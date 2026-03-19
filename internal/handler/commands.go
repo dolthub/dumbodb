@@ -275,30 +275,35 @@ func (h *Handler) initCommands() {
 		// please keep sorted alphabetically
 	}
 
-	if h.EnableNewAuth {
-		// sorted alphabetically
-		h.commands["createUser"] = &command{
-			Handler: h.MsgCreateUser,
-			Help:    "Creates a new user.",
-		}
-		h.commands["dropAllUsersFromDatabase"] = &command{
-			Handler: h.MsgDropAllUsersFromDatabase,
-			Help:    "Drops all user from database.",
-		}
-		h.commands["dropUser"] = &command{
-			Handler: h.MsgDropUser,
-			Help:    "Drops user.",
-		}
-		h.commands["updateUser"] = &command{
-			Handler: h.MsgUpdateUser,
-			Help:    "Updates user.",
-		}
-		h.commands["usersInfo"] = &command{
-			Handler: h.MsgUsersInfo,
-			Help:    "Returns information about users.",
-		}
-		// please keep sorted alphabetically
+	// User management commands are always registered (anonymous so they work without auth).
+	// When EnableNewAuth is false these are effectively no-ops (system.users is always empty).
+	// sorted alphabetically
+	h.commands["createUser"] = &command{
+		anonymous: true,
+		Handler:   h.MsgCreateUser,
+		Help:      "Creates a new user.",
 	}
+	h.commands["dropAllUsersFromDatabase"] = &command{
+		anonymous: true,
+		Handler:   h.MsgDropAllUsersFromDatabase,
+		Help:      "Drops all users from database.",
+	}
+	h.commands["dropUser"] = &command{
+		anonymous: true,
+		Handler:   h.MsgDropUser,
+		Help:      "Drops user.",
+	}
+	h.commands["updateUser"] = &command{
+		anonymous: true,
+		Handler:   h.MsgUpdateUser,
+		Help:      "Updates user.",
+	}
+	h.commands["usersInfo"] = &command{
+		anonymous: true,
+		Handler:   h.MsgUsersInfo,
+		Help:      "Returns information about users.",
+	}
+	// please keep sorted alphabetically
 
 	for name, cmd := range h.commands {
 		if h.EnableNewAuth && !cmd.anonymous {
