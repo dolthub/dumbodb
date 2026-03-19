@@ -217,6 +217,17 @@ func compareScalars(v1, v2 any) CompareResult {
 		default:
 			return compareTypeOrder(v1, v2)
 		}
+
+	case Decimal128:
+		v, ok := v2.(Decimal128)
+		if ok {
+			if v1.H != v.H {
+				return compareOrdered(v1.H, v.H)
+			}
+			return compareOrdered(v1.L, v.L)
+		}
+
+		return compareTypeOrder(v1, v2)
 	}
 
 	panic("not reached")

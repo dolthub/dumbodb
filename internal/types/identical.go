@@ -172,6 +172,13 @@ func Identical(a, b any) bool {
 		}
 
 		return a == b
+	case Decimal128:
+		b, ok := b.(Decimal128)
+		if !ok {
+			return false
+		}
+
+		return a == b
 	}
 
 	panic("not reached")

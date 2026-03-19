@@ -74,6 +74,8 @@ func FormatAnyValue(value any) string {
 		return fmt.Sprintf("Timestamp(%v, %v)", int64(value)>>32, int32(value))
 	case int64:
 		return fmt.Sprintf("%d", value)
+	case Decimal128:
+		return fmt.Sprintf("Decimal128(%d, %d)", value.H, value.L)
 	default:
 		panic(fmt.Sprintf("unknown type %T", value))
 	}

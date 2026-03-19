@@ -106,6 +106,9 @@ func slogValue(v any, depth int) slog.Value {
 	case int64:
 		return slog.Int64Value(v)
 
+	case Decimal128:
+		return slog.StringValue(fmt.Sprintf("Decimal128(%d, %d)", v.H, v.L))
+
 	default:
 		panic(fmt.Sprintf("invalid BSON type %T", v))
 	}

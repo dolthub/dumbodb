@@ -121,6 +121,10 @@ func New(opts *NewOpts) (*Handler, error) {
 		opts.MaxBsonObjectSizeBytes = types.MaxDocumentLen
 	}
 
+	if opts.BatchSize == 0 {
+		opts.BatchSize = int(maxWriteBatchSize)
+	}
+
 	b := oplog.NewBackend(opts.Backend, logging.WithName(opts.L, "oplog"))
 
 	h := &Handler{

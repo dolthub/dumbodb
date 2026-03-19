@@ -78,6 +78,8 @@ func detectDataType(value any) compareTypeOrderResult {
 		return timestampDataType
 	case int64:
 		return numbersDataType
+	case Decimal128:
+		return numbersDataType
 	default:
 		panic(fmt.Sprintf("value cannot be defined, value is %[1]v, data type of value is %[1]T", value))
 	}

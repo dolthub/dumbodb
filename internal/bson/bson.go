@@ -82,6 +82,8 @@ func convertFromTypes(v any) (any, error) {
 		return wirebson.Timestamp(v), nil
 	case int64:
 		return v, nil
+	case types.Decimal128:
+		return wirebson.Decimal128{L: v.L, H: v.H}, nil
 
 	default:
 		panic(fmt.Sprintf("invalid type %T", v))
@@ -220,6 +222,8 @@ func convertToTypes(v any) (any, error) {
 		return types.Timestamp(v), nil
 	case int64:
 		return v, nil
+	case wirebson.Decimal128:
+		return types.Decimal128{L: v.L, H: v.H}, nil
 
 	default:
 		panic(fmt.Sprintf("invalid BSON type %T", v))
