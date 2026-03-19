@@ -132,4 +132,4 @@ require (
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
 )
 
-replace github.com/dolthub/dolt/go => /home/ubuntu/dongo/dongo/mayor/rig/dolt/go
+replace github.com/dolthub/dolt/go => ./dolt/go
