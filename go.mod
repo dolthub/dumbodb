@@ -62,7 +62,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20251022180443-0feb69152e9f // indirect
-	github.com/dolthub/dolt/go v0.40.4 // indirect
+	github.com/dolthub/dolt/go v0.40.5-0.20260318200444-c790f75d992d // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/fslock v0.0.0-20251215194149-ef20baba2318 // indirect
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260316223625-fdcf3f20a2bc // indirect
@@ -132,4 +132,3 @@ require (
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
 )
 
-replace github.com/dolthub/dolt/go => ./dolt/go
