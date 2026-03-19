@@ -17,9 +17,10 @@ package dolt
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 
+	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -358,7 +359,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		for {
 			k, v, err := iter.Next(ctx)
 			if err != nil {
-				if errors.Is(err, tree.ErrEndOfIndex) {
+				if err == io.EOF {
 					break
 				}
 
@@ -531,7 +532,7 @@ func encodeDocument(doc *types.Document) ([]byte, error) {
 
 // decodeDocument deserializes BSON bytes to a types.Document.
 func decodeDocument(data []byte) (*types.Document, error) {
-	doc, err := bson.ToDocument(bsonRawDoc(data))
+	doc, err := bson.ToDocument(wirebson.RawDocument(data))
 	if err != nil {
 		return nil, fmt.Errorf("dolt: decoding document: %w", err)
 	}
@@ -539,12 +540,12 @@ func decodeDocument(data []byte) (*types.Document, error) {
 	return doc, nil
 }
 
-// bsonRawDoc implements wirebson.AnyDocument for raw BSON bytes.
-type bsonRawDoc []byte
-
 // marshalID serializes an _id value to a comparable byte key.
 func marshalID(id any) ([]byte, error) {
-	doc := types.MustNewDocument("_id", id)
+	doc, err := types.NewDocument("_id", id)
+	if err != nil {
+		return nil, err
+	}
 
 	wdoc, err := bson.FromDocument(doc)
 	if err != nil {
@@ -589,23 +590,23 @@ func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bo
 }
 
 // Next implements types.DocumentsIterator.
-func (it *mapIter) Next() (int64, *types.Document, error) {
+func (it *mapIter) Next() (struct{}, *types.Document, error) {
 	if it.limit > 0 && it.count >= it.limit {
-		return 0, nil, iterator.ErrIteratorDone
+		return struct{}{}, nil, iterator.ErrIteratorDone
 	}
 
 	for {
 		k, v, err := it.iter.Next(it.ctx)
 		if err != nil {
-			if errors.Is(err, tree.ErrEndOfIndex) {
-				return 0, nil, iterator.ErrIteratorDone
+			if err == io.EOF {
+				return struct{}{}, nil, iterator.ErrIteratorDone
 			}
 
-			return 0, nil, err
+			return struct{}{}, nil, err
 		}
 
 		if v == nil {
-			return 0, nil, iterator.ErrIteratorDone
+			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
 
 		// Extract RecordID from key.
@@ -616,11 +617,15 @@ func (it *mapIter) Next() (int64, *types.Document, error) {
 
 		if it.onlyRecordID {
 			// Return a minimal document with just the RecordID.
-			doc := types.MustNewDocument()
+			doc, err := types.NewDocument()
+			if err != nil {
+				return struct{}{}, nil, err
+			}
+
 			doc.SetRecordID(recordID)
 			it.count++
 
-			return recordID, doc, nil
+			return struct{}{}, doc, nil
 		}
 
 		// Read BSON bytes from the store.
@@ -631,18 +636,18 @@ func (it *mapIter) Next() (int64, *types.Document, error) {
 
 		docBytes, err := it.ns.ReadBytes(it.ctx, bsonHash)
 		if err != nil {
-			return 0, nil, err
+			return struct{}{}, nil, err
 		}
 
 		doc, err := decodeDocument(docBytes)
 		if err != nil {
-			return 0, nil, err
+			return struct{}{}, nil, err
 		}
 
 		doc.SetRecordID(recordID)
 		it.count++
 
-		return recordID, doc, nil
+		return struct{}{}, doc, nil
 	}
 }
 
@@ -656,8 +661,8 @@ func newEmptyIter() types.DocumentsIterator {
 	return &emptyIter{}
 }
 
-func (it *emptyIter) Next() (int64, *types.Document, error) {
-	return 0, nil, iterator.ErrIteratorDone
+func (it *emptyIter) Next() (struct{}, *types.Document, error) {
+	return struct{}{}, nil, iterator.ErrIteratorDone
 }
 
 func (it *emptyIter) Close() {}
@@ -667,8 +672,8 @@ type errorIter struct {
 	err error
 }
 
-func (it *errorIter) Next() (int64, *types.Document, error) {
-	return 0, nil, it.err
+func (it *errorIter) Next() (struct{}, *types.Document, error) {
+	return struct{}{}, nil, it.err
 }
 
 func (it *errorIter) Close() {}

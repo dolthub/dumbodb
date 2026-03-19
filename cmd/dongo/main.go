@@ -50,12 +50,13 @@ func run(logger *slog.Logger) error {
 
 	metrics := connmetrics.NewListenerMetrics()
 
-	h, closeBackend, err := registry.NewHandler("stub", &registry.NewHandlerOpts{
+	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
 		Logger:        logger,
 		ConnMetrics:   metrics.ConnMetrics,
 		StateProvider: stateProvider,
 		TCPHost:       "127.0.0.1",
 		ReplSetName:   "",
+		DoltDataDir:   "data",
 	})
 	if err != nil {
 		return err

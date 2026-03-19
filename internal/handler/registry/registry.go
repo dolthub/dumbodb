@@ -51,6 +51,10 @@ type NewHandlerOpts struct {
 	SetupPassword password.Password
 	SetupTimeout  time.Duration
 
+	// DoltDataDir is the directory where dolt backend stores its data.
+	// Used only by the "dolt" handler.
+	DoltDataDir string
+
 	TestOpts
 
 	_ struct{} // prevent unkeyed literals
@@ -88,7 +92,7 @@ func NewHandler(name string, opts *NewHandlerOpts) (*handler.Handler, CloseBacke
 func Handlers() []string {
 	res := make([]string, 0, len(registry))
 
-	for _, h := range []string{"stub"} {
+	for _, h := range []string{"stub", "dolt"} {
 		if _, ok := registry[h]; !ok {
 			continue
 		}
