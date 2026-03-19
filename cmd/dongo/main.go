@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"log/slog"
 	"os"
@@ -43,6 +44,10 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	dataDir := flag.String("data-dir", "data", "directory for storing Dolt data")
+	addr := flag.String("addr", "127.0.0.1:27017", "listen address")
+	flag.Parse()
+
 	stateProvider, err := state.NewProvider("")
 	if err != nil {
 		return err
@@ -56,7 +61,7 @@ func run(logger *slog.Logger) error {
 		StateProvider: stateProvider,
 		TCPHost:       "127.0.0.1",
 		ReplSetName:   "",
-		DoltDataDir:   "data",
+		DoltDataDir:   *dataDir,
 	})
 	if err != nil {
 		return err
@@ -64,7 +69,7 @@ func run(logger *slog.Logger) error {
 	defer closeBackend()
 
 	listener, err := clientconn.Listen(&clientconn.NewListenerOpts{
-		TCP:     "127.0.0.1:27017",
+		TCP:     *addr,
 		Mode:    clientconn.NormalMode,
 		Metrics: metrics,
 		Handler: h,
@@ -74,7 +79,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	logger.Info("Dongo server started", "addr", "127.0.0.1:27017")
+	logger.Info("Dongo server started", "addr", *addr, "data-dir", *dataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
