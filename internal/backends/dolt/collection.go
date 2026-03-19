@@ -125,34 +125,49 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
+	// Collect all existing _id values from the map for duplicate detection.
+	existingIDs, err := collectExistingIDs(ctx, state.ns, m)
+	if err != nil {
+		return nil, err
+	}
+
 	mut := m.Mutate()
 
+	// Track _id values inserted in this batch to detect in-batch duplicates.
+	batchIDs := make([]any, 0, len(params.Docs))
+
 	for _, doc := range params.Docs {
-		// Check for duplicate _id.
+		// Extract the _id from this document.
+		docID, err := doc.Get("_id")
+		if err != nil {
+			return nil, fmt.Errorf("dolt: document missing _id: %w", err)
+		}
+
+		// Check against existing IDs in the collection.
+		for _, existingID := range existingIDs {
+			if types.Compare(existingID, docID) == types.Equal {
+				return nil, backends.NewError(
+					backends.ErrorCodeInsertDuplicateID,
+					fmt.Errorf("dolt: duplicate _id in collection"),
+				)
+			}
+		}
+
+		// Check against IDs already inserted in this batch.
+		for _, batchID := range batchIDs {
+			if types.Compare(batchID, docID) == types.Equal {
+				return nil, backends.NewError(
+					backends.ErrorCodeInsertDuplicateID,
+					fmt.Errorf("dolt: duplicate _id in batch"),
+				)
+			}
+		}
+
 		recordID := doc.RecordID()
 		key, err := buildKey(recordID)
 
 		if err != nil {
 			return nil, err
-		}
-
-		var existing val.Tuple
-
-		if err := mut.Get(ctx, key, func(k, v val.Tuple) error {
-			existing = v
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-
-		if existing != nil {
-			// Check for duplicate _id (by scanning for same _id in existing docs).
-			// Since key is RecordID (unique per insert), we won't have key collisions.
-			// But we need to check for _id duplicates.
-			// RecordID is always unique (assigned from timestamp), so this won't trigger.
-			// However, per contract, _id duplicates must return ErrorCodeInsertDuplicateID.
-			// We handle this by checking the _id against all existing docs' _ids during scan.
-			// For now, RecordID uniqueness is guaranteed by the contract.
 		}
 
 		// Encode the document to BSON.
@@ -175,6 +190,8 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		if err := mut.Put(ctx, key, v); err != nil {
 			return nil, err
 		}
+
+		batchIDs = append(batchIDs, docID)
 	}
 
 	// Flush the mutable map.
@@ -191,6 +208,55 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	return &backends.InsertAllResult{}, nil
+}
+
+// collectExistingIDs scans the prolly.Map and returns all _id values stored in the collection.
+func collectExistingIDs(ctx context.Context, ns tree.NodeStore, m prolly.Map) ([]any, error) {
+	iter, err := m.IterAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []any
+
+	for {
+		_, v, err := iter.Next(ctx)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			return nil, err
+		}
+
+		if v == nil {
+			break
+		}
+
+		bsonHash, ok := valDesc.GetBytesAddr(0, v)
+		if !ok {
+			continue
+		}
+
+		docBytes, err := ns.ReadBytes(ctx, bsonHash)
+		if err != nil {
+			continue
+		}
+
+		doc, err := decodeDocument(docBytes)
+		if err != nil {
+			continue
+		}
+
+		id, err := doc.Get("_id")
+		if err != nil {
+			continue
+		}
+
+		ids = append(ids, id)
+	}
+
+	return ids, nil
 }
 
 // UpdateAll implements backends.Collection.

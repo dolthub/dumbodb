@@ -168,10 +168,14 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				return nil, lazyerrors.Error(err)
 			}
 
+			dupID, _ := doc.Get("_id")
 			writeErrors = append(writeErrors, &mongo.WriteError{
 				Index:   docsIndexes[j],
 				Code:    int(handlererrors.ErrDuplicateKeyInsert),
-				Message: fmt.Sprintf(`E11000 duplicate key error collection: %s.%s`, params.DB, params.Collection),
+				Message: fmt.Sprintf(
+					`E11000 duplicate key error collection: %s.%s index: _id_ dup key: { _id: %s }`,
+					params.DB, params.Collection, types.FormatAnyValue(dupID),
+				),
 			})
 
 			if params.Ordered {

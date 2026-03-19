@@ -97,6 +97,10 @@ func (d *Document) validateData(isTopLevel bool) error {
 		}
 
 		if _, ok := duplicateChecker[key]; ok {
+			if key == "_id" {
+				return newValidationError(ErrValidation, fmt.Errorf("can't have multiple _id fields in one document"))
+			}
+
 			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (duplicate keys are not allowed)", key))
 		}
 		duplicateChecker[key] = struct{}{}
