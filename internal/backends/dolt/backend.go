@@ -271,7 +271,15 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			return nil, fmt.Errorf("dolt: creating empty address map for %q: %w", dbName, err)
 		}
 
-		amHash := am.HashOf()
+		// Write the root node to the chunk store before committing its hash
+		// as the store root. Without this, Commit fails with a dangling ref
+		// because the chunk for the AddressMap node hasn't been persisted yet.
+		amHash, err := ns.Write(ctx, am.Node())
+		if err != nil {
+			_ = cs.Close()
+			return nil, fmt.Errorf("dolt: writing initial address map node for %q: %w", dbName, err)
+		}
+
 		if _, err := cs.Commit(ctx, amHash, rootHash); err != nil {
 			_ = cs.Close()
 			return nil, fmt.Errorf("dolt: committing initial root for %q: %w", dbName, err)
