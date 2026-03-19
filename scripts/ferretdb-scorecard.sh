@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DONGO_BINARY="$REPO_ROOT/.runtime/bin/dongo"
-FERRETDB_INTEGRATION="/home/ubuntu/dongo/dongo/mayor/rig/ferretdb/integration"
+FERRETDB_INTEGRATION="$REPO_ROOT/ferretdb/integration"
 DONGO_HOST="127.0.0.1"
 DONGO_PORT="27017"
 DONGO_ADDR="$DONGO_HOST:$DONGO_PORT"
@@ -26,9 +26,8 @@ echo "Date: $(date -u)" | tee -a "$RESULTS_FILE"
 echo "Dongo: $DONGO_BINARY" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
-# Start Dongo server in background from its data directory.
-cd "$DONGO_DATA_DIR"
-"$DONGO_BINARY" >"$DONGO_LOG" 2>&1 &
+# Start Dongo server in background.
+"$DONGO_BINARY" --addr "$DONGO_ADDR" --data-dir "$DONGO_DATA_DIR" >"$DONGO_LOG" 2>&1 &
 DONGO_PID=$!
 
 cleanup() {
