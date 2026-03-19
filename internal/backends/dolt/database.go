@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
+	"github.com/google/uuid"
 
 	"github.com/dolthub/dongo/internal/backends"
 )
@@ -62,7 +63,8 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			return nil
 		}
 
-		colls = append(colls, backends.CollectionInfo{Name: name})
+		collUUID := state.uuids[name]
+		colls = append(colls, backends.CollectionInfo{Name: name, UUID: collUUID})
 		return nil
 	}); err != nil {
 		return nil, err
@@ -102,9 +104,17 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return err
 	}
 
-	return state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
 		return ed.Add(ctx, params.Name, emptyMap.HashOf())
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Generate and store a UUID for this collection.
+	collUUID := uuid.New()
+	state.uuids[params.Name] = collUUID.String()
+
+	return nil
 }
 
 // DropCollection implements backends.Database.
@@ -132,9 +142,15 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 			fmt.Errorf("dolt: collection %q does not exist in %q", params.Name, db.name))
 	}
 
-	return state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
 		return ed.Delete(ctx, params.Name)
-	})
+	}); err != nil {
+		return err
+	}
+
+	delete(state.uuids, params.Name)
+
+	return nil
 }
 
 // RenameCollection implements backends.Database.
@@ -172,16 +188,46 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("dolt: collection %q already exists in %q", params.NewName, db.name))
 	}
 
-	return state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}
 
 		return ed.Add(ctx, params.NewName, oldAddr)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Transfer UUID from old name to new name.
+	if collUUID, ok := state.uuids[params.OldName]; ok {
+		state.uuids[params.NewName] = collUUID
+		delete(state.uuids, params.OldName)
+	}
+
+	return nil
 }
 
 // Stats implements backends.Database.
 func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsParams) (*backends.DatabaseStatsResult, error) {
-	return &backends.DatabaseStatsResult{}, nil
+	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if state == nil {
+		return &backends.DatabaseStatsResult{}, nil
+	}
+
+	state.mu.RLock()
+	count, _ := state.am.Count()
+	state.mu.RUnlock()
+
+	// Return a non-zero SizeTotal when the database has collections,
+	// so that listDatabases reports empty=false and a non-zero totalSize.
+	var sizeTotal int64
+	if count > 0 {
+		sizeTotal = int64(count) * 4096
+	}
+
+	return &backends.DatabaseStatsResult{SizeTotal: sizeTotal}, nil
 }

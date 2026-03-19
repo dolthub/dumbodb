@@ -17,11 +17,10 @@ package backends
 import (
 	"regexp"
 	"strings"
-	"unicode/utf8"
 )
 
-// databaseNameRe validates database name.
-var databaseNameRe = regexp.MustCompile("^[a-zA-Z0-9_-]{1,63}$")
+// databaseNameRe validates database name (allows unicode but not special chars like / \ $ . null space).
+var databaseNameRe = regexp.MustCompile(`^[^\x00 /\\.$]{1,63}$`)
 
 // collectionNameRe validates collection names.
 var collectionNameRe = regexp.MustCompile("^[^\\.$\x00][^$\x00]{0,234}$")
@@ -69,10 +68,6 @@ func validateCollectionName(name string) error {
 	}
 
 	if strings.HasPrefix(name, ReservedPrefix) {
-		return NewError(ErrorCodeCollectionNameIsInvalid, nil)
-	}
-
-	if !utf8.ValidString(name) {
 		return NewError(ErrorCodeCollectionNameIsInvalid, nil)
 	}
 

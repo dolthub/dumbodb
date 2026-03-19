@@ -80,16 +80,6 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 	collections := types.MakeArray(len(res.Collections))
 
 	for _, collection := range res.Collections {
-		d := must.NotFail(types.NewDocument(
-			"name", collection.Name,
-			"type", "collection",
-			"idIndex", must.NotFail(types.NewDocument(
-				"v", int32(2),
-				"key", must.NotFail(types.NewDocument("_id", int32(1))),
-				"name", "_id_",
-			)),
-		))
-
 		options := must.NotFail(types.NewDocument())
 		info := must.NotFail(types.NewDocument("readOnly", false))
 
@@ -105,23 +95,31 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			options.Set("max", collection.CappedDocuments)
 		}
 
-		d.Set("options", options)
-
 		if collection.UUID != "" {
-			uuid, err := uuid.Parse(collection.UUID)
+			collUUID, err := uuid.Parse(collection.UUID)
 			if err != nil {
 				return nil, lazyerrors.Error(err)
 			}
 
 			uuidBinary := types.Binary{
 				Subtype: types.BinaryUUID,
-				B:       must.NotFail(uuid.MarshalBinary()),
+				B:       must.NotFail(collUUID.MarshalBinary()),
 			}
 
 			info.Set("uuid", uuidBinary)
 		}
 
-		d.Set("info", info)
+		d := must.NotFail(types.NewDocument(
+			"name", collection.Name,
+			"type", "collection",
+			"options", options,
+			"info", info,
+			"idIndex", must.NotFail(types.NewDocument(
+				"v", int32(2),
+				"key", must.NotFail(types.NewDocument("_id", int32(1))),
+				"name", "_id_",
+			)),
+		))
 
 		matches, err := common.FilterDocument(d, filter)
 		if err != nil {

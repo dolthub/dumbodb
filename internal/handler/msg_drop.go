@@ -77,11 +77,18 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	})
 
 	switch {
-	case err == nil, backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):
+	case err == nil:
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
 				"nIndexesWas", int32(1), // TODO https://github.com/dolthub/dongo/issues/2337
 				"ns", dbName+"."+collectionName,
+				"ok", float64(1),
+			)),
+		)
+
+	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
 				"ok", float64(1),
 			)),
 		)

@@ -51,10 +51,11 @@ const (
 
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
-	mu  sync.RWMutex
-	cs  *nbs.GenerationalNBS
-	ns  tree.NodeStore
-	am  prolly.AddressMap // current root address map (collection name -> prolly Map root)
+	mu    sync.RWMutex
+	cs    *nbs.GenerationalNBS
+	ns    tree.NodeStore
+	am    prolly.AddressMap // current root address map (collection name -> prolly Map root)
+	uuids map[string]string // collection name -> UUID string (in-memory)
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -322,9 +323,10 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
-		cs: cs,
-		ns: ns,
-		am: am,
+		cs:    cs,
+		ns:    ns,
+		am:    am,
+		uuids: make(map[string]string),
 	}
 
 	b.dbs[dbName] = db

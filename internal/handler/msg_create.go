@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/FerretDB/wire"
 
@@ -77,6 +78,10 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		Name: collectionName,
 	}
 
+	// hasExplicitOptions tracks whether the caller specified any create options.
+	// If an already-existing collection is created with explicit options, it's an error.
+	var hasExplicitOptions bool
+
 	var capped bool
 	if v, _ := document.Get("capped"); v != nil {
 		capped, err = handlerparams.GetBoolOptionalParam("capped", v)
@@ -86,6 +91,8 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	if capped {
+		hasExplicitOptions = true
+
 		size, _ := document.Get("size")
 		if _, ok := size.(types.NullType); size == nil || ok {
 			msg := "the 'size' field is required when 'capped' is true"
@@ -103,12 +110,39 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				return nil, err
 			}
 		}
+	} else if sizeVal, _ := document.Get("size"); sizeVal != nil {
+		// size was provided without capped=true — still counts as explicit options.
+		hasExplicitOptions = true
+	}
+
+	// Validate collection name with MongoDB-compatible error messages before calling backend.
+	if collectionName == "" {
+		msg := fmt.Sprintf("Invalid namespace specified '%s.'", dbName)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
+	}
+
+	if strings.ContainsRune(collectionName, '\x00') {
+		msg := "namespaces cannot have embedded null characters"
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
+	}
+
+	if strings.HasPrefix(collectionName, ".") {
+		msg := fmt.Sprintf("Collection names cannot start with '.': %s", collectionName)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
+	}
+
+	// Check fully qualified namespace length (db.collection must be <= 255 bytes).
+	const maxNamespaceLen = 255
+	ns := dbName + "." + collectionName
+	if len(ns) > maxNamespaceLen {
+		msg := fmt.Sprintf("Fully qualified namespace is too long. Namespace: %s Max: %d", ns, maxNamespaceLen)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 	}
 
 	db, err := h.b.Database(dbName)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
-			msg := fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
+			msg := invalidDatabaseNameMsg(dbName, collectionName)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 		}
 
@@ -130,10 +164,43 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionAlreadyExists):
-		msg := fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
+		// MongoDB 7.0+ returns success when creating an already-existing collection with the
+		// same options (idempotent). With different options (e.g., size), it returns a
+		// NamespaceExists error.
+		if hasExplicitOptions {
+			msg := fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
+		}
+
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"ok", float64(1),
+			)),
+		)
 
 	default:
 		return nil, lazyerrors.Error(err)
 	}
 }
+
+// invalidDatabaseNameMsg returns the MongoDB-compatible error message for an invalid database name.
+func invalidDatabaseNameMsg(dbName, collectionName string) string {
+	// Too long.
+	if len(dbName) > 63 {
+		return fmt.Sprintf("db name must be at most 63 characters, found: %d", len(dbName))
+	}
+
+	// Contains a dot.
+	if strings.ContainsRune(dbName, '.') {
+		return fmt.Sprintf("'.' is an invalid character in a db name: %s", dbName)
+	}
+
+	// Contains a dollar sign.
+	if strings.ContainsRune(dbName, '$') {
+		return fmt.Sprintf("Invalid namespace: %s.%s", dbName, collectionName)
+	}
+
+	// Other invalid characters (slash, backslash, space, null, etc.).
+	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
+}
+
