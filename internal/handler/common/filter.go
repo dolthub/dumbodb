@@ -18,9 +18,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dongo/internal/handler/commonpath"
@@ -952,6 +955,13 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 	case int64:
 		return (^uint64(value) & bitmask) == bitmask, nil
 
+	case types.Decimal128:
+		intVal, ok := decimal128ToInt64(value)
+		if !ok {
+			return false, nil
+		}
+		return (^uint64(intVal) & bitmask) == bitmask, nil
+
 	default:
 		return false, nil
 	}
@@ -985,6 +995,13 @@ func filterFieldExprBitsAllSet(fieldValue, maskValue any) (bool, error) {
 
 	case int64:
 		return (uint64(value) & bitmask) == bitmask, nil
+
+	case types.Decimal128:
+		intVal, ok := decimal128ToInt64(value)
+		if !ok {
+			return false, nil
+		}
+		return (uint64(intVal) & bitmask) == bitmask, nil
 
 	default:
 		return false, nil
@@ -1020,6 +1037,13 @@ func filterFieldExprBitsAnyClear(fieldValue, maskValue any) (bool, error) {
 	case int64:
 		return (^uint64(value) & bitmask) != 0, nil
 
+	case types.Decimal128:
+		intVal, ok := decimal128ToInt64(value)
+		if !ok {
+			return false, nil
+		}
+		return (^uint64(intVal) & bitmask) != 0, nil
+
 	default:
 		return false, nil
 	}
@@ -1054,6 +1078,13 @@ func filterFieldExprBitsAnySet(fieldValue, maskValue any) (bool, error) {
 	case int64:
 		return (uint64(value) & bitmask) != 0, nil
 
+	case types.Decimal128:
+		intVal, ok := decimal128ToInt64(value)
+		if !ok {
+			return false, nil
+		}
+		return (uint64(intVal) & bitmask) != 0, nil
+
 	default:
 		return false, nil
 	}
@@ -1070,6 +1101,42 @@ func isInvalidBitwiseValue(value float64) bool {
 		math.IsInf(value, 0) ||
 		value >= math.MaxInt64 ||
 		value < math.MinInt64
+}
+
+// decimal128ToInt64 attempts to convert a types.Decimal128 value to int64 for
+// use in bitwise operations. It truncates toward zero (like MongoDB does).
+// Returns (value, true) on success, or (0, false) if the value cannot be
+// represented as an int64 (NaN, Inf, out of range).
+func decimal128ToInt64(d types.Decimal128) (int64, bool) {
+	// Use primitive.Decimal128 which stores (H=high, L=low).
+	// types.Decimal128 stores H and L fields matching the wire format.
+	p := primitive.NewDecimal128(d.H, d.L)
+
+	bi, exp, err := p.BigInt()
+	if err != nil {
+		// NaN or Inf
+		return 0, false
+	}
+
+	// Apply the exponent: value = bi * 10^exp
+	if exp > 0 {
+		factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
+		bi = new(big.Int).Mul(bi, factor)
+	} else if exp < 0 {
+		// Truncate toward zero: divide and discard remainder
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil)
+		// Truncate toward zero: use Quo (truncated division)
+		bi = new(big.Int).Quo(bi, divisor)
+	}
+
+	// Check if it fits in int64
+	minInt64 := new(big.Int).SetInt64(math.MinInt64)
+	maxInt64 := new(big.Int).SetInt64(math.MaxInt64)
+	if bi.Cmp(minInt64) < 0 || bi.Cmp(maxInt64) > 0 {
+		return 0, false
+	}
+
+	return bi.Int64(), true
 }
 
 // filterFieldMod handles {field: {$mod: [divisor, remainder]}} filter.

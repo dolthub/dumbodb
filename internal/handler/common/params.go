@@ -308,7 +308,7 @@ func getBinaryMaskParam(operator string, mask any) (uint64, error) {
 	default:
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			fmt.Sprintf(`value takes an Array, a number, or a BinData but received: %s: %#v`, operator, mask),
+			fmt.Sprintf(`v takes an Array, a number, or a BinData but received: %s: %#v`, operator, mask),
 			operator,
 		)
 	}
