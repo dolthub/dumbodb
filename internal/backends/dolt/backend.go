@@ -15,7 +15,7 @@
 // Package dolt provides a Dolt-backed storage backend for FerretDB.
 //
 // Storage hierarchy:
-//   - One nbs.NomsBlockStore per MongoDB database, stored in <dataDir>/<dbName>/
+//   - One nbs.GenerationalNBS per MongoDB database, stored in <dataDir>/<dbName>/
 //   - The NBS store root hash points to a prolly.AddressMap node
 //   - The AddressMap maps collection names to prolly.Map root hashes
 //   - Each prolly.Map uses key=Int64(RecordID) and value=BytesAddr(BSON hash)
@@ -52,7 +52,7 @@ const (
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	mu  sync.RWMutex
-	cs  *nbs.NomsBlockStore
+	cs  *nbs.GenerationalNBS
 	ns  tree.NodeStore
 	am  prolly.AddressMap // current root address map (collection name -> prolly Map root)
 }
@@ -246,11 +246,33 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		return nil, fmt.Errorf("dolt: creating db directory for %q: %w", dbName, err)
 	}
 
-	cs, err := nbs.NewLocalStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, defaultMemTableSize,
-		&nbs.UnlimitedQuotaProvider{}, false)
+	q := nbs.NewUnlimitedMemQuotaProvider()
+
+	newGenSt, err := nbs.NewLocalJournalingStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, q, false, nil)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: opening NBS store for %q: %w", dbName, err)
+		return nil, fmt.Errorf("dolt: opening newgen NBS store for %q: %w", dbName, err)
 	}
+
+	oldgenDir := filepath.Join(dbDir, "oldgen")
+	if err := os.MkdirAll(oldgenDir, 0o755); err != nil {
+		_ = newGenSt.Close()
+		return nil, fmt.Errorf("dolt: creating oldgen directory for %q: %w", dbName, err)
+	}
+
+	oldGenSt, err := nbs.NewLocalStore(ctx, newGenSt.Version(), oldgenDir, defaultMemTableSize, q, false)
+	if err != nil {
+		_ = newGenSt.Close()
+		return nil, fmt.Errorf("dolt: opening oldgen NBS store for %q: %w", dbName, err)
+	}
+
+	ghostGen, err := nbs.NewGhostBlockStore(dbDir)
+	if err != nil {
+		_ = oldGenSt.Close()
+		_ = newGenSt.Close()
+		return nil, fmt.Errorf("dolt: opening ghost block store for %q: %w", dbName, err)
+	}
+
+	cs := nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen)
 
 	ns := tree.NewNodeStore(cs)
 
