@@ -17,6 +17,7 @@ package backends
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -207,7 +208,59 @@ func (bc *backendContract) Collect(ch chan<- prometheus.Metric) {
 	bc.b.Collect(ch)
 }
 
+// DongoCommit implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoCommit(ctx context.Context, params *CommitParams) (*CommitResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoCommit(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoCommit")
+}
+
+// DongoBranch implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoBranch(ctx context.Context, params *BranchParams) (*BranchResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoBranch(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoBranch")
+}
+
+// DongoMerge implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoMerge(ctx context.Context, params *MergeParams) (*MergeResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoMerge(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoMerge")
+}
+
+// DongoLog implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoLog(ctx context.Context, params *LogParams) (*LogResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoLog(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoLog")
+}
+
+// DongoStatus implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoStatus(ctx context.Context, params *VersioningStatusParams) (*VersioningStatusResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoStatus(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoStatus")
+}
+
+// newVersioningUnsupportedError returns a standard error for when a versioning operation
+// is not supported by the current backend.
+func newVersioningUnsupportedError(op string) error {
+	return fmt.Errorf("dongo versioning not supported by this backend: %s", op)
+}
+
 // check interfaces
 var (
-	_ Backend = (*backendContract)(nil)
+	_ Backend          = (*backendContract)(nil)
+	_ VersioningBackend = (*backendContract)(nil)
 )

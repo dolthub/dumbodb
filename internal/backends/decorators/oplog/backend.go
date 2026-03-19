@@ -16,6 +16,7 @@ package oplog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -79,7 +80,53 @@ func (b *backend) Collect(ch chan<- prometheus.Metric) {
 	b.origB.Collect(ch)
 }
 
+// DongoCommit implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoCommit(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoCommit: versioning not supported by wrapped backend")
+}
+
+// DongoBranch implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoBranch(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoBranch: versioning not supported by wrapped backend")
+}
+
+// DongoMerge implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoMerge(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoMerge: versioning not supported by wrapped backend")
+}
+
+// DongoLog implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoLog(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoLog: versioning not supported by wrapped backend")
+}
+
+// DongoStatus implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoStatus(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoStatus: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
-	_ backends.Backend = (*backend)(nil)
+	_ backends.Backend          = (*backend)(nil)
+	_ backends.VersioningBackend = (*backend)(nil)
 )

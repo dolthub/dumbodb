@@ -102,6 +102,53 @@ func (db *database) Stats(_ context.Context, _ *backends.DatabaseStatsParams) (*
 	return &backends.DatabaseStatsResult{}, nil
 }
 
+// DongoCommit implements backends.VersioningBackend interface.
+func (b *Backend) DongoCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+	b.l.Info("stub: DongoCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+
+	return &backends.CommitResult{
+		Hash:    "0000000000000000000000000000000000000000",
+		Branch:  params.Branch,
+		Message: params.Message,
+	}, nil
+}
+
+// DongoBranch implements backends.VersioningBackend interface.
+func (b *Backend) DongoBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+	b.l.Info("stub: DongoBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
+
+	return &backends.BranchResult{
+		Branch: params.Name,
+	}, nil
+}
+
+// DongoMerge implements backends.VersioningBackend interface.
+func (b *Backend) DongoMerge(_ context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+	b.l.Info("stub: DongoMerge", slog.String("db", params.DBName), slog.String("into", params.Into), slog.String("from", params.From))
+
+	return &backends.MergeResult{
+		Hash:    "0000000000000000000000000000000000000000",
+		Message: fmt.Sprintf("Merged '%s' into '%s'", params.From, params.Into),
+	}, nil
+}
+
+// DongoLog implements backends.VersioningBackend interface.
+func (b *Backend) DongoLog(_ context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+	b.l.Info("stub: DongoLog", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+
+	return &backends.LogResult{Commits: []backends.CommitInfo{}}, nil
+}
+
+// DongoStatus implements backends.VersioningBackend interface.
+func (b *Backend) DongoStatus(_ context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+	b.l.Info("stub: DongoStatus", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+
+	return &backends.VersioningStatusResult{
+		Branch: params.Branch,
+		Tables: []backends.TableStatus{},
+	}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

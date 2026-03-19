@@ -108,6 +108,26 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDebugError,
 			Help:    "Returns error for debugging.",
 		},
+		"dongoBranch": {
+			Handler: h.MsgDongoBranch,
+			Help:    "Creates a new Dongo branch from the current branch encoded in the database name.",
+		},
+		"dongoCommit": {
+			Handler: h.MsgDongoCommit,
+			Help:    "Commits the current working set on the branch encoded in the database name.",
+		},
+		"dongoLog": {
+			Handler: h.MsgDongoLog,
+			Help:    "Returns commit history for the branch encoded in the database name.",
+		},
+		"dongoMerge": {
+			Handler: h.MsgDongoMerge,
+			Help:    "Merges a source branch into the branch encoded in the database name.",
+		},
+		"dongoStatus": {
+			Handler: h.MsgDongoStatus,
+			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
+		},
 		"delete": {
 			Handler: h.MsgDelete,
 			Help:    "Deletes documents matched by the query.",
