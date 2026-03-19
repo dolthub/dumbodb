@@ -1,3 +1,0 @@
-[submodule "dolt"]
-	path = dolt
-	url = https://github.com/dolthub/dolt.git
