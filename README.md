@@ -4,11 +4,10 @@ Dongo is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub
 
 ## Build
 
-> **Note:** `go.mod` has a `replace` directive pointing to a local Dolt checkout at
-> `dolt/go`. Builds must be run on the development server where that directory exists
-> (currently `~/dongo/dongo/mayor/rig/`). `go install` from a local clone will fail.
-
 ```bash
+git clone https://github.com/dolthub/dongo
+cd dongo
+git submodule update --init
 make build
 # Binary: .runtime/bin/dongo
 ```
