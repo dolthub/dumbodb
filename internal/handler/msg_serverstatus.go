@@ -64,6 +64,11 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 		}
 	}
 
+	stats, err := h.b.Status(connCtx, new(backends.StatusParams))
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
 	res := must.NotFail(types.NewDocument(
 		"host", host,
 		"version", version.Get().MongoDBVersion,
@@ -73,33 +78,20 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 		"uptimeMillis", uptime.Milliseconds(),
 		"uptimeEstimate", int64(uptime.Seconds()),
 		"localTime", time.Now(),
-		"freeMonitoring", must.NotFail(types.NewDocument(
-			"state", h.StateProvider.Get().TelemetryString(),
-		)),
 		"metrics", must.NotFail(types.NewDocument(
 			"commands", metricsDoc,
 		)),
-
-		// our extensions
-		"ferretdbVersion", version.Get().Version,
-
+		"catalogStats", must.NotFail(types.NewDocument(
+			"collections", int32(stats.CountCollections),
+			"capped", stats.CountCappedCollections,
+			"clustered", int32(0),
+			"timeseries", int32(0),
+			"views", int32(0),
+			"internalCollections", int32(0),
+			"internalViews", int32(0),
+		)),
 		"ok", float64(1),
 	))
-
-	stats, err := h.b.Status(connCtx, new(backends.StatusParams))
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	res.Set("catalogStats", must.NotFail(types.NewDocument(
-		"collections", stats.CountCollections,
-		"capped", stats.CountCappedCollections,
-		"clustered", int32(0),
-		"timeseries", int32(0),
-		"views", int32(0),
-		"internalCollections", int32(0),
-		"internalViews", int32(0),
-	)))
 
 	return documentOpMsg(
 		res,

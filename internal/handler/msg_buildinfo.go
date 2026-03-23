@@ -21,7 +21,6 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dongo/build/version"
-	"github.com/dolthub/dongo/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/must"
 )
@@ -30,11 +29,6 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgBuildInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	aggregationStages := types.MakeArray(len(stages.Stages))
-	for stage := range stages.Stages {
-		aggregationStages.Append(stage)
-	}
-
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"version", version.Get().MongoDBVersion,
@@ -42,17 +36,10 @@ func (h *Handler) MsgBuildInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			"modules", must.NotFail(types.NewArray()),
 			"sysInfo", "deprecated",
 			"versionArray", version.Get().MongoDBVersionArray,
+			"buildEnvironment", version.Get().BuildEnvironment,
 			"bits", int32(strconv.IntSize),
 			"debug", version.Get().DebugBuild,
 			"maxBsonObjectSize", int32(h.MaxBsonObjectSizeBytes),
-			"buildEnvironment", version.Get().BuildEnvironment,
-
-			// our extensions
-			"ferretdbVersion", version.Get().Version,
-			"ferretdbFeatures", must.NotFail(types.NewDocument(
-				"aggregationStages", aggregationStages,
-			)),
-
 			"ok", float64(1),
 		)),
 	)

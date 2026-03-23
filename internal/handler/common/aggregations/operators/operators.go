@@ -88,7 +88,7 @@ func NewOperator(doc *types.Document) (Operator, error) {
 		return nil, newOperatorError(
 			ErrTooManyFields,
 			doc.Command(),
-			"The operator field specifies more than one operator",
+			fmt.Sprintf("An object representing an expression must have exactly one field: %s", types.FormatAnyValue(doc)),
 		)
 	}
 

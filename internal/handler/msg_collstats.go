@@ -113,53 +113,71 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
-	pairs := []any{
-		"ns", dbName + "." + collection,
-		"size", stats.SizeCollection / scale,
-		"count", stats.CountDocuments,
-	}
-
-	// If there are objects in the collection, calculate the average object size.
-	if stats.CountDocuments > 0 {
-		pairs = append(pairs, "avgObjSize", stats.SizeCollection/stats.CountDocuments)
-	}
-
+	// Build indexSizes document.
 	indexSizes := types.MakeDocument(len(stats.IndexSizes))
 	for _, indexSize := range stats.IndexSizes {
-		indexSizes.Set(indexSize.Name, indexSize.Size/scale)
+		indexSizes.Set(indexSize.Name, int32(indexSize.Size/scale))
 	}
 
-	// MongoDB uses "numbers" that could be int32 or int64,
-	// FerretDB always returns int64 for simplicity.
-	pairs = append(pairs,
-		"storageSize", stats.SizeCollection/scale,
-	)
+	// Build indexDetails document (one entry per index, value is an empty document).
+	indexDetails := types.MakeDocument(len(indexes.Indexes))
+	for _, idx := range indexes.Indexes {
+		indexDetails.Set(idx.Name, must.NotFail(types.NewDocument()))
+	}
 
-	if found {
+	var pairs []any
+
+	if !found {
+		// Collection does not exist in the backend: return minimal stats.
+		pairs = []any{
+			"ns", dbName + "." + collection,
+			"size", int32(stats.SizeCollection / scale),
+			"count", int32(stats.CountDocuments),
+			"numOrphanDocs", int32(0),
+			"storageSize", int32(stats.SizeCollection / scale),
+			"totalSize", int32(stats.SizeTotal / scale),
+			"nindexes", int32(len(indexes.Indexes)),
+			"totalIndexSize", int32(stats.SizeIndexes / scale),
+			"indexDetails", indexDetails,
+			"indexSizes", indexSizes,
+			"scaleFactor", int32(scale),
+			"ok", float64(1),
+		}
+	} else {
+		// Collection exists: return full stats with freeStorageSize, capped, indexBuilds, etc.
+		pairs = []any{
+			"ns", dbName + "." + collection,
+			"size", int32(stats.SizeCollection / scale),
+			"count", int32(stats.CountDocuments),
+		}
+
+		if stats.CountDocuments > 0 {
+			pairs = append(pairs, "avgObjSize", int32(stats.SizeCollection/stats.CountDocuments))
+		}
+
 		pairs = append(pairs,
-			"freeStorageSize", stats.SizeFreeStorage/scale,
+			"numOrphanDocs", int32(0),
+			"storageSize", int32(stats.SizeCollection/scale),
+			"freeStorageSize", int32(stats.SizeFreeStorage/scale),
+			"capped", cInfo.Capped(),
+			"nindexes", int32(len(indexes.Indexes)),
+			"indexDetails", indexDetails,
+			"indexBuilds", must.NotFail(types.NewArray()),
+			"totalIndexSize", int32(stats.SizeIndexes/scale),
+			"indexSizes", indexSizes,
+			"totalSize", int32(stats.SizeTotal/scale),
+			"scaleFactor", int32(scale),
 		)
+
+		if cInfo.Capped() {
+			pairs = append(pairs,
+				"max", cInfo.CappedDocuments,
+				"maxSize", cInfo.CappedSize/scale,
+			)
+		}
+
+		pairs = append(pairs, "ok", float64(1))
 	}
-
-	pairs = append(pairs,
-		"nindexes", int64(len(indexes.Indexes)),
-		"totalIndexSize", stats.SizeIndexes/scale,
-		"totalSize", stats.SizeTotal/scale,
-		"indexSizes", indexSizes,
-		"scaleFactor", int32(scale),
-		"capped", cInfo.Capped(),
-	)
-
-	if cInfo.Capped() {
-		pairs = append(pairs,
-			"max", cInfo.CappedDocuments,
-			"maxSize", cInfo.CappedSize/scale,
-		)
-	}
-
-	pairs = append(pairs,
-		"ok", float64(1),
-	)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(pairs...)),

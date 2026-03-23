@@ -47,10 +47,7 @@ func (h *Handler) MsgGetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 	common.Ignored(document, h.L, "comment")
 
-	mechanisms := must.NotFail(types.NewArray("PLAIN"))
-	if h.EnableNewAuth {
-		mechanisms = must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
-	}
+	mechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
 
 	parameters := must.NotFail(types.NewDocument(
 		// to add a new parameter, fill template and place it in the alphabetical order position
@@ -142,14 +139,14 @@ func extractGetParameter(getParameter any) (showDetails, allParameters bool, err
 
 	if param, ok := getParameter.(*types.Document); ok {
 		if v, _ := param.Get("showDetails"); v != nil {
-			showDetails, err = handlerparams.GetBoolOptionalParam("showDetails", v)
+			showDetails, err = handlerparams.GetBoolOptionalParam("getParameter.showDetails", v)
 			if err != nil {
 				return false, false, lazyerrors.Error(err)
 			}
 		}
 
 		if v, _ := param.Get("allParameters"); v != nil {
-			allParameters, err = handlerparams.GetBoolOptionalParam("allParameters", v)
+			allParameters, err = handlerparams.GetBoolOptionalParam("getParameter.allParameters", v)
 			if err != nil {
 				return false, false, lazyerrors.Error(err)
 			}

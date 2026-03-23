@@ -55,7 +55,10 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	if !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrTypeMismatch,
-			fmt.Sprintf("collection name has invalid type %s", handlerparams.AliasFromType(namespaceParam)),
+			fmt.Sprintf(
+				"BSON field 'dataSize.dataSize' is the wrong type '%s', expected type 'string'",
+				handlerparams.AliasFromType(namespaceParam),
+			),
 			document.Command(),
 		)
 	}
@@ -97,13 +100,19 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	pairs := []any{
+		"size", stats.SizeTotal,
+		"numObjects", stats.CountDocuments,
+		"millis", int64(time.Since(started).Milliseconds()),
+	}
+
+	if stats.CountDocuments > 0 || stats.SizeTotal > 0 {
+		pairs = append(pairs, "estimate", false)
+	}
+
+	pairs = append(pairs, "ok", float64(1))
+
 	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"estimate", false,
-			"size", stats.SizeTotal,
-			"numObjects", stats.CountDocuments,
-			"millis", int32(time.Since(started).Milliseconds()),
-			"ok", float64(1),
-		)),
+		must.NotFail(types.NewDocument(pairs...)),
 	)
 }

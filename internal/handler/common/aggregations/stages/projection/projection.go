@@ -117,6 +117,7 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrWrongPositionalOperatorLocation,
 				"Invalid $project :: caused by :: "+
+					"As of 4.4, it's illegal to specify positional operator in the middle of a path."+
 					"Positional projection may only be used at the end, "+
 					"for example: a.b.$. If the query previously used a form "+
 					"like a.b.$.d, remove the parts following the '$' and "+
@@ -220,14 +221,14 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			if *projectionVal {
 				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrProjectionExIn,
-					fmt.Sprintf("Cannot do exclusion on field %s in inclusion projection", key),
+					fmt.Sprintf("Invalid $project :: caused by :: Cannot do exclusion on field %s in inclusion projection", key),
 					"projection",
 				)
 			}
 
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrProjectionInEx,
-				fmt.Sprintf("Cannot do inclusion on field %s in exclusion projection", key),
+				fmt.Sprintf("Invalid $project :: caused by :: Cannot do inclusion on field %s in exclusion projection", key),
 				"projection",
 			)
 		}
@@ -665,7 +666,7 @@ func processOperatorError(err error) error {
 		case operators.ErrInvalidExpression:
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrAggregateInvalidExpression,
-				"Invalid $project :: caused by :: "+opErr.Error(),
+				fmt.Sprintf("Invalid $project :: caused by :: Unknown expression %s", opErr.Name()),
 				"$project (stage)",
 			)
 		case operators.ErrInvalidNestedExpression:

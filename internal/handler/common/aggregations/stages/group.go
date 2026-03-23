@@ -400,7 +400,7 @@ func processGroupStageError(err error) error {
 		case operators.ErrTooManyFields:
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrExpressionWrongLenOfFields,
-				"An object representing an expression must have exactly one field",
+				opErr.Error(),
 				"$group (stage)",
 			)
 		case operators.ErrNotImplemented:
@@ -437,7 +437,7 @@ func processGroupStageError(err error) error {
 		case aggregations.ErrInvalidExpression:
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrFailedToParse,
-				"'$' starts with an invalid character for a user variable name",
+				fmt.Sprintf("'%s' starts with an invalid character for a user variable name", exErr.Name()),
 				"$group (stage)",
 			)
 		case aggregations.ErrEmptyFieldPath:

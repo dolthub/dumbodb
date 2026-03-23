@@ -94,7 +94,7 @@ func GetValidatedNumberParamWithMinValue(command string, param string, value any
 			return 0, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrTypeMismatch,
 				fmt.Sprintf(
-					`BSON field '%s.%s' is the wrong type '%s', expected types '[long, int, decimal, double]'`,
+					`BSON field '%s.%s' is the wrong type '%s', expected types '[long, int, decimal, double']`,
 					command, param, AliasFromType(value),
 				),
 				command,
@@ -214,7 +214,7 @@ func GetBoolOptionalParam(key string, v any) (bool, error) {
 		return v != 0, nil
 	default:
 		msg := fmt.Sprintf(
-			`BSON field '%s' is the wrong type '%s', expected types '[bool, long, int, decimal, double]'`,
+			`BSON field '%s' is the wrong type '%s', expected types '[bool, long, int, decimal, double']`,
 			key,
 			AliasFromType(v),
 		)

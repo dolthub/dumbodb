@@ -16,7 +16,10 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"syscall"
 
 	"github.com/FerretDB/wire"
 
@@ -49,7 +52,7 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	var s any
 	if s, err = document.Get("scale"); err == nil {
-		if scale, err = handlerparams.GetValidatedNumberParamWithMinValue(command, "scale", s, 1); err != nil {
+		if scale, err = dbStatsGetScale(command, s); err != nil {
 			return nil, err
 		}
 	}
@@ -112,55 +115,101 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
-	// MongoDB uses "numbers" that could be int32 or int64,
-	// FerretDB always returns int64 for simplicity.
+	var avgObjSize float64
+	if stats.CountDocuments > 0 {
+		avgObjSize = float64(stats.SizeCollections) / float64(stats.CountDocuments)
+	}
+
 	pairs := []any{
 		"db", dbName,
 		"collections", int64(len(list.Collections)),
 		// TODO https://github.com/dolthub/dongo/issues/176
 		"views", int64(0),
 		"objects", stats.CountDocuments,
-	}
-
-	if stats.CountDocuments > 0 {
-		pairs = append(pairs, "avgObjSize", stats.SizeCollections/stats.CountDocuments)
-	}
-
-	pairs = append(pairs,
-		"dataSize", stats.SizeCollections/scale,
-		"storageSize", stats.SizeCollections/scale,
-	)
-
-	if freeStorage {
-		pairs = append(pairs,
-			"freeStorageSize", stats.SizeFreeStorage/scale,
-		)
-	}
-
-	pairs = append(pairs,
+		"avgObjSize", avgObjSize,
+		"dataSize", float64(stats.SizeCollections) / float64(scale),
+		"storageSize", float64(stats.SizeCollections) / float64(scale),
 		"indexes", nIndexes,
-		"indexSize", stats.SizeIndexes/scale,
-	)
-
-	// add indexFreeStorageSize
-	// TODO https://github.com/dolthub/dongo/issues/2447
-
-	pairs = append(pairs,
-		"totalSize", stats.SizeTotal/scale,
-	)
+		"indexSize", float64(stats.SizeIndexes) / float64(scale),
+		"totalSize", float64(stats.SizeTotal) / float64(scale),
+	}
 
 	if freeStorage {
 		pairs = append(pairs,
-			"totalFreeStorageSize", (stats.SizeFreeStorage)/scale,
+			"freeStorageSize", float64(stats.SizeFreeStorage)/float64(scale),
+			"indexFreeStorageSize", float64(0),
+			"totalFreeStorageSize", float64(stats.SizeFreeStorage)/float64(scale),
 		)
+	}
+
+	var fsStat syscall.Statfs_t
+	var fsUsedSize, fsTotalSize float64
+	if (stats.CountDocuments > 0 || stats.SizeTotal > 0) && syscall.Statfs("/", &fsStat) == nil {
+		fsTotalSize = float64(fsStat.Blocks) * float64(fsStat.Bsize)
+		fsUsedSize = fsTotalSize - float64(fsStat.Bfree)*float64(fsStat.Bsize)
 	}
 
 	pairs = append(pairs,
 		"scaleFactor", scale,
+		"fsUsedSize", fsUsedSize,
+		"fsTotalSize", fsTotalSize,
 		"ok", float64(1),
 	)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(pairs...)),
 	)
+}
+
+// dbStatsGetScale validates and returns the scale parameter for dbStats.
+// MongoDB returns BadValue (code 2) for negative/zero scale, unlike collStats which returns Location51024.
+func dbStatsGetScale(command string, value any) (int64, error) {
+	whole, err := handlerparams.GetWholeNumberParam(value)
+	if err != nil {
+		switch {
+		case errors.Is(err, handlerparams.ErrUnexpectedType):
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				fmt.Sprintf(
+					`BSON field '%s.scale' is the wrong type '%s', expected types '[long, int, decimal, double']`,
+					command, handlerparams.AliasFromType(value),
+				),
+				command,
+			)
+		case errors.Is(err, handlerparams.ErrNotWholeNumber):
+			if math.Signbit(value.(float64)) {
+				return 0, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"Scale factor must be greater than zero",
+					command,
+				)
+			}
+			// non-integer positive numbers: round down
+			return int64(math.Floor(value.(float64))), nil
+		case errors.Is(err, handlerparams.ErrLongExceededPositive):
+			return math.MaxInt32, nil
+		case errors.Is(err, handlerparams.ErrLongExceededNegative):
+			return 0, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"Scale factor must be greater than zero",
+				command,
+			)
+		default:
+			return 0, lazyerrors.Error(err)
+		}
+	}
+
+	if whole < 1 {
+		return 0, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"Scale factor must be greater than zero",
+			command,
+		)
+	}
+
+	if whole > math.MaxInt32 {
+		return math.MaxInt32, nil
+	}
+
+	return whole, nil
 }

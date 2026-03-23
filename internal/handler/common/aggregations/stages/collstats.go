@@ -46,9 +46,11 @@ type storageStats struct {
 func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$collStats")
 	if err != nil {
+		// Format as "key: value" without surrounding braces, matching MongoDB's error format.
+		stageValue, _ := stage.Get("$collStats")
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageCollStatsInvalidArg,
-			fmt.Sprintf("$collStats must take a nested object but found: %s", types.FormatAnyValue(stage)),
+			fmt.Sprintf("$collStats must take a nested object but found: $collStats: %s", types.FormatAnyValue(stageValue)),
 			"$collStats (stage)",
 		)
 	}

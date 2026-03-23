@@ -127,7 +127,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrTypeMismatch,
 				fmt.Sprintf(
-					`BSON field 'aggregate.maxTimeMS' is the wrong type '%s', expected types '[long, int, decimal, double]'`,
+					`BSON field 'aggregate.maxTimeMS' is the wrong type '%s', expected types '[long, int, decimal, double']`,
 					handlerparams.AliasFromType(v),
 				),
 				document.Command(),
@@ -141,7 +141,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		case errors.Is(err, handlerparams.ErrLongExceededPositive):
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				fmt.Sprintf("%s value for maxTimeMS is out of range", types.FormatAnyValue(v)),
+				fmt.Sprintf("%d value for maxTimeMS is out of range [0, 2147483647]", int64(math.MaxInt64)),
 				document.Command(),
 			)
 		case errors.Is(err, handlerparams.ErrLongExceededNegative):
@@ -166,7 +166,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if maxTimeMS > math.MaxInt32 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			fmt.Sprintf("%v value for maxTimeMS is out of range", v),
+			fmt.Sprintf("%v value for maxTimeMS is out of range [0, 2147483647]", v),
 			document.Command(),
 		)
 	}
@@ -232,10 +232,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrTypeMismatch,
-			fmt.Sprintf(
-				`BSON field 'cursor' is the wrong type '%s', expected type 'object'`,
-				handlerparams.AliasFromType(v),
-			),
+			"cursor field must be missing or an object",
 			document.Command(),
 		)
 	}
@@ -245,7 +242,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		v = int32(101)
 	}
 
-	batchSize, err := handlerparams.GetValidatedNumberParamWithMinValue(document.Command(), "batchSize", v, 0)
+	batchSize, err := handlerparams.GetValidatedNumberParamWithMinValue("cursor", "batchSize", v, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +469,7 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 	doc := must.NotFail(types.NewDocument(
 		"ns", p.dbName+"."+p.cName,
 		"host", host,
-		"localTime", time.Now().UTC().Format(time.RFC3339),
+		"localTime", time.Now().UTC(),
 	))
 
 	var (
@@ -486,7 +483,12 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNamespaceNotFound,
-				fmt.Sprintf("ns not found: %s.%s", p.dbName, p.cName),
+				fmt.Sprintf(
+					"PlanExecutor error during aggregation :: caused by :: "+
+						"Unable to retrieve storageStats in $collStats stage :: "+
+						"caused by :: Collection [%s.%s] not found.",
+					p.dbName, p.cName,
+				),
 				"aggregate",
 			)
 		}

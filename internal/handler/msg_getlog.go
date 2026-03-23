@@ -86,8 +86,8 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		resDoc = must.NotFail(types.NewDocument(
+			"totalLinesWritten", int32(res.Len()),
 			"log", must.NotFail(bson.ToArray(res)),
-			"totalLinesWritten", int64(res.Len()),
 			"ok", float64(1),
 		))
 
@@ -157,15 +157,15 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			log.Append(string(b))
 		}
 		resDoc = must.NotFail(types.NewDocument(
+			"totalLinesWritten", int32(log.Len()),
 			"log", &log,
-			"totalLinesWritten", int64(log.Len()),
 			"ok", float64(1),
 		))
 
 	default:
 		return nil, handlererrors.NewCommandError(
 			handlererrors.ErrOperationFailed,
-			fmt.Errorf("no RecentEntries named: %s", getLog),
+			fmt.Errorf("No log named '%s'", getLog),
 		)
 	}
 

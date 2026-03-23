@@ -154,12 +154,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 				}
 			}
 		case float64:
-			if math.IsInf(value, 0) {
-				return newValidationError(
-					ErrValidation, fmt.Errorf("invalid value: { %q: %f } (infinity values are not allowed)", key, value),
-				)
-			}
-
 			if value == 0 && math.Signbit(value) {
 				d.Set(key, math.Copysign(0, +1))
 			}
