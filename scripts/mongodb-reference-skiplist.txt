@@ -31,3 +31,16 @@ TestOpQueryIsMaster
 TestOpQueryIsMasterHelloOk
 TestSASLContinueErrors
 TestSASLContinueOpQueryErrors
+
+# --- Category: Error code/message divergence in MongoDB 7.0.8 ---
+#
+# These tests assert error Code:73 (InvalidNamespace) for invalid collection
+# name types, but MongoDB 7.0.8 actually returns Code:2 (BadValue) for most
+# subtypes. This is a FerretDB test suite bug — the assertions were written
+# against a MongoDB version with different error codes.
+#
+# Reference: docs/ferretdb-test-analysis.md, Category E
+#
+TestDistinctCommandErrors
+TestExplainCommandQueryErrors
+TestQueryBadFindType
