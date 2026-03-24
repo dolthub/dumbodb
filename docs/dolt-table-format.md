@@ -200,25 +200,7 @@ NBS root → STRT
 
 ---
 
-## 3. Migration from Option A (TUPM-valued ADRM entries)
-
-Existing databases store TUPM hashes (prolly.Map root hashes) in the ADRM.
-Migration at `getOrOpenDB` time:
-
-1. Detect: read each ADRM entry; check if hash points to TUPM chunk
-2. For each TUPM entry:
-   a. Open prolly.Map from the TUPM hash
-   b. Build DTBL flatbuffer wrapping the map
-   c. Write DTBL to value store
-   d. Update ADRM entry: replace TUPM hash with DTBL hash
-3. Write new RTVL with migrated ADRM
-4. Update working set with new RTVL
-
-Migration is non-destructive: TUPM chunks remain in the store (NBS is append-only).
-
----
-
-## 4. dolt CLI Compatibility After Option C
+## 3. dolt CLI Compatibility After Option C
 
 | Command               | Works? | Notes                                              |
 |-----------------------|--------|----------------------------------------------------|
