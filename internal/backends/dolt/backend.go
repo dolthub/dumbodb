@@ -56,8 +56,9 @@ const (
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
 
-	// mainDataset is the dataset ID used for the "heads/main" branch.
-	mainDataset = "heads/main"
+	// mainDataset is the dataset ID used for the "refs/heads/main" branch.
+	// Dolt expects the full ref path including "refs/" prefix.
+	mainDataset = "refs/heads/main"
 )
 
 // dbState holds the open Dolt store for a single MongoDB database.
