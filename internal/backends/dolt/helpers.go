@@ -23,6 +23,7 @@ import (
 	"github.com/dolthub/dolt/go/store/pool"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
+	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 )
 
@@ -91,14 +92,14 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 		return fmt.Errorf("dolt: flushing address map: %w", err)
 	}
 
-	// Commit the updated collections AM as a new dolt commit.
-	// datas.Database.Commit manages the STRT root format automatically.
+	// Commit the updated collections AM wrapped in an RTVL flatbuffer.
 	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", "update")
 	if err != nil {
 		return fmt.Errorf("dolt: creating commit meta: %w", err)
 	}
 
-	newDS, err := state.doltDB.Commit(ctx, state.ds, tree.ValueFromNode(newAM.Node()), datas.CommitOptions{
+	rtvlMsg := buildRootValueFlatbuffer(newAM)
+	newDS, err := state.doltDB.Commit(ctx, state.ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta: meta,
 	})
 	if err != nil {

@@ -20,7 +20,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/datas"
+	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dongo/internal/backends"
 	"github.com/dolthub/dongo/internal/types"
@@ -69,6 +71,139 @@ func TestInitialCommitMessage(t *testing.T) {
 		t.Errorf("initial commit message = %q, want %q", meta.Description, wantMsg)
 	}
 
+}
+
+// TestRTVLFormat verifies that the head commit's rootValue has file ID "RTVL"
+// and that the embedded ADRM in RTVL.tables can be parsed.
+func TestRTVLFormat(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-rtvl-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	logger := slog.Default()
+
+	b := &Backend{
+		dataDir: dir,
+		l:       logger,
+		dbs:     make(map[string]*dbState),
+	}
+
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	if !state.ds.HasHead() {
+		t.Fatal("expected new database to have a head commit")
+	}
+
+	headValue, _, err := state.ds.MaybeHeadValue()
+	if err != nil {
+		t.Fatalf("MaybeHeadValue: %v", err)
+	}
+
+	headMsg, ok := headValue.(dolttypes.SerialMessage)
+	if !ok {
+		t.Fatalf("head value is %T, want SerialMessage", headValue)
+	}
+
+	fileID := serial.GetFileID([]byte(headMsg))
+	if fileID != serial.RootValueFileID {
+		t.Errorf("head commit rootValue file ID = %q, want %q", fileID, serial.RootValueFileID)
+	}
+
+	// Verify we can parse the RTVL and extract the tables ADRM.
+	rtvl, err := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
+	if err != nil {
+		t.Fatalf("TryGetRootAsRootValue: %v", err)
+	}
+
+	if rtvl.FeatureVersion() != 7 {
+		t.Errorf("RTVL feature_version = %d, want 7", rtvl.FeatureVersion())
+	}
+
+	if rtvl.TablesLength() == 0 {
+		t.Error("RTVL.tables is empty, expected embedded ADRM bytes")
+	}
+}
+
+// TestWorkingSetRTVL verifies that both working_root_addr and staged_root_addr
+// in the working set point to RTVL chunks (not raw ADRM).
+func TestWorkingSetRTVL(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-ws-rtvl-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	logger := slog.Default()
+
+	b := &Backend{
+		dataDir: dir,
+		l:       logger,
+		dbs:     make(map[string]*dbState),
+	}
+
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// Read the working set dataset.
+	wsDs, err := state.doltDB.GetDataset(ctx, workingSetDataset)
+	if err != nil {
+		t.Fatalf("GetDataset(workingSet): %v", err)
+	}
+
+	if !wsDs.HasHead() {
+		t.Fatal("working set dataset has no head")
+	}
+
+	wsHead, err := wsDs.HeadWorkingSet()
+	if err != nil {
+		t.Fatalf("HeadWorkingSet: %v", err)
+	}
+
+	workingAddr := wsHead.WorkingAddr
+	if workingAddr.IsEmpty() {
+		t.Fatal("working_root_addr is empty")
+	}
+
+	if wsHead.StagedAddr == nil {
+		t.Fatal("staged_root_addr is nil")
+	}
+	stagedAddr := *wsHead.StagedAddr
+
+	// Read the working root chunk and verify it's RTVL.
+	workingChunk, err := state.cs.Get(ctx, workingAddr)
+	if err != nil {
+		t.Fatalf("reading working root chunk: %v", err)
+	}
+
+	workingFileID := serial.GetFileID(workingChunk.Data())
+	if workingFileID != serial.RootValueFileID {
+		t.Errorf("working_root_addr chunk file ID = %q, want %q", workingFileID, serial.RootValueFileID)
+	}
+
+	// Read staged root chunk and verify it's also RTVL.
+	stagedChunk, err := state.cs.Get(ctx, stagedAddr)
+	if err != nil {
+		t.Fatalf("reading staged root chunk: %v", err)
+	}
+
+	stagedFileID := serial.GetFileID(stagedChunk.Data())
+	if stagedFileID != serial.RootValueFileID {
+		t.Errorf("staged_root_addr chunk file ID = %q, want %q", stagedFileID, serial.RootValueFileID)
+	}
+
+	// Verify staged root is the same hash as working root (clean state invariant).
+	if workingAddr != stagedAddr {
+		t.Errorf("working_root_addr != staged_root_addr: invariant violated (working=%v, staged=%v)", workingAddr, stagedAddr)
+	}
 }
 
 // TestPersistenceAcrossRestart verifies that documents survive a backend close and reopen.
