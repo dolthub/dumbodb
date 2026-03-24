@@ -5,7 +5,7 @@ Dongo is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub
 ## Build
 
 ```bash
-git clone https://github.com/dolthub/dongo
+git clone --recurse-submodules https://github.com/dolthub/dongo
 cd dongo
 make build
 # Binary: .runtime/bin/dongo
