@@ -104,8 +104,12 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return err
 	}
 
+	dtblHash, err := state.dtblHashForMap(ctx, emptyMap)
+	if err != nil {
+		return err
+	}
 	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
-		return ed.Add(ctx, params.Name, emptyMap.HashOf())
+		return ed.Add(ctx, params.Name, dtblHash)
 	}); err != nil {
 		return err
 	}

@@ -49,6 +49,7 @@ import (
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/datas"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -80,8 +81,15 @@ type dbState struct {
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
 	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
 	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
-	am     prolly.AddressMap     // current collections address map (name → prolly.Map root)
+	am     prolly.AddressMap     // current collections address map (name → DTBL hash)
 	uuids  map[string]string     // collection name → UUID string (in-memory)
+
+	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
+	// collection schema: _id BIGINT NOT NULL PK, doc LONGBLOB NOT NULL.
+	// Written once at DB open and reused for all DTBL construction.
+	collSchemaHash hash.Hash
+	// emptyIndexAM is an empty AddressMap used for the DTBL secondary_indexes field.
+	emptyIndexAM prolly.AddressMap
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -470,6 +478,21 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		ds:     ds,
 		am:     am,
 		uuids:  make(map[string]string),
+	}
+
+	// Initialize DTBL construction helpers: write the shared DSCH chunk once
+	// and create an empty AddressMap for secondary_indexes.
+	schemaMsg := buildCollectionTableSchema()
+	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
+	if err != nil {
+		_ = doltDB.Close()
+		return nil, fmt.Errorf("dolt: writing collection schema chunk: %w", err)
+	}
+	db.collSchemaHash = schemaRef.TargetHash()
+	db.emptyIndexAM, err = prolly.NewEmptyAddressMap(ns)
+	if err != nil {
+		_ = doltDB.Close()
+		return nil, fmt.Errorf("dolt: creating empty index address map: %w", err)
 	}
 
 	b.dbs[dbName] = db

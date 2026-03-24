@@ -62,7 +62,7 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 		return prolly.Map{}, false, nil, nil
 	}
 
-	m, err := openMap(ctx, state.ns, rootHash)
+	m, err := openCollection(ctx, state.cs, state.ns, rootHash)
 	if err != nil {
 		return prolly.Map{}, false, nil, err
 	}
@@ -200,9 +200,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	// Update the address map.
+	// Wrap the updated map in a DTBL chunk and update the address map.
+	dtblHash, err := state.dtblHashForMap(ctx, newMap)
+	if err != nil {
+		return nil, err
+	}
 	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
-		return ed.Update(ctx, c.name, newMap.HashOf())
+		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
 	}
@@ -340,8 +344,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
+	dtblHash, err := state.dtblHashForMap(ctx, newMap)
+	if err != nil {
+		return nil, err
+	}
 	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
-		return ed.Update(ctx, c.name, newMap.HashOf())
+		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
 	}
@@ -485,8 +493,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, err
 	}
 
+	dtblHash, err := state.dtblHashForMap(ctx, newMap)
+	if err != nil {
+		return nil, err
+	}
 	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
-		return ed.Update(ctx, c.name, newMap.HashOf())
+		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
 	}
@@ -563,7 +575,7 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	}
 
 	if !rootHash.IsEmpty() {
-		return openMap(ctx, state.ns, rootHash)
+		return openCollection(ctx, state.cs, state.ns, rootHash)
 	}
 
 	// Collection doesn't exist: create it.
@@ -572,8 +584,12 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return prolly.Map{}, err
 	}
 
+	dtblHash, err := state.dtblHashForMap(ctx, emptyMap)
+	if err != nil {
+		return prolly.Map{}, err
+	}
 	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
-		return ed.Add(ctx, c.name, emptyMap.HashOf())
+		return ed.Add(ctx, c.name, dtblHash)
 	}); err != nil {
 		return prolly.Map{}, err
 	}
