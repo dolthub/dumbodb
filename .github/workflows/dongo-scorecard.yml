@@ -1,0 +1,80 @@
+name: Dongo FerretDB Scorecard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build dongo
+        run: make build
+
+      - name: Run FerretDB scorecard
+        id: run-scorecard
+        run: make ferretdb-scorecard
+        continue-on-error: true
+
+      - name: Check for startup failure
+        run: |
+          RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
+
+          if [ ! -f "$RESULTS_FILE" ]; then
+            echo "ERROR: Results file not found — dongo may have failed to start or build"
+            exit 1
+          fi
+
+          if grep -qE "^ERROR: Dongo" "$RESULTS_FILE"; then
+            echo "=== Dongo failed to start ==="
+            grep -A 20 "^ERROR: Dongo" "$RESULTS_FILE" || true
+            exit 1
+          fi
+
+      - name: Report pass percentage
+        run: |
+          RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
+
+          PASS=$(grep -c "^--- PASS:" "$RESULTS_FILE" || true)
+          FAIL=$(grep -c "^--- FAIL:" "$RESULTS_FILE" || true)
+          SKIP=$(grep -c "^--- SKIP:" "$RESULTS_FILE" || true)
+          TOTAL=$(( PASS + FAIL + SKIP ))
+
+          if [ "$TOTAL" -gt 0 ]; then
+            RATE=$(awk "BEGIN { printf \"%.1f\", ($PASS / $TOTAL) * 100 }")
+          else
+            RATE="0.0"
+          fi
+
+          echo ""
+          echo "================================================"
+          echo "  DONGO FERRETDB COMPATIBILITY SCORECARD"
+          echo "================================================"
+          printf "  Tests run     : %d\n" "$TOTAL"
+          printf "  Tests passed  : %d\n" "$PASS"
+          printf "  Tests failed  : %d\n" "$FAIL"
+          printf "  Tests skipped : %d\n" "$SKIP"
+          echo "  --------------------------------"
+          printf "  PASS RATE: %d/%d (%s%%)\n" "$PASS" "$TOTAL" "$RATE"
+          echo "================================================"
+          echo ""
+
+      - name: Upload scorecard artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ferretdb-scorecard
+          path: .runtime/ferretdb-scorecard.txt
