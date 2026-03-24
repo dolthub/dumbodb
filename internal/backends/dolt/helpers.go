@@ -246,7 +246,8 @@ func (state *dbState) dtblHashForMap(ctx context.Context, m prolly.Map) (hash.Ha
 
 // updateAddressMap applies a mutation to the collections address map and
 // persists it to the dolt working set only. HEAD stays at the last explicit
-// commit; the working set diverges as writes accumulate.
+// commit; only working_root_addr advances. staged_root_addr stays at HEAD's
+// rootValue so that `dolt status` shows "Changes not staged for commit".
 // The caller must hold state.mu (write lock).
 func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.AddressMapEditor) error) error {
 	editor := state.am.Editor()
@@ -260,18 +261,52 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 		return fmt.Errorf("dolt: flushing address map: %w", err)
 	}
 
-	// Write the RTVL chunk to the value store so the working set reference is
+	// Write the working RTVL chunk to the value store so the working set reference is
 	// resolvable. updateWorkingSet recomputes the same hash deterministically.
-	rtvlMsg := buildRootValueFlatbuffer(newAM)
-	if _, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(rtvlMsg)); err != nil {
+	workingRtvlMsg := buildRootValueFlatbuffer(newAM)
+	if _, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvlMsg)); err != nil {
 		return fmt.Errorf("dolt: writing RTVL for working set: %w", err)
 	}
 
-	if err := updateWorkingSet(ctx, state.doltDB, newAM); err != nil {
+	// Get the staged AM from HEAD's rootValue. Staged stays at HEAD until an
+	// explicit stage operation advances it.
+	stagedAM, err := state.headRootAM(ctx)
+	if err != nil {
+		return fmt.Errorf("dolt: reading HEAD AM for staged root: %w", err)
+	}
+
+	if err := updateWorkingSet(ctx, state.doltDB, newAM, stagedAM); err != nil {
 		return fmt.Errorf("dolt: updating working set: %w", err)
 	}
 
 	state.am = newAM
 
 	return nil
+}
+
+// headRootAM returns the collections AddressMap from HEAD's rootValue.
+// This is the correct staged root: staged stays equal to HEAD until an
+// explicit stage operation advances it.
+// The caller must hold state.mu (read or write lock).
+func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error) {
+	if !state.ds.HasHead() {
+		return prolly.NewEmptyAddressMap(state.ns)
+	}
+	headValue, _, err := state.ds.MaybeHeadValue()
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("reading HEAD value: %w", err)
+	}
+	headMsg, ok := headValue.(dolttypes.SerialMessage)
+	if !ok {
+		return prolly.AddressMap{}, fmt.Errorf("unexpected HEAD value type %T", headValue)
+	}
+	rtvl, err := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("parsing HEAD RTVL: %w", err)
+	}
+	amNode, _, err := tree.NodeFromBytes(rtvl.TablesBytes())
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("parsing AM from HEAD RTVL: %w", err)
+	}
+	return prolly.NewAddressMap(amNode, state.ns)
 }

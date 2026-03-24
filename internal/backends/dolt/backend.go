@@ -26,9 +26,9 @@
 // This layout is compatible with Dolt CLI tools (dolt log, dolt fsck, dolt status, etc.).
 //
 // Invariant: after init, HEAD stays at the "Initialize database" commit. Writes
-// update only the working set (WRST). WRST.working_root_addr == WRST.staged_root_addr
-// always (both point to the latest RTVL), but diverge from HEAD after the first
-// write. `dolt status` therefore shows a dirty working set after writes.
+// update only the working set (WRST). WRST.working_root_addr advances with each
+// write; WRST.staged_root_addr stays equal to HEAD's rootValue until an explicit
+// stage operation. `dolt status` shows "Changes not staged for commit" after writes.
 //
 // Branch parsing: the database name may contain a __ separator (e.g. mydb__main)
 // to specify the branch, but currently all data lives in a single NBS store per
@@ -527,7 +527,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		return datas.Dataset{}, am, err
 	}
 
-	if err := updateWorkingSet(ctx, doltDB, am); err != nil {
+	if err := updateWorkingSet(ctx, doltDB, am, am); err != nil {
 		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
 	}
 
@@ -633,24 +633,26 @@ func buildStoreRootFlatbuffer(refsAM prolly.AddressMap) serial.Message {
 	return serial.FinishMessage(builder, serial.StoreRootEnd(builder), []byte(serial.StoreRootFileID))
 }
 
-// updateWorkingSet writes the working set to point to the RTVL chunk for the
-// current collections AM. This is required for `dolt status` to function —
-// without a workingSets/heads/main entry, dolt panics trying to read the working set.
+// updateWorkingSet writes the working set with independent working and staged roots.
+// This is required for `dolt status` to function — without a workingSets/heads/main
+// entry, dolt panics trying to read the working set.
 //
-// The caller must have already written the RTVL chunk to the value store via
-// vs.WriteValue so that the hash reference is resolvable in the chunk store.
-//
-// Invariant: working_root_addr == staged_root_addr (both point to the latest
-// RTVL). After writes, these diverge from HEAD rootValue, so `dolt status`
-// shows a dirty working set.
-func updateWorkingSet(ctx context.Context, doltDB datas.Database, am prolly.AddressMap) error {
-	// Build the RTVL value. The RTVL chunk must already be in the store
-	// (written by the caller via vs.WriteValue); we recompute its hash here.
-	rtvlMsg := buildRootValueFlatbuffer(am)
-	rtvlValue := dolttypes.SerialMessage(rtvlMsg)
-	rtvlRef, err := dolttypes.NewRef(rtvlValue, dolttypes.Format_DOLT)
+// workingAM is the latest uncommitted state; stagedAM is what has been staged for
+// the next commit (typically HEAD's rootValue until an explicit stage operation).
+// The RTVL chunk for workingAM must already be in the value store (written by the
+// caller via vs.WriteValue). The staged RTVL is recomputed from stagedAM and its
+// chunk must also be present in the store (e.g. written by a prior commit).
+func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, stagedAM prolly.AddressMap) error {
+	workingRtvlMsg := buildRootValueFlatbuffer(workingAM)
+	workingRtvlRef, err := dolttypes.NewRef(dolttypes.SerialMessage(workingRtvlMsg), dolttypes.Format_DOLT)
 	if err != nil {
-		return fmt.Errorf("creating RTVL ref: %w", err)
+		return fmt.Errorf("creating working RTVL ref: %w", err)
+	}
+
+	stagedRtvlMsg := buildRootValueFlatbuffer(stagedAM)
+	stagedRtvlRef, err := dolttypes.NewRef(dolttypes.SerialMessage(stagedRtvlMsg), dolttypes.Format_DOLT)
+	if err != nil {
+		return fmt.Errorf("creating staged RTVL ref: %w", err)
 	}
 
 	wsDs, err := doltDB.GetDataset(ctx, workingSetDataset)
@@ -668,8 +670,8 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, am prolly.Addr
 
 	spec := datas.WorkingSetSpec{
 		Meta:        meta,
-		WorkingRoot: rtvlRef,
-		StagedRoot:  rtvlRef,
+		WorkingRoot: workingRtvlRef,
+		StagedRoot:  stagedRtvlRef,
 	}
 
 	_, err = doltDB.UpdateWorkingSet(ctx, wsDs, spec, prevHash)

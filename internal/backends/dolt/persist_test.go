@@ -200,9 +200,103 @@ func TestWorkingSetRTVL(t *testing.T) {
 		t.Errorf("staged_root_addr chunk file ID = %q, want %q", stagedFileID, serial.RootValueFileID)
 	}
 
-	// Verify staged root is the same hash as working root (clean state invariant).
+	// At init (before any writes), working == staged == HEAD's rootValue.
 	if workingAddr != stagedAddr {
-		t.Errorf("working_root_addr != staged_root_addr: invariant violated (working=%v, staged=%v)", workingAddr, stagedAddr)
+		t.Errorf("working_root_addr != staged_root_addr at init (working=%v, staged=%v)", workingAddr, stagedAddr)
+	}
+}
+
+// TestWorkingSetDivergesAfterWrite verifies that after a document insert,
+// working_root_addr advances while staged_root_addr stays at HEAD's rootValue.
+// This models the git/dolt staging model: `dolt status` should show
+// "Changes not staged for commit" after writes.
+func TestWorkingSetDivergesAfterWrite(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-ws-diverge-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	logger := slog.Default()
+
+	b := &Backend{
+		dataDir: dir,
+		l:       logger,
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// Record HEAD's rootValue hash before any writes — this is the expected staged addr.
+	headValue, _, err := state.ds.MaybeHeadValue()
+	if err != nil {
+		t.Fatalf("MaybeHeadValue: %v", err)
+	}
+	headMsg, ok := headValue.(dolttypes.SerialMessage)
+	if !ok {
+		t.Fatalf("unexpected HEAD value type %T", headValue)
+	}
+	headRef, err := dolttypes.NewRef(headMsg, dolttypes.Format_DOLT)
+	if err != nil {
+		t.Fatalf("NewRef for HEAD: %v", err)
+	}
+	headRootAddr := headRef.TargetHash()
+
+	// Insert a document so the working set diverges from HEAD.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	coll, err := db.Collection("testcoll")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	doc, err := types.NewDocument("_id", int64(1), "v", int64(42))
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	doc.SetRecordID(1)
+	if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	// Read the updated working set.
+	wsDs, err := state.doltDB.GetDataset(ctx, workingSetDataset)
+	if err != nil {
+		t.Fatalf("GetDataset(workingSet): %v", err)
+	}
+	wsHead, err := wsDs.HeadWorkingSet()
+	if err != nil {
+		t.Fatalf("HeadWorkingSet: %v", err)
+	}
+
+	workingAddr := wsHead.WorkingAddr
+	if workingAddr.IsEmpty() {
+		t.Fatal("working_root_addr is empty after write")
+	}
+	if wsHead.StagedAddr == nil {
+		t.Fatal("staged_root_addr is nil after write")
+	}
+	stagedAddr := *wsHead.StagedAddr
+
+	// working must have advanced past HEAD (new data was inserted).
+	if workingAddr == headRootAddr {
+		t.Errorf("working_root_addr did not advance after write (still = HEAD rootValue %v)", workingAddr)
+	}
+
+	// staged must stay equal to HEAD's rootValue (nothing was explicitly staged).
+	if stagedAddr != headRootAddr {
+		t.Errorf("staged_root_addr moved after write: got %v, want HEAD rootValue %v", stagedAddr, headRootAddr)
+	}
+
+	// working and staged must differ after writes.
+	if workingAddr == stagedAddr {
+		t.Errorf("working_root_addr == staged_root_addr after write: staging model is collapsed")
 	}
 }
 
