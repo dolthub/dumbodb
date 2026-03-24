@@ -1,3 +1,139 @@
+# FerretDB Integration Test Analysis
+
+---
+
+## Run 3: MongoDB 7.0.8 (target version) — hq-iay1f
+
+**Date**: 2026-03-24
+**Log**: `/home/ubuntu/mongodb-reference.txt` (7.0.8 run)
+**Issue**: hq-iay1f
+**Prior issues**: hq-xjiy5 (8.2.6 run), hq-u4ih8 (7.0.31 run)
+
+### TL;DR
+
+**This run is a corrupted infrastructure failure — not a valid MongoDB 7.0.8 baseline.**
+
+All 132 tests fail, but for one reason: `TestServerStatusCommandStress` (the first
+test to execute) exhausted the OS file-descriptor limit (`TooManyFilesOpen`, errno 24),
+causing MongoDB to close all open connections and become unreachable. Every subsequent
+test failed immediately with `connection refused` — not because of MongoDB 7.0.8
+behaviour, but because MongoDB had crashed.
+
+**Outcome**: This log cannot be used as a 7.0.8 baseline. The run must be repeated
+with an adequate file-descriptor limit (`ulimit -n 65536` or equivalent before starting
+MongoDB and the test suite).
+
+---
+
+### 1. Failure Count and Classification
+
+**132 tests failed. 0 tests passed.**
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| A: Root cause — file-descriptor exhaustion | 1 | `TestServerStatusCommandStress` triggers `TooManyFilesOpen` + socket EOF cascade |
+| B: Cascading — MongoDB unreachable after crash | 131 | All subsequent tests: `connection refused` to 127.0.0.1:37017 |
+| **Total** | **132** | |
+
+There are **no version-gate failures, no auth/SASL failures, no error-message
+mismatches, and no behavioural differences** observable in this log. Every single
+failure traces back to MongoDB being unreachable.
+
+---
+
+### 2. Root Cause: `TooManyFilesOpen` in TestServerStatusCommandStress
+
+`TestServerStatusCommandStress` is a concurrent stress test that opens many
+simultaneous connections. It was the very first test to run. Within its 42-second
+window it generated:
+
+1. `(TooManyFilesOpen) 24: Too many open files` — the OS EMFILE limit was hit
+2. Multiple `socket was unexpectedly closed: EOF` errors — MongoDB started dropping connections
+3. Connection pool cleared repeatedly — the driver gave up on the connection pool
+
+MongoDB then became completely unresponsive. All subsequent tests, including basic
+ones like `TestPingCommand` and `TestBuildInfoCommand`, failed immediately:
+
+```
+server selection error: server selection timeout, current topology:
+  { Type: Unknown, Servers: [{ Addr: 127.0.0.1:37017, Type: Unknown,
+    Last error: dial tcp 127.0.0.1:37017: connect: connection refused }] }
+```
+
+The test binary ran on macOS/ARM64 (stack traces show `asm_arm64.s` and path
+`/Users/neil/Documents/dongo/ferretdb/integration/`) — not inside Docker.
+macOS defaults to a low per-process file-descriptor limit (256–1024), which a
+concurrent stress test easily exhausts.
+
+---
+
+### 3. Are Any Failures Explainable vs. Surprising?
+
+All 132 failures are **explainable** under a single root cause. There are
+**no surprising failures** that require investigation.
+
+**Not visible in this log:**
+- Whether MongoDB 7.0.8 would pass the non-auth tests (expected: yes)
+- Whether auth/SASL tests would still fail (expected: yes — same no-auth
+  configuration issue identified in the 7.0.31 run, Category B)
+- Whether any genuine 7.0.8 regressions exist (cannot determine)
+
+---
+
+### 4. Comparison Across Runs
+
+| Run | Issue | MongoDB | Failures | Root cause |
+|-----|-------|---------|----------|------------|
+| 1 | hq-xjiy5 | 8.2.6 | 55 | Version mismatch (8.x vs expected 7.0.x) |
+| 2 | hq-u4ih8 | 7.0.31 | 25 | Auth infrastructure + minor-version drift |
+| 3 | hq-iay1f | 7.0.8 | 132 | **Infrastructure crash (ulimit EMFILE)** |
+| Expected | — | 7.0.8 (Docker) | ~0–10 | Auth/SASL only (no users configured) |
+
+Run 3 is a regression in **run quality**, not MongoDB quality. The test environment
+was not configured correctly for a high-concurrency stress suite.
+
+---
+
+### 5. Recommendation: Rerun with Correct Environment
+
+**Immediate fix — raise file-descriptor limit before running:**
+
+```bash
+ulimit -n 65536
+cd ferretdb && docker compose up -d mongodb
+# Wait ~5s, then:
+make mongodb-reference
+```
+
+**Or add to the test script (`scripts/mongodb-reference.sh`):**
+
+```bash
+# Raise fd limit before running integration tests
+ulimit -n 65536 2>/dev/null || true
+```
+
+**Why Docker matters here:** Running MongoDB inside Docker with `--ulimit nofile=65536:65536`
+(or via the compose file) isolates the fd limit from the host macOS default. The
+previous runs that produced 55 and 25 failures presumably had MongoDB running in Docker
+with adequate limits; this run had MongoDB running directly on the macOS host.
+
+**Expected outcome after fix**: ~0–10 failures (auth/SASL infrastructure only),
+matching the projection from the 7.0.31 analysis.
+
+---
+
+### 6. No New Issues Filed
+
+This analysis does not surface any dongo-specific bugs or new actionable items
+beyond what was identified in the 7.0.31 run (hq-u4ih8). The auth/SASL
+infrastructure gap remains the only known non-version failure category.
+
+The delta methodology from hq-u4ih8 still applies unchanged: failures present
+in `ferretdb-scorecard` (dongo) but **absent** in a clean 7.0.8 reference run
+are genuine dongo-vs-MongoDB gaps.
+
+---
+
 # FerretDB Integration Test Analysis: MongoDB 7.0.31 vs 7.0.8
 
 **Date**: 2026-03-24
