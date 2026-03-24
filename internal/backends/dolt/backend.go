@@ -25,8 +25,10 @@
 //
 // This layout is compatible with Dolt CLI tools (dolt log, dolt fsck, dolt status, etc.).
 //
-// Invariant: DCMT.rootValue == WRST.working_root_addr == WRST.staged_root_addr
-// (all three point to the same RTVL hash), so `dolt status` always shows clean.
+// Invariant: after init, HEAD stays at the "Initialize database" commit. Writes
+// update only the working set (WRST). WRST.working_root_addr == WRST.staged_root_addr
+// always (both point to the latest RTVL), but diverge from HEAD after the first
+// write. `dolt status` therefore shows a dirty working set after writes.
 //
 // Branch parsing: the database name may contain a __ separator (e.g. mydb__main)
 // to specify the branch, but currently all data lives in a single NBS store per
@@ -75,10 +77,11 @@ type dbState struct {
 	mu     sync.RWMutex
 	cs     *nbs.GenerationalNBS
 	ns     tree.NodeStore
-	doltDB datas.Database     // manages STRT root format; owns cs lifecycle
-	ds     datas.Dataset      // current "heads/main" dataset, updated on each commit
-	am     prolly.AddressMap  // current collections address map (name → prolly.Map root)
-	uuids  map[string]string  // collection name → UUID string (in-memory)
+	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
+	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
+	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
+	am     prolly.AddressMap     // current collections address map (name → prolly.Map root)
+	uuids  map[string]string     // collection name → UUID string (in-memory)
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -401,24 +404,29 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 				headFileID := serial.GetFileID([]byte(headMsg))
 				switch headFileID {
 				case serial.RootValueFileID:
-					// New RTVL format: extract collections AM from RTVL.tables.
-					rtvl, err := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
-					if err != nil {
-						_ = doltDB.Close()
-						return nil, fmt.Errorf("dolt: parsing RTVL for %q: %w", dbName, err)
+					// RTVL format: prefer the working set — it holds the latest state
+					// after writes that don't create commits (HEAD stays at last explicit
+					// commit). Fall back to HEAD rootValue if the working set is missing.
+					wsAM, wsErr := readAMFromWorkingSet(ctx, doltDB, cs, ns)
+					if wsErr != nil {
+						b.l.Warn("dolt: working set unavailable, falling back to HEAD AM", "db", dbName, "err", wsErr)
+						rtvl, fallbackErr := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
+						if fallbackErr != nil {
+							_ = doltDB.Close()
+							return nil, fmt.Errorf("dolt: parsing RTVL for %q: %w", dbName, fallbackErr)
+						}
+						amNode, _, fallbackErr := tree.NodeFromBytes(rtvl.TablesBytes())
+						if fallbackErr != nil {
+							_ = doltDB.Close()
+							return nil, fmt.Errorf("dolt: parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
+						}
+						wsAM, fallbackErr = prolly.NewAddressMap(amNode, ns)
+						if fallbackErr != nil {
+							_ = doltDB.Close()
+							return nil, fmt.Errorf("dolt: loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
+						}
 					}
-
-					amNode, _, err := tree.NodeFromBytes(rtvl.TablesBytes())
-					if err != nil {
-						_ = doltDB.Close()
-						return nil, fmt.Errorf("dolt: parsing collections AM from RTVL for %q: %w", dbName, err)
-					}
-
-					am, err = prolly.NewAddressMap(amNode, ns)
-					if err != nil {
-						_ = doltDB.Close()
-						return nil, fmt.Errorf("dolt: loading collections AM from RTVL for %q: %w", dbName, err)
-					}
+					am = wsAM
 
 				case serial.AddressMapFileID:
 					// Legacy: commit rootValue is raw ADRM. Migrate to RTVL.
@@ -457,6 +465,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	db = &dbState{
 		cs:     cs,
 		ns:     ns,
+		vs:     vs,
 		doltDB: doltDB,
 		ds:     ds,
 		am:     am,
@@ -601,15 +610,19 @@ func buildStoreRootFlatbuffer(refsAM prolly.AddressMap) serial.Message {
 	return serial.FinishMessage(builder, serial.StoreRootEnd(builder), []byte(serial.StoreRootFileID))
 }
 
-// updateWorkingSet writes a clean working set pointing to the RTVL chunk for
-// the current collections AM. This is required for `dolt status` to function —
+// updateWorkingSet writes the working set to point to the RTVL chunk for the
+// current collections AM. This is required for `dolt status` to function —
 // without a workingSets/heads/main entry, dolt panics trying to read the working set.
 //
-// Invariant maintained: working_root_addr == staged_root_addr == HEAD rootValue
-// (all point to the same RTVL hash), so `dolt status` shows "nothing to commit".
+// The caller must have already written the RTVL chunk to the value store via
+// vs.WriteValue so that the hash reference is resolvable in the chunk store.
+//
+// Invariant: working_root_addr == staged_root_addr (both point to the latest
+// RTVL). After writes, these diverge from HEAD rootValue, so `dolt status`
+// shows a dirty working set.
 func updateWorkingSet(ctx context.Context, doltDB datas.Database, am prolly.AddressMap) error {
-	// Build the RTVL value. The same RTVL chunk was already written by the
-	// preceding doltDB.Commit call; we compute its hash deterministically here.
+	// Build the RTVL value. The RTVL chunk must already be in the store
+	// (written by the caller via vs.WriteValue); we recompute its hash here.
 	rtvlMsg := buildRootValueFlatbuffer(am)
 	rtvlValue := dolttypes.SerialMessage(rtvlMsg)
 	rtvlRef, err := dolttypes.NewRef(rtvlValue, dolttypes.Format_DOLT)
@@ -638,4 +651,43 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, am prolly.Addr
 
 	_, err = doltDB.UpdateWorkingSet(ctx, wsDs, spec, prevHash)
 	return err
+}
+
+// readAMFromWorkingSet reads the collections AddressMap from the working set.
+// The working set always reflects the latest writes, even when those writes
+// did not create a dolt commit (HEAD stays at the last explicit commit).
+// Returns an error if the working set is missing or cannot be parsed.
+func readAMFromWorkingSet(ctx context.Context, doltDB datas.Database, cs *nbs.GenerationalNBS, ns tree.NodeStore) (prolly.AddressMap, error) {
+	wsDs, err := doltDB.GetDataset(ctx, workingSetDataset)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("getting working set dataset: %w", err)
+	}
+	if !wsDs.HasHead() {
+		return prolly.AddressMap{}, fmt.Errorf("working set has no head")
+	}
+	wsHead, err := wsDs.HeadWorkingSet()
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("reading working set head: %w", err)
+	}
+	workingAddr := wsHead.WorkingAddr
+	if workingAddr.IsEmpty() {
+		return prolly.AddressMap{}, fmt.Errorf("working_root_addr is empty")
+	}
+	workingChunk, err := cs.Get(ctx, workingAddr)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("reading working root chunk: %w", err)
+	}
+	fileID := serial.GetFileID(workingChunk.Data())
+	if fileID != serial.RootValueFileID {
+		return prolly.AddressMap{}, fmt.Errorf("unexpected working root file ID %q", fileID)
+	}
+	rtvl, err := serial.TryGetRootAsRootValue(workingChunk.Data(), serial.MessagePrefixSz)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("parsing RTVL from working set: %w", err)
+	}
+	amNode, _, err := tree.NodeFromBytes(rtvl.TablesBytes())
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("parsing collections AM from working set: %w", err)
+	}
+	return prolly.NewAddressMap(amNode, ns)
 }

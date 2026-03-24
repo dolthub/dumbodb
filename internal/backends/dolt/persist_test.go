@@ -284,3 +284,71 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 		t.Errorf("expected 1 document after restart, got %d — persistence is broken", count)
 	}
 }
+
+// TestWritesNoNewCommits verifies that N document inserts produce exactly 1 commit
+// (the "Initialize database" commit from init). Writes must update the working set
+// only; they must NOT advance HEAD.
+func TestWritesNoNewCommits(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-writes-no-commits-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	logger := slog.Default()
+
+	b := &Backend{
+		dataDir: dir,
+		l:       logger,
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	// Open the database and capture HEAD hash after init.
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	initAddr, ok := state.ds.MaybeHeadAddr()
+	if !ok {
+		t.Fatal("no HEAD after init")
+	}
+
+	// Insert N documents via the same backend.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	coll, err := db.Collection("testcoll")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	const N = 5
+	for i := 0; i < N; i++ {
+		doc, docErr := types.NewDocument("_id", int64(i), "v", int64(i))
+		if docErr != nil {
+			t.Fatalf("NewDocument[%d]: %v", i, docErr)
+		}
+		doc.SetRecordID(int64(i + 1))
+		_, insErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
+		if insErr != nil {
+			t.Fatalf("InsertAll[%d]: %v", i, insErr)
+		}
+	}
+
+	// Re-read the "heads/main" dataset directly from the doltDB to bypass any
+	// cached state.ds and verify HEAD has not moved.
+	freshDS, err := state.doltDB.GetDataset(ctx, mainDataset)
+	if err != nil {
+		t.Fatalf("GetDataset after writes: %v", err)
+	}
+	headAddr, ok := freshDS.MaybeHeadAddr()
+	if !ok {
+		t.Fatal("no HEAD after writes")
+	}
+	if headAddr != initAddr {
+		t.Errorf("HEAD moved after %d writes (addr %v → %v): writes must not create dolt commits", N, initAddr, headAddr)
+	}
+}

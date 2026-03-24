@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/pool"
 	"github.com/dolthub/dolt/go/store/prolly"
@@ -78,7 +77,8 @@ func buildValue(bsonHash hash.Hash) (val.Tuple, error) {
 }
 
 // updateAddressMap applies a mutation to the collections address map and
-// persists it as a new dolt commit on the "heads/main" dataset.
+// persists it to the dolt working set only. HEAD stays at the last explicit
+// commit; the working set diverges as writes accumulate.
 // The caller must hold state.mu (write lock).
 func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.AddressMapEditor) error) error {
 	editor := state.am.Editor()
@@ -92,18 +92,11 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 		return fmt.Errorf("dolt: flushing address map: %w", err)
 	}
 
-	// Commit the updated collections AM wrapped in an RTVL flatbuffer.
-	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", "update")
-	if err != nil {
-		return fmt.Errorf("dolt: creating commit meta: %w", err)
-	}
-
+	// Write the RTVL chunk to the value store so the working set reference is
+	// resolvable. updateWorkingSet recomputes the same hash deterministically.
 	rtvlMsg := buildRootValueFlatbuffer(newAM)
-	newDS, err := state.doltDB.Commit(ctx, state.ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
-		Meta: meta,
-	})
-	if err != nil {
-		return fmt.Errorf("dolt: committing collections AM: %w", err)
+	if _, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(rtvlMsg)); err != nil {
+		return fmt.Errorf("dolt: writing RTVL for working set: %w", err)
 	}
 
 	if err := updateWorkingSet(ctx, state.doltDB, newAM); err != nil {
@@ -111,7 +104,6 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 	}
 
 	state.am = newAM
-	state.ds = newDS
 
 	return nil
 }
