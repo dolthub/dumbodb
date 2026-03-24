@@ -20,9 +20,56 @@ import (
 	"os"
 	"testing"
 
+	"github.com/dolthub/dolt/go/store/datas"
+
 	"github.com/dolthub/dongo/internal/backends"
 	"github.com/dolthub/dongo/internal/types"
 )
+
+// TestInitialCommitMessage verifies that a brand-new database gets an "Initialize database"
+// root commit with no parents, satisfying the requirement that dolt log shows a clean
+// ancestry for new stores.
+func TestInitialCommitMessage(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-init-commit-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	logger := slog.Default()
+
+	b := &Backend{
+		dataDir: dir,
+		l:       logger,
+		dbs:     make(map[string]*dbState),
+	}
+
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	if !state.ds.HasHead() {
+		t.Fatal("expected new database to have a head commit")
+	}
+
+	headVal, ok := state.ds.MaybeHead()
+	if !ok {
+		t.Fatal("MaybeHead returned false")
+	}
+
+	meta, err := datas.GetCommitMeta(ctx, headVal)
+	if err != nil {
+		t.Fatalf("GetCommitMeta: %v", err)
+	}
+
+	const wantMsg = "Initialize database"
+	if meta.Description != wantMsg {
+		t.Errorf("initial commit message = %q, want %q", meta.Description, wantMsg)
+	}
+
+}
 
 // TestPersistenceAcrossRestart verifies that documents survive a backend close and reopen.
 // This is the end-to-end persistence test described in do-q040.

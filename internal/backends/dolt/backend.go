@@ -319,7 +319,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			return nil, fmt.Errorf("dolt: creating empty address map for %q: %w", dbName, err)
 		}
 
-		ds, am, err = commitCollectionsAM(ctx, doltDB, datas.Dataset{}, am, "init")
+		ds, am, err = commitCollectionsAM(ctx, doltDB, datas.Dataset{}, am, "Initialize database")
 		if err != nil {
 			_ = doltDB.Close()
 			return nil, fmt.Errorf("dolt: initial commit for %q: %w", dbName, err)
