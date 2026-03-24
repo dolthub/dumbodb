@@ -16,9 +16,13 @@
 //
 // Storage hierarchy:
 //   - One nbs.GenerationalNBS per MongoDB database, stored in <dataDir>/<dbName>/
-//   - The NBS store root hash points to a prolly.AddressMap node
-//   - The AddressMap maps collection names to prolly.Map root hashes
+//   - The NBS store root chunk is a StoreRoot flatbuffer (STRT)
+//   - STRT embeds a refsAM inline: AddressMap mapping "heads/main" → commitHash
+//   - commitHash → Commit (DCMT) with rootValue = collections AddressMap bytes
+//   - Collections AddressMap (ADRM) maps collection names to prolly.Map root hashes
 //   - Each prolly.Map uses key=Int64(RecordID) and value=BytesAddr(BSON hash)
+//
+// This layout is compatible with Dolt CLI tools (dolt log, dolt fsck, etc.).
 //
 // Branch parsing: the database name may contain a __ separator (e.g. mydb__main)
 // to specify the branch, but currently all data lives in a single NBS store per
@@ -35,6 +39,10 @@ import (
 	"strings"
 	"sync"
 
+	fb "github.com/dolthub/flatbuffers/v23/go"
+
+	"github.com/dolthub/dolt/go/gen/fb/serial"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -47,15 +55,20 @@ import (
 const (
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
+
+	// mainDataset is the dataset ID used for the "heads/main" branch.
+	mainDataset = "heads/main"
 )
 
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
-	mu    sync.RWMutex
-	cs    *nbs.GenerationalNBS
-	ns    tree.NodeStore
-	am    prolly.AddressMap // current root address map (collection name -> prolly Map root)
-	uuids map[string]string // collection name -> UUID string (in-memory)
+	mu     sync.RWMutex
+	cs     *nbs.GenerationalNBS
+	ns     tree.NodeStore
+	doltDB datas.Database     // manages STRT root format; owns cs lifecycle
+	ds     datas.Dataset      // current "heads/main" dataset, updated on each commit
+	am     prolly.AddressMap  // current collections address map (name → prolly.Map root)
+	uuids  map[string]string  // collection name → UUID string (in-memory)
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -89,7 +102,7 @@ func (b *Backend) Close() {
 
 	for name, db := range b.dbs {
 		db.mu.Lock()
-		if err := db.cs.Close(); err != nil {
+		if err := db.doltDB.Close(); err != nil {
 			b.l.Error("dolt: closing database", "db", name, "err", err)
 		}
 		db.mu.Unlock()
@@ -197,7 +210,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 	// Close the open store if it exists.
 	if db, ok := b.dbs[params.Name]; ok {
 		db.mu.Lock()
-		_ = db.cs.Close()
+		_ = db.doltDB.Close()
 		db.mu.Unlock()
 		delete(b.dbs, params.Name)
 	}
@@ -277,59 +290,239 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 
 	ns := tree.NewNodeStore(cs)
 
-	// Load or create the root AddressMap.
+	// Inspect the existing root format before creating the datas.Database,
+	// since datas.Database panics when reading an ADRM-format root.
 	rootHash, err := cs.Root(ctx)
 	if err != nil {
 		_ = cs.Close()
 		return nil, fmt.Errorf("dolt: reading root for %q: %w", dbName, err)
 	}
 
+	// Create the value store and dolt database which manage the STRT root format.
+	vs := dolttypes.NewValueStore(cs)
+	doltDB := datas.NewTypesDatabase(vs, ns)
+
 	var am prolly.AddressMap
+	var ds datas.Dataset
 
 	if rootHash.IsEmpty() {
-		// New database: create empty AddressMap and commit it.
+		// New database: create empty collections AM and write the initial STRT commit.
 		am, err = prolly.NewEmptyAddressMap(ns)
 		if err != nil {
-			_ = cs.Close()
+			_ = doltDB.Close()
 			return nil, fmt.Errorf("dolt: creating empty address map for %q: %w", dbName, err)
 		}
 
-		// Write the root node to the chunk store before committing its hash
-		// as the store root. Without this, Commit fails with a dangling ref
-		// because the chunk for the AddressMap node hasn't been persisted yet.
-		amHash, err := ns.Write(ctx, am.Node())
+		ds, am, err = commitCollectionsAM(ctx, doltDB, datas.Dataset{}, am, "init")
 		if err != nil {
-			_ = cs.Close()
-			return nil, fmt.Errorf("dolt: writing initial address map node for %q: %w", dbName, err)
-		}
-
-		if _, err := cs.Commit(ctx, amHash, rootHash); err != nil {
-			_ = cs.Close()
-			return nil, fmt.Errorf("dolt: committing initial root for %q: %w", dbName, err)
+			_ = doltDB.Close()
+			return nil, fmt.Errorf("dolt: initial commit for %q: %w", dbName, err)
 		}
 	} else {
-		// Existing database: load the AddressMap from the root node.
-		rootNode, err := ns.Read(ctx, rootHash)
+		// Existing database: detect the root chunk format.
+		rootChunk, err := cs.Get(ctx, rootHash)
 		if err != nil {
-			_ = cs.Close()
-			return nil, fmt.Errorf("dolt: reading root node for %q: %w", dbName, err)
+			_ = doltDB.Close()
+			return nil, fmt.Errorf("dolt: reading root chunk for %q: %w", dbName, err)
 		}
 
-		am, err = prolly.NewAddressMap(rootNode, ns)
-		if err != nil {
-			_ = cs.Close()
-			return nil, fmt.Errorf("dolt: loading address map for %q: %w", dbName, err)
+		fileID := serial.GetFileID(rootChunk.Data())
+
+		switch fileID {
+		case serial.AddressMapFileID:
+			// Legacy ADRM format: the root chunk is the collections AM directly.
+			// Migrate to STRT by creating an initial dolt commit.
+			b.l.Info("dolt: migrating database from ADRM to STRT root format", "db", dbName)
+
+			amNode, _, err := tree.NodeFromChunk(&rootChunk)
+			if err != nil {
+				_ = doltDB.Close()
+				return nil, fmt.Errorf("dolt: parsing ADRM root node for %q: %w", dbName, err)
+			}
+
+			am, err = prolly.NewAddressMap(amNode, ns)
+			if err != nil {
+				_ = doltDB.Close()
+				return nil, fmt.Errorf("dolt: loading collections AM from ADRM root for %q: %w", dbName, err)
+			}
+
+			// Build the STRT structure manually because datas.Database panics on ADRM roots.
+			// We need to do this atomically: write commit + STRT, then swap the NBS root.
+			if err := migrateADRMtoSTRT(ctx, cs, vs, ns, am, rootHash); err != nil {
+				_ = doltDB.Close()
+				return nil, fmt.Errorf("dolt: migrating ADRM root for %q: %w", dbName, err)
+			}
+
+			// Now the NBS root is STRT; read the dataset from doltDB normally.
+			ds, err = doltDB.GetDataset(ctx, mainDataset)
+			if err != nil {
+				_ = doltDB.Close()
+				return nil, fmt.Errorf("dolt: getting dataset after migration for %q: %w", dbName, err)
+			}
+
+		case serial.StoreRootFileID:
+			// STRT format: read the collections AM from the head commit.
+			ds, err = doltDB.GetDataset(ctx, mainDataset)
+			if err != nil {
+				_ = doltDB.Close()
+				return nil, fmt.Errorf("dolt: getting dataset for %q: %w", dbName, err)
+			}
+
+			if !ds.HasHead() {
+				// Shouldn't happen for a valid STRT database, but recover gracefully.
+				am, err = prolly.NewEmptyAddressMap(ns)
+				if err != nil {
+					_ = doltDB.Close()
+					return nil, fmt.Errorf("dolt: creating empty address map for %q: %w", dbName, err)
+				}
+			} else {
+				amValue, _, err := ds.MaybeHeadValue()
+				if err != nil {
+					_ = doltDB.Close()
+					return nil, fmt.Errorf("dolt: reading head value for %q: %w", dbName, err)
+				}
+
+				amMsg, ok := amValue.(dolttypes.SerialMessage)
+				if !ok {
+					_ = doltDB.Close()
+					return nil, fmt.Errorf("dolt: unexpected root value type %T for %q", amValue, dbName)
+				}
+
+				amNode, _, err := tree.NodeFromBytes([]byte(amMsg))
+				if err != nil {
+					_ = doltDB.Close()
+					return nil, fmt.Errorf("dolt: parsing collections AM for %q: %w", dbName, err)
+				}
+
+				am, err = prolly.NewAddressMap(amNode, ns)
+				if err != nil {
+					_ = doltDB.Close()
+					return nil, fmt.Errorf("dolt: loading collections AM for %q: %w", dbName, err)
+				}
+			}
+
+		default:
+			_ = doltDB.Close()
+			return nil, fmt.Errorf("dolt: unexpected root chunk file ID %q for %q", fileID, dbName)
 		}
 	}
 
 	db = &dbState{
-		cs:    cs,
-		ns:    ns,
-		am:    am,
-		uuids: make(map[string]string),
+		cs:     cs,
+		ns:     ns,
+		doltDB: doltDB,
+		ds:     ds,
+		am:     am,
+		uuids:  make(map[string]string),
 	}
 
 	b.dbs[dbName] = db
 
 	return db, nil
+}
+
+// commitCollectionsAM creates a new dolt commit with the given collections
+// AddressMap as its root value, updating the "heads/main" dataset.
+// Returns the updated dataset and the (unchanged) AM.
+func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc string) (datas.Dataset, prolly.AddressMap, error) {
+	// For a new dataset, we need to get it first.
+	var err error
+	if ds.ID() == "" {
+		ds, err = doltDB.GetDataset(ctx, mainDataset)
+		if err != nil {
+			return datas.Dataset{}, am, err
+		}
+	}
+
+	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", desc)
+	if err != nil {
+		return datas.Dataset{}, am, err
+	}
+
+	newDS, err := doltDB.Commit(ctx, ds, tree.ValueFromNode(am.Node()), datas.CommitOptions{
+		Meta: meta,
+	})
+	if err != nil {
+		return datas.Dataset{}, am, err
+	}
+
+	return newDS, am, nil
+}
+
+// migrateADRMtoSTRT converts a legacy ADRM-rooted NBS store to STRT format
+// by writing an initial dolt commit and updating the NBS root atomically.
+// Uses lower-level APIs to avoid datas.Database panicking on the ADRM root.
+func migrateADRMtoSTRT(ctx context.Context, cs *nbs.GenerationalNBS, vs *dolttypes.ValueStore, ns tree.NodeStore, am prolly.AddressMap, adrmRootHash interface{ IsEmpty() bool }) error {
+	oldRoot, err := cs.Root(ctx)
+	if err != nil {
+		return fmt.Errorf("reading current root: %w", err)
+	}
+
+	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", "migrate: ADRM to STRT")
+	if err != nil {
+		return fmt.Errorf("creating commit meta: %w", err)
+	}
+
+	// Create an initial commit wrapping the collections AM as its root value.
+	// NewCommitForValue writes the AM value chunk and builds the commit flatbuffer,
+	// but does NOT write the commit chunk itself.
+	commit, err := datas.NewCommitForValue(ctx, cs, vs, ns, tree.ValueFromNode(am.Node()), datas.CommitOptions{
+		Meta: meta,
+	})
+	if err != nil {
+		return fmt.Errorf("creating commit: %w", err)
+	}
+
+	// Write the commit chunk to the store.
+	commitRef, err := vs.WriteValue(ctx, commit.NomsValue())
+	if err != nil {
+		return fmt.Errorf("writing commit: %w", err)
+	}
+
+	// Build a refsAM mapping "heads/main" → commit hash.
+	refsAM, err := prolly.NewEmptyAddressMap(ns)
+	if err != nil {
+		return fmt.Errorf("creating refs address map: %w", err)
+	}
+
+	refsEditor := refsAM.Editor()
+	if err := refsEditor.Add(ctx, mainDataset, commitRef.TargetHash()); err != nil {
+		return fmt.Errorf("adding main ref: %w", err)
+	}
+
+	refsAM, err = refsEditor.Flush(ctx)
+	if err != nil {
+		return fmt.Errorf("flushing refs address map: %w", err)
+	}
+
+	// Build the STRT flatbuffer with the refsAM bytes inline.
+	strtMsg := buildStoreRootFlatbuffer(refsAM)
+
+	// Write the STRT chunk and atomically update the NBS root.
+	strtRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(strtMsg))
+	if err != nil {
+		return fmt.Errorf("writing store root: %w", err)
+	}
+
+	ok, err := cs.Commit(ctx, strtRef.TargetHash(), oldRoot)
+	if err != nil {
+		return fmt.Errorf("committing new root: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("root CAS failed (concurrent modification)")
+	}
+
+	return nil
+}
+
+// buildStoreRootFlatbuffer builds a StoreRoot (STRT) flatbuffer with the
+// given refsAM bytes embedded inline, replicating the unexported
+// storeroot_flatbuffer() function from dolt/go/store/datas/refmap.go.
+func buildStoreRootFlatbuffer(refsAM prolly.AddressMap) serial.Message {
+	builder := fb.NewBuilder(1024)
+	ambytes := []byte(tree.ValueFromNode(refsAM.Node()).(dolttypes.SerialMessage))
+	voff := builder.CreateByteVector(ambytes)
+	serial.StoreRootStart(builder)
+	serial.StoreRootAddAddressMap(builder, voff)
+	return serial.FinishMessage(builder, serial.StoreRootEnd(builder), []byte(serial.StoreRootFileID))
 }

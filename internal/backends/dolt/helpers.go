@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/pool"
 	"github.com/dolthub/dolt/go/store/prolly"
@@ -75,7 +76,8 @@ func buildValue(bsonHash hash.Hash) (val.Tuple, error) {
 	return tup, nil
 }
 
-// updateAddressMap applies a mutation to the address map and commits it.
+// updateAddressMap applies a mutation to the collections address map and
+// persists it as a new dolt commit on the "heads/main" dataset.
 // The caller must hold state.mu (write lock).
 func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.AddressMapEditor) error) error {
 	editor := state.am.Editor()
@@ -89,14 +91,22 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 		return fmt.Errorf("dolt: flushing address map: %w", err)
 	}
 
-	oldHash := state.am.HashOf()
-	newHash := newAM.HashOf()
+	// Commit the updated collections AM as a new dolt commit.
+	// datas.Database.Commit manages the STRT root format automatically.
+	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", "update")
+	if err != nil {
+		return fmt.Errorf("dolt: creating commit meta: %w", err)
+	}
 
-	if _, err := state.cs.Commit(ctx, newHash, oldHash); err != nil {
-		return fmt.Errorf("dolt: committing address map: %w", err)
+	newDS, err := state.doltDB.Commit(ctx, state.ds, tree.ValueFromNode(newAM.Node()), datas.CommitOptions{
+		Meta: meta,
+	})
+	if err != nil {
+		return fmt.Errorf("dolt: committing collections AM: %w", err)
 	}
 
 	state.am = newAM
+	state.ds = newDS
 
 	return nil
 }
