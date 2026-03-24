@@ -38,7 +38,6 @@ jobs:
         env:
           MONGO_HOST: 127.0.0.1
           MONGO_PORT: 37017
-        continue-on-error: true
 
       - name: Check for unexpected failures
         run: |

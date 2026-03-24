@@ -24,9 +24,9 @@ jobs:
       - name: Build and run FerretDB scorecard
         id: run-scorecard
         run: make ferretdb-scorecard
-        continue-on-error: true
 
-      - name: Check for startup failure
+      - name: Report pass percentage
+        if: always()
         run: |
           RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
 
@@ -35,20 +35,10 @@ jobs:
             exit 1
           fi
 
-          if grep -qE "^ERROR: Dongo" "$RESULTS_FILE"; then
-            echo "=== Dongo failed to start ==="
-            grep -A 20 "^ERROR: Dongo" "$RESULTS_FILE" || true
-            exit 1
-          fi
-
-      - name: Report pass percentage
-        if: always()
-        run: |
-          RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
-
-          PASS=$(grep -c "^--- PASS:" "$RESULTS_FILE" || true)
-          FAIL=$(grep -c "^--- FAIL:" "$RESULTS_FILE" || true)
-          SKIP=$(grep -c "^--- SKIP:" "$RESULTS_FILE" || true)
+          # Count all test lines (top-level and subtests) by stripping leading whitespace
+          PASS=$(grep -cE "^\s+--- PASS:|^--- PASS:" "$RESULTS_FILE" || true)
+          FAIL=$(grep -cE "^\s+--- FAIL:|^--- FAIL:" "$RESULTS_FILE" || true)
+          SKIP=$(grep -cE "^\s+--- SKIP:|^--- SKIP:" "$RESULTS_FILE" || true)
           TOTAL=$(( PASS + FAIL + SKIP ))
 
           if [ "$TOTAL" -gt 0 ]; then
