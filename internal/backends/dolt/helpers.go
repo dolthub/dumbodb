@@ -105,6 +105,10 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 		return fmt.Errorf("dolt: committing collections AM: %w", err)
 	}
 
+	if err := updateWorkingSet(ctx, state.doltDB, newAM); err != nil {
+		return fmt.Errorf("dolt: updating working set: %w", err)
+	}
+
 	state.am = newAM
 	state.ds = newDS
 

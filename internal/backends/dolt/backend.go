@@ -59,6 +59,11 @@ const (
 	// mainDataset is the dataset ID used for the "refs/heads/main" branch.
 	// Dolt expects the full ref path including "refs/" prefix.
 	mainDataset = "refs/heads/main"
+
+	// workingSetDataset is the dataset ID for the working set.
+	// Dolt derives this from WorkingSetRefForHead: "workingSets/" + "heads/main".
+	// Required for `dolt status` to work without panicking.
+	workingSetDataset = "workingSets/heads/main"
 )
 
 // dbState holds the open Dolt store for a single MongoDB database.
@@ -447,6 +452,10 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		return datas.Dataset{}, am, err
 	}
 
+	if err := updateWorkingSet(ctx, doltDB, am); err != nil {
+		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
+	}
+
 	return newDS, am, nil
 }
 
@@ -526,4 +535,43 @@ func buildStoreRootFlatbuffer(refsAM prolly.AddressMap) serial.Message {
 	serial.StoreRootStart(builder)
 	serial.StoreRootAddAddressMap(builder, voff)
 	return serial.FinishMessage(builder, serial.StoreRootEnd(builder), []byte(serial.StoreRootFileID))
+}
+
+// updateWorkingSet writes a clean working set pointing to the current
+// collections AM as both working and staged root. This is required for
+// `dolt status` to function — without a workingSets/heads/main entry,
+// dolt panics trying to read the working set.
+//
+// The working set is always kept in sync with HEAD: working == staged == HEAD root.
+// Replicates the relevant parts of datas.workingset_flatbuffer (unexported).
+func updateWorkingSet(ctx context.Context, doltDB datas.Database, am prolly.AddressMap) error {
+	// Create a types.Ref pointing to the collections AM value.
+	// Both working root and staged root point to the same AM (clean state).
+	amValue := tree.ValueFromNode(am.Node())
+	amRef, err := dolttypes.NewRef(amValue, dolttypes.Format_DOLT)
+	if err != nil {
+		return fmt.Errorf("creating AM ref: %w", err)
+	}
+
+	wsDs, err := doltDB.GetDataset(ctx, workingSetDataset)
+	if err != nil {
+		return fmt.Errorf("getting working set dataset: %w", err)
+	}
+
+	prevHash, _ := wsDs.MaybeHeadAddr()
+
+	meta := &datas.WorkingSetMeta{
+		Name:        "dongo",
+		Email:       "dongo@localhost",
+		Description: "dongo working set",
+	}
+
+	spec := datas.WorkingSetSpec{
+		Meta:        meta,
+		WorkingRoot: amRef,
+		StagedRoot:  amRef,
+	}
+
+	_, err = doltDB.UpdateWorkingSet(ctx, wsDs, spec, prevHash)
+	return err
 }
