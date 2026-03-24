@@ -21,10 +21,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build dongo
-        run: make build
-
-      - name: Run FerretDB scorecard
+      - name: Build and run FerretDB scorecard
         id: run-scorecard
         run: make ferretdb-scorecard
         continue-on-error: true
@@ -45,6 +42,7 @@ jobs:
           fi
 
       - name: Report pass percentage
+        if: always()
         run: |
           RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
 
