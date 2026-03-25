@@ -16,8 +16,12 @@ package dolt
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
+	"sort"
 
+	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
@@ -28,13 +32,16 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
+
+	"github.com/dolthub/dongo/internal/bson"
+	"github.com/dolthub/dongo/internal/types"
 )
 
-// keyDesc describes the key tuple: one Int64 field for RecordID.
-var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.Int64Enc, Nullable: false})
+// keyDesc describes the key tuple: one varbinary field for the encoded MongoDB _id.
+var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
-// valDesc describes the value tuple: one BytesAddr field for the BSON blob hash.
-var valDesc = val.NewTupleDescriptor(val.Type{Enc: val.BytesAddrEnc, Nullable: false})
+// valDesc describes the value tuple: one JSONAddr field for the JSON document hash.
+var valDesc = val.NewTupleDescriptor(val.Type{Enc: val.JSONAddrEnc, Nullable: false})
 
 // bufPool is a global buffer pool for building tuples.
 var bufPool = pool.NewBuffPool()
@@ -80,40 +87,40 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 }
 
 // buildCollectionTableSchema builds a DSCH (TableSchema) flatbuffer for the
-// dongo collection schema: _id BIGINT NOT NULL PK, doc LONGBLOB NOT NULL.
+// dongo collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
 //
 // This schema is shared across all collections within a database; the DSCH
 // chunk is written once to the value store and its hash is stored in every DTBL.
 //
-// The physical encodings match our existing prolly.Map descriptors:
-//   - _id BIGINT PK → Int64Enc (key tuple)
-//   - doc LONGBLOB   → BytesAddrEnc (value tuple, stores hash to BSON bytes)
+// The physical encodings match our prolly.Map descriptors:
+//   - _id VARBINARY PK → ByteStringEnc (key tuple)
+//   - doc JSON         → JSONAddrEnc (value tuple, stores hash to JSON prolly tree)
 func buildCollectionTableSchema() serial.Message {
 	b := fb.NewBuilder(512)
 
 	// Pre-build all strings before starting any object.
 	idName := b.CreateString("_id")
-	idSqlType := b.CreateString("bigint")
+	idSqlType := b.CreateString("varbinary")
 	docName := b.CreateString("doc")
-	docSqlType := b.CreateString("longblob")
+	docSqlType := b.CreateString("json")
 
-	// Column 0: _id BIGINT NOT NULL PK
+	// Column 0: _id VARBINARY NOT NULL PK
 	serial.ColumnStart(b)
 	serial.ColumnAddName(b, idName)
 	serial.ColumnAddSqlType(b, idSqlType)
 	serial.ColumnAddTag(b, 1) // stable column tag
-	serial.ColumnAddEncoding(b, serial.EncodingInt64)
+	serial.ColumnAddEncoding(b, serial.EncodingBytes)
 	serial.ColumnAddPrimaryKey(b, true)
 	serial.ColumnAddNullable(b, false)
 	serial.ColumnAddDisplayOrder(b, 0)
 	col0 := serial.ColumnEnd(b)
 
-	// Column 1: doc LONGBLOB NOT NULL
+	// Column 1: doc JSON NOT NULL
 	serial.ColumnStart(b)
 	serial.ColumnAddName(b, docName)
 	serial.ColumnAddSqlType(b, docSqlType)
 	serial.ColumnAddTag(b, 2) // stable column tag
-	serial.ColumnAddEncoding(b, serial.EncodingBytesAddr)
+	serial.ColumnAddEncoding(b, serial.EncodingJSONAddr)
 	serial.ColumnAddPrimaryKey(b, false)
 	serial.ColumnAddNullable(b, false)
 	serial.ColumnAddDisplayOrder(b, 1)
@@ -206,10 +213,105 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, emptyIndexAM p
 	return serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
 }
 
-// buildKey creates a key tuple for a RecordID.
-func buildKey(recordID int64) (val.Tuple, error) {
+// encodeID serializes a MongoDB _id value to varbinary bytes.
+// Format: 1-byte BSON type tag + canonical value bytes.
+// Returns an error for unsupported types or if total length exceeds 255 bytes.
+func encodeID(id any) ([]byte, error) {
+	switch v := id.(type) {
+	case int32:
+		b := make([]byte, 5)
+		b[0] = 0x10 // BSON Int32 tag
+		binary.BigEndian.PutUint32(b[1:], uint32(v))
+		return b, nil
+
+	case int64:
+		b := make([]byte, 9)
+		b[0] = 0x12 // BSON Int64 tag
+		binary.BigEndian.PutUint64(b[1:], uint64(v))
+		return b, nil
+
+	case float64:
+		// IEEE 754 sign-magnitude encoding so memcmp sorts correctly:
+		// positive values have MSB set; negative have MSB clear.
+		b := make([]byte, 9)
+		b[0] = 0x01 // BSON Double tag
+		u := math.Float64bits(v)
+		if math.Signbit(v) {
+			u = ^u // flip all bits for negative / negative zero
+		} else {
+			u |= 1 << 63 // set sign bit for positive / positive zero
+		}
+		binary.BigEndian.PutUint64(b[1:], u)
+		return b, nil
+
+	case types.ObjectID:
+		b := make([]byte, 13)
+		b[0] = 0x07 // BSON ObjectId tag
+		copy(b[1:], v[:])
+		return b, nil
+
+	case string:
+		out := make([]byte, 1+len(v))
+		out[0] = 0x02 // BSON String tag
+		copy(out[1:], []byte(v))
+		if len(out) > 255 {
+			return nil, fmt.Errorf("dolt: _id string too long: %d bytes total (max 255)", len(out))
+		}
+		return out, nil
+
+	case types.Binary:
+		out := make([]byte, 2+len(v.B))
+		out[0] = 0x05 // BSON BinData tag
+		out[1] = byte(v.Subtype)
+		copy(out[2:], v.B)
+		if len(out) > 255 {
+			return nil, fmt.Errorf("dolt: _id BinData too long: %d bytes total (max 255)", len(out))
+		}
+		return out, nil
+
+	case bool:
+		b := []byte{0x08, 0x00} // BSON Bool tag + false
+		if v {
+			b[1] = 0x01
+		}
+		return b, nil
+
+	case *types.Document:
+		// Encode as canonical BSON with fields sorted lexicographically.
+		bsonBytes, err := encodeDocumentCanonical(v)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: encoding _id document: %w", err)
+		}
+		out := make([]byte, 1+len(bsonBytes))
+		out[0] = 0x03 // BSON Document tag
+		copy(out[1:], bsonBytes)
+		if len(out) > 255 {
+			return nil, fmt.Errorf("dolt: _id document too long: %d bytes total (max 255)", len(out))
+		}
+		return out, nil
+
+	case *types.Array:
+		bsonBytes, err := encodeArrayCanonical(v)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: encoding _id array: %w", err)
+		}
+		out := make([]byte, 1+len(bsonBytes))
+		out[0] = 0x04 // BSON Array tag
+		copy(out[1:], bsonBytes)
+		if len(out) > 255 {
+			return nil, fmt.Errorf("dolt: _id array too long: %d bytes total (max 255)", len(out))
+		}
+		return out, nil
+
+	default:
+		return nil, fmt.Errorf("dolt: unsupported _id type %T", id)
+	}
+}
+
+// buildKey creates a key tuple for the encoded MongoDB _id bytes.
+func buildKey(idBytes []byte) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(keyDesc, nil)
-	tb.PutInt64(0, recordID)
+	tb.PutByteString(0, idBytes)
 
 	tup, err := tb.Build(bufPool)
 	if err != nil {
@@ -219,10 +321,10 @@ func buildKey(recordID int64) (val.Tuple, error) {
 	return tup, nil
 }
 
-// buildValue creates a value tuple storing a hash to BSON bytes.
-func buildValue(bsonHash hash.Hash) (val.Tuple, error) {
+// buildValue creates a value tuple storing a hash to a JSON prolly tree.
+func buildValue(jsonHash hash.Hash) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(valDesc, nil)
-	tb.PutBytesAddr(0, bsonHash)
+	tb.PutJSONAddr(0, jsonHash)
 
 	tup, err := tb.Build(bufPool)
 	if err != nil {
@@ -309,4 +411,95 @@ func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error)
 		return prolly.AddressMap{}, fmt.Errorf("parsing AM from HEAD RTVL: %w", err)
 	}
 	return prolly.NewAddressMap(amNode, state.ns)
+}
+
+// encodeDocumentCanonical converts a types.Document to canonical BSON bytes
+// with fields sorted lexicographically at every nesting level.
+func encodeDocumentCanonical(doc *types.Document) ([]byte, error) {
+	// Get all field names and sort them.
+	iter := doc.Iterator()
+	defer iter.Close()
+
+	type field struct {
+		name string
+		val  any
+	}
+	var fields []field
+
+	for {
+		k, v, err := iter.Next()
+		if err != nil {
+			break
+		}
+		fields = append(fields, field{name: k, val: v})
+	}
+
+	sort.Slice(fields, func(i, j int) bool {
+		return fields[i].name < fields[j].name
+	})
+
+	// Build a new document with sorted fields.
+	sorted := wirebson.MakeDocument(len(fields))
+	for _, f := range fields {
+		wv, err := convertFieldCanonical(f.val)
+		if err != nil {
+			return nil, fmt.Errorf("field %q: %w", f.name, err)
+		}
+		if err := sorted.Add(f.name, wv); err != nil {
+			return nil, fmt.Errorf("adding field %q: %w", f.name, err)
+		}
+	}
+
+	raw, err := sorted.Encode()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(raw), nil
+}
+
+// encodeArrayCanonical converts a types.Array to BSON bytes.
+func encodeArrayCanonical(arr *types.Array) ([]byte, error) {
+	warr, err := bson.FromArray(arr)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := warr.Encode()
+	if err != nil {
+		return nil, err
+	}
+	return []byte(raw), nil
+}
+
+// convertFieldCanonical converts a types.Type value to a wirebson-compatible value,
+// with nested documents having canonically sorted fields.
+func convertFieldCanonical(v any) (any, error) {
+	switch vt := v.(type) {
+	case *types.Document:
+		// Recursively sort nested documents.
+		raw, err := encodeDocumentCanonical(vt)
+		if err != nil {
+			return nil, err
+		}
+		return wirebson.RawDocument(raw), nil
+	case *types.Array:
+		return bson.FromArray(vt)
+	case float64:
+		return bson.From(vt)
+	case string:
+		return bson.From(vt)
+	case types.Binary:
+		return bson.From(vt)
+	case types.ObjectID:
+		return bson.From(vt)
+	case bool:
+		return bson.From(vt)
+	case types.NullType:
+		return bson.From(vt)
+	case int32:
+		return bson.From(vt)
+	case int64:
+		return bson.From(vt)
+	default:
+		return nil, fmt.Errorf("unsupported type %T in _id document", v)
+	}
 }

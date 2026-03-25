@@ -21,7 +21,7 @@
 //   - commitHash → Commit (DCMT) with rootValue = RTVL (RootValue) chunk
 //   - RTVL.tables wraps the collections AddressMap (ADRM) bytes inline
 //   - Collections AddressMap (ADRM) maps collection names to prolly.Map root hashes
-//   - Each prolly.Map uses key=Int64(RecordID) and value=BytesAddr(BSON hash)
+//   - Each prolly.Map uses key=ByteString(encoded MongoDB _id) and value=JSONAddr(JSON prolly tree hash)
 //
 // This layout is compatible with Dolt CLI tools (dolt log, dolt fsck, dolt status, etc.).
 //
@@ -85,7 +85,7 @@ type dbState struct {
 	uuids  map[string]string     // collection name → UUID string (in-memory)
 
 	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
-	// collection schema: _id BIGINT NOT NULL PK, doc LONGBLOB NOT NULL.
+	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
 	// Written once at DB open and reused for all DTBL construction.
 	collSchemaHash hash.Hash
 	// emptyIndexAM is an empty AddressMap used for the DTBL secondary_indexes field.
