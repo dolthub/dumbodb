@@ -243,6 +243,11 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
+	from, err := common.GetOptionalParam[string](document, "from", "")
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -255,6 +260,7 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		DBName: dbName,
 		Branch: branch,
 		Limit:  limit,
+		From:   from,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -263,13 +269,21 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	commits := types.MakeArray(len(res.Commits))
 
 	for _, c := range res.Commits {
-		entry := must.NotFail(types.NewDocument(
+		pairs := []any{
 			"hash", c.Hash,
-			"author", c.Author,
-			"email", c.Email,
+		}
+		if c.Parent1 != "" {
+			pairs = append(pairs, "parent1", c.Parent1)
+		}
+		if c.Parent2 != "" {
+			pairs = append(pairs, "parent2", c.Parent2)
+		}
+		pairs = append(pairs,
 			"message", c.Message,
 			"timestamp", time.UnixMilli(c.Timestamp),
-		))
+			"author", c.Author,
+		)
+		entry := must.NotFail(types.NewDocument(pairs...))
 		commits.Append(entry)
 	}
 

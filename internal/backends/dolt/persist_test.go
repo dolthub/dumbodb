@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -744,5 +745,302 @@ func TestDongoCommitWorkingSetClean(t *testing.T) {
 
 	if *ws.StagedAddr != headRtvlHash {
 		t.Errorf("working set staged root %v != HEAD rootValue hash %v", *ws.StagedAddr, headRtvlHash)
+	}
+}
+
+// newBackendForTest creates a temporary Backend for use in tests.
+// The caller must call b.Close() and os.RemoveAll(dir) when done.
+func newBackendForTest(t *testing.T) (b *Backend, dir string) {
+	t.Helper()
+	var err error
+	dir, err = os.MkdirTemp("", "dongo-log-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	return b, dir
+}
+
+// insertDocForTest inserts a document with the given integer _id into the named collection,
+// so that a subsequent DongoCommit records a real content change.
+func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName string, id int64) {
+	t.Helper()
+	db, err := b.Database(dbName)
+	if err != nil {
+		t.Fatalf("Database %q: %v", dbName, err)
+	}
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	doc, err := types.NewDocument("_id", id, "v", id)
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	doc.SetRecordID(id)
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+}
+
+// TestDongoLogFreshDatabase verifies that DongoLog on a brand-new database returns exactly
+// one commit — the "Initialize database" root commit — and that the root commit has no Parent1.
+func TestDongoLogFreshDatabase(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DongoLog: %v", err)
+	}
+
+	if len(res.Commits) != 1 {
+		t.Fatalf("expected 1 commit on fresh db, got %d", len(res.Commits))
+	}
+
+	c := res.Commits[0]
+	if c.Hash == "" {
+		t.Error("root commit hash is empty")
+	}
+	if c.Message != "Initialize database" {
+		t.Errorf("root commit message = %q, want %q", c.Message, "Initialize database")
+	}
+	// Root commit must have no parent.
+	if c.Parent1 != "" {
+		t.Errorf("root commit Parent1 = %q, want empty", c.Parent1)
+	}
+	if c.Parent2 != "" {
+		t.Errorf("root commit Parent2 = %q, want empty", c.Parent2)
+	}
+}
+
+// TestDongoLogAfterOneCommit verifies that after one DongoCommit the log returns
+// 2 commits in newest-first order: the user commit followed by the init commit.
+func TestDongoLogAfterOneCommit(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	insertDocForTest(t, ctx, b, "testdb", 1)
+
+	commitRes, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit"})
+	if err != nil {
+		t.Fatalf("DongoCommit: %v", err)
+	}
+
+	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DongoLog: %v", err)
+	}
+
+	if len(res.Commits) != 2 {
+		t.Fatalf("expected 2 commits, got %d", len(res.Commits))
+	}
+
+	// Newest first: index 0 is the user commit.
+	if res.Commits[0].Hash != commitRes.Hash {
+		t.Errorf("Commits[0].Hash = %q, want %q (the user commit)", res.Commits[0].Hash, commitRes.Hash)
+	}
+	if res.Commits[0].Message != "first user commit" {
+		t.Errorf("Commits[0].Message = %q, want %q", res.Commits[0].Message, "first user commit")
+	}
+	// User commit must have Parent1 pointing at the init commit.
+	if res.Commits[0].Parent1 == "" {
+		t.Error("user commit Parent1 is empty, expected init commit hash")
+	}
+	if res.Commits[0].Parent1 != res.Commits[1].Hash {
+		t.Errorf("user commit Parent1 = %q, want init hash %q", res.Commits[0].Parent1, res.Commits[1].Hash)
+	}
+
+	// index 1 is the init commit (root — no parent).
+	if res.Commits[1].Message != "Initialize database" {
+		t.Errorf("Commits[1].Message = %q, want %q", res.Commits[1].Message, "Initialize database")
+	}
+	if res.Commits[1].Parent1 != "" {
+		t.Errorf("init commit Parent1 = %q, want empty", res.Commits[1].Parent1)
+	}
+}
+
+// TestDongoLogLimit verifies that the Limit parameter is respected: limit=1 returns
+// only the HEAD commit even when more commits exist.
+func TestDongoLogLimit(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// Create 3 user commits so there are 4 total (including init).
+	for i := int64(1); i <= 3; i++ {
+		insertDocForTest(t, ctx, b, "testdb", i)
+		if _, err := b.DongoCommit(ctx, &backends.CommitParams{
+			DBName:  "testdb",
+			Message: fmt.Sprintf("commit %d", i),
+		}); err != nil {
+			t.Fatalf("DongoCommit %d: %v", i, err)
+		}
+	}
+
+	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	if err != nil {
+		t.Fatalf("DongoLog: %v", err)
+	}
+
+	if len(res.Commits) != 1 {
+		t.Fatalf("expected 1 commit with limit=1, got %d", len(res.Commits))
+	}
+	if res.Commits[0].Message != "commit 3" {
+		t.Errorf("Commits[0].Message = %q, want %q", res.Commits[0].Message, "commit 3")
+	}
+}
+
+// TestDongoLogFromHash verifies that setting From=<hash> starts traversal from
+// that specific commit rather than HEAD.
+func TestDongoLogFromHash(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	insertDocForTest(t, ctx, b, "testdb", 1)
+	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one"})
+	if err != nil {
+		t.Fatalf("DongoCommit 1: %v", err)
+	}
+
+	insertDocForTest(t, ctx, b, "testdb", 2)
+	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two"}); err != nil {
+		t.Fatalf("DongoCommit 2: %v", err)
+	}
+
+	// Starting from commit one's hash should return commit one + init commit only.
+	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.Hash})
+	if err != nil {
+		t.Fatalf("DongoLog from hash: %v", err)
+	}
+
+	if len(res.Commits) != 2 {
+		t.Fatalf("expected 2 commits starting from commit one, got %d", len(res.Commits))
+	}
+	if res.Commits[0].Hash != res1.Hash {
+		t.Errorf("Commits[0].Hash = %q, want %q (commit one)", res.Commits[0].Hash, res1.Hash)
+	}
+	if res.Commits[1].Message != "Initialize database" {
+		t.Errorf("Commits[1].Message = %q, want %q", res.Commits[1].Message, "Initialize database")
+	}
+}
+
+// TestDongoLogFromUnknownHash verifies that from=<unknown hash> returns an error.
+func TestDongoLogFromUnknownHash(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// A syntactically valid but non-existent hash (32 hex bytes = 64 chars).
+	unknownHash := "0000000000000000000000000000000000000000000000000000000000000001"
+
+	_, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
+	if err == nil {
+		t.Error("expected error for unknown from hash, got nil")
+	}
+}
+
+// TestDongoLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
+// verifies that returned hashes match what DongoCommit reported (newest first) and
+// that timestamps are non-zero and non-decreasing from root toward HEAD.
+func TestDongoLogHashOrderAndTimestamps(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	insertDocForTest(t, ctx, b, "testdb", 1)
+	r1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha"})
+	if err != nil {
+		t.Fatalf("DongoCommit 1: %v", err)
+	}
+
+	insertDocForTest(t, ctx, b, "testdb", 2)
+	r2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta"})
+	if err != nil {
+		t.Fatalf("DongoCommit 2: %v", err)
+	}
+
+	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DongoLog: %v", err)
+	}
+
+	// Expect 3 commits: beta, alpha, init.
+	if len(res.Commits) != 3 {
+		t.Fatalf("expected 3 commits, got %d", len(res.Commits))
+	}
+
+	// Newest first: beta is index 0, alpha is index 1.
+	if res.Commits[0].Hash != r2.Hash {
+		t.Errorf("Commits[0].Hash = %q, want %q (beta)", res.Commits[0].Hash, r2.Hash)
+	}
+	if res.Commits[1].Hash != r1.Hash {
+		t.Errorf("Commits[1].Hash = %q, want %q (alpha)", res.Commits[1].Hash, r1.Hash)
+	}
+
+	// All timestamps must be non-zero.
+	for i, c := range res.Commits {
+		if c.Timestamp == 0 {
+			t.Errorf("Commits[%d].Timestamp is zero", i)
+		}
+	}
+
+	// Timestamps must be non-decreasing from root toward HEAD (i.e. non-decreasing
+	// as we scan from the oldest commit to newest, which is reverse of log order).
+	for i := len(res.Commits) - 1; i > 0; i-- {
+		older := res.Commits[i].Timestamp
+		newer := res.Commits[i-1].Timestamp
+		if newer < older {
+			t.Errorf("timestamp went backwards: Commits[%d].Timestamp=%d > Commits[%d].Timestamp=%d",
+				i, older, i-1, newer)
+		}
+	}
+}
+
+// TestDongoLogCommitInfoSupportsParent2 is a compile-time structural assertion:
+// CommitInfo must have a Parent2 field to support merge commits in the future.
+// This test documents the requirement and ensures the struct is not accidentally changed.
+func TestDongoLogCommitInfoSupportsParent2(t *testing.T) {
+	var ci backends.CommitInfo
+	ci.Parent2 = "somemergehash"
+	if ci.Parent2 != "somemergehash" {
+		t.Error("CommitInfo.Parent2 field not working as expected")
 	}
 }

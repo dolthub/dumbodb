@@ -733,8 +733,94 @@ func (b *Backend) DongoMerge(_ context.Context, _ *backends.MergeParams) (*backe
 }
 
 // DongoLog implements backends.VersioningBackend.
-func (b *Backend) DongoLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
-	return nil, fmt.Errorf("dolt: DongoLog not yet implemented")
+// It returns the commit history for the given branch, walking HEAD backwards
+// through the parent1 chain up to the specified limit (default 20).
+// If params.From is set, traversal starts from that commit hash instead of HEAD.
+func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoLog: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DongoLog: database %q does not exist", params.DBName))
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	limit := int(params.Limit)
+	if limit <= 0 {
+		limit = 20
+	}
+
+	// Determine starting commit hash.
+	var startHash hash.Hash
+	if params.From != "" {
+		var ok bool
+		startHash, ok = hash.MaybeParse(params.From)
+		if !ok {
+			return nil, fmt.Errorf("dolt: DongoLog: invalid from hash %q", params.From)
+		}
+	} else {
+		var ok bool
+		startHash, ok = db.ds.MaybeHeadAddr()
+		if !ok {
+			return &backends.LogResult{}, nil
+		}
+	}
+
+	// Walk the parent chain.
+	var commits []backends.CommitInfo
+	currentHash := startHash
+	checkFrom := params.From != ""
+
+	for len(commits) < limit {
+		commit, loadErr := datas.LoadCommitAddr(ctx, db.vs, currentHash)
+		if loadErr != nil {
+			if loadErr == datas.ErrCommitNotFound {
+				if checkFrom {
+					return nil, fmt.Errorf("dolt: DongoLog: commit not found: %q", params.From)
+				}
+				break
+			}
+			return nil, fmt.Errorf("dolt: DongoLog: loading commit %q: %w", currentHash, loadErr)
+		}
+		// The from hash was successfully resolved on the first iteration.
+		checkFrom = false
+
+		meta, err := datas.GetCommitMeta(ctx, commit.NomsValue())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoLog: reading meta for %q: %w", currentHash, err)
+		}
+
+		parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoLog: reading parents for %q: %w", currentHash, err)
+		}
+
+		info := backends.CommitInfo{
+			Hash:      currentHash.String(),
+			Author:    meta.Name,
+			Message:   meta.Description,
+			Timestamp: int64(meta.Timestamp),
+		}
+		if len(parentAddrs) >= 1 {
+			info.Parent1 = parentAddrs[0].String()
+		}
+		if len(parentAddrs) >= 2 {
+			info.Parent2 = parentAddrs[1].String()
+		}
+
+		commits = append(commits, info)
+
+		if len(parentAddrs) == 0 {
+			break // root commit, stop walking
+		}
+		currentHash = parentAddrs[0]
+	}
+
+	return &backends.LogResult{Commits: commits}, nil
 }
 
 // DongoStatus implements backends.VersioningBackend.

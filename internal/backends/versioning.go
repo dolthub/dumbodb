@@ -60,11 +60,14 @@ type LogParams struct {
 	DBName string
 	Branch string
 	Limit  int32
+	From   string // optional: start traversal from this commit hash instead of HEAD
 }
 
 // CommitInfo represents a single commit entry returned by DongoLog.
 type CommitInfo struct {
 	Hash      string
+	Parent1   string // empty for root commit (no parent)
+	Parent2   string // non-empty only for merge commits
 	Author    string
 	Email     string
 	Message   string
