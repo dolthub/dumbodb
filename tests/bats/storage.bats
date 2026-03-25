@@ -131,7 +131,7 @@ teardown() {
 
     # Run dongoCommit and capture the result.
     run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.adminCommand({dongoCommit: 1, message: "my first commit"}))'
+        'JSON.stringify(db.runCommand({dongoCommit: 1, message: "my first commit"}))'
     [ "$status" -eq 0 ]
 
     # Verify ok:1 and a non-empty hash.
