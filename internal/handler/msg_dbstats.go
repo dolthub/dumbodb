@@ -168,6 +168,10 @@ func dbStatsGetScale(command string, value any) (int64, error) {
 	if err != nil {
 		switch {
 		case errors.Is(err, handlerparams.ErrUnexpectedType):
+			if _, ok := value.(types.NullType); ok {
+				return 1, nil
+			}
+
 			return 0, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrTypeMismatch,
 				fmt.Sprintf(

@@ -74,8 +74,9 @@ TestValidateCommandError
 
 # --- Category: Secondary indexes not yet implemented ---
 #
-# TestListIndexesCommandIndexFieldOrder creates a secondary index and expects
-# listIndexes to return both _id_ and the new index. Dongo only returns _id_
-# because secondary index creation is not yet implemented.
+# These tests create secondary indexes and expect them to appear in stats/index
+# results. Dongo only tracks the _id_ index because secondary index creation is
+# not yet implemented.
 #
 TestListIndexesCommandIndexFieldOrder
+TestCollStatsCommandScaleSize

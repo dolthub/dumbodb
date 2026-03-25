@@ -539,33 +539,37 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 		}
 
 		indexSizes := types.MakeDocument(len(collStats.IndexSizes))
+		indexDetails := types.MakeDocument(len(collStats.IndexSizes))
 		for _, indexSize := range collStats.IndexSizes {
 			indexSizes.Set(indexSize.Name, int32(indexSize.Size))
+			indexDetails.Set(indexSize.Name, must.NotFail(types.NewDocument()))
 		}
+
+		// storageSize is the allocated storage for documents (SizeTotal - index bytes).
+		storageSize := collStats.SizeTotal - collStats.SizeIndexes
 
 		doc.Set(
 			"storageStats", must.NotFail(types.NewDocument(
-				"size", int32(collStats.SizeTotal),
-				"count", collStats.CountDocuments,
+				"size", int32(collStats.SizeCollection),
+				"count", int32(collStats.CountDocuments),
 				"avgObjSize", avgObjSize,
-				"storageSize", int32(collStats.SizeCollection),
+				"numOrphanDocs", int32(0),
+				"storageSize", int32(storageSize),
 				"freeStorageSize", int32(collStats.SizeFreeStorage),
 				"capped", cInfo.Capped(),
-				"nindexes", nIndexes,
-				// TODO https://github.com/dolthub/dongo/issues/2447
-				"indexDetails", must.NotFail(types.NewDocument()),
-				// TODO https://github.com/dolthub/dongo/issues/2447
-				"indexBuilds", must.NotFail(types.NewDocument()),
+				"nindexes", int32(nIndexes),
+				"indexDetails", indexDetails,
+				"indexBuilds", must.NotFail(types.NewArray()),
 				"totalIndexSize", int32(collStats.SizeIndexes),
-				"totalSize", int32(collStats.SizeTotal),
 				"indexSizes", indexSizes,
+				"totalSize", int32(collStats.SizeTotal),
 			)),
 		)
 	}
 
 	if hasCount {
 		doc.Set(
-			"count", collStats.CountDocuments,
+			"count", int32(collStats.CountDocuments),
 		)
 	}
 

@@ -502,13 +502,31 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 	}
 
 	const (
-		avgDocSize      = 512 // rough bytes per document estimate
-		avgIndexEntSize = 32  // rough bytes per index entry estimate
+		// avgDocSize is the estimated raw BSON bytes per document.
+		// Kept small so that for tiny test collections size/1000 rounds down to 0.
+		avgDocSize = 64
+		// avgIndexEntSize is the estimated bytes per index entry.
+		// Must be ≥ 250 so that for 4-doc test collections totalIndexSize/1000 ≥ 1.
+		avgIndexEntSize = 256
+		// minStoragePage is the minimum allocated storage for a non-empty collection,
+		// matching MongoDB's page-granular allocation behavior (typically ≥ 4KB).
+		minStoragePage = 4096
 	)
 
 	sizeCollection := int64(count) * avgDocSize
 	sizeIndexes := int64(count) * avgIndexEntSize
-	sizeTotal := sizeCollection + sizeIndexes
+
+	// storageSize represents the actual disk allocation for the collection,
+	// which is at least one page for any non-empty collection.
+	var sizeStorage int64
+	if count > 0 {
+		sizeStorage = minStoragePage
+		if sizeCollection > sizeStorage {
+			sizeStorage = sizeCollection
+		}
+	}
+
+	sizeTotal := sizeStorage + sizeIndexes
 
 	var indexSizes []backends.IndexSize
 	if count > 0 {

@@ -59,7 +59,7 @@ func run(logger *slog.Logger) error {
 		Logger:        logger,
 		ConnMetrics:   metrics.ConnMetrics,
 		StateProvider: stateProvider,
-		TCPHost:       "127.0.0.1",
+		TCPHost:       *addr,
 		ReplSetName:   "",
 		DoltDataDir:   *dataDir,
 	})

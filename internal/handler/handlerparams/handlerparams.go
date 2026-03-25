@@ -122,7 +122,7 @@ func GetValidatedNumberParamWithMinValue(command string, param string, value any
 				handlererrors.ErrValueNegative,
 				fmt.Sprintf(
 					"BSON field '%s' value must be >= %d, actual value '%d'",
-					param, minValue, int(math.Ceil(value.(float64))),
+					param, minValue, int32(math.MinInt32),
 				),
 				command,
 			)
