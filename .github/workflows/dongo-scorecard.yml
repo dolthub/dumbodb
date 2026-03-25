@@ -24,6 +24,7 @@ jobs:
       - name: Build and run FerretDB scorecard
         id: run-scorecard
         run: make ferretdb-scorecard
+        continue-on-error: true  # expected failures are handled by skip list; step failure = build/startup failure
 
       - name: Report pass percentage
         if: always()
@@ -68,6 +69,13 @@ jobs:
 
           if [ ! -f "$RESULTS_FILE" ]; then
             echo "ERROR: Results file not found: $RESULTS_FILE"
+            exit 1
+          fi
+
+          # Fail on Dongo startup/crash errors (these don't produce --- FAIL: lines)
+          if grep -qE "^ERROR: Dongo" "$RESULTS_FILE"; then
+            echo "=== Dongo failed to start or crashed ==="
+            grep -A 30 "^ERROR: Dongo" "$RESULTS_FILE" || true
             exit 1
           fi
 
