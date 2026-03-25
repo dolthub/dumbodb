@@ -81,8 +81,9 @@ type dbState struct {
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
 	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
 	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
-	am     prolly.AddressMap     // current collections address map (name → DTBL hash)
-	uuids  map[string]string     // collection name → UUID string (in-memory)
+	am      prolly.AddressMap        // current collections address map (name → DTBL hash)
+	uuids   map[string]string        // collection name → UUID string (in-memory)
+	indexes map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
 
 	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
 	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
@@ -471,13 +472,14 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
-		cs:     cs,
-		ns:     ns,
-		vs:     vs,
-		doltDB: doltDB,
-		ds:     ds,
-		am:     am,
-		uuids:  make(map[string]string),
+		cs:      cs,
+		ns:      ns,
+		vs:      vs,
+		doltDB:  doltDB,
+		ds:      ds,
+		am:      am,
+		uuids:   make(map[string]string),
+		indexes: make(map[string][]backends.IndexInfo),
 	}
 
 	// Initialize DTBL construction helpers: write the shared DSCH chunk once

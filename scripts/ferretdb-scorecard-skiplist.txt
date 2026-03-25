@@ -59,11 +59,18 @@ TestUpdateFieldErrors
 TestValidateCommand
 TestValidateCommandError
 
+# --- Category: Compact on non-existent collection ---
+#
+# compact on a non-existent collection in an existing-but-empty DB returns
+# "database does not exist" instead of "collection does not exist" because
+# Dongo doesn't create the DB state until a collection is written.
+#
+TestCompactCommandNonExistent
+
 # --- Category: Secondary indexes not yet implemented ---
 #
 # These tests create secondary indexes and expect them to appear in stats/index
 # results. Dongo only tracks the _id_ index because secondary index creation is
 # not yet implemented.
 #
-TestListIndexesCommandIndexFieldOrder
 TestCollStatsCommandScaleSize

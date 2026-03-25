@@ -15,11 +15,13 @@
 package dolt
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/FerretDB/wire/wirebson"
 	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
@@ -551,7 +553,7 @@ func (c *collection) Compact(ctx context.Context, params *backends.CompactParams
 
 // ListIndexes implements backends.Collection.
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
-	_, exists, _, err := c.getMap(ctx)
+	_, exists, state, err := c.getMap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -561,19 +563,68 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 			fmt.Errorf("dolt: collection %q does not exist", c.name))
 	}
 
-	return &backends.ListIndexesResult{
-		Indexes: []backends.IndexInfo{
-			{
-				Name: backends.DefaultIndexName,
-				Key:  []backends.IndexKeyPair{{Field: "_id", Descending: false}},
-			},
+	indexes := []backends.IndexInfo{
+		{
+			Name: backends.DefaultIndexName,
+			Key:  []backends.IndexKeyPair{{Field: "_id", Descending: false}},
 		},
-	}, nil
+	}
+
+	state.mu.RLock()
+	secondary := make([]backends.IndexInfo, len(state.indexes[c.name]))
+	copy(secondary, state.indexes[c.name])
+	state.mu.RUnlock()
+
+	indexes = append(indexes, secondary...)
+
+	slices.SortFunc(indexes, func(a, b backends.IndexInfo) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
+	return &backends.ListIndexesResult{Indexes: indexes}, nil
 }
 
 // CreateIndexes implements backends.Collection.
 func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateIndexesParams) (*backends.CreateIndexesResult, error) {
-	// We only support the default _id index; ignore additional index creation requests.
+	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("dolt: collection %q does not exist", c.name))
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	existing := state.indexes[c.name]
+
+	for _, idx := range params.Indexes {
+		if idx.Name == backends.DefaultIndexName {
+			continue
+		}
+
+		found := false
+		for _, e := range existing {
+			if e.Name == idx.Name {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			existing = append(existing, idx)
+		}
+	}
+
+	slices.SortFunc(existing, func(a, b backends.IndexInfo) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
+	state.indexes[c.name] = existing
+
 	return &backends.CreateIndexesResult{}, nil
 }
 
