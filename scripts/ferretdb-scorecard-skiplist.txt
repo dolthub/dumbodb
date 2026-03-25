@@ -50,15 +50,6 @@ TestQueryMaxTimeMSErrors
 TestAggregateCommandMaxTimeMSErrors
 TestUpdateFieldErrors
 
-
-# --- Category: Validate command response structure ---
-#
-# FerretDB returns a different response structure for the validate command
-# than MongoDB 7.0.8 (different fields, different nesting).
-#
-TestValidateCommand
-TestValidateCommandError
-
 # --- Category: Compact on non-existent collection ---
 #
 # compact on a non-existent collection in an existing-but-empty DB returns

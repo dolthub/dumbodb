@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/FerretDB/wire"
+	"github.com/google/uuid"
 
 	"github.com/dolthub/dongo/internal/backends"
 	"github.com/dolthub/dongo/internal/handler/common"
@@ -77,14 +78,45 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
-	// TODO https://github.com/dolthub/dongo/issues/3841
+	// Get UUID for this collection.
+	var uuidBinary types.Binary
+	if collsRes, err := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: collection}); err == nil {
+		for _, coll := range collsRes.Collections {
+			if coll.Name == collection && coll.UUID != "" {
+				if collUUID, err := uuid.Parse(coll.UUID); err == nil {
+					uuidBinary = types.Binary{
+						Subtype: types.BinaryUUID,
+						B:       must.NotFail(collUUID.MarshalBinary()),
+					}
+				}
+			}
+		}
+	}
+
+	// Get indexes for keysPerIndex and indexDetails.
+	indexRes, err := c.ListIndexes(connCtx, nil)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	keysPerIndex := must.NotFail(types.NewDocument())
+	indexDetails := must.NotFail(types.NewDocument())
+
+	for _, idx := range indexRes.Indexes {
+		keysPerIndex.Set(idx.Name, int32(stats.CountDocuments))
+		indexDetails.Set(idx.Name, must.NotFail(types.NewDocument("valid", true)))
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ns", dbName+"."+collection,
+			"uuid", uuidBinary,
 			"nInvalidDocuments", int32(0),
 			"nNonCompliantDocuments", int32(0),
 			"nrecords", int32(stats.CountDocuments),
-			"nIndexes", int32(len(stats.IndexSizes)),
+			"nIndexes", int32(len(indexRes.Indexes)),
+			"keysPerIndex", keysPerIndex,
+			"indexDetails", indexDetails,
 			"valid", true,
 			"repaired", false,
 			"warnings", types.MakeArray(0),
