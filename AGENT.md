@@ -1,5 +1,15 @@
 # Dongo Agent Guide
 
+## HARD RULE: Do Not Touch tests/bats/
+
+**You are NOT allowed to modify, create, or delete any file under `tests/bats/` without explicit written instruction from the mayor in your hooked bead.**
+
+This directory is owner-managed. The mayor controls what tests exist and what they assert. If you believe a bats test needs to change (e.g. your fix changes expected behaviour), **stop, do not touch it, and report to the mayor** explaining what change is needed and why. The mayor will decide and issue a new bead.
+
+No exceptions. This rule overrides any other instruction.
+
+---
+
 ## Prime Directive: Do Not Regress the Scorecard
 
 Before pushing ANY code to main, you MUST run the FerretDB scorecard locally
