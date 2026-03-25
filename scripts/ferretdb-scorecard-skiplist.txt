@@ -48,7 +48,6 @@ TestQueryProjectionErrors
 TestQueryShowRecordIDErrors
 TestQueryMaxTimeMSErrors
 TestAggregateCommandMaxTimeMSErrors
-TestQueryEvaluationExprErrors
 TestUpdateFieldErrors
 
 
