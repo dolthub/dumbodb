@@ -102,7 +102,8 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			// there cannot be more than one positional operator.
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrWrongPositionalOperatorLocation,
-				"Positional projection may only be used at the end, "+
+				"As of 4.4, it's illegal to specify positional operator in the middle of a path."+
+					"Positional projection may only be used at the end, "+
 					"for example: a.b.$. If the query previously used a form "+
 					"like a.b.$.d, remove the parts following the '$' and "+
 					"the results will be equivalent.",
@@ -123,7 +124,8 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			// there cannot be a positional operator along the path, can only be at the end.
 			return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrWrongPositionalOperatorLocation,
-				"Positional projection may only be used at the end, "+
+				"As of 4.4, it's illegal to specify positional operator in the middle of a path."+
+					"Positional projection may only be used at the end, "+
 					"for example: a.b.$. If the query previously used a form "+
 					"like a.b.$.d, remove the parts following the '$' and "+
 					"the results will be equivalent.",

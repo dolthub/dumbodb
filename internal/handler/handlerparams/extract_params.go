@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
@@ -152,13 +153,14 @@ func ExtractParams(doc *types.Document, command string, value any, l *slog.Logge
 type tagOptions struct {
 	optional            bool
 	nonDefault          bool
-	unimplemented       bool
-	ignored             bool
-	positiveNumber      bool
-	wholePositiveNumber bool
-	numericBool         bool
-	zeroOrOneAsBool     bool
-	collection          bool
+	unimplemented          bool
+	ignored                bool
+	positiveNumber         bool
+	wholePositiveNumber    bool
+	numericBool            bool
+	zeroOrOneAsBool        bool
+	zeroOrOneAsDeleteLimit bool
+	collection             bool
 }
 
 // lookupFieldTag looks for the tag and returns its options.
@@ -217,6 +219,8 @@ func tagOptionsFromList(optionsList []string) *tagOptions {
 			to.wholePositiveNumber = true
 		case "zeroOrOneAsBool":
 			to.zeroOrOneAsBool = true
+		case "zeroOrOneAsDeleteLimit":
+			to.zeroOrOneAsDeleteLimit = true
 		case "collection":
 			to.collection = true
 		default:
@@ -285,6 +289,39 @@ func setStructField(elem *reflect.Value, o *tagOptions, i int, command, key stri
 				return handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrFailedToParse,
 					fmt.Sprintf("The '%s.%s' field must be 0 or 1. Got %v", command, key, types.FormatAnyValue(val)),
+					command,
+				)
+			}
+
+			settable = numeric == 1
+
+			break
+		}
+
+		if o.zeroOrOneAsDeleteLimit {
+			var numeric int64
+
+			if s, ok := val.(string); ok {
+				// MongoDB accepts string representations of 0 or 1 for the limit field.
+				parsed, parseErr := strconv.ParseInt(s, 10, 64)
+				if parseErr != nil || parsed < 0 || parsed > 1 {
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrFailedToParse,
+						fmt.Sprintf("The limit field in delete objects must be 0 or 1. Got %v", types.FormatAnyValue(val)),
+						command,
+					)
+				}
+
+				settable = parsed == 1
+
+				break
+			}
+
+			numeric, err = GetWholeNumberParam(val)
+			if err != nil || numeric < 0 || numeric > 1 {
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrFailedToParse,
+					fmt.Sprintf("The limit field in delete objects must be 0 or 1. Got %v", types.FormatAnyValue(val)),
 					command,
 				)
 			}

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -475,12 +476,13 @@ func processRenameFieldExpression(command string, doc *types.Document, key strin
 			return false, nil
 		}
 
-		if dpe.Code() == types.ErrPathIndexInvalid {
-			return false, NewUpdateError(
-				handlererrors.ErrUnsuitableValueType,
-				fmt.Sprintf("cannot use path '%s' to traverse the document", sourcePath),
-				command,
-			)
+		if dpe.Code() == types.ErrPathIndexInvalid || dpe.Code() == types.ErrPathCannotAccess {
+			msg := mongoTraversalErrorMsg(doc, sourcePath)
+			if msg == "" {
+				msg = fmt.Sprintf("cannot use path '%s' to traverse the document", sourcePath)
+			}
+
+			return false, NewUpdateError(handlererrors.ErrUnsuitableValueType, msg, command)
 		}
 
 		return false, NewUpdateError(handlererrors.ErrUnsuitableValueType, dpe.Error(), command)
@@ -495,6 +497,56 @@ func processRenameFieldExpression(command string, doc *types.Document, key strin
 	}
 
 	return true, nil
+}
+
+// mongoTraversalErrorMsg generates a MongoDB-compatible error message when a path traversal
+// fails because an intermediate value is not a Document or Array.
+// Returns a message like "Cannot create field 'KEY' in element {KEY : VALUE}",
+// or an empty string if the failure point cannot be determined.
+func mongoTraversalErrorMsg(doc *types.Document, path types.Path) string {
+	var current any = doc
+
+	for i, key := range path.Slice() {
+		if i == path.Len()-1 {
+			break
+		}
+
+		switch v := current.(type) {
+		case *types.Document:
+			val, err := v.Get(key)
+			if err != nil {
+				return ""
+			}
+
+			switch val.(type) {
+			case *types.Document, *types.Array:
+				current = val
+			default:
+				return fmt.Sprintf(
+					"Cannot create field '%s' in element {%s : %s}",
+					key, key, types.FormatAnyValue(val),
+				)
+			}
+
+		case *types.Array:
+			index, err := strconv.Atoi(key)
+			if err != nil {
+				return ""
+			}
+
+			val, err := v.Get(index)
+			if err != nil {
+				return ""
+			}
+
+			current = val
+
+		default:
+			return ""
+		}
+	}
+
+	return ""
 }
 
 // processIncFieldExpression changes document according to $inc operator.

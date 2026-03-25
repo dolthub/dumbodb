@@ -51,7 +51,7 @@ type DeleteParams struct {
 //nolint:vet // for readability
 type Delete struct {
 	Filter  *types.Document `ferretdb:"q"`
-	Limited bool            `ferretdb:"limit,zeroOrOneAsBool"`
+	Limited bool            `ferretdb:"limit,zeroOrOneAsDeleteLimit"`
 
 	Collation *types.Document `ferretdb:"collation,unimplemented"`
 

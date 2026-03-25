@@ -225,13 +225,16 @@ func getSortValue(key string, value any) (int64, error) {
 	if err != nil {
 		switch {
 		case errors.Is(err, handlerparams.ErrUnexpectedType):
+			var formattedValue string
 			if _, ok := value.(types.NullType); ok {
-				value = "null"
+				formattedValue = "null"
+			} else {
+				formattedValue = types.FormatAnyValue(value)
 			}
 
 			return 0, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrSortBadValue,
-				fmt.Sprintf(`Illegal key in $sort specification: %v: %v`, key, value),
+				fmt.Sprintf(`Illegal key in $sort specification: %v: %v`, key, formattedValue),
 				"$sort",
 			)
 		case errors.Is(err, handlerparams.ErrNotWholeNumber):

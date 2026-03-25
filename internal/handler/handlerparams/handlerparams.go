@@ -159,7 +159,16 @@ func getOptionalPositiveNumber(key string, value any) (int64, error) {
 				key,
 			)
 		case errors.Is(err, ErrNotWholeNumber):
-			if _, ok := value.(float64); ok {
+			if fv, ok := value.(float64); ok {
+				floorVal := int64(math.Floor(fv))
+				if floorVal < 0 || floorVal > math.MaxInt32 {
+					return 0, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						fmt.Sprintf("%v value for %s is out of range [0, 2147483647]", floorVal, key),
+						key,
+					)
+				}
+
 				return 0, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,
 					fmt.Sprintf("%v has non-integral value", key),
@@ -180,7 +189,7 @@ func getOptionalPositiveNumber(key string, value any) (int64, error) {
 	if whole > math.MaxInt32 || whole < math.MinInt32 {
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			fmt.Sprintf("%v value for %s is out of range", whole, key),
+			fmt.Sprintf("%v value for %s is out of range [0, 2147483647]", whole, key),
 			key,
 		)
 	}
@@ -188,7 +197,7 @@ func getOptionalPositiveNumber(key string, value any) (int64, error) {
 	if whole < 0 {
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			fmt.Sprintf("%v value for %s is out of range", value, key),
+			fmt.Sprintf("%v value for %s is out of range [0, 2147483647]", value, key),
 			key,
 		)
 	}

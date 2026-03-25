@@ -74,6 +74,33 @@ func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 		BatchSize: 101,
 	}
 
+	// Pre-validate sort type: MongoDB returns a specific "Expected field sortto be of type object"
+	// message (with the MongoDB typo "sortto") when sort is not a document.
+	if sortVal, err := doc.Get("sort"); err == nil {
+		if _, ok := sortVal.(*types.Document); !ok {
+			if _, isNull := sortVal.(types.NullType); !isNull {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrTypeMismatch,
+					"Expected field sortto be of type object",
+					"find",
+				)
+			}
+		}
+	}
+
+	// Pre-validate showRecordId type: MongoDB returns "Field 'showRecordId' should be a boolean value"
+	// instead of the generic BSON type mismatch message.
+	if showRecordIdVal, err := doc.Get("showRecordId"); err == nil {
+		if _, ok := showRecordIdVal.(bool); !ok {
+			typeName := handlerparams.AliasFromType(showRecordIdVal)
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"Field 'showRecordId' should be a boolean value, but found: "+typeName,
+				"find",
+			)
+		}
+	}
+
 	if err := handlerparams.ExtractParams(doc, "find", &params, l); err != nil {
 		return nil, err
 	}
