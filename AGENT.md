@@ -43,8 +43,24 @@ make ferretdb-scorecard
 The scorecard builds Dongo, starts it, runs the FerretDB integration suite
 against it, and writes results to `.runtime/ferretdb-scorecard.txt`.
 
+## Critical: Local Runs ≠ CI — Do Not Remove from Skiplist Without CI Confirmation
+
+**Never remove a test from `scripts/ferretdb-scorecard-skiplist.txt` based solely on a local run.**
+
+Some tests (e.g. timing-sensitive tests like `TestAggregateCommandMaxTimeMSErrors`) pass locally
+but fail on CI due to resource constraints on GitHub Actions runners. Removing them from the
+skiplist breaks CI even when local runs look clean.
+
+**Required process for skiplist removals:**
+1. Fix the underlying issue and run locally — test must pass
+2. Push the fix to main (keep the test in the skiplist for now)
+3. Check the GitHub Actions `Dongo FerretDB Scorecard` run for that push
+4. Only if CI shows no unexpected failures for that test → then remove it from the skiplist
+5. Push the skiplist change and confirm CI stays green
+
+Report to mayor in completion mail whether CI was verified or not.
+
 ## Current Goal
 
-The scorecard shows 0/117 tests passing. The immediate goal is to get tests
-passing one at a time. Pick ONE failing test, make it pass, verify the
-scorecard improves, and push. Small, verified improvements only.
+Fix failing FerretDB integration tests one at a time. Use CI (GitHub Actions) as the
+source of truth — not local runs. Small, CI-verified improvements only.
