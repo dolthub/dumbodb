@@ -241,7 +241,7 @@ func processExprOperatorErrors(err error, argument string) error {
 		case ErrTooManyFields:
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrExpressionWrongLenOfFields,
-				"An object representing an expression must have exactly one field",
+				opErr.Error(),
 				argument,
 			)
 		case ErrNotImplemented:
