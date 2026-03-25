@@ -86,12 +86,12 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 			)
 		}
 
-		resSupportedMechs = must.NotFail(types.NewArray("PLAIN"))
+		if resSupportedMechs, err = h.getUserSupportedMechs(ctx, db, username); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
 
-		if h.EnableNewAuth {
-			if resSupportedMechs, err = h.getUserSupportedMechs(ctx, db, username); err != nil {
-				return nil, lazyerrors.Error(err)
-			}
+		if resSupportedMechs == nil {
+			resSupportedMechs = must.NotFail(types.NewArray("PLAIN"))
 		}
 	}
 

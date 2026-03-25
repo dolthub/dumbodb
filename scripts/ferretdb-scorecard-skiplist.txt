@@ -24,7 +24,6 @@ TestHelloIsMasterOpQuerySpeculative
 TestHelloOpQuerySASLSupportedMechs
 TestHelloSpeculative
 TestHelloWithSupportedMechs
-TestLogoutCommandAuthenticatedUser
 TestOpQuery
 TestOpQueryHello
 TestOpQueryIsMaster
