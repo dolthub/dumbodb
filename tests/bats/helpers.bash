@@ -67,8 +67,8 @@ setup_dolt_hack() {
     # Symlink noms to the 'test' db dir (default dongo database name).
     ln -sfn "${data_dir}/test" "${dolt_dir}/noms"
 
-    # Create repo_stat.json so dolt recognises this as a valid repo.
-    cat > "${dolt_dir}/repo_stat.json" <<'EOF'
+    # Create repo_state.json so dolt recognises this as a valid repo.
+    cat > "${dolt_dir}/repo_state.json" <<'EOF'
 {"head":"refs/heads/main","remotes":{},"backups":{},"branches":{}}
 EOF
 }
