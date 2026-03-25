@@ -63,26 +63,9 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	if _, err = common.GetOptionalParam[*types.Array](document, "roles", nil); err != nil {
-		var ce *handlererrors.CommandError
-		if errors.As(err, &ce) && ce.Code() == handlererrors.ErrBadValue {
-			return nil, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrMissingField,
-				"BSON field 'updateUser.roles' is missing but a required field",
-			)
-		}
-
-		return nil, lazyerrors.Error(err)
-	}
-
-	if err = common.UnimplementedNonDefault(document, "roles", func(v any) bool {
-		r, ok := v.(*types.Array)
-		return ok && r.Len() == 0
-	}); err != nil {
-		return nil, err
-	}
-
-	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment")
+	// Accept any roles value; dongo doesn't enforce RBAC but must not reject
+	// non-empty roles to be compatible with MongoDB clients.
+	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment", "roles")
 
 	defMechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
 
@@ -208,6 +191,13 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		changes = true
 
 		saved.Set("credentials", credentials)
+	}
+
+	if document.Has("roles") {
+		changes = true
+		// Roles are accepted but not enforced (no RBAC). The stored value remains
+		// an empty array; we only set changes=true to satisfy the "at least one
+		// field" requirement.
 	}
 
 	if !changes {

@@ -90,12 +90,9 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	if err = common.UnimplementedNonDefault(document, "roles", func(v any) bool {
-		r, ok := v.(*types.Array)
-		return ok && r.Len() == 0
-	}); err != nil {
-		return nil, err
-	}
+	// Accept any roles array; dongo doesn't enforce RBAC but must not reject
+	// non-empty roles to be compatible with MongoDB clients.
+	common.Ignored(document, h.L, "roles")
 
 	if err = common.UnimplementedNonDefault(document, "digestPassword", func(v any) bool {
 		if v == nil || v == types.Null {

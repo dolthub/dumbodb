@@ -18,9 +18,6 @@
 # so these tests fail before exercising their intended logic. These failures
 # are not dongo bugs — they are a test suite infrastructure limitation.
 #
-# TestAuth: still failing post-82a30f9 SCRAM fix — createUser roles field
-# ("roles" with non-default value) is not yet implemented.
-TestAuth
 TestAuthAlreadyAuthenticated
 TestLogoutCommandAuthenticatedUser
 TestHelloIsMasterOpQuerySpeculative
