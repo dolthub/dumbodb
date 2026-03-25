@@ -17,8 +17,6 @@ package types
 import (
 	"errors"
 	"fmt"
-	"math"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/dolthub/dongo/internal/util/must"
@@ -65,7 +63,6 @@ func (e *ValidationError) Code() ValidationErrorCode {
 
 // ValidateData checks if the document represents a valid "data document".
 // It places `_id` field into the fields slice 0 index.
-// It replaces negative zero -0 with valid positive zero 0.
 // If the document is not valid it returns *ValidationError.
 func (d *Document) ValidateData() error {
 	return d.validateData(true)
@@ -86,14 +83,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 
 		if !utf8.ValidString(key) {
 			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (not a valid UTF-8 string)", key))
-		}
-
-		if strings.HasPrefix(key, "$") {
-			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (key must not start with '$' sign)", key))
-		}
-
-		if strings.Contains(key, ".") {
-			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (key must not contain '.' sign)", key))
 		}
 
 		if _, ok := duplicateChecker[key]; ok {
@@ -129,11 +118,8 @@ func (d *Document) validateData(isTopLevel bool) error {
 			}
 
 			for i := 0; i < value.Len(); i++ {
-				item := must.NotFail(value.Get(i))
-
-				switch item := item.(type) {
-				case *Document:
-					err := item.validateData(false)
+				if doc, ok := must.NotFail(value.Get(i)).(*Document); ok {
+					err := doc.validateData(false)
 					if err != nil {
 						var vErr *ValidationError
 
@@ -143,19 +129,7 @@ func (d *Document) validateData(isTopLevel bool) error {
 
 						return err
 					}
-				case *Array:
-					return newValidationError(ErrValidation, fmt.Errorf(
-						"invalid value: { %q: %v } (nested arrays are not supported)", key, FormatAnyValue(value),
-					))
-				case float64:
-					if item == 0 && math.Signbit(item) {
-						must.NoError(value.Set(i, math.Copysign(0, +1)))
-					}
 				}
-			}
-		case float64:
-			if value == 0 && math.Signbit(value) {
-				d.Set(key, math.Copysign(0, +1))
 			}
 		case Regex:
 			if isTopLevel && key == "_id" {
