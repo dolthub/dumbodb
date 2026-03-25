@@ -6,13 +6,14 @@ COMPAT_FILE            := $(CURDIR)/.runtime/ferretdb-compat.txt
 MONGODB_REFERENCE_FILE := $(CURDIR)/.runtime/mongodb-reference.txt
 FERRETDB_REFERENCE_FILE := $(CURDIR)/.runtime/ferretdb-reference.txt
 
-.PHONY: help build ferretdb-scorecard ferretdb-compat mongodb-reference ferretdb-reference
+.PHONY: help build ferretdb-scorecard ferretdb-compat mongodb-reference ferretdb-reference bats
 
 help:
 	@echo "Dongo Makefile"
 	@echo ""
 	@echo "Targets:"
 	@echo "  build                Build Dongo server binary"
+	@echo "  bats                 Run bats integration tests (tests/bats/)"
 	@echo "  ferretdb-scorecard   Start Dongo, run FerretDB integration tests, report results"
 	@echo "  ferretdb-compat      Run FerretDB compat suite: Dongo (target) vs MongoDB (compat)"
 	@echo "  mongodb-reference    Run FerretDB suite against real MongoDB (baseline)"
@@ -44,3 +45,6 @@ mongodb-reference:
 
 ferretdb-reference:
 	./scripts/ferretdb-reference.sh $(FERRETDB_REFERENCE_FILE)
+
+bats: build
+	bats tests/bats/
