@@ -83,6 +83,10 @@ func FormatAnyValue(value any) string {
 
 // formatDocument formats Document for error output.
 func formatDocument(doc *Document) string {
+	if len(doc.fields) == 0 {
+		return "{}"
+	}
+
 	result := "{ "
 
 	for i, f := range doc.fields {

@@ -361,7 +361,7 @@ func setStructField(elem *reflect.Value, o *tagOptions, i int, command, key stri
 			if key == command {
 				return handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrInvalidNamespace,
-					fmt.Sprintf("collection name has invalid type %s", AliasFromType(settable)),
+					"Failed to parse namespace element",
 					command,
 				)
 			}

@@ -88,9 +88,18 @@ func (h *Handler) MsgCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	statsBefore, err := c.Stats(connCtx, new(backends.CollectionStatsParams))
 	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
+		dbList, listErr := h.b.ListDatabases(connCtx, &backends.ListDatabasesParams{Name: dbName})
+		if listErr == nil && len(dbList.Databases) == 0 {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrNamespaceNotFound,
+				"database does not exist",
+				command,
+			)
+		}
+
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNamespaceNotFound,
-			fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collection),
+			"collection does not exist",
 			command,
 		)
 	}

@@ -49,9 +49,23 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	collection, err := common.GetRequiredParam[string](document, command)
-	if err != nil {
-		return nil, err
+	collectionVal, _ := document.Get(command)
+
+	var collection string
+
+	switch cv := collectionVal.(type) {
+	case string:
+		collection = cv
+	case nil:
+		if collection, err = common.GetRequiredParam[string](document, command); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("collection name has invalid type %s", handlerparams.AliasFromType(cv)),
+			command,
+		)
 	}
 
 	db, err := h.b.Database(dbName)
@@ -328,7 +342,7 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 					fmt.Sprintf(
 						"Error in specification { key: %s, name: %q, unique: %s } "+
 							":: caused by :: "+
-							"The field 'unique' has value unique: %[3]s, which is not convertible to bool",
+							"The field 'unique has value unique: %[3]s, which is not convertible to bool",
 						types.FormatAnyValue(must.NotFail(indexDoc.Get("key"))),
 						index.Name, types.FormatAnyValue(v),
 					),
@@ -503,8 +517,8 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				msg := fmt.Sprintf(
 					"An existing index has the same name as the requested index."+
 						" When index names are not specified, they are auto generated and can cause conflicts."+
-						" Please refer to our documentation. Requested index: { key: { %s }, name: %q },"+
-						" existing index: { key: { %s }, name: %q }",
+						" Please refer to our documentation. Requested index: { v: 2, key: { %s }, name: %q },"+
+						" existing index: { v: 2, key: { %s }, name: %q }",
 					newKey, newIdx.Name, otherKey, otherName,
 				)
 
@@ -534,8 +548,8 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				msg := fmt.Sprintf(
 					"An existing index has the same name as the requested index."+
 						" When index names are not specified, they are auto generated and can cause conflicts."+
-						" Please refer to our documentation. Requested index: { key: { %s }, name: %q },"+
-						" existing index: { key: { %s }, name: %q }",
+						" Please refer to our documentation. Requested index: { v: 2, key: { %s }, name: %q },"+
+						" existing index: { v: 2, key: { %s }, name: %q }",
 					newKey, newIdx.Name, existingKey, existingIdx.Name,
 				)
 

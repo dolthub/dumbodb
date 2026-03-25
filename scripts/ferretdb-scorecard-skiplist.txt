@@ -43,7 +43,6 @@ TestSASLStartOpQueryErrors
 #
 TestDelete
 TestDistinctCommandErrors
-TestQueryBadFindType
 TestQuerySortErrors
 TestQueryProjectionErrors
 TestQueryShowRecordIDErrors
@@ -52,17 +51,6 @@ TestAggregateCommandMaxTimeMSErrors
 TestQueryEvaluationExprErrors
 TestUpdateFieldErrors
 
-# --- Category: FerretDB error message format divergence (index/admin commands) ---
-#
-# FerretDB generates functionally correct but differently worded error messages
-# for these commands compared to MongoDB 7.0.8.
-#
-TestCompactCommandNonExistent
-TestCreateIndexesCommandInvalidCollection
-TestCreateIndexesCommandInvalidSpec
-TestDropIndexesCommandErrors
-TestDropIndexesCommandInvalidCollection
-TestExplainCommandQueryErrors
 
 # --- Category: Validate command response structure ---
 #

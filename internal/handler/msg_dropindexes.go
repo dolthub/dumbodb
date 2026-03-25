@@ -47,9 +47,23 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	collection, err := common.GetRequiredParam[string](document, command)
-	if err != nil {
-		return nil, err
+	collectionVal, _ := document.Get(command)
+
+	var collection string
+
+	switch cv := collectionVal.(type) {
+	case string:
+		collection = cv
+	case nil:
+		if collection, err = common.GetRequiredParam[string](document, command); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("collection name has invalid type %s", handlerparams.AliasFromType(cv)),
+			command,
+		)
 	}
 
 	db, err := h.b.Database(dbName)
@@ -190,7 +204,7 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 				return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrTypeMismatch,
 					fmt.Sprintf(
-						"BSON field 'dropIndexes.index' is the wrong type '%s', expected types '[string, object]'",
+						"BSON field 'dropIndexes.index' is the wrong type '%s', expected types '[string']",
 						handlerparams.AliasFromType(v),
 					),
 					command,
@@ -273,7 +287,7 @@ func processDropIndexOptions(command, ns string, v any, existing []backends.Inde
 	return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrTypeMismatch,
 		fmt.Sprintf(
-			"BSON field 'dropIndexes.index' is the wrong type '%s', expected types '[string, object]'",
+			"BSON field 'dropIndexes.index' is the wrong type '%s', expected types '[string, object']",
 			handlerparams.AliasFromType(v),
 		),
 		command,
