@@ -34,12 +34,14 @@ jobs:
 
       - name: Run MongoDB reference suite
         id: run-tests
+        continue-on-error: true
         run: make mongodb-reference
         env:
           MONGO_HOST: 127.0.0.1
           MONGO_PORT: 37017
 
       - name: Check for unexpected failures
+        if: always()
         run: |
           RESULTS_FILE=".runtime/mongodb-reference.txt"
           SKIPLIST_FILE="scripts/mongodb-reference-skiplist.txt"
