@@ -29,6 +29,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
+	"github.com/google/uuid"
 	mongobson "go.mongodb.org/mongo-driver/bson"
 
 	"github.com/dolthub/dongo/internal/backends"
@@ -659,6 +660,11 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return ed.Add(ctx, c.name, dtblHash)
 	}); err != nil {
 		return prolly.Map{}, err
+	}
+
+	// Generate and store a UUID for this implicitly-created collection.
+	if _, exists := state.uuids[c.name]; !exists {
+		state.uuids[c.name] = uuid.New().String()
 	}
 
 	return emptyMap, nil
