@@ -30,15 +30,13 @@ teardown() {
     run mongosh "$mongo_uri" --quiet --eval \
         'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
     [ "$status" -eq 0 ]
-    run sh -c "echo '$output' | jq -e '.acknowledged == true and .insertedId != null'"
-    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
     # Insert bob.
     run mongosh "$mongo_uri" --quiet --eval \
         'JSON.stringify(db.col1.insertOne({name:"bob",age:25}))'
     [ "$status" -eq 0 ]
-    run sh -c "echo '$output' | jq -e '.acknowledged == true and .insertedId != null'"
-    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
     # Stop dongo so data is flushed.
     stop_dongo
@@ -48,16 +46,17 @@ teardown() {
 
     local repo_dir
     repo_dir="$(dirname "$DONGO_DATA_DIR")"
+    cd "$repo_dir"
 
     # Verify dolt storage integrity.
-    run sh -c "cd '$repo_dir' && dolt fsck"
+    run dolt fsck
     [ "$status" -eq 0 ]
 
     # Verify the two inserted documents appear in dolt sql.
-    run sh -c "cd '$repo_dir' && dolt sql -q 'select count(*) from col1' --result-format csv"
+    run dolt sql -q 'select count(*) from col1' --result-format csv
     [ "$status" -eq 0 ]
-    echo "dolt sql output: $output"
     # The CSV output has a header line and a data line; the count should be 2.
-    run sh -c "echo '$output' | tail -1 | tr -d '[:space:]'"
-    [ "$output" = "2" ]
+    local count
+    count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
+    [ "$count" = "2" ]
 }
