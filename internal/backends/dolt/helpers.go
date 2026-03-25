@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
@@ -274,6 +275,19 @@ func encodeID(id any) ([]byte, error) {
 		if v {
 			b[1] = 0x01
 		}
+		return b, nil
+
+	case time.Time:
+		b := make([]byte, 9)
+		b[0] = 0x09 // BSON Date tag
+		binary.BigEndian.PutUint64(b[1:], uint64(v.UnixMilli()))
+		return b, nil
+
+	case types.Decimal128:
+		b := make([]byte, 17)
+		b[0] = 0x13 // BSON Decimal128 tag
+		binary.LittleEndian.PutUint64(b[1:], v.L)
+		binary.LittleEndian.PutUint64(b[9:], v.H)
 		return b, nil
 
 	case *types.Document:

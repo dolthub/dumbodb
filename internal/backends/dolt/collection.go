@@ -22,6 +22,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
@@ -800,6 +801,22 @@ func decodeID(b []byte) (any, error) {
 			return nil, fmt.Errorf("dolt: Bool _id: expected 1 byte, got %d", len(data))
 		}
 		return data[0] != 0x00, nil
+
+	case 0x09: // Date
+		if len(data) != 8 {
+			return nil, fmt.Errorf("dolt: Date _id: expected 8 bytes, got %d", len(data))
+		}
+		ms := int64(binary.BigEndian.Uint64(data))
+		return time.UnixMilli(ms).UTC(), nil
+
+	case 0x13: // Decimal128
+		if len(data) != 16 {
+			return nil, fmt.Errorf("dolt: Decimal128 _id: expected 16 bytes, got %d", len(data))
+		}
+		return types.Decimal128{
+			L: binary.LittleEndian.Uint64(data[0:8]),
+			H: binary.LittleEndian.Uint64(data[8:16]),
+		}, nil
 
 	default:
 		return nil, fmt.Errorf("dolt: unsupported _id tag 0x%02x", tag)
