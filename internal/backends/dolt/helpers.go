@@ -100,7 +100,7 @@ func buildCollectionTableSchema() serial.Message {
 
 	// Pre-build all strings before starting any object.
 	idName := b.CreateString("_id")
-	idSqlType := b.CreateString("varbinary")
+	idSqlType := b.CreateString("varbinary(1024)")
 	docName := b.CreateString("doc")
 	docSqlType := b.CreateString("json")
 
