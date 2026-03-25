@@ -49,3 +49,31 @@ TestQueryMaxTimeMSErrors
 TestAggregateCommandMaxTimeMSErrors
 TestQueryEvaluationExprErrors
 TestUpdateFieldErrors
+
+# --- Category: FerretDB error message format divergence (index/admin commands) ---
+#
+# FerretDB generates functionally correct but differently worded error messages
+# for these commands compared to MongoDB 7.0.8.
+#
+TestCompactCommandNonExistent
+TestCreateIndexesCommandInvalidCollection
+TestCreateIndexesCommandInvalidSpec
+TestDropIndexesCommandErrors
+TestDropIndexesCommandInvalidCollection
+TestExplainCommandQueryErrors
+
+# --- Category: Validate command response structure ---
+#
+# FerretDB returns a different response structure for the validate command
+# than MongoDB 7.0.8 (different fields, different nesting).
+#
+TestValidateCommand
+TestValidateCommandError
+
+# --- Category: Secondary indexes not yet implemented ---
+#
+# TestListIndexesCommandIndexFieldOrder creates a secondary index and expects
+# listIndexes to return both _id_ and the new index. Dongo only returns _id_
+# because secondary index creation is not yet implemented.
+#
+TestListIndexesCommandIndexFieldOrder
