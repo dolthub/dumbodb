@@ -61,6 +61,43 @@ teardown() {
     [ "$count" = "2" ]
 }
 
+@test 'inserted docs appear as added rows in dolt diff' {
+    local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+
+    run mongosh "$mongo_uri" --quiet --eval \
+        'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
+
+    run mongosh "$mongo_uri" --quiet --eval \
+        'JSON.stringify(db.col1.insertOne({name:"bob",age:25}))'
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
+
+    stop_dongo
+
+    setup_dolt_hack "$DONGO_DATA_DIR"
+
+    local repo_dir
+    repo_dir="$(dirname "$DONGO_DATA_DIR")"
+    cd "$repo_dir"
+
+    run dolt diff --result-format=sql
+    [ "$status" -eq 0 ]
+
+    # The table itself should be new.
+    [[ "$output" =~ 'CREATE TABLE `col1`' ]] || false
+
+    # Each inserted document should appear as an INSERT with a hex _id.
+    local added_rows
+    added_rows="$(echo "$output" | grep -c '^INSERT INTO')"
+    [ "$added_rows" -eq 2 ]
+
+    # The doc column should contain alice and bob (JSON is escaped in SQL format).
+    [[ "$output" =~ '\"name\":\"alice\"' ]] || false
+    [[ "$output" =~ '\"name\":\"bob\"' ]] || false
+}
+
 @test 'collection schema has _id and doc columns' {
     run mongosh "mongodb://127.0.0.1:${DONGO_PORT}/test" --quiet --eval \
         'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
