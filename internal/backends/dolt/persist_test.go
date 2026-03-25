@@ -568,3 +568,181 @@ func TestDongoCommitDefaultMessage(t *testing.T) {
 		t.Errorf("default message = %q, want %q", res.Message, "dongo commit")
 	}
 }
+
+// TestDongoCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
+func TestDongoCommitTwoDistinctHashes(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-two-hashes-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	if _, err = b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// Insert a document, then commit.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	doc1, err := types.NewDocument("_id", int64(1), "x", int64(1))
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	doc1.SetRecordID(1)
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc1}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one"})
+	if err != nil {
+		t.Fatalf("DongoCommit 1: %v", err)
+	}
+
+	// Insert another document, then commit again.
+	doc2, err := types.NewDocument("_id", int64(2), "x", int64(2))
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	doc2.SetRecordID(2)
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc2}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two"})
+	if err != nil {
+		t.Fatalf("DongoCommit 2: %v", err)
+	}
+
+	if res1.Hash == res2.Hash {
+		t.Errorf("two commits produced the same hash %q", res1.Hash)
+	}
+}
+
+// TestDongoCommitNoOpSucceeds verifies that committing with no changes since the last
+// commit succeeds (a no-op commit is acceptable).
+func TestDongoCommitNoOpSucceeds(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-noop-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	if _, err = b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// First commit (on empty state after init).
+	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first"})
+	if err != nil {
+		t.Fatalf("DongoCommit 1: %v", err)
+	}
+
+	// Second commit with no intervening writes — must not error.
+	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op"})
+	if err != nil {
+		t.Fatalf("DongoCommit 2 (no-op): %v", err)
+	}
+
+	// Both hashes must be non-empty.
+	if res1.Hash == "" || res2.Hash == "" {
+		t.Errorf("got empty hash: %q / %q", res1.Hash, res2.Hash)
+	}
+}
+
+// TestDongoCommitWorkingSetClean verifies that after a commit the working set's
+// staged root address equals the HEAD commit's rootValue address (clean state).
+func TestDongoCommitWorkingSetClean(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-ws-clean-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	// Insert a doc, then commit.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	doc, err := types.NewDocument("_id", int64(1), "x", int64(99))
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	doc.SetRecordID(1)
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check"}); err != nil {
+		t.Fatalf("DongoCommit: %v", err)
+	}
+
+	// Read HEAD rootValue hash.
+	headVal, _, err := state.ds.MaybeHeadValue()
+	if err != nil {
+		t.Fatalf("MaybeHeadValue: %v", err)
+	}
+	headRtvlRef, err := dolttypes.NewRef(headVal, dolttypes.Format_DOLT)
+	if err != nil {
+		t.Fatalf("NewRef for head rootValue: %v", err)
+	}
+	headRtvlHash := headRtvlRef.TargetHash()
+
+	// Read the working set and get the staged root addr.
+	wsDs, err := state.doltDB.GetDataset(ctx, workingSetDataset)
+	if err != nil {
+		t.Fatalf("GetDataset working set: %v", err)
+	}
+	if !wsDs.HasHead() {
+		t.Fatal("working set has no head")
+	}
+	ws, err := wsDs.HeadWorkingSet()
+	if err != nil {
+		t.Fatalf("HeadWorkingSet: %v", err)
+	}
+	if ws.StagedAddr == nil {
+		t.Fatal("working set StagedAddr is nil after commit")
+	}
+
+	if *ws.StagedAddr != headRtvlHash {
+		t.Errorf("working set staged root %v != HEAD rootValue hash %v", *ws.StagedAddr, headRtvlHash)
+	}
+}
