@@ -109,22 +109,35 @@ assert_id_roundtrip() {
 @test '_id as embedded document' {
     local uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
 
+    # Insert doc1: _id with key order {a, b}
     run mongosh "$uri" --quiet --eval \
-        "JSON.stringify(db.col_subdoc.insertOne({_id: {a: 1, b: 'x'}, k: 1, v: 42}))"
+        "JSON.stringify(db.col_subdoc.insertOne({_id: {a: 1, b: 'x'}, v: 42}))"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true'
 
-    # Same key order as inserted — must find the document.
+    # Insert doc2: _id with reversed key order {b, a} — this is a distinct _id
+    run mongosh "$uri" --quiet --eval \
+        "JSON.stringify(db.col_subdoc.insertOne({_id: {b: 'x', a: 1}, v: 99}))"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.acknowledged == true'
+
+    # findOne with key order {a, b} — must return doc1 (v == 42), not doc2
     run mongosh "$uri" --quiet --eval \
         "JSON.stringify(db.col_subdoc.findOne({_id: {a: 1, b: 'x'}}))"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '._id.a == 1 and ._id.b == "x" and .k == 1 and .v == 42'
+    echo "$output" | jq -e '._id.a == 1 and ._id.b == "x" and .v == 42'
 
-    # Different key order — must NOT find the document (MongoDB _id matching is order-sensitive).
+    # findOne with key order {b, a} — must return doc2 (v == 99), not doc1
     run mongosh "$uri" --quiet --eval \
         "JSON.stringify(db.col_subdoc.findOne({_id: {b: 'x', a: 1}}))"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '. == null'
+    echo "$output" | jq -e '._id.b == "x" and ._id.a == 1 and .v == 99'
+
+    # Collection must contain exactly 2 documents
+    run mongosh "$uri" --quiet --eval \
+        "db.col_subdoc.find({}).count()"
+    [ "$status" -eq 0 ]
+    [ "$output" -eq 2 ]
 }
 
 @test '_id as Date' {
