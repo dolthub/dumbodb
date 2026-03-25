@@ -33,17 +33,6 @@ TestSASLContinueOpQueryErrors
 TestSASLStartErrors
 TestSASLStartOpQueryErrors
 
-# --- Category: Auth session management (structural) ---
-#
-# TestLogoutCommandAuthenticatedUser creates a SCRAM-SHA-256 authenticated
-# connection, issues logout, then expects subsequent operations to fail with
-# an auth error. Dongo does not yet implement per-connection auth state
-# invalidation on logout, so post-logout operations succeed instead of
-# returning Unauthorized. Enabling SCRAM support (do-bdl) was not sufficient
-# to fix this — the logout path itself needs work.
-#
-TestLogoutCommandAuthenticatedUser
-
 # --- Category: FerretDB error message format divergence from MongoDB 7.0.8 ---
 #
 # These tests assert MongoDB-specific error message strings. FerretDB generates
