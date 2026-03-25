@@ -680,6 +680,68 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, sta
 	return err
 }
 
+// Verify that Backend implements VersioningBackend.
+var _ backends.VersioningBackend = (*Backend)(nil)
+
+// DongoCommit implements backends.VersioningBackend.
+// It commits the current working set (collections AM) with the given message,
+// creating a new dolt commit on the main branch.
+func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DongoCommit: database %q does not exist", params.DBName))
+	}
+
+	message := params.Message
+	if message == "" {
+		message = "dongo commit"
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	newDS, _, err := commitCollectionsAM(ctx, db.doltDB, db.ds, db.am, message)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: committing db %q: %w", params.DBName, err)
+	}
+	db.ds = newDS
+
+	headHash, ok := newDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoCommit: no head after commit for db %q", params.DBName)
+	}
+
+	return &backends.CommitResult{
+		Hash:    headHash.String(),
+		Branch:  "main",
+		Message: message,
+	}, nil
+}
+
+// DongoBranch implements backends.VersioningBackend.
+func (b *Backend) DongoBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
+	return nil, fmt.Errorf("dolt: DongoBranch not yet implemented")
+}
+
+// DongoMerge implements backends.VersioningBackend.
+func (b *Backend) DongoMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
+	return nil, fmt.Errorf("dolt: DongoMerge not yet implemented")
+}
+
+// DongoLog implements backends.VersioningBackend.
+func (b *Backend) DongoLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
+	return nil, fmt.Errorf("dolt: DongoLog not yet implemented")
+}
+
+// DongoStatus implements backends.VersioningBackend.
+func (b *Backend) DongoStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+	return nil, fmt.Errorf("dolt: DongoStatus not yet implemented")
+}
+
 // readAMFromWorkingSet reads the collections AddressMap from the working set.
 // The working set always reflects the latest writes, even when those writes
 // did not create a dolt commit (HEAD stays at the last explicit commit).

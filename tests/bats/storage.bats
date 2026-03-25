@@ -119,3 +119,26 @@ teardown() {
     [[ "$output" =~ '`doc` json NOT NULL' ]] || false
     [[ "$output" =~ 'PRIMARY KEY (`_id`)' ]] || false
 }
+
+@test 'dongoCommit returns non-empty hash' {
+    local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+
+    # Insert a document so there is something to commit.
+    run mongosh "$mongo_uri" --quiet --eval \
+        'JSON.stringify(db.col.insertOne({x:1}))'
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.acknowledged == true'
+
+    # Run dongoCommit and capture the result.
+    run mongosh "$mongo_uri" --quiet --eval \
+        'JSON.stringify(db.adminCommand({dongoCommit: 1, message: "my first commit"}))'
+    [ "$status" -eq 0 ]
+
+    # Verify ok:1 and a non-empty hash.
+    echo "$output" | jq -e '.ok == 1'
+    local hash
+    hash="$(echo "$output" | jq -r '.hash')"
+    [ -n "$hash" ]
+    [ "$hash" != "null" ]
+    [ "$hash" != "0000000000000000000000000000000000000000" ]
+}

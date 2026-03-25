@@ -446,3 +446,125 @@ func TestWritesNoNewCommits(t *testing.T) {
 		t.Errorf("HEAD moved after %d writes (addr %v → %v): writes must not create dolt commits", N, initAddr, headAddr)
 	}
 }
+
+// TestDongoCommit verifies that DongoCommit creates a new dolt commit,
+// advances HEAD, and returns a non-empty hash string.
+func TestDongoCommit(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	// Open/create a database.
+	state, err := b.getOrOpenDB(ctx, "testdb", true)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	initAddr, ok := state.ds.MaybeHeadAddr()
+	if !ok {
+		t.Fatal("no HEAD after init")
+	}
+
+	// Insert a document so the working set has something different from HEAD.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	doc, err := types.NewDocument("_id", int64(1), "x", int64(42))
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	doc.SetRecordID(1)
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	// Run DongoCommit.
+	res, err := b.DongoCommit(ctx, &backends.CommitParams{
+		DBName:  "testdb",
+		Message: "my first commit",
+	})
+	if err != nil {
+		t.Fatalf("DongoCommit: %v", err)
+	}
+
+	// Hash must be non-empty and not all-zeros.
+	if res.Hash == "" {
+		t.Error("DongoCommit returned empty hash")
+	}
+	allZero := true
+	for _, c := range res.Hash {
+		if c != '0' {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Errorf("DongoCommit returned all-zero hash: %s", res.Hash)
+	}
+
+	// Branch should be "main".
+	if res.Branch != "main" {
+		t.Errorf("DongoCommit branch = %q, want %q", res.Branch, "main")
+	}
+
+	// Message should match.
+	if res.Message != "my first commit" {
+		t.Errorf("DongoCommit message = %q, want %q", res.Message, "my first commit")
+	}
+
+	// HEAD must have advanced past the init commit.
+	freshDS, err := state.doltDB.GetDataset(ctx, mainDataset)
+	if err != nil {
+		t.Fatalf("GetDataset after commit: %v", err)
+	}
+	headAddr, ok := freshDS.MaybeHeadAddr()
+	if !ok {
+		t.Fatal("no HEAD after DongoCommit")
+	}
+	if headAddr == initAddr {
+		t.Error("HEAD did not advance after DongoCommit")
+	}
+}
+
+// TestDongoCommitDefaultMessage verifies that an empty Message defaults to "dongo commit".
+func TestDongoCommitDefaultMessage(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-default-msg-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	if _, err = b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	res, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoCommit: %v", err)
+	}
+	if res.Message != "dongo commit" {
+		t.Errorf("default message = %q, want %q", res.Message, "dongo commit")
+	}
+}
