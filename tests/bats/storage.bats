@@ -38,15 +38,9 @@ teardown() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
-    # Stop dongo so data is flushed.
     stop_dongo
-
-    # Set up the dolt symlink hack so dolt can read dongo's data.
     setup_dolt_hack "$DONGO_DATA_DIR"
-
-    local repo_dir
-    repo_dir="$(dirname "$DONGO_DATA_DIR")"
-    cd "$repo_dir"
+    cd "$(dirname "$DONGO_DATA_DIR")"
 
     # Verify dolt storage integrity.
     run dolt fsck
@@ -75,12 +69,8 @@ teardown() {
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
     stop_dongo
-
     setup_dolt_hack "$DONGO_DATA_DIR"
-
-    local repo_dir
-    repo_dir="$(dirname "$DONGO_DATA_DIR")"
-    cd "$repo_dir"
+    cd "$(dirname "$DONGO_DATA_DIR")"
 
     run dolt diff --result-format=sql
     [ "$status" -eq 0 ]
@@ -105,12 +95,8 @@ teardown() {
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
     stop_dongo
-
     setup_dolt_hack "$DONGO_DATA_DIR"
-
-    local repo_dir
-    repo_dir="$(dirname "$DONGO_DATA_DIR")"
-    cd "$repo_dir"
+    cd "$(dirname "$DONGO_DATA_DIR")"
 
     run dolt sql -q 'show create table col1'
 
@@ -121,24 +107,37 @@ teardown() {
 }
 
 @test 'dongoCommit returns non-empty hash' {
-    local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+  local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
 
-    # Insert a document so there is something to commit.
-    run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.col.insertOne({x:1}))'
-    [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.acknowledged == true'
+  # Insert a document so there is something to commit.
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.col.insertOne({x:1}))'
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.acknowledged == true'
 
-    # Run dongoCommit and capture the result.
-    run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.runCommand({dongoCommit: 1, message: "my first commit"}))'
-    [ "$status" -eq 0 ]
+  # Run dongoCommit and capture the result.
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.runCommand({dongoCommit: 1, message: "my first commit"}))'
+  [ "$status" -eq 0 ]
 
-    # Verify ok:1 and a non-empty hash.
-    echo "$output" | jq -e '.ok == 1'
-    local hash
-    hash="$(echo "$output" | jq -r '.hash')"
-    [ -n "$hash" ]
-    [ "$hash" != "null" ]
-    [ "$hash" != "0000000000000000000000000000000000000000" ]
+  # Verify ok:1 and a non-empty hash.
+  echo "$output" | jq -e '.ok == 1'
+  local hash
+  hash="$(echo "$output" | jq -r '.hash')"
+  [ -n "$hash" ]
+  [ "$hash" != "null" ]
+  [ "$hash" != "0000000000000000000000000000000000000000" ]
+
+  stop_dongo
+  setup_dolt_hack "$DONGO_DATA_DIR"
+  cd "$(dirname "$DONGO_DATA_DIR")"
+
+  run dolt show
+
+  echo "----------------------"
+  echo "$output"
+  echo "----------------------"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ 'my first commit' ]] || false
 }
