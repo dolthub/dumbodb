@@ -223,15 +223,51 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 	}
 
 	state.mu.RLock()
-	count, _ := state.am.Count()
-	state.mu.RUnlock()
+	defer state.mu.RUnlock()
 
-	// Return a non-zero SizeTotal when the database has collections,
-	// so that listDatabases reports empty=false and a non-zero totalSize.
-	var sizeTotal int64
-	if count > 0 {
-		sizeTotal = int64(count) * 4096
+	const (
+		avgDocSize      = 512 // rough bytes per document estimate
+		avgIndexEntSize = 32  // rough bytes per index entry estimate
+	)
+
+	var totalDocs, totalSizeCollection, totalSizeIndexes int64
+
+	if err := state.am.IterAll(ctx, func(_ string, collHash hash.Hash) error {
+		if collHash.IsEmpty() {
+			return nil
+		}
+
+		m, err := openCollection(ctx, state.cs, state.ns, collHash)
+		if err != nil {
+			return err
+		}
+
+		count, err := m.Count()
+		if err != nil {
+			return err
+		}
+
+		totalDocs += int64(count)
+		totalSizeCollection += int64(count) * avgDocSize
+		totalSizeIndexes += int64(count) * avgIndexEntSize
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	return &backends.DatabaseStatsResult{SizeTotal: sizeTotal}, nil
+	// Preserve a non-zero SizeTotal when the database has collections but no documents,
+	// so that listDatabases reports empty=false.
+	if totalSizeCollection == 0 {
+		collCount, _ := state.am.Count()
+		if collCount > 0 {
+			totalSizeCollection = int64(collCount) * 4096
+		}
+	}
+
+	return &backends.DatabaseStatsResult{
+		CountDocuments:  totalDocs,
+		SizeCollections: totalSizeCollection,
+		SizeIndexes:     totalSizeIndexes,
+		SizeTotal:       totalSizeCollection + totalSizeIndexes,
+	}, nil
 }

@@ -230,7 +230,7 @@ func SplitNamespace(ns, argument string) (string, string, error) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidNamespace,
-			fmt.Sprintf("Invalid namespace specified '%s'", ns),
+			fmt.Sprintf("Namespace %s is not a valid collection name", ns),
 			argument,
 		)
 	}

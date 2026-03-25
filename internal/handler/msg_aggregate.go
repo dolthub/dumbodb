@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -353,7 +354,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		statistics := stages.GetStatistics(collStatsDocuments)
 
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
-			c, db, dbName, cName, statistics, collStatsDocuments,
+			c, db, dbName, cName, statistics, collStatsDocuments, h.TCPHost,
 		})
 	}
 
@@ -447,6 +448,7 @@ type stagesStatsParams struct {
 	cName      string
 	statistics map[stages.Statistic]struct{}
 	stages     []aggregations.Stage
+	tcpHost    string
 }
 
 // processStagesStats retrieves the statistics from the database and then processes them through the stages.
@@ -461,9 +463,16 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 	var host string
 	var err error
 
-	host, err = os.Hostname()
+	hostname, err := os.Hostname()
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	host = hostname
+	if p.tcpHost != "" {
+		if _, port, err := net.SplitHostPort(p.tcpHost); err == nil && port != "" {
+			host = hostname + ":" + port
+		}
 	}
 
 	doc := must.NotFail(types.NewDocument(
@@ -524,31 +533,31 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 	}
 
 	if hasStorage {
-		var avgObjSize int64
+		var avgObjSize int32
 		if collStats.CountDocuments > 0 {
-			avgObjSize = collStats.SizeCollection / collStats.CountDocuments
+			avgObjSize = int32(collStats.SizeCollection / collStats.CountDocuments)
 		}
 
 		indexSizes := types.MakeDocument(len(collStats.IndexSizes))
 		for _, indexSize := range collStats.IndexSizes {
-			indexSizes.Set(indexSize.Name, indexSize.Size)
+			indexSizes.Set(indexSize.Name, int32(indexSize.Size))
 		}
 
 		doc.Set(
 			"storageStats", must.NotFail(types.NewDocument(
-				"size", collStats.SizeTotal,
+				"size", int32(collStats.SizeTotal),
 				"count", collStats.CountDocuments,
 				"avgObjSize", avgObjSize,
-				"storageSize", collStats.SizeCollection,
-				"freeStorageSize", collStats.SizeFreeStorage,
+				"storageSize", int32(collStats.SizeCollection),
+				"freeStorageSize", int32(collStats.SizeFreeStorage),
 				"capped", cInfo.Capped(),
 				"nindexes", nIndexes,
 				// TODO https://github.com/dolthub/dongo/issues/2447
 				"indexDetails", must.NotFail(types.NewDocument()),
 				// TODO https://github.com/dolthub/dongo/issues/2447
 				"indexBuilds", must.NotFail(types.NewDocument()),
-				"totalIndexSize", collStats.SizeIndexes,
-				"totalSize", collStats.SizeTotal,
+				"totalIndexSize", int32(collStats.SizeIndexes),
+				"totalSize", int32(collStats.SizeTotal),
 				"indexSizes", indexSizes,
 			)),
 		)

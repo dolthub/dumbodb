@@ -495,8 +495,28 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 		return nil, err
 	}
 
+	const (
+		avgDocSize      = 512 // rough bytes per document estimate
+		avgIndexEntSize = 32  // rough bytes per index entry estimate
+	)
+
+	sizeCollection := int64(count) * avgDocSize
+	sizeIndexes := int64(count) * avgIndexEntSize
+	sizeTotal := sizeCollection + sizeIndexes
+
+	var indexSizes []backends.IndexSize
+	if count > 0 {
+		indexSizes = []backends.IndexSize{
+			{Name: backends.DefaultIndexName, Size: sizeIndexes},
+		}
+	}
+
 	return &backends.CollectionStatsResult{
 		CountDocuments: int64(count),
+		SizeCollection: sizeCollection,
+		SizeIndexes:    sizeIndexes,
+		SizeTotal:      sizeTotal,
+		IndexSizes:     indexSizes,
 	}, nil
 }
 
