@@ -19,7 +19,6 @@
 # are not dongo bugs — they are a test suite infrastructure limitation.
 #
 TestAuthAlreadyAuthenticated
-TestLogoutCommandAuthenticatedUser
 TestHelloIsMasterOpQuerySpeculative
 TestHelloOpQuerySASLSupportedMechs
 TestHelloSpeculative

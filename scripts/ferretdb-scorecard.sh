@@ -70,9 +70,11 @@ echo "--- Running FerretDB integration tests ---" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
 # Run integration tests. -race=false for speed; ferretdb_dev tag required.
+# -v is required so that "--- PASS:" lines appear in output for pass-count reporting.
 cd "$FERRETDB_INTEGRATION"
 set +e
 go test -count=1 -timeout=0 \
+    -v \
     -tags=ferretdb_dev \
     -race=false \
     -target-backend=mongodb \
