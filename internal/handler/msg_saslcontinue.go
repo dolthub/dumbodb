@@ -84,6 +84,7 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 		h.L.DebugContext(connCtx, "saslContinue: conversation success", attrs...)
 
 		conninfo.Get(connCtx).SetBypassBackendAuth()
+		conninfo.Get(connCtx).SetSCRAMAuthenticated()
 
 		return must.NotFail(types.NewDocument(
 			"conversationId", int32(1),

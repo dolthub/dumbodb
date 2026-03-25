@@ -306,12 +306,15 @@ func (h *Handler) initCommands() {
 	// please keep sorted alphabetically
 
 	for name, cmd := range h.commands {
-		if h.EnableNewAuth && !cmd.anonymous {
+		if !cmd.anonymous {
 			cmdHandler := h.commands[name].Handler
+			enableNewAuth := h.EnableNewAuth
 
 			h.commands[name].Handler = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-				if err := checkSCRAMConversation(ctx, name, h.L); err != nil {
-					return nil, err
+				if enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated() {
+					if err := checkSCRAMConversation(ctx, name, h.L); err != nil {
+						return nil, err
+					}
 				}
 
 				return cmdHandler(ctx, msg)

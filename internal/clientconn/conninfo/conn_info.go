@@ -50,7 +50,8 @@ type ConnInfo struct {
 	// It is set to true for background connections (such us capped collections cleanup)
 	// and by the new authentication.
 	// See where it is used for more details.
-	bypassBackendAuth bool // protected by rw
+	bypassBackendAuth  bool // protected by rw
+	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
 }
 
 // New returns a new ConnInfo.
@@ -99,6 +100,23 @@ func (connInfo *ConnInfo) SetMetadataRecv() {
 	defer connInfo.rw.Unlock()
 
 	connInfo.metadataRecv = true
+}
+
+// SetSCRAMAuthenticated marks that SCRAM authentication completed successfully on this connection.
+// This is never cleared, even after logout.
+func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.scramAuthenticated = true
+}
+
+// SCRAMAuthenticated reports whether SCRAM authentication has been completed on this connection.
+func (connInfo *ConnInfo) SCRAMAuthenticated() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.scramAuthenticated
 }
 
 // SetBypassBackendAuth marks the connection as not requiring backend authentication.
