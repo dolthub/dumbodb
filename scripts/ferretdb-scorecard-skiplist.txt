@@ -1,0 +1,51 @@
+# FerretDB Scorecard — Known-Failing Tests Skip List
+#
+# Tests listed here are expected to fail and are excluded from the "unexpected
+# failures" check in the dongo-scorecard GitHub Actions workflow.
+#
+# Format: one test name per line (base test name only, no subtest paths).
+# Lines starting with # and blank lines are ignored.
+#
+# Maintenance:
+#   - Add tests here when a failure is confirmed to be structural (not a bug).
+#   - Remove tests here when the underlying issue is fixed.
+#   - Prefer narrow entries (specific test names) over broad exclusions.
+#
+# --- Category: Auth / SASL infrastructure (structural) ---
+#
+# These tests require a MongoDB-compatible server running with real auth users
+# and SASL support. The CI FerretDB instance does not provide an auth server,
+# so these tests fail before exercising their intended logic. These failures
+# are not dongo bugs — they are a test suite infrastructure limitation.
+#
+TestAuth
+TestAuthAlreadyAuthenticated
+TestHelloIsMasterOpQuerySpeculative
+TestHelloOpQuerySASLSupportedMechs
+TestHelloSpeculative
+TestHelloWithSupportedMechs
+TestLogoutCommandAuthenticatedUser
+TestOpQuery
+TestOpQueryHello
+TestOpQueryIsMaster
+TestOpQueryIsMasterHelloOk
+TestSASLContinueErrors
+TestSASLContinueOpQueryErrors
+TestSASLStartErrors
+TestSASLStartOpQueryErrors
+
+# --- Category: FerretDB error message format divergence from MongoDB 7.0.8 ---
+#
+# These tests assert MongoDB-specific error message strings. FerretDB generates
+# functionally equivalent but differently worded messages, causing assertion
+# failures. These are FerretDB vs MongoDB message format divergences that
+# cannot be fixed in dongo.
+#
+TestDelete
+TestQuerySortErrors
+TestQueryProjectionErrors
+TestQueryShowRecordIDErrors
+TestQueryMaxTimeMSErrors
+TestAggregateCommandMaxTimeMSErrors
+TestQueryEvaluationExprErrors
+TestUpdateFieldErrors

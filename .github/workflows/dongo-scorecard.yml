@@ -60,6 +60,64 @@ jobs:
           echo "================================================"
           echo ""
 
+      - name: Check for unexpected failures
+        if: always()
+        run: |
+          RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
+          SKIPLIST_FILE="scripts/ferretdb-scorecard-skiplist.txt"
+
+          if [ ! -f "$RESULTS_FILE" ]; then
+            echo "ERROR: Results file not found: $RESULTS_FILE"
+            exit 1
+          fi
+
+          # Fail fast on build errors (these don't produce --- FAIL: lines)
+          BUILD_FAILS=$(grep -E "^FAIL\s.*\[build failed\]" "$RESULTS_FILE" || true)
+          if [ -n "$BUILD_FAILS" ]; then
+            echo "=== BUILD FAILURES ==="
+            echo "$BUILD_FAILS"
+            exit 1
+          fi
+
+          # Extract top-level failing test names (strip subtest paths)
+          FAILING=$(grep -E "^--- FAIL: " "$RESULTS_FILE" \
+            | sed 's/^--- FAIL: \([^/ ]*\).*/\1/' \
+            | sort -u || true)
+
+          if [ -z "$FAILING" ]; then
+            echo "All tests passed!"
+            exit 0
+          fi
+
+          echo "=== Failing tests ==="
+          echo "$FAILING"
+          echo ""
+
+          # Build a sorted list of skip-list entries (strip blanks and comments)
+          SKIPLIST=$(grep -v '^\s*#' "$SKIPLIST_FILE" | grep -v '^\s*$' | sort -u || true)
+
+          UNEXPECTED=""
+          while IFS= read -r test; do
+            if echo "$SKIPLIST" | grep -qxF "$test"; then
+              echo "  EXPECTED (in skip list): $test"
+            else
+              UNEXPECTED="${UNEXPECTED}  ${test}"$'\n'
+            fi
+          done <<< "$FAILING"
+
+          if [ -n "$UNEXPECTED" ]; then
+            echo ""
+            echo "=== UNEXPECTED FAILURES (not in skip list) ==="
+            printf '%s' "$UNEXPECTED"
+            echo ""
+            echo "Add these tests to scripts/ferretdb-scorecard-skiplist.txt if they are"
+            echo "structurally expected, or fix the underlying issue."
+            exit 1
+          fi
+
+          echo ""
+          echo "All failures are in the skip list — no unexpected regressions."
+
       - name: Upload scorecard artifact
         uses: actions/upload-artifact@v4
         if: always()
