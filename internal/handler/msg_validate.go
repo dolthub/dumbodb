@@ -23,6 +23,7 @@ import (
 	"github.com/dolthub/dongo/internal/backends"
 	"github.com/dolthub/dongo/internal/handler/common"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
+	"github.com/dolthub/dongo/internal/handler/handlerparams"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/lazyerrors"
 	"github.com/dolthub/dongo/internal/util/must"
@@ -46,9 +47,14 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
-	collection, err := common.GetRequiredParam[string](document, command)
-	if err != nil {
-		return nil, err
+	collectionVal, _ := document.Get(command)
+	collection, ok := collectionVal.(string)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidNamespace,
+			fmt.Sprintf("collection name has invalid type %s", handlerparams.AliasFromType(collectionVal)),
+			command,
+		)
 	}
 
 	db, err := h.b.Database(dbName)
