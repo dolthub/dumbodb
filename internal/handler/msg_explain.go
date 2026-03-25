@@ -54,11 +54,12 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	serverInfo := must.NotFail(types.NewDocument(
 		"host", hostname,
+		"port", int32(27017),
 		"version", version.Get().MongoDBVersion,
 		"gitVersion", version.Get().Commit,
 
 		// our extensions
-		"ferretdbVersion", version.Get().Version,
+		"ferretdb", version.Get().Version,
 	))
 
 	cmd := params.Command
@@ -174,13 +175,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			"explainVersion", "1",
 			"command", cmd,
 			"serverInfo", serverInfo,
-
-			// our extensions
-			// TODO https://github.com/dolthub/dongo/issues/3235
-			"filterPushdown", res.FilterPushdown,
-			"sortPushdown", res.SortPushdown,
-			"limitPushdown", res.LimitPushdown,
-
 			"ok", float64(1),
 		)),
 	)

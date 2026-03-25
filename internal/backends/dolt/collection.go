@@ -33,6 +33,7 @@ import (
 	"github.com/dolthub/dongo/internal/bson"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/dongo/internal/util/must"
 )
 
 // collection implements backends.Collection.
@@ -107,8 +108,13 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 
 // Explain implements backends.Collection.
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
+	qp := must.NotFail(types.NewDocument(
+		"namespace", c.db.name+"."+c.name,
+		"parsedQuery", types.MakeDocument(0),
+		"winningPlan", must.NotFail(types.NewDocument("stage", "COLLSCAN")),
+	))
 	return &backends.ExplainResult{
-		QueryPlanner: new(types.Document),
+		QueryPlanner: qp,
 	}, nil
 }
 

@@ -18,6 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dongo/internal/handler/commonpath"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
@@ -86,6 +89,53 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 	return &dp, nil
 }
 
+// decimal128ToFloat64 converts a Decimal128 to float64 via its string representation.
+// Returns (value, true) on success, or (0, false) for NaN/Infinity or parse errors.
+func decimal128ToFloat64(d types.Decimal128) (float64, bool) {
+	s := primitive.NewDecimal128(d.H, d.L).String()
+	switch s {
+	case "NaN", "Infinity", "-Infinity":
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
+}
+
+// distinctContains checks if arr already contains a value equal to val.
+// For Decimal128 values, equality is determined by numeric value rather than
+// bit-level representation, so that e.g. Decimal128("42") and Decimal128("42.0")
+// are treated as duplicates.
+func distinctContains(arr *types.Array, val any) bool {
+	d1, isDecimal := val.(types.Decimal128)
+	if !isDecimal {
+		return arr.Contains(val)
+	}
+
+	f1, f1ok := decimal128ToFloat64(d1)
+	for i := 0; i < arr.Len(); i++ {
+		el, err := arr.Get(i)
+		if err != nil {
+			continue
+		}
+		d2, ok := el.(types.Decimal128)
+		if !ok {
+			continue
+		}
+		f2, f2ok := decimal128ToFloat64(d2)
+		if f1ok && f2ok && f1 == f2 {
+			return true
+		}
+		// fallback: bit-level equality for NaN/Infinity
+		if !f1ok && !f2ok && d1 == d2 {
+			return true
+		}
+	}
+	return false
+}
+
 // FilterDistinctValues returns distinct values from the given slice of documents with the given key.
 //
 // If the key is not found in the document, the document is ignored.
@@ -131,13 +181,13 @@ func FilterDistinctValues(iter types.DocumentsIterator, key string) (*types.Arra
 						return nil, lazyerrors.Error(err)
 					}
 
-					if !distinct.Contains(el) {
+					if !distinctContains(distinct, el) {
 						distinct.Append(el)
 					}
 				}
 
 			default:
-				if !distinct.Contains(v) {
+				if !distinctContains(distinct, v) {
 					distinct.Append(v)
 				}
 			}
