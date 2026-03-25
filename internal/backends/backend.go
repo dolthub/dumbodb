@@ -253,6 +253,15 @@ func (bc *backendContract) DongoStatus(ctx context.Context, params *VersioningSt
 	return nil, newVersioningUnsupportedError("DongoStatus")
 }
 
+// DongoDiff implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoDiff(ctx context.Context, params *DiffParams) (*DiffResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoDiff(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoDiff")
+}
+
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {

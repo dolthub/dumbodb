@@ -29,6 +29,96 @@ import (
 	"github.com/dolthub/dongo/internal/util/must"
 )
 
+// MsgDongoDiff implements the `dongoDiff` command.
+//
+// Returns the document-level diff between two states for the branch encoded in $db.
+// Usage:
+//
+//	db.adminCommand({dongoDiff: 1})                          // working set vs HEAD
+//	db.adminCommand({dongoDiff: 1, from: "<hash>"})          // commit hash to working set
+//	db.adminCommand({dongoDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, _ := branchFromDBName(encodedDB)
+
+	from, err := common.GetOptionalParam[string](document, "from", "")
+	if err != nil {
+		return nil, err
+	}
+
+	to, err := common.GetOptionalParam[string](document, "to", "")
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dongoDiff: versioning is not supported by the current backend",
+		)
+	}
+
+	res, err := vb.DongoDiff(connCtx, &backends.DiffParams{
+		DBName: dbName,
+		From:   from,
+		To:     to,
+	})
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	collections := types.MakeArray(len(res.Collections))
+
+	for _, cd := range res.Collections {
+		added := types.MakeArray(len(cd.Added))
+		for _, doc := range cd.Added {
+			added.Append(doc)
+		}
+
+		removed := types.MakeArray(len(cd.Removed))
+		for _, doc := range cd.Removed {
+			removed.Append(doc)
+		}
+
+		modified := types.MakeArray(len(cd.Modified))
+		for _, m := range cd.Modified {
+			entry := must.NotFail(types.NewDocument(
+				"_id", m.ID,
+				"a", m.A,
+				"b", m.B,
+			))
+			modified.Append(entry)
+		}
+
+		collEntry := must.NotFail(types.NewDocument(
+			"name", cd.Name,
+			"added", added,
+			"removed", removed,
+			"modified", modified,
+		))
+		collections.Append(collEntry)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"collections", collections,
+			"ok", float64(1),
+		)),
+	)
+}
+
 // branchFromDBName parses the real database name and branch from an encoded db name.
 //
 // Dongo encodes branch information in the database name using a double-underscore separator:

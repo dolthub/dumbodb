@@ -149,6 +149,13 @@ func (b *Backend) DongoStatus(_ context.Context, params *backends.VersioningStat
 	}, nil
 }
 
+// DongoDiff implements backends.VersioningBackend interface.
+func (b *Backend) DongoDiff(_ context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+	b.l.Info("stub: DongoDiff", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("to", params.To))
+
+	return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

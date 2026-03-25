@@ -828,6 +828,116 @@ func (b *Backend) DongoStatus(_ context.Context, _ *backends.VersioningStatusPar
 	return nil, fmt.Errorf("dolt: DongoStatus not yet implemented")
 }
 
+// DongoDiff implements backends.VersioningBackend.
+//
+// It computes the document-level diff between two database states:
+//   - If From is empty, the "a" side is HEAD (the last committed state).
+//   - If To is empty, the "b" side is the working set (latest uncommitted state).
+//   - Non-empty From/To values are interpreted as dolt commit hashes.
+//
+// Only collections with at least one change are included in the result.
+// For modified documents, only the changed fields appear in a/b.
+func (b *Backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+	state, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoDiff: opening db %q: %w", params.DBName, err)
+	}
+
+	if state == nil {
+		return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	// Resolve the "a" (from) side.
+	var aAM prolly.AddressMap
+
+	if params.From == "" {
+		// Default: HEAD committed state.
+		aAM, err = state.headRootAM(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: reading HEAD AM for db %q: %w", params.DBName, err)
+		}
+	} else {
+		aAM, err = amFromCommitHash(ctx, state, params.From)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: resolving from hash %q: %w", params.From, err)
+		}
+	}
+
+	// Resolve the "b" (to) side.
+	var bAM prolly.AddressMap
+
+	if params.To == "" {
+		// Default: current working set (may include uncommitted writes).
+		bAM = state.am
+	} else {
+		bAM, err = amFromCommitHash(ctx, state, params.To)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: resolving to hash %q: %w", params.To, err)
+		}
+	}
+
+	// Enumerate all collection names present in either side.
+	names, err := unionCollectionNames(ctx, aAM, bAM)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoDiff: collecting collection names for db %q: %w", params.DBName, err)
+	}
+
+	var diffs []backends.CollectionDiff
+
+	for _, name := range names {
+		// Load or substitute an empty map for each side.
+		aMap, mapErr := collectionMapFromAM(ctx, state, aAM, name)
+		if mapErr != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
+		}
+
+		bMap, mapErr := collectionMapFromAM(ctx, state, bAM, name)
+		if mapErr != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
+		}
+
+		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, aMap, bMap)
+		if diffErr != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
+		}
+
+		if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
+			continue
+		}
+
+		diffs = append(diffs, backends.CollectionDiff{
+			Name:     name,
+			Added:    added,
+			Removed:  removed,
+			Modified: modified,
+		})
+	}
+
+	if diffs == nil {
+		diffs = []backends.CollectionDiff{}
+	}
+
+	return &backends.DiffResult{Collections: diffs}, nil
+}
+
+// collectionMapFromAM opens the prolly.Map for a collection from an AddressMap.
+// If the collection is not present in the AM, an empty map is returned.
+func collectionMapFromAM(ctx context.Context, state *dbState, am prolly.AddressMap, name string) (prolly.Map, error) {
+	h, err := am.Get(ctx, name)
+	if err != nil {
+		return prolly.Map{}, err
+	}
+
+	if h.IsEmpty() {
+		return newEmptyMap(ctx, state.ns)
+	}
+
+	return openCollection(ctx, state.cs, state.ns, h)
+}
+
 // readAMFromWorkingSet reads the collections AddressMap from the working set.
 // The working set always reflects the latest writes, even when those writes
 // did not create a dolt commit (HEAD stays at the last explicit commit).

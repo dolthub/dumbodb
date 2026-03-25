@@ -112,6 +112,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDongoBranch,
 			Help:    "Creates a new Dongo branch from the current branch encoded in the database name.",
 		},
+		"dongoDiff": {
+			Handler: h.MsgDongoDiff,
+			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
+		},
 		"dongoCommit": {
 			Handler: h.MsgDongoCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",

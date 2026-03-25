@@ -14,7 +14,11 @@
 
 package backends
 
-import "context"
+import (
+	"context"
+
+	"github.com/dolthub/dongo/internal/types"
+)
 
 // CommitParams represents the parameters of VersioningBackend.DongoCommit method.
 type CommitParams struct {
@@ -97,6 +101,38 @@ type VersioningStatusResult struct {
 	Tables []TableStatus
 }
 
+// DiffParams represents the parameters of VersioningBackend.DongoDiff method.
+// From and To are commit hashes (empty string means default):
+//   - From="": use HEAD (committed state) as the "a" side
+//   - To="": use the working set (uncommitted state) as the "b" side
+type DiffParams struct {
+	DBName string
+	From   string // commit hash; empty means HEAD
+	To     string // commit hash; empty means working set
+}
+
+// ModifiedDoc represents a document that was changed between two commits.
+// Only fields that differ between the two versions appear in A and B.
+type ModifiedDoc struct {
+	ID any             // the _id value
+	A  *types.Document // old values of changed fields only
+	B  *types.Document // new values of changed fields only
+}
+
+// CollectionDiff represents the changes to a single collection.
+type CollectionDiff struct {
+	Name     string
+	Added    []*types.Document // full documents added in "b"
+	Removed  []*types.Document // full documents removed from "a"
+	Modified []ModifiedDoc     // documents changed between "a" and "b"
+}
+
+// DiffResult represents the result of VersioningBackend.DongoDiff method.
+// Only collections with at least one change appear.
+type DiffResult struct {
+	Collections []CollectionDiff
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dongo versioning commands to return an unsupported error.
@@ -115,4 +151,8 @@ type VersioningBackend interface {
 
 	// DongoStatus returns the uncommitted changes on the given branch.
 	DongoStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
+
+	// DongoDiff returns the document-level diff between two states.
+	// If From is empty, the "a" side is HEAD. If To is empty, the "b" side is the working set.
+	DongoDiff(context.Context, *DiffParams) (*DiffResult, error)
 }
