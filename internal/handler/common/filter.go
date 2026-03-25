@@ -97,27 +97,6 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) 
 
 	switch filterValue := filterValue.(type) {
 	case *types.Document:
-		// For _id with a plain document value (no $ operators), use order-insensitive
-		// document equality: MongoDB's _id matching treats embedded document _id values
-		// as equal regardless of field order.
-		hasOps := false
-		for _, k := range filterValue.Keys() {
-			if strings.HasPrefix(k, "$") {
-				hasOps = true
-				break
-			}
-		}
-		if filterSuffix == "_id" && !hasOps {
-			for _, val := range vals {
-				if docVal, ok := val.(*types.Document); ok {
-					if documentsEqualOrderInsensitive(docVal, filterValue) {
-						return true, nil
-					}
-				}
-			}
-			return false, nil
-		}
-
 		var docs []*types.Document
 		for _, val := range vals {
 			docs = append(docs, must.NotFail(types.NewDocument(filterSuffix, val)))
@@ -1597,39 +1576,3 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	return filterFieldExpr(doc, filterKey, filterSuffix, expr)
 }
 
-// documentsEqualOrderInsensitive returns true if a and b have the same set of
-// key-value pairs regardless of field order. Nested documents are also compared
-// order-insensitively.
-func documentsEqualOrderInsensitive(a, b *types.Document) bool {
-	if a.Len() != b.Len() {
-		return false
-	}
-
-	for _, key := range a.Keys() {
-		aVal, err := a.Get(key)
-		if err != nil {
-			return false
-		}
-
-		bVal, err := b.Get(key)
-		if err != nil {
-			// key not present in b
-			return false
-		}
-
-		aDoc, aIsDoc := aVal.(*types.Document)
-		bDoc, bIsDoc := bVal.(*types.Document)
-
-		if aIsDoc && bIsDoc {
-			if !documentsEqualOrderInsensitive(aDoc, bDoc) {
-				return false
-			}
-		} else if aIsDoc != bIsDoc {
-			return false
-		} else if types.Compare(aVal, bVal) != types.Equal {
-			return false
-		}
-	}
-
-	return true
-}

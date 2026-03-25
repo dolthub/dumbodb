@@ -120,11 +120,11 @@ assert_id_roundtrip() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '._id.a == 1 and ._id.b == "x" and .k == 1 and .v == 42'
 
-    # Different key order — must still find the same document.
+    # Different key order — must NOT find the document (MongoDB _id matching is order-sensitive).
     run mongosh "$uri" --quiet --eval \
         "JSON.stringify(db.col_subdoc.findOne({_id: {b: 'x', a: 1}}))"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '._id.a == 1 and ._id.b == "x" and .k == 1 and .v == 42'
+    echo "$output" | jq -e '. == null'
 }
 
 @test '_id as Date' {
