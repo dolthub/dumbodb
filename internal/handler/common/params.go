@@ -26,6 +26,25 @@ import (
 	"github.com/dolthub/dongo/internal/util/must"
 )
 
+// GetCollectionNameParam returns doc's value for the collection name key
+// (the command itself, e.g. "createIndexes"), or a MongoDB-compatible error.
+// When the value has the wrong type, MongoDB returns "collection name has invalid type <alias>".
+func GetCollectionNameParam(doc *types.Document, command string) (string, error) {
+	v, _ := doc.Get(command)
+	if v == nil {
+		msg := fmt.Sprintf("required parameter %q is missing", command)
+		return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
+	}
+
+	s, ok := v.(string)
+	if !ok {
+		msg := fmt.Sprintf("collection name has invalid type %s", handlerparams.AliasFromType(v))
+		return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
+	}
+
+	return s, nil
+}
+
 // GetRequiredParam returns doc's value for key
 // or protocol error for missing key or invalid type.
 func GetRequiredParam[T types.Type](doc *types.Document, key string) (T, error) {

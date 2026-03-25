@@ -49,23 +49,9 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	collectionVal, _ := document.Get(command)
-
-	var collection string
-
-	switch cv := collectionVal.(type) {
-	case string:
-		collection = cv
-	case nil:
-		if collection, err = common.GetRequiredParam[string](document, command); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			fmt.Sprintf("collection name has invalid type %s", handlerparams.AliasFromType(cv)),
-			command,
-		)
+	collection, err := common.GetCollectionNameParam(document, command)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := h.b.Database(dbName)
