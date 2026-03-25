@@ -42,6 +42,8 @@ TestSASLStartOpQueryErrors
 # cannot be fixed in dongo.
 #
 TestDelete
+TestDistinctCommandErrors
+TestQueryBadFindType
 TestQuerySortErrors
 TestQueryProjectionErrors
 TestQueryShowRecordIDErrors

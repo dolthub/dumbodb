@@ -171,8 +171,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"queryPlanner", res.QueryPlanner,
 			"explainVersion", "1",
+			"queryPlanner", res.QueryPlanner,
 			"command", cmd,
 			"serverInfo", serverInfo,
 			"ok", float64(1),

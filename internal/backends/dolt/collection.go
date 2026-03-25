@@ -609,8 +609,10 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 		return hash.Hash{}, fmt.Errorf("dolt: encoding document to BSON: %w", err)
 	}
 
-	// Step 2: Convert BSON bytes → Extended JSON bytes.
-	jsonBytes, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), false, false)
+	// Step 2: Convert BSON bytes → Canonical Extended JSON bytes.
+	// Must use canonical=true to preserve BSON type distinctions (int32 vs int64,
+	// double vs decimal128, etc.) through the JSON roundtrip.
+	jsonBytes, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("dolt: converting BSON to JSON: %w", err)
 	}
@@ -641,9 +643,9 @@ func readDocJSON(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*types.Do
 		return nil, fmt.Errorf("dolt: getting JSON bytes: %w", err)
 	}
 
-	// Step 3: Convert Extended JSON bytes → BSON raw.
+	// Step 3: Convert Canonical Extended JSON bytes → BSON raw.
 	var rawBSON mongobson.Raw
-	if err := mongobson.UnmarshalExtJSON(jsonBytes, false, &rawBSON); err != nil {
+	if err := mongobson.UnmarshalExtJSON(jsonBytes, true, &rawBSON); err != nil {
 		return nil, fmt.Errorf("dolt: converting JSON to BSON: %w", err)
 	}
 

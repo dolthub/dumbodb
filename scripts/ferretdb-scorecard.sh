@@ -18,6 +18,9 @@ DONGO_LOG="$REPO_ROOT/.runtime/dongo.log"
 RESULTS_FILE="${1:-$REPO_ROOT/.runtime/ferretdb-scorecard.txt}"
 
 mkdir -p "$(dirname "$RESULTS_FILE")"
+# Always start with a clean data directory so schema changes don't cause
+# migration failures from stale data left by previous runs.
+rm -rf "$DONGO_DATA_DIR"
 mkdir -p "$DONGO_DATA_DIR"
 mkdir -p "$(dirname "$DONGO_LOG")"
 
