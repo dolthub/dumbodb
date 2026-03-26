@@ -18,11 +18,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dongo/internal/clientconn/conninfo"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
+	"github.com/dolthub/dongo/internal/util/logging"
 )
 
 // command represents a handler for single command.
@@ -327,6 +329,69 @@ func (h *Handler) initCommands() {
 
 				return cmdHandler(ctx, msg)
 			}
+		}
+	}
+
+	// Wrap all commands with per-command request logging.
+	for name, cmd := range h.commands {
+		cmdName := name
+		cmdHandler := cmd.Handler
+		l := h.L
+
+		h.commands[name].Handler = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+			start := time.Now()
+
+			// Extract db and ns for logging; ignore parse errors here since the real handler will catch them.
+			var db, ns string
+			if doc, err := opMsgDocument(msg); err == nil {
+				if v, err := doc.Get("$db"); err == nil {
+					if s, ok := v.(string); ok {
+						db = s
+					}
+				}
+				keys := doc.Keys()
+				if len(keys) > 0 {
+					if v, err := doc.Get(keys[0]); err == nil {
+						if col, ok := v.(string); ok && col != "" {
+							ns = db + "." + col
+						}
+					}
+				}
+			}
+			if ns == "" {
+				ns = db
+			}
+
+			// Get connection identifier from peer address.
+			conn := ""
+			if info := conninfo.Get(ctx); info != nil && info.Peer.IsValid() {
+				conn = info.Peer.String()
+			}
+
+			res, handlerErr := cmdHandler(ctx, msg)
+
+			durationMs := time.Since(start).Milliseconds()
+
+			if handlerErr != nil {
+				l.WarnContext(ctx, "command error",
+					slog.String("conn", conn),
+					slog.String("cmd", cmdName),
+					slog.String("db", db),
+					slog.String("ns", ns),
+					slog.Int64("duration_ms", durationMs),
+					logging.Error(handlerErr),
+				)
+			} else {
+				l.InfoContext(ctx, "command",
+					slog.String("conn", conn),
+					slog.String("cmd", cmdName),
+					slog.String("db", db),
+					slog.String("ns", ns),
+					slog.Int64("duration_ms", durationMs),
+				)
+			}
+
+			return res, handlerErr
 		}
 	}
 }

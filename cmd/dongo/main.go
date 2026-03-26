@@ -50,7 +50,18 @@ func run(logger *slog.Logger) error {
 	dataDir := flag.String("data-dir", "data", "directory for storing Dolt data")
 	addr := flag.String("addr", "127.0.0.1:27017", "listen address")
 	port := flag.Int("port", 0, "listen port (overrides port in --addr if set)")
+	logLevel := flag.String("log-level", "info", "log level (debug, info, warn, error)")
 	flag.Parse()
+
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		return fmt.Errorf("invalid --log-level %q: %w", *logLevel, err)
+	}
+	logging.Setup(&logging.NewHandlerOpts{
+		Base:  "text",
+		Level: level,
+	}, "")
+	logger = slog.Default()
 
 	if *port != 0 {
 		addrExplicit := false
