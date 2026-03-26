@@ -97,3 +97,12 @@ TestAggregateCommandCollStatsIndexSizes
 # Structural incompatibility, not a dongo bug.
 #
 TestDBStatsCommandScale
+# --- Category: dbStats / FerretDB compatibility (structural) ---
+#
+# TestDBStatsCommandScale and TestDBStatsCommandFreeStorage subtests exercise
+# dbStats scale and freeStorage handling. Subtests are marked FailsForFerretDB
+# (FerretDB/FerretDB#4821) but parent tests still show as FAIL in the scorecard
+# output. Structural incompatibility, not a dongo bug.
+#
+TestDBStatsCommandScale
+TestDBStatsCommandFreeStorage
