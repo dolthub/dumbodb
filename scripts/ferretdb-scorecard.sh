@@ -69,6 +69,11 @@ echo "" | tee -a "$RESULTS_FILE"
 echo "--- Running FerretDB integration tests ---" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
+# Build -skip regexp from skiplist so known-failing tests are skipped at
+# runtime (they appear as --- SKIP: lines, not --- FAIL: lines).
+SKIPLIST_FILE="$REPO_ROOT/scripts/ferretdb-scorecard-skiplist.txt"
+SKIP_PATTERN=$(grep -v '^\s*#' "$SKIPLIST_FILE" | grep -v '^\s*$' | paste -sd'|')
+
 # Run integration tests. -race=false for speed; ferretdb_dev tag required.
 # -v is required so that "--- PASS:" lines appear in output for pass-count reporting.
 cd "$FERRETDB_INTEGRATION"
@@ -77,6 +82,7 @@ go test -count=1 -timeout=0 \
     -v \
     -tags=ferretdb_dev \
     -race=false \
+    -skip "$SKIP_PATTERN" \
     -target-backend=mongodb \
     -target-url="$DONGO_URL" \
     ./... 2>&1 | tee -a "$RESULTS_FILE"
