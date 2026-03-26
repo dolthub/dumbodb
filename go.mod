@@ -6,10 +6,14 @@ require (
 	github.com/AlekSi/pointer v1.2.0
 	github.com/FerretDB/wire v0.0.8
 	github.com/arl/statsviz v0.6.0
+	github.com/dolthub/dolt/go v0.40.5-0.20260318200444-c790f75d992d
+	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260316223625-fdcf3f20a2bc
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
+	github.com/stretchr/testify v1.11.1
 	github.com/xdg-go/scram v1.1.2
 	github.com/xdg-go/stringprep v1.0.4
 	go.mongodb.org/mongo-driver v1.17.3
@@ -62,10 +66,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20251022180443-0feb69152e9f // indirect
-	github.com/dolthub/dolt/go v0.40.5-0.20260318200444-c790f75d992d // indirect
-	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/fslock v0.0.0-20251215194149-ef20baba2318 // indirect
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260316223625-fdcf3f20a2bc // indirect
 	github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
 	github.com/dolthub/vitess v0.0.0-20260309181228-a99af9c518ab // indirect
@@ -130,5 +131,5 @@ require (
 	google.golang.org/grpc v1.78.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-

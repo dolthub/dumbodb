@@ -292,6 +292,20 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 
 	case "$expr":
 		return filterExprOperator(doc, must.NotFail(types.NewDocument(operator, filterValue)))
+
+	case "$jsonSchema":
+		// {$jsonSchema: <JSON Schema object>}
+		schema, ok := filterValue.(*types.Document)
+		if !ok {
+			return false, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"$jsonSchema must be a valid JSON object",
+				"$jsonSchema",
+			)
+		}
+
+		return filterJSONSchema(doc, schema)
+
 	default:
 		msg := fmt.Sprintf(
 			`unknown top level operator: %s. `+
