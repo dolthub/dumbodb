@@ -103,7 +103,16 @@ func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 // Accumulators maps all aggregation accumulators.
 var Accumulators = map[string]newAccumulatorFunc{
 	// sorted alphabetically
-	"$count": newCount,
-	"$sum":   newSum,
+	"$addToSet":   newAddToSet,
+	"$avg":        newAvg,
+	"$count":      newCount,
+	"$first":      newFirst,
+	"$last":       newLast,
+	"$max":        newMax,
+	"$min":        newMin,
+	"$push":       newPush,
+	"$stdDevPop":  newStdDevPop,
+	"$stdDevSamp": newStdDevSamp,
+	"$sum":        newSum,
 	// please keep sorted alphabetically
 }
