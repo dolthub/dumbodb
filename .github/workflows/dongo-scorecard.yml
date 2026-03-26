@@ -24,7 +24,7 @@ jobs:
       - name: Build and run FerretDB scorecard
         id: run-scorecard
         run: make ferretdb-scorecard
-        continue-on-error: true  # expected failures are handled by skip list; step failure = build/startup failure
+        continue-on-error: true  # structural failures are handled below; step failure = build/startup failure
 
       - name: Report pass percentage
         if: always()
@@ -61,11 +61,10 @@ jobs:
           echo "================================================"
           echo ""
 
-      - name: Check for unexpected failures
+      - name: Check for test failures
         if: always()
         run: |
           RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
-          SKIPLIST_FILE="scripts/ferretdb-scorecard-skiplist.txt"
 
           if [ ! -f "$RESULTS_FILE" ]; then
             echo "ERROR: Results file not found: $RESULTS_FILE"
@@ -101,30 +100,47 @@ jobs:
           echo "$FAILING"
           echo ""
 
-          # Build a sorted list of skip-list entries (strip blanks and comments)
-          SKIPLIST=$(grep -v '^\s*#' "$SKIPLIST_FILE" | grep -v '^\s*$' | sort -u || true)
+          # Structural exclusions: tests that require real auth/SASL infrastructure
+          # not available in CI. These are the ONLY tests permanently excluded from
+          # CI failure — they fail before exercising their logic because the CI
+          # FerretDB instance has no auth server. This list must NOT grow beyond
+          # genuine infrastructure limitations.
+          STRUCTURAL_EXCLUSIONS="
+          TestHelloIsMasterOpQuerySpeculative
+          TestHelloOpQuerySASLSupportedMechs
+          TestHelloSpeculative
+          TestHelloWithSupportedMechs
+          TestOpQuery
+          TestOpQueryHello
+          TestOpQueryIsMaster
+          TestOpQueryIsMasterHelloOk
+          TestSASLContinueErrors
+          TestSASLContinueOpQueryErrors
+          TestSASLStartErrors
+          TestSASLStartOpQueryErrors
+          "
 
-          UNEXPECTED=""
+          FAILING_NON_STRUCTURAL=""
           while IFS= read -r test; do
-            if echo "$SKIPLIST" | grep -qxF "$test"; then
-              echo "  EXPECTED (in skip list): $test"
+            if echo "$STRUCTURAL_EXCLUSIONS" | grep -qxF "          $test"; then
+              echo "  STRUCTURAL (auth/SASL infra): $test"
             else
-              UNEXPECTED="${UNEXPECTED}  ${test}"$'\n'
+              FAILING_NON_STRUCTURAL="${FAILING_NON_STRUCTURAL}  ${test}"$'\n'
             fi
           done <<< "$FAILING"
 
-          if [ -n "$UNEXPECTED" ]; then
+          if [ -n "$FAILING_NON_STRUCTURAL" ]; then
             echo ""
-            echo "=== UNEXPECTED FAILURES (not in skip list) ==="
-            printf '%s' "$UNEXPECTED"
+            echo "=== FAILING TESTS (CI must be red until these are fixed) ==="
+            printf '%s' "$FAILING_NON_STRUCTURAL"
             echo ""
-            echo "Add these tests to scripts/ferretdb-scorecard-skiplist.txt if they are"
-            echo "structurally expected, or fix the underlying issue."
+            echo "Fix these failures. Only SASL/auth infrastructure tests may be"
+            echo "structurally excluded — all other failures must be resolved."
             exit 1
           fi
 
           echo ""
-          echo "All failures are in the skip list — no unexpected regressions."
+          echo "Only structural auth/SASL failures — all fixable tests pass."
 
       - name: Upload scorecard artifact
         uses: actions/upload-artifact@v4
