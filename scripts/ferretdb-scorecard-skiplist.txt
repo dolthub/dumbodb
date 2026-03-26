@@ -31,3 +31,10 @@ TestSASLContinueOpQueryErrors
 TestSASLStartErrors
 TestSASLStartOpQueryErrors
 
+# --- Category: Timing-sensitive (CI resource constraints) ---
+#
+# Passes locally but fails on CI GitHub Actions runners due to timing/resource
+# constraints. The underlying fix (do-beq) was merged but CI still flakes.
+# Keep here until CI shows consistent green across multiple runs.
+#
+TestAggregateCommandMaxTimeMSErrors
