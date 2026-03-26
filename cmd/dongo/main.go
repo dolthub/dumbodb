@@ -18,10 +18,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/dolthub/dongo/internal/clientconn"
@@ -46,7 +49,24 @@ func main() {
 func run(logger *slog.Logger) error {
 	dataDir := flag.String("data-dir", "data", "directory for storing Dolt data")
 	addr := flag.String("addr", "127.0.0.1:27017", "listen address")
+	port := flag.Int("port", 0, "listen port (overrides port in --addr if set)")
 	flag.Parse()
+
+	if *port != 0 {
+		addrExplicit := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "addr" {
+				addrExplicit = true
+			}
+		})
+		if !addrExplicit {
+			host, _, err := net.SplitHostPort(*addr)
+			if err != nil {
+				return fmt.Errorf("invalid --addr %q: %w", *addr, err)
+			}
+			*addr = net.JoinHostPort(host, strconv.Itoa(*port))
+		}
+	}
 
 	stateProvider, err := state.NewProvider("")
 	if err != nil {
