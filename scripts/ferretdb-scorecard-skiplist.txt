@@ -61,11 +61,12 @@ TestQueryShowRecordIDErrors
 
 # --- Category: collStats / FerretDB-DocumentDB compatibility (structural) ---
 #
-# TestCollStatsCommandCount inserts 1000 documents and checks that collStats
-# returns the correct count. This is not yet accurate in FerretDB-DocumentDB
-# (issue #555). The test is marked FailsForFerretDB but the parent test still
-# shows as FAIL in the scorecard output. Structural incompatibility, not a dongo bug.
+# TestCollStatsCommand and TestCollStatsCommandCount check collStats output
+# fields and document counts. Not yet accurate in FerretDB-DocumentDB (issue #555).
+# Both are marked FailsForFerretDB but the parent tests still show as FAIL in
+# the scorecard output. Structural incompatibility, not a dongo bug.
 #
+TestCollStatsCommand
 TestCollStatsCommandCount
 
 # --- Category: collStats scale / FerretDB compatibility (structural) ---
