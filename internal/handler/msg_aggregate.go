@@ -134,6 +134,16 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				document.Command(),
 			)
 		case errors.Is(err, handlerparams.ErrNotWholeNumber):
+			// For negative non-integral floats, MongoDB reports a "must be >= 0" error
+			// using the floor (truncated toward -inf) integer value.
+			if fv, ok := v.(float64); ok && fv < 0 {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrValueNegative,
+					fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(math.Floor(fv))),
+					document.Command(),
+				)
+			}
+
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
 				"maxTimeMS has non-integral value",
@@ -146,9 +156,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				document.Command(),
 			)
 		case errors.Is(err, handlerparams.ErrLongExceededNegative):
+			// For floats that exceed the int64 range in the negative direction, MongoDB
+			// reports the saturated int64 value (math.MinInt64) rather than the original float.
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrValueNegative,
-				fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%s'", types.FormatAnyValue(v)),
+				fmt.Sprintf("BSON field 'maxTimeMS' value must be >= 0, actual value '%d'", int64(math.MinInt64)),
 				document.Command(),
 			)
 		default:

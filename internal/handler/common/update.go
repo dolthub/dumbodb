@@ -477,7 +477,11 @@ func processRenameFieldExpression(command string, doc *types.Document, key strin
 		}
 
 		if dpe.Code() == types.ErrPathIndexInvalid || dpe.Code() == types.ErrPathCannotAccess {
-			msg := mongoTraversalErrorMsg(doc, sourcePath)
+			msg := renameTraversalErrorMsg(doc, sourcePath)
+			if msg == "" {
+				msg = mongoTraversalErrorMsg(doc, sourcePath)
+			}
+
 			if msg == "" {
 				msg = fmt.Sprintf("cannot use path '%s' to traverse the document", sourcePath)
 			}
@@ -497,6 +501,60 @@ func processRenameFieldExpression(command string, doc *types.Document, key strin
 	}
 
 	return true, nil
+}
+
+// renameTraversalErrorMsg generates a MongoDB-compatible error message for $rename when
+// a path traversal fails because:
+//   - an array field is accessed with a non-numeric or negative key, or
+//   - a scalar (non-traversable) field is used as an intermediate path node.
+//
+// Returns a message like "cannot use the part (KEY of PATH) to traverse the element ({KEY: VALUE})",
+// or an empty string if this specific failure pattern is not detected.
+func renameTraversalErrorMsg(doc *types.Document, path types.Path) string {
+	var current any = doc
+	pathSlice := path.Slice()
+
+	for i, key := range pathSlice {
+		switch v := current.(type) {
+		case *types.Document:
+			val, err := v.Get(key)
+			if err != nil {
+				return ""
+			}
+
+			current = val
+
+		case *types.Array:
+			// An array was reached; check if the next key is a valid non-negative index.
+			// pathSlice[i-1] is the key in the parent that accessed this array.
+			index, err := strconv.Atoi(key)
+			if err != nil || index < 0 {
+				arrayKey := pathSlice[i-1]
+				return fmt.Sprintf(
+					"cannot use the part (%s of %s) to traverse the element ({%s: %s})",
+					arrayKey, path, arrayKey, types.FormatAnyValue(current),
+				)
+			}
+
+			val, getErr := v.Get(index)
+			if getErr != nil {
+				return ""
+			}
+
+			current = val
+
+		default:
+			// current is a scalar; it cannot be traversed further.
+			// pathSlice[i-1] is the key that accessed this scalar value.
+			prevKey := pathSlice[i-1]
+			return fmt.Sprintf(
+				"cannot use the part (%s of %s) to traverse the element ({%s: %s})",
+				prevKey, path, prevKey, types.FormatAnyValue(current),
+			)
+		}
+	}
+
+	return ""
 }
 
 // mongoTraversalErrorMsg generates a MongoDB-compatible error message when a path traversal
