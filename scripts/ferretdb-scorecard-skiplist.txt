@@ -49,3 +49,12 @@ TestQueryMaxTimeMSErrors
 # FAIL in the scorecard output. Structural incompatibility, not a dongo bug.
 #
 TestQueryProjectionErrors
+# --- Category: showRecordId / FerretDB-DocumentDB compatibility (structural) ---
+#
+# TestQueryShowRecordIDErrors contains subtests that exercise showRecordId type
+# validation (null, int, string inputs) which is not yet implemented in
+# FerretDB-DocumentDB (issue #242). Each subtest is individually marked
+# FailsForFerretDB but the parent test still shows as FAIL in the scorecard
+# output. Structural incompatibility, not a dongo bug.
+#
+TestQueryShowRecordIDErrors
