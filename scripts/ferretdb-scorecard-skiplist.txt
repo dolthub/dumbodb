@@ -115,3 +115,12 @@ TestDBStatsCommandFreeStorage
 # FerretDB-DocumentDB does not produce. Structural incompatibility, not a dongo bug.
 #
 TestCreateIndexesCommandInvalidCollection
+
+# --- Category: createIndexes / FerretDB-DocumentDB compatibility (structural) ---
+#
+# TestCreateIndexesCommandInvalidSpec contains subtests (NilIndexes, IDIndex) that
+# are marked FailsForFerretDB (FerretDB/FerretDB-DocumentDB#290) due to unimplemented
+# validation in FerretDB-DocumentDB. The parent test shows as FAIL in the scorecard
+# output. Structural incompatibility, not a dongo bug.
+#
+TestCreateIndexesCommandInvalidSpec
