@@ -98,15 +98,6 @@ TestAggregateCommandCollStatsIndexSizes
 #
 TestDBStatsCommandScale
 TestDBStatsCommandFreeStorage
-# --- Category: createIndexes invalid collection / FerretDB-DocumentDB compatibility (structural) ---
-#
-# TestCreateIndexesCommandInvalidCollection exercises invalid collection name
-# handling (wrong type, null, empty string). The InvalidTypeCollection and
-# NilCollection subtests have altMessages for FerretDB's different error text,
-# but the EmptyCollection subtest expects an exact namespace error message that
-# FerretDB-DocumentDB does not produce. Structural incompatibility, not a dongo bug.
-#
-TestCreateIndexesCommandInvalidCollection
 
 # --- Category: createIndexes / FerretDB-DocumentDB compatibility (structural) ---
 #
