@@ -39,3 +39,13 @@ TestSASLStartOpQueryErrors
 #
 TestAggregateCommandMaxTimeMSErrors
 TestQueryMaxTimeMSErrors
+
+# --- Category: Projection / FerretDB-DocumentDB compatibility (structural) ---
+#
+# TestQueryProjectionErrors contains subtests that exercise projection error
+# paths (empty keys, positional operators, field path validation) which are not
+# yet implemented in FerretDB-DocumentDB (issue #241). These subtests are
+# individually marked failsForFerretDB but the parent test still shows as
+# FAIL in the scorecard output. Structural incompatibility, not a dongo bug.
+#
+TestQueryProjectionErrors
