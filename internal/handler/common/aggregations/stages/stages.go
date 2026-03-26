@@ -30,8 +30,11 @@ type newStageFunc func(stage *types.Document) (aggregations.Stage, error)
 var Stages = map[string]newStageFunc{
 	// sorted alphabetically
 	"$addFields":   newAddFields,
+	"$bucket":      newBucket,
+	"$bucketAuto":  newBucketAuto,
 	"$collStats":   newCollStats,
 	"$count":       newCount,
+	"$facet":       newFacet,
 	"$group":       newGroup,
 	"$limit":       newLimit,
 	"$match":       newMatch,
@@ -41,6 +44,7 @@ var Stages = map[string]newStageFunc{
 	"$set":         newSet,
 	"$skip":        newSkip,
 	"$sort":        newSort,
+	"$sortByCount": newSortByCount,
 	"$unset":       newUnset,
 	"$unwind":      newUnwind,
 	// please keep sorted alphabetically
@@ -49,13 +53,10 @@ var Stages = map[string]newStageFunc{
 // unsupportedStages maps all unsupported yet stages.
 var unsupportedStages = map[string]struct{}{
 	// sorted alphabetically
-	"$bucket":                 {},
-	"$bucketAuto":             {},
 	"$changeStream":           {},
 	"$currentOp":              {},
 	"$densify":                {},
 	"$documents":              {},
-	"$facet":                  {},
 	"$fill":                   {},
 	"$geoNear":                {},
 	"$graphLookup":            {},
@@ -71,7 +72,6 @@ var unsupportedStages = map[string]struct{}{
 	"$searchMeta":             {},
 	"$setWindowFields":        {},
 	"$sharedDataDistribution": {},
-	"$sortByCount":            {},
 	"$unionWith":              {},
 	// please keep sorted alphabetically
 }
