@@ -19,10 +19,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
-	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
@@ -291,21 +289,27 @@ func encodeID(id any) ([]byte, error) {
 		return b, nil
 
 	case *types.Document:
-		// Encode as canonical BSON with fields sorted lexicographically.
-		bsonBytes, err := encodeDocumentCanonical(v)
+		// Encode preserving field insertion order so that {a:1,b:'x'} and {b:'x',a:1}
+		// produce different keys. bson.FromDocument is order-preserving (unlike
+		// encodeDocumentCanonical which sorts fields lexicographically).
+		wdoc, err := bson.FromDocument(v)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: encoding _id document: %w", err)
 		}
-		out := make([]byte, 1+len(bsonBytes))
+		raw, err := wdoc.Encode()
+		if err != nil {
+			return nil, fmt.Errorf("dolt: encoding _id document: %w", err)
+		}
+		out := make([]byte, 1+len(raw))
 		out[0] = 0x03 // BSON Document tag
-		copy(out[1:], bsonBytes)
+		copy(out[1:], raw)
 		if len(out) > 255 {
 			return nil, fmt.Errorf("dolt: _id document too long: %d bytes total (max 255)", len(out))
 		}
 		return out, nil
 
 	case *types.Array:
-		bsonBytes, err := encodeArrayCanonical(v)
+		bsonBytes, err := encodeArrayOrdered(v)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: encoding _id array: %w", err)
 		}
@@ -427,52 +431,8 @@ func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error)
 	return prolly.NewAddressMap(amNode, state.ns)
 }
 
-// encodeDocumentCanonical converts a types.Document to canonical BSON bytes
-// with fields sorted lexicographically at every nesting level.
-func encodeDocumentCanonical(doc *types.Document) ([]byte, error) {
-	// Get all field names and sort them.
-	iter := doc.Iterator()
-	defer iter.Close()
-
-	type field struct {
-		name string
-		val  any
-	}
-	var fields []field
-
-	for {
-		k, v, err := iter.Next()
-		if err != nil {
-			break
-		}
-		fields = append(fields, field{name: k, val: v})
-	}
-
-	sort.Slice(fields, func(i, j int) bool {
-		return fields[i].name < fields[j].name
-	})
-
-	// Build a new document with sorted fields.
-	sorted := wirebson.MakeDocument(len(fields))
-	for _, f := range fields {
-		wv, err := convertFieldCanonical(f.val)
-		if err != nil {
-			return nil, fmt.Errorf("field %q: %w", f.name, err)
-		}
-		if err := sorted.Add(f.name, wv); err != nil {
-			return nil, fmt.Errorf("adding field %q: %w", f.name, err)
-		}
-	}
-
-	raw, err := sorted.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return []byte(raw), nil
-}
-
-// encodeArrayCanonical converts a types.Array to BSON bytes.
-func encodeArrayCanonical(arr *types.Array) ([]byte, error) {
+// encodeArrayOrdered converts a types.Array to BSON bytes preserving element order.
+func encodeArrayOrdered(arr *types.Array) ([]byte, error) {
 	warr, err := bson.FromArray(arr)
 	if err != nil {
 		return nil, err
@@ -482,38 +442,4 @@ func encodeArrayCanonical(arr *types.Array) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(raw), nil
-}
-
-// convertFieldCanonical converts a types.Type value to a wirebson-compatible value,
-// with nested documents having canonically sorted fields.
-func convertFieldCanonical(v any) (any, error) {
-	switch vt := v.(type) {
-	case *types.Document:
-		// Recursively sort nested documents.
-		raw, err := encodeDocumentCanonical(vt)
-		if err != nil {
-			return nil, err
-		}
-		return wirebson.RawDocument(raw), nil
-	case *types.Array:
-		return bson.FromArray(vt)
-	case float64:
-		return bson.From(vt)
-	case string:
-		return bson.From(vt)
-	case types.Binary:
-		return bson.From(vt)
-	case types.ObjectID:
-		return bson.From(vt)
-	case bool:
-		return bson.From(vt)
-	case types.NullType:
-		return bson.From(vt)
-	case int32:
-		return bson.From(vt)
-	case int64:
-		return bson.From(vt)
-	default:
-		return nil, fmt.Errorf("unsupported type %T in _id document", v)
-	}
 }
