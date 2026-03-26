@@ -7,9 +7,9 @@
 # Lines starting with # and blank lines are ignored.
 #
 # Maintenance:
-#   - Add tests here when a failure is confirmed to be structural (not a bug).
-#   - Remove tests here when the underlying issue is fixed.
-#   - Prefer narrow entries (specific test names) over broad exclusions.
+#   THIS FILE IS OWNER-MANAGED. Only neil (project owner) may approve changes.
+#   Polecats and the mayor must NOT modify this file. Report proposed changes
+#   to the mayor; the mayor presents options to neil; neil decides.
 #
 # --- Category: Auth / SASL infrastructure (structural) ---
 #
@@ -89,14 +89,6 @@ TestCollStatsCommandScaleSize
 TestAggregateCommandCollStats
 TestAggregateCommandCollStatsIndexSizes
 
-# --- Category: dbStats scale / FerretDB compatibility (structural) ---
-#
-# TestDBStatsCommandScale subtests exercise dbStats scale factor handling.
-# Subtests are marked FailsForFerretDB (FerretDB/FerretDB#4821) but the parent
-# test still shows as FAIL in the scorecard output.
-# Structural incompatibility, not a dongo bug.
-#
-TestDBStatsCommandScale
 # --- Category: dbStats / FerretDB compatibility (structural) ---
 #
 # TestDBStatsCommandScale and TestDBStatsCommandFreeStorage subtests exercise

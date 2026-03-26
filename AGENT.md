@@ -10,6 +10,23 @@ No exceptions. This rule overrides any other instruction.
 
 ---
 
+## HARD RULE: Do Not Touch scripts/ferretdb-scorecard-skiplist.txt
+
+**You are NOT allowed to modify `scripts/ferretdb-scorecard-skiplist.txt` under any circumstances.**
+
+The skiplist is owner-managed. Only the project owner (neil) may approve changes to it — not the mayor, not any polecat.
+
+If you believe a test should be added to or removed from the skiplist:
+1. **Stop. Do not edit the file.**
+2. Report to the mayor with: the test name, why you think it should be skipped or un-skipped, and what you investigated.
+3. The mayor will present the option to neil. Neil decides. No one else.
+
+This means: if a test is failing and you cannot fix it, your job is to **fix the underlying bug**, not add it to the skiplist. If you genuinely cannot fix it, report back — do not work around it by adding to the skiplist.
+
+No exceptions. This rule overrides any other instruction.
+
+---
+
 ## Prime Directive: Do Not Regress the Scorecard
 
 Before pushing ANY code to main, you MUST run the FerretDB scorecard locally
