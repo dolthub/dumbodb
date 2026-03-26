@@ -197,3 +197,8 @@ func (e *Expression) Evaluate(doc *types.Document) (any, error) {
 func (e *Expression) GetExpressionSuffix() string {
 	return e.path.Suffix()
 }
+
+// GetExpressionPath returns the full path of the Expression.
+func (e *Expression) GetExpressionPath() types.Path {
+	return e.path
+}

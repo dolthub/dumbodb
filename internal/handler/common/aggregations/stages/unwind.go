@@ -19,19 +19,22 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dolthub/dongo/internal/handler/common"
 	"github.com/dolthub/dongo/internal/handler/common/aggregations"
 	"github.com/dolthub/dongo/internal/handler/commonpath"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
 	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
 )
 
 // unwind represents $unwind stage.
+//
+//	{ $unwind: <field path> }
+//	{ $unwind: { path: <field path>, includeArrayIndex: <string>, preserveNullAndEmptyArrays: <bool> } }
 type unwind struct {
-	field *aggregations.Expression
+	field                      *aggregations.Expression
+	includeArrayIndex          string // empty means not set
+	preserveNullAndEmptyArrays bool
 }
 
 // newUnwind creates a new $unwind stage.
@@ -41,56 +44,11 @@ func newUnwind(stage *types.Document) (aggregations.Stage, error) {
 		return nil, err
 	}
 
-	var expr *aggregations.Expression
-
 	switch field := field.(type) {
 	case *types.Document:
-		return nil, common.Unimplemented(stage, "$unwind")
+		return newUnwindFromDocument(field)
 	case string:
-		if field == "" {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrStageUnwindNoPath,
-				"no path specified to $unwind stage",
-				"$unwind (stage)",
-			)
-		}
-
-		// For $unwind to deconstruct an array from dot notation, array must be at the suffix.
-		// It returns empty result if array is found at other parts of dot notation,
-		// so it does not return value by index of array nor values for given key in array's document.
-		expr, err = aggregations.NewExpression(field, &commonpath.FindValuesOpts{
-			FindArrayIndex:     false,
-			FindArrayDocuments: false,
-		})
-		if err != nil {
-			var exprErr *aggregations.ExpressionError
-			if !errors.As(err, &exprErr) {
-				return nil, lazyerrors.Error(err)
-			}
-
-			switch exprErr.Code() {
-			case aggregations.ErrNotExpression:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrStageUnwindNoPrefix,
-					fmt.Sprintf("path option to $unwind stage should be prefixed with a '$': %v", types.FormatAnyValue(field)),
-					"$unwind (stage)",
-				)
-			case aggregations.ErrEmptyFieldPath:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrEmptyFieldPath,
-					"Expression cannot be constructed with empty string",
-					"$unwind (stage)",
-				)
-			case aggregations.ErrEmptyVariable, aggregations.ErrInvalidExpression, aggregations.ErrUndefinedVariable:
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrFieldPathInvalidName,
-					"Expression field names may not start with '$'. Consider using $getField or $setField",
-					"$unwind (stage)",
-				)
-			default:
-				return nil, lazyerrors.Error(err)
-			}
-		}
+		return newUnwindFromString(field)
 	default:
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageUnwindWrongType,
@@ -101,15 +59,157 @@ func newUnwind(stage *types.Document) (aggregations.Stage, error) {
 			"$unwind (Stage)",
 		)
 	}
+}
 
-	return &unwind{
-		field: expr,
-	}, nil
+// newUnwindFromString creates an unwind stage from a string field path.
+func newUnwindFromString(field string) (aggregations.Stage, error) {
+	if field == "" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrStageUnwindNoPath,
+			"no path specified to $unwind stage",
+			"$unwind (stage)",
+		)
+	}
+
+	expr, err := parseUnwindPath(field)
+	if err != nil {
+		return nil, err
+	}
+
+	return &unwind{field: expr}, nil
+}
+
+// newUnwindFromDocument creates an unwind stage from a document specification.
+func newUnwindFromDocument(doc *types.Document) (aggregations.Stage, error) {
+	pathVal, err := doc.Get("path")
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrStageUnwindNoPath,
+			"no path specified to $unwind stage",
+			"$unwind (stage)",
+		)
+	}
+
+	pathStr, ok := pathVal.(string)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrStageUnwindWrongType,
+			fmt.Sprintf(
+				"expected either a string or an object as specification for $unwind stage, got %s",
+				types.FormatAnyValue(pathVal),
+			),
+			"$unwind (stage)",
+		)
+	}
+
+	if pathStr == "" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrStageUnwindNoPath,
+			"no path specified to $unwind stage",
+			"$unwind (stage)",
+		)
+	}
+
+	expr, err := parseUnwindPath(pathStr)
+	if err != nil {
+		return nil, err
+	}
+
+	u := &unwind{field: expr}
+
+	// Parse optional includeArrayIndex.
+	if v, getErr := doc.Get("includeArrayIndex"); getErr == nil {
+		switch s := v.(type) {
+		case string:
+			u.includeArrayIndex = s
+		case types.NullType:
+			// null is treated as not set
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("expected a string for includeArrayIndex, got %s", types.FormatAnyValue(v)),
+				"$unwind (stage)",
+			)
+		}
+	}
+
+	// Parse optional preserveNullAndEmptyArrays.
+	if v, getErr := doc.Get("preserveNullAndEmptyArrays"); getErr == nil {
+		switch b := v.(type) {
+		case bool:
+			u.preserveNullAndEmptyArrays = b
+		case types.NullType:
+			// null is treated as false (default)
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("expected a boolean for preserveNullAndEmptyArrays, got %s", types.FormatAnyValue(v)),
+				"$unwind (stage)",
+			)
+		}
+	}
+
+	// Check for any unrecognized fields.
+	for _, key := range doc.Keys() {
+		switch key {
+		case "path", "includeArrayIndex", "preserveNullAndEmptyArrays":
+			// known fields, ok
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf("Unrecognized option to $unwind: %s", key),
+				"$unwind (stage)",
+			)
+		}
+	}
+
+	return u, nil
+}
+
+// parseUnwindPath parses and validates a field path string for $unwind.
+func parseUnwindPath(field string) (*aggregations.Expression, error) {
+	// For $unwind to deconstruct an array from dot notation, array must be at the suffix.
+	// It returns empty result if array is found at other parts of dot notation,
+	// so it does not return value by index of array nor values for given key in array's document.
+	expr, err := aggregations.NewExpression(field, &commonpath.FindValuesOpts{
+		FindArrayIndex:     false,
+		FindArrayDocuments: false,
+	})
+	if err != nil {
+		var exprErr *aggregations.ExpressionError
+		if !errors.As(err, &exprErr) {
+			return nil, lazyerrors.Error(err)
+		}
+
+		switch exprErr.Code() {
+		case aggregations.ErrNotExpression:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrStageUnwindNoPrefix,
+				fmt.Sprintf("path option to $unwind stage should be prefixed with a '$': %v", types.FormatAnyValue(field)),
+				"$unwind (stage)",
+			)
+		case aggregations.ErrEmptyFieldPath:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrEmptyFieldPath,
+				"Expression cannot be constructed with empty string",
+				"$unwind (stage)",
+			)
+		case aggregations.ErrEmptyVariable, aggregations.ErrInvalidExpression, aggregations.ErrUndefinedVariable:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrFieldPathInvalidName,
+				"Expression field names may not start with '$'. Consider using $getField or $setField",
+				"$unwind (stage)",
+			)
+		default:
+			return nil, lazyerrors.Error(err)
+		}
+	}
+
+	return expr, nil
 }
 
 // Process implements Stage interface.
-func (u *unwind) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	// TODO https://github.com/dolthub/dongo/issues/2490
+func (u *unwind) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -118,49 +218,86 @@ func (u *unwind) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	var out []*types.Document
 
 	if u.field == nil {
-		return nil, nil
+		result := iterator.Values(iterator.ForSlice(out))
+		closer.Add(result)
+
+		return result, nil
 	}
 
-	key := u.field.GetExpressionSuffix()
+	fieldPath := u.field.GetExpressionPath()
 
 	for _, doc := range docs {
-		d, err := u.field.Evaluate(doc)
-		if err != nil {
-			// Ignore non-existent values
+		d, evalErr := u.field.Evaluate(doc)
+
+		if evalErr != nil {
+			// Field does not exist in the document.
+			if u.preserveNullAndEmptyArrays {
+				out = append(out, doc.DeepCopy())
+			}
+
 			continue
 		}
 
 		switch d := d.(type) {
-		case *types.Array:
-			iter := d.Iterator()
-			defer iter.Close()
+		case types.NullType:
+			// Field is null.
+			if u.preserveNullAndEmptyArrays {
+				out = append(out, doc.DeepCopy())
+			}
 
-			id := must.NotFail(doc.Get("_id"))
+		case *types.Array:
+			if d.Len() == 0 {
+				// Empty array.
+				if u.preserveNullAndEmptyArrays {
+					// Emit the document with the field removed.
+					newDoc := doc.DeepCopy()
+					newDoc.RemoveByPath(fieldPath)
+					out = append(out, newDoc)
+				}
+
+				continue
+			}
+
+			// Non-empty array: emit one doc per element.
+			arrIter := d.Iterator()
 
 			for {
-				_, v, err := iter.Next()
-				if err != nil {
-					if errors.Is(err, iterator.ErrIteratorDone) {
+				idx, v, iterErr := arrIter.Next()
+				if iterErr != nil {
+					arrIter.Close()
+
+					if errors.Is(iterErr, iterator.ErrIteratorDone) {
 						break
 					}
 
-					return nil, err
+					return nil, lazyerrors.Error(iterErr)
 				}
 
-				newDoc := must.NotFail(types.NewDocument("_id", id, key, v))
+				newDoc := doc.DeepCopy()
+
+				if setErr := newDoc.SetByPath(fieldPath, v); setErr != nil {
+					arrIter.Close()
+
+					return nil, lazyerrors.Error(setErr)
+				}
+
+				if u.includeArrayIndex != "" {
+					newDoc.Set(u.includeArrayIndex, int64(idx))
+				}
+
 				out = append(out, newDoc)
 			}
-		case types.NullType:
-			// Ignore Nulls
+
 		default:
-			out = append(out, doc)
+			// Scalar value: pass through unchanged.
+			out = append(out, doc.DeepCopy())
 		}
 	}
 
-	iter = iterator.Values(iterator.ForSlice(out))
-	closer.Add(iter)
+	result := iterator.Values(iterator.ForSlice(out))
+	closer.Add(result)
 
-	return iter, nil
+	return result, nil
 }
 
 // check interfaces

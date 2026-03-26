@@ -210,7 +210,30 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		var s aggregations.Stage
 
-		if s, err = stages.NewStage(d); err != nil {
+		if d.Command() == "$lookup" {
+			// $lookup requires database access to fetch the "from" collection.
+			fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
+				fromColl, collErr := db.Collection(collName)
+				if collErr != nil {
+					return nil, collErr
+				}
+
+				qRes, qErr := fromColl.Query(ctx, new(backends.QueryParams))
+				if qErr != nil {
+					return nil, qErr
+				}
+
+				defer qRes.Iter.Close()
+
+				return iterator.ConsumeValues(qRes.Iter)
+			}
+
+			s, err = stages.NewLookupStage(d, fetcher)
+		} else {
+			s, err = stages.NewStage(d)
+		}
+
+		if err != nil {
 			return nil, err
 		}
 

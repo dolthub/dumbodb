@@ -29,18 +29,20 @@ type newStageFunc func(stage *types.Document) (aggregations.Stage, error)
 // Stages maps all supported aggregation Stages.
 var Stages = map[string]newStageFunc{
 	// sorted alphabetically
-	"$addFields": newAddFields,
-	"$collStats": newCollStats,
-	"$count":     newCount,
-	"$group":     newGroup,
-	"$limit":     newLimit,
-	"$match":     newMatch,
-	"$project":   newProject,
-	"$set":       newSet,
-	"$skip":      newSkip,
-	"$sort":      newSort,
-	"$unset":     newUnset,
-	"$unwind":    newUnwind,
+	"$addFields":   newAddFields,
+	"$collStats":   newCollStats,
+	"$count":       newCount,
+	"$group":       newGroup,
+	"$limit":       newLimit,
+	"$match":       newMatch,
+	"$project":     newProject,
+	"$replaceRoot": newReplaceRoot,
+	"$replaceWith": newReplaceWith,
+	"$set":         newSet,
+	"$skip":        newSkip,
+	"$sort":        newSort,
+	"$unset":       newUnset,
+	"$unwind":      newUnwind,
 	// please keep sorted alphabetically
 }
 
@@ -60,13 +62,11 @@ var unsupportedStages = map[string]struct{}{
 	"$indexStats":             {},
 	"$listLocalSessions":      {},
 	"$listSessions":           {},
-	"$lookup":                 {},
+	"$lookup":                 {}, // handled specially in msg_aggregate.go via NewLookupStage
 	"$merge":                  {},
 	"$out":                    {},
 	"$planCacheStats":         {},
 	"$redact":                 {},
-	"$replaceRoot":            {},
-	"$replaceWith":            {},
 	"$sample":                 {},
 	"$search":                 {},
 	"$searchMeta":             {},
