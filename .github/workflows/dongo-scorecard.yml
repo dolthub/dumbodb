@@ -61,6 +61,11 @@ jobs:
           echo "================================================"
           echo ""
 
+          if [ "$FAIL" -gt 0 ]; then
+            echo "FAIL: $FAIL test(s) failed — CI is red until this reaches 0"
+            exit 1
+          fi
+
       - name: Check for test failures
         if: always()
         run: |
