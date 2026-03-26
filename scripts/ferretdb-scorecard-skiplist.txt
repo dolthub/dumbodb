@@ -124,3 +124,12 @@ TestCreateIndexesCommandInvalidCollection
 # output. Structural incompatibility, not a dongo bug.
 #
 TestCreateIndexesCommandInvalidSpec
+
+# --- Category: compact command / FerretDB compatibility (structural) ---
+#
+# TestCompactCommandNonExistent exercises compact on non-existent DB/collection.
+# The test has altMessages for FerretDB's different error text ("ns does not exist")
+# but FerretDB returns a response that does not match either the primary or alt
+# message. Structural incompatibility, not a dongo bug.
+#
+TestCompactCommandNonExistent
