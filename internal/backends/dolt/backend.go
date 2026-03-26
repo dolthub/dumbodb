@@ -114,6 +114,15 @@ func NewBackend(dataDir string, l *slog.Logger) (backends.Backend, error) {
 		dbs:     make(map[string]*dbState),
 	}
 
+	// Initialize the admin database so it always exists on disk, matching
+	// MongoDB's behavior where the admin database is always present even when
+	// empty. Without this, compact on a non-existent collection in admin
+	// incorrectly returns "database does not exist" instead of "collection
+	// does not exist".
+	if _, err := b.getOrOpenDB(context.Background(), "admin", true); err != nil {
+		return nil, fmt.Errorf("dolt: initializing admin database: %w", err)
+	}
+
 	return backends.BackendContract(b), nil
 }
 
