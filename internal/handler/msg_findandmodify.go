@@ -66,6 +66,22 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handleUpdateError(params.DB, params.Collection, "findAndModify", err)
 	}
 
+	if params.Fields != nil {
+		if doc, ok := res.value.(*types.Document); ok {
+			projection, inclusion, projErr := common.ValidateProjection(params.Fields)
+			if projErr != nil {
+				return nil, projErr
+			}
+
+			projected, projErr := common.ProjectDocument(doc, projection, params.Query, inclusion)
+			if projErr != nil {
+				return nil, projErr
+			}
+
+			res.value = projected
+		}
+	}
+
 	lastError := must.NotFail(types.NewDocument(
 		"n", res.modified,
 	))
