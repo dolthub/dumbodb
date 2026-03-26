@@ -496,6 +496,13 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 	}
 
 	if !exists {
+		// Distinguish database-not-found from collection-not-found.
+		state, stateErr := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
+		if stateErr == nil && state == nil {
+			return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+				fmt.Errorf("dolt: database %q does not exist", c.db.name))
+		}
+
 		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
 			fmt.Errorf("dolt: collection %q does not exist", c.name))
 	}

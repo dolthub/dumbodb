@@ -320,7 +320,7 @@ type IndexSize struct {
 // Stats returns statistic estimations about the collection.
 // All returned values are not exact, but might be more accurate when Stats is called with `Refresh: true`.
 //
-// The errors for non-existing database and non-existing collection are the same.
+// Possible errors: ErrorCodeDatabaseDoesNotExist, ErrorCodeCollectionDoesNotExist.
 func (cc *collectionContract) Stats(ctx context.Context, params *CollectionStatsParams) (*CollectionStatsResult, error) {
 	ctx, span := otel.Tracer("").Start(ctx, "CollectionStats")
 	defer span.End()
@@ -330,7 +330,7 @@ func (cc *collectionContract) Stats(ctx context.Context, params *CollectionStats
 		span.SetStatus(otelcodes.Error, "")
 	}
 
-	checkError(err, ErrorCodeCollectionDoesNotExist)
+	checkError(err, ErrorCodeDatabaseDoesNotExist, ErrorCodeCollectionDoesNotExist)
 
 	return res, err
 }
