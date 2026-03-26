@@ -38,3 +38,4 @@ TestSASLStartOpQueryErrors
 # Keep here until CI shows consistent green across multiple runs.
 #
 TestAggregateCommandMaxTimeMSErrors
+TestQueryMaxTimeMSErrors
