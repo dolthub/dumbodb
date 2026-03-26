@@ -828,6 +828,62 @@ func (b *Backend) DongoStatus(_ context.Context, _ *backends.VersioningStatusPar
 	return nil, fmt.Errorf("dolt: DongoStatus not yet implemented")
 }
 
+// DongoReset implements backends.VersioningBackend.
+//
+// Soft reset (Hard=false): moves HEAD to the target commit; staged root is updated to match
+// the target commit's rootValue; the working tree (db.am) is left unchanged so that any
+// uncommitted changes survive.
+//
+// Hard reset (Hard=true): moves HEAD to the target commit and resets both the working tree
+// and the staged root to the target commit's rootValue, discarding all uncommitted changes.
+func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoReset: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DongoReset: database %q does not exist", params.DBName))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Parse and validate the target commit hash.
+	targetHash, ok := hash.MaybeParse(params.Hash)
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoReset: invalid commit hash %q", params.Hash)
+	}
+
+	// Load the AM from the target commit.
+	targetAM, err := amFromCommitHash(ctx, db, params.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoReset: resolving target commit %q: %w", params.Hash, err)
+	}
+
+	// Move HEAD to the target commit without touching the working set.
+	newDS, err := db.doltDB.SetHead(ctx, db.ds, targetHash, "")
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoReset: setting HEAD to %q: %w", params.Hash, err)
+	}
+	db.ds = newDS
+
+	if params.Hard {
+		// Hard reset: working tree and staged root both point to the target commit.
+		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM); err != nil {
+			return nil, fmt.Errorf("dolt: DongoReset: updating working set (hard): %w", err)
+		}
+		db.am = targetAM
+	} else {
+		// Soft reset: keep the working tree as-is; staged root = target commit.
+		if err := updateWorkingSet(ctx, db.doltDB, db.am, targetAM); err != nil {
+			return nil, fmt.Errorf("dolt: DongoReset: updating working set (soft): %w", err)
+		}
+	}
+
+	return &backends.ResetResult{Hash: params.Hash}, nil
+}
+
 // DongoDiff implements backends.VersioningBackend.
 //
 // It computes the document-level diff between two database states:

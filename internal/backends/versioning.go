@@ -133,6 +133,19 @@ type DiffResult struct {
 	Collections []CollectionDiff
 }
 
+// ResetParams represents the parameters of VersioningBackend.DongoReset method.
+type ResetParams struct {
+	DBName string
+	Branch string
+	Hash   string
+	Hard   bool
+}
+
+// ResetResult represents the result of VersioningBackend.DongoReset method.
+type ResetResult struct {
+	Hash string
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dongo versioning commands to return an unsupported error.
@@ -155,4 +168,10 @@ type VersioningBackend interface {
 	// DongoDiff returns the document-level diff between two states.
 	// If From is empty, the "a" side is HEAD. If To is empty, the "b" side is the working set.
 	DongoDiff(context.Context, *DiffParams) (*DiffResult, error)
+
+	// DongoReset moves the branch HEAD to the given commit hash.
+	// Soft reset (Hard=false): leaves the working tree unchanged; staged root is updated to the target commit.
+	// Hard reset (Hard=true): resets both the working tree and staged root to the target commit,
+	// discarding all uncommitted changes.
+	DongoReset(context.Context, *ResetParams) (*ResetResult, error)
 }

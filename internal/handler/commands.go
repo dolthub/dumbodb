@@ -128,6 +128,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDongoMerge,
 			Help:    "Merges a source branch into the branch encoded in the database name.",
 		},
+		"dongoReset": {
+			Handler: h.MsgDongoReset,
+			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
+		},
 		"dongoStatus": {
 			Handler: h.MsgDongoStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",

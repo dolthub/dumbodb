@@ -386,6 +386,76 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	)
 }
 
+// MsgDongoReset implements the `dongoReset` command.
+//
+// It moves the branch HEAD to the specified commit hash. Two modes:
+//
+//	Soft (default): HEAD moves to target, working tree is untouched, staged root = target.
+//	Hard (hard: true): HEAD moves to target, working tree and staged root are reset to target.
+//
+// Usage:
+//
+//	db.runCommand({dongoReset: 1, to: "<hash>"})
+//	db.runCommand({dongoReset: 1, to: "<hash>", hard: true})
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch := branchFromDBName(encodedDB)
+
+	to, err := common.GetRequiredParam[string](document, "to")
+	if err != nil {
+		return nil, err
+	}
+
+	if to == "" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dongoReset: 'to' parameter must not be empty",
+			"to",
+		)
+	}
+
+	hard, err := common.GetOptionalParam[bool](document, "hard", false)
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dongoReset: versioning is not supported by the current backend",
+		)
+	}
+
+	res, err := vb.DongoReset(connCtx, &backends.ResetParams{
+		DBName: dbName,
+		Branch: branch,
+		Hash:   to,
+		Hard:   hard,
+	})
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"hash", res.Hash,
+			"ok", float64(1),
+		)),
+	)
+}
+
 // MsgDongoStatus implements the `dongoStatus` command.
 //
 // It returns the uncommitted changes on the branch encoded in $db (format: "dbname__branch").

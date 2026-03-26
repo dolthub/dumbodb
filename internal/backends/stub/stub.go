@@ -156,6 +156,13 @@ func (b *Backend) DongoDiff(_ context.Context, params *backends.DiffParams) (*ba
 	return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
 }
 
+// DongoReset implements backends.VersioningBackend interface.
+func (b *Backend) DongoReset(_ context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	b.l.Info("stub: DongoReset", slog.String("db", params.DBName), slog.String("hash", params.Hash), slog.Bool("hard", params.Hard))
+
+	return &backends.ResetResult{Hash: params.Hash}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

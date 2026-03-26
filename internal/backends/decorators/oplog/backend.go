@@ -134,6 +134,15 @@ func (b *backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*
 	return nil, fmt.Errorf("oplog: DongoDiff: versioning not supported by wrapped backend")
 }
 
+// DongoReset implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoReset(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoReset: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
 	_ backends.Backend          = (*backend)(nil)
