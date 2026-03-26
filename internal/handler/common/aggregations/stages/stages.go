@@ -62,9 +62,8 @@ var unsupportedStages = map[string]struct{}{
 	"$indexStats":             {},
 	"$listLocalSessions":      {},
 	"$listSessions":           {},
-	"$lookup":                 {}, // handled specially in msg_aggregate.go via NewLookupStage
-	"$merge":                  {},
-	"$out":                    {},
+	"$lookup": {}, // handled specially in msg_aggregate.go via NewLookupStage
+	// $merge and $out handled specially in msg_aggregate.go via NewMergeStage/NewOutStage
 	"$planCacheStats":         {},
 	"$redact":                 {},
 	"$sample":                 {},

@@ -210,7 +210,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		var s aggregations.Stage
 
-		if d.Command() == "$lookup" {
+		switch d.Command() {
+		case "$lookup":
 			// $lookup requires database access to fetch the "from" collection.
 			fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
 				fromColl, collErr := db.Collection(collName)
@@ -229,7 +230,18 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 
 			s, err = stages.NewLookupStage(d, fetcher)
-		} else {
+
+		case "$out":
+			// $out requires database write access to replace a collection.
+			outWriter := makeOutWriter(h.b, dbName)
+			s, err = stages.NewOutStage(d, dbName, outWriter)
+
+		case "$merge":
+			// $merge requires database read/write access to merge into a collection.
+			mergeWriter := makeMergeWriter(h.b, dbName)
+			s, err = stages.NewMergeStage(d, dbName, mergeWriter)
+
+		default:
 			s, err = stages.NewStage(d)
 		}
 
@@ -620,4 +632,195 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 	}
 
 	return iter, nil
+}
+
+// makeOutWriter returns an OutWriter callback that replaces the target collection
+// with the provided documents. It drops the existing collection (if any),
+// then inserts all documents into a fresh collection.
+func makeOutWriter(b backends.Backend, currentDB string) stages.OutWriter { //nolint:unparam // currentDB used by caller
+	return func(ctx context.Context, dbName, collName string, docs []*types.Document) error {
+		db, err := b.Database(dbName)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+
+		// Drop collection if it exists to match MongoDB $out semantics.
+		dropErr := db.DropCollection(ctx, &backends.DropCollectionParams{Name: collName})
+		if dropErr != nil && !backends.ErrorCodeIs(dropErr, backends.ErrorCodeCollectionDoesNotExist) {
+			return lazyerrors.Error(dropErr)
+		}
+
+		// InsertAll creates the database and collection automatically if needed.
+		coll, err := db.Collection(collName)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+
+		if len(docs) == 0 {
+			// Create an empty collection explicitly so $out with zero results still leaves a collection.
+			if createErr := db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: collName}); createErr != nil {
+				if !backends.ErrorCodeIs(createErr, backends.ErrorCodeCollectionAlreadyExists) {
+					return lazyerrors.Error(createErr)
+				}
+			}
+
+			return nil
+		}
+
+		_, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs})
+
+		return err
+	}
+}
+
+// makeMergeWriter returns a MergeFunc callback that merges documents into the
+// target collection according to the $merge semantics.
+func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //nolint:unparam // currentDB used by caller
+	return func(ctx context.Context, params *stages.MergeParams) error {
+		db, err := b.Database(params.DBName)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+
+		coll, err := db.Collection(params.CollName)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+
+		if len(params.Docs) == 0 {
+			return nil
+		}
+
+		// Fetch all existing documents from the target collection for matching.
+		qRes, err := coll.Query(ctx, new(backends.QueryParams))
+		if err != nil {
+			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+				backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+				// Collection doesn't exist yet; all docs are "not matched".
+				if params.WhenNotMatched == "insert" {
+					_, insertErr := coll.InsertAll(ctx, &backends.InsertAllParams{Docs: params.Docs})
+					return insertErr
+				}
+
+				return nil
+			}
+
+			return lazyerrors.Error(err)
+		}
+
+		existingDocs, err := iterator.ConsumeValues(qRes.Iter)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+
+		// Build a lookup map of existing docs keyed by the "on" field value(s).
+		type existingEntry struct {
+			doc   *types.Document
+			index int
+		}
+
+		existingMap := make(map[string]*existingEntry, len(existingDocs))
+
+		for i, existing := range existingDocs {
+			key := buildMergeKey(existing, params.On)
+			existingMap[key] = &existingEntry{doc: existing, index: i}
+		}
+
+		var toInsert []*types.Document
+		var toUpdate []*types.Document
+
+		for _, incoming := range params.Docs {
+			key := buildMergeKey(incoming, params.On)
+			entry, matched := existingMap[key]
+
+			if matched {
+				switch params.WhenMatched {
+				case "merge":
+					// Merge fields from incoming into existing.
+					merged := entry.doc
+					for _, k := range incoming.Keys() {
+						v := must.NotFail(incoming.Get(k))
+						merged.Set(k, v)
+					}
+
+					toUpdate = append(toUpdate, merged)
+
+				case "replace":
+					// Replace existing doc (preserving its _id if incoming lacks one).
+					if _, idErr := incoming.Get("_id"); idErr != nil {
+						id := must.NotFail(entry.doc.Get("_id"))
+						incoming.Set("_id", id)
+					}
+
+					toUpdate = append(toUpdate, incoming)
+
+				case "keepExisting":
+					// Do nothing; existing document wins.
+
+				case "fail":
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"$merge with whenMatched: 'fail' found a matching document",
+						"$merge (stage)",
+					)
+				}
+			} else {
+				switch params.WhenNotMatched {
+				case "insert":
+					toInsert = append(toInsert, incoming)
+
+				case "discard":
+					// Skip this document.
+
+				case "fail":
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"$merge with whenNotMatched: 'fail' found an unmatched document",
+						"$merge (stage)",
+					)
+				}
+			}
+		}
+
+		if len(toInsert) > 0 {
+			if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: toInsert}); err != nil {
+				return lazyerrors.Error(err)
+			}
+		}
+
+		if len(toUpdate) > 0 {
+			if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: toUpdate}); err != nil {
+				return lazyerrors.Error(err)
+			}
+		}
+
+		return nil
+	}
+}
+
+// buildMergeKey builds a string key for a document based on the given field names.
+// This key is used to match incoming documents against existing documents in $merge.
+func buildMergeKey(doc *types.Document, fields []string) string {
+	if len(fields) == 1 {
+		v, err := doc.Get(fields[0])
+		if err != nil {
+			return ""
+		}
+
+		return fmt.Sprintf("%v", v)
+	}
+
+	key := ""
+
+	for _, f := range fields {
+		v, err := doc.Get(f)
+		if err != nil {
+			key += "|<missing>"
+			continue
+		}
+
+		key += fmt.Sprintf("|%v", v)
+	}
+
+	return key
 }
