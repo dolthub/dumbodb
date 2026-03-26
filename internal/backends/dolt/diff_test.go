@@ -92,186 +92,24 @@ func mustDoc(t *testing.T, pairs ...any) *types.Document {
 	return doc
 }
 
-// ── Field-level diff unit tests ────────────────────────────────────────────────
+// findFieldDiff searches m.Diff for an entry with the given path, fataling if not found.
+func findFieldDiff(t *testing.T, m backends.ModifiedDoc, path string) backends.FieldDiff {
+	t.Helper()
 
-// TestDiffDocumentFields_NoChanges verifies that two identical docs return nil, nil.
-func TestDiffDocumentFields_NoChanges(t *testing.T) {
-	docA := mustDoc(t, "_id", int64(1), "x", int64(42), "y", "hello")
-	docB := mustDoc(t, "_id", int64(1), "x", int64(42), "y", "hello")
-
-	aDiff, bDiff, err := diffDocumentFields(docA, docB)
-	if err != nil {
-		t.Fatalf("diffDocumentFields: %v", err)
+	for _, fd := range m.Diff {
+		if fd.Path == path {
+			return fd
+		}
 	}
 
-	if aDiff != nil || bDiff != nil {
-		t.Errorf("expected nil diffs for identical docs, got aDiff=%v bDiff=%v", aDiff, bDiff)
-	}
-}
-
-// TestDiffDocumentFields_AddField verifies that a field added in b is absent from a and present in b.
-func TestDiffDocumentFields_AddField(t *testing.T) {
-	docA := mustDoc(t, "_id", int64(1), "x", int64(1))
-	docB := mustDoc(t, "_id", int64(1), "x", int64(1), "y", int64(2))
-
-	aDiff, bDiff, err := diffDocumentFields(docA, docB)
-	if err != nil {
-		t.Fatalf("diffDocumentFields: %v", err)
+	paths := make([]string, len(m.Diff))
+	for i, fd := range m.Diff {
+		paths[i] = fd.Path
 	}
 
-	if aDiff == nil || bDiff == nil {
-		t.Fatalf("expected non-nil diffs, got aDiff=%v bDiff=%v", aDiff, bDiff)
-	}
+	t.Fatalf("no FieldDiff found for path %q; got paths: %v", path, paths)
 
-	// y must be absent from aDiff
-	if aDiff.Has("y") {
-		t.Errorf("added field 'y' should be absent from aDiff")
-	}
-
-	// y must be present in bDiff with value 2
-	yVal, err := bDiff.Get("y")
-	if err != nil {
-		t.Fatalf("bDiff.Get(y): %v", err)
-	}
-
-	if yVal != int64(2) {
-		t.Errorf("bDiff['y'] = %v, want 2", yVal)
-	}
-}
-
-// TestDiffDocumentFields_RemoveField verifies that a field removed from b is present in a and absent from b.
-func TestDiffDocumentFields_RemoveField(t *testing.T) {
-	docA := mustDoc(t, "_id", int64(1), "x", int64(1), "y", int64(99))
-	docB := mustDoc(t, "_id", int64(1), "x", int64(1))
-
-	aDiff, bDiff, err := diffDocumentFields(docA, docB)
-	if err != nil {
-		t.Fatalf("diffDocumentFields: %v", err)
-	}
-
-	if aDiff == nil || bDiff == nil {
-		t.Fatalf("expected non-nil diffs, got aDiff=%v bDiff=%v", aDiff, bDiff)
-	}
-
-	// y must be present in aDiff with old value
-	yVal, err := aDiff.Get("y")
-	if err != nil {
-		t.Fatalf("aDiff.Get(y): %v", err)
-	}
-
-	if yVal != int64(99) {
-		t.Errorf("aDiff['y'] = %v, want 99", yVal)
-	}
-
-	// y must be absent from bDiff
-	if bDiff.Has("y") {
-		t.Errorf("removed field 'y' should be absent from bDiff")
-	}
-}
-
-// TestDiffDocumentFields_ChangeField verifies that only the changed field appears in the diff.
-func TestDiffDocumentFields_ChangeField(t *testing.T) {
-	docA := mustDoc(t, "_id", int64(1), "x", int64(10), "y", "unchanged")
-	docB := mustDoc(t, "_id", int64(1), "x", int64(20), "y", "unchanged")
-
-	aDiff, bDiff, err := diffDocumentFields(docA, docB)
-	if err != nil {
-		t.Fatalf("diffDocumentFields: %v", err)
-	}
-
-	if aDiff == nil || bDiff == nil {
-		t.Fatalf("expected non-nil diffs, got aDiff=%v bDiff=%v", aDiff, bDiff)
-	}
-
-	// Only x should differ; y must be absent from both diffs.
-	if aDiff.Has("y") || bDiff.Has("y") {
-		t.Errorf("unchanged field 'y' should not appear in diffs")
-	}
-
-	aX, err := aDiff.Get("x")
-	if err != nil {
-		t.Fatalf("aDiff.Get(x): %v", err)
-	}
-
-	bX, err := bDiff.Get("x")
-	if err != nil {
-		t.Fatalf("bDiff.Get(x): %v", err)
-	}
-
-	if aX != int64(10) {
-		t.Errorf("aDiff['x'] = %v, want 10", aX)
-	}
-
-	if bX != int64(20) {
-		t.Errorf("bDiff['x'] = %v, want 20", bX)
-	}
-}
-
-// TestDiffDocumentFields_NestedDocChange verifies that only the changed nested key appears.
-func TestDiffDocumentFields_NestedDocChange(t *testing.T) {
-	innerA := mustDoc(t, "p", int64(1), "q", int64(2))
-	innerB := mustDoc(t, "p", int64(1), "q", int64(99))
-
-	docA := mustDoc(t, "_id", int64(1), "nested", innerA, "top", "same")
-	docB := mustDoc(t, "_id", int64(1), "nested", innerB, "top", "same")
-
-	aDiff, bDiff, err := diffDocumentFields(docA, docB)
-	if err != nil {
-		t.Fatalf("diffDocumentFields: %v", err)
-	}
-
-	if aDiff == nil || bDiff == nil {
-		t.Fatalf("expected non-nil diffs, got aDiff=%v bDiff=%v", aDiff, bDiff)
-	}
-
-	// top must be absent (unchanged).
-	if aDiff.Has("top") || bDiff.Has("top") {
-		t.Errorf("unchanged field 'top' should not appear in diffs")
-	}
-
-	// nested must appear in both diffs.
-	aNested, err := aDiff.Get("nested")
-	if err != nil {
-		t.Fatalf("aDiff.Get(nested): %v", err)
-	}
-
-	bNested, err := bDiff.Get("nested")
-	if err != nil {
-		t.Fatalf("bDiff.Get(nested): %v", err)
-	}
-
-	// The nested diffs should contain only the changed sub-field q.
-	aNestedDoc, ok := aNested.(*types.Document)
-	if !ok {
-		t.Fatalf("aDiff['nested'] is %T, want *types.Document", aNested)
-	}
-
-	bNestedDoc, ok := bNested.(*types.Document)
-	if !ok {
-		t.Fatalf("bDiff['nested'] is %T, want *types.Document", bNested)
-	}
-
-	if aNestedDoc.Has("p") || bNestedDoc.Has("p") {
-		t.Errorf("unchanged nested field 'p' should not appear in nested diffs")
-	}
-
-	aQ, err := aNestedDoc.Get("q")
-	if err != nil {
-		t.Fatalf("aDiff['nested']['q']: %v", err)
-	}
-
-	bQ, err := bNestedDoc.Get("q")
-	if err != nil {
-		t.Fatalf("bDiff['nested']['q']: %v", err)
-	}
-
-	if aQ != int64(2) {
-		t.Errorf("aDiff['nested']['q'] = %v, want 2", aQ)
-	}
-
-	if bQ != int64(99) {
-		t.Errorf("bDiff['nested']['q'] = %v, want 99", bQ)
-	}
+	return backends.FieldDiff{}
 }
 
 // ── Backend DongoDiff tests ────────────────────────────────────────────────────
@@ -399,7 +237,7 @@ func TestDongoDiff_DeleteShowsRemoved(t *testing.T) {
 }
 
 // TestDongoDiff_UpdateShowsModified verifies that updating a doc then diffing shows only
-// the changed fields in a/b.
+// the changed fields in the path-based diff array.
 func TestDongoDiff_UpdateShowsModified(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
@@ -448,26 +286,25 @@ func TestDongoDiff_UpdateShowsModified(t *testing.T) {
 	m := cd.Modified[0]
 
 	// Only x should appear in the diff; y was unchanged.
-	if m.A.Has("y") || m.B.Has("y") {
-		t.Errorf("unchanged field 'y' should not appear in modified diff")
+	for _, fd := range m.Diff {
+		if fd.Path == "$.y" {
+			t.Errorf("unchanged field '$.y' should not appear in modified diff")
+		}
 	}
 
-	aX, err := m.A.Get("x")
-	if err != nil {
-		t.Fatalf("m.A.Get(x): %v", err)
+	// Verify the x diff entry.
+	xDiff := findFieldDiff(t, m, "$.x")
+
+	if xDiff.Type != "modified" {
+		t.Errorf("$.x type = %q, want %q", xDiff.Type, "modified")
 	}
 
-	bX, err := m.B.Get("x")
-	if err != nil {
-		t.Fatalf("m.B.Get(x): %v", err)
+	if xDiff.A != int64(10) {
+		t.Errorf("$.x a = %v, want 10", xDiff.A)
 	}
 
-	if aX != int64(10) {
-		t.Errorf("a['x'] = %v, want 10", aX)
-	}
-
-	if bX != int64(99) {
-		t.Errorf("b['x'] = %v, want 99", bX)
+	if xDiff.B != int64(99) {
+		t.Errorf("$.x b = %v, want 99", xDiff.B)
 	}
 }
 
@@ -692,24 +529,305 @@ func TestDongoDiff_TwoCommitsDeltaCorrect(t *testing.T) {
 		t.Errorf("expected 0 added/removed, got added=%d removed=%d", len(cd.Added), len(cd.Removed))
 	}
 
-	// Field v: old=1, new=2.
 	m := cd.Modified[0]
 
-	aV, err := m.A.Get("v")
+	// Field v: path=$.v, type=modified, a=1, b=2.
+	vDiff := findFieldDiff(t, m, "$.v")
+
+	if vDiff.Type != "modified" {
+		t.Errorf("$.v type = %q, want %q", vDiff.Type, "modified")
+	}
+
+	if vDiff.A != int64(1) {
+		t.Errorf("$.v a = %v, want 1", vDiff.A)
+	}
+
+	if vDiff.B != int64(2) {
+		t.Errorf("$.v b = %v, want 2", vDiff.B)
+	}
+}
+
+// TestDongoDiff_AddFieldShowsAdded verifies that when a field is added to a document,
+// the diff reports type="added" with path="$.fieldname" and only a "b" value.
+func TestDongoDiff_AddFieldShowsAdded(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit a doc without field "y".
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "x", int64(1)))
+	commitDB(t, b, "testdb", "baseline")
+
+	// Update to add field "y".
+	db, err := b.Database("testdb")
 	if err != nil {
-		t.Fatalf("m.A.Get(v): %v", err)
+		t.Fatalf("Database: %v", err)
 	}
 
-	bV, err := m.B.Get("v")
+	coll, err := db.Collection("col")
 	if err != nil {
-		t.Fatalf("m.B.Get(v): %v", err)
+		t.Fatalf("Collection: %v", err)
 	}
 
-	if aV != int64(1) {
-		t.Errorf("a['v'] = %v, want 1", aV)
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "x", int64(1), "y", int64(2)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	if bV != int64(2) {
-		t.Errorf("b['v'] = %v, want 2", bV)
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 modified doc")
+	}
+
+	m := res.Collections[0].Modified[0]
+
+	// y must be present as "added" with b=2; a must be absent.
+	yDiff := findFieldDiff(t, m, "$.y")
+
+	if yDiff.Type != "added" {
+		t.Errorf("$.y type = %q, want %q", yDiff.Type, "added")
+	}
+
+	if yDiff.A != nil {
+		t.Errorf("$.y a should be nil for added, got %v", yDiff.A)
+	}
+
+	if yDiff.B != int64(2) {
+		t.Errorf("$.y b = %v, want 2", yDiff.B)
+	}
+
+	// x must not appear (unchanged).
+	for _, fd := range m.Diff {
+		if fd.Path == "$.x" {
+			t.Errorf("unchanged field '$.x' should not appear in diff")
+		}
+	}
+}
+
+// TestDongoDiff_RemoveFieldShowsRemoved verifies that when a field is removed from a document,
+// the diff reports type="removed" with path="$.fieldname" and only an "a" value.
+func TestDongoDiff_RemoveFieldShowsRemoved(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit a doc with field "y".
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "x", int64(1), "y", int64(99)))
+	commitDB(t, b, "testdb", "baseline")
+
+	// Update to remove field "y".
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "x", int64(1)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 modified doc")
+	}
+
+	m := res.Collections[0].Modified[0]
+
+	// y must be present as "removed" with a=99; b must be absent.
+	yDiff := findFieldDiff(t, m, "$.y")
+
+	if yDiff.Type != "removed" {
+		t.Errorf("$.y type = %q, want %q", yDiff.Type, "removed")
+	}
+
+	if yDiff.A != int64(99) {
+		t.Errorf("$.y a = %v, want 99", yDiff.A)
+	}
+
+	if yDiff.B != nil {
+		t.Errorf("$.y b should be nil for removed, got %v", yDiff.B)
+	}
+}
+
+// TestDongoDiff_NestedFieldChange verifies that changing a nested field reports
+// the full JSON path (e.g. "$.address.city") rather than just the top-level key.
+func TestDongoDiff_NestedFieldChange(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Build a doc with a nested "address" sub-document.
+	addrA := mustDoc(t, "city", "Seattle", "zip", "98101")
+	addrB := mustDoc(t, "city", "Portland", "zip", "98101")
+
+	insertDoc(t, b, "testdb", "col",
+		mustDoc(t, "_id", int64(1), "address", addrA, "name", "alice"))
+	commitDB(t, b, "testdb", "baseline")
+
+	// Update: change address.city only.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "address", addrB, "name", "alice"),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 modified doc")
+	}
+
+	m := res.Collections[0].Modified[0]
+
+	// $.address.city must be modified; $.address.zip and $.name must be absent.
+	cityDiff := findFieldDiff(t, m, "$.address.city")
+
+	if cityDiff.Type != "modified" {
+		t.Errorf("$.address.city type = %q, want %q", cityDiff.Type, "modified")
+	}
+
+	if cityDiff.A != "Seattle" {
+		t.Errorf("$.address.city a = %v, want Seattle", cityDiff.A)
+	}
+
+	if cityDiff.B != "Portland" {
+		t.Errorf("$.address.city b = %v, want Portland", cityDiff.B)
+	}
+
+	// Unchanged fields must not appear.
+	for _, fd := range m.Diff {
+		if fd.Path == "$.address.zip" {
+			t.Errorf("unchanged '$.address.zip' should not appear in diff")
+		}
+
+		if fd.Path == "$.name" {
+			t.Errorf("unchanged '$.name' should not appear in diff")
+		}
+	}
+}
+
+// TestDongoDiff_ArrayElementChange verifies that changing an array element reports
+// the path with bracket notation (e.g. "$.scores[2]").
+func TestDongoDiff_ArrayElementChange(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Build docs with an array field. types.MakeArray requires appending.
+	scoresA := types.MakeArray(3)
+	scoresA.Append(int64(80))
+	scoresA.Append(int64(85))
+	scoresA.Append(int64(91))
+
+	scoresB := types.MakeArray(3)
+	scoresB.Append(int64(80))
+	scoresB.Append(int64(85))
+	scoresB.Append(int64(95)) // index 2 changed
+
+	docA := mustDoc(t, "_id", int64(1), "scores", scoresA)
+	docB := mustDoc(t, "_id", int64(1), "scores", scoresB)
+
+	insertDoc(t, b, "testdb", "col", docA)
+	commitDB(t, b, "testdb", "baseline")
+
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{docB}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 modified doc")
+	}
+
+	m := res.Collections[0].Modified[0]
+
+	// Element at index 2 must be reported as modified.
+	elemDiff := findFieldDiff(t, m, "$.scores[2]")
+
+	if elemDiff.Type != "modified" {
+		t.Errorf("$.scores[2] type = %q, want %q", elemDiff.Type, "modified")
+	}
+
+	if elemDiff.A != int64(91) {
+		t.Errorf("$.scores[2] a = %v, want 91", elemDiff.A)
+	}
+
+	if elemDiff.B != int64(95) {
+		t.Errorf("$.scores[2] b = %v, want 95", elemDiff.B)
+	}
+}
+
+// TestDongoDiff_NoChangesMeanNoDiff verifies that updating a doc with identical
+// content produces no modified entries.
+func TestDongoDiff_NoChangesMeanNoDiff(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	original := mustDoc(t, "_id", int64(1), "x", int64(42), "y", "hello")
+	insertDoc(t, b, "testdb", "col", original)
+	commitDB(t, b, "testdb", "init")
+
+	// "Update" with identical values.
+	same := mustDoc(t, "_id", int64(1), "x", int64(42), "y", "hello")
+
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{same}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 0 {
+		t.Errorf("expected 0 changed collections for identical update, got %d", len(res.Collections))
 	}
 }

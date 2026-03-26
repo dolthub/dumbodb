@@ -111,12 +111,19 @@ type DiffParams struct {
 	To     string // commit hash; empty means working set
 }
 
+// FieldDiff represents a single field-level change within a modified document.
+type FieldDiff struct {
+	Type string // "added", "modified", or "removed"
+	Path string // JSON Path (e.g. "$.field", "$.nested.field", "$.array[0]")
+	A    any    // old value; nil for Type=="added"
+	B    any    // new value; nil for Type=="removed"
+}
+
 // ModifiedDoc represents a document that was changed between two commits.
-// Only fields that differ between the two versions appear in A and B.
+// Diff contains the path-based field diffs for all changed fields.
 type ModifiedDoc struct {
-	ID any             // the _id value
-	A  *types.Document // old values of changed fields only
-	B  *types.Document // new values of changed fields only
+	ID   any
+	Diff []FieldDiff
 }
 
 // CollectionDiff represents the changes to a single collection.

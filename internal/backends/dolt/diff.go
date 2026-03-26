@@ -135,6 +135,170 @@ func idFromKeyTuple(k val.Tuple) (any, error) {
 	return decodeID(keyBytes)
 }
 
+// diffDocumentPaths computes path-based field diffs between two documents,
+// producing a []backends.FieldDiff where each entry carries a JSON Path string
+// (e.g. "$.field", "$.nested.field", "$.array[2]"), a type tag ("added",
+// "modified", "removed"), and the old and/or new values as MongoDB-typed values.
+//
+// The _id field is excluded since it is reported at the ModifiedDoc level.
+// Returns nil if the documents are identical.
+func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.FieldDiff, error) {
+	// Build a map of b's non-_id fields for O(1) lookup.
+	bFieldMap := make(map[string]any)
+	bIter := docB.Iterator()
+	defer bIter.Close()
+
+	for {
+		k, v, err := bIter.Next()
+		if err != nil {
+			if err == iterator.ErrIteratorDone {
+				break
+			}
+
+			return nil, fmt.Errorf("iterating b document: %w", err)
+		}
+
+		if k == "_id" {
+			continue
+		}
+
+		bFieldMap[k] = v
+	}
+
+	var diffs []backends.FieldDiff
+
+	// Walk a's fields.
+	aIter := docA.Iterator()
+	defer aIter.Close()
+
+	aFieldsSeen := make(map[string]struct{})
+
+	for {
+		k, aVal, err := aIter.Next()
+		if err != nil {
+			if err == iterator.ErrIteratorDone {
+				break
+			}
+
+			return nil, fmt.Errorf("iterating a document: %w", err)
+		}
+
+		if k == "_id" {
+			continue
+		}
+
+		aFieldsSeen[k] = struct{}{}
+		path := prefix + "." + k
+
+		bVal, inB := bFieldMap[k]
+		if !inB {
+			// Field was removed.
+			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: path, A: aVal})
+		} else {
+			// Field in both — compare values recursively.
+			subdiffs, err := compareFieldPaths(path, aVal, bVal)
+			if err != nil {
+				return nil, err
+			}
+
+			diffs = append(diffs, subdiffs...)
+		}
+	}
+
+	// Fields only in b (added).
+	for k, bVal := range bFieldMap {
+		if _, inA := aFieldsSeen[k]; !inA {
+			path := prefix + "." + k
+			diffs = append(diffs, backends.FieldDiff{Type: "added", Path: path, B: bVal})
+		}
+	}
+
+	return diffs, nil
+}
+
+// compareFieldPaths compares two field values, recursing into nested documents
+// and arrays. It returns a FieldDiff for each differing leaf.
+func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error) {
+	// Nested documents — recurse.
+	aDoc, aIsDoc := aVal.(*types.Document)
+	bDoc, bIsDoc := bVal.(*types.Document)
+
+	if aIsDoc && bIsDoc {
+		return diffDocumentPaths(path, aDoc, bDoc)
+	}
+
+	// Arrays — compare element by element.
+	aArr, aIsArr := aVal.(*types.Array)
+	bArr, bIsArr := bVal.(*types.Array)
+
+	if aIsArr && bIsArr {
+		return diffArrayPaths(path, aArr, bArr)
+	}
+
+	// Scalars (or type mismatch between doc/array/scalar).
+	if types.Compare(aVal, bVal) == types.Equal {
+		return nil, nil
+	}
+
+	return []backends.FieldDiff{{Type: "modified", Path: path, A: aVal, B: bVal}}, nil
+}
+
+// diffArrayPaths compares two arrays element-by-element and returns path-based
+// diffs with bracket notation (e.g. "$.scores[2]").
+func diffArrayPaths(path string, arrA, arrB *types.Array) ([]backends.FieldDiff, error) {
+	lenA := arrA.Len()
+	lenB := arrB.Len()
+
+	maxLen := lenA
+	if lenB > maxLen {
+		maxLen = lenB
+	}
+
+	var diffs []backends.FieldDiff
+
+	for i := 0; i < maxLen; i++ {
+		elemPath := fmt.Sprintf("%s[%d]", path, i)
+
+		switch {
+		case i >= lenA:
+			bVal, err := arrB.Get(i)
+			if err != nil {
+				return nil, fmt.Errorf("reading array b[%d]: %w", i, err)
+			}
+
+			diffs = append(diffs, backends.FieldDiff{Type: "added", Path: elemPath, B: bVal})
+
+		case i >= lenB:
+			aVal, err := arrA.Get(i)
+			if err != nil {
+				return nil, fmt.Errorf("reading array a[%d]: %w", i, err)
+			}
+
+			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: elemPath, A: aVal})
+
+		default:
+			aVal, err := arrA.Get(i)
+			if err != nil {
+				return nil, fmt.Errorf("reading array a[%d]: %w", i, err)
+			}
+
+			bVal, err := arrB.Get(i)
+			if err != nil {
+				return nil, fmt.Errorf("reading array b[%d]: %w", i, err)
+			}
+
+			subdiffs, err := compareFieldPaths(elemPath, aVal, bVal)
+			if err != nil {
+				return nil, err
+			}
+
+			diffs = append(diffs, subdiffs...)
+		}
+	}
+
+	return diffs, nil
+}
+
 // diffCollectionMaps computes the document-level diff between two prolly.Maps
 // (one per collection). Both maps use the same key/value descriptors as
 // the rest of the dolt backend.
@@ -142,9 +306,11 @@ func idFromKeyTuple(k val.Tuple) (any, error) {
 // It iterates both sorted maps in parallel (merge-join) to find:
 //   - Documents only in aMap → removed
 //   - Documents only in bMap → added
-//   - Documents in both with different values → modified (field-level diff)
+//   - Documents in both with different values → modified (path-based field diff)
 //
 // Documents present in both with identical values are not included in any list.
+// For modified documents, the prolly-map content-hash comparison detects changes
+// without deserializing unchanged documents.
 func diffCollectionMaps(
 	ctx context.Context,
 	ns tree.NodeStore,
@@ -225,7 +391,9 @@ func diffCollectionMaps(
 				kB, vB, errB = iterB.Next(ctx)
 
 			default:
-				// Same key. Check if the stored JSON hash changed.
+				// Same key. The prolly-map value stores the JSON content hash,
+				// so a byte-level comparison quickly detects any change without
+				// deserializing either document.
 				if !bytes.Equal(vA, vB) {
 					docA, readErr := readDocFromEntry(ctx, ns, kA, vA)
 					if readErr != nil {
@@ -242,24 +410,15 @@ func diffCollectionMaps(
 						return nil, nil, nil, idErr
 					}
 
-					aDiff, bDiff, diffErr := diffDocumentFields(docA, docB)
+					fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
 					if diffErr != nil {
 						return nil, nil, nil, diffErr
 					}
 
-					if aDiff != nil || bDiff != nil {
-						if aDiff == nil {
-							aDiff = types.MakeDocument(0)
-						}
-
-						if bDiff == nil {
-							bDiff = types.MakeDocument(0)
-						}
-
+					if len(fieldDiffs) > 0 {
 						modified = append(modified, backends.ModifiedDoc{
-							ID: id,
-							A:  aDiff,
-							B:  bDiff,
+							ID:   id,
+							Diff: fieldDiffs,
 						})
 					}
 				}
@@ -271,121 +430,4 @@ func diffCollectionMaps(
 	}
 
 	return added, removed, modified, nil
-}
-
-// diffDocumentFields computes the field-level diff between two documents.
-// Only fields that differ between docA and docB appear in the returned aDiff/bDiff documents:
-//   - Field present in A but not B: appears in aDiff only.
-//   - Field present in B but not A: appears in bDiff only.
-//   - Field present in both with different values: appears in both with respective values.
-//   - For nested document values, the diff recurses to show only changed nested fields.
-//
-// The _id field is excluded since it is reported at the ModifiedDoc level.
-// Returns nil, nil if the two documents have identical non-_id fields.
-func diffDocumentFields(docA, docB *types.Document) (*types.Document, *types.Document, error) {
-	aDiff := types.MakeDocument(0)
-	bDiff := types.MakeDocument(0)
-
-	// Build a map of b's non-_id fields for O(1) lookup.
-	bFieldMap := make(map[string]any)
-	bIter := docB.Iterator()
-	defer bIter.Close()
-
-	for {
-		k, v, err := bIter.Next()
-		if err != nil {
-			if err == iterator.ErrIteratorDone {
-				break
-			}
-
-			return nil, nil, fmt.Errorf("iterating b document: %w", err)
-		}
-
-		if k == "_id" {
-			continue
-		}
-
-		bFieldMap[k] = v
-	}
-
-	// Iterate a's fields.
-	aIter := docA.Iterator()
-	defer aIter.Close()
-
-	aFieldsSeen := make(map[string]struct{})
-
-	for {
-		k, aVal, err := aIter.Next()
-		if err != nil {
-			if err == iterator.ErrIteratorDone {
-				break
-			}
-
-			return nil, nil, fmt.Errorf("iterating a document: %w", err)
-		}
-
-		if k == "_id" {
-			continue
-		}
-
-		aFieldsSeen[k] = struct{}{}
-
-		bVal, inB := bFieldMap[k]
-		if !inB {
-			// Field was removed: present in a only.
-			aDiff.Set(k, aVal)
-		} else {
-			// Field in both — compare values.
-			av, bv, changed := fieldValueDiff(aVal, bVal)
-			if changed {
-				aDiff.Set(k, av)
-				bDiff.Set(k, bv)
-			}
-		}
-	}
-
-	// Fields only in b (added).
-	for k, bVal := range bFieldMap {
-		if _, inA := aFieldsSeen[k]; !inA {
-			bDiff.Set(k, bVal)
-		}
-	}
-
-	if aDiff.Len() == 0 && bDiff.Len() == 0 {
-		return nil, nil, nil
-	}
-
-	return aDiff, bDiff, nil
-}
-
-// fieldValueDiff compares two scalar or document field values.
-// For nested *types.Document values, it recurses via diffDocumentFields so that
-// only the changed nested fields appear in the diff (not the entire sub-document).
-// Returns (aVal, bVal, true) if the values differ, or (nil, nil, false) if equal.
-func fieldValueDiff(aVal, bVal any) (any, any, bool) {
-	aDoc, aIsDoc := aVal.(*types.Document)
-	bDoc, bIsDoc := bVal.(*types.Document)
-
-	if aIsDoc && bIsDoc {
-		aDiff, bDiff, _ := diffDocumentFields(aDoc, bDoc)
-		if aDiff == nil && bDiff == nil {
-			return nil, nil, false
-		}
-
-		if aDiff == nil {
-			aDiff = types.MakeDocument(0)
-		}
-
-		if bDiff == nil {
-			bDiff = types.MakeDocument(0)
-		}
-
-		return aDiff, bDiff, true
-	}
-
-	if types.Compare(aVal, bVal) == types.Equal {
-		return nil, nil, false
-	}
-
-	return aVal, bVal, true
 }

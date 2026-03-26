@@ -94,10 +94,21 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		modified := types.MakeArray(len(cd.Modified))
 		for _, m := range cd.Modified {
+			diffArray := types.MakeArray(len(m.Diff))
+			for _, fd := range m.Diff {
+				pairs := []any{"type", fd.Type, "path", fd.Path}
+				if fd.Type != "added" {
+					pairs = append(pairs, "a", fd.A)
+				}
+				if fd.Type != "removed" {
+					pairs = append(pairs, "b", fd.B)
+				}
+				diffEntry := must.NotFail(types.NewDocument(pairs...))
+				diffArray.Append(diffEntry)
+			}
 			entry := must.NotFail(types.NewDocument(
 				"_id", m.ID,
-				"a", m.A,
-				"b", m.B,
+				"diff", diffArray,
 			))
 			modified.Append(entry)
 		}
