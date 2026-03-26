@@ -78,3 +78,12 @@ TestCollStatsCommandCount
 #
 TestCollStatsCommandScale
 TestCollStatsCommandScaleSize
+
+# --- Category: $collStats aggregation / FerretDB-DocumentDB compatibility (structural) ---
+#
+# TestAggregateCommandCollStats subtests exercise the $collStats aggregation
+# stage. Several subtests are marked FailsForFerretDB (FerretDB-DocumentDB
+# issues #534 and others) but the parent test still shows as FAIL in the
+# scorecard output. Structural incompatibility, not a dongo bug.
+#
+TestAggregateCommandCollStats
