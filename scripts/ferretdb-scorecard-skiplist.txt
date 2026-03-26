@@ -71,9 +71,10 @@ TestCollStatsCommandCount
 
 # --- Category: collStats scale / FerretDB compatibility (structural) ---
 #
-# TestCollStatsCommandScale subtests exercise scale factor handling in collStats.
-# Several subtests (scaleOne, scaleBig, scaleMaxInt, scaleFloat) are marked
-# FailsForFerretDB (FerretDB/FerretDB#4792) but the parent test still shows as
-# FAIL in the scorecard output. Structural incompatibility, not a dongo bug.
+# TestCollStatsCommandScale and TestCollStatsCommandScaleSize exercise scale
+# factor handling in collStats. Both are marked FailsForFerretDB
+# (FerretDB/FerretDB#4792) but the parent tests still show as FAIL in the
+# scorecard output. Structural incompatibility, not a dongo bug.
 #
 TestCollStatsCommandScale
+TestCollStatsCommandScaleSize
