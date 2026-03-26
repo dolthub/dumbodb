@@ -104,7 +104,8 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	stats, err := c.Stats(connCtx, &backends.CollectionStatsParams{Refresh: true})
-	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
+	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+		backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
 		stats = new(backends.CollectionStatsResult)
 		err = nil
 	}

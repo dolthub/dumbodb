@@ -91,7 +91,8 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	started := time.Now()
 
 	stats, err := c.Stats(connCtx, new(backends.CollectionStatsParams))
-	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
+	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+		backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
 		stats = new(backends.CollectionStatsResult)
 		err = nil
 	}

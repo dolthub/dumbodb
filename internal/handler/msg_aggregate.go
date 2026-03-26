@@ -501,7 +501,8 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 
 	if hasCount || hasStorage {
 		collStats, err = p.c.Stats(ctx, new(backends.CollectionStatsParams))
-		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNamespaceNotFound,
 				fmt.Sprintf(

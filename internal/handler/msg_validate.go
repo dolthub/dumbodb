@@ -70,7 +70,8 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	stats, err := c.Stats(connCtx, &backends.CollectionStatsParams{Refresh: true})
 	if err != nil {
-		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
 			msg := fmt.Sprintf("Collection '%s.%s' does not exist to validate.", dbName, collection)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceNotFound, msg, document.Command())
 		}
