@@ -111,7 +111,7 @@ func NewStage(stage *types.Document) (aggregations.Stage, error) {
 	case !supported && !unsupported:
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrStageUnrecognized,
-			fmt.Sprintf("Unrecognized pipeline stage name: %q", name),
+			fmt.Sprintf("Unrecognized pipeline stage name: '%s'", name),
 			name+" (stage)", // to differentiate update operator $set from aggregation stage $set, etc
 		)
 	}
