@@ -1144,16 +1144,15 @@ func TestCRUD_UpdatePipeline(t *testing.T) {
 	})
 }
 
-// ─── Update: arrayFilters (DongoXFail) ───────────────────────────────────────
+// ─── Update: arrayFilters ─────────────────────────────────────────────────────
 
-// TestCRUD_ArrayFilters tests arrayFilters with positional $[identifier].
+// TestCRUD_ArrayFilters tests arrayFilters with positional $[identifier]. (DongoFull)
 func TestCRUD_ArrayFilters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("ArrayFilterPositionalIdentifier", func(t *testing.T) {
 		t.Parallel()
-
 		env := startDongo(t)
 		coll := env.collection(t)
 		insertDocs(t, coll, d(e("_id", "a"),
@@ -1186,7 +1185,6 @@ func TestCRUD_ArrayFilters(t *testing.T) {
 
 	t.Run("ArrayFilterMultipleConditions", func(t *testing.T) {
 		t.Parallel()
-
 		env := startDongo(t)
 		coll := env.collection(t)
 		insertDocs(t, coll, d(e("_id", "b"),
@@ -1200,6 +1198,15 @@ func TestCRUD_ArrayFilters(t *testing.T) {
 			}),
 		)
 		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "b"))).Decode(&result))
+		scores := result.Map()["scores"].(bson.A)
+		// Elements < 65: index 1 (60) and index 3 (40) should be 50.
+		assert.Equal(t, int32(80), scores[0])
+		assert.Equal(t, int32(50), scores[1])
+		assert.Equal(t, int32(90), scores[2])
+		assert.Equal(t, int32(50), scores[3])
 	})
 }
 
@@ -1684,14 +1691,13 @@ func TestCRUD_BulkWrite(t *testing.T) {
 	})
 }
 
-// TestCRUD_BulkWriteArrayFilters tests BulkWrite with arrayFilters.
+// TestCRUD_BulkWriteArrayFilters tests BulkWrite with arrayFilters. (DongoFull)
 func TestCRUD_BulkWriteArrayFilters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("UpdateOneWithArrayFilters", func(t *testing.T) {
 		t.Parallel()
-
 		env := startDongo(t)
 		coll := env.collection(t)
 		insertDocs(t, coll, d(e("_id", "a"),

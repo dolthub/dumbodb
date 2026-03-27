@@ -88,7 +88,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		} else if !param.HasUpdateOperators {
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
-			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.ArrayFilters)
+			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters)
 		}
 
 		if err != nil {
@@ -310,291 +310,146 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 	return changed, nil
 }
 
-// processPositionalFilteredUpdate handles update paths containing $[identifier].
-// For example: $set on "grades.$[elem].score" with arrayFilters [{elem.grade: "B"}]
-// updates all array elements in "grades" where element.grade == "B", setting their "score" field.
-// Returns true if any element was modified.
-func processPositionalFilteredUpdate(command string, doc *types.Document, operator, key string, value any, arrayFilters *types.Array) (bool, error) {
-	// Split on ".$[" to find the array field and the identifier+remainder.
-	// e.g. "grades.$[elem].score" → arrayField="grades", rest="elem].score"
-	// e.g. "scores.$[x]" → arrayField="scores", rest="x]"
-	splitIdx := strings.Index(key, ".$[")
-	if splitIdx == -1 {
-		// Key starts with $[identifier] — treat the whole document as the array.
-		// Not commonly used; fall through to error.
-		return false, NewUpdateError(
-			handlererrors.ErrNotImplemented,
-			fmt.Sprintf("processPositionalFilteredUpdate: unsupported key format %q", key),
-			command,
-		)
-	}
-
-	arrayFieldStr := key[:splitIdx]
-	rest := key[splitIdx+3:] // strip ".$["
-
-	closeBracket := strings.Index(rest, "]")
-	if closeBracket == -1 {
-		return false, NewUpdateError(
-			handlererrors.ErrFailedToParse,
-			fmt.Sprintf("malformed $[identifier] in path: %q", key),
-			command,
-		)
-	}
-
-	identifier := rest[:closeBracket]
-	afterIdentifier := rest[closeBracket+1:] // e.g. ".score" or ""
-
-	// Resolve the array field path.
-	arrayPath, err := types.NewPathFromString(arrayFieldStr)
-	if err != nil {
-		return false, lazyerrors.Error(err)
-	}
-
-	arrayVal, err := doc.GetByPath(arrayPath)
-	if err != nil {
-		// Array field doesn't exist; nothing to update.
-		return false, nil
-	}
-
-	array, ok := arrayVal.(*types.Array)
-	if !ok {
-		return false, NewUpdateError(
-			handlererrors.ErrTypeMismatch,
-			fmt.Sprintf("Cannot apply array update to non-array field %q", arrayFieldStr),
-			command,
-		)
-	}
-
-	// Build the filter for this identifier from arrayFilters.
-	// arrayFilters entries look like [{elem.grade: "B"}] for identifier "elem",
-	// or [{x: {$lt: 65}}] for identifier "x".
-	// We keep the filter as-is and match by wrapping each element: {identifier: elem}.
-	var identifierFilters []*types.Document
-
-	if arrayFilters != nil {
-		prefix := identifier + "."
-		for i := range arrayFilters.Len() {
-			entry := must.NotFail(arrayFilters.Get(i))
-
-			filterDoc, ok := entry.(*types.Document)
-			if !ok {
-				continue
-			}
-
-			// Check if any key in this filter entry belongs to this identifier.
-			for _, k := range filterDoc.Keys() {
-				if k == identifier || strings.HasPrefix(k, prefix) {
-					identifierFilters = append(identifierFilters, filterDoc)
-					break
-				}
-			}
-		}
-	}
-
-	var changed bool
-
-	for i := range array.Len() {
-		elem := must.NotFail(array.Get(i))
-
-		// Check if this element matches all identifier filters.
-		matches := true
-
-		for _, filterDoc := range identifierFilters {
-			// Wrap element as {identifier: elem} and apply the filter.
-			tmpDoc := must.NotFail(types.NewDocument(identifier, elem))
-
-			match, err := FilterDocument(tmpDoc, filterDoc)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			if !match {
-				matches = false
-				break
-			}
-		}
-
-		if !matches {
-			continue
-		}
-
-		// Apply the update to this element.
-		if afterIdentifier == "" {
-			// Update the element itself (e.g. "scores.$[x]" = 50).
-			if err := array.Set(i, value); err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			changed = true
-		} else {
-			// Update a sub-field within the element (e.g. "grades.$[elem].score" = 90).
-			subFieldStr := afterIdentifier[1:] // strip leading "."
-
-			elemDoc, ok := elem.(*types.Document)
-			if !ok {
-				return false, NewUpdateError(
-					handlererrors.ErrTypeMismatch,
-					fmt.Sprintf("Element at index %d is not a document, cannot set sub-field %q", i, subFieldStr),
-					command,
-				)
-			}
-
-			subPath, err := types.NewPathFromString(subFieldStr)
-			if err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			if err := elemDoc.SetByPath(subPath, value); err != nil {
-				return false, lazyerrors.Error(err)
-			}
-
-			changed = true
-		}
-	}
-
-	return changed, nil
-}
-
 // processUpdateOperator updates the given document with a series of update operators.
 // Returns true if the document is changed.
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
+// filter is the query filter used to match the document (needed for $ positional operator).
+// arrayFilters is used for $[identifier] positional operator.
 // TODO https://github.com/dolthub/dongo/issues/3044
-func processUpdateOperator(command string, doc, update *types.Document, upsert bool, arrayFilters *types.Array) (bool, error) {
+func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array) (bool, error) {
 	var docUpdated bool
 	var err error
 
 	docId, _ := doc.Get("_id")
 
 	for _, kvOp := range getSortedKVOps(update) {
-		var updated bool
-
-		key, value := kvOp.Key, kvOp.Value
-
-		// Handle $[identifier] positional filtered operator.
-		if strings.Contains(key, ".$[") || strings.HasPrefix(key, "$[") {
-			updated, err = processPositionalFilteredUpdate(command, doc, kvOp.Operator, key, value, arrayFilters)
+		// Expand positional operators ($ $[] $[identifier]) to concrete array indices.
+		keys := []string{kvOp.Key}
+		if hasPositionalOp(kvOp.Key) {
+			keys, err = expandPositionalOps(kvOp.Key, doc, filter, arrayFilters)
 			if err != nil {
-				return false, err
+				return false, NewUpdateError(handlererrors.ErrBadValue, err.Error(), command)
+			}
+		}
+
+		for _, key := range keys {
+			var updated bool
+			value := kvOp.Value
+
+			switch kvOp.Operator {
+			case "$currentDate":
+				updated, err = processCurrentDateFieldExpression(doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$set":
+				updated, err = processSetFieldExpression(command, doc, key, value, false)
+				if err != nil {
+					return false, err
+				}
+
+			case "$setOnInsert":
+				if !upsert {
+					continue
+				}
+
+				updated, err = processSetFieldExpression(command, doc, key, value, true)
+				if err != nil {
+					return false, err
+				}
+
+			case "$unset":
+				var path types.Path
+
+				path, err = types.NewPathFromString(key)
+				if err != nil {
+					// ValidateUpdateOperators checked already $unset contains valid path.
+					panic(err)
+				}
+
+				if doc.HasByPath(path) {
+					doc.RemoveByPath(path)
+					updated = true
+				}
+
+			case "$inc":
+				updated, err = processIncFieldExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$max":
+				updated, err = processMaxFieldExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$min":
+				updated, err = processMinFieldExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$mul":
+				if updated, err = processMulFieldExpression(command, doc, key, value); err != nil {
+					return false, err
+				}
+
+			case "$rename":
+				updated, err = processRenameFieldExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$pop":
+				updated, err = processPopArrayUpdateExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$push":
+				updated, err = processPushArrayUpdateExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$addToSet":
+				updated, err = processAddToSetArrayUpdateExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$pull":
+				updated, err = processPullArrayUpdateExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$pullAll":
+				updated, err = processPullAllArrayUpdateExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			case "$bit":
+				updated, err = processBitFieldExpression(command, doc, key, value)
+				if err != nil {
+					return false, err
+				}
+
+			default:
+				if strings.HasPrefix(kvOp.Operator, "$") {
+					return false, NewUpdateError(
+						handlererrors.ErrNotImplemented,
+						fmt.Sprintf("UpdateDocument: unhandled operation %q", kvOp.Operator),
+						command,
+					)
+				}
 			}
 
 			docUpdated = docUpdated || updated
-
-			continue
 		}
-
-		switch kvOp.Operator {
-		case "$currentDate":
-			updated, err = processCurrentDateFieldExpression(doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$set":
-			updated, err = processSetFieldExpression(command, doc, key, value, false)
-			if err != nil {
-				return false, err
-			}
-
-		case "$setOnInsert":
-			if !upsert {
-				continue
-			}
-
-			updated, err = processSetFieldExpression(command, doc, key, value, true)
-			if err != nil {
-				return false, err
-			}
-
-		case "$unset":
-			var path types.Path
-
-			path, err = types.NewPathFromString(key)
-			if err != nil {
-				// ValidateUpdateOperators checked already $unset contains valid path.
-				panic(err)
-			}
-
-			if doc.HasByPath(path) {
-				doc.RemoveByPath(path)
-				updated = true
-			}
-
-		case "$inc":
-			updated, err = processIncFieldExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$max":
-			updated, err = processMaxFieldExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$min":
-			updated, err = processMinFieldExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$mul":
-			if updated, err = processMulFieldExpression(command, doc, key, value); err != nil {
-				return false, err
-			}
-
-		case "$rename":
-			updated, err = processRenameFieldExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$pop":
-			updated, err = processPopArrayUpdateExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$push":
-			updated, err = processPushArrayUpdateExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$addToSet":
-			updated, err = processAddToSetArrayUpdateExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$pull":
-			updated, err = processPullArrayUpdateExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$pullAll":
-			updated, err = processPullAllArrayUpdateExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		case "$bit":
-			updated, err = processBitFieldExpression(command, doc, key, value)
-			if err != nil {
-				return false, err
-			}
-
-		default:
-			if strings.HasPrefix(kvOp.Operator, "$") {
-				return false, NewUpdateError(
-					handlererrors.ErrNotImplemented,
-					fmt.Sprintf("UpdateDocument: unhandled operation %q", kvOp.Operator),
-					command,
-				)
-			}
-		}
-
-		docUpdated = docUpdated || updated
 	}
 
 	updatedId, _ := doc.Get("_id")

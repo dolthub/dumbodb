@@ -446,3 +446,112 @@ func docFieldOrNil(doc bson.D, key string) interface{} {
 
 	return nil
 }
+
+// TestUpdateOne_positional_first_match tests the $ positional operator that updates
+// the first array element matching the query filter. (DongoFull)
+func TestUpdateOne_positional_first_match(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("ScalarArray", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "a"), e("scores", bson.A{int32(30), int32(70), int32(90)})))
+
+		// $ matches the first element satisfying the filter (scores: {$gt: 50}).
+		_, err := coll.UpdateOne(ctx,
+			d(e("scores", d(e("$gt", int32(50))))),
+			d(e("$set", d(e("scores.$", int32(100))))),
+		)
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "a"))).Decode(&result))
+		scores := result.Map()["scores"].(bson.A)
+		// First matching element (index 1, value 70) should be updated; others unchanged.
+		assert.Equal(t, int32(30), scores[0])
+		assert.Equal(t, int32(100), scores[1])
+		assert.Equal(t, int32(90), scores[2])
+	})
+
+	t.Run("SubdocumentArray", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "b"),
+			e("items", bson.A{
+				d(e("name", "a"), e("qty", int32(1))),
+				d(e("name", "b"), e("qty", int32(2))),
+			}),
+		))
+
+		// Update qty of the first item with name "b".
+		_, err := coll.UpdateOne(ctx,
+			d(e("items.name", "b")),
+			d(e("$set", d(e("items.$.qty", int32(99))))),
+		)
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "b"))).Decode(&result))
+		items := result.Map()["items"].(bson.A)
+		item0 := items[0].(bson.D).Map()
+		item1 := items[1].(bson.D).Map()
+		assert.Equal(t, int32(1), item0["qty"])
+		assert.Equal(t, int32(99), item1["qty"])
+	})
+}
+
+// TestUpdateMany_positional_all tests the $[] all-positional operator that updates
+// all elements of an array. (DongoFull)
+func TestUpdateMany_positional_all(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("UpdateAllScalarElements", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "a"), e("nums", bson.A{int32(1), int32(2), int32(3)})))
+
+		_, err := coll.UpdateOne(ctx,
+			d(e("_id", "a")),
+			d(e("$set", d(e("nums.$[]", int32(0))))),
+		)
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "a"))).Decode(&result))
+		nums := result.Map()["nums"].(bson.A)
+		for i, v := range nums {
+			assert.Equal(t, int32(0), v, "index %d", i)
+		}
+	})
+
+	t.Run("UpdateAllSubdocumentFields", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "b"),
+			e("items", bson.A{
+				d(e("name", "x"), e("active", false)),
+				d(e("name", "y"), e("active", false)),
+			}),
+		))
+
+		_, err := coll.UpdateOne(ctx,
+			d(e("_id", "b")),
+			d(e("$set", d(e("items.$[].active", true)))),
+		)
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "b"))).Decode(&result))
+		items := result.Map()["items"].(bson.A)
+		for i, item := range items {
+			active := item.(bson.D).Map()["active"]
+			assert.Equal(t, true, active, "index %d", i)
+		}
+	})
+}
