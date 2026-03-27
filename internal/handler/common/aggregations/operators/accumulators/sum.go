@@ -84,6 +84,8 @@ func newSum(args ...any) (Accumulator, error) {
 
 // Accumulate implements Accumulator interface.
 func (s *sum) Accumulate(iter types.DocumentsIterator) (any, error) {
+	defer iter.Close()
+
 	var numbers []any
 
 	for {
