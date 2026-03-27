@@ -173,6 +173,9 @@ func (c *conn) run(ctx context.Context) (err error) {
 		if p := recover(); p != nil {
 			c.l.LogAttrs(ctx, logging.LevelDPanic, fmt.Sprint(p), logging.Error(err))
 			err = errors.New("panic")
+			// Cancel the context immediately to trigger cleanup of any open iterators
+			// or cursors that may have been left open by the panicking goroutine.
+			cancel(lazyerrors.Errorf("panic recovered: %v", p))
 		}
 
 		// let goroutine above exit

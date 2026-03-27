@@ -36,6 +36,14 @@ func filterJSONSchema(doc *types.Document, schema *types.Document) (bool, error)
 
 // validateJSONSchemaValue recursively validates a value against a JSON Schema document.
 func validateJSONSchemaValue(value any, schema *types.Document, isDocument bool) (bool, error) {
+	if dupKey, ok := schema.FindDuplicateKey(); ok {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse,
+			fmt.Sprintf("$jsonSchema does not allow duplicate field name: %s", dupKey),
+			"$jsonSchema",
+		)
+	}
+
 	for _, key := range schema.Keys() {
 		schemaVal := must.NotFail(schema.Get(key))
 
