@@ -381,6 +381,7 @@ type IndexInfo struct {
 type IndexKeyPair struct {
 	Field      string
 	Descending bool
+	Text       bool // true if this is a text index field
 }
 
 // ListIndexes returns a list of collection indexes.

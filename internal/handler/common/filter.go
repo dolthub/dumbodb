@@ -287,6 +287,19 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 
 		return true, nil
 
+	case "$text":
+		// {$text: {$search: "word1 word2", $language: "en", $caseSensitive: false, $diacriticSensitive: false}}
+		textDoc, ok := filterValue.(*types.Document)
+		if !ok {
+			return false, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"$text expects an object",
+				operator,
+			)
+		}
+
+		return filterTextSearch(doc, textDoc)
+
 	case "$comment":
 		return true, nil
 
@@ -1588,5 +1601,188 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 	}
 
 	return filterFieldExpr(doc, filterKey, filterSuffix, expr)
+}
+
+// filterTextSearch implements the $text query operator.
+// It parses the $search terms and checks if any string field in the document contains the terms.
+// $caseSensitive and $diacriticSensitive flags are respected.
+// $language is accepted but not used (language-specific stemming is not implemented).
+func filterTextSearch(doc *types.Document, textQuery *types.Document) (bool, error) {
+	searchVal, err := textQuery.Get("$search")
+	if err != nil {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			`$text requires { $search: <string> }`,
+			"$text",
+		)
+	}
+
+	searchStr, ok := searchVal.(string)
+	if !ok {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			`$search requires a string`,
+			"$text",
+		)
+	}
+
+	caseSensitive := false
+	if v, _ := textQuery.Get("$caseSensitive"); v != nil {
+		if b, ok := v.(bool); ok {
+			caseSensitive = b
+		}
+	}
+
+	// $language and $diacriticSensitive are accepted but not used in this implementation.
+
+	// Split search string into terms (quoted phrases are treated as single terms).
+	terms := parseTextSearchTerms(searchStr)
+	if len(terms) == 0 {
+		return false, nil
+	}
+
+	// Search all string fields (recursively) for any of the terms.
+	return docMatchesTextTerms(doc, terms, caseSensitive), nil
+}
+
+// parseTextSearchTerms splits a $search string into individual search terms.
+// Terms prefixed with '-' are exclusion terms (the document must NOT contain them).
+// Quoted phrases are treated as a single term.
+// Returns an empty slice if the search string is empty or all terms are negated.
+func parseTextSearchTerms(search string) []textTerm {
+	var terms []textTerm
+	r := []rune(search)
+	i := 0
+
+	for i < len(r) {
+		// Skip spaces.
+		for i < len(r) && r[i] == ' ' {
+			i++
+		}
+		if i >= len(r) {
+			break
+		}
+
+		negated := false
+		if r[i] == '-' {
+			negated = true
+			i++
+		}
+
+		var word []rune
+
+		if i < len(r) && r[i] == '"' {
+			// Quoted phrase.
+			i++ // skip opening quote
+			for i < len(r) && r[i] != '"' {
+				word = append(word, r[i])
+				i++
+			}
+			if i < len(r) {
+				i++ // skip closing quote
+			}
+		} else {
+			// Plain word.
+			for i < len(r) && r[i] != ' ' {
+				word = append(word, r[i])
+				i++
+			}
+		}
+
+		if len(word) > 0 {
+			terms = append(terms, textTerm{word: string(word), negated: negated})
+		}
+	}
+
+	return terms
+}
+
+// textTerm represents a single search term (may be negated).
+type textTerm struct {
+	word    string
+	negated bool
+}
+
+// docMatchesTextTerms returns true if the document's string fields satisfy the text search terms.
+// All positive terms must match at least one string field; no negative terms may match.
+func docMatchesTextTerms(doc *types.Document, terms []textTerm, caseSensitive bool) bool {
+	// Collect all string values from the document recursively.
+	var allStrings []string
+	collectStrings(doc, &allStrings)
+
+	for _, term := range terms {
+		word := term.word
+		found := false
+
+		for _, s := range allStrings {
+			if textContainsWord(s, word, caseSensitive) {
+				found = true
+				break
+			}
+		}
+
+		if term.negated {
+			if found {
+				return false
+			}
+		} else {
+			if !found {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// collectStrings appends all string values from a document (recursively) to the slice.
+func collectStrings(doc *types.Document, out *[]string) {
+	for _, key := range doc.Keys() {
+		val := must.NotFail(doc.Get(key))
+		appendStringValue(val, out)
+	}
+}
+
+// appendStringValue recursively collects string values from a value.
+func appendStringValue(val any, out *[]string) {
+	switch v := val.(type) {
+	case string:
+		*out = append(*out, v)
+	case *types.Document:
+		collectStrings(v, out)
+	case *types.Array:
+		for i := 0; i < v.Len(); i++ {
+			elem := must.NotFail(v.Get(i))
+			appendStringValue(elem, out)
+		}
+	}
+}
+
+// textContainsWord returns true if the string s contains the word as a word boundary match.
+// If caseSensitive is false, the comparison is case-insensitive.
+func textContainsWord(s, word string, caseSensitive bool) bool {
+	if !caseSensitive {
+		s = strings.ToLower(s)
+		word = strings.ToLower(word)
+	}
+
+	// Split s into words separated by whitespace and punctuation.
+	words := strings.FieldsFunc(s, func(r rune) bool {
+		return !isWordChar(r)
+	})
+
+	for _, w := range words {
+		if w == word {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isWordChar returns true for characters that are part of a word (letters, digits, underscore).
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' ||
+		r > 127 // include unicode characters as word chars
 }
 

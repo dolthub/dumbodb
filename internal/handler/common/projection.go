@@ -149,6 +149,13 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 		switch value := value.(type) {
 		case *types.Document:
+			if isMetaTextScore(value) {
+				// {field: {$meta: "textScore"}} — valid inclusion projection, pass through.
+				inclusionField = true
+				validated.Set(key, value)
+				break
+			}
+
 			return nil, false, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrNotImplemented,
 				fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
@@ -317,7 +324,13 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 		}
 
 		switch value := value.(type) { // found in the projection
-		case *types.Document: // field: { $elemMatch: { field2: value }}
+		case *types.Document:
+			if isMetaTextScore(value) {
+				// {field: {$meta: "textScore"}} — add the field with a placeholder score.
+				projected.Set(key, float64(1))
+				continue
+			}
+
 			return nil, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrCommandNotFound,
 				fmt.Sprintf("projection %s is not supported",
@@ -618,4 +631,20 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 		projected.Set(key, must.NotFail(tmp.Get(tmp.Keys()[i])))
 		i++
 	}
+}
+
+
+// isMetaTextScore returns true if the document is {$meta: "textScore"}.
+func isMetaTextScore(doc *types.Document) bool {
+	if doc.Len() != 1 {
+		return false
+	}
+
+	v, err := doc.Get("$meta")
+	if err != nil {
+		return false
+	}
+
+	s, ok := v.(string)
+	return ok && s == "textScore"
 }

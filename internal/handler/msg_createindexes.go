@@ -358,8 +358,11 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 			// Ignore for now to make Meteor apps work.
 			// TODO https://github.com/dolthub/dongo/issues/2448
 
+		case "weights", "default_language", "language_override", "textIndexVersion":
+			// Text index options — accepted but not stored in the backend for now.
+
 		case "partialFilterExpression", "expireAfterSeconds", "hidden", "storageEngine",
-			"weights", "default_language", "language_override", "textIndexVersion", "2dsphereIndexVersion",
+			"2dsphereIndexVersion",
 			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
@@ -411,6 +414,24 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 
 		duplicateChecker[field] = struct{}{}
 
+		// Check for text index key type (value is the string "text").
+		if orderStr, ok := order.(string); ok {
+			if orderStr != "text" {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrIndexNotFound,
+					fmt.Sprintf("can't find index with key: { %s: %q }", field, order),
+					command,
+				)
+			}
+
+			res = append(res, backends.IndexKeyPair{
+				Field: field,
+				Text:  true,
+			})
+
+			continue
+		}
+
 		var orderParam int64
 
 		if orderParam, err = handlerparams.GetWholeNumberParam(order); err != nil {
@@ -448,9 +469,14 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 	res := make([]string, len(key))
 
 	for i, pair := range key {
-		order := "1"
-		if pair.Descending {
+		var order string
+		switch {
+		case pair.Text:
+			order = `"text"`
+		case pair.Descending:
 			order = "-1"
+		default:
+			order = "1"
 		}
 
 		res[i] = pair.Field + ": " + order
@@ -549,5 +575,48 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 		}
 	}
 
+	// Check that at most one text index exists (or will exist) per collection.
+	existingHasText := false
+	for _, idx := range existing {
+		if isTextIndex(idx) {
+			existingHasText = true
+			break
+		}
+	}
+
+	newTextCount := 0
+	for _, idx := range toCreate {
+		if isTextIndex(idx) {
+			newTextCount++
+		}
+	}
+
+	if newTextCount > 1 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"only one text index per collection is allowed",
+			command,
+		)
+	}
+
+	if existingHasText && newTextCount > 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"only one text index per collection is allowed",
+			command,
+		)
+	}
+
 	return filteredToCreate, nil
+}
+
+// isTextIndex returns true if the given index has at least one text key field.
+func isTextIndex(idx backends.IndexInfo) bool {
+	for _, kp := range idx.Key {
+		if kp.Text {
+			return true
+		}
+	}
+
+	return false
 }

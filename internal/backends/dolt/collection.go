@@ -568,8 +568,28 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 	}
 
 	if !exists {
-		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: collection %q does not exist", c.name))
+		// The collection may have no documents yet but still have secondary indexes
+		// (e.g., created before any inserts). Try to get the database state without
+		// requiring the collection's prolly.Map to exist.
+		state, err = c.db.backend.getOrOpenDB(ctx, c.db.name, false)
+		if err != nil {
+			return nil, err
+		}
+
+		if state == nil {
+			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+				fmt.Errorf("dolt: collection %q does not exist", c.name))
+		}
+
+		// If there are no secondary indexes for this collection, the collection doesn't exist.
+		state.mu.RLock()
+		hasIndexes := len(state.indexes[c.name]) > 0
+		state.mu.RUnlock()
+
+		if !hasIndexes {
+			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+				fmt.Errorf("dolt: collection %q does not exist", c.name))
+		}
 	}
 
 	indexes := []backends.IndexInfo{
