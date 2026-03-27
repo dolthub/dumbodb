@@ -58,7 +58,7 @@ type FindParams struct {
 
 	ReturnKey           bool `ferretdb:"returnKey,unimplemented-non-default"`
 	OplogReplay         bool `ferretdb:"oplogReplay,ignored"`
-	AllowPartialResults bool `ferretdb:"allowPartialResults,unimplemented-non-default"`
+	AllowPartialResults bool `ferretdb:"allowPartialResults,ignored"`
 
 	// TODO https://github.com/dolthub/dongo/issues/4035
 	NoCursorTimeout bool `ferretdb:"noCursorTimeout,unimplemented-non-default"`

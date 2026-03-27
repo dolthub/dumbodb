@@ -689,10 +689,9 @@ func TestCursor_MultiBatchAllHelper(t *testing.T) {
 // ─── tailable cursors ─────────────────────────────────────────────────────────
 
 // TestCursor_Tailable verifies that a tailable cursor can be opened on a capped
-// collection and returns documents inserted so far. (DongoXFail)
+// collection and returns documents inserted so far. (DongoFull)
 func TestCursor_Tailable(t *testing.T) {
 	t.Parallel()
-	dongoXFail(t, "tailable cursors not yet supported by Dongo")
 
 	ctx := context.Background()
 	env := startDongo(t)
@@ -725,10 +724,9 @@ func TestCursor_Tailable(t *testing.T) {
 }
 
 // TestCursor_TailableAwaitData verifies that a TailableAwait cursor blocks briefly
-// waiting for new data. (DongoXFail)
+// waiting for new data. (DongoFull)
 func TestCursor_TailableAwaitData(t *testing.T) {
 	t.Parallel()
-	dongoXFail(t, "tailable awaitData cursors not yet supported by Dongo")
 
 	ctx := context.Background()
 	env := startDongo(t)
@@ -762,10 +760,9 @@ func TestCursor_TailableAwaitData(t *testing.T) {
 }
 
 // TestCursor_TailableCappedCollectionRequired verifies that opening a tailable
-// cursor on a non-capped collection returns an error. (DongoXFail)
+// cursor on a non-capped collection returns an error. (DongoFull)
 func TestCursor_TailableCappedCollectionRequired(t *testing.T) {
 	t.Parallel()
-	dongoXFail(t, "tailable cursor error handling not yet implemented in Dongo")
 
 	ctx := context.Background()
 	env := startDongo(t)
@@ -900,6 +897,47 @@ func TestCursor_ProjectionExclusion(t *testing.T) {
 	assert.Contains(t, m, "name")
 	assert.Contains(t, m, "age")
 	assert.NotContains(t, m, "password", "excluded field should not appear in result")
+}
+
+// ─── allowPartialResults ──────────────────────────────────────────────────────
+
+// TestCursor_AllowPartialResultsTrue verifies that allowPartialResults=true is
+// accepted on a non-sharded Dongo instance and returns full results. (DongoFull)
+func TestCursor_AllowPartialResultsTrue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("v", int32(1))),
+		d(e("_id", "b"), e("v", int32(2))),
+	)
+
+	// allowPartialResults is a sharding option; on a non-sharded DB it should
+	// be silently accepted and return full results without error.
+	cursor, err := coll.Find(ctx, bson.D{}, options.Find().SetAllowPartialResults(true))
+	require.NoError(t, err)
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	assert.Len(t, results, 2, "allowPartialResults=true should return all docs on non-sharded DB")
+}
+
+// TestCursor_AllowPartialResultsFalse verifies that allowPartialResults=false
+// (the explicit default) is accepted without error. (DongoFull)
+func TestCursor_AllowPartialResultsFalse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+	insertDocs(t, coll, d(e("_id", "x"), e("v", int32(42))))
+
+	cursor, err := coll.Find(ctx, bson.D{}, options.Find().SetAllowPartialResults(false))
+	require.NoError(t, err)
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	assert.Len(t, results, 1)
 }
 
 // TestCursor_SortLimitSkipCombined verifies combining sort+limit+skip in a single
