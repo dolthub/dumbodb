@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/dolthub/dongo/internal/handler/common/aggregations"
+	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
@@ -135,7 +136,42 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 		return result.DeepCopy(), nil
 
 	case *types.Document:
-		// Literal document — return a deep copy with expressions evaluated.
+		// Operator expression like {$mergeObjects: [...]} — evaluate as operator.
+		if operators.IsOperator(e) {
+			op, opErr := operators.NewOperator(e)
+			if opErr != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf("'newRoot' expression for $replaceRoot failed: %s", opErr.Error()),
+					"$replaceRoot (stage)",
+				)
+			}
+
+			val, opErr := op.Process(doc)
+			if opErr != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf("'newRoot' expression for $replaceRoot failed: %s", opErr.Error()),
+					"$replaceRoot (stage)",
+				)
+			}
+
+			result, ok := val.(*types.Document)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf(
+						"'newRoot' expression for $replaceRoot must evaluate to an object, got %s",
+						types.FormatAnyValue(val),
+					),
+					"$replaceRoot (stage)",
+				)
+			}
+
+			return result, nil
+		}
+
+		// Literal document template — evaluate field path expressions in values.
 		return evaluateDocumentExpression(e, doc)
 
 	default:
@@ -189,13 +225,28 @@ func evaluateDocumentExpression(templateDoc *types.Document, doc *types.Document
 			}
 
 		case *types.Document:
-			// Recursively evaluate nested documents.
-			nested, evalErr := evaluateDocumentExpression(val, doc)
-			if evalErr != nil {
-				return nil, evalErr
-			}
+			// Operator expression (e.g. {$mergeObjects: [...]}) — evaluate it.
+			if operators.IsOperator(val) {
+				op, opErr := operators.NewOperator(val)
+				if opErr != nil {
+					return nil, lazyerrors.Error(opErr)
+				}
 
-			outVal = nested
+				evaluated, opErr := op.Process(doc)
+				if opErr != nil {
+					return nil, lazyerrors.Error(opErr)
+				}
+
+				outVal = evaluated
+			} else {
+				// Recursively evaluate nested literal documents.
+				nested, evalErr := evaluateDocumentExpression(val, doc)
+				if evalErr != nil {
+					return nil, evalErr
+				}
+
+				outVal = nested
+			}
 
 		default:
 			outVal = v

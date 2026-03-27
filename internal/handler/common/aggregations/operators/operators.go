@@ -175,6 +175,7 @@ var Operators = map[string]newOperatorFunc{
 	"$ltrim":            newLtrim,
 	"$lte":              newCmpOperator("$lte", compLte),
 	"$map":              newMap,
+	"$mergeObjects":     newMergeObjects,
 	"$millisecond":      newDatePartOp("$millisecond"),
 	"$minute":           newDatePartOp("$minute"),
 	"$mod":              newMod,

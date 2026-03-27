@@ -1063,6 +1063,131 @@ func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 	}
 }
 
+// TestAggComplex_replaceRoot_mergeObjects verifies that $replaceRoot with a
+// $mergeObjects newRoot expression correctly merges $$ROOT with a literal
+// document. Previously, dongo treated {$mergeObjects: ...} as a literal
+// template and returned it verbatim, causing wrong results (and a server crash
+// in some configurations).
+//
+// Regression test for do-e4pc.
+func TestAggComplex_replaceRoot_mergeObjects(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "Alice", "score", int32(90))),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "Bob", "score", int32(75))),
+	}
+
+	// {$replaceRoot: {newRoot: {$mergeObjects: ["$$ROOT", {grade: "A"}]}}}
+	mergeSpec := must.NotFail(types.NewDocument(
+		"$mergeObjects", must.NotFail(types.NewArray(
+			"$$ROOT",
+			must.NotFail(types.NewDocument("grade", "A")),
+		)),
+	))
+	stageDoc := must.NotFail(types.NewDocument(
+		"$replaceRoot", must.NotFail(types.NewDocument("newRoot", mergeSpec)),
+	))
+
+	stage, err := stages.NewStage(stageDoc)
+	if err != nil {
+		t.Fatalf("NewStage($replaceRoot): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := stage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 docs, got %d", len(results))
+	}
+
+	// Each result doc must have the original fields plus grade="A".
+	for i, res := range results {
+		name, nameErr := res.Get("name")
+		score, scoreErr := res.Get("score")
+		grade, gradeErr := res.Get("grade")
+
+		if nameErr != nil || scoreErr != nil || gradeErr != nil {
+			t.Errorf("results[%d] missing expected fields: name=%v score=%v grade=%v", i, nameErr, scoreErr, gradeErr)
+			continue
+		}
+
+		if grade != "A" {
+			t.Errorf("results[%d]: expected grade=A, got %v", i, grade)
+		}
+
+		_ = name
+		_ = score
+	}
+
+	// Verify field values for first doc.
+	name0, _ := results[0].Get("name")
+	if name0 != "Alice" {
+		t.Errorf("results[0].name: expected Alice, got %v", name0)
+	}
+}
+
+// TestAggComplex_mergeObjects_laterFieldsWin verifies that when two documents
+// passed to $mergeObjects share a key, the later document's value wins.
+func TestAggComplex_mergeObjects_laterFieldsWin(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "status", "pending", "category", "X")),
+	}
+
+	// {$replaceRoot: {newRoot: {$mergeObjects: ["$$ROOT", {status: "active"}]}}}
+	// "status" in $$ROOT is "pending"; the second doc overrides it with "active".
+	mergeSpec := must.NotFail(types.NewDocument(
+		"$mergeObjects", must.NotFail(types.NewArray(
+			"$$ROOT",
+			must.NotFail(types.NewDocument("status", "active")),
+		)),
+	))
+	stageDoc := must.NotFail(types.NewDocument(
+		"$replaceRoot", must.NotFail(types.NewDocument("newRoot", mergeSpec)),
+	))
+
+	stage, err := stages.NewStage(stageDoc)
+	if err != nil {
+		t.Fatalf("NewStage: %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	out, err := stage.Process(context.Background(), iterator.Values(iterator.ForSlice(docs)), closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 doc, got %d", len(results))
+	}
+
+	status, _ := results[0].Get("status")
+	category, _ := results[0].Get("category")
+
+	if status != "active" {
+		t.Errorf("expected status=active (later doc wins), got %v", status)
+	}
+
+	if category != "X" {
+		t.Errorf("expected category=X (from $$ROOT), got %v", category)
+	}
+}
+
 // TestAggComplex_matchUnwindGroupSort verifies that $sort is stable: when two
 // groups have the same sort key value, they retain the order produced by the
 // preceding pipeline stage (matching MongoDB behavior).
