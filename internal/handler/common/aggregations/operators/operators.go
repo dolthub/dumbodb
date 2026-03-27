@@ -139,8 +139,11 @@ func NewOperator(doc *types.Document) (Operator, error) {
 // Operators maps all standard aggregation operators.
 var Operators = map[string]newOperatorFunc{
 	// sorted alphabetically
-	"$sum":  newSum,
-	"$type": newType,
+	"$multiply":   newMultiply,
+	"$sum":        newSum,
+	"$tsIncrement": newTsIncrement,
+	"$tsSecond":   newTsSecond,
+	"$type":       newType,
 	// please keep sorted alphabetically
 }
 
@@ -230,7 +233,6 @@ var unsupportedOperators = map[string]struct{}{
 	"$minute":           {},
 	"$mod":              {},
 	"$month":            {},
-	"$multiply":         {},
 	"$ne":               {},
 	"$not":              {},
 	"$objectToArray":    {},
@@ -289,8 +291,6 @@ var unsupportedOperators = map[string]struct{}{
 	"$toUpper":          {},
 	"$trim":             {},
 	"$trunc":            {},
-	"$tsIncrement":      {},
-	"$tsSecond":         {},
 	"$unsetField":       {},
 	"$week":             {},
 	"$year":             {},

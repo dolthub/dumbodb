@@ -133,6 +133,226 @@ func toDecimalVal(v any) (decimalVal, bool) {
 	}
 }
 
+// AvgNumbers computes the average of numeric values.
+// If any input is Decimal128, the average is computed and returned as Decimal128.
+// Otherwise it returns float64, or types.Null when there are no numeric values.
+func AvgNumbers(vs ...any) any {
+	for _, v := range vs {
+		if _, ok := v.(types.Decimal128); ok {
+			return avgDecimal128(vs)
+		}
+	}
+
+	var sum float64
+	var count int
+
+	for _, v := range vs {
+		switch v := v.(type) {
+		case float64:
+			sum += v
+			count++
+		case int32:
+			sum += float64(v)
+			count++
+		case int64:
+			sum += float64(v)
+			count++
+		}
+	}
+
+	if count == 0 {
+		return types.Null
+	}
+
+	return sum / float64(count)
+}
+
+// avgDecimal128 computes the average of numeric values using Decimal128 arithmetic.
+// Called when at least one element is types.Decimal128.
+func avgDecimal128(vs []any) types.Decimal128 {
+	var count int64
+
+	for _, v := range vs {
+		switch v.(type) {
+		case int32, int64, float64, types.Decimal128:
+			count++
+		}
+	}
+
+	if count == 0 {
+		p, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		h, l := p.GetBytes()
+
+		return types.Decimal128{H: h, L: l}
+	}
+
+	sum := sumDecimal128(vs)
+	p := primitive.NewDecimal128(sum.H, sum.L)
+
+	m, exp, err := p.BigInt()
+	if err != nil {
+		// NaN or Inf — return zero.
+		p2, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		h, l := p2.GetBytes()
+
+		return types.Decimal128{H: h, L: l}
+	}
+
+	// Divide: scale m up by 10^34 to preserve 34 digits of precision,
+	// then integer-divide by count. Result exponent = exp - 34.
+	const precisionDigits = 34
+
+	ten := big.NewInt(10)
+	factor := new(big.Int).Exp(ten, big.NewInt(precisionDigits), nil)
+	scaled := new(big.Int).Mul(m, factor)
+	quotient := new(big.Int).Quo(scaled, big.NewInt(count))
+
+	resultExp := exp - precisionDigits
+
+	// Normalize: strip trailing zeros from the mantissa added by the precision
+	// scaling step, so the result is compact (e.g. "20" not "20.0000…0").
+	// After stripping, re-expand if the exponent would become positive so that
+	// "20" is represented as mantissa=20/exp=0 rather than mantissa=2/exp=1
+	// (which round-trips as "2E+1" instead of the more readable "20").
+	if quotient.Sign() != 0 {
+		rem := new(big.Int)
+
+		for {
+			q, r := new(big.Int).DivMod(quotient, ten, rem)
+			if r.Sign() != 0 {
+				break
+			}
+
+			quotient = q
+			resultExp++
+		}
+
+		// If stripping produced a positive exponent, re-expand to exp=0
+		// so the decimal driver formats the value without scientific notation.
+		if resultExp > 0 {
+			factor := new(big.Int).Exp(ten, big.NewInt(int64(resultExp)), nil)
+			quotient.Mul(quotient, factor)
+			resultExp = 0
+		}
+	}
+
+	result, ok := primitive.ParseDecimal128FromBigInt(quotient, resultExp)
+	if !ok {
+		result, _ = primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+	}
+
+	h, l := result.GetBytes()
+
+	return types.Decimal128{H: h, L: l}
+}
+
+// MultiplyNumbers multiplies numeric values together, preserving type.
+// If any value is Decimal128 the result is Decimal128.
+// float64 dominates over int types; int64 dominates over int32.
+// Non-numeric values are ignored (treated as identity for multiplication).
+func MultiplyNumbers(vs ...any) any {
+	for _, v := range vs {
+		if _, ok := v.(types.Decimal128); ok {
+			return multiplyDecimal128(vs)
+		}
+	}
+
+	var hasFloat64, hasInt64 bool
+
+	for _, v := range vs {
+		switch v.(type) {
+		case float64:
+			hasFloat64 = true
+		case int64:
+			hasInt64 = true
+		}
+	}
+
+	if hasFloat64 {
+		result := 1.0
+
+		for _, v := range vs {
+			switch v := v.(type) {
+			case float64:
+				result *= v
+			case int32:
+				result *= float64(v)
+			case int64:
+				result *= float64(v)
+			}
+		}
+
+		return result
+	}
+
+	bigResult := big.NewInt(1)
+
+	for _, v := range vs {
+		switch v := v.(type) {
+		case int32:
+			bigResult.Mul(bigResult, big.NewInt(int64(v)))
+		case int64:
+			bigResult.Mul(bigResult, big.NewInt(v))
+		}
+	}
+
+	if hasInt64 {
+		if bigResult.IsInt64() {
+			return bigResult.Int64()
+		}
+
+		f, _ := new(big.Float).SetInt(bigResult).Float64()
+
+		return f
+	}
+
+	// All int32: return int32 if fits, otherwise promote to int64.
+	val := bigResult.Int64()
+	if val >= math.MinInt32 && val <= math.MaxInt32 {
+		return int32(val)
+	}
+
+	return val
+}
+
+// multiplyDecimal128 multiplies numeric values using Decimal128 arithmetic.
+// Called when at least one element is types.Decimal128.
+func multiplyDecimal128(vs []any) types.Decimal128 {
+	var decimals []decimalVal
+
+	for _, v := range vs {
+		d, ok := toDecimalVal(v)
+		if ok {
+			decimals = append(decimals, d)
+		}
+	}
+
+	if len(decimals) == 0 {
+		p, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		h, l := p.GetBytes()
+
+		return types.Decimal128{H: h, L: l}
+	}
+
+	// result = product(m_i) * 10^(sum(e_i))
+	totalM := new(big.Int).Set(decimals[0].m)
+	totalExp := decimals[0].exp
+
+	for _, d := range decimals[1:] {
+		totalM.Mul(totalM, d.m)
+		totalExp += d.exp
+	}
+
+	p, ok := primitive.ParseDecimal128FromBigInt(totalM, totalExp)
+	if !ok {
+		p, _ = primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+	}
+
+	h, l := p.GetBytes()
+
+	return types.Decimal128{H: h, L: l}
+}
+
 // sumDecimal128 sums a slice of numbers using Decimal128 arithmetic.
 // Called when at least one element is types.Decimal128.
 func sumDecimal128(vs []any) types.Decimal128 {

@@ -88,35 +88,9 @@ func (a *avg) Accumulate(iter types.DocumentsIterator) (any, error) {
 		}
 	}
 
-	return avgNumbers(numbers...), nil
+	return aggregations.AvgNumbers(numbers...), nil
 }
 
-// avgNumbers computes the average of numeric values, ignoring non-numeric.
-// Returns null if no numeric values.
-func avgNumbers(vs ...any) any {
-	var sum float64
-	var count int
-
-	for _, v := range vs {
-		switch v := v.(type) {
-		case float64:
-			sum += v
-			count++
-		case int32:
-			sum += float64(v)
-			count++
-		case int64:
-			sum += float64(v)
-			count++
-		}
-	}
-
-	if count == 0 {
-		return types.Null
-	}
-
-	return sum / float64(count)
-}
 
 // check interfaces
 var (
