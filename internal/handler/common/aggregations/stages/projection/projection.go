@@ -361,7 +361,25 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 
 			projected.Set(key, v)
 
-		case *types.Array, string, types.Binary, types.ObjectID,
+		case string:
+			if strings.HasPrefix(value, "$") {
+				expr, err := aggregations.NewExpression(value, nil)
+				if err != nil {
+					return nil, processOperatorError(err)
+				}
+
+				v, err := expr.Evaluate(doc)
+				if err != nil {
+					// Field not found: omit from result (MongoDB behavior for missing field references).
+					continue
+				}
+
+				projected.Set(key, v)
+			} else {
+				projected.Set(key, value)
+			}
+
+		case *types.Array, types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
 			projected.Set(key, value)
 
