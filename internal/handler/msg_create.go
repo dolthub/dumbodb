@@ -42,8 +42,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	unimplementedFields := []string{
 		"timeseries",
 		"expireAfterSeconds",
-		"viewOn",
-		"pipeline",
 		"collation",
 	}
 	if err = common.Unimplemented(document, unimplementedFields...); err != nil {
@@ -110,6 +108,33 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	} else if sizeVal, _ := document.Get("size"); sizeVal != nil {
 		// size was provided without capped=true — still counts as explicit options.
 		hasExplicitOptions = true
+	}
+
+	// Parse view options (viewOn + pipeline).
+	if viewOnVal, _ := document.Get("viewOn"); viewOnVal != nil {
+		viewOn, ok := viewOnVal.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'viewOn' option must be a string",
+				"create",
+			)
+		}
+		params.ViewOn = viewOn
+		hasExplicitOptions = true
+
+		// Parse optional pipeline.
+		if pipelineVal, _ := document.Get("pipeline"); pipelineVal != nil {
+			pipeline, ok := pipelineVal.(*types.Array)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"'pipeline' option must be an array",
+					"create",
+				)
+			}
+			params.ViewPipeline = pipeline
+		}
 	}
 
 	// Parse schema validation options.

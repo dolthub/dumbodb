@@ -63,6 +63,49 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	// Get collection info to check for views and UUID.
+	var isView bool
+	var uuidBinary types.Binary
+	if collsRes, collsErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: collection}); collsErr == nil {
+		for _, ci := range collsRes.Collections {
+			if ci.Name == collection {
+				isView = ci.IsView
+				if ci.UUID != "" {
+					if collUUID, parseErr := uuid.Parse(ci.UUID); parseErr == nil {
+						uuidBinary = types.Binary{
+							Subtype: types.BinaryUUID,
+							B:       must.NotFail(collUUID.MarshalBinary()),
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// For views, return a simplified validate response indicating view type.
+	if isView {
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"ns", dbName+"."+collection,
+				"uuid", uuidBinary,
+				"nInvalidDocuments", int32(0),
+				"nNonCompliantDocuments", int32(0),
+				"nrecords", int32(0),
+				"nIndexes", int32(0),
+				"keysPerIndex", must.NotFail(types.NewDocument()),
+				"indexDetails", must.NotFail(types.NewDocument()),
+				"valid", true,
+				"repaired", false,
+				"warnings", types.MakeArray(0),
+				"errors", types.MakeArray(0),
+				"extraIndexEntries", types.MakeArray(0),
+				"missingIndexEntries", types.MakeArray(0),
+				"corruptRecords", types.MakeArray(0),
+				"ok", float64(1),
+			)),
+		)
+	}
+
 	c, err := db.Collection(collection)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -77,21 +120,6 @@ func (h *Handler) MsgValidate(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		}
 
 		return nil, lazyerrors.Error(err)
-	}
-
-	// Get UUID for this collection.
-	var uuidBinary types.Binary
-	if collsRes, err := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: collection}); err == nil {
-		for _, coll := range collsRes.Collections {
-			if coll.Name == collection && coll.UUID != "" {
-				if collUUID, err := uuid.Parse(coll.UUID); err == nil {
-					uuidBinary = types.Binary{
-						Subtype: types.BinaryUUID,
-						B:       must.NotFail(collUUID.MarshalBinary()),
-					}
-				}
-			}
-		}
 	}
 
 	// Get indexes for keysPerIndex and indexDetails.

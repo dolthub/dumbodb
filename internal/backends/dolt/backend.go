@@ -81,6 +81,18 @@ type collectionValidator struct {
 	ValidationAction string
 }
 
+// cappedCollectionMeta holds capped collection configuration (in-memory only).
+type cappedCollectionMeta struct {
+	CappedSize      int64
+	CappedDocuments int64
+}
+
+// viewMeta holds collection view definition (in-memory only).
+type viewMeta struct {
+	ViewOn   string
+	Pipeline *types.Array
+}
+
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	mu     sync.RWMutex
@@ -93,6 +105,10 @@ type dbState struct {
 	uuids      map[string]string               // collection name → UUID string (in-memory)
 	indexes    map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
 	validators map[string]*collectionValidator // collection name → validator (in-memory)
+	capped     map[string]*cappedCollectionMeta // collection name → capped config (in-memory)
+	// insertionOrder tracks document _id values in insertion order for FIFO eviction in capped collections.
+	insertionOrder map[string][]any
+	views          map[string]*viewMeta // collection name → view definition (in-memory)
 
 	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
 	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
@@ -490,15 +506,18 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
-		cs:         cs,
-		ns:         ns,
-		vs:         vs,
-		doltDB:     doltDB,
-		ds:         ds,
-		am:         am,
-		uuids:      make(map[string]string),
-		indexes:    make(map[string][]backends.IndexInfo),
-		validators: make(map[string]*collectionValidator),
+		cs:             cs,
+		ns:             ns,
+		vs:             vs,
+		doltDB:         doltDB,
+		ds:             ds,
+		am:             am,
+		uuids:          make(map[string]string),
+		indexes:        make(map[string][]backends.IndexInfo),
+		validators:     make(map[string]*collectionValidator),
+		capped:         make(map[string]*cappedCollectionMeta),
+		insertionOrder: make(map[string][]any),
+		views:          make(map[string]*viewMeta),
 	}
 
 	// Initialize DTBL construction helpers: write the shared DSCH chunk once

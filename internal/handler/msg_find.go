@@ -84,6 +84,25 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		cInfo = cList.Collections[0]
 	}
 
+	// If the target is a view, redirect to the source collection for reading.
+	if cInfo.IsView {
+		params.Collection = cInfo.ViewOn
+		viewSourceParam := backends.ListCollectionsParams{Name: cInfo.ViewOn}
+		var srcList *backends.ListCollectionsResult
+		if srcList, err = db.ListCollections(connCtx, &viewSourceParam); err != nil {
+			return nil, err
+		}
+		cInfo = backends.CollectionInfo{}
+		if len(srcList.Collections) > 0 {
+			cInfo = srcList.Collections[0]
+		}
+		// Re-obtain the collection object for the source collection.
+		coll, err = db.Collection(params.Collection)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+	}
+
 	capped := cInfo.Capped()
 	if params.Tailable {
 		if !capped {

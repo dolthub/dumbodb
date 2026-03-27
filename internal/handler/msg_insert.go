@@ -79,12 +79,16 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Fetch collection validator (if any) for schema validation.
+	// Fetch collection info for validator and view checks.
 	var collValidator *types.Document
 	var validationAction string
 	if collRes, collErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
 		if len(collRes.Collections) == 1 {
 			ci := collRes.Collections[0]
+			if ci.IsView {
+				msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "insert")
+			}
 			if ci.Validator != nil && ci.ValidationLevel != "off" {
 				collValidator = ci.Validator
 				validationAction = ci.ValidationAction

@@ -205,6 +205,16 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		batchIDs = append(batchIDs, docID)
 	}
 
+	// Track insertion order for capped collections.
+	if _, isCapped := state.capped[c.name]; isCapped {
+		state.insertionOrder[c.name] = append(state.insertionOrder[c.name], batchIDs...)
+
+		// Perform FIFO eviction if limits are exceeded.
+		if err := c.evictCappedDocs(ctx, state, mut); err != nil {
+			return nil, err
+		}
+	}
+
 	// Flush the mutable map.
 	newMap, err := mut.Map(ctx)
 	if err != nil {
@@ -223,6 +233,69 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	return &backends.InsertAllResult{}, nil
+}
+
+// evictCappedDocs removes oldest documents from a capped collection to enforce size and count limits.
+// Must be called with state.mu held for writing.
+// avgDocSize is a rough estimate in bytes per document for size-based eviction.
+const cappedAvgDocSize = 512
+
+func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *prolly.MutableMap) error {
+	cappedMeta, ok := state.capped[c.name]
+	if !ok {
+		return nil
+	}
+
+	insertionOrder := state.insertionOrder[c.name]
+	currentCount := int64(len(insertionOrder))
+
+	// Determine how many documents to evict.
+	var toEvict int64
+
+	// Count-based eviction.
+	if cappedMeta.CappedDocuments > 0 && currentCount > cappedMeta.CappedDocuments {
+		toEvict = currentCount - cappedMeta.CappedDocuments
+	}
+
+	// Size-based eviction (estimated).
+	if cappedMeta.CappedSize > 0 {
+		estimatedSize := currentCount * cappedAvgDocSize
+		if estimatedSize > cappedMeta.CappedSize {
+			sizeEvict := (estimatedSize-cappedMeta.CappedSize)/cappedAvgDocSize + 1
+			if sizeEvict > toEvict {
+				toEvict = sizeEvict
+			}
+		}
+	}
+
+	if toEvict <= 0 {
+		return nil
+	}
+
+	// Evict the oldest documents (FIFO: remove from the front of insertionOrder).
+	if toEvict > currentCount {
+		toEvict = currentCount
+	}
+
+	for i := int64(0); i < toEvict; i++ {
+		oldID := insertionOrder[i]
+		idBytes, err := encodeID(oldID)
+		if err != nil {
+			return fmt.Errorf("dolt: capped evict encoding _id: %w", err)
+		}
+
+		key, err := buildKey(idBytes)
+		if err != nil {
+			return fmt.Errorf("dolt: capped evict building key: %w", err)
+		}
+
+		if err := mut.Delete(ctx, key); err != nil {
+			return fmt.Errorf("dolt: capped evict delete: %w", err)
+		}
+	}
+
+	state.insertionOrder[c.name] = insertionOrder[toEvict:]
+	return nil
 }
 
 // collectExistingIDs scans the prolly.Map and returns all _id values stored in the collection.

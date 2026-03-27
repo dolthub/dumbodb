@@ -102,6 +102,12 @@ type CollectionInfo struct {
 	ValidationLevel string
 	// ValidationAction is "error" or "warn" (empty defaults to "error").
 	ValidationAction string
+	// IsView is true if this entry represents a view.
+	IsView bool
+	// ViewOn is the source collection name for a view.
+	ViewOn string
+	// ViewPipeline is the aggregation pipeline for a view.
+	ViewPipeline *types.Array
 	_ struct{} // prevent unkeyed literals
 }
 
@@ -151,6 +157,10 @@ type CreateCollectionParams struct {
 	ValidationLevel string
 	// ValidationAction is "error" or "warn" (empty defaults to "error").
 	ValidationAction string
+	// ViewOn is the source collection for a view (empty for regular collections).
+	ViewOn string
+	// ViewPipeline is the aggregation pipeline for a view.
+	ViewPipeline *types.Array
 	_ struct{} // prevent unkeyed literals
 }
 

@@ -38,6 +38,7 @@ func _() {
 	_ = x[ErrIndexKeySpecsConflict-86]
 	_ = x[ErrOperationFailed-96]
 	_ = x[ErrDocumentValidationFailure-121]
+	_ = x[ErrCommandNotSupportedOnView-166]
 	_ = x[ErrInvalidIndexSpecificationOption-197]
 	_ = x[ErrInvalidPipelineOperator-168]
 	_ = x[ErrClientMetadataCannotBeMutated-186]
@@ -151,6 +152,7 @@ var _ErrorCode_map = map[ErrorCode]string{
 	86:      _ErrorCode_name[403:424],
 	96:      _ErrorCode_name[424:439],
 	121:     _ErrorCode_name[439:464],
+	166:     "CommandNotSupportedOnView",
 	168:     _ErrorCode_name[464:487],
 	186:     _ErrorCode_name[487:516],
 	197:     _ErrorCode_name[516:547],

@@ -58,6 +58,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 
 	var colls []backends.CollectionInfo
 
+	// Include regular collections from the address map.
 	if err := state.am.IterAll(ctx, func(name string, _ hash.Hash) error {
 		if params != nil && params.Name != "" && name != params.Name {
 			return nil
@@ -70,10 +71,30 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			ci.ValidationLevel = v.ValidationLevel
 			ci.ValidationAction = v.ValidationAction
 		}
+		if c, ok := state.capped[name]; ok {
+			ci.CappedSize = c.CappedSize
+			ci.CappedDocuments = c.CappedDocuments
+		}
 		colls = append(colls, ci)
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+
+	// Include views.
+	for name, v := range state.views {
+		if params != nil && params.Name != "" && name != params.Name {
+			continue
+		}
+		collUUID := state.uuids[name]
+		ci := backends.CollectionInfo{
+			Name:         name,
+			UUID:         collUUID,
+			IsView:       true,
+			ViewOn:       v.ViewOn,
+			ViewPipeline: v.Pipeline,
+		}
+		colls = append(colls, ci)
 	}
 
 	slices.SortFunc(colls, func(a, b backends.CollectionInfo) int {
@@ -93,7 +114,13 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// Check if already exists.
+	// Check if already exists as a view.
+	if _, isView := state.views[params.Name]; isView {
+		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
+			fmt.Errorf("dolt: collection %q already exists in %q", params.Name, db.name))
+	}
+
+	// Check if already exists as a regular collection.
 	exists, err := state.am.Has(ctx, params.Name)
 	if err != nil {
 		return err
@@ -102,6 +129,18 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if exists {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
 			fmt.Errorf("dolt: collection %q already exists in %q", params.Name, db.name))
+	}
+
+	// If viewOn is set, this is a view — store metadata only, no prolly map.
+	if params.ViewOn != "" {
+		state.views[params.Name] = &viewMeta{
+			ViewOn:   params.ViewOn,
+			Pipeline: params.ViewPipeline,
+		}
+		// Generate a UUID for the view.
+		collUUID := uuid.New()
+		state.uuids[params.Name] = collUUID.String()
+		return nil
 	}
 
 	// Create an empty prolly map for this collection.
@@ -123,6 +162,14 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	// Generate and store a UUID for this collection.
 	collUUID := uuid.New()
 	state.uuids[params.Name] = collUUID.String()
+
+	// Store capped configuration if provided.
+	if params.CappedSize > 0 {
+		state.capped[params.Name] = &cappedCollectionMeta{
+			CappedSize:      params.CappedSize,
+			CappedDocuments: params.CappedDocuments,
+		}
+	}
 
 	// Store validator if provided.
 	if params.Validator != nil || params.ValidationLevel != "" || params.ValidationAction != "" {
@@ -151,6 +198,13 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	// Check if it's a view.
+	if _, isView := state.views[params.Name]; isView {
+		delete(state.views, params.Name)
+		delete(state.uuids, params.Name)
+		return nil
+	}
+
 	exists, err := state.am.Has(ctx, params.Name)
 	if err != nil {
 		return err
@@ -169,6 +223,8 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 
 	delete(state.uuids, params.Name)
 	delete(state.validators, params.Name)
+	delete(state.capped, params.Name)
+	delete(state.insertionOrder, params.Name)
 
 	return nil
 }
@@ -228,6 +284,18 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 	if v, ok := state.validators[params.OldName]; ok {
 		state.validators[params.NewName] = v
 		delete(state.validators, params.OldName)
+	}
+
+	// Transfer capped metadata from old name to new name.
+	if c, ok := state.capped[params.OldName]; ok {
+		state.capped[params.NewName] = c
+		delete(state.capped, params.OldName)
+	}
+
+	// Transfer insertion order from old name to new name.
+	if ord, ok := state.insertionOrder[params.OldName]; ok {
+		state.insertionOrder[params.NewName] = ord
+		delete(state.insertionOrder, params.OldName)
 	}
 
 	return nil

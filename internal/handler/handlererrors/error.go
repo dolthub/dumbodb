@@ -119,6 +119,9 @@ const (
 	// ErrInvalidIndexSpecificationOption indicates that the index option is invalid.
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
 
+	// ErrCommandNotSupportedOnView indicates that the command does not support views.
+	ErrCommandNotSupportedOnView = ErrorCode(166) // CommandNotSupportedOnView
+
 	// ErrInvalidPipelineOperator indicates that provided aggregation operator is invalid.
 	ErrInvalidPipelineOperator = ErrorCode(168) // InvalidPipelineOperator
 
