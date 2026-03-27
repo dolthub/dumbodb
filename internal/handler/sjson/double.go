@@ -17,6 +17,7 @@ package sjson
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 
 	"github.com/dolthub/dongo/internal/util/lazyerrors"
 )
@@ -31,6 +32,19 @@ func (d *doubleType) sjsontype() {}
 func (d *doubleType) UnmarshalJSON(data []byte) error {
 	if bytes.Equal(data, []byte("null")) {
 		panic("null data")
+	}
+
+	// Handle special float values stored as JSON strings.
+	switch string(data) {
+	case `"nan"`:
+		*d = doubleType(math.NaN())
+		return nil
+	case `"+inf"`:
+		*d = doubleType(math.Inf(1))
+		return nil
+	case `"-inf"`:
+		*d = doubleType(math.Inf(-1))
+		return nil
 	}
 
 	r := bytes.NewReader(data)
@@ -54,6 +68,15 @@ func (d *doubleType) UnmarshalJSON(data []byte) error {
 // MarshalJSON implements sjsontype interface.
 func (d *doubleType) MarshalJSON() ([]byte, error) {
 	f := float64(*d)
+
+	switch {
+	case math.IsNaN(f):
+		return []byte(`"nan"`), nil
+	case math.IsInf(f, 1):
+		return []byte(`"+inf"`), nil
+	case math.IsInf(f, -1):
+		return []byte(`"-inf"`), nil
+	}
 
 	res, err := json.Marshal(f)
 	if err != nil {
