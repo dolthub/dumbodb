@@ -162,6 +162,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	docs, err := iterator.ConsumeValuesN(c, int(params.BatchSize))
 	if err != nil {
+		h.cursors.CloseAndRemove(c)
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 

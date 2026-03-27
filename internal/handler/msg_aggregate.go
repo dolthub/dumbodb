@@ -427,6 +427,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	docs, err := iterator.ConsumeValuesN(cursor, int(batchSize))
 	if err != nil {
+		h.cursors.CloseAndRemove(cursor)
 		return nil, handleMaxTimeMSError(err, maxTimeMS, "aggregate")
 	}
 
