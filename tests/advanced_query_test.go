@@ -12,6 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Advanced query operator parity tests.
+//
+// Test naming conventions:
+//   - DongoFull: test expected to pass on both Dongo and MongoDB.
+//   - DongoXFail: test expected to fail on Dongo (known limitation); uses dongoXFail() to skip.
+//     Once the underlying issue is fixed, remove the dongoXFail() call and the test becomes a
+//     passing DongoFull test.
+
 package tests
 
 import (

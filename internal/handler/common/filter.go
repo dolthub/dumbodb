@@ -22,6 +22,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
@@ -1633,7 +1637,14 @@ func filterTextSearch(doc *types.Document, textQuery *types.Document) (bool, err
 		}
 	}
 
-	// $language and $diacriticSensitive are accepted but not used in this implementation.
+	diacriticSensitive := false
+	if v, _ := textQuery.Get("$diacriticSensitive"); v != nil {
+		if b, ok := v.(bool); ok {
+			diacriticSensitive = b
+		}
+	}
+
+	// $language is accepted but stemming is not implemented.
 
 	// Split search string into terms (quoted phrases are treated as single terms).
 	terms := parseTextSearchTerms(searchStr)
@@ -1642,7 +1653,7 @@ func filterTextSearch(doc *types.Document, textQuery *types.Document) (bool, err
 	}
 
 	// Search all string fields (recursively) for any of the terms.
-	return docMatchesTextTerms(doc, terms, caseSensitive), nil
+	return docMatchesTextTerms(doc, terms, caseSensitive, diacriticSensitive), nil
 }
 
 // parseTextSearchTerms splits a $search string into individual search terms.
@@ -1705,7 +1716,7 @@ type textTerm struct {
 
 // docMatchesTextTerms returns true if the document's string fields satisfy the text search terms.
 // All positive terms must match at least one string field; no negative terms may match.
-func docMatchesTextTerms(doc *types.Document, terms []textTerm, caseSensitive bool) bool {
+func docMatchesTextTerms(doc *types.Document, terms []textTerm, caseSensitive, diacriticSensitive bool) bool {
 	// Collect all string values from the document recursively.
 	var allStrings []string
 	collectStrings(doc, &allStrings)
@@ -1715,7 +1726,7 @@ func docMatchesTextTerms(doc *types.Document, terms []textTerm, caseSensitive bo
 		found := false
 
 		for _, s := range allStrings {
-			if textContainsWord(s, word, caseSensitive) {
+			if textContainsWord(s, word, caseSensitive, diacriticSensitive) {
 				found = true
 				break
 			}
@@ -1758,12 +1769,36 @@ func appendStringValue(val any, out *[]string) {
 	}
 }
 
-// textContainsWord returns true if the string s contains the word as a word boundary match.
+// stripDiacritics removes diacritic marks from a string using Unicode normalization (NFD + strip Mn).
+func stripDiacritics(s string) string {
+	t := transform.Chain(norm.NFD, transform.RemoveFunc(func(r rune) bool {
+		return unicode.Is(unicode.Mn, r)
+	}), norm.NFC)
+	result, _, err := transform.String(t, s)
+	if err != nil {
+		return s
+	}
+	return result
+}
+
+// textContainsWord returns true if the string s contains the word (or phrase) as a match.
+// Phrases (terms with spaces) use substring matching; single words use word-boundary matching.
 // If caseSensitive is false, the comparison is case-insensitive.
-func textContainsWord(s, word string, caseSensitive bool) bool {
+// If diacriticSensitive is false, diacritics are stripped before comparison.
+func textContainsWord(s, word string, caseSensitive, diacriticSensitive bool) bool {
+	if !diacriticSensitive {
+		s = stripDiacritics(s)
+		word = stripDiacritics(word)
+	}
+
 	if !caseSensitive {
 		s = strings.ToLower(s)
 		word = strings.ToLower(word)
+	}
+
+	// If the term contains spaces, it's a quoted phrase — use substring matching.
+	if strings.ContainsRune(word, ' ') {
+		return strings.Contains(s, word)
 	}
 
 	// Split s into words separated by whitespace and punctuation.
