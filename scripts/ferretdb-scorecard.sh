@@ -15,7 +15,9 @@ DONGO_ADDR="$DONGO_HOST:$DONGO_PORT"
 # These match FerretDB's in-process test defaults so auth-requiring tests work.
 DONGO_USER="username"
 DONGO_PASS="password"
-# MongoDB URI requires a trailing slash before query parameters.
+# Unauthenticated URL used for initial user creation.
+DONGO_URL_NOAUTH="mongodb://$DONGO_ADDR/"
+# Authenticated URL used for the test suite.
 DONGO_URL="mongodb://${DONGO_USER}:${DONGO_PASS}@$DONGO_ADDR/"
 DONGO_DATA_DIR="$REPO_ROOT/.runtime/dongo-data"
 DONGO_LOG="$REPO_ROOT/.runtime/dongo.log"
@@ -70,6 +72,14 @@ if [ "$READY" -eq 0 ]; then
     exit 1
 fi
 
+# Create the standard FerretDB integration test user so auth-dependent tests
+# (e.g. TestHelloOpQuerySASLSupportedMechs) can run against this server.
+echo "Creating scorecard user..." | tee -a "$RESULTS_FILE"
+cd "$REPO_ROOT"
+if ! go run scripts/create_scorecard_user.go "$DONGO_URL_NOAUTH" 2>&1 | tee -a "$RESULTS_FILE"; then
+    echo "ERROR: Failed to create scorecard user" | tee -a "$RESULTS_FILE"
+    exit 1
+fi
 echo "" | tee -a "$RESULTS_FILE"
 echo "--- Running FerretDB integration tests ---" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
