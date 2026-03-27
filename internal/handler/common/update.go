@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
+	stageProjection "github.com/dolthub/dongo/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/handler/handlerparams"
 	"github.com/dolthub/dongo/internal/types"
@@ -81,7 +83,9 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 		}
 
-		if !param.HasUpdateOperators {
+		if param.IsPipeline {
+			modified, err = processPipelineUpdate(doc, param.Pipeline)
+		} else if !param.HasUpdateOperators {
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
 			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert)
@@ -172,6 +176,102 @@ func processFilterEqualityCondition(doc, filter *types.Document) error {
 			return lazyerrors.Error(err)
 		}
 	}
+}
+
+// processPipelineUpdate applies a pipeline-style update ([]bson.D / *types.Array) to the document.
+// Each element of the pipeline is a stage document with a single key like "$set", "$unset",
+// "$addFields", or "$project".
+// Returns true if the document is changed.
+func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, error) {
+	before := doc.DeepCopy()
+
+	for i := range pipeline.Len() {
+		stage := must.NotFail(pipeline.Get(i)).(*types.Document)
+		stageName := stage.Keys()[0]
+		stageVal := must.NotFail(stage.Get(stageName))
+
+		switch stageName {
+		case "$set", "$addFields":
+			fieldsDoc, ok := stageVal.(*types.Document)
+			if !ok {
+				return false, fmt.Errorf("pipeline stage %q must be an object", stageName)
+			}
+
+			for _, key := range fieldsDoc.Keys() {
+				val := must.NotFail(fieldsDoc.Get(key))
+
+				if valDoc, ok := val.(*types.Document); ok {
+					if operators.IsOperator(valDoc) {
+						op, err := operators.NewOperator(valDoc)
+						if err != nil {
+							return false, lazyerrors.Error(err)
+						}
+
+						val, err = op.Process(doc)
+						if err != nil {
+							return false, lazyerrors.Error(err)
+						}
+					}
+				}
+
+				path := must.NotFail(types.NewPathFromString(key))
+				if err := doc.SetByPath(path, val); err != nil {
+					return false, lazyerrors.Error(err)
+				}
+			}
+
+		case "$unset":
+			var fields []string
+
+			switch u := stageVal.(type) {
+			case string:
+				fields = []string{u}
+			case *types.Array:
+				for j := range u.Len() {
+					f, ok := must.NotFail(u.Get(j)).(string)
+					if !ok {
+						return false, fmt.Errorf("$unset array elements must be strings")
+					}
+
+					fields = append(fields, f)
+				}
+			default:
+				return false, fmt.Errorf("$unset stage value must be a string or array")
+			}
+
+			for _, field := range fields {
+				path := must.NotFail(types.NewPathFromString(field))
+				doc.RemoveByPath(path)
+			}
+
+		case "$project":
+			projDoc, ok := stageVal.(*types.Document)
+			if !ok {
+				return false, fmt.Errorf("$project stage must be an object")
+			}
+
+			validated, inclusion, err := stageProjection.ValidateProjection(projDoc)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			projected, err := stageProjection.ProjectDocument(doc, validated, inclusion)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			// Replace doc fields with projected result.
+			for _, key := range doc.Keys() {
+				doc.Remove(key)
+			}
+
+			for _, key := range projected.Keys() {
+				doc.Set(key, must.NotFail(projected.Get(key)))
+			}
+		}
+	}
+
+	return types.Compare(before, doc) != types.Equal, nil
 }
 
 // processReplacementDoc replaces the given document with a new document while retaining its

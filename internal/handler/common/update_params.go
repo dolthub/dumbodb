@@ -15,11 +15,13 @@
 package common
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/handler/handlerparams"
 	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/dongo/internal/util/must"
 )
 
 // UpdateParams represents parameters for the update command.
@@ -55,12 +57,16 @@ type UpdateParams struct {
 //
 //nolint:vet // for readability
 type Update struct {
-	Filter *types.Document `ferretdb:"q,opt"`
-	Update *types.Document `ferretdb:"u,opt"` // TODO https://github.com/dolthub/dongo/issues/2742
-	Multi  bool            `ferretdb:"multi,opt"`
-	Upsert bool            `ferretdb:"upsert,opt,numericBool"`
+	Filter    *types.Document `ferretdb:"q,opt"`
+	UpdateRaw any             `ferretdb:"u,opt"` // *types.Document or *types.Array (pipeline)
+	Multi     bool            `ferretdb:"multi,opt"`
+	Upsert    bool            `ferretdb:"upsert,opt,numericBool"`
 
-	HasUpdateOperators bool `ferretdb:"-"`
+	// Populated by GetUpdateParams from UpdateRaw.
+	Update             *types.Document `ferretdb:"-"`
+	Pipeline           *types.Array    `ferretdb:"-"`
+	HasUpdateOperators bool            `ferretdb:"-"`
+	IsPipeline         bool            `ferretdb:"-"`
 
 	C            *types.Document `ferretdb:"c,unimplemented"`
 	Collation    *types.Document `ferretdb:"collation,unimplemented"`
@@ -101,26 +107,70 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 		for i := range params.Updates {
 			update := &params.Updates[i]
 
-			if update.Update == nil {
+			if update.UpdateRaw == nil {
 				continue
 			}
 
-			hasUpdateOperators, err := HasSupportedUpdateModifiers("update", update.Update)
-			if err != nil {
-				return nil, err
-			}
+			switch u := update.UpdateRaw.(type) {
+			case *types.Document:
+				update.Update = u
 
-			if hasUpdateOperators {
-				update.HasUpdateOperators = true
-
-				if err := ValidateUpdateOperators(document.Command(), update.Update); err != nil {
+				hasUpdateOperators, err := HasSupportedUpdateModifiers("update", u)
+				if err != nil {
 					return nil, err
 				}
-			} else if update.Multi {
-				return nil, NewUpdateError(
+
+				if hasUpdateOperators {
+					update.HasUpdateOperators = true
+
+					if err := ValidateUpdateOperators(document.Command(), u); err != nil {
+						return nil, err
+					}
+				} else if update.Multi {
+					return nil, NewUpdateError(
+						handlererrors.ErrFailedToParse,
+						"multi update is not supported for replacement-style update",
+						"update",
+					)
+				}
+
+			case *types.Array:
+				update.IsPipeline = true
+				update.Pipeline = u
+
+				// Validate each pipeline stage is a supported operator.
+				for j := range u.Len() {
+					stage, ok := must.NotFail(u.Get(j)).(*types.Document)
+					if !ok {
+						return nil, handlererrors.NewWriteErrorMsg(
+							handlererrors.ErrFailedToParse,
+							"A pipeline stage specification must be an object",
+						)
+					}
+
+					if stage.Len() != 1 {
+						return nil, handlererrors.NewWriteErrorMsg(
+							handlererrors.ErrFailedToParse,
+							"A pipeline stage specification object must contain exactly one field",
+						)
+					}
+
+					stageName := stage.Keys()[0]
+					switch stageName {
+					case "$set", "$unset", "$addFields", "$project":
+						// supported pipeline stages for updates
+					default:
+						return nil, handlererrors.NewWriteErrorMsg(
+							handlererrors.ErrNotImplemented,
+							fmt.Sprintf("Unrecognized pipeline stage name: '%s'", stageName),
+						)
+					}
+				}
+
+			default:
+				return nil, handlererrors.NewWriteErrorMsg(
 					handlererrors.ErrFailedToParse,
-					"multi update is not supported for replacement-style update",
-					"update",
+					"Update argument must be either an object or an array",
 				)
 			}
 		}

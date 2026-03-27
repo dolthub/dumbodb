@@ -186,8 +186,14 @@ func checkUnsuitableValueInArray(command string, array *types.Array, fullPath, p
 
 // processPushArrayUpdateExpression changes document according to $push array update operator.
 // If the document was changed it returns true.
+// Supports modifiers: $each, $position, $slice, $sort.
 func processPushArrayUpdateExpression(command string, doc *types.Document, key string, pushVal any) (bool, error) {
-	var each *types.Array
+	var (
+		each     *types.Array
+		position *int64
+		slice    *int64
+		sortDoc  any // int64 (1 or -1) or *types.Document
+	)
 
 	if pushDoc, ok := pushVal.(*types.Document); ok {
 		if pushDoc.Has("$each") {
@@ -204,6 +210,40 @@ func processPushArrayUpdateExpression(command string, doc *types.Document, key s
 					command,
 				)
 			}
+		}
+
+		if pushDoc.Has("$position") {
+			posRaw := must.NotFail(pushDoc.Get("$position"))
+
+			posVal, err := handlerparams.GetWholeNumberParam(posRaw)
+			if err != nil {
+				return false, NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf("The value for $position must be an integer value, not of type %s", handlerparams.AliasFromType(posRaw)),
+					command,
+				)
+			}
+
+			position = &posVal
+		}
+
+		if pushDoc.Has("$slice") {
+			sliceRaw := must.NotFail(pushDoc.Get("$slice"))
+
+			sliceVal, err := handlerparams.GetWholeNumberParam(sliceRaw)
+			if err != nil {
+				return false, NewUpdateError(
+					handlererrors.ErrBadValue,
+					fmt.Sprintf("The value for $slice must be an integer value, not of type %s", handlerparams.AliasFromType(sliceRaw)),
+					command,
+				)
+			}
+
+			slice = &sliceVal
+		}
+
+		if pushDoc.Has("$sort") {
+			sortDoc = must.NotFail(pushDoc.Get("$sort"))
 		}
 	}
 
@@ -247,8 +287,132 @@ func processPushArrayUpdateExpression(command string, doc *types.Document, key s
 
 	var changed bool
 
-	for i := range each.Len() {
-		array.Append(must.NotFail(each.Get(i)))
+	if position != nil {
+		// $position: insert each element at the given position, shifting existing elements right.
+		pos := int(*position)
+		if pos < 0 {
+			// Negative position counts from the end; clamp to 0 so we don't panic.
+			pos = array.Len() + pos + 1
+			if pos < 0 {
+				pos = 0
+			}
+		}
+
+		if pos > array.Len() {
+			pos = array.Len()
+		}
+
+		// Build a new array: [0..pos) + each + [pos..)
+		newArray := types.MakeArray(array.Len() + each.Len())
+
+		for i := range pos {
+			newArray.Append(must.NotFail(array.Get(i)))
+		}
+
+		for i := range each.Len() {
+			newArray.Append(must.NotFail(each.Get(i)))
+			changed = true
+		}
+
+		for i := pos; i < array.Len(); i++ {
+			newArray.Append(must.NotFail(array.Get(i)))
+		}
+
+		array = newArray
+	} else {
+		for i := range each.Len() {
+			array.Append(must.NotFail(each.Get(i)))
+			changed = true
+		}
+	}
+
+	// Apply $sort before $slice.
+	if sortDoc != nil && array.Len() > 0 {
+		switch s := sortDoc.(type) {
+		case int64:
+			sortType := types.Ascending
+			if s == -1 {
+				sortType = types.Descending
+			}
+
+			SortArray(array, sortType)
+		case int32:
+			sortType := types.Ascending
+			if s == -1 {
+				sortType = types.Descending
+			}
+
+			SortArray(array, sortType)
+		case float64:
+			sortType := types.Ascending
+			if s == -1 {
+				sortType = types.Descending
+			}
+
+			SortArray(array, sortType)
+		case *types.Document:
+			// Sort array of documents by the given fields.
+			docs := make([]*types.Document, array.Len())
+			for i := range array.Len() {
+				elem, ok := must.NotFail(array.Get(i)).(*types.Document)
+				if !ok {
+					return false, NewUpdateError(
+						handlererrors.ErrBadValue,
+						"$push $sort requires array elements to be objects when using a document sort spec",
+						command,
+					)
+				}
+
+				docs[i] = elem
+			}
+
+			if err := SortDocuments(docs, s); err != nil {
+				return false, NewUpdateError(handlererrors.ErrBadValue, err.Error(), command)
+			}
+
+			sorted := types.MakeArray(len(docs))
+			for _, d := range docs {
+				sorted.Append(d)
+			}
+
+			array = sorted
+		}
+
+		changed = true
+	}
+
+	// Apply $slice after $sort.
+	if slice != nil {
+		n := int(*slice)
+		length := array.Len()
+
+		switch {
+		case n == 0:
+			array = types.MakeArray(0)
+		case n > 0:
+			if n < length {
+				sliced := types.MakeArray(n)
+
+				for i := range n {
+					sliced.Append(must.NotFail(array.Get(i)))
+				}
+
+				array = sliced
+			}
+		case n < 0:
+			// Keep last |n| elements.
+			keep := -n
+			if keep < length {
+				sliced := types.MakeArray(keep)
+
+				for i := length - keep; i < length; i++ {
+					sliced.Append(must.NotFail(array.Get(i)))
+				}
+
+				array = sliced
+			}
+		}
+
 		changed = true
 	}
 
