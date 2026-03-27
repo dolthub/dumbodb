@@ -42,6 +42,7 @@ var Stages = map[string]newStageFunc{
 	"$replaceRoot": newReplaceRoot,
 	"$replaceWith": newReplaceWith,
 	"$set":         newSet,
+	"$sample":      newSample,
 	"$skip":        newSkip,
 	"$sort":        newSort,
 	"$sortByCount": newSortByCount,
@@ -67,7 +68,6 @@ var unsupportedStages = map[string]struct{}{
 	// $merge and $out handled specially in msg_aggregate.go via NewMergeStage/NewOutStage
 	"$planCacheStats":         {},
 	"$redact":                 {},
-	"$sample":                 {},
 	"$search":                 {},
 	"$searchMeta":             {},
 	"$setWindowFields":        {},

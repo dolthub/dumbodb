@@ -216,6 +216,12 @@ const (
 	// ErrStageUnsetInvalidType indicates that $unset stage arguments has unexpected type.
 	ErrStageUnsetInvalidType = ErrorCode(31002) // Location31002
 
+	// ErrStageSampleInvalidArg indicates invalid argument for the aggregation $sample stage.
+	ErrStageSampleInvalidArg = ErrorCode(28745) // Location28745
+
+	// ErrStageSampleNegativeSize indicates that $sample size must not be negative.
+	ErrStageSampleNegativeSize = ErrorCode(28747) // Location28747
+
 	// ErrStageUnwindNoPath indicates that $unwind aggregation stage is empty.
 	ErrStageUnwindNoPath = ErrorCode(28812) // Location28812
 
