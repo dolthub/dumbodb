@@ -286,6 +286,9 @@ const (
 	// ErrStageInvalid indicates invalid aggregation pipeline stage.
 	ErrStageInvalid = ErrorCode(40323) // Location40323
 
+	// ErrStageUnrecognized indicates an unrecognized pipeline stage name.
+	ErrStageUnrecognized = ErrorCode(40324) // Location40324
+
 	// ErrEmptyFieldPath indicates that the field path is empty.
 	ErrEmptyFieldPath = ErrorCode(40352) // Location40352
 

@@ -109,7 +109,7 @@ func NewStage(stage *types.Document) (aggregations.Stage, error) {
 
 	case !supported && !unsupported:
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageGroupInvalidAccumulator,
+			handlererrors.ErrStageUnrecognized,
 			fmt.Sprintf("Unrecognized pipeline stage name: %q", name),
 			name+" (stage)", // to differentiate update operator $set from aggregation stage $set, etc
 		)
