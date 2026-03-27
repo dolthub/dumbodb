@@ -283,7 +283,7 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 
 				result := fromDoc.DeepCopy()
 				if gl.depthField != "" {
-					result.Set(gl.depthField, currentDepth)
+					result.Set(gl.depthField, int32(currentDepth))
 				}
 
 				results = append(results, result)

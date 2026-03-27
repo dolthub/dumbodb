@@ -776,9 +776,10 @@ func TestGraphLookup_DepthField(t *testing.T) {
 		}
 
 		// Depth should be 0 for bob (first hop) and 1 for carol (second hop).
-		depth, ok := depthVal.(int64)
+		// MongoDB returns depthField as int32 for small values.
+		depth, ok := depthVal.(int32)
 		if !ok {
-			t.Errorf("managers[%d].depth not int64: %T (%v)", i, depthVal, depthVal)
+			t.Errorf("managers[%d].depth not int32: %T (%v)", i, depthVal, depthVal)
 		} else if depth < 0 || depth > 1 {
 			t.Errorf("managers[%d].depth out of expected range [0,1]: %d", i, depth)
 		}
@@ -1059,5 +1060,112 @@ func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 
 	if s0 != "cancelled" || s1 != "pending" {
 		t.Errorf("expected [cancelled pending], got [%v %v]", s0, s1)
+	}
+}
+
+// TestAggStage_graphLookup_MaxDepthLimitsTraversal verifies that maxDepth correctly
+// limits traversal and that depthField values are returned as int32 (matching MongoDB).
+//
+// Graph: alice → bob → carol → dave → eve (5-node chain)
+// With maxDepth=2, only bob (depth 0), carol (depth 1), and dave (depth 2) should
+// appear. eve at depth 3 must NOT be included.
+func TestAggStage_graphLookup_MaxDepthLimitsTraversal(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "bob", "reportsTo", "carol")),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "carol", "reportsTo", "dave")),
+		must.NotFail(types.NewDocument("_id", int32(4), "name", "dave", "reportsTo", "eve")),
+		must.NotFail(types.NewDocument("_id", int32(5), "name", "eve")),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "managers",
+		"maxDepth", int32(2),
+		"depthField", "depth",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	managersVal, err := results[0].Get("managers")
+	if err != nil {
+		t.Fatalf("missing managers: %v", err)
+	}
+
+	managers, ok := managersVal.(*types.Array)
+	if !ok {
+		t.Fatalf("managers not an array: %T", managersVal)
+	}
+
+	// maxDepth=2: bob (depth 0), carol (depth 1), dave (depth 2). eve is excluded.
+	if managers.Len() != 3 {
+		t.Fatalf("expected 3 managers (bob, carol, dave), got %d", managers.Len())
+	}
+
+	// Verify depthField is int32 (matching MongoDB BSON wire type) and values are 0, 1, 2.
+	expectedNames := []string{"bob", "carol", "dave"}
+	expectedDepths := []int32{0, 1, 2}
+
+	for i := 0; i < managers.Len(); i++ {
+		v, _ := managers.Get(i)
+		mgr, ok := v.(*types.Document)
+		if !ok {
+			t.Errorf("managers[%d] not a document: %T", i, v)
+			continue
+		}
+
+		nameVal, err := mgr.Get("name")
+		if err != nil {
+			t.Errorf("managers[%d] missing name: %v", i, err)
+			continue
+		}
+
+		if nameVal != expectedNames[i] {
+			t.Errorf("managers[%d].name = %v, want %v", i, nameVal, expectedNames[i])
+		}
+
+		depthVal, err := mgr.Get("depth")
+		if err != nil {
+			t.Errorf("managers[%d] missing depth: %v", i, err)
+			continue
+		}
+
+		// depthField must be int32, matching MongoDB's BSON wire representation.
+		depth, ok := depthVal.(int32)
+		if !ok {
+			t.Errorf("managers[%d].depth is %T, want int32", i, depthVal)
+			continue
+		}
+
+		if depth != expectedDepths[i] {
+			t.Errorf("managers[%d].depth = %d, want %d", i, depth, expectedDepths[i])
+		}
 	}
 }
