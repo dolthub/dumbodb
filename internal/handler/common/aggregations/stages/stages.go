@@ -41,13 +41,14 @@ var Stages = map[string]newStageFunc{
 	"$project":     newProject,
 	"$replaceRoot": newReplaceRoot,
 	"$replaceWith": newReplaceWith,
-	"$set":         newSet,
-	"$sample":      newSample,
-	"$skip":        newSkip,
-	"$sort":        newSort,
-	"$sortByCount": newSortByCount,
-	"$unset":       newUnset,
-	"$unwind":      newUnwind,
+	"$set":              newSet,
+	"$sample":           newSample,
+	"$setWindowFields":  newSetWindowFields,
+	"$skip":             newSkip,
+	"$sort":             newSort,
+	"$sortByCount":      newSortByCount,
+	"$unset":            newUnset,
+	"$unwind":           newUnwind,
 	// please keep sorted alphabetically
 }
 
@@ -70,7 +71,8 @@ var unsupportedStages = map[string]struct{}{
 	"$redact":                 {},
 	"$search":                 {},
 	"$searchMeta":             {},
-	"$setWindowFields":        {},
+	// "$setWindowFields" is now implemented above
+
 	"$sharedDataDistribution": {},
 	"$unionWith":              {},
 	// please keep sorted alphabetically
