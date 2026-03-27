@@ -204,6 +204,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		Update:             params.Update,
 		Upsert:             params.Upsert,
 		HasUpdateOperators: params.HasUpdateOperators,
+		ArrayFilters:       params.ArrayFilters,
 	}
 
 	// TODO https://github.com/dolthub/dongo/issues/2168

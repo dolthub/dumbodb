@@ -47,7 +47,7 @@ type FindAndModifyParams struct {
 
 	Let          *types.Document `ferretdb:"let,unimplemented"`
 	Collation    *types.Document `ferretdb:"collation,unimplemented"`
-	ArrayFilters *types.Array    `ferretdb:"arrayFilters,unimplemented"`
+	ArrayFilters *types.Array    `ferretdb:"arrayFilters,opt"`
 
 	Hint                     string          `ferretdb:"hint,ignored"`
 	WriteConcern             *types.Document `ferretdb:"writeConcern,ignored"`

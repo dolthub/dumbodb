@@ -88,7 +88,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		} else if !param.HasUpdateOperators {
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
-			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert)
+			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.ArrayFilters)
 		}
 
 		if err != nil {
@@ -310,11 +310,156 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 	return changed, nil
 }
 
+// processPositionalFilteredUpdate handles update paths containing $[identifier].
+// For example: $set on "grades.$[elem].score" with arrayFilters [{elem.grade: "B"}]
+// updates all array elements in "grades" where element.grade == "B", setting their "score" field.
+// Returns true if any element was modified.
+func processPositionalFilteredUpdate(command string, doc *types.Document, operator, key string, value any, arrayFilters *types.Array) (bool, error) {
+	// Split on ".$[" to find the array field and the identifier+remainder.
+	// e.g. "grades.$[elem].score" → arrayField="grades", rest="elem].score"
+	// e.g. "scores.$[x]" → arrayField="scores", rest="x]"
+	splitIdx := strings.Index(key, ".$[")
+	if splitIdx == -1 {
+		// Key starts with $[identifier] — treat the whole document as the array.
+		// Not commonly used; fall through to error.
+		return false, NewUpdateError(
+			handlererrors.ErrNotImplemented,
+			fmt.Sprintf("processPositionalFilteredUpdate: unsupported key format %q", key),
+			command,
+		)
+	}
+
+	arrayFieldStr := key[:splitIdx]
+	rest := key[splitIdx+3:] // strip ".$["
+
+	closeBracket := strings.Index(rest, "]")
+	if closeBracket == -1 {
+		return false, NewUpdateError(
+			handlererrors.ErrFailedToParse,
+			fmt.Sprintf("malformed $[identifier] in path: %q", key),
+			command,
+		)
+	}
+
+	identifier := rest[:closeBracket]
+	afterIdentifier := rest[closeBracket+1:] // e.g. ".score" or ""
+
+	// Resolve the array field path.
+	arrayPath, err := types.NewPathFromString(arrayFieldStr)
+	if err != nil {
+		return false, lazyerrors.Error(err)
+	}
+
+	arrayVal, err := doc.GetByPath(arrayPath)
+	if err != nil {
+		// Array field doesn't exist; nothing to update.
+		return false, nil
+	}
+
+	array, ok := arrayVal.(*types.Array)
+	if !ok {
+		return false, NewUpdateError(
+			handlererrors.ErrTypeMismatch,
+			fmt.Sprintf("Cannot apply array update to non-array field %q", arrayFieldStr),
+			command,
+		)
+	}
+
+	// Build the filter for this identifier from arrayFilters.
+	// arrayFilters entries look like [{elem.grade: "B"}] for identifier "elem",
+	// or [{x: {$lt: 65}}] for identifier "x".
+	// We keep the filter as-is and match by wrapping each element: {identifier: elem}.
+	var identifierFilters []*types.Document
+
+	if arrayFilters != nil {
+		prefix := identifier + "."
+		for i := range arrayFilters.Len() {
+			entry := must.NotFail(arrayFilters.Get(i))
+
+			filterDoc, ok := entry.(*types.Document)
+			if !ok {
+				continue
+			}
+
+			// Check if any key in this filter entry belongs to this identifier.
+			for _, k := range filterDoc.Keys() {
+				if k == identifier || strings.HasPrefix(k, prefix) {
+					identifierFilters = append(identifierFilters, filterDoc)
+					break
+				}
+			}
+		}
+	}
+
+	var changed bool
+
+	for i := range array.Len() {
+		elem := must.NotFail(array.Get(i))
+
+		// Check if this element matches all identifier filters.
+		matches := true
+
+		for _, filterDoc := range identifierFilters {
+			// Wrap element as {identifier: elem} and apply the filter.
+			tmpDoc := must.NotFail(types.NewDocument(identifier, elem))
+
+			match, err := FilterDocument(tmpDoc, filterDoc)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			if !match {
+				matches = false
+				break
+			}
+		}
+
+		if !matches {
+			continue
+		}
+
+		// Apply the update to this element.
+		if afterIdentifier == "" {
+			// Update the element itself (e.g. "scores.$[x]" = 50).
+			if err := array.Set(i, value); err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			changed = true
+		} else {
+			// Update a sub-field within the element (e.g. "grades.$[elem].score" = 90).
+			subFieldStr := afterIdentifier[1:] // strip leading "."
+
+			elemDoc, ok := elem.(*types.Document)
+			if !ok {
+				return false, NewUpdateError(
+					handlererrors.ErrTypeMismatch,
+					fmt.Sprintf("Element at index %d is not a document, cannot set sub-field %q", i, subFieldStr),
+					command,
+				)
+			}
+
+			subPath, err := types.NewPathFromString(subFieldStr)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			if err := elemDoc.SetByPath(subPath, value); err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			changed = true
+		}
+	}
+
+	return changed, nil
+}
+
 // processUpdateOperator updates the given document with a series of update operators.
 // Returns true if the document is changed.
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
 // TODO https://github.com/dolthub/dongo/issues/3044
-func processUpdateOperator(command string, doc, update *types.Document, upsert bool) (bool, error) {
+func processUpdateOperator(command string, doc, update *types.Document, upsert bool, arrayFilters *types.Array) (bool, error) {
 	var docUpdated bool
 	var err error
 
@@ -324,6 +469,18 @@ func processUpdateOperator(command string, doc, update *types.Document, upsert b
 		var updated bool
 
 		key, value := kvOp.Key, kvOp.Value
+
+		// Handle $[identifier] positional filtered operator.
+		if strings.Contains(key, ".$[") || strings.HasPrefix(key, "$[") {
+			updated, err = processPositionalFilteredUpdate(command, doc, kvOp.Operator, key, value, arrayFilters)
+			if err != nil {
+				return false, err
+			}
+
+			docUpdated = docUpdated || updated
+
+			continue
+		}
 
 		switch kvOp.Operator {
 		case "$currentDate":

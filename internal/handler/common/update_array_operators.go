@@ -608,7 +608,22 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 	for i := array.Len() - 1; i >= 0; i-- {
 		elem := must.NotFail(array.Get(i))
 
-		if types.Compare(elem, pullVal) == types.Equal {
+		var match bool
+
+		if pullDoc, ok := pullVal.(*types.Document); ok {
+			// Use filter matching when pullVal is a document (may contain query operators).
+			// Wrap the element in a temp doc so filterDocumentPair can evaluate it.
+			tmpDoc := must.NotFail(types.NewDocument("v", elem))
+
+			match, err = filterDocumentPair(tmpDoc, "v", pullDoc)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+		} else {
+			match = types.Compare(elem, pullVal) == types.Equal
+		}
+
+		if match {
 			array.Remove(i)
 			changed = true
 		}

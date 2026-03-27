@@ -715,7 +715,6 @@ func TestCRUD_UpdatePull(t *testing.T) {
 	})
 
 	t.Run("PullWithGtCondition", func(t *testing.T) {
-		dongoXFail(t, "$pull with query conditions (e.g. $gt) not yet applied")
 		t.Parallel()
 		env := startDongo(t)
 		coll := env.collection(t)
@@ -1147,13 +1146,13 @@ func TestCRUD_UpdatePipeline(t *testing.T) {
 
 // ─── Update: arrayFilters (DongoXFail) ───────────────────────────────────────
 
-// TestCRUD_ArrayFilters tests arrayFilters with positional $[identifier]. (DongoXFail)
+// TestCRUD_ArrayFilters tests arrayFilters with positional $[identifier].
 func TestCRUD_ArrayFilters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("ArrayFilterPositionalIdentifier", func(t *testing.T) {
-		dongoXFail(t, "arrayFilters with $[identifier] not yet implemented")
+		t.Parallel()
 
 		env := startDongo(t)
 		coll := env.collection(t)
@@ -1186,7 +1185,7 @@ func TestCRUD_ArrayFilters(t *testing.T) {
 	})
 
 	t.Run("ArrayFilterMultipleConditions", func(t *testing.T) {
-		dongoXFail(t, "arrayFilters with $[identifier] not yet implemented")
+		t.Parallel()
 
 		env := startDongo(t)
 		coll := env.collection(t)
@@ -1685,13 +1684,13 @@ func TestCRUD_BulkWrite(t *testing.T) {
 	})
 }
 
-// TestCRUD_BulkWriteArrayFilters tests BulkWrite with arrayFilters. (DongoXFail)
+// TestCRUD_BulkWriteArrayFilters tests BulkWrite with arrayFilters.
 func TestCRUD_BulkWriteArrayFilters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("UpdateOneWithArrayFilters", func(t *testing.T) {
-		dongoXFail(t, "arrayFilters with $[identifier] not yet implemented")
+		t.Parallel()
 
 		env := startDongo(t)
 		coll := env.collection(t)
