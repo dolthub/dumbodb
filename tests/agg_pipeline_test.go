@@ -303,3 +303,661 @@ func TestAggPipeline_hint(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	assert.Len(t, results, 2)
 }
+
+// ─── $sortByCount ─────────────────────────────────────────────────────────────
+
+// TestAggPipeline_sortByCount tests the $sortByCount aggregation stage.
+func TestAggPipeline_sortByCount(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("category", "A")),
+		d(e("_id", int32(2)), e("category", "B")),
+		d(e("_id", int32(3)), e("category", "A")),
+		d(e("_id", int32(4)), e("category", "C")),
+		d(e("_id", int32(5)), e("category", "A")),
+		d(e("_id", int32(6)), e("category", "B")),
+	)
+
+	t.Run("BasicCount", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$sortByCount", "$category")),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		require.Len(t, results, 3)
+
+		// Results should be sorted by count descending: A(3), B(2), C(1).
+		assert.Equal(t, "A", results[0].Map()["_id"])
+		assert.Equal(t, int32(3), results[0].Map()["count"])
+		assert.Equal(t, "B", results[1].Map()["_id"])
+		assert.Equal(t, int32(2), results[1].Map()["count"])
+		assert.Equal(t, "C", results[2].Map()["_id"])
+		assert.Equal(t, int32(1), results[2].Map()["count"])
+	})
+
+	t.Run("EmptyCollection", func(t *testing.T) {
+		t.Parallel()
+
+		emptyColl := env.collection(t)
+
+		ctx := context.Background()
+		cursor, err := emptyColl.Aggregate(ctx, bson.A{
+			d(e("$sortByCount", "$category")),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		assert.Len(t, results, 0)
+	})
+
+	t.Run("AllSameValue", func(t *testing.T) {
+		t.Parallel()
+
+		sameColl := env.collection(t)
+		insertDocs(t, sameColl,
+			d(e("_id", int32(10)), e("x", "same")),
+			d(e("_id", int32(11)), e("x", "same")),
+			d(e("_id", int32(12)), e("x", "same")),
+		)
+
+		ctx := context.Background()
+		cursor, err := sameColl.Aggregate(ctx, bson.A{
+			d(e("$sortByCount", "$x")),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		require.Len(t, results, 1)
+		assert.Equal(t, "same", results[0].Map()["_id"])
+		assert.Equal(t, int32(3), results[0].Map()["count"])
+	})
+
+	t.Run("MissingField", func(t *testing.T) {
+		t.Parallel()
+
+		mixedColl := env.collection(t)
+		insertDocs(t, mixedColl,
+			d(e("_id", int32(20)), e("cat", "X")),
+			d(e("_id", int32(21))), // missing cat field → null
+			d(e("_id", int32(22))), // missing cat field → null
+		)
+
+		ctx := context.Background()
+		cursor, err := mixedColl.Aggregate(ctx, bson.A{
+			d(e("$sortByCount", "$cat")),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		// null (count=2) and X (count=1).
+		require.Len(t, results, 2)
+		assert.Equal(t, int32(2), results[0].Map()["count"])
+		assert.Equal(t, int32(1), results[1].Map()["count"])
+	})
+}
+
+// TestAggPipeline_sortByCountErrors tests $sortByCount error cases.
+func TestAggPipeline_sortByCountErrors(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	t.Run("NullExpression", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$sortByCount", nil)),
+		})
+		require.Error(t, err)
+	})
+}
+
+// ─── $bucket ──────────────────────────────────────────────────────────────────
+
+// TestAggPipeline_bucket tests the $bucket aggregation stage.
+func TestAggPipeline_bucket(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("price", int32(5))),
+		d(e("_id", int32(2)), e("price", int32(15))),
+		d(e("_id", int32(3)), e("price", int32(25))),
+		d(e("_id", int32(4)), e("price", int32(35))),
+		d(e("_id", int32(5)), e("price", int32(45))),
+	)
+
+	t.Run("BasicBuckets", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$price"),
+				e("boundaries", bson.A{int32(0), int32(20), int32(40)}),
+				e("default", "Other"),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		// Bucket [0,20): price 5, 15 → count 2.
+		// Bucket [20,40): price 25, 35 → count 2.
+		// Default "Other": price 45 → count 1.
+		require.Len(t, results, 3)
+		assert.Equal(t, int32(0), results[0].Map()["_id"])
+		assert.Equal(t, int32(2), results[0].Map()["count"])
+		assert.Equal(t, int32(20), results[1].Map()["_id"])
+		assert.Equal(t, int32(2), results[1].Map()["count"])
+		assert.Equal(t, "Other", results[2].Map()["_id"])
+		assert.Equal(t, int32(1), results[2].Map()["count"])
+	})
+
+	t.Run("NoDefault_AllFit", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$price"),
+				e("boundaries", bson.A{int32(0), int32(50)}),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		require.Len(t, results, 1)
+		assert.Equal(t, int32(0), results[0].Map()["_id"])
+		assert.Equal(t, int32(5), results[0].Map()["count"])
+	})
+
+	t.Run("EmptyBucketsSkipped", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$price"),
+				e("boundaries", bson.A{int32(0), int32(10), int32(100)}),
+				e("default", "Other"),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		// [0,10): price 5 → count 1.
+		// [10,100): price 15, 25, 35, 45 → count 4.
+		require.Len(t, results, 2)
+	})
+
+	t.Run("WithOutputAccumulator", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$price"),
+				e("boundaries", bson.A{int32(0), int32(30), int32(60)}),
+				e("output", d(
+					e("total", d(e("$sum", "$price"))),
+					e("cnt", d(e("$sum", int32(1)))),
+				)),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		require.Len(t, results, 2)
+		// [0,30): 5+15+25 = 45.
+		assert.Equal(t, int32(0), results[0].Map()["_id"])
+		// [30,60): 35+45 = 80.
+		assert.Equal(t, int32(30), results[1].Map()["_id"])
+	})
+}
+
+// TestAggPipeline_bucketErrors tests $bucket error cases.
+func TestAggPipeline_bucketErrors(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	t.Run("MissingGroupBy", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("boundaries", bson.A{int32(0), int32(10)}),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("MissingBoundaries", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$x"),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("TooFewBoundaries", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$x"),
+				e("boundaries", bson.A{int32(0)}),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("UnsortedBoundaries", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$x"),
+				e("boundaries", bson.A{int32(10), int32(5)}),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("NoDefaultValueOutOfRange", func(t *testing.T) {
+		t.Parallel()
+
+		outOfRangeColl := env.collection(t)
+		insertDocs(t, outOfRangeColl,
+			d(e("_id", int32(1)), e("x", int32(100))),
+		)
+
+		ctx := context.Background()
+		cursor, err := outOfRangeColl.Aggregate(ctx, bson.A{
+			d(e("$bucket", d(
+				e("groupBy", "$x"),
+				e("boundaries", bson.A{int32(0), int32(10)}),
+			))),
+		})
+		// Error should be returned at iteration time (cursor.All).
+		if err == nil {
+			var results []bson.D
+			err = cursor.All(ctx, &results)
+		}
+		require.Error(t, err)
+	})
+}
+
+// ─── $bucketAuto ──────────────────────────────────────────────────────────────
+
+// TestAggPipeline_bucketAuto tests the $bucketAuto aggregation stage.
+func TestAggPipeline_bucketAuto(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("score", int32(10))),
+		d(e("_id", int32(2)), e("score", int32(20))),
+		d(e("_id", int32(3)), e("score", int32(30))),
+		d(e("_id", int32(4)), e("score", int32(40))),
+		d(e("_id", int32(5)), e("score", int32(50))),
+		d(e("_id", int32(6)), e("score", int32(60))),
+	)
+
+	t.Run("TwoBuckets", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+				e("buckets", int32(2)),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		assert.Len(t, results, 2)
+
+		// Each result has _id: {min: X, max: Y} and count.
+		for _, r := range results {
+			_, hasID := r.Map()["_id"]
+			assert.True(t, hasID, "result missing _id")
+			_, hasCount := r.Map()["count"]
+			assert.True(t, hasCount, "result missing count")
+		}
+	})
+
+	t.Run("ThreeBuckets", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+				e("buckets", int32(3)),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		assert.Len(t, results, 3)
+	})
+
+	t.Run("BucketsExceedDocs", func(t *testing.T) {
+		t.Parallel()
+
+		fewColl := env.collection(t)
+		insertDocs(t, fewColl,
+			d(e("_id", int32(10)), e("v", int32(1))),
+			d(e("_id", int32(11)), e("v", int32(2))),
+		)
+
+		ctx := context.Background()
+		cursor, err := fewColl.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$v"),
+				e("buckets", int32(10)),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		// Can't have more buckets than documents.
+		assert.LessOrEqual(t, len(results), 2)
+	})
+
+	t.Run("EmptyCollection", func(t *testing.T) {
+		t.Parallel()
+
+		emptyColl := env.collection(t)
+
+		ctx := context.Background()
+		cursor, err := emptyColl.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+				e("buckets", int32(3)),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		assert.Len(t, results, 0)
+	})
+
+	t.Run("OneBucket", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+				e("buckets", int32(1)),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		assert.Len(t, results, 1)
+	})
+}
+
+// TestAggPipeline_bucketAutoErrors tests $bucketAuto error cases.
+func TestAggPipeline_bucketAutoErrors(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	t.Run("MissingGroupBy", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("buckets", int32(3)),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("MissingBuckets", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("ZeroBuckets", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+				e("buckets", int32(0)),
+			))),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("NegativeBuckets", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$bucketAuto", d(
+				e("groupBy", "$score"),
+				e("buckets", int32(-1)),
+			))),
+		})
+		require.Error(t, err)
+	})
+}
+
+// ─── $facet ───────────────────────────────────────────────────────────────────
+
+// TestAggPipeline_facet tests the $facet aggregation stage.
+func TestAggPipeline_facet(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("category", "A"), e("price", int32(10))),
+		d(e("_id", int32(2)), e("category", "B"), e("price", int32(20))),
+		d(e("_id", int32(3)), e("category", "A"), e("price", int32(30))),
+		d(e("_id", int32(4)), e("category", "C"), e("price", int32(40))),
+		d(e("_id", int32(5)), e("category", "B"), e("price", int32(50))),
+	)
+
+	t.Run("TwoSubPipelines", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$facet", d(
+				e("byCategory", bson.A{
+					d(e("$sortByCount", "$category")),
+				}),
+				e("priceBuckets", bson.A{
+					d(e("$bucket", d(
+						e("groupBy", "$price"),
+						e("boundaries", bson.A{int32(0), int32(25), int32(60)}),
+					))),
+				}),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		// $facet always returns exactly one document.
+		require.Len(t, results, 1)
+
+		result := results[0]
+		_, hasCategory := result.Map()["byCategory"]
+		assert.True(t, hasCategory, "result missing byCategory field")
+		_, hasBuckets := result.Map()["priceBuckets"]
+		assert.True(t, hasBuckets, "result missing priceBuckets field")
+	})
+
+	t.Run("SingleSubPipeline", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$facet", d(
+				e("categories", bson.A{
+					d(e("$group", d(e("_id", "$category")))),
+					d(e("$sort", d(e("_id", int32(1))))),
+				}),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		require.Len(t, results, 1)
+
+		categoriesRaw, ok := results[0].Map()["categories"]
+		require.True(t, ok, "result missing categories field")
+		categories, ok := categoriesRaw.(bson.A)
+		require.True(t, ok, "categories is not an array")
+		// A, B, C → 3 groups.
+		assert.Len(t, categories, 3)
+	})
+
+	t.Run("EmptyCollection", func(t *testing.T) {
+		t.Parallel()
+
+		emptyColl := env.collection(t)
+
+		ctx := context.Background()
+		cursor, err := emptyColl.Aggregate(ctx, bson.A{
+			d(e("$facet", d(
+				e("items", bson.A{
+					d(e("$count", "total")),
+				}),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		// $facet always emits one document even with empty input.
+		assert.Len(t, results, 1)
+	})
+
+	t.Run("SubPipelineWithMatch", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cursor, err := coll.Aggregate(ctx, bson.A{
+			d(e("$facet", d(
+				e("cheap", bson.A{
+					d(e("$match", d(e("price", d(e("$lte", int32(20))))))),
+				}),
+				e("expensive", bson.A{
+					d(e("$match", d(e("price", d(e("$gt", int32(30))))))),
+				}),
+			))),
+		})
+		require.NoError(t, err)
+
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+		require.Len(t, results, 1)
+
+		cheapRaw := results[0].Map()["cheap"]
+		cheap, ok := cheapRaw.(bson.A)
+		require.True(t, ok, "cheap is not an array")
+		// price <= 20: ids 1,2 → 2 docs.
+		assert.Len(t, cheap, 2)
+
+		expensiveRaw := results[0].Map()["expensive"]
+		expensive, ok := expensiveRaw.(bson.A)
+		require.True(t, ok, "expensive is not an array")
+		// price > 30: ids 4,5 → 2 docs.
+		assert.Len(t, expensive, 2)
+	})
+}
+
+// TestAggPipeline_facetErrors tests $facet error cases.
+func TestAggPipeline_facetErrors(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	t.Run("NonDocumentSpec", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$facet", "not-a-doc")),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("EmptySpec", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$facet", d())),
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("FieldValueNotArray", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		_, err := coll.Aggregate(ctx, bson.A{
+			d(e("$facet", d(e("myField", "not-an-array")))),
+		})
+		require.Error(t, err)
+	})
+}
