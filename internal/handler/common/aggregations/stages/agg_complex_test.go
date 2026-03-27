@@ -1063,6 +1063,82 @@ func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 	}
 }
 
+// TestAggComplex_matchUnwindGroupSort verifies that $sort is stable: when two
+// groups have the same sort key value, they retain the order produced by the
+// preceding pipeline stage (matching MongoDB behavior).
+//
+// Regression test for do-socd: $sort tie-breaking in sort+group pipeline.
+func TestAggComplex_matchUnwindGroupSort(t *testing.T) {
+	t.Parallel()
+
+	// Three orders across two customers. After $unwind+$group by category,
+	// groups B and A both have totalQty=2. MongoDB preserves insertion order
+	// for ties; Dongo must do the same (stable sort).
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "category", "C", "qty", int32(8))),
+		must.NotFail(types.NewDocument("_id", int32(2), "category", "B", "qty", int32(2))),
+		must.NotFail(types.NewDocument("_id", int32(3), "category", "A", "qty", int32(2))),
+	}
+
+	// $group: {_id: "$category", orderCount: {$sum: 1}, totalQty: {$sum: "$qty"}}
+	groupSpec := must.NotFail(types.NewDocument(
+		"_id", "$category",
+		"orderCount", must.NotFail(types.NewDocument("$sum", int32(1))),
+		"totalQty", must.NotFail(types.NewDocument("$sum", "$qty")),
+	))
+	groupDoc := must.NotFail(types.NewDocument("$group", groupSpec))
+	groupStage, err := stages.NewStage(groupDoc)
+	if err != nil {
+		t.Fatalf("NewStage($group): %v", err)
+	}
+
+	// $sort: {totalQty: -1}
+	sortDoc := must.NotFail(types.NewDocument("$sort", must.NotFail(types.NewDocument("totalQty", int32(-1)))))
+	sortStage, err := stages.NewStage(sortDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sort): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := groupStage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("$group Process: %v", err)
+	}
+
+	out, err = sortStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$sort Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 output docs, got %d", len(results))
+	}
+
+	// First doc must be C (totalQty=8). B and A both have totalQty=2; because
+	// the sort is stable, B (inserted before A) must appear before A.
+	getID := func(doc *types.Document) string {
+		v, _ := doc.Get("_id")
+		s, _ := v.(string)
+		return s
+	}
+
+	if id := getID(results[0]); id != "C" {
+		t.Errorf("results[0]: expected _id=C, got %q", id)
+	}
+	if id := getID(results[1]); id != "B" {
+		t.Errorf("results[1]: expected _id=B (stable tie-break), got %q", id)
+	}
+	if id := getID(results[2]); id != "A" {
+		t.Errorf("results[2]: expected _id=A (stable tie-break), got %q", id)
+	}
+}
+
 // TestAggStage_graphLookup_MaxDepthLimitsTraversal verifies that maxDepth correctly
 // limits traversal and that depthField values are returned as int32 (matching MongoDB).
 //

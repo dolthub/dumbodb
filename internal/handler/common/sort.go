@@ -80,7 +80,7 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 	}
 
 	sorter := &docsSorter{docs: docs, sorts: sortFuncs}
-	sort.Sort(sorter)
+	sort.Stable(sorter)
 
 	return nil
 }
