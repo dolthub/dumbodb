@@ -14,10 +14,12 @@
 
 package stages_test
 
-// Tests for complex $lookup scenarios:
+// Tests for complex $lookup and $graphLookup scenarios:
 //   - Pipeline form with let variables (correlated subquery)
 //   - Array localField (unwind-join pattern)
 //   - Nested $lookup (lookup within a lookup pipeline)
+//   - $graphLookup: recursive graph traversal with startWith, connectFromField,
+//     connectToField, as, maxDepth, depthField, and restrictSearchWithMatch
 
 import (
 	"context"
@@ -564,5 +566,406 @@ func TestLookup_ArrayLocalFieldNoMatch(t *testing.T) {
 
 	if matchedArr.Len() != 0 {
 		t.Errorf("expected 0 matches, got %d", matchedArr.Len())
+	}
+}
+
+// TestGraphLookup_BasicTraversal verifies simple recursive graph traversal.
+//
+// Graph: alice → bob → carol  (each employee's reportsTo field points to their manager's name).
+// Starting from alice, we expect to find bob and carol in the result.
+func TestGraphLookup_BasicTraversal(t *testing.T) {
+	t.Parallel()
+
+	// employees collection: reportsTo links one employee to another by name.
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "bob", "reportsTo", "carol")),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "carol")), // top of hierarchy
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "managers",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	managersVal, err := results[0].Get("managers")
+	if err != nil {
+		t.Fatalf("missing managers: %v", err)
+	}
+
+	managers, ok := managersVal.(*types.Array)
+	if !ok {
+		t.Fatalf("managers not an array: %T", managersVal)
+	}
+
+	// Starting from alice, we follow: reportsTo=bob (depth 0), then bob.reportsTo=carol (depth 1).
+	if managers.Len() != 2 {
+		t.Errorf("expected 2 managers (bob and carol), got %d", managers.Len())
+	}
+}
+
+// TestGraphLookup_MaxDepth verifies that maxDepth limits the traversal depth.
+//
+// With maxDepth: 0 only the immediate managers are returned (no further traversal).
+func TestGraphLookup_MaxDepth(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "bob", "reportsTo", "carol")),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "carol")),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "managers",
+		"maxDepth", int32(0),
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	managersVal, err := results[0].Get("managers")
+	if err != nil {
+		t.Fatalf("missing managers: %v", err)
+	}
+
+	managers, ok := managersVal.(*types.Array)
+	if !ok {
+		t.Fatalf("managers not an array: %T", managersVal)
+	}
+
+	// maxDepth 0: only depth-0 documents (bob) are returned; carol is not visited.
+	if managers.Len() != 1 {
+		t.Errorf("expected 1 manager (bob only, maxDepth=0), got %d", managers.Len())
+	}
+
+	v, _ := managers.Get(0)
+	doc, ok := v.(*types.Document)
+	if !ok {
+		t.Fatalf("element not a document: %T", v)
+	}
+
+	name, err := doc.Get("name")
+	if err != nil || name != "bob" {
+		t.Errorf("expected name=bob, got %v (err=%v)", name, err)
+	}
+}
+
+// TestGraphLookup_DepthField verifies that depthField is added to each result document.
+func TestGraphLookup_DepthField(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "bob", "reportsTo", "carol")),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "carol")),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "managers",
+		"depthField", "depth",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	managersVal, err := results[0].Get("managers")
+	if err != nil {
+		t.Fatalf("missing managers: %v", err)
+	}
+
+	managers, ok := managersVal.(*types.Array)
+	if !ok {
+		t.Fatalf("managers not an array: %T", managersVal)
+	}
+
+	if managers.Len() != 2 {
+		t.Fatalf("expected 2 managers, got %d", managers.Len())
+	}
+
+	// Verify depthField is set correctly.
+	for i := 0; i < managers.Len(); i++ {
+		v, _ := managers.Get(i)
+		mgr, ok := v.(*types.Document)
+		if !ok {
+			t.Errorf("managers[%d] not a document: %T", i, v)
+			continue
+		}
+
+		depthVal, dErr := mgr.Get("depth")
+		if dErr != nil {
+			t.Errorf("managers[%d] missing 'depth' field: %v", i, dErr)
+			continue
+		}
+
+		// Depth should be 0 for bob (first hop) and 1 for carol (second hop).
+		depth, ok := depthVal.(int64)
+		if !ok {
+			t.Errorf("managers[%d].depth not int64: %T (%v)", i, depthVal, depthVal)
+		} else if depth < 0 || depth > 1 {
+			t.Errorf("managers[%d].depth out of expected range [0,1]: %d", i, depth)
+		}
+	}
+}
+
+// TestGraphLookup_RestrictSearchWithMatch verifies that restrictSearchWithMatch
+// filters out documents that do not match the given condition.
+func TestGraphLookup_RestrictSearchWithMatch(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob", "active", true)),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "bob", "reportsTo", "carol", "active", false)),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "carol", "active", true)),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	// Only follow edges through active employees.
+	restrictFilter := must.NotFail(types.NewDocument("active", true))
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "managers",
+		"restrictSearchWithMatch", restrictFilter,
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	// Alice (reportsTo=bob). bob is inactive, so traversal stops at depth 0.
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob", "active", true))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	managersVal, err := results[0].Get("managers")
+	if err != nil {
+		t.Fatalf("missing managers: %v", err)
+	}
+
+	managers, ok := managersVal.(*types.Array)
+	if !ok {
+		t.Fatalf("managers not an array: %T", managersVal)
+	}
+
+	// bob is filtered out (active=false), so no results.
+	if managers.Len() != 0 {
+		t.Errorf("expected 0 managers (bob filtered by restrictSearchWithMatch), got %d", managers.Len())
+	}
+}
+
+// TestGraphLookup_CycleDetection verifies that cyclic graphs do not cause infinite loops.
+//
+// Graph: a ↔ b (a.reportsTo=b, b.reportsTo=a). The traversal should terminate
+// after visiting each node once.
+func TestGraphLookup_CycleDetection(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "a", "reportsTo", "b")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "b", "reportsTo", "a")),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "related",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	// Start from employee "a" (reportsTo=b).
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(1), "name", "a", "reportsTo", "b"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	relatedVal, err := results[0].Get("related")
+	if err != nil {
+		t.Fatalf("missing related: %v", err)
+	}
+
+	related, ok := relatedVal.(*types.Array)
+	if !ok {
+		t.Fatalf("related not an array: %T", relatedVal)
+	}
+
+	// Should find b (from reportsTo=b), then attempt a (from b.reportsTo=a) but
+	// "a" was the search value that started it all — actually "b" was searched first,
+	// then "a" is queued. "a" has not been searched yet, so we look for connectToField=a
+	// and find employee "a". But then a.reportsTo=b which was already searched, so we stop.
+	// Result: b and a → 2 documents.
+	if related.Len() != 2 {
+		t.Errorf("expected 2 related docs (a and b, cycle terminates), got %d", related.Len())
+	}
+}
+
+// TestGraphLookup_StartWithMissingField verifies that a missing startWith field
+// produces an empty result array (no traversal begins).
+func TestGraphLookup_StartWithMissingField(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "alice", "reportsTo", "bob")),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$nonExistentField",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "managers",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(99), "name", "ghost"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	managersVal, err := results[0].Get("managers")
+	if err != nil {
+		t.Fatalf("missing managers: %v", err)
+	}
+
+	managers, ok := managersVal.(*types.Array)
+	if !ok {
+		t.Fatalf("managers not an array: %T", managersVal)
+	}
+
+	if managers.Len() != 0 {
+		t.Errorf("expected 0 managers (no startWith value), got %d", managers.Len())
 	}
 }

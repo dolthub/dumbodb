@@ -211,8 +211,8 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		var s aggregations.Stage
 
 		switch d.Command() {
-		case "$lookup":
-			// $lookup requires database access to fetch the "from" collection.
+		case "$lookup", "$graphLookup":
+			// $lookup and $graphLookup require database access to fetch the "from" collection.
 			fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
 				fromColl, collErr := db.Collection(collName)
 				if collErr != nil {
@@ -229,7 +229,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				return iterator.ConsumeValues(qRes.Iter)
 			}
 
-			s, err = stages.NewLookupStage(d, fetcher)
+			if d.Command() == "$graphLookup" {
+				s, err = stages.NewGraphLookupStage(d, fetcher)
+			} else {
+				s, err = stages.NewLookupStage(d, fetcher)
+			}
 
 		case "$out":
 			// $out requires database write access to replace a collection.

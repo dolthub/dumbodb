@@ -60,7 +60,7 @@ var unsupportedStages = map[string]struct{}{
 	"$documents":              {},
 	"$fill":                   {},
 	"$geoNear":                {},
-	"$graphLookup":            {},
+	// $graphLookup is handled specially in msg_aggregate.go via NewGraphLookupStage
 	"$indexStats":             {},
 	"$listLocalSessions":      {},
 	"$listSessions":           {},
