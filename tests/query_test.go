@@ -156,6 +156,35 @@ func d(elems ...primitive.E) bson.D {
 	return bson.D(elems)
 }
 
+// TestBSON_array_nested is a regression test for nested array support (do-dor).
+// MongoDB supports arrays containing arrays; dongo must store and retrieve them
+// without error.
+func TestBSON_array_nested(t *testing.T) {
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+
+	// Insert a document that contains a nested array: { arr: [[1,2],[3,4]] }.
+	doc := d(e("arr", bson.A{bson.A{int32(1), int32(2)}, bson.A{int32(3), int32(4)}}))
+	_, err := coll.InsertOne(ctx, doc)
+	require.NoError(t, err, "inserting a document with nested arrays must not fail")
+
+	// Verify the document round-trips correctly.
+	var result bson.D
+	require.NoError(t, coll.FindOne(ctx, bson.D{}).Decode(&result))
+
+	var arr bson.A
+	for _, el := range result {
+		if el.Key == "arr" {
+			arr = el.Value.(bson.A)
+			break
+		}
+	}
+	require.NotNil(t, arr, "arr field must be present in the retrieved document")
+	require.Len(t, arr, 2, "arr must have two sub-arrays")
+}
+
 // TestFind_CursorCleanupOnFilterError is a regression test for MultiCloser leaks.
 //
 // When a find command fails mid-iteration due to an invalid filter (e.g. a
