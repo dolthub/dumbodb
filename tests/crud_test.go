@@ -950,6 +950,56 @@ func TestCRUD_UpdateMinMax(t *testing.T) {
 	})
 }
 
+// ─── Update operator: $mul ───────────────────────────────────────────────────
+
+// TestCRUD_UpdateMul tests $mul (multiply). (DongoFull)
+func TestCRUD_UpdateMul(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("MulInt32", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "a"), e("v", int32(4))))
+
+		_, err := coll.UpdateOne(ctx, d(e("_id", "a")), d(e("$mul", d(e("v", int32(3))))))
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "a"))).Decode(&result))
+		assert.Equal(t, int32(12), result.Map()["v"])
+	})
+
+	t.Run("MulFloat64", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "a"), e("v", float64(2.5))))
+
+		_, err := coll.UpdateOne(ctx, d(e("_id", "a")), d(e("$mul", d(e("v", float64(4.0))))))
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "a"))).Decode(&result))
+		assert.Equal(t, float64(10.0), result.Map()["v"])
+	})
+
+	t.Run("MulMissingFieldSetsZero", func(t *testing.T) {
+		t.Parallel()
+		env := startDongo(t)
+		coll := env.collection(t)
+		insertDocs(t, coll, d(e("_id", "a")))
+
+		_, err := coll.UpdateOne(ctx, d(e("_id", "a")), d(e("$mul", d(e("v", int32(5))))))
+		require.NoError(t, err)
+
+		var result bson.D
+		require.NoError(t, coll.FindOne(ctx, d(e("_id", "a"))).Decode(&result))
+		assert.Equal(t, int32(0), result.Map()["v"])
+	})
+}
+
 // ─── Update operator: $currentDate ───────────────────────────────────────────
 
 // TestCRUD_UpdateCurrentDate tests $currentDate with date and timestamp types. (DongoFull)
