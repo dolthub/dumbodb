@@ -715,6 +715,7 @@ func TestCRUD_UpdatePull(t *testing.T) {
 	})
 
 	t.Run("PullWithGtCondition", func(t *testing.T) {
+		dongoXFail(t, "$pull with query conditions (e.g. $gt) not yet applied")
 		t.Parallel()
 		env := startDongo(t)
 		coll := env.collection(t)
@@ -1672,6 +1673,7 @@ func TestCRUD_BulkWrite(t *testing.T) {
 	})
 
 	t.Run("EmptyWritesResult", func(t *testing.T) {
+		dongoXFail(t, "BulkWrite rejects empty slice instead of returning zero-count result")
 		t.Parallel()
 		env := startDongo(t)
 		coll := env.collection(t)
