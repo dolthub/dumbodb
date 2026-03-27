@@ -31,7 +31,6 @@ import (
 	"github.com/dolthub/dongo/internal/clientconn/connmetrics"
 	"github.com/dolthub/dongo/internal/handler/registry"
 	"github.com/dolthub/dongo/internal/util/logging"
-	"github.com/dolthub/dongo/internal/util/password"
 	"github.com/dolthub/dongo/internal/util/state"
 )
 
@@ -52,8 +51,6 @@ func run(logger *slog.Logger) error {
 	addr := flag.String("addr", "127.0.0.1:27017", "listen address")
 	port := flag.Int("port", 0, "listen port (overrides port in --addr if set)")
 	logLevel := flag.String("log-level", "info", "log level (debug, info, warn, error)")
-	setupUsername := flag.String("setup-username", "", "username for the initial admin user (creates user on first start if set)")
-	setupPassword := flag.String("setup-password", "", "password for the initial admin user")
 	flag.Parse()
 
 	var level slog.Level
@@ -89,21 +86,14 @@ func run(logger *slog.Logger) error {
 
 	metrics := connmetrics.NewListenerMetrics()
 
-	handlerOpts := &registry.NewHandlerOpts{
+	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
 		Logger:        logger,
 		ConnMetrics:   metrics.ConnMetrics,
 		StateProvider: stateProvider,
 		TCPHost:       *addr,
 		ReplSetName:   "",
 		DoltDataDir:   *dataDir,
-	}
-	if *setupUsername != "" {
-		handlerOpts.SetupDatabase = "admin"
-		handlerOpts.SetupUsername = *setupUsername
-		handlerOpts.SetupPassword = password.WrapPassword(*setupPassword)
-	}
-
-	h, closeBackend, err := registry.NewHandler("dolt", handlerOpts)
+	})
 	if err != nil {
 		return err
 	}

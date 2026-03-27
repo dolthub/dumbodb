@@ -11,14 +11,8 @@ FERRETDB_INTEGRATION="$REPO_ROOT/ferretdb/integration"
 DONGO_HOST="127.0.0.1"
 DONGO_PORT="27017"
 DONGO_ADDR="$DONGO_HOST:$DONGO_PORT"
-# Credentials for the initial admin user created on first start.
-# These match FerretDB's in-process test defaults so auth-requiring tests work.
-DONGO_USER="username"
-DONGO_PASS="password"
-# Unauthenticated URL used for initial user creation.
-DONGO_URL_NOAUTH="mongodb://$DONGO_ADDR/"
-# Authenticated URL used for the test suite.
-DONGO_URL="mongodb://${DONGO_USER}:${DONGO_PASS}@$DONGO_ADDR/"
+# MongoDB URI requires a trailing slash before query parameters.
+DONGO_URL="mongodb://$DONGO_ADDR/"
 DONGO_DATA_DIR="$REPO_ROOT/.runtime/dongo-data"
 DONGO_LOG="$REPO_ROOT/.runtime/dongo.log"
 RESULTS_FILE="${1:-$REPO_ROOT/.runtime/ferretdb-scorecard.txt}"
@@ -35,9 +29,8 @@ echo "Date: $(date -u)" | tee -a "$RESULTS_FILE"
 echo "Dongo: $DONGO_BINARY" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
-# Start Dongo server in background with a setup user so auth-requiring tests pass.
-"$DONGO_BINARY" --addr "$DONGO_ADDR" --data-dir "$DONGO_DATA_DIR" \
-    --setup-username "$DONGO_USER" --setup-password "$DONGO_PASS" >"$DONGO_LOG" 2>&1 &
+# Start Dongo server in background.
+"$DONGO_BINARY" --addr "$DONGO_ADDR" --data-dir "$DONGO_DATA_DIR" >"$DONGO_LOG" 2>&1 &
 DONGO_PID=$!
 
 cleanup() {
@@ -76,7 +69,7 @@ fi
 # (e.g. TestHelloOpQuerySASLSupportedMechs) can run against this server.
 echo "Creating scorecard user..." | tee -a "$RESULTS_FILE"
 cd "$REPO_ROOT"
-if ! go run scripts/create_scorecard_user.go "$DONGO_URL_NOAUTH" 2>&1 | tee -a "$RESULTS_FILE"; then
+if ! go run scripts/create_scorecard_user.go "$DONGO_URL" 2>&1 | tee -a "$RESULTS_FILE"; then
     echo "ERROR: Failed to create scorecard user" | tee -a "$RESULTS_FILE"
     exit 1
 fi
