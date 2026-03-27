@@ -505,6 +505,88 @@ func TestQuery_bits(t *testing.T) {
 	})
 }
 
+// TestQuery_expr tests the $expr query operator that allows aggregation expressions
+// in query filter context.
+func TestQuery_expr(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "low"), e("a", int32(5)), e("b", int32(10))),
+		d(e("_id", "equal"), e("a", int32(10)), e("b", int32(10))),
+		d(e("_id", "high"), e("a", int32(15)), e("b", int32(10))),
+		d(e("_id", "missing")),
+	)
+
+	t.Run("FieldToFieldGt", func(t *testing.T) {
+		t.Parallel()
+		// {$expr: {$gt: ['$a', '$b']}} — a > b: only "high" matches.
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$gt", bson.A{"$a", "$b"})))))
+		assert.Equal(t, []interface{}{"high"}, ids)
+	})
+
+	t.Run("FieldToFieldEq", func(t *testing.T) {
+		t.Parallel()
+		// {$expr: {$eq: ['$a', '$b']}} — a == b.
+		// "equal" has a==b==10 ✓, "missing" has both a and b missing → null==null ✓.
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$eq", bson.A{"$a", "$b"})))))
+		assert.Equal(t, []interface{}{"equal", "missing"}, ids)
+	})
+
+	t.Run("FieldToFieldLt", func(t *testing.T) {
+		t.Parallel()
+		// {$expr: {$lt: ['$a', '$b']}} — a < b: only "low" matches.
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$lt", bson.A{"$a", "$b"})))))
+		assert.Equal(t, []interface{}{"low"}, ids)
+	})
+
+	t.Run("WithArithmeticAdd", func(t *testing.T) {
+		t.Parallel()
+		// {$expr: {$gt: [{$add: ['$a', '$b']}, 20]}} — a+b > 20.
+		// low: 5+10=15 ✗, equal: 10+10=20 ✗, high: 15+10=25 ✓
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$gt", bson.A{
+			d(e("$add", bson.A{"$a", "$b"})),
+			int32(20),
+		})))))
+		assert.Equal(t, []interface{}{"high"}, ids)
+	})
+
+	t.Run("WithArithmeticSubtract", func(t *testing.T) {
+		t.Parallel()
+		// {$expr: {$gt: [{$subtract: ['$a', '$b']}, 0]}} — a-b > 0.
+		// low: -5 ✗, equal: 0 ✗, high: 5 ✓
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$gt", bson.A{
+			d(e("$subtract", bson.A{"$a", "$b"})),
+			int32(0),
+		})))))
+		assert.Equal(t, []interface{}{"high"}, ids)
+	})
+
+	t.Run("MissingFieldIsNull", func(t *testing.T) {
+		t.Parallel()
+		// Documents with missing $a: $gt [null, 0] is false, so "missing" is excluded.
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$gt", bson.A{"$a", int32(0)})))))
+		// low(5), equal(10), high(15) all > 0; missing has null $a so excluded
+		assert.Equal(t, []interface{}{"equal", "high", "low"}, ids)
+	})
+
+	t.Run("LiteralComparison", func(t *testing.T) {
+		t.Parallel()
+		// {$expr: {$gte: ['$a', 10]}} — a >= 10: equal and high match.
+		ids := queryIDs(t, coll, d(e("$expr", d(e("$gte", bson.A{"$a", int32(10)})))))
+		assert.Equal(t, []interface{}{"equal", "high"}, ids)
+	})
+
+	t.Run("ErrInvalidOperator", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		_, err := coll.Find(ctx, d(e("$expr", d(e("$unknownOp", bson.A{"$a", "$b"})))))
+		require.Error(t, err)
+	})
+}
+
 // TestFind_CursorCleanupOnFilterError is a regression test for MultiCloser leaks.
 //
 // When a find command fails mid-iteration due to an invalid filter (e.g. a
