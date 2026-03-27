@@ -273,7 +273,7 @@ func processPushArrayUpdateExpression(command string, doc *types.Document, key s
 		return false, NewUpdateError(
 			handlererrors.ErrBadValue,
 			fmt.Sprintf(
-				"The field '%s' must be an array but is of type '%s' in document {_id: %s}",
+				"The field '%s' must be an array but is of type %s in document {_id: %s}",
 				key, handlerparams.AliasFromType(value), types.FormatAnyValue(must.NotFail(doc.Get("_id"))),
 			),
 			command,
@@ -472,7 +472,7 @@ func processAddToSetArrayUpdateExpression(command string, doc *types.Document, k
 		return false, NewUpdateError(
 			handlererrors.ErrBadValue,
 			fmt.Sprintf(
-				"The field '%s' must be an array but is of type '%s' in document {_id: %s}",
+				"The field '%s' must be an array but is of type %s in document {_id: %s}",
 				key, handlerparams.AliasFromType(value), types.FormatAnyValue(must.NotFail(doc.Get("_id"))),
 			),
 			command,
@@ -513,7 +513,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 		return false, NewUpdateError(
 			handlererrors.ErrBadValue,
 			fmt.Sprintf(
-				"The field '%s' must be an array but is of type '%s'",
+				"The field '%s' must be an array but is of type %s",
 				key, handlerparams.AliasFromType(pullVal),
 			),
 			command,
@@ -543,7 +543,7 @@ func processPullAllArrayUpdateExpression(command string, doc *types.Document, ke
 		return false, NewUpdateError(
 			handlererrors.ErrBadValue,
 			fmt.Sprintf(
-				"The field '%s' must be an array but is of type '%s' in document {_id: %s}",
+				"The field '%s' must be an array but is of type %s in document {_id: %s}",
 				key, handlerparams.AliasFromType(value), types.FormatAnyValue(must.NotFail(doc.Get("_id"))),
 			),
 			command,
