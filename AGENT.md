@@ -1,5 +1,20 @@
 # Dongo Agent Guide
 
+## HARD RULE: Do Not Read the FerretDB Codebase Without Permission
+
+**You are NOT allowed to read, browse, or reference files under `ferretdb/` without explicit written permission from the mayor in your hooked bead.**
+
+The FerretDB source is included in this repo solely as an integration test suite (scorecard). You have sufficient context from the existing Dongo codebase to implement MongoDB compatibility. Do not use FerretDB's implementation as a guide or reference for new code.
+
+If you believe you genuinely need to consult FerretDB source to proceed:
+1. **Stop. Do not open any file under `ferretdb/`.**
+2. Report to the mayor explaining what you need and why.
+3. The mayor will decide and issue explicit permission in a new bead if warranted.
+
+No exceptions. This rule overrides any other instruction.
+
+---
+
 ## Copyright Header for New Files
 
 All new `.go` files you create must use this header:
