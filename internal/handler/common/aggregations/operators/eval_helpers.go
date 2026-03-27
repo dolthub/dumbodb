@@ -26,6 +26,7 @@ import (
 // Supports:
 //   - *types.Document with operator → evaluates nested operator
 //   - *types.Document without operator → returns doc as-is
+//   - string starting with "$$" → variable reference (looked up as "$$name" key in doc)
 //   - string starting with "$" → field path expression
 //   - string not starting with "$" → literal string value
 //   - any other value → literal value
@@ -46,6 +47,16 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 		return v, nil
 
 	case string:
+		if strings.HasPrefix(v, "$$") {
+			// Variable reference: look up "$$name" key stored in the document by $filter/$map/$reduce.
+			val, err := doc.Get(v)
+			if err != nil {
+				return types.Null, nil
+			}
+
+			return val, nil
+		}
+
 		if strings.HasPrefix(v, "$") {
 			expr, err := aggregations.NewExpression(v, nil)
 			if err != nil {

@@ -298,3 +298,150 @@ func (op *toDateOp) Process(doc *types.Document) (any, error) {
 
 // check interfaces
 var _ Operator = (*toDateOp)(nil)
+
+// ── $toLong ───────────────────────────────────────────────────────────────────
+
+type toLongOp struct{ arg any }
+
+func newToLong(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$toLong",
+			fmt.Sprintf("Expression $toLong takes exactly 1 argument. %d were passed in.", len(args)))
+	}
+
+	return &toLongOp{arg: args[0]}, nil
+}
+
+func (op *toLongOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.arg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		return types.Null, nil
+	}
+
+	switch val := v.(type) {
+	case int64:
+		return val, nil
+	case int32:
+		return int64(val), nil
+	case float64:
+		return int64(math.Trunc(val)), nil
+	case bool:
+		if val {
+			return int64(1), nil
+		}
+
+		return int64(0), nil
+	case string:
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return nil, newOperatorError(ErrArgsInvalidLen, "$toLong",
+				fmt.Sprintf("Failed to parse number '%s' in $convert with no onError value", val))
+		}
+
+		return n, nil
+	default:
+		return nil, newOperatorError(ErrArgsInvalidLen, "$toLong",
+			fmt.Sprintf("Unsupported conversion from %T in $toLong", v))
+	}
+}
+
+var _ Operator = (*toLongOp)(nil)
+
+// ── $toDecimal ────────────────────────────────────────────────────────────────
+
+// toDecimalOp converts to float64 (Dongo uses float64 for Decimal128 approximation).
+type toDecimalOp struct{ arg any }
+
+func newToDecimal(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$toDecimal",
+			fmt.Sprintf("Expression $toDecimal takes exactly 1 argument. %d were passed in.", len(args)))
+	}
+
+	return &toDecimalOp{arg: args[0]}, nil
+}
+
+func (op *toDecimalOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.arg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		return types.Null, nil
+	}
+
+	switch val := v.(type) {
+	case float64:
+		return val, nil
+	case int32:
+		return float64(val), nil
+	case int64:
+		return float64(val), nil
+	case bool:
+		if val {
+			return 1.0, nil
+		}
+
+		return 0.0, nil
+	case string:
+		n, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return nil, newOperatorError(ErrArgsInvalidLen, "$toDecimal",
+				fmt.Sprintf("Failed to parse number '%s' in $convert with no onError value", val))
+		}
+
+		return n, nil
+	default:
+		return nil, newOperatorError(ErrArgsInvalidLen, "$toDecimal",
+			fmt.Sprintf("Unsupported conversion from %T in $toDecimal", v))
+	}
+}
+
+var _ Operator = (*toDecimalOp)(nil)
+
+// ── $toBool ───────────────────────────────────────────────────────────────────
+
+type toBoolOp struct{ arg any }
+
+func newToBool(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$toBool",
+			fmt.Sprintf("Expression $toBool takes exactly 1 argument. %d were passed in.", len(args)))
+	}
+
+	return &toBoolOp{arg: args[0]}, nil
+}
+
+func (op *toBoolOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.arg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		return types.Null, nil
+	}
+
+	switch val := v.(type) {
+	case bool:
+		return val, nil
+	case int32:
+		return val != 0, nil
+	case int64:
+		return val != 0, nil
+	case float64:
+		return val != 0, nil
+	case string:
+		return val != "", nil
+	default:
+		// Documents, arrays, ObjectID, etc. are truthy.
+		return true, nil
+	}
+}
+
+var _ Operator = (*toBoolOp)(nil)

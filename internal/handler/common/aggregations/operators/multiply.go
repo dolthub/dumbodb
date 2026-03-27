@@ -28,6 +28,7 @@ type multiply struct {
 	expressions []*aggregations.Expression
 	operators   []*types.Document
 	numbers     []any
+	rawArgs     []string // variable references ($$var) or other raw strings for evalArgValue
 }
 
 // newMultiply creates a new $multiply operator.
@@ -45,8 +46,14 @@ func newMultiply(args ...any) (Operator, error) {
 			ex, err := aggregations.NewExpression(arg, nil)
 
 			var exErr *aggregations.ExpressionError
-			if errors.As(err, &exErr) && exErr.Code() == aggregations.ErrNotExpression {
-				break
+			if errors.As(err, &exErr) {
+				if exErr.Code() == aggregations.ErrUndefinedVariable {
+					// Variable reference ($$var) — evaluate at process time via evalArgValue.
+					op.rawArgs = append(op.rawArgs, arg)
+				}
+
+				// ErrNotExpression and other codes: skip this arg.
+				continue
 			}
 
 			if err != nil {
@@ -105,6 +112,15 @@ func (m *multiply) Process(doc *types.Document) (any, error) {
 		v, err := op.Process(doc)
 		if err != nil {
 			return nil, err
+		}
+
+		values = append(values, v)
+	}
+
+	for _, rawArg := range m.rawArgs {
+		v, err := evalArgValue(rawArg, doc)
+		if err != nil {
+			continue
 		}
 
 		values = append(values, v)

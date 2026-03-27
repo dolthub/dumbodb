@@ -33,6 +33,8 @@ type sum struct {
 	numbers []any
 	// arrayLen is set when $sum operator contains array field such as `{$sum: [1, "$v"]}`
 	arrayLen int
+	// rawArgs are variable references ($$var) evaluated at process time
+	rawArgs []string
 }
 
 // newSum collects values that can be summed in `numbers`,
@@ -55,8 +57,12 @@ func newSum(args ...any) (Operator, error) {
 			ex, err := aggregations.NewExpression(arg, nil)
 
 			var exErr *aggregations.ExpressionError
-			if errors.As(err, &exErr) && exErr.Code() == aggregations.ErrNotExpression {
-				break
+			if errors.As(err, &exErr) {
+				if exErr.Code() == aggregations.ErrUndefinedVariable {
+					operator.rawArgs = append(operator.rawArgs, arg)
+				}
+
+				continue
 			}
 
 			if err != nil {
@@ -128,6 +134,15 @@ func (s *sum) Process(doc *types.Document) (any, error) {
 		v, err := op.Process(doc)
 		if err != nil {
 			return nil, err
+		}
+
+		numbers = append(numbers, v)
+	}
+
+	for _, rawArg := range s.rawArgs {
+		v, err := evalArgValue(rawArg, doc)
+		if err != nil {
+			continue
 		}
 
 		numbers = append(numbers, v)
