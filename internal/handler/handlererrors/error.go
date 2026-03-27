@@ -132,7 +132,7 @@ const (
 	ErrNotImplemented = ErrorCode(238) // NotImplemented
 
 	// ErrMechanismUnavailable indicates that the authentication mechanism is unavailable.
-	ErrMechanismUnavailable = ErrorCode(334)
+	ErrMechanismUnavailable = ErrorCode(334) // MechanismUnavailable
 
 	// ErrUnsupportedOpQueryCommand indicates that given op query is not supported.
 	ErrUnsupportedOpQueryCommand = ErrorCode(352) // UnsupportedOpQueryCommand

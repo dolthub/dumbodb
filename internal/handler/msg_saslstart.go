@@ -116,9 +116,8 @@ func (h *Handler) saslStart(ctx context.Context, dbName string, document *types.
 			"payload", emptyPayload,
 		)), nil
 	default:
-		msg := fmt.Sprintf("Unsupported authentication mechanism %q.\n", mechanism) +
-			"See https://docs.ferretdb.io/v1.24/security/authentication/ for more details."
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrAuthenticationFailed, msg, "mechanism")
+		msg := fmt.Sprintf("Received authentication for mechanism %s which is not enabled", mechanism)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrMechanismUnavailable, msg, "mechanism")
 	}
 }
 
@@ -312,9 +311,10 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 		cred, lookupErr := h.scramCredentialLookup(ctx, dbName, username, mechanism)
 		if lookupErr != nil {
 			var cmdErr *handlererrors.CommandError
-			if errors.As(lookupErr, &cmdErr) && cmdErr.Code() == handlererrors.ErrAuthenticationFailed {
+			if errors.As(lookupErr, &cmdErr) && cmdErr.Code() == handlererrors.ErrAuthenticationFailed && username != "" {
 				// User not found: return fake credentials so the SCRAM handshake can continue.
 				// This prevents username enumeration. Authentication will fail at saslContinue.
+				// Empty usernames are not valid and fail immediately without fake credentials.
 				return scramFakeCredentials(mechanism), nil
 			}
 
@@ -344,7 +344,11 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 
 		h.L.WarnContext(ctx, "saslStartSCRAM: step failed", attrs...)
 
-		return "", err
+		return "", handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrAuthenticationFailed,
+			"Authentication failed.",
+			"saslStart",
+		)
 	}
 
 	h.L.DebugContext(ctx, "saslStartSCRAM: step succeed", attrs...)
