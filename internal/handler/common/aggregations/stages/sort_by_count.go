@@ -87,7 +87,7 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 		res = append(res, must.NotFail(types.NewDocument("_id", e.id, "count", e.count)))
 	}
 
-	stdsort.SliceStable(res, func(i, j int) bool {
+	stdsort.Slice(res, func(i, j int) bool {
 		ci := must.NotFail(res[i].Get("count")).(int32)
 		cj := must.NotFail(res[j].Get("count")).(int32)
 
@@ -95,7 +95,11 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 			return ci > cj
 		}
 
-		return false
+		// Break ties by _id ascending so output is deterministic.
+		idi := must.NotFail(res[i].Get("_id"))
+		idj := must.NotFail(res[j].Get("_id"))
+
+		return types.CompareForAggregation(idi, idj) == types.Less
 	})
 
 	result := iterator.Values(iterator.ForSlice(res))
