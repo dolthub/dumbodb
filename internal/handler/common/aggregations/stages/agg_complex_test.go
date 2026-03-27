@@ -969,3 +969,95 @@ func TestGraphLookup_StartWithMissingField(t *testing.T) {
 		t.Errorf("expected 0 managers (no startWith value), got %d", managers.Len())
 	}
 }
+
+// TestAggComplex_matchGroupProject_addToSet verifies that a pipeline of
+// $match → $group (with $addToSet) → $project produces deterministically
+// ordered set elements matching MongoDB's sorted output.
+func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
+	t.Parallel()
+
+	// Three orders with two distinct statuses: "pending" appears first in the
+	// slice, "cancelled" second. Without explicit sorting in $addToSet the
+	// output order is document-iteration-dependent; with sorting it is stable.
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "customerId", int32(100), "status", "pending")),
+		must.NotFail(types.NewDocument("_id", int32(2), "customerId", int32(100), "status", "cancelled")),
+		must.NotFail(types.NewDocument("_id", int32(3), "customerId", int32(100), "status", "pending")),
+	}
+
+	// $match: {customerId: 100}
+	matchDoc := must.NotFail(types.NewDocument(
+		"$match", must.NotFail(types.NewDocument("customerId", int32(100))),
+	))
+	matchStage, err := stages.NewStage(matchDoc)
+	if err != nil {
+		t.Fatalf("NewStage($match): %v", err)
+	}
+
+	// $group: {_id: "$customerId", uniqueStatuses: {$addToSet: "$status"}}
+	groupSpec := must.NotFail(types.NewDocument(
+		"_id", "$customerId",
+		"uniqueStatuses", must.NotFail(types.NewDocument("$addToSet", "$status")),
+	))
+	groupDoc := must.NotFail(types.NewDocument("$group", groupSpec))
+	groupStage, err := stages.NewStage(groupDoc)
+	if err != nil {
+		t.Fatalf("NewStage($group): %v", err)
+	}
+
+	// $project: {_id: 0, uniqueStatuses: 1}
+	projectSpec := must.NotFail(types.NewDocument("_id", int32(0), "uniqueStatuses", int32(1)))
+	projectDoc := must.NotFail(types.NewDocument("$project", projectSpec))
+	projectStage, err := stages.NewStage(projectDoc)
+	if err != nil {
+		t.Fatalf("NewStage($project): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := matchStage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("$match Process: %v", err)
+	}
+
+	out, err = groupStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$group Process: %v", err)
+	}
+
+	out, err = projectStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$project Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	rawStatuses, err := results[0].Get("uniqueStatuses")
+	if err != nil {
+		t.Fatalf("missing uniqueStatuses: %v", err)
+	}
+
+	statuses, ok := rawStatuses.(*types.Array)
+	if !ok {
+		t.Fatalf("uniqueStatuses is not an array: %T", rawStatuses)
+	}
+
+	if statuses.Len() != 2 {
+		t.Fatalf("expected 2 unique statuses, got %d", statuses.Len())
+	}
+
+	// MongoDB returns $addToSet elements sorted; we expect ["cancelled", "pending"].
+	s0, _ := statuses.Get(0)
+	s1, _ := statuses.Get(1)
+
+	if s0 != "cancelled" || s1 != "pending" {
+		t.Errorf("expected [cancelled pending], got [%v %v]", s0, s1)
+	}
+}
