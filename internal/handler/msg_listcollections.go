@@ -95,6 +95,18 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 			options.Set("max", collection.CappedDocuments)
 		}
 
+		if collection.Validator != nil {
+			options.Set("validator", collection.Validator)
+		}
+
+		if collection.ValidationLevel != "" {
+			options.Set("validationLevel", collection.ValidationLevel)
+		}
+
+		if collection.ValidationAction != "" {
+			options.Set("validationAction", collection.ValidationAction)
+		}
+
 		if collection.UUID != "" {
 			collUUID, err := uuid.Parse(collection.UUID)
 			if err != nil {

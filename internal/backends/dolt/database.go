@@ -64,7 +64,13 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		}
 
 		collUUID := state.uuids[name]
-		colls = append(colls, backends.CollectionInfo{Name: name, UUID: collUUID})
+		ci := backends.CollectionInfo{Name: name, UUID: collUUID}
+		if v, ok := state.validators[name]; ok {
+			ci.Validator = v.Validator
+			ci.ValidationLevel = v.ValidationLevel
+			ci.ValidationAction = v.ValidationAction
+		}
+		colls = append(colls, ci)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -118,6 +124,15 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	collUUID := uuid.New()
 	state.uuids[params.Name] = collUUID.String()
 
+	// Store validator if provided.
+	if params.Validator != nil || params.ValidationLevel != "" || params.ValidationAction != "" {
+		state.validators[params.Name] = &collectionValidator{
+			Validator:        params.Validator,
+			ValidationLevel:  params.ValidationLevel,
+			ValidationAction: params.ValidationAction,
+		}
+	}
+
 	return nil
 }
 
@@ -153,6 +168,7 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	}
 
 	delete(state.uuids, params.Name)
+	delete(state.validators, params.Name)
 
 	return nil
 }
@@ -206,6 +222,63 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 	if collUUID, ok := state.uuids[params.OldName]; ok {
 		state.uuids[params.NewName] = collUUID
 		delete(state.uuids, params.OldName)
+	}
+
+	// Transfer validator from old name to new name.
+	if v, ok := state.validators[params.OldName]; ok {
+		state.validators[params.NewName] = v
+		delete(state.validators, params.OldName)
+	}
+
+	return nil
+}
+
+// CollMod implements backends.Database.
+func (db *database) CollMod(ctx context.Context, params *backends.CollModParams) error {
+	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
+	if err != nil {
+		return err
+	}
+
+	if state == nil {
+		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("dolt: database %q does not exist", db.name))
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	exists, err := state.am.Has(ctx, params.Name)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("dolt: collection %q does not exist in %q", params.Name, db.name))
+	}
+
+	// Get or create validator entry.
+	v, ok := state.validators[params.Name]
+	if !ok {
+		v = &collectionValidator{}
+	}
+
+	if params.SetValidator {
+		v.Validator = params.Validator
+	}
+	if params.ValidationLevel != "" {
+		v.ValidationLevel = params.ValidationLevel
+	}
+	if params.ValidationAction != "" {
+		v.ValidationAction = params.ValidationAction
+	}
+
+	// Store (or clear if all fields are empty).
+	if v.Validator == nil && v.ValidationLevel == "" && v.ValidationAction == "" {
+		delete(state.validators, params.Name)
+	} else {
+		state.validators[params.Name] = v
 	}
 
 	return nil

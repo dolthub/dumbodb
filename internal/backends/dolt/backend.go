@@ -57,6 +57,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/dongo/internal/types"
 )
 
 const (
@@ -73,6 +74,13 @@ const (
 	workingSetDataset = "workingSets/heads/main"
 )
 
+// collectionValidator holds schema validation options for a single collection (in-memory only).
+type collectionValidator struct {
+	Validator        *types.Document
+	ValidationLevel  string
+	ValidationAction string
+}
+
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	mu     sync.RWMutex
@@ -81,9 +89,10 @@ type dbState struct {
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
 	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
 	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
-	am      prolly.AddressMap        // current collections address map (name → DTBL hash)
-	uuids   map[string]string        // collection name → UUID string (in-memory)
-	indexes map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
+	am         prolly.AddressMap               // current collections address map (name → DTBL hash)
+	uuids      map[string]string               // collection name → UUID string (in-memory)
+	indexes    map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
+	validators map[string]*collectionValidator // collection name → validator (in-memory)
 
 	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
 	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
@@ -481,14 +490,15 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
-		cs:      cs,
-		ns:      ns,
-		vs:      vs,
-		doltDB:  doltDB,
-		ds:      ds,
-		am:      am,
-		uuids:   make(map[string]string),
-		indexes: make(map[string][]backends.IndexInfo),
+		cs:         cs,
+		ns:         ns,
+		vs:         vs,
+		doltDB:     doltDB,
+		ds:         ds,
+		am:         am,
+		uuids:      make(map[string]string),
+		indexes:    make(map[string][]backends.IndexInfo),
+		validators: make(map[string]*collectionValidator),
 	}
 
 	// Initialize DTBL construction helpers: write the shared DSCH chunk once

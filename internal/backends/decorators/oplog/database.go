@@ -71,6 +71,11 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 	return db.origDB.RenameCollection(ctx, params)
 }
 
+// CollMod implements backends.Database interface.
+func (db *database) CollMod(ctx context.Context, params *backends.CollModParams) error {
+	return db.origDB.CollMod(ctx, params)
+}
+
 // Stats implements backends.Database interface.
 func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsParams) (*backends.DatabaseStatsResult, error) {
 	return db.origDB.Stats(ctx, params)

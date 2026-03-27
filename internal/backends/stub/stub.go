@@ -97,6 +97,11 @@ func (db *database) RenameCollection(_ context.Context, params *backends.RenameC
 	return fmt.Errorf("stub: RenameCollection %q not implemented", params.OldName)
 }
 
+// CollMod implements backends.Database interface.
+func (db *database) CollMod(_ context.Context, params *backends.CollModParams) error {
+	return backends.NewError(backends.ErrorCodeCollectionDoesNotExist, fmt.Errorf("stub: CollMod %q.%q not implemented", db.name, params.Name))
+}
+
 // Stats implements backends.Database interface.
 func (db *database) Stats(_ context.Context, _ *backends.DatabaseStatsParams) (*backends.DatabaseStatsResult, error) {
 	return &backends.DatabaseStatsResult{}, nil

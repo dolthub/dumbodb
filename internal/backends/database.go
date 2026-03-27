@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
 
+	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/must"
 )
 
@@ -41,6 +42,7 @@ type Database interface {
 	CreateCollection(context.Context, *CreateCollectionParams) error
 	DropCollection(context.Context, *DropCollectionParams) error
 	RenameCollection(context.Context, *RenameCollectionParams) error
+	CollMod(context.Context, *CollModParams) error
 
 	Stats(context.Context, *DatabaseStatsParams) (*DatabaseStatsResult, error)
 }
@@ -94,7 +96,13 @@ type CollectionInfo struct {
 	UUID            string
 	CappedSize      int64
 	CappedDocuments int64
-	_               struct{} // prevent unkeyed literals
+	// Validator is the schema validator expression (nil if none).
+	Validator *types.Document
+	// ValidationLevel is "strict" or "moderate" (empty defaults to "strict").
+	ValidationLevel string
+	// ValidationAction is "error" or "warn" (empty defaults to "error").
+	ValidationAction string
+	_ struct{} // prevent unkeyed literals
 }
 
 // Capped returns true if collection is capped.
@@ -137,12 +145,32 @@ type CreateCollectionParams struct {
 	Name            string
 	CappedSize      int64
 	CappedDocuments int64
-	_               struct{} // prevent unkeyed literals
+	// Validator is the schema validator expression (nil if none).
+	Validator *types.Document
+	// ValidationLevel is "strict" or "moderate" (empty defaults to "strict").
+	ValidationLevel string
+	// ValidationAction is "error" or "warn" (empty defaults to "error").
+	ValidationAction string
+	_ struct{} // prevent unkeyed literals
 }
 
 // Capped returns true if capped collection creation is requested.
 func (ccp *CreateCollectionParams) Capped() bool {
 	return ccp.CappedSize > 0 // TODO https://github.com/dolthub/dongo/issues/3631
+}
+
+// CollModParams represents the parameters of Database.CollMod method.
+type CollModParams struct {
+	Name string
+	// Validator replaces the existing validator when SetValidator is true.
+	// Set to an empty document to clear the validator.
+	Validator    *types.Document
+	SetValidator bool
+	// ValidationLevel replaces the existing level when non-empty.
+	ValidationLevel string
+	// ValidationAction replaces the existing action when non-empty.
+	ValidationAction string
+	_ struct{} // prevent unkeyed literals
 }
 
 // CreateCollection creates a new collection with valid name in the database; it should not already exist.
@@ -224,6 +252,27 @@ func (dbc *databaseContract) RenameCollection(ctx context.Context, params *Renam
 	}
 
 	checkError(err, ErrorCodeCollectionNameIsInvalid, ErrorCodeCollectionDoesNotExist, ErrorCodeCollectionAlreadyExists)
+	return err
+}
+
+// CollMod modifies collection options (validator, validationLevel, validationAction).
+//
+// The collection must exist; otherwise ErrorCodeCollectionDoesNotExist is returned.
+func (dbc *databaseContract) CollMod(ctx context.Context, params *CollModParams) error {
+	ctx, span := otel.Tracer("").Start(ctx, "CollMod")
+	defer span.End()
+
+	err := validateCollectionName(params.Name)
+	if err == nil {
+		err = dbc.db.CollMod(ctx, params)
+	}
+
+	if err != nil {
+		span.SetStatus(otelcodes.Error, "")
+	}
+
+	checkError(err, ErrorCodeCollectionNameIsInvalid, ErrorCodeCollectionDoesNotExist)
+
 	return err
 }
 

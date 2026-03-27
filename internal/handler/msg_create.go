@@ -42,9 +42,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	unimplementedFields := []string{
 		"timeseries",
 		"expireAfterSeconds",
-		"validator",
-		"validationLevel",
-		"validationAction",
 		"viewOn",
 		"pipeline",
 		"collation",
@@ -113,6 +110,62 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	} else if sizeVal, _ := document.Get("size"); sizeVal != nil {
 		// size was provided without capped=true — still counts as explicit options.
 		hasExplicitOptions = true
+	}
+
+	// Parse schema validation options.
+	if validatorVal, _ := document.Get("validator"); validatorVal != nil {
+		hasExplicitOptions = true
+		validatorDoc, ok := validatorVal.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'validator' option must be a document",
+				"create",
+			)
+		}
+		params.Validator = validatorDoc
+	}
+
+	if validationLevelVal, _ := document.Get("validationLevel"); validationLevelVal != nil {
+		level, ok := validationLevelVal.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'validationLevel' must be a string ('off', 'strict', or 'moderate')",
+				"create",
+			)
+		}
+		switch level {
+		case "off", "strict", "moderate":
+			params.ValidationLevel = level
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'validationLevel' must be 'off', 'strict', or 'moderate'",
+				"create",
+			)
+		}
+	}
+
+	if validationActionVal, _ := document.Get("validationAction"); validationActionVal != nil {
+		action, ok := validationActionVal.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'validationAction' must be a string ('error' or 'warn')",
+				"create",
+			)
+		}
+		switch action {
+		case "error", "warn":
+			params.ValidationAction = action
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'validationAction' must be 'error' or 'warn'",
+				"create",
+			)
+		}
 	}
 
 	// Validate collection name with MongoDB-compatible error messages before calling backend.

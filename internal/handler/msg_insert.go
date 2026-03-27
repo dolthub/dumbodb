@@ -79,6 +79,22 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	// Fetch collection validator (if any) for schema validation.
+	var collValidator *types.Document
+	var validationAction string
+	if collRes, collErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
+		if len(collRes.Collections) == 1 {
+			ci := collRes.Collections[0]
+			if ci.Validator != nil && ci.ValidationLevel != "off" {
+				collValidator = ci.Validator
+				validationAction = ci.ValidationAction
+				if validationAction == "" {
+					validationAction = "error"
+				}
+			}
+		}
+	}
+
 	docsIter := params.Docs.Iterator()
 	defer docsIter.Close()
 
@@ -111,37 +127,64 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			}
 
 			// TODO https://github.com/dolthub/dongo/issues/3454
-			if err = doc.ValidateData(); err == nil {
-				docs = append(docs, doc)
-				docsIndexes = append(docsIndexes, i)
+			if err = doc.ValidateData(); err != nil {
+				var ve *types.ValidationError
+				if !errors.As(err, &ve) {
+					return nil, lazyerrors.Error(err)
+				}
+
+				var code handlererrors.ErrorCode
+				switch ve.Code() {
+				case types.ErrValidation, types.ErrIDNotFound:
+					code = handlererrors.ErrBadValue
+				case types.ErrWrongIDType:
+					code = handlererrors.ErrInvalidID
+				default:
+					panic(fmt.Sprintf("Unknown error code: %v", ve.Code()))
+				}
+
+				writeErrors = append(writeErrors, &mongo.WriteError{
+					Index:   i,
+					Code:    int(code),
+					Message: ve.Error(),
+				})
+
+				if params.Ordered {
+					break
+				}
 
 				continue
 			}
 
-			var ve *types.ValidationError
-			if !errors.As(err, &ve) {
-				return nil, lazyerrors.Error(err)
+			// Apply schema validator if set.
+			if collValidator != nil {
+				matches, schemaErr := common.FilterDocument(doc, collValidator)
+				if schemaErr != nil {
+					return nil, lazyerrors.Error(schemaErr)
+				}
+
+				if !matches {
+					const errMsg = "Document failed validation"
+					if validationAction == "warn" {
+						h.L.Warn("document failed schema validation", "collection", params.Collection)
+					} else {
+						writeErrors = append(writeErrors, &mongo.WriteError{
+							Index:   i,
+							Code:    int(handlererrors.ErrDocumentValidationFailure),
+							Message: errMsg,
+						})
+
+						if params.Ordered {
+							break
+						}
+
+						continue
+					}
+				}
 			}
 
-			var code handlererrors.ErrorCode
-			switch ve.Code() {
-			case types.ErrValidation, types.ErrIDNotFound:
-				code = handlererrors.ErrBadValue
-			case types.ErrWrongIDType:
-				code = handlererrors.ErrInvalidID
-			default:
-				panic(fmt.Sprintf("Unknown error code: %v", ve.Code()))
-			}
-
-			writeErrors = append(writeErrors, &mongo.WriteError{
-				Index:   i,
-				Code:    int(code),
-				Message: ve.Error(),
-			})
-
-			if params.Ordered {
-				break
-			}
+			docs = append(docs, doc)
+			docsIndexes = append(docsIndexes, i)
 		}
 
 		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs}); err == nil {
