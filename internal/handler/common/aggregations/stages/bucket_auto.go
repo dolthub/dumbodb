@@ -71,8 +71,8 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	groupByVal, err := spec.Get("groupBy")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			"The $bucketAuto stage specification must have a 'groupBy' field",
+			handlererrors.ErrBucketAutoMissingRequiredFields,
+			"$bucketAuto requires 'groupBy' and 'buckets' to be specified.",
 			"$bucketAuto (stage)",
 		)
 	}
@@ -81,8 +81,8 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	bucketsVal, err := spec.Get("buckets")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
-			"The $bucketAuto stage specification must have a 'buckets' field",
+			handlererrors.ErrBucketAutoMissingRequiredFields,
+			"$bucketAuto requires 'groupBy' and 'buckets' to be specified.",
 			"$bucketAuto (stage)",
 		)
 	}

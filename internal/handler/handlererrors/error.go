@@ -280,6 +280,9 @@ const (
 	// ErrStageGroupMultipleAccumulator indicates that group field must specify one accumulator.
 	ErrStageGroupMultipleAccumulator = ErrorCode(40238) // Location40238
 
+	// ErrBucketAutoMissingRequiredFields indicates that $bucketAuto is missing required 'groupBy' or 'buckets' fields.
+	ErrBucketAutoMissingRequiredFields = ErrorCode(40246) // Location40246
+
 	// ErrStageGroupInvalidAccumulator indicates invalid accumulator field.
 	ErrStageGroupInvalidAccumulator = ErrorCode(40234) // Location40234
 
