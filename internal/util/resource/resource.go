@@ -17,6 +17,7 @@ package resource
 
 import (
 	"fmt"
+	"log/slog"
 	"reflect"
 	"runtime"
 	"runtime/pprof"
@@ -86,7 +87,14 @@ func Track(obj any, token *Token) {
 			msg += "\nObject created by " + string(stack)
 		}
 
-		panic(msg)
+		// In debug/race builds, panic to catch resource leaks during development.
+		// In production builds, log a warning — panicking in a GC finalizer runs in
+		// goroutine 6 with no recovery and kills the entire server process.
+		if debugbuild.Enabled {
+			panic(msg)
+		}
+
+		slog.Error(msg)
 	})
 }
 
