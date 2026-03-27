@@ -504,3 +504,39 @@ func TestQuery_bits(t *testing.T) {
 		}
 	})
 }
+
+// TestFind_CursorCleanupOnFilterError is a regression test for MultiCloser leaks.
+//
+// When a find command fails mid-iteration due to an invalid filter (e.g. a
+// $jsonSchema with a malformed "required" clause), the cursor's underlying
+// MultiCloser must be closed before the error is returned to the client.
+// If it is not, GC will fire the finalizer and panic with:
+//
+//	panic: *iterator.MultiCloser has not been finalized
+//
+// This test does NOT run in parallel so that forcing GC here does not interact
+// with other goroutines' resource tracking.
+func TestFind_CursorCleanupOnFilterError(t *testing.T) {
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("name", "alice")),
+		d(e("_id", int32(2)), e("name", "bob")),
+	)
+
+	ctx := context.Background()
+
+	// $jsonSchema with required as a string (not an array) causes FilterDocument
+	// to return an error on the first document, which fails ConsumeValuesN.
+	// The fix: MsgFind calls h.cursors.CloseAndRemove before returning the error,
+	// properly finalizing the MultiCloser.
+	_, err := coll.Find(ctx, d(e("$jsonSchema", d(e("required", "not-an-array")))))
+	require.Error(t, err)
+
+	// Force GC multiple times to flush the finalizer goroutine.
+	// If the MultiCloser leaked (Close not called), this will panic.
+	for i := 0; i < 5; i++ {
+		runtime.GC()
+	}
+}
