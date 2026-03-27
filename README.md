@@ -46,6 +46,90 @@ Or with `mongosh` one-liner:
 mongosh --eval 'db.test.insertOne({x:1})' mongodb://127.0.0.1:27017/testdb
 ```
 
+## Go parity test suite
+
+### What this is
+
+The `tests/` package is a Go parity test suite that validates Dongo's
+MongoDB compatibility. Each test runs an operation against a locally-managed
+Dongo instance using the MongoDB Go driver and asserts that the response
+matches expected MongoDB 8 behavior. Dongo is built and started automatically
+by the test harness — no external processes required.
+
+### Prerequisites
+
+- Go 1.21 or later (module requires Go 1.25.6+)
+- No Docker or external servers needed — the harness builds and starts Dongo in-process
+
+### Running locally
+
+```bash
+# Clone (no submodules needed for this suite)
+git clone https://github.com/dolthub/dongo
+cd dongo
+
+# Run the full parity suite (builds Dongo automatically if binary is missing)
+go test ./tests/
+
+# Run with verbose output
+go test -v ./tests/
+
+# Run a single test
+go test -v -run TestCRUD_InsertOne ./tests/
+
+# Run tests in parallel (default) with a timeout
+go test -timeout 5m ./tests/
+```
+
+The binary is cached at `.runtime/bin/dongo` after the first build.
+Pre-build it explicitly with:
+
+```bash
+make build
+# or: go build -o .runtime/bin/dongo ./cmd/dongo/
+```
+
+### Test result legend
+
+| Result | Meaning |
+|--------|---------|
+| `PASS` | Test passed — Dongo behaves correctly |
+| `FAIL` | Unexpected failure — likely a bug or regression |
+| `SKIP` | Test skipped (e.g. parallel setup, environment guard) |
+| `SKIP DongoXFail: …` | Known limitation — Dongo does not yet implement this behavior |
+
+**DongoXFail** tests (`dongoXFail(t, "reason")`) document correct MongoDB
+behavior in their test body. When Dongo adds support, removing the
+`dongoXFail()` call turns the test into a normal passing test. Do not delete
+these tests — they are the acceptance criteria for future work.
+
+### Known divergences
+
+Known Dongo limitations are recorded inline via `dongoXFail` calls throughout
+the test files. Each call includes a short reason string describing what MongoDB
+does that Dongo does not yet support. Search for `DongoXFail` in `tests/` to
+see the current list:
+
+```bash
+grep -r 'dongoXFail' tests/ | grep -v '^tests/crud_test.go:.*func dongoXFail'
+```
+
+### Repo layout
+
+```
+tests/                      Go parity tests (this suite)
+  *_test.go                 Test files (one per topic area)
+  bats/                     Bats shell integration tests (owner-managed, do not edit)
+cmd/dongo/                  Dongo server entry point
+internal/                   Dongo implementation
+.github/workflows/
+  dongo-scorecard.yml       FerretDB scorecard CI
+  mongodb-reference.yml     MongoDB reference baseline CI
+  bats.yml                  Bats shell test CI
+```
+
+---
+
 ## Run FerretDB integration tests
 
 The `ferretdb/` directory is a Git submodule containing the [FerretDB](https://github.com/FerretDB/FerretDB)
