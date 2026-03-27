@@ -122,6 +122,33 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	}, nil
 }
 
+// extractIndexKey returns a composite key for the given index extracted from doc.
+// Fields absent in the document are represented as types.Null.
+func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
+	key := make([]any, len(idx.Key))
+	for i, kp := range idx.Key {
+		val, err := doc.Get(kp.Field)
+		if err != nil {
+			val = types.Null
+		}
+		key[i] = val
+	}
+	return key
+}
+
+// indexKeysEqual returns true if two composite index keys are element-wise equal.
+func indexKeysEqual(a, b []any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if types.Compare(a[i], b[i]) != types.Equal {
+			return false
+		}
+	}
+	return true
+}
+
 // InsertAll implements backends.Collection.
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
@@ -144,10 +171,53 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
+	// Collect unique secondary indexes for this collection.
+	var uniqueIndexes []backends.IndexInfo
+	for _, idx := range state.indexes[c.name] {
+		if idx.Unique {
+			uniqueIndexes = append(uniqueIndexes, idx)
+		}
+	}
+
+	// For each unique index, gather the key values of all existing documents.
+	// existingUniqueKeys[i] holds the composite keys for unique index i.
+	existingUniqueKeys := make([][][]any, len(uniqueIndexes))
+	if len(uniqueIndexes) > 0 {
+		iter, err := m.IterAll(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for {
+			_, v, err := iter.Next(ctx)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return nil, err
+			}
+			if v == nil {
+				break
+			}
+			jsonHash, ok := valDesc.GetJSONAddr(0, v)
+			if !ok {
+				continue
+			}
+			existingDoc, err := readDocJSON(ctx, state.ns, jsonHash)
+			if err != nil {
+				return nil, err
+			}
+			for i, idx := range uniqueIndexes {
+				existingUniqueKeys[i] = append(existingUniqueKeys[i], extractIndexKey(existingDoc, idx))
+			}
+		}
+	}
+
 	mut := m.Mutate()
 
 	// Track _id values inserted in this batch to detect in-batch duplicates.
 	batchIDs := make([]any, 0, len(params.Docs))
+	// batchUniqueKeys[i] holds composite keys for unique index i from docs in this batch.
+	batchUniqueKeys := make([][][]any, len(uniqueIndexes))
 
 	for _, doc := range params.Docs {
 		// Extract the _id from this document.
@@ -174,6 +244,28 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 					fmt.Errorf("dolt: duplicate _id in batch"),
 				)
 			}
+		}
+
+		// Check unique secondary index constraints.
+		for i, idx := range uniqueIndexes {
+			newKey := extractIndexKey(doc, idx)
+			for _, existKey := range existingUniqueKeys[i] {
+				if indexKeysEqual(newKey, existKey) {
+					return nil, backends.NewError(
+						backends.ErrorCodeInsertDuplicateID,
+						fmt.Errorf("dolt: duplicate key for unique index %s", idx.Name),
+					)
+				}
+			}
+			for _, batchKey := range batchUniqueKeys[i] {
+				if indexKeysEqual(newKey, batchKey) {
+					return nil, backends.NewError(
+						backends.ErrorCodeInsertDuplicateID,
+						fmt.Errorf("dolt: duplicate key for unique index %s", idx.Name),
+					)
+				}
+			}
+			batchUniqueKeys[i] = append(batchUniqueKeys[i], newKey)
 		}
 
 		// Encode the _id to varbinary key bytes.
