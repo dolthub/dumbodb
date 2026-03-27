@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dongo/internal/clientconn/conninfo"
 	"github.com/dolthub/dongo/internal/handler/common"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
+	"github.com/dolthub/dongo/internal/handler/handlerparams"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
 	"github.com/dolthub/dongo/internal/util/lazyerrors"
@@ -65,6 +66,26 @@ func (h *Handler) saslStart(ctx context.Context, dbName string, document *types.
 	mechanism, err := common.GetRequiredParam[string](document, "mechanism")
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if optionsRaw, _ := document.Get("options"); optionsRaw != nil {
+		optionsDoc, ok := optionsRaw.(*types.Document)
+		if !ok {
+			msg := fmt.Sprintf(
+				"BSON field 'saslStart.options' is the wrong type '%s', expected type 'object'",
+				handlerparams.AliasFromType(optionsRaw),
+			)
+
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch, msg, "options")
+		}
+
+		if _, err = common.GetOptionalParam(optionsDoc, "skipEmptyExchange", false); err != nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrAuthenticationFailed,
+				"Authentication failed.",
+				"saslStart",
+			)
+		}
 	}
 
 	switch mechanism {
