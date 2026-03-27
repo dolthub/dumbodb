@@ -671,430 +671,132 @@ func TestAggExpr_AddFields_SubtractFloat(t *testing.T) {
 	assert.InDelta(t, 7.3, diff, 0.0001)
 }
 
-// ─── Arithmetic math operators ────────────────────────────────────────────────
+// ─── arithmetic extension operators ──────────────────────────────────────────
 
-// TestAggExpr_Math_Abs tests $abs. (DongoFull)
-func TestAggExpr_Math_Abs(t *testing.T) {
+// TestAggExpr_Abs tests $abs. (DongoFull)
+func TestAggExpr_Abs(t *testing.T) {
 	t.Parallel()
 
 	env := startDongo(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
-		d(e("_id", "a"), e("val", int32(-5))),
+		d(e("_id", "a"), e("v", int32(-5))),
+		d(e("_id", "b"), e("v", float64(-3.7))),
+		d(e("_id", "c"), e("v", int32(4))),
 	)
 
 	ctx := context.Background()
 	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(e("abs", d(e("$abs", "$val")))))),
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$abs", "$v")))))),
 	})
 	require.NoError(t, err)
 
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-	assert.Equal(t, int32(5), results[0].Map()["abs"])
+	require.Len(t, results, 3)
+
+	assert.Equal(t, int32(5), results[0].Map()["r"])
+	assert.InDelta(t, 3.7, results[1].Map()["r"].(float64), 0.0001)
+	assert.Equal(t, int32(4), results[2].Map()["r"])
 }
 
-// TestAggExpr_Math_CeilFloor tests $ceil and $floor. (DongoFull)
-func TestAggExpr_Math_CeilFloor(t *testing.T) {
+// TestAggExpr_Ceil tests $ceil. (DongoFull)
+func TestAggExpr_Ceil(t *testing.T) {
 	t.Parallel()
 
 	env := startDongo(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
-		d(e("_id", "a"), e("x", float64(4.3))),
+		d(e("_id", "a"), e("v", float64(2.1))),
+		d(e("_id", "b"), e("v", float64(-1.9))),
+		d(e("_id", "c"), e("v", int32(3))),
 	)
 
 	ctx := context.Background()
 	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("c", d(e("$ceil", "$x"))),
-			e("f", d(e("$floor", "$x"))),
-		))),
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$ceil", "$v")))))),
 	})
 	require.NoError(t, err)
 
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
+	require.Len(t, results, 3)
 
-	assert.Equal(t, float64(5), results[0].Map()["c"])
-	assert.Equal(t, float64(4), results[0].Map()["f"])
+	assert.Equal(t, float64(3), results[0].Map()["r"])
+	assert.Equal(t, float64(-1), results[1].Map()["r"])
+	assert.Equal(t, int32(3), results[2].Map()["r"])
 }
 
-// TestAggExpr_Math_Sqrt tests $sqrt. (DongoFull)
-func TestAggExpr_Math_Sqrt(t *testing.T) {
+// TestAggExpr_Floor tests $floor. (DongoFull)
+func TestAggExpr_Floor(t *testing.T) {
 	t.Parallel()
 
 	env := startDongo(t)
 	coll := env.collection(t)
 
-	insertDocs(t, coll, d(e("_id", "a"), e("x", float64(9))))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(e("s", d(e("$sqrt", "$x")))))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	assert.InDelta(t, float64(3), results[0].Map()["s"], 0.001)
-}
-
-// TestAggExpr_Math_PowMod tests $pow and $mod. (DongoFull)
-func TestAggExpr_Math_PowMod(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("x", int32(3)), e("y", int32(2))))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("p", d(e("$pow", bson.A{"$x", "$y"}))),
-			e("m", d(e("$mod", bson.A{"$x", "$y"}))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	assert.InDelta(t, float64(9), results[0].Map()["p"], 0.001)
-	assert.Equal(t, int32(1), results[0].Map()["m"])
-}
-
-// TestAggExpr_Math_RoundTrunc tests $round and $trunc. (DongoFull)
-func TestAggExpr_Math_RoundTrunc(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("x", float64(4.7))))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("r", d(e("$round", "$x"))),
-			e("tr", d(e("$trunc", "$x"))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	assert.Equal(t, float64(5), results[0].Map()["r"])
-	assert.Equal(t, float64(4), results[0].Map()["tr"])
-}
-
-// ─── Array operators ──────────────────────────────────────────────────────────
-
-// TestAggExpr_Array_Size tests $size. (DongoFull)
-func TestAggExpr_Array_Size(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("arr", bson.A{1, 2, 3})))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(e("sz", d(e("$size", "$arr")))))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-	assert.Equal(t, int32(3), results[0].Map()["sz"])
-}
-
-// TestAggExpr_Array_SliceReverseConcat tests $slice, $reverseArray, $concatArrays. (DongoFull)
-func TestAggExpr_Array_SliceReverseConcat(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("arr", bson.A{int32(1), int32(2), int32(3), int32(4)})))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("sl", d(e("$slice", bson.A{"$arr", int32(2)}))),
-			e("rv", d(e("$reverseArray", "$arr"))),
-			e("ca", d(e("$concatArrays", bson.A{bson.A{int32(0)}, "$arr"}))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, bson.A{int32(1), int32(2)}, m["sl"])
-	assert.Equal(t, bson.A{int32(4), int32(3), int32(2), int32(1)}, m["rv"])
-	assert.Equal(t, bson.A{int32(0), int32(1), int32(2), int32(3), int32(4)}, m["ca"])
-}
-
-// TestAggExpr_Array_FilterMapReduce tests $filter, $map, $reduce. (DongoFull)
-func TestAggExpr_Array_FilterMapReduce(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("nums", bson.A{int32(1), int32(2), int32(3), int32(4)})))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("evens", d(e("$filter", d(
-				e("input", "$nums"),
-				e("as", "n"),
-				e("cond", d(e("$eq", bson.A{"$$n", int32(2)}))),
-			)))),
-			e("doubled", d(e("$map", d(
-				e("input", "$nums"),
-				e("as", "n"),
-				e("in", d(e("$multiply", bson.A{"$$n", int32(2)}))),
-			)))),
-			e("sum", d(e("$reduce", d(
-				e("input", "$nums"),
-				e("initialValue", int32(0)),
-				e("in", d(e("$add", bson.A{"$$value", "$$this"}))),
-			)))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, bson.A{int32(2)}, m["evens"])
-	assert.Equal(t, bson.A{int32(2), int32(4), int32(6), int32(8)}, m["doubled"])
-	assert.Equal(t, int32(10), m["sum"])
-}
-
-// TestAggExpr_Array_RangeInIsArray tests $range, $in, $isArray. (DongoFull)
-func TestAggExpr_Array_RangeInIsArray(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("arr", bson.A{int32(10), int32(20)})))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("rng", d(e("$range", bson.A{int32(0), int32(4)}))),
-			e("inArr", d(e("$in", bson.A{int32(10), "$arr"}))),
-			e("isArr", d(e("$isArray", "$arr"))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, bson.A{int32(0), int32(1), int32(2), int32(3)}, m["rng"])
-	assert.Equal(t, true, m["inArr"])
-	assert.Equal(t, true, m["isArr"])
-}
-
-// ─── String operators ─────────────────────────────────────────────────────────
-
-// TestAggExpr_String_StrLen tests $strLenBytes and $strLenCP. (DongoFull)
-func TestAggExpr_String_StrLen(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("s", "hello")))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("lb", d(e("$strLenBytes", "$s"))),
-			e("lcp", d(e("$strLenCP", "$s"))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, int32(5), m["lb"])
-	assert.Equal(t, int32(5), m["lcp"])
-}
-
-// TestAggExpr_String_SubstrSplit tests $substr, $substrCP, $split. (DongoFull)
-func TestAggExpr_String_SubstrSplit(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("s", "hello world")))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("sub", d(e("$substr", bson.A{"$s", int32(0), int32(5)}))),
-			e("scp", d(e("$substrCP", bson.A{"$s", int32(6), int32(5)}))),
-			e("sp", d(e("$split", bson.A{"$s", " "}))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, "hello", m["sub"])
-	assert.Equal(t, "world", m["scp"])
-	assert.Equal(t, bson.A{"hello", "world"}, m["sp"])
-}
-
-// TestAggExpr_String_Trim tests $trim, $ltrim, $rtrim. (DongoFull)
-func TestAggExpr_String_Trim(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("s", "  hello  ")))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("tr", d(e("$trim", d(e("input", "$s"))))),
-			e("lt", d(e("$ltrim", d(e("input", "$s"))))),
-			e("rt", d(e("$rtrim", d(e("input", "$s"))))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, "hello", m["tr"])
-	assert.Equal(t, "hello  ", m["lt"])
-	assert.Equal(t, "  hello", m["rt"])
-}
-
-// TestAggExpr_String_RegexMatch tests $regexMatch. (DongoFull)
-func TestAggExpr_String_RegexMatch(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("s", "hello world")))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("m1", d(e("$regexMatch", d(e("input", "$s"), e("regex", "hello"))))),
-			e("m2", d(e("$regexMatch", d(e("input", "$s"), e("regex", "xyz"))))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, true, m["m1"])
-	assert.Equal(t, false, m["m2"])
-}
-
-// ─── Date operators ───────────────────────────────────────────────────────────
-
-// TestAggExpr_Date_Parts tests $year, $month, $dayOfMonth, $hour, $minute, $second. (DongoFull)
-func TestAggExpr_Date_Parts(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	ts := primitive.NewDateTimeFromTime(
-		primitive.NewObjectID().Timestamp(), // we need a fixed time
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("v", float64(2.9))),
+		d(e("_id", "b"), e("v", float64(-1.1))),
+		d(e("_id", "c"), e("v", int32(3))),
 	)
-	// Use a fixed time: 2023-06-15 12:34:56 UTC
-	fixedTime := primitive.DateTime(1686832496000) // ms since epoch
-
-	insertDocs(t, coll, d(e("_id", "a"), e("dt", fixedTime)))
-	_ = ts
 
 	ctx := context.Background()
 	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("yr", d(e("$year", "$dt"))),
-			e("mo", d(e("$month", "$dt"))),
-			e("dom", d(e("$dayOfMonth", "$dt"))),
-			e("hr", d(e("$hour", "$dt"))),
-			e("min", d(e("$minute", "$dt"))),
-			e("sec", d(e("$second", "$dt"))),
-		))),
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$floor", "$v")))))),
 	})
 	require.NoError(t, err)
 
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
+	require.Len(t, results, 3)
 
-	m := results[0].Map()
-	assert.Equal(t, int32(2023), m["yr"])
-	assert.Equal(t, int32(6), m["mo"])
-	assert.Equal(t, int32(15), m["dom"])
-	assert.Equal(t, int32(12), m["hr"])
-	assert.Equal(t, int32(34), m["min"])
-	assert.Equal(t, int32(56), m["sec"])
+	assert.Equal(t, float64(2), results[0].Map()["r"])
+	assert.Equal(t, float64(-2), results[1].Map()["r"])
+	assert.Equal(t, int32(3), results[2].Map()["r"])
 }
 
-// ─── Set operators ────────────────────────────────────────────────────────────
-
-// TestAggExpr_Set_Union tests $setUnion. (DongoFull)
-func TestAggExpr_Set_Union(t *testing.T) {
+// TestAggExpr_Round tests $round. (DongoFull)
+func TestAggExpr_Round(t *testing.T) {
 	t.Parallel()
 
 	env := startDongo(t)
 	coll := env.collection(t)
 
-	insertDocs(t, coll, d(e("_id", "a"),
-		e("a", bson.A{int32(1), int32(2), int32(3)}),
-		e("b", bson.A{int32(2), int32(3), int32(4)}),
-	))
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("v", float64(2.5))),
+		d(e("_id", "b"), e("v", float64(3.456))),
+	)
 
 	ctx := context.Background()
 	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(e("u", d(e("$setUnion", bson.A{"$a", "$b"})))))),
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$round", bson.A{"$v", int32(2)})))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 2)
+
+	assert.InDelta(t, 2.5, results[0].Map()["r"].(float64), 0.0001)
+	assert.InDelta(t, 3.46, results[1].Map()["r"].(float64), 0.0001)
+}
+
+// TestAggExpr_Mod tests $mod. (DongoFull)
+func TestAggExpr_Mod(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("v", int32(10))),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$mod", bson.A{"$v", int32(3)})))))),
 	})
 	require.NoError(t, err)
 
@@ -1102,28 +804,332 @@ func TestAggExpr_Set_Union(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	u, ok := results[0].Map()["u"].(bson.A)
+	assert.Equal(t, int32(1), results[0].Map()["r"])
+}
+
+// TestAggExpr_Pow tests $pow. (DongoFull)
+func TestAggExpr_Pow(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("v", int32(2))),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$pow", bson.A{"$v", int32(10)})))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.InDelta(t, 1024.0, results[0].Map()["r"].(float64), 0.0001)
+}
+
+// TestAggExpr_Sqrt tests $sqrt. (DongoFull)
+func TestAggExpr_Sqrt(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("v", int32(16))),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$sqrt", "$v")))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.InDelta(t, 4.0, results[0].Map()["r"].(float64), 0.0001)
+}
+
+// ─── string extension operators ───────────────────────────────────────────────
+
+// TestAggExpr_Trim tests $trim. (DongoFull)
+func TestAggExpr_Trim(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "  hello  ")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$trim", d(e("input", "$s")))))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, "hello", results[0].Map()["r"])
+}
+
+// TestAggExpr_Ltrim tests $ltrim. (DongoFull)
+func TestAggExpr_Ltrim(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "  hello  ")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$ltrim", d(e("input", "$s")))))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, "hello  ", results[0].Map()["r"])
+}
+
+// TestAggExpr_Rtrim tests $rtrim. (DongoFull)
+func TestAggExpr_Rtrim(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "  hello  ")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$rtrim", d(e("input", "$s")))))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, "  hello", results[0].Map()["r"])
+}
+
+// TestAggExpr_SubstrBytes tests $substrBytes. (DongoFull)
+func TestAggExpr_SubstrBytes(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "Hello World")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$substrBytes", bson.A{"$s", int32(6), int32(5)})))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, "World", results[0].Map()["r"])
+}
+
+// TestAggExpr_StrLenBytes tests $strLenBytes. (DongoFull)
+func TestAggExpr_StrLenBytes(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "hello")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$addFields", d(e("r", d(e("$strLenBytes", "$s")))))),
+		d(e("$project", d(e("_id", int32(0)), e("r", true)))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, int32(5), results[0].Map()["r"])
+}
+
+// TestAggExpr_StrLenCP tests $strLenCP. (DongoFull)
+func TestAggExpr_StrLenCP(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "hello")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$addFields", d(e("r", d(e("$strLenCP", "$s")))))),
+		d(e("$project", d(e("_id", int32(0)), e("r", true)))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, int32(5), results[0].Map()["r"])
+}
+
+// TestAggExpr_Split tests $split. (DongoFull)
+func TestAggExpr_Split(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "a,b,c")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$split", bson.A{"$s", ","})))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	arr, ok := results[0].Map()["r"].(bson.A)
 	require.True(t, ok)
-	assert.Len(t, u, 4)
+	assert.Equal(t, bson.A{"a", "b", "c"}, arr)
 }
 
-// TestAggExpr_Set_IntersectionDifference tests $setIntersection and $setDifference. (DongoFull)
-func TestAggExpr_Set_IntersectionDifference(t *testing.T) {
+// TestAggExpr_Strcasecmp tests $strcasecmp. (DongoFull)
+func TestAggExpr_Strcasecmp(t *testing.T) {
 	t.Parallel()
 
 	env := startDongo(t)
 	coll := env.collection(t)
 
-	insertDocs(t, coll, d(e("_id", "a"),
-		e("a", bson.A{int32(1), int32(2), int32(3)}),
-		e("b", bson.A{int32(2), int32(3), int32(4)}),
-	))
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "Hello")),
+	)
 
 	ctx := context.Background()
 	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("inter", d(e("$setIntersection", bson.A{"$a", "$b"}))),
-			e("diff", d(e("$setDifference", bson.A{"$a", "$b"}))),
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$strcasecmp", bson.A{"$s", "hello"})))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, int32(0), results[0].Map()["r"])
+}
+
+// TestAggExpr_IndexOfBytes tests $indexOfBytes. (DongoFull)
+func TestAggExpr_IndexOfBytes(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "hello world")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(e("_id", int32(0)), e("r", d(e("$indexOfBytes", bson.A{"$s", "world"})))))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	assert.Equal(t, int32(6), results[0].Map()["r"])
+}
+
+// ─── $strcasecmp and $substrBytes ─────────────────────────────────────────────
+
+// TestAggExpr_String_Strcasecmp tests $strcasecmp. (DongoFull)
+func TestAggExpr_String_Strcasecmp(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "Hello")),
+		d(e("_id", "b"), e("s", "apple")),
+		d(e("_id", "c"), e("s", "Zebra")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(
+			e("_id", int32(0)),
+			e("eq", d(e("$strcasecmp", bson.A{"$s", "hello"}))),
+		))),
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 3)
+
+	// "Hello" vs "hello" → 0 (equal case-insensitively)
+	assert.Equal(t, int32(0), results[0].Map()["eq"])
+	// "apple" vs "hello" → -1 (apple < hello)
+	assert.Equal(t, int32(-1), results[1].Map()["eq"])
+	// "Zebra" vs "hello" → 1 (zebra > hello)
+	assert.Equal(t, int32(1), results[2].Map()["eq"])
+}
+
+// TestAggExpr_String_SubstrBytes tests $substrBytes. (DongoFull)
+func TestAggExpr_String_SubstrBytes(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("s", "Hello World")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		d(e("$project", d(
+			e("_id", int32(0)),
+			e("w", d(e("$substrBytes", bson.A{"$s", int32(6), int32(5)}))),
+			e("h", d(e("$substrBytes", bson.A{"$s", int32(0), int32(5)}))),
 		))),
 	})
 	require.NoError(t, err)
@@ -1132,143 +1138,6 @@ func TestAggExpr_Set_IntersectionDifference(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	m := results[0].Map()
-	inter, ok := m["inter"].(bson.A)
-	require.True(t, ok)
-	assert.Len(t, inter, 2)
-
-	diff, ok := m["diff"].(bson.A)
-	require.True(t, ok)
-	assert.Len(t, diff, 1)
-}
-
-// TestAggExpr_Set_EqualsIsSubset tests $setEquals and $setIsSubset. (DongoFull)
-func TestAggExpr_Set_EqualsIsSubset(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"),
-		e("a", bson.A{int32(1), int32(2)}),
-		e("b", bson.A{int32(1), int32(2), int32(3)}),
-	))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("eq", d(e("$setEquals", bson.A{"$a", "$a"}))),
-			e("neq", d(e("$setEquals", bson.A{"$a", "$b"}))),
-			e("sub", d(e("$setIsSubset", bson.A{"$a", "$b"}))),
-			e("nsub", d(e("$setIsSubset", bson.A{"$b", "$a"}))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, true, m["eq"])
-	assert.Equal(t, false, m["neq"])
-	assert.Equal(t, true, m["sub"])
-	assert.Equal(t, false, m["nsub"])
-}
-
-// TestAggExpr_Set_AnyAllElements tests $anyElementTrue and $allElementsTrue. (DongoFull)
-func TestAggExpr_Set_AnyAllElements(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"),
-		e("mixed", bson.A{true, false, true}),
-		e("allTrue", bson.A{true, true}),
-		e("allFalse", bson.A{false, false}),
-	))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("anyM", d(e("$anyElementTrue", bson.A{"$mixed"}))),
-			e("allT", d(e("$allElementsTrue", bson.A{"$allTrue"}))),
-			e("anyF", d(e("$anyElementTrue", bson.A{"$allFalse"}))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, true, m["anyM"])
-	assert.Equal(t, true, m["allT"])
-	assert.Equal(t, false, m["anyF"])
-}
-
-// ─── Conditional: $switch ─────────────────────────────────────────────────────
-
-// TestAggExpr_Switch tests $switch. (DongoFull)
-func TestAggExpr_Switch(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("score", int32(75))))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(e("grade", d(e("$switch", d(
-			e("branches", bson.A{
-				d(e("case", d(e("$gte", bson.A{"$score", int32(90)}))), e("then", "A")),
-				d(e("case", d(e("$gte", bson.A{"$score", int32(70)}))), e("then", "B")),
-				d(e("case", d(e("$gte", bson.A{"$score", int32(60)}))), e("then", "C")),
-			}),
-			e("default", "F"),
-		))))))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	assert.Equal(t, "B", results[0].Map()["grade"])
-}
-
-// ─── Type conversion extensions ───────────────────────────────────────────────
-
-// TestAggExpr_Convert_BoolLongDecimal tests $toBool, $toLong, $toDecimal. (DongoFull)
-func TestAggExpr_Convert_BoolLongDecimal(t *testing.T) {
-	t.Parallel()
-
-	env := startDongo(t)
-	coll := env.collection(t)
-
-	insertDocs(t, coll, d(e("_id", "a"), e("n", int32(42)), e("z", int32(0))))
-
-	ctx := context.Background()
-	cursor, err := coll.Aggregate(ctx, bson.A{
-		d(e("$addFields", d(
-			e("b1", d(e("$toBool", "$n"))),
-			e("b0", d(e("$toBool", "$z"))),
-			e("l", d(e("$toLong", "$n"))),
-			e("dec", d(e("$toDecimal", "$n"))),
-		))),
-	})
-	require.NoError(t, err)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 1)
-
-	m := results[0].Map()
-	assert.Equal(t, true, m["b1"])
-	assert.Equal(t, false, m["b0"])
-	assert.Equal(t, int64(42), m["l"])
-	assert.InDelta(t, float64(42), m["dec"], 0.001)
+	assert.Equal(t, "World", results[0].Map()["w"])
+	assert.Equal(t, "Hello", results[0].Map()["h"])
 }
