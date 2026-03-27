@@ -144,14 +144,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			break
 		}
 
-		if !cInfo.Capped() {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNotImplemented,
-				"$natural sort for non-capped collection is not supported.",
-				"explain",
-			)
-		}
-
 		qp.Sort = params.Sort
 	}
 

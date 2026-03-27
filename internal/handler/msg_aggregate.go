@@ -387,15 +387,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				break
 			}
 
-			if !cInfo.Capped() {
-				closer.Close()
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrNotImplemented,
-					"$natural sort for non-capped collection is not supported.",
-					"aggregate",
-				)
-			}
-
 			qp.Sort = sort
 		}
 

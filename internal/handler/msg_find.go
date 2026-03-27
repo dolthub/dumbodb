@@ -283,14 +283,6 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 			break
 		}
 
-		if !cInfo.Capped() {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNotImplemented,
-				"$natural sort for non-capped collection is not supported.",
-				"find",
-			)
-		}
-
 		qp.Sort = params.Sort
 	}
 
