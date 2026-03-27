@@ -1340,11 +1340,9 @@ func TestLookup_PipelineForm(t *testing.T) {
 	assert.Equal(t, int32(5), first.Map()["score"])
 }
 
-// TestLookup_PipelineFormLetVars tests $lookup pipeline form with let variable bindings. (DongoXFail)
-// This requires $expr/$eq aggregation operator support, which is not yet implemented.
+// TestLookup_PipelineFormLetVars tests $lookup pipeline form with let variable bindings. (DongoFull)
 func TestLookup_PipelineFormLetVars(t *testing.T) {
 	t.Parallel()
-	dongoXFail(t, "$expr with $eq aggregation operator not yet implemented (needed for $lookup let pipelines)")
 
 	env := startDongo(t)
 	ctx := context.Background()

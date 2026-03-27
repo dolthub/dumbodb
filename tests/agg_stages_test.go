@@ -778,7 +778,7 @@ func TestAggStage_project(t *testing.T) {
 	})
 
 	t.Run("ComputedField", func(t *testing.T) {
-		dongoXFail(t, "$add expression operator not yet implemented in $project")
+		t.Parallel()
 
 		ctx := context.Background()
 		cursor, err := coll.Aggregate(ctx, bson.A{
@@ -934,7 +934,7 @@ func TestAggStage_addFields(t *testing.T) {
 	})
 
 	t.Run("AddComputedField", func(t *testing.T) {
-		dongoXFail(t, "$add expression operator not yet implemented in $addFields")
+		t.Parallel()
 
 		ctx := context.Background()
 		cursor, err := coll.Aggregate(ctx, bson.A{
