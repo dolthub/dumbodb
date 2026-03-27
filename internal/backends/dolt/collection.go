@@ -824,6 +824,38 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 
 // DropIndexes implements backends.Collection.
 func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndexesParams) (*backends.DropIndexesResult, error) {
+	if len(params.Indexes) == 0 {
+		return &backends.DropIndexesResult{}, nil
+	}
+
+	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if state == nil {
+		return &backends.DropIndexesResult{}, nil
+	}
+
+	drop := make(map[string]struct{}, len(params.Indexes))
+	for _, name := range params.Indexes {
+		drop[name] = struct{}{}
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	existing := state.indexes[c.name]
+	kept := existing[:0]
+
+	for _, idx := range existing {
+		if _, remove := drop[idx.Name]; !remove {
+			kept = append(kept, idx)
+		}
+	}
+
+	state.indexes[c.name] = kept
+
 	return &backends.DropIndexesResult{}, nil
 }
 
