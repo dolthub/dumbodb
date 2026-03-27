@@ -1268,6 +1268,21 @@ func filterFieldMod(fieldValue, exprValue any) (bool, error) {
 		)
 	}
 
+	// For array fields, check if any element satisfies the modulo condition.
+	if arr, ok := fieldValue.(*types.Array); ok {
+		for i := 0; i < arr.Len(); i++ {
+			elem := must.NotFail(arr.Get(i))
+			ok, err := filterFieldMod(elem, exprValue)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
 	switch f := fieldValue.(type) {
 	case float64:
 		if math.IsNaN(f) || math.IsInf(f, 0) {

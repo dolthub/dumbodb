@@ -34,6 +34,248 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// ─── $mod parity tests ────────────────────────────────────────────────────────
+
+// TestMod_BasicInt32 verifies that $mod matches int32 fields correctly. (DongoFull)
+func TestMod_BasicInt32(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(9))),
+		d(e("_id", 2), e("v", int32(10))),
+		d(e("_id", 3), e("v", int32(12))),
+	)
+
+	// 9 % 3 == 0, 12 % 3 == 0; 10 % 3 == 1 (no match)
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1), int32(3)}, ids)
+}
+
+// TestMod_BasicInt64 verifies that $mod matches int64 fields correctly. (DongoFull)
+func TestMod_BasicInt64(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int64(100))),
+		d(e("_id", 2), e("v", int64(101))),
+		d(e("_id", 3), e("v", int64(105))),
+	)
+
+	// 100 % 5 == 0, 105 % 5 == 0; 101 % 5 != 0
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{5, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1), int32(3)}, ids)
+}
+
+// TestMod_Float verifies that $mod truncates float field values before applying modulo. (DongoFull)
+func TestMod_Float(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", float64(9.9))),  // truncated to 9: 9 % 3 == 0
+		d(e("_id", 2), e("v", float64(10.1))), // truncated to 10: 10 % 3 != 0
+	)
+
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1)}, ids)
+}
+
+// TestMod_NonZeroRemainder verifies matching with a non-zero remainder. (DongoFull)
+func TestMod_NonZeroRemainder(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(7))),
+		d(e("_id", 2), e("v", int32(8))),
+		d(e("_id", 3), e("v", int32(9))),
+	)
+
+	// 7 % 3 == 1: match doc 1; 8 % 3 == 2; 9 % 3 == 0
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3, 1}}}}})
+	assert.Equal(t, []interface{}{int32(1)}, ids)
+}
+
+// TestMod_NegativeDivisor verifies that negative divisors work as in MongoDB. (DongoFull)
+func TestMod_NegativeDivisor(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(9))),
+		d(e("_id", 2), e("v", int32(10))),
+	)
+
+	// Go's % mirrors MongoDB: 9 % -3 == 0
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{-3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1)}, ids)
+}
+
+// TestMod_NestedField verifies $mod works on nested (dot-notation) fields. (DongoFull)
+func TestMod_NestedField(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("a", d(e("b", int32(9))))),
+		d(e("_id", 2), e("a", d(e("b", int32(10))))),
+	)
+
+	ids := queryIDs(t, coll, bson.D{{"a.b", bson.D{{"$mod", bson.A{3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1)}, ids)
+}
+
+// TestMod_NonNumericFieldIgnored verifies that non-numeric field values don't match. (DongoFull)
+func TestMod_NonNumericFieldIgnored(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", "hello")),
+		d(e("_id", 2), e("v", nil)),
+		d(e("_id", 3), e("v", true)),
+		d(e("_id", 4), e("v", int32(6))), // 6 % 3 == 0: should match
+	)
+
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(4)}, ids)
+}
+
+// TestMod_MissingFieldIgnored verifies that documents without the field don't match. (DongoFull)
+func TestMod_MissingFieldIgnored(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("other", int32(9))), // no "v" field
+		d(e("_id", 2), e("v", int32(9))),
+	)
+
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(2)}, ids)
+}
+
+// TestMod_ZeroDivisorError verifies that $mod with divisor 0 returns an error. (DongoFull)
+func TestMod_ZeroDivisorError(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(9))),
+	)
+
+	ctx := context.Background()
+	_, err := coll.Find(ctx, bson.D{{"v", bson.D{{"$mod", bson.A{0, 0}}}}})
+	assert.Error(t, err, "expected error for zero divisor")
+}
+
+// TestMod_TooFewElementsError verifies that $mod with fewer than 2 elements returns an error. (DongoFull)
+func TestMod_TooFewElementsError(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(9))),
+	)
+
+	ctx := context.Background()
+	_, err := coll.Find(ctx, bson.D{{"v", bson.D{{"$mod", bson.A{3}}}}})
+	assert.Error(t, err, "expected error for too few elements")
+}
+
+// TestMod_TooManyElementsError verifies that $mod with more than 2 elements returns an error. (DongoFull)
+func TestMod_TooManyElementsError(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(9))),
+	)
+
+	ctx := context.Background()
+	_, err := coll.Find(ctx, bson.D{{"v", bson.D{{"$mod", bson.A{3, 0, 1}}}}})
+	assert.Error(t, err, "expected error for too many elements")
+}
+
+// TestMod_FloatDivisorTruncated verifies that a float divisor is truncated to integer. (DongoFull)
+func TestMod_FloatDivisorTruncated(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(9))),
+		d(e("_id", 2), e("v", int32(10))),
+	)
+
+	// divisor 3.7 is truncated to 3; 9 % 3 == 0
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3.7, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1)}, ids)
+}
+
+// TestMod_CombinedWithOtherFilter verifies $mod can be composed with other query operators. (DongoFull)
+func TestMod_CombinedWithOtherFilter(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", int32(3)), e("active", true)),
+		d(e("_id", 2), e("v", int32(6)), e("active", false)),
+		d(e("_id", 3), e("v", int32(9)), e("active", true)),
+	)
+
+	// v % 3 == 0 AND active == true → docs 1 and 3
+	filter := bson.D{
+		{"v", bson.D{{"$mod", bson.A{3, 0}}}},
+		{"active", true},
+	}
+	ids := queryIDs(t, coll, filter)
+	assert.Equal(t, []interface{}{int32(1), int32(3)}, ids)
+}
+
+// TestMod_ArrayField verifies that $mod matches documents where any element in an array field satisfies the modulo. (DongoFull)
+func TestMod_ArrayField(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", 1), e("v", bson.A{1, 2, 9})), // 9 % 3 == 0: match
+		d(e("_id", 2), e("v", bson.A{1, 2, 4})), // none divisible by 3: no match
+	)
+
+	ids := queryIDs(t, coll, bson.D{{"v", bson.D{{"$mod", bson.A{3, 0}}}}})
+	assert.Equal(t, []interface{}{int32(1)}, ids)
+}
+
 // createTextIndex is a helper that creates a text index on the given fields.
 func createTextIndex(t *testing.T, coll *mongo.Collection, fields bson.D, name string) {
 	t.Helper()
