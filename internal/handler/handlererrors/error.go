@@ -274,6 +274,9 @@ const (
 	// amount of arguments.
 	ErrAddFieldsExpressionWrongAmountOfArgs = ErrorCode(40181) // Location40181
 
+	// ErrBucketMissingBoundaries indicates that $bucket stage specification is missing the required 'boundaries' field.
+	ErrBucketMissingBoundaries = ErrorCode(40198) // Location40198
+
 	// ErrStageGroupUnaryOperator indicates that $sum is a unary operator.
 	ErrStageGroupUnaryOperator = ErrorCode(40237) // Location40237
 

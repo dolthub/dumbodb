@@ -88,7 +88,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	boundariesVal, err := spec.Get("boundaries")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
+			handlererrors.ErrBucketMissingBoundaries,
 			"The $bucket stage specification must have a 'boundaries' field",
 			"$bucket (stage)",
 		)
