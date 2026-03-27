@@ -46,39 +46,38 @@ Or with `mongosh` one-liner:
 mongosh --eval 'db.test.insertOne({x:1})' mongodb://127.0.0.1:27017/testdb
 ```
 
-## Go parity test suite
+## Test suites
 
-### What this is
+### MongoDB parity tests (dolthub/dongo-parity-testing)
 
-The `tests/` package is a Go parity test suite that validates Dongo's
-MongoDB compatibility. Each test runs an operation against a locally-managed
-Dongo instance using the MongoDB Go driver and asserts that the response
-matches expected MongoDB 8 behavior. Dongo is built and started automatically
-by the test harness — no external processes required.
+MongoDB compatibility tests live in a separate repository: **dolthub/dongo-parity-testing**.
 
-### Prerequisites
+That repo uses a dual-client harness (`PairTest`) that runs each operation against
+both a real MongoDB 8 instance and Dongo, then compares the results. Tests are
+labelled with three support levels:
 
-- Go 1.21 or later (module requires Go 1.25.6+)
-- No Docker or external servers needed — the harness builds and starts Dongo in-process
+| Label | Meaning |
+|-------|---------|
+| `DongoFull` | Both MongoDB and Dongo are exercised; divergences break CI |
+| `DongoXFail` | Both are exercised; Dongo divergence is recorded but not fatal |
+| `DongoMongoOnly` | MongoDB only; Dongo skipped (auth, sharding, GridFS, etc.) |
 
-### Running locally
+**Policy**: `tests/` in this repo is for dongo-specific tests only. MongoDB
+compatibility tests belong in dolthub/dongo-parity-testing.
+
+### Dongo-specific regression tests (tests/)
+
+The `tests/` package contains regression tests for dongo-internal behaviors
+that have no MongoDB equivalent — things like internal resource management,
+cursor lifecycle, and implementation-specific edge cases. Dongo is built and
+started automatically by the test harness.
 
 ```bash
-# Clone (no submodules needed for this suite)
-git clone https://github.com/dolthub/dongo
-cd dongo
-
-# Run the full parity suite (builds Dongo automatically if binary is missing)
-go test ./tests/
-
 # Run with verbose output
 go test -v ./tests/
 
 # Run a single test
-go test -v -run TestCRUD_InsertOne ./tests/
-
-# Run tests in parallel (default) with a timeout
-go test -timeout 5m ./tests/
+go test -v -run TestFind_CursorCleanupOnFilterError ./tests/
 ```
 
 The binary is cached at `.runtime/bin/dongo` after the first build.
@@ -89,36 +88,11 @@ make build
 # or: go build -o .runtime/bin/dongo ./cmd/dongo/
 ```
 
-### Test result legend
-
-| Result | Meaning |
-|--------|---------|
-| `PASS` | Test passed — Dongo behaves correctly |
-| `FAIL` | Unexpected failure — likely a bug or regression |
-| `SKIP` | Test skipped (e.g. parallel setup, environment guard) |
-| `SKIP DongoXFail: …` | Known limitation — Dongo does not yet implement this behavior |
-
-**DongoXFail** tests (`dongoXFail(t, "reason")`) document correct MongoDB
-behavior in their test body. When Dongo adds support, removing the
-`dongoXFail()` call turns the test into a normal passing test. Do not delete
-these tests — they are the acceptance criteria for future work.
-
-### Known divergences
-
-Known Dongo limitations are recorded inline via `dongoXFail` calls throughout
-the test files. Each call includes a short reason string describing what MongoDB
-does that Dongo does not yet support. Search for `DongoXFail` in `tests/` to
-see the current list:
-
-```bash
-grep -r 'dongoXFail' tests/ | grep -v '^tests/crud_test.go:.*func dongoXFail'
-```
-
 ### Repo layout
 
 ```
-tests/                      Go parity tests (this suite)
-  *_test.go                 Test files (one per topic area)
+tests/                      Dongo-specific regression tests
+  query_test.go             Test harness + regression tests
   bats/                     Bats shell integration tests (owner-managed, do not edit)
 cmd/dongo/                  Dongo server entry point
 internal/                   Dongo implementation
