@@ -149,17 +149,68 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 		switch value := value.(type) {
 		case *types.Document:
-			if isMetaTextScore(value) {
-				// {field: {$meta: "textScore"}} — valid inclusion projection, pass through.
-				inclusionField = true
-				validated.Set(key, value)
-				break
+			if value.Len() != 1 {
+				return nil, false, handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrNotImplemented,
+					fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
+				)
 			}
 
-			return nil, false, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrNotImplemented,
-				fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
-			)
+			opKey := value.Keys()[0]
+			opVal := must.NotFail(value.Get(opKey))
+
+			switch opKey {
+			case "$elemMatch":
+				if _, ok := opVal.(*types.Document); !ok {
+					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"$elemMatch projection requires an object specification",
+						"$elemMatch",
+					)
+				}
+
+				inclusionField = true
+				validated.Set(key, value)
+
+			case "$slice":
+				if err := validateSliceProjectionArg(opVal); err != nil {
+					return nil, false, err
+				}
+
+				validated.Set(key, value)
+				// $slice is neutral - does not affect inclusion/exclusion mode tracking.
+				continue
+
+			case "$meta":
+				metaStr, ok := opVal.(string)
+				if !ok {
+					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"$meta projection only supports \"textScore\" and \"indexKey\" right now",
+						"$meta",
+					)
+				}
+
+				switch metaStr {
+				case "textScore", "indexKey":
+				default:
+					return nil, false, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"$meta projection only supports \"textScore\" and \"indexKey\" right now",
+						"$meta",
+					)
+				}
+
+				inclusionField = true
+				validated.Set(key, value)
+
+			default:
+				return nil, false, handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrNotImplemented,
+					fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
+				)
+			}
+
 		case *types.Array, string, types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
 			inclusionField = true
@@ -225,6 +276,12 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				"projection",
 			)
 		}
+	}
+
+	if inclusion == nil {
+		// Only $slice operators were specified; default to exclusion mode
+		// (show everything with array modifications applied).
+		return validated, false, nil
 	}
 
 	return validated, *inclusion, nil
@@ -324,19 +381,32 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 		}
 
 		switch value := value.(type) { // found in the projection
-		case *types.Document:
-			if isMetaTextScore(value) {
-				// {field: {$meta: "textScore"}} — add the field with a placeholder score.
-				projected.Set(key, float64(1))
-				continue
-			}
+		case *types.Document: // field: { $elemMatch: {...} } | { $slice: N } | { $meta: "..." }
+			opKey := value.Keys()[0]
+			opVal := must.NotFail(value.Get(opKey))
 
-			return nil, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrCommandNotFound,
-				fmt.Sprintf("projection %s is not supported",
-					types.FormatAnyValue(value),
-				),
-			)
+			switch opKey {
+			case "$slice":
+				if err = applySliceProjection(key, path, opVal, docWithoutID, projected, inclusion); err != nil {
+					return nil, err
+				}
+
+			case "$elemMatch":
+				condition := opVal.(*types.Document) //nolint:forcetypeassert // validated in ValidateProjection
+				if err = applyElemMatchProjection(key, path, condition, docWithoutID, projected); err != nil {
+					return nil, err
+				}
+
+			case "$meta":
+				metaType := opVal.(string) //nolint:forcetypeassert // validated in ValidateProjection
+				applyMetaProjection(key, metaType, projected)
+
+			default:
+				return nil, handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrCommandNotFound,
+					fmt.Sprintf("projection %s is not supported", types.FormatAnyValue(value)),
+				)
+			}
 
 		case *types.Array, string, types.Binary, types.ObjectID,
 			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
@@ -360,6 +430,307 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 	}
 
 	return projected, nil
+}
+
+// validateSliceProjectionArg validates the $slice projection argument.
+// Valid forms: integer (int32/int64/float64) or [skip, limit] array.
+func validateSliceProjectionArg(arg any) error {
+	switch v := arg.(type) {
+	case int32, int64, float64:
+		return nil
+	case *types.Array:
+		if v.Len() != 2 {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"$slice array argument should be of form [skip, limit]",
+				"$slice",
+			)
+		}
+
+		for i := range 2 {
+			elem, _ := v.Get(i)
+			switch elem.(type) {
+			case int32, int64, float64:
+			default:
+				return handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"$slice array argument should be of form [skip, limit]",
+					"$slice",
+				)
+			}
+		}
+
+		return nil
+	default:
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("First argument to $slice must be an array, but is of type %T", arg),
+			"$slice",
+		)
+	}
+}
+
+// sliceArray returns the first n elements (n > 0) or last |n| elements (n < 0) of arr.
+// If |n| >= arr.Len(), the full array is returned.
+func sliceArray(arr *types.Array, n int) *types.Array {
+	result := new(types.Array)
+	length := arr.Len()
+
+	if n >= 0 {
+		end := n
+		if end > length {
+			end = length
+		}
+
+		for i := range end {
+			result.Append(must.NotFail(arr.Get(i)))
+		}
+	} else {
+		// negative: take last |n| elements
+		start := length + n
+		if start < 0 {
+			start = 0
+		}
+
+		for i := start; i < length; i++ {
+			result.Append(must.NotFail(arr.Get(i)))
+		}
+	}
+
+	return result
+}
+
+// sliceArrayWithSkip returns at most limit elements starting from skip.
+// Negative skip counts from the end.
+func sliceArrayWithSkip(arr *types.Array, skip, limit int) *types.Array {
+	length := arr.Len()
+
+	start := skip
+	if start < 0 {
+		start = length + skip
+		if start < 0 {
+			start = 0
+		}
+	} else if start > length {
+		start = length
+	}
+
+	end := start + limit
+	if limit <= 0 {
+		end = start
+	}
+
+	if end > length {
+		end = length
+	}
+
+	result := new(types.Array)
+	for i := start; i < end; i++ {
+		result.Append(must.NotFail(arr.Get(i)))
+	}
+
+	return result
+}
+
+// applySliceArg applies a $slice argument to an array and returns the sliced array.
+func applySliceArg(arr *types.Array, arg any) (*types.Array, error) {
+	switch v := arg.(type) {
+	case int32:
+		return sliceArray(arr, int(v)), nil
+	case int64:
+		return sliceArray(arr, int(v)), nil
+	case float64:
+		return sliceArray(arr, int(v)), nil
+	case *types.Array:
+		// [skip, limit]
+		skipVal, _ := v.Get(0)
+		limitVal, _ := v.Get(1)
+
+		var skip, limit int
+
+		switch s := skipVal.(type) {
+		case int32:
+			skip = int(s)
+		case int64:
+			skip = int(s)
+		case float64:
+			skip = int(s)
+		}
+
+		switch l := limitVal.(type) {
+		case int32:
+			limit = int(l)
+		case int64:
+			limit = int(l)
+		case float64:
+			limit = int(l)
+		}
+
+		return sliceArrayWithSkip(arr, skip, limit), nil
+	default:
+		return nil, lazyerrors.Errorf("unexpected $slice argument type %T", arg)
+	}
+}
+
+// applySliceProjection applies a $slice projection operator to the field at path.
+// In inclusion mode, the (sliced) field is fetched from source and placed in projected.
+// In exclusion mode, the field already exists in projected and is replaced with its sliced version.
+func applySliceProjection(key string, path types.Path, sliceArg any, source, projected *types.Document, inclusion bool) error {
+	var fieldVal any
+
+	if inclusion {
+		// Get the value from source to include it.
+		v, err := source.GetByPath(path)
+		if err != nil {
+			// Field doesn't exist in source; nothing to include.
+			return nil
+		}
+
+		fieldVal = v
+	} else {
+		// The field is already in projected; get it and replace.
+		v, err := projected.GetByPath(path)
+		if err != nil {
+			// Field doesn't exist in projected; nothing to modify.
+			return nil
+		}
+
+		fieldVal = v
+	}
+
+	arr, ok := fieldVal.(*types.Array)
+	if !ok {
+		// Not an array; include as-is in inclusion mode, leave unchanged in exclusion mode.
+		if inclusion {
+			setBySourceOrder(key, fieldVal, source, projected)
+		}
+
+		return nil
+	}
+
+	sliced, err := applySliceArg(arr, sliceArg)
+	if err != nil {
+		return err
+	}
+
+	if path.Len() == 1 {
+		if inclusion {
+			setBySourceOrder(key, sliced, source, projected)
+		} else {
+			projected.Set(key, sliced)
+		}
+	} else {
+		// Nested path: use SetByPath.
+		if err = projected.SetByPath(path, sliced); err != nil {
+			return lazyerrors.Error(err)
+		}
+	}
+
+	return nil
+}
+
+// applyElemMatchProjection applies a $elemMatch projection.
+// It finds the first element in the array at path that matches condition,
+// and places it as a single-element array in projected.
+// If the field is not an array or no element matches, the field is excluded.
+func applyElemMatchProjection(key string, path types.Path, condition *types.Document, source, projected *types.Document) error {
+	fieldVal, err := source.GetByPath(path)
+	if err != nil {
+		// Field doesn't exist; exclude.
+		return nil
+	}
+
+	arr, ok := fieldVal.(*types.Array)
+	if !ok {
+		// Not an array; exclude.
+		return nil
+	}
+
+	elem, found, err := findFirstElemMatchElement(arr, condition)
+	if err != nil {
+		return err
+	}
+
+	if found {
+		result := new(types.Array)
+		result.Append(elem)
+
+		if path.Len() == 1 {
+			setBySourceOrder(key, result, source, projected)
+		} else {
+			if err = projected.SetByPath(path, result); err != nil {
+				return lazyerrors.Error(err)
+			}
+		}
+	}
+
+	// If not found, field is excluded (not added to projected).
+	return nil
+}
+
+// findFirstElemMatchElement returns the first element in arr that matches condition.
+// For operator conditions (keys starting with $), it wraps the element in a document.
+// For field conditions (keys not starting with $), it treats element as a document.
+func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any, bool, error) {
+	iter := arr.Iterator()
+	defer iter.Close()
+
+	// Determine if condition uses operators or field names.
+	isOperatorCondition := true
+
+	for _, k := range condition.Keys() {
+		if !strings.HasPrefix(k, "$") {
+			isOperatorCondition = false
+			break
+		}
+	}
+
+	for {
+		_, elem, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, false, lazyerrors.Error(err)
+		}
+
+		var matches bool
+
+		if isOperatorCondition {
+			// Wrap scalar/array element in a document with a dummy key to apply operator filter.
+			wrapDoc := must.NotFail(types.NewDocument("__v__", elem))
+			matchFilter := must.NotFail(types.NewDocument("__v__", condition))
+			matches, err = FilterDocument(wrapDoc, matchFilter)
+		} else {
+			// Element must be a document to match field conditions.
+			if elemDoc, ok := elem.(*types.Document); ok {
+				matches, err = FilterDocument(elemDoc, condition)
+			}
+		}
+
+		if err != nil {
+			return nil, false, lazyerrors.Error(err)
+		}
+
+		if matches {
+			return elem, true, nil
+		}
+	}
+
+	return nil, false, nil
+}
+
+// applyMetaProjection sets a $meta projection value in projected.
+// textScore returns 0.0 (FerretDB does not support text search).
+// indexKey returns an empty document.
+func applyMetaProjection(key, metaType string, projected *types.Document) {
+	switch metaType {
+	case "textScore":
+		projected.Set(key, float64(0))
+	case "indexKey":
+		projected.Set(key, types.MakeDocument(0))
+	}
 }
 
 // includeProjection copies the field on the path from source to projected.
@@ -633,18 +1004,3 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 	}
 }
 
-
-// isMetaTextScore returns true if the document is {$meta: "textScore"}.
-func isMetaTextScore(doc *types.Document) bool {
-	if doc.Len() != 1 {
-		return false
-	}
-
-	v, err := doc.Get("$meta")
-	if err != nil {
-		return false
-	}
-
-	s, ok := v.(string)
-	return ok && s == "textScore"
-}
