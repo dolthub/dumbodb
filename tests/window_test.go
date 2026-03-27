@@ -911,10 +911,8 @@ func TestAggWindow_singleDocument(t *testing.T) {
 
 // ─── Unimplemented operators (DongoXFail) ─────────────────────────────────────
 
-// TestAggWindow_count tests $count window operator. (DongoXFail)
+// TestAggWindow_count tests $count window operator.
 func TestAggWindow_count(t *testing.T) {
-	dongoXFail(t, "$count window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -955,10 +953,8 @@ func TestAggWindow_count(t *testing.T) {
 	}
 }
 
-// TestAggWindow_first tests $first window operator (first doc in window). (DongoXFail)
+// TestAggWindow_first tests $first window operator (first doc in window).
 func TestAggWindow_first(t *testing.T) {
-	dongoXFail(t, "$first window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -999,10 +995,8 @@ func TestAggWindow_first(t *testing.T) {
 	}
 }
 
-// TestAggWindow_last tests $last window operator (last doc in window). (DongoXFail)
+// TestAggWindow_last tests $last window operator (last doc in window).
 func TestAggWindow_last(t *testing.T) {
-	dongoXFail(t, "$last window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1043,10 +1037,8 @@ func TestAggWindow_last(t *testing.T) {
 	}
 }
 
-// TestAggWindow_push tests $push window operator (collect values into array). (DongoXFail)
+// TestAggWindow_push tests $push window operator (collect values into array).
 func TestAggWindow_push(t *testing.T) {
-	dongoXFail(t, "$push window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1089,10 +1081,8 @@ func TestAggWindow_push(t *testing.T) {
 	}
 }
 
-// TestAggWindow_addToSet tests $addToSet window operator (unique values). (DongoXFail)
+// TestAggWindow_addToSet tests $addToSet window operator (unique values).
 func TestAggWindow_addToSet(t *testing.T) {
-	dongoXFail(t, "$addToSet window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1135,10 +1125,8 @@ func TestAggWindow_addToSet(t *testing.T) {
 	}
 }
 
-// TestAggWindow_shift tests $shift window operator (access another doc's field). (DongoXFail)
+// TestAggWindow_shift tests $shift window operator (access another doc's field).
 func TestAggWindow_shift(t *testing.T) {
-	dongoXFail(t, "$shift window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1183,10 +1171,8 @@ func TestAggWindow_shift(t *testing.T) {
 	}
 }
 
-// TestAggWindow_stdDevPop tests $stdDevPop window operator. (DongoXFail)
+// TestAggWindow_stdDevPop tests $stdDevPop window operator.
 func TestAggWindow_stdDevPop(t *testing.T) {
-	dongoXFail(t, "$stdDevPop window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1232,10 +1218,8 @@ func TestAggWindow_stdDevPop(t *testing.T) {
 	}
 }
 
-// TestAggWindow_stdDevSamp tests $stdDevSamp window operator. (DongoXFail)
+// TestAggWindow_stdDevSamp tests $stdDevSamp window operator.
 func TestAggWindow_stdDevSamp(t *testing.T) {
-	dongoXFail(t, "$stdDevSamp window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1281,10 +1265,8 @@ func TestAggWindow_stdDevSamp(t *testing.T) {
 	}
 }
 
-// TestAggWindow_covariancePop tests $covariancePop window operator. (DongoXFail)
+// TestAggWindow_covariancePop tests $covariancePop window operator.
 func TestAggWindow_covariancePop(t *testing.T) {
-	dongoXFail(t, "$covariancePop window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1328,10 +1310,8 @@ func TestAggWindow_covariancePop(t *testing.T) {
 	}
 }
 
-// TestAggWindow_expMovingAvg tests $expMovingAvg window operator. (DongoXFail)
+// TestAggWindow_expMovingAvg tests $expMovingAvg window operator.
 func TestAggWindow_expMovingAvg(t *testing.T) {
-	dongoXFail(t, "$expMovingAvg window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1370,10 +1350,8 @@ func TestAggWindow_expMovingAvg(t *testing.T) {
 	require.NotEmpty(t, results[0])
 }
 
-// TestAggWindow_derivative tests $derivative window operator. (DongoXFail)
+// TestAggWindow_derivative tests $derivative window operator.
 func TestAggWindow_derivative(t *testing.T) {
-	dongoXFail(t, "$derivative window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1411,10 +1389,8 @@ func TestAggWindow_derivative(t *testing.T) {
 	require.NotEmpty(t, results[0])
 }
 
-// TestAggWindow_integral tests $integral window operator. (DongoXFail)
+// TestAggWindow_integral tests $integral window operator.
 func TestAggWindow_integral(t *testing.T) {
-	dongoXFail(t, "$integral window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1452,10 +1428,8 @@ func TestAggWindow_integral(t *testing.T) {
 	require.NotEmpty(t, results[0])
 }
 
-// TestAggWindow_linearFill tests $linearFill window operator (fill null with linear interp). (DongoXFail)
+// TestAggWindow_linearFill tests $linearFill window operator (fill null with linear interp).
 func TestAggWindow_linearFill(t *testing.T) {
-	dongoXFail(t, "$linearFill window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1500,9 +1474,8 @@ func TestAggWindow_linearFill(t *testing.T) {
 	}
 }
 
-// TestAggWindow_locf tests $locf window operator (last observation carried forward). (DongoXFail)
+// TestAggWindow_locf tests $locf window operator (last observation carried forward).
 func TestAggWindow_locf(t *testing.T) {
-	dongoXFail(t, "$locf window operator not yet implemented")
 
 	t.Parallel()
 
@@ -1543,10 +1516,8 @@ func TestAggWindow_locf(t *testing.T) {
 	}
 }
 
-// TestAggWindow_top tests $top window operator (document with highest sort key). (DongoXFail)
+// TestAggWindow_top tests $top window operator (document with highest sort key).
 func TestAggWindow_top(t *testing.T) {
-	dongoXFail(t, "$top window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
@@ -1595,10 +1566,8 @@ func TestAggWindow_top(t *testing.T) {
 	}
 }
 
-// TestAggWindow_bottom tests $bottom window operator (document with lowest sort key). (DongoXFail)
+// TestAggWindow_bottom tests $bottom window operator (document with lowest sort key).
 func TestAggWindow_bottom(t *testing.T) {
-	dongoXFail(t, "$bottom window operator not yet implemented")
-
 	t.Parallel()
 
 	env := startDongo(t)
