@@ -358,11 +358,11 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 			// Ignore for now to make Meteor apps work.
 			// TODO https://github.com/dolthub/dongo/issues/2448
 
-		case "weights", "default_language", "language_override", "textIndexVersion":
-			// Text index options — accepted but not stored in the backend for now.
+		case "weights", "default_language", "language_override", "textIndexVersion",
+			"2dsphereIndexVersion":
+			// Index options — accepted but not stored in the backend for now.
 
 		case "partialFilterExpression", "expireAfterSeconds", "hidden", "storageEngine",
-			"2dsphereIndexVersion",
 			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
@@ -414,21 +414,31 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 
 		duplicateChecker[field] = struct{}{}
 
-		// Check for text index key type (value is the string "text").
+		// Check for string-valued index key types: "text", "2dsphere", "2d".
 		if orderStr, ok := order.(string); ok {
-			if orderStr != "text" {
+			switch orderStr {
+			case "text":
+				res = append(res, backends.IndexKeyPair{
+					Field: field,
+					Text:  true,
+				})
+			case "2dsphere":
+				res = append(res, backends.IndexKeyPair{
+					Field:       field,
+					Geo2DSphere: true,
+				})
+			case "2d":
+				res = append(res, backends.IndexKeyPair{
+					Field: field,
+					Geo2D: true,
+				})
+			default:
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrIndexNotFound,
 					fmt.Sprintf("can't find index with key: { %s: %q }", field, order),
 					command,
 				)
 			}
-
-			res = append(res, backends.IndexKeyPair{
-				Field: field,
-				Text:  true,
-			})
-
 			continue
 		}
 
@@ -473,6 +483,10 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 		switch {
 		case pair.Text:
 			order = `"text"`
+		case pair.Geo2DSphere:
+			order = `"2dsphere"`
+		case pair.Geo2D:
+			order = `"2d"`
 		case pair.Descending:
 			order = "-1"
 		default:

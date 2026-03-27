@@ -35,6 +35,7 @@ var Stages = map[string]newStageFunc{
 	"$collStats":   newCollStats,
 	"$count":       newCount,
 	"$facet":       newFacet,
+	"$geoNear":     newGeoNear,
 	"$group":       newGroup,
 	"$limit":       newLimit,
 	"$match":       newMatch,
@@ -60,7 +61,7 @@ var unsupportedStages = map[string]struct{}{
 	"$densify":                {},
 	"$documents":              {},
 	"$fill":                   {},
-	"$geoNear":                {},
+	// $geoNear is now implemented in stages.go
 	// $graphLookup is handled specially in msg_aggregate.go via NewGraphLookupStage
 	"$indexStats":             {},
 	"$listLocalSessions":      {},

@@ -114,6 +114,11 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
+	// Validate geospatial operators in the filter before executing (query-time validation).
+	if err = common.ValidateGeoFilter(params.Filter); err != nil {
+		return nil, err
+	}
+
 	qp, err := h.makeFindQueryParams(connCtx, params, &cInfo)
 	if err != nil {
 		return nil, err
@@ -312,12 +317,20 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 
 	iter = common.FilterIterator(iter, closer, params.Filter)
 
-	iter, err := common.SortIterator(iter, closer, params.Sort)
-	if err != nil {
+	// If the filter contains $near or $nearSphere, sort results by geo distance.
+	// Otherwise use the regular sort.
+	var sortErr error
+	if geoSort := common.FindGeoSortKey(params.Filter); geoSort != nil {
+		iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
+	} else {
+		iter, sortErr = common.SortIterator(iter, closer, params.Sort)
+	}
+
+	if sortErr != nil {
 		closer.Close()
 
 		var pathErr *types.PathError
-		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
+		if errors.As(sortErr, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrPathContainsEmptyElement,
 				"Empty field names in path are not allowed",
@@ -325,13 +338,14 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 			)
 		}
 
-		return nil, lazyerrors.Error(err)
+		return nil, lazyerrors.Error(sortErr)
 	}
 
 	iter = common.SkipIterator(iter, closer, params.Skip)
 
 	iter = common.LimitIterator(iter, closer, params.Limit)
 
+	var err error
 	if iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter); err != nil {
 		closer.Close()
 		return nil, lazyerrors.Error(err)

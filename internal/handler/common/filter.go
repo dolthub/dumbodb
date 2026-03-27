@@ -760,6 +760,123 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 				return false, err
 			}
 
+		case "$geoWithin":
+			// {field: {$geoWithin: spec}}
+			spec, ok := exprValue.(*types.Document)
+			if !ok {
+				return false, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"$geoWithin requires a document argument",
+					"$geoWithin",
+				)
+			}
+			res, err := filterFieldGeoWithin(fieldValue, spec)
+			if !res || err != nil {
+				return false, err
+			}
+
+		case "$geoIntersects":
+			// {field: {$geoIntersects: {$geometry: ...}}}
+			spec, ok := exprValue.(*types.Document)
+			if !ok {
+				return false, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"$geoIntersects requires a document argument",
+					"$geoIntersects",
+				)
+			}
+			res, err := filterFieldGeoIntersects(fieldValue, spec)
+			if !res || err != nil {
+				return false, err
+			}
+
+		case "$near":
+			// {field: {$near: {$geometry: ..., $maxDistance: n, $minDistance: n}}}
+			// or legacy: {field: {$near: [lon, lat]}} with optional sibling $maxDistance
+			switch nv := exprValue.(type) {
+			case *types.Document:
+				res, err := filterFieldNear(fieldValue, nv, false)
+				if !res || err != nil {
+					return false, err
+				}
+			case *types.Array:
+				if nv.Len() < 2 {
+					return false, nil
+				}
+				lon, e := toFloat64(must.NotFail(nv.Get(0)))
+				if e != nil {
+					return false, nil
+				}
+				lat, e := toFloat64(must.NotFail(nv.Get(1)))
+				if e != nil {
+					return false, nil
+				}
+				coordArr := must.NotFail(types.NewArray(lon, lat))
+				ptDoc := must.NotFail(types.NewDocument(
+					"type", "Point",
+					"coordinates", coordArr,
+				))
+				nearDoc := must.NotFail(types.NewDocument("$geometry", ptDoc))
+				if maxAny, e2 := expr.Get("$maxDistance"); e2 == nil {
+					nearDoc.Set("$maxDistance", maxAny)
+				}
+				res, err := filterFieldNear(fieldValue, nearDoc, false)
+				if !res || err != nil {
+					return false, err
+				}
+			default:
+				return false, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"$near requires a document or array argument",
+					"$near",
+				)
+			}
+
+		case "$nearSphere":
+			// Same as $near but always uses spherical (Haversine) distance.
+			switch nv := exprValue.(type) {
+			case *types.Document:
+				res, err := filterFieldNear(fieldValue, nv, true)
+				if !res || err != nil {
+					return false, err
+				}
+			case *types.Array:
+				if nv.Len() < 2 {
+					return false, nil
+				}
+				lon, e := toFloat64(must.NotFail(nv.Get(0)))
+				if e != nil {
+					return false, nil
+				}
+				lat, e := toFloat64(must.NotFail(nv.Get(1)))
+				if e != nil {
+					return false, nil
+				}
+				coordArr := must.NotFail(types.NewArray(lon, lat))
+				ptDoc := must.NotFail(types.NewDocument(
+					"type", "Point",
+					"coordinates", coordArr,
+				))
+				nearDoc := must.NotFail(types.NewDocument("$geometry", ptDoc))
+				if maxAny, e2 := expr.Get("$maxDistance"); e2 == nil {
+					nearDoc.Set("$maxDistance", maxAny)
+				}
+				res, err := filterFieldNear(fieldValue, nearDoc, true)
+				if !res || err != nil {
+					return false, err
+				}
+			default:
+				return false, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"$nearSphere requires a document or array argument",
+					"$nearSphere",
+				)
+			}
+
+		// $maxDistance and $minDistance are consumed by $near/$nearSphere above.
+		case "$maxDistance", "$minDistance":
+			// skip — handled as sibling keys within $near / $nearSphere
+
 		default:
 			return false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,

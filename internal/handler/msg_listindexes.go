@@ -85,17 +85,20 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		indexKey := must.NotFail(types.NewDocument())
 
 		for _, key := range index.Key {
-			if key.Text {
+			switch {
+			case key.Text:
 				indexKey.Set(key.Field, "text")
-				continue
+			case key.Geo2DSphere:
+				indexKey.Set(key.Field, "2dsphere")
+			case key.Geo2D:
+				indexKey.Set(key.Field, "2d")
+			default:
+				order := int32(1)
+				if key.Descending {
+					order = -1
+				}
+				indexKey.Set(key.Field, order)
 			}
-
-			order := int32(1)
-			if key.Descending {
-				order = -1
-			}
-
-			indexKey.Set(key.Field, order)
 		}
 
 		indexDoc := must.NotFail(types.NewDocument(
