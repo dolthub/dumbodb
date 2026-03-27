@@ -277,11 +277,8 @@ func TestAggStage_group(t *testing.T) {
 		assert.EqualValues(t, 25, results[1].Map()["hi"]) // cat B: max is 25
 	})
 
-	// TestAggStage_group/MinMaxTogether documents that using multiple accumulators
-	// in the same $group stage does not yet work correctly — the group iterator is
-	// consumed by the first accumulator, leaving subsequent ones empty. (DongoXFail)
 	t.Run("MinMaxTogether", func(t *testing.T) {
-		dongoXFail(t, "multiple accumulators per $group share iterator; second accumulator sees empty input")
+		t.Parallel()
 
 		ctx := context.Background()
 		cursor, err := coll.Aggregate(ctx, bson.A{
@@ -387,12 +384,7 @@ func TestAggStage_group(t *testing.T) {
 		assert.EqualValues(t, 3, results[0].Map()["last"])
 	})
 
-	// TestAggStage_group/FirstLastTogether documents that $first and $last in the
-	// same $group share the iterator — $last sees empty input after $first consumes
-	// it. (DongoXFail)
 	t.Run("FirstLastTogether", func(t *testing.T) {
-		dongoXFail(t, "multiple accumulators per $group share iterator; $last sees empty input after $first")
-
 		env2 := startDongo(t)
 		coll2 := env2.collection(t)
 		insertDocs(t, coll2,
@@ -1763,7 +1755,7 @@ func TestAggPipeline_multiStage(t *testing.T) {
 	)
 
 	t.Run("MatchGroupSort", func(t *testing.T) {
-		dongoXFail(t, "multiple accumulators per $group share iterator; $sum constant sees empty input after $avg")
+		t.Parallel()
 
 		ctx := context.Background()
 		cursor, err := coll.Aggregate(ctx, bson.A{
