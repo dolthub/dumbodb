@@ -242,6 +242,40 @@ func (h *Handler) initCommands() {
 			anonymous: true,
 			Help:      "Logs out from the current session.",
 		},
+		"startSession": {
+			Handler:   h.MsgStartSession,
+			anonymous: true,
+			Help:      "Creates a new server session.",
+		},
+		"commitTransaction": {
+			Handler: h.MsgCommitTransaction,
+			Help:    "Commits a transaction (no-op: transactions are not isolated).",
+		},
+		"createSearchIndexes": {
+			Handler: h.MsgCreateSearchIndexes,
+			Help:    "Creates Atlas Search indexes (not supported).",
+		},
+		"listSearchIndexes": {
+			Handler: h.MsgListSearchIndexes,
+			Help:    "Lists Atlas Search indexes (not supported).",
+		},
+		"dropSearchIndex": {
+			Handler: h.MsgDropSearchIndex,
+			Help:    "Drops an Atlas Search index (not supported).",
+		},
+		"updateSearchIndex": {
+			Handler: h.MsgUpdateSearchIndex,
+			Help:    "Updates an Atlas Search index (not supported).",
+		},
+		"abortTransaction": {
+			Handler: h.MsgAbortTransaction,
+			Help:    "Aborts a transaction (no-op: operations cannot be rolled back).",
+		},
+		"endSessions": {
+			Handler:   h.MsgEndSessions,
+			anonymous: true,
+			Help:      "Ends server sessions.",
+		},
 		"ping": {
 			Handler:   h.MsgPing,
 			anonymous: true,

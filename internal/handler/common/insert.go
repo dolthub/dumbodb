@@ -40,6 +40,8 @@ type InsertParams struct {
 	Comment                  string          `ferretdb:"comment,ignored"`
 	LSID                     any             `ferretdb:"lsid,ignored"`
 	TxnNumber                int64           `ferretdb:"txnNumber,ignored"`
+	StartTransaction         bool            `ferretdb:"startTransaction,ignored"`
+	Autocommit               bool            `ferretdb:"autocommit,ignored"`
 	ClusterTime              any             `ferretdb:"$clusterTime,ignored"`
 	ReadPreference           *types.Document `ferretdb:"$readPreference,ignored"`
 
