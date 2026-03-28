@@ -33,6 +33,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// buildOnce ensures the dongo binary is built exactly once per test run.
+var buildOnce sync.Once
 
 // dongoTestEnv holds a running dongo process and a connected MongoDB client.
 type dongoTestEnv struct {
@@ -70,13 +74,21 @@ func startDongo(tb testing.TB) *dongoTestEnv {
 	dataDir := tb.TempDir()
 	binary := filepath.Join(repoRoot(), ".runtime", "bin", "dongo")
 
-	if _, err := os.Stat(binary); os.IsNotExist(err) {
-		// Try to build on the fly.
+	// Build once per test run to ensure the binary is up-to-date with current source.
+	var buildErr error
+	buildOnce.Do(func() {
+		if mkErr := os.MkdirAll(filepath.Dir(binary), 0o755); mkErr != nil {
+			buildErr = mkErr
+			return
+		}
 		build := exec.Command("go", "build", "-o", binary, "./cmd/dongo/")
 		build.Dir = repoRoot()
 		if out, err := build.CombinedOutput(); err != nil {
-			tb.Fatalf("failed to build dongo: %v\n%s", err, out)
+			buildErr = fmt.Errorf("failed to build dongo: %w\n%s", err, out)
 		}
+	})
+	if buildErr != nil {
+		tb.Fatalf("failed to build dongo: %v", buildErr)
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
