@@ -367,6 +367,12 @@ const (
 
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
+
+	// ErrWindowDerivativeUnitRequiresDate indicates that $derivative with 'unit' requires a Date sort field.
+	ErrWindowDerivativeUnitRequiresDate = ErrorCode(5624900) // Location5624900
+
+	// ErrWindowIntegralUnitRequiresDate indicates that $integral with 'unit' requires a Date sort field.
+	ErrWindowIntegralUnitRequiresDate = ErrorCode(5423901) // Location5423901
 )
 
 // ErrInfo represents additional optional error information.

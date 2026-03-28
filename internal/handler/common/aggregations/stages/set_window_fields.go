@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	stdsort "sort"
+	"time"
 
 	"github.com/dolthub/dongo/internal/handler/common"
 	"github.com/dolthub/dongo/internal/handler/common/aggregations"
@@ -89,7 +90,7 @@ type covPairSpec struct {
 // topSpec holds $top/$bottom operator configuration.
 type topSpec struct {
 	sortBy     *types.Document
-	outputExpr *types.Document
+	outputExpr any // field path string or projection document
 }
 
 // setWindowFields represents $setWindowFields aggregation stage.
@@ -629,9 +630,7 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 	case "$sum", "$avg", "$min", "$max", "$first", "$last", "$push", "$addToSet",
 		"$stdDevPop", "$stdDevSamp":
 		for i := range partition {
-			lo, hi := s.windowBounds(wof.frame, i, n)
-
-			window := partition[lo:hi]
+			window := s.windowDocs(wof.frame, i, partition)
 
 			val, err := applyAccumulator(wof.operator, wof.expression, window)
 			if err != nil {
@@ -643,15 +642,14 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 
 	case "$count":
 		for i := range partition {
-			lo, hi := s.windowBounds(wof.frame, i, n)
-			vals[i] = int64(hi - lo)
+			window := s.windowDocs(wof.frame, i, partition)
+			vals[i] = int64(len(window))
 		}
 
 	case "$covariancePop", "$covarianceSamp":
 		spec := wof.opSpec.(covPairSpec)
 		for i := range partition {
-			lo, hi := s.windowBounds(wof.frame, i, n)
-			window := partition[lo:hi]
+			window := s.windowDocs(wof.frame, i, partition)
 			val := computeCovariance(wof.operator, spec, window)
 			vals[i] = val
 		}
@@ -673,6 +671,15 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 
 	case "$derivative":
 		spec := wof.opSpec.(derivativeSpec)
+		if spec.unit != "" {
+			if err := s.validateSortByFieldIsDate(partition); err != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrWindowDerivativeUnitRequiresDate,
+					"PlanExecutor error during aggregation :: caused by :: $derivative with 'unit' expects the sortBy field to be a Date",
+					"$setWindowFields (stage)",
+				)
+			}
+		}
 		for i := range partition {
 			lo, hi := s.windowBounds(wof.frame, i, n)
 			window := partition[lo:hi]
@@ -681,6 +688,15 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 
 	case "$integral":
 		spec := wof.opSpec.(derivativeSpec)
+		if spec.unit != "" {
+			if err := s.validateSortByFieldIsDate(partition); err != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrWindowIntegralUnitRequiresDate,
+					"PlanExecutor error during aggregation :: caused by :: $integral with 'unit' expects the sortBy field to be a Date",
+					"$setWindowFields (stage)",
+				)
+			}
+		}
 		for i := range partition {
 			lo, hi := s.windowBounds(wof.frame, i, n)
 			window := partition[lo:hi]
@@ -688,6 +704,9 @@ func (s *setWindowFields) computeWindowValues(partition []*types.Document, wof w
 		}
 
 	case "$linearFill":
+		if err := s.validateSortByFieldIsNumericOrDate(partition); err != nil {
+			return nil, err
+		}
 		vals = computeLinearFill(wof.expression, partition)
 
 	case "$locf":
@@ -766,6 +785,154 @@ func resolveBound(b windowBound, i, n int, isLower bool) int {
 
 		return i + int(b.offset) + 1
 	}
+}
+
+// windowDocs returns the slice of documents in the window for document at position i.
+// For range frames it uses value-based bounds; for document frames it uses index bounds.
+func (s *setWindowFields) windowDocs(frame *windowFrame, i int, partition []*types.Document) []*types.Document {
+	n := len(partition)
+
+	if frame != nil && frame.frameType == windowFrameRange {
+		return s.windowDocsRange(frame, i, partition)
+	}
+
+	lo, hi := s.windowBounds(frame, i, n)
+
+	return partition[lo:hi]
+}
+
+// windowDocsRange computes the window slice for a range-based frame at position i.
+// The frame bounds are value offsets from the current document's sort field value.
+func (s *setWindowFields) windowDocsRange(frame *windowFrame, i int, partition []*types.Document) []*types.Document {
+	if s.sortBy == nil || s.sortBy.Len() == 0 {
+		return partition
+	}
+
+	sortKey := s.sortBy.Keys()[0]
+	currentVal, _ := partition[i].Get(sortKey)
+
+	currentFloat, ok := toFloat64(currentVal)
+	if !ok {
+		// Fall back to index-based bounds for non-numeric sort fields.
+		lo, hi := s.windowBounds(frame, i, len(partition))
+		return partition[lo:hi]
+	}
+
+	loUnbounded := frame.lower.unbounded
+	var loBound float64
+
+	if !loUnbounded {
+		if frame.lower.current {
+			loBound = currentFloat
+		} else {
+			loBound = currentFloat + float64(frame.lower.offset)
+		}
+	}
+
+	hiUnbounded := frame.upper.unbounded
+	var hiBound float64
+
+	if !hiUnbounded {
+		if frame.upper.current {
+			hiBound = currentFloat
+		} else {
+			hiBound = currentFloat + float64(frame.upper.offset)
+		}
+	}
+
+	var result []*types.Document
+
+	for _, doc := range partition {
+		val, _ := doc.Get(sortKey)
+
+		f, ok := toFloat64(val)
+		if !ok {
+			continue
+		}
+
+		if !loUnbounded && f < loBound {
+			continue
+		}
+
+		if !hiUnbounded && f > hiBound {
+			continue
+		}
+
+		result = append(result, doc)
+	}
+
+	return result
+}
+
+// validateSortByFieldIsDate checks that the first sort-by field value in the partition is a Date.
+// Returns a non-nil error if the partition is non-empty and the field is not a time.Time.
+func (s *setWindowFields) validateSortByFieldIsDate(partition []*types.Document) error {
+	if len(partition) == 0 || s.sortBy == nil || s.sortBy.Len() == 0 {
+		return nil
+	}
+
+	sortKey := s.sortBy.Keys()[0]
+	val, _ := partition[0].Get(sortKey)
+
+	if _, ok := val.(time.Time); !ok {
+		return fmt.Errorf("not a date")
+	}
+
+	return nil
+}
+
+// bsonTypeName returns the MongoDB type name for a value (used in error messages).
+func bsonTypeName(v any) string {
+	switch v.(type) {
+	case string:
+		return "string"
+	case float64:
+		return "double"
+	case int32:
+		return "int"
+	case int64:
+		return "long"
+	case bool:
+		return "bool"
+	case time.Time:
+		return "date"
+	case *types.Document:
+		return "object"
+	case *types.Array:
+		return "array"
+	case types.NullType:
+		return "null"
+	default:
+		return "unknown"
+	}
+}
+
+// validateSortByFieldIsNumericOrDate checks that the sort-by field values are numeric or Date.
+// Returns an error matching MongoDB's TypeMismatch error if they are not.
+func (s *setWindowFields) validateSortByFieldIsNumericOrDate(partition []*types.Document) error {
+	if len(partition) == 0 || s.sortBy == nil || s.sortBy.Len() == 0 {
+		return nil
+	}
+
+	sortKey := s.sortBy.Keys()[0]
+
+	for _, doc := range partition {
+		val, _ := doc.Get(sortKey)
+
+		switch val.(type) {
+		case float64, int32, int64, time.Time:
+			// valid
+		default:
+			typeName := bsonTypeName(val)
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"PlanExecutor error during aggregation :: caused by :: Value of the sortBy field must be numeric or a date, but found "+typeName,
+				"$setWindowFields (stage)",
+			)
+		}
+	}
+
+	return nil
 }
 
 // computeRank computes $rank or $denseRank values for all documents in a partition.
@@ -1224,16 +1391,7 @@ func parseTopSpec(doc *types.Document) (topSpec, error) {
 		)
 	}
 
-	outputDoc, ok := outputVal.(*types.Document)
-	if !ok {
-		return spec, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrTypeMismatch,
-			"$top/$bottom 'output' must be an object",
-			"$setWindowFields (stage)",
-		)
-	}
-
-	spec.outputExpr = outputDoc
+	spec.outputExpr = outputVal
 
 	return spec, nil
 }
@@ -1298,17 +1456,22 @@ func computeCovariance(op string, spec covPairSpec, window []*types.Document) an
 		return types.Null
 	}
 
-	var sumX, sumY, sumXY float64
+	var sumX, sumY float64
 	for i := range n {
 		sumX += xs[i]
 		sumY += ys[i]
-		sumXY += xs[i] * ys[i]
 	}
 
 	meanX := sumX / float64(n)
 	meanY := sumY / float64(n)
 
-	cov := sumXY/float64(n) - meanX*meanY
+	// Two-pass formula for numerical stability.
+	var cov float64
+	for i := range n {
+		cov += (xs[i] - meanX) * (ys[i] - meanY)
+	}
+
+	cov /= float64(n)
 
 	if op == "$covarianceSamp" {
 		// Adjust for sample: multiply by n/(n-1).
@@ -1572,31 +1735,46 @@ func computeTopBottom(op string, spec topSpec, window []*types.Document) (any, e
 		return false
 	})
 
-	// Project output fields from the selected document.
-	// Both $top and $bottom return sorted[0]: the caller uses sortBy to control which
-	// end they want ($top with descending sortBy for the maximum, $bottom with ascending
-	// sortBy for the minimum).
-	selected := sorted[0]
+	// $top returns the first document after sorting; $bottom returns the last.
+	var selected *types.Document
+	if op == "$bottom" {
+		selected = sorted[len(sorted)-1]
+	} else {
+		selected = sorted[0]
+	}
+
+	if spec.outputExpr == nil {
+		return new(types.Document), nil
+	}
+
+	// If output is a string (field path), evaluate and return the value directly.
+	if _, ok := spec.outputExpr.(string); ok {
+		return evaluateExpr(spec.outputExpr, selected), nil
+	}
+
+	// If output is a document, project each field.
+	outputDoc, ok := spec.outputExpr.(*types.Document)
+	if !ok {
+		return evaluateExpr(spec.outputExpr, selected), nil
+	}
 
 	result := new(types.Document)
 
-	if spec.outputExpr != nil {
-		iter := spec.outputExpr.Iterator()
-		defer iter.Close()
+	iter := outputDoc.Iterator()
+	defer iter.Close()
 
-		for {
-			k, v, err := iter.Next()
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
-
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			projected := evaluateExpr(v, selected)
-			result.Set(k, projected)
+	for {
+		k, v, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
 		}
+
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		projected := evaluateExpr(v, selected)
+		result.Set(k, projected)
 	}
 
 	return result, nil
