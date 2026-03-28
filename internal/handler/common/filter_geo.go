@@ -583,6 +583,13 @@ func geometryIntersectsGeometry(docGeomVal any, queryGeomDoc *types.Document) (b
 		}
 		return false, nil
 
+	case "LineString":
+		qCoords, err := lineStringCoords(queryGeomDoc)
+		if err != nil {
+			return false, err
+		}
+		return docGeomIntersectsLineString(docGeomVal, qCoords), nil
+
 	default:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
@@ -630,6 +637,85 @@ func docGeomIntersectsPolygon(docGeomVal any, exterior [][2]float64) bool {
 	}
 
 	return false
+}
+
+// docGeomIntersectsLineString returns true if any part of the document geometry
+// intersects the given LineString coordinate sequence.
+func docGeomIntersectsLineString(docGeomVal any, lineCoords [][2]float64) bool {
+	// Check if any vertex of the document geometry lies exactly on the LineString.
+	pts := extractAllPoints(docGeomVal)
+	for _, p := range pts {
+		if pointOnLineString(p, lineCoords) {
+			return true
+		}
+	}
+
+	// For polygon-like document geometries: also check if any query line segment
+	// crosses the polygon boundary, or if any query line point is inside the polygon.
+	if v, ok := docGeomVal.(*types.Document); ok {
+		gtype, _ := geoJSONType(v)
+		switch gtype {
+		case "Polygon":
+			rings, err := polygonRings(v)
+			if err == nil && len(rings) > 0 {
+				exterior := rings[0]
+				for _, qp := range lineCoords {
+					if pointInRing(qp[0], qp[1], exterior) {
+						return true
+					}
+				}
+				if segmentsCrossRing(lineCoords, exterior) {
+					return true
+				}
+			}
+		case "MultiPolygon":
+			polys, err := multiPolygonRings(v)
+			if err == nil {
+				for _, rings := range polys {
+					exterior := rings[0]
+					for _, qp := range lineCoords {
+						if pointInRing(qp[0], qp[1], exterior) {
+							return true
+						}
+					}
+					if segmentsCrossRing(lineCoords, exterior) {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// pointOnLineString returns true if p lies exactly on any segment of the line.
+func pointOnLineString(p [2]float64, lineCoords [][2]float64) bool {
+	for i := 0; i < len(lineCoords)-1; i++ {
+		if pointOnSegment(p, lineCoords[i], lineCoords[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// pointOnSegment returns true if p lies on the segment from a to b.
+func pointOnSegment(p, a, b [2]float64) bool {
+	// Check collinearity using cross product.
+	cross := (b[0]-a[0])*(p[1]-a[1]) - (b[1]-a[1])*(p[0]-a[0])
+	if cross != 0 {
+		return false
+	}
+	// p is collinear — check it falls within the bounding box of [a, b].
+	minX, maxX := a[0], b[0]
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	minY, maxY := a[1], b[1]
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	return p[0] >= minX && p[0] <= maxX && p[1] >= minY && p[1] <= maxY
 }
 
 // segmentsCrossRing returns true if any segment of lineCoords crosses any edge of ring.
