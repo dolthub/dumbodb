@@ -105,3 +105,13 @@ func newSearch(stage *types.Document) (aggregations.Stage, error) {
 		"$search (stage)",
 	)
 }
+
+// newChangeStream returns a ChangeStreamNotSupported error for the $changeStream aggregation stage.
+// $changeStream is not supported on standalone servers; MongoDB requires a replica set or sharded cluster.
+func newChangeStream(stage *types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrChangeStreamNotSupported,
+		"The $changeStream stage is only supported on replica sets",
+		"$changeStream (stage)",
+	)
+}

@@ -313,6 +313,9 @@ const (
 	// ErrFailedToParseInput indicates invalid input (absent or malformed fields).
 	ErrFailedToParseInput = ErrorCode(40415) // Location40415
 
+	// ErrChangeStreamNotSupported indicates that $changeStream is not supported on a standalone server.
+	ErrChangeStreamNotSupported = ErrorCode(40573) // Location40573
+
 	// ErrCollStatsIsNotFirstStage indicates that $collStats must be the first stage in the pipeline.
 	ErrCollStatsIsNotFirstStage = ErrorCode(40602) // Location40602
 
