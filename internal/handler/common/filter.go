@@ -1681,6 +1681,12 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 
 // filterFieldExprElemMatch handles {field: {$elemMatch: value}}.
 // Returns false if doc value is not an array.
+//
+// Two condition forms are supported:
+//   - Operator conditions (all keys start with "$", e.g. {$gte: 80}): delegated to filterFieldExpr
+//     which uses array-aware comparison.
+//   - Field conditions (at least one key without "$", e.g. {a: 1, b: 2} or {score: {$gt: 5}}):
+//     iterates array elements and calls FilterDocument on each embedded document element.
 func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix string, exprValue any) (bool, error) {
 	expr, ok := exprValue.(*types.Document)
 	if !ok {
@@ -1690,6 +1696,8 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			"$elemMatch",
 		)
 	}
+
+	isOperatorCondition := true
 
 	for _, key := range expr.Keys() {
 		if slices.Contains([]string{"$text", "$where"}, key) {
@@ -1718,12 +1726,8 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			)
 		}
 
-		if expr.Len() > 1 && !strings.HasPrefix(key, "$") {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("unknown operator: %s", key),
-				"$elemMatch",
-			)
+		if !strings.HasPrefix(key, "$") {
+			isOperatorCondition = false
 		}
 	}
 
@@ -1732,11 +1736,48 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 		return false, nil
 	}
 
-	if _, ok := value.(*types.Array); !ok {
+	arr, ok := value.(*types.Array)
+	if !ok {
 		return false, nil
 	}
 
-	return filterFieldExpr(doc, filterKey, filterSuffix, expr)
+	if isOperatorCondition {
+		// For pure operator conditions like {$gte: 80}, delegate to filterFieldExpr
+		// which handles array comparison semantics.
+		return filterFieldExpr(doc, filterKey, filterSuffix, expr)
+	}
+
+	// For field conditions like {a: 1, b: 2} or {score: {$gt: 5, $lt: 10}}, iterate
+	// each array element and check if it matches the condition as an embedded document.
+	iter := arr.Iterator()
+	defer iter.Close()
+
+	for {
+		_, elem, iterErr := iter.Next()
+		if errors.Is(iterErr, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if iterErr != nil {
+			return false, lazyerrors.Error(iterErr)
+		}
+
+		elemDoc, ok := elem.(*types.Document)
+		if !ok {
+			continue
+		}
+
+		matches, err := FilterDocument(elemDoc, expr)
+		if err != nil {
+			return false, err
+		}
+
+		if matches {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // filterTextSearch implements the $text query operator.
