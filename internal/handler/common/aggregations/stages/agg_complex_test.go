@@ -23,9 +23,11 @@ package stages_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/dolthub/dongo/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
 	"github.com/dolthub/dongo/internal/util/must"
@@ -1368,5 +1370,30 @@ func TestAggStage_graphLookup_MaxDepthLimitsTraversal(t *testing.T) {
 		if depth != expectedDepths[i] {
 			t.Errorf("managers[%d].depth = %d, want %d", i, depth, expectedDepths[i])
 		}
+	}
+}
+
+// TestAggStage_bucket_MissingBoundariesError verifies that $bucket returns error
+// code 40198 when the required 'boundaries' field is absent.
+func TestAggStage_bucket_MissingBoundariesError(t *testing.T) {
+	t.Parallel()
+
+	// Build a $bucket spec with groupBy but no boundaries field.
+	spec := must.NotFail(types.NewDocument("groupBy", "$x"))
+	stageDoc := must.NotFail(types.NewDocument("$bucket", spec))
+
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for missing boundaries, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrBucketMissingBoundaries
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrBucketMissingBoundaries)", cmdErr.Code(), wantCode)
 	}
 }
