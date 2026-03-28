@@ -483,3 +483,138 @@ func diffDateUnit(start, end time.Time, unit string) (int64, error) {
 }
 
 var _ Operator = (*dateDiffOp)(nil)
+
+// ── $dateTrunc ────────────────────────────────────────────────────────────────
+
+// dateTruncOp represents { $dateTrunc: { date: <expr>, unit: <string>, binSize: <number> } }.
+// Truncates a date to the start of the specified time unit.
+type dateTruncOp struct {
+	dateArg    any
+	unitArg    any
+	binSizeArg any // optional, defaults to 1
+}
+
+func newDateTrunc(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			"$dateTrunc requires a document argument")
+	}
+
+	doc, ok := args[0].(*types.Document)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			"$dateTrunc requires a document argument")
+	}
+
+	dateArg, err := doc.Get("date")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			"Missing 'date' parameter to $dateTrunc")
+	}
+
+	unitArg, err := doc.Get("unit")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			"Missing 'unit' parameter to $dateTrunc")
+	}
+
+	op := &dateTruncOp{dateArg: dateArg, unitArg: unitArg}
+
+	if binSizeArg, err := doc.Get("binSize"); err == nil {
+		op.binSizeArg = binSizeArg
+	}
+
+	return op, nil
+}
+
+func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
+	dv, err := evalArgValue(op.dateArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if dv == types.Null {
+		return types.Null, nil
+	}
+
+	t, ok := toTime(dv)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			fmt.Sprintf("$dateTrunc 'date' must be a date, got %T", dv))
+	}
+
+	uv, err := evalArgValue(op.unitArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	unit, ok := uv.(string)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			"$dateTrunc 'unit' must be a string")
+	}
+
+	binSize := int64(1)
+	if op.binSizeArg != nil {
+		bsv, err := evalArgValue(op.binSizeArg, doc)
+		if err != nil {
+			return nil, err
+		}
+
+		if bsv != types.Null {
+			binSize = int64(toFloat64(bsv))
+		}
+	}
+
+	var truncated time.Time
+
+	switch strings.ToLower(unit) {
+	case "year":
+		year := int64(t.Year())
+		year = (year / binSize) * binSize
+		truncated = time.Date(int(year), 1, 1, 0, 0, 0, 0, time.UTC)
+	case "quarter":
+		month := int(t.Month())
+		quarterStart := ((month - 1) / 3) * 3 + 1
+		truncated = time.Date(t.Year(), time.Month(quarterStart), 1, 0, 0, 0, 0, time.UTC)
+	case "month":
+		month := int64(t.Month()) + int64(t.Year()-1)*12
+		month = (month/binSize)*binSize + 1
+		year := (month - 1) / 12
+		m := (month-1)%12 + 1
+		truncated = time.Date(int(year), time.Month(m), 1, 0, 0, 0, 0, time.UTC)
+	case "week":
+		weekday := int(t.Weekday())
+		if weekday == 0 {
+			weekday = 7 // Sunday → 7 for ISO week
+		}
+		truncated = time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
+	case "day":
+		day := t.Unix() / 86400
+		day = (day / binSize) * binSize
+		truncated = time.Unix(day*86400, 0).UTC()
+	case "hour":
+		hours := t.Unix() / 3600
+		hours = (hours / binSize) * binSize
+		truncated = time.Unix(hours*3600, 0).UTC()
+	case "minute":
+		minutes := t.Unix() / 60
+		minutes = (minutes / binSize) * binSize
+		truncated = time.Unix(minutes*60, 0).UTC()
+	case "second":
+		seconds := t.Unix()
+		seconds = (seconds / binSize) * binSize
+		truncated = time.Unix(seconds, 0).UTC()
+	case "millisecond":
+		ms := t.UnixMilli()
+		ms = (ms / binSize) * binSize
+		truncated = time.UnixMilli(ms).UTC()
+	default:
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateTrunc",
+			fmt.Sprintf("$dateTrunc unknown unit: %s", unit))
+	}
+
+	return truncated, nil
+}
+
+var _ Operator = (*dateTruncOp)(nil)

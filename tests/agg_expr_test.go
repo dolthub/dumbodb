@@ -666,3 +666,43 @@ func TestExpr_project_in_operator(t *testing.T) {
 	assert.Equal(t, false, results[1].Map()["r"], "news is not in the set")
 	assert.Equal(t, true, results[2].Map()["r"], "finance is in the set")
 }
+
+// TestExpr_dateTrunc tests the $dateTrunc aggregation expression operator. (DongoFull)
+// $dateTrunc truncates a date to the start of a specified time unit.
+func TestExpr_dateTrunc(t *testing.T) {
+	t.Parallel()
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	// 2024-03-15 14:32:45 UTC
+	ts := primitive.NewDateTimeFromTime(time.Date(2024, 3, 15, 14, 32, 45, 0, time.UTC))
+	insertDocs(t, coll,
+		d(e("_id", "a"), e("ts", ts)),
+	)
+
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		bson.D{{"$project", bson.D{
+			{"_id", false},
+			{"byDay", bson.D{{"$dateTrunc", bson.D{
+				{"date", "$ts"},
+				{"unit", "day"},
+			}}}},
+			{"byHour", bson.D{{"$dateTrunc", bson.D{
+				{"date", "$ts"},
+				{"unit", "hour"},
+			}}}},
+		}}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	byDay := results[0].Map()["byDay"].(primitive.DateTime).Time().UTC()
+	assert.Equal(t, time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC), byDay)
+
+	byHour := results[0].Map()["byHour"].(primitive.DateTime).Time().UTC()
+	assert.Equal(t, time.Date(2024, 3, 15, 14, 0, 0, 0, time.UTC), byHour)
+}
