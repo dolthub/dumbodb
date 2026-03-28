@@ -1494,3 +1494,114 @@ func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
 		}
 	}
 }
+
+// TestAggStage_graphLookup_TraverseHierarchyFromLeaf is a regression test for the
+// within-level ordering bug where $graphLookup returned results in frontier-value order
+// rather than collection-scan (_id) order.
+//
+// Graph (upward reporting chain from a leaf):
+//
+//	jr → mgr → [vp, ceo]   (mgr.reportsTo is an array ["vp","ceo"])
+//	ceo and vp are both terminal (no further reportsTo)
+//
+// Starting from jr (startWith = "$reportsTo" = "mgr"), the BFS discovers:
+//   - depth 0: mgr   (name matches "mgr")
+//   - depth 1: ceo, vp  (both names are in mgr.reportsTo; _id "ceo" < "vp" → ceo first)
+//
+// MongoDB scans the collection once per depth level (collection-scan order), so it
+// emits ceo before vp at depth 1. The prior implementation iterated frontier values
+// as the outer loop, emitting vp first (array element order), yielding [mgr, vp, ceo].
+//
+// After the fix the outer loop is fromDocs (sorted by _id), so ceo (id < vp) is
+// discovered first: chain = [mgr, ceo, vp].
+func TestAggStage_graphLookup_TraverseHierarchyFromLeaf(t *testing.T) {
+	t.Parallel()
+
+	// mgr.reportsTo is an array with "vp" listed BEFORE "ceo" — this is intentional.
+	// It ensures that naive frontier-first iteration yields the wrong order [mgr,vp,ceo]
+	// while the correct collection-scan-first iteration yields [mgr,ceo,vp].
+	mgrReportsTo := types.MakeArray(2)
+	mgrReportsTo.Append("vp")
+	mgrReportsTo.Append("ceo")
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", "ceo", "name", "ceo")),
+		must.NotFail(types.NewDocument("_id", "jr", "name", "jr", "reportsTo", "mgr")),
+		must.NotFail(types.NewDocument("_id", "mgr", "name", "mgr", "reportsTo", mgrReportsTo)),
+		must.NotFail(types.NewDocument("_id", "vp", "name", "vp")),
+	}
+
+	// Shuffle the fetcher order to prove the fix doesn't rely on fetcher ordering.
+	shuffled := []*types.Document{employees[3], employees[0], employees[2], employees[1]} // vp, ceo, mgr, jr
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": shuffled})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "$reportsTo",
+		"connectFromField", "reportsTo",
+		"connectToField", "name",
+		"as", "chain",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	// Input: the leaf employee "jr"
+	inputDoc := must.NotFail(types.NewDocument("_id", "jr", "name", "jr", "reportsTo", "mgr"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	chainVal, err := results[0].Get("chain")
+	if err != nil {
+		t.Fatalf("missing chain field: %v", err)
+	}
+
+	chain, ok := chainVal.(*types.Array)
+	if !ok {
+		t.Fatalf("chain not an array: %T", chainVal)
+	}
+
+	// Expected: mgr (depth 0), ceo (depth 1, _id "ceo" < "vp"), vp (depth 1)
+	if chain.Len() != 3 {
+		t.Fatalf("expected 3 chain entries (mgr, ceo, vp), got %d", chain.Len())
+	}
+
+	// MongoDB emits within-level results in collection-scan (_id asc) order:
+	//   depth 0: [mgr]
+	//   depth 1: [ceo, vp]   ← "ceo" < "vp" alphabetically by _id
+	wantNames := []string{"mgr", "ceo", "vp"}
+
+	for i := 0; i < chain.Len(); i++ {
+		v, _ := chain.Get(i)
+		entry, ok := v.(*types.Document)
+		if !ok {
+			t.Errorf("chain[%d] not a document: %T", i, v)
+			continue
+		}
+
+		nameVal, err := entry.Get("name")
+		if err != nil {
+			t.Errorf("chain[%d] missing name: %v", i, err)
+			continue
+		}
+
+		if nameVal != wantNames[i] {
+			t.Errorf("chain[%d].name = %v, want %v (MongoDB collection-scan order)", i, nameVal, wantNames[i])
+		}
+	}
+}

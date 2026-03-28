@@ -235,10 +235,16 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 //
 // Cycle prevention: each connectToField search-value is only processed once, so
 // cycles in the graph terminate naturally.
+//
+// Ordering: within each BFS depth level, results appear in _id-ascending order.
+// This mirrors MongoDB's behaviour, which yields documents in collection-scan order
+// (effectively insertion order); sorting by _id gives us a deterministic proxy for
+// that because documents are discovered by scanning fromDocs once per depth level
+// rather than once per frontier value.
 func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document) ([]*types.Document, error) {
-	// Sort fromDocs by _id ascending before traversal so that when multiple documents
-	// match at the same BFS depth level, they are discovered in a deterministic order
-	// that matches MongoDB's natural (insertion-order) collection scan.
+	// Sort fromDocs by _id ascending once. All per-level scans then proceed in this
+	// fixed order, so within-level results always appear in _id order — matching
+	// MongoDB's collection-scan ordering guarantee.
 	sorted := make([]*types.Document, len(fromDocs))
 	copy(sorted, fromDocs)
 	stdsort.SliceStable(sorted, func(i, j int) bool {
@@ -267,50 +273,75 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 			break
 		}
 
+		// Build the set of frontier search-values for this depth level, skipping any
+		// already processed (cycle prevention). Mark them searched immediately so that
+		// even if a doc's connectFromField re-enqueues a value seen at a prior level,
+		// it is silently dropped.
+		frontierSet := make(map[string]bool, len(frontier))
+		for _, searchVal := range frontier {
+			key := fmt.Sprintf("%v", searchVal)
+			if !searchedKeys[key] {
+				frontierSet[key] = true
+				searchedKeys[key] = true
+			}
+		}
+
+		if len(frontierSet) == 0 {
+			break
+		}
+
+		// nextFrontierSet deduplicates values enqueued for the next depth level.
+		nextFrontierSet := make(map[string]bool)
 		var nextFrontier []any
 
-		for _, searchVal := range frontier {
-			searchKey := fmt.Sprintf("%v", searchVal)
-			if searchedKeys[searchKey] {
+		// Scan fromDocs in sorted order — the outer loop is the collection, not the
+		// frontier. This matches MongoDB's per-level collection scan: all frontier values
+		// are checked against each document as it is encountered, so within a depth level
+		// documents are emitted in _id order regardless of which frontier value they match.
+		for _, fromDoc := range fromDocs {
+			toVal := getFieldValue(fromDoc, gl.connectToField)
+			toKey := fmt.Sprintf("%v", toVal)
+
+			if !frontierSet[toKey] {
 				continue
 			}
 
-			searchedKeys[searchKey] = true
-
-			for _, fromDoc := range fromDocs {
-				toVal := getFieldValue(fromDoc, gl.connectToField)
-				if !valuesEqual(toVal, searchVal) {
+			if gl.restrictSearchWithMatch != nil {
+				matched, mErr := common.FilterDocument(fromDoc, gl.restrictSearchWithMatch)
+				if mErr != nil || !matched {
 					continue
 				}
+			}
 
-				if gl.restrictSearchWithMatch != nil {
-					matched, mErr := common.FilterDocument(fromDoc, gl.restrictSearchWithMatch)
-					if mErr != nil || !matched {
-						continue
-					}
+			docID := docIdentityKey(fromDoc)
+			if resultIDs[docID] {
+				continue
+			}
+
+			resultIDs[docID] = true
+
+			result := fromDoc.DeepCopy()
+			if gl.depthField != "" {
+				result.Set(gl.depthField, int32(currentDepth))
+			}
+
+			results = append(results, result)
+
+			// Enqueue the connectFromField value(s) for the next depth level.
+			fromVal := getFieldValue(fromDoc, gl.connectFromField)
+			if fromVal != nil {
+				var vals []any
+				if fromArr, ok := fromVal.(*types.Array); ok {
+					vals = arrayElements(fromArr)
+				} else {
+					vals = []any{fromVal}
 				}
 
-				docID := docIdentityKey(fromDoc)
-				if resultIDs[docID] {
-					continue
-				}
-
-				resultIDs[docID] = true
-
-				result := fromDoc.DeepCopy()
-				if gl.depthField != "" {
-					result.Set(gl.depthField, int32(currentDepth))
-				}
-
-				results = append(results, result)
-
-				// Enqueue the connectFromField value(s) for the next depth level.
-				fromVal := getFieldValue(fromDoc, gl.connectFromField)
-				if fromVal != nil {
-					if fromArr, ok := fromVal.(*types.Array); ok {
-						nextFrontier = append(nextFrontier, arrayElements(fromArr)...)
-					} else {
-						nextFrontier = append(nextFrontier, fromVal)
+				for _, v := range vals {
+					k := fmt.Sprintf("%v", v)
+					if !searchedKeys[k] && !nextFrontierSet[k] {
+						nextFrontierSet[k] = true
+						nextFrontier = append(nextFrontier, v)
 					}
 				}
 			}
