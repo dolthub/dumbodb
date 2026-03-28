@@ -245,6 +245,10 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			mergeWriter := makeMergeWriter(h.b, dbName)
 			s, err = stages.NewMergeStage(d, dbName, mergeWriter)
 
+		case "$indexStats":
+			// $indexStats requires collection access to retrieve index metadata.
+			s, err = stages.NewIndexStatsStage(d, connCtx, c)
+
 		default:
 			s, err = stages.NewStage(d)
 		}

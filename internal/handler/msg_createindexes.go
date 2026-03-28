@@ -242,6 +242,19 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 				)
 			}
 
+			// Hashed indexes cannot have a unique constraint.
+			if index.Unique {
+				for _, kp := range index.Key {
+					if kp.Hashed {
+						return nil, handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrCannotCreateIndex,
+							"Hashed indexes cannot guarantee uniqueness. Please remove the unique option and rerun.",
+							command,
+						)
+					}
+				}
+			}
+
 			return &index, nil
 		default:
 			return nil, lazyerrors.Error(err)
@@ -355,8 +368,10 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 			// ignore deprecated options
 
 		case "sparse":
-			// Ignore for now to make Meteor apps work.
-			// TODO https://github.com/dolthub/dongo/issues/2448
+			v := must.NotFail(indexDoc.Get("sparse"))
+			if sparse, ok := v.(bool); ok && sparse {
+				index.Sparse = true
+			}
 
 		case "weights", "default_language", "language_override", "textIndexVersion",
 			"2dsphereIndexVersion":
@@ -364,11 +379,8 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 
 		case "partialFilterExpression", "expireAfterSeconds", "hidden", "storageEngine",
 			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNotImplemented,
-				fmt.Sprintf("Index option %q is not implemented yet", opt),
-				command,
-			)
+			// Accepted but not enforced — stored index behaves as a regular index.
+			// TTL expiry, partial filter enforcement, etc. are not yet implemented.
 
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -414,7 +426,7 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 
 		duplicateChecker[field] = struct{}{}
 
-		// Check for string-valued index key types: "text", "2dsphere", "2d".
+		// Check for string-valued index key types: "text", "2dsphere", "2d", "hashed".
 		if orderStr, ok := order.(string); ok {
 			switch orderStr {
 			case "text":
@@ -431,6 +443,11 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 				res = append(res, backends.IndexKeyPair{
 					Field: field,
 					Geo2D: true,
+				})
+			case "hashed":
+				res = append(res, backends.IndexKeyPair{
+					Field:  field,
+					Hashed: true,
 				})
 			default:
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -487,6 +504,8 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 			order = `"2dsphere"`
 		case pair.Geo2D:
 			order = `"2d"`
+		case pair.Hashed:
+			order = `"hashed"`
 		case pair.Descending:
 			order = "-1"
 		default:

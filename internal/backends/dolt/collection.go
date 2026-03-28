@@ -136,6 +136,17 @@ func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
 	return key
 }
 
+// allNull returns true if every element in the key slice is types.Null.
+// Used to detect sparse index documents that should be excluded from unique checks.
+func allNull(key []any) bool {
+	for _, v := range key {
+		if v != types.Null {
+			return false
+		}
+	}
+	return true
+}
+
 // indexKeysEqual returns true if two composite index keys are element-wise equal.
 func indexKeysEqual(a, b []any) bool {
 	if len(a) != len(b) {
@@ -249,6 +260,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		// Check unique secondary index constraints.
 		for i, idx := range uniqueIndexes {
 			newKey := extractIndexKey(doc, idx)
+
+			// For sparse indexes, documents where all indexed fields are missing
+			// are not indexed and thus do not participate in uniqueness checks.
+			if idx.Sparse && allNull(newKey) {
+				continue
+			}
+
 			for _, existKey := range existingUniqueKeys[i] {
 				if indexKeysEqual(newKey, existKey) {
 					return nil, backends.NewError(
@@ -746,12 +764,13 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 				fmt.Errorf("dolt: collection %q does not exist", c.name))
 		}
 
-		// If there are no secondary indexes for this collection, the collection doesn't exist.
+		// If this collection was never registered (created), it doesn't exist.
+		// Note: a registered collection with 0 secondary indexes (all dropped) still exists.
 		state.mu.RLock()
-		hasIndexes := len(state.indexes[c.name]) > 0
+		_, registered := state.indexes[c.name]
 		state.mu.RUnlock()
 
-		if !hasIndexes {
+		if !registered {
 			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
 				fmt.Errorf("dolt: collection %q does not exist", c.name))
 		}

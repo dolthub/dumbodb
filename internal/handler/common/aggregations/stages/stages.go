@@ -63,7 +63,7 @@ var unsupportedStages = map[string]struct{}{
 	"$fill":                   {},
 	// $geoNear is now implemented in stages.go
 	// $graphLookup is handled specially in msg_aggregate.go via NewGraphLookupStage
-	"$indexStats":             {},
+	// $indexStats is handled specially in msg_aggregate.go via NewIndexStatsStage
 	"$listLocalSessions":      {},
 	"$listSessions":           {},
 	"$lookup": {}, // handled specially in msg_aggregate.go via NewLookupStage

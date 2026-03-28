@@ -375,6 +375,7 @@ type IndexInfo struct {
 	Name   string
 	Key    []IndexKeyPair
 	Unique bool
+	Sparse bool // true if the index only covers documents with the indexed field(s)
 }
 
 // IndexKeyPair consists of a field name and a sort order that are part of the index.
@@ -384,6 +385,7 @@ type IndexKeyPair struct {
 	Text        bool // true if this is a text index field
 	Geo2DSphere bool // true if this is a 2dsphere geospatial index field
 	Geo2D       bool // true if this is a 2d (legacy planar) index field
+	Hashed      bool // true if this is a hashed index field
 }
 
 // ListIndexes returns a list of collection indexes.

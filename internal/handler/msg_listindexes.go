@@ -92,6 +92,8 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 				indexKey.Set(key.Field, "2dsphere")
 			case key.Geo2D:
 				indexKey.Set(key.Field, "2d")
+			case key.Hashed:
+				indexKey.Set(key.Field, "hashed")
 			default:
 				order := int32(1)
 				if key.Descending {
