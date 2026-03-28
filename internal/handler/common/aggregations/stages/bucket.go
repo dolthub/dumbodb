@@ -89,7 +89,7 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBucketMissingBoundaries,
-			"The $bucket stage specification must have a 'boundaries' field",
+			"$bucket requires 'groupBy' and 'boundaries' to be specified.",
 			"$bucket (stage)",
 		)
 	}

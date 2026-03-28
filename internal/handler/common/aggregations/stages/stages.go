@@ -40,6 +40,7 @@ var Stages = map[string]newStageFunc{
 	"$limit":       newLimit,
 	"$match":       newMatch,
 	"$project":     newProject,
+	"$redact":      newRedact,
 	"$replaceRoot": newReplaceRoot,
 	"$replaceWith": newReplaceWith,
 	"$set":              newSet,
@@ -69,7 +70,6 @@ var unsupportedStages = map[string]struct{}{
 	"$lookup": {}, // handled specially in msg_aggregate.go via NewLookupStage
 	// $merge and $out handled specially in msg_aggregate.go via NewMergeStage/NewOutStage
 	"$planCacheStats":         {},
-	"$redact":                 {},
 	"$search":                 {},
 	"$searchMeta":             {},
 	// "$setWindowFields" is now implemented above

@@ -20,6 +20,7 @@ import (
 
 	"github.com/dolthub/dongo/internal/handler/common/aggregations"
 	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/dongo/internal/util/must"
 )
 
 // evalArgValue resolves an operator argument to its concrete value against the document.
@@ -44,14 +45,17 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			return op.Process(doc)
 		}
 
-		return v, nil
+		// Non-operator document: treat as an expression object — each value is an expression.
+		return evalDocumentExpressions(v, doc)
 
 	case string:
 		if strings.HasPrefix(v, "$$") {
-			// Variable reference: look up "$$name" key stored in the document by $filter/$map/$reduce.
+			// Variable reference: look up "$$name" key stored in the document by $filter/$map/$reduce/$let.
 			val, err := doc.Get(v)
 			if err != nil {
-				return types.Null, nil
+				// Unknown variable — treat as a literal system variable string (e.g. $$PRUNE, $$KEEP,
+				// $$DESCEND, $$REMOVE) so that operators like $redact can inspect the value.
+				return v, nil
 			}
 
 			return val, nil
@@ -82,6 +86,27 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	default:
 		return v, nil
 	}
+}
+
+// evalDocumentExpressions evaluates each value of a non-operator expression document as an
+// expression against doc, returning a new document with the resolved values. This matches
+// MongoDB's behavior where `{key: "$field"}` inside an expression context produces
+// `{key: <value of $field>}`.
+func evalDocumentExpressions(expr *types.Document, doc *types.Document) (*types.Document, error) {
+	result := must.NotFail(types.NewDocument())
+
+	for _, k := range expr.Keys() {
+		val := must.NotFail(expr.Get(k))
+
+		evaluated, err := evalArgValue(val, doc)
+		if err != nil {
+			return nil, err
+		}
+
+		result.Set(k, evaluated)
+	}
+
+	return result, nil
 }
 
 // isFalsy returns true when v is MongoDB-falsy for $cond purposes:
