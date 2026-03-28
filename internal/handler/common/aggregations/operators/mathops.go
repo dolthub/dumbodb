@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/types"
 )
 
@@ -510,15 +509,9 @@ func (op *modOp) Process(doc *types.Document) (any, error) {
 	}
 
 	bf := toFloat64(b)
-	if math.IsNaN(bf) {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"$mod: the divisor cannot be NaN",
-			"$mod",
-		)
-	}
 
-	if bf == 0 {
+	// NaN divisor: MongoDB returns NaN without error; math.Mod propagates NaN naturally.
+	if !math.IsNaN(bf) && bf == 0 {
 		return nil, newOperatorError(ErrArgsInvalidLen, "$mod", "$mod by zero")
 	}
 

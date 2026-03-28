@@ -980,3 +980,81 @@ func (op *objectToArrayOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*objectToArrayOp)(nil)
+
+// ── $arrayToObject ────────────────────────────────────────────────────────────
+
+// arrayToObjectOp represents { $arrayToObject: <array-expr> }.
+// Converts an array of {k, v} documents to a single document.
+type arrayToObjectOp struct{ arg any }
+
+func newArrayToObject(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
+			fmt.Sprintf("Expression $arrayToObject takes exactly 1 argument. %d were passed in.", len(args)))
+	}
+
+	return &arrayToObjectOp{arg: args[0]}, nil
+}
+
+func (op *arrayToObjectOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.arg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		return types.Null, nil
+	}
+
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
+			fmt.Sprintf("$arrayToObject requires an array argument, got %T", v))
+	}
+
+	result := types.MakeDocument(arr.Len())
+
+	iter := arr.Iterator()
+	defer iter.Close()
+
+	for {
+		_, elem, iterErr := iter.Next()
+		if errors.Is(iterErr, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if iterErr != nil {
+			return nil, iterErr
+		}
+
+		pair, ok := elem.(*types.Document)
+		if !ok {
+			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
+				"$arrayToObject requires an array of objects with 'k' and 'v' fields")
+		}
+
+		kv, err := pair.Get("k")
+		if err != nil {
+			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
+				"$arrayToObject element must have a 'k' field")
+		}
+
+		key, ok := kv.(string)
+		if !ok {
+			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
+				"$arrayToObject element 'k' field must be a string")
+		}
+
+		val, err := pair.Get("v")
+		if err != nil {
+			return nil, newOperatorError(ErrArgsInvalidLen, "$arrayToObject",
+				"$arrayToObject element must have a 'v' field")
+		}
+
+		result.Set(key, val)
+	}
+
+	return result, nil
+}
+
+var _ Operator = (*arrayToObjectOp)(nil)

@@ -445,9 +445,15 @@ func diffDateUnit(start, end time.Time, unit string) (int64, error) {
 	case "hour":
 		return int64(end.Sub(start).Hours()), nil
 	case "day":
-		return int64(end.Sub(start).Hours() / 24), nil
+		// Count calendar day boundaries crossed (truncate both to midnight).
+		startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+		return int64(endDay.Sub(startDay).Hours() / 24), nil
 	case "week":
-		return int64(end.Sub(start).Hours() / (24 * 7)), nil
+		// Count calendar week boundaries crossed.
+		startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+		return int64(endDay.Sub(startDay).Hours() / (24 * 7)), nil
 	case "month":
 		years := int64(end.Year() - start.Year())
 		months := int64(end.Month() - start.Month())

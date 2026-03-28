@@ -15,19 +15,17 @@
 package operators
 
 import (
-	"errors"
 	"math"
 	"testing"
 
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/util/must"
 
 	"github.com/dolthub/dongo/internal/types"
 )
 
-// TestProbeModNaNDivisor is a regression test for do-9ni.
-// When $mod is used with a NaN divisor, dongo must return error code 2 (BadValue),
-// not error code 0 (success / no error).
+// TestProbeModNaNDivisor is a regression test for do-9ni / do-sl4f.
+// When $mod is used with a NaN divisor, dongo must return NaN (matching MongoDB),
+// not crash or return an error.
 func TestProbeModNaNDivisor(t *testing.T) {
 	t.Parallel()
 
@@ -38,18 +36,17 @@ func TestProbeModNaNDivisor(t *testing.T) {
 
 	doc := must.NotFail(types.NewDocument("x", float64(10)))
 
-	_, err = op.Process(doc)
-	if err == nil {
-		t.Fatal("$mod with NaN divisor: expected an error, got nil")
+	result, err := op.Process(doc)
+	if err != nil {
+		t.Fatalf("$mod with NaN divisor: expected no error, got: %v", err)
 	}
 
-	var cmdErr *handlererrors.CommandError
-	if !errors.As(err, &cmdErr) {
-		t.Fatalf("$mod with NaN divisor: expected *CommandError, got %T: %v", err, err)
+	f, ok := result.(float64)
+	if !ok {
+		t.Fatalf("$mod with NaN divisor: expected float64 result, got %T", result)
 	}
 
-	if cmdErr.Code() != handlererrors.ErrBadValue {
-		t.Errorf("$mod with NaN divisor: expected error code %d (BadValue), got %d",
-			handlererrors.ErrBadValue, cmdErr.Code())
+	if !math.IsNaN(f) {
+		t.Errorf("$mod with NaN divisor: expected NaN result, got %v", f)
 	}
 }

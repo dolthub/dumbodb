@@ -143,6 +143,7 @@ var Operators = map[string]newOperatorFunc{
 	"$add":              newAdd,
 	"$allElementsTrue":  newAllElementsTrue,
 	"$and":              newAnd,
+	"$arrayToObject":    newArrayToObject,
 	"$avg":              newAvgOp,
 	"$anyElementTrue":   newAnyElementTrue,
 	"$arrayElemAt":      newArrayElemAt,
@@ -251,7 +252,6 @@ var unsupportedOperators = map[string]struct{}{
 	// sorted alphabetically
 	"$acos":             {},
 	"$acosh":            {},
-	"$arrayToObject":    {},
 	"$asin":             {},
 	"$asinh":            {},
 	"$atan":             {},
