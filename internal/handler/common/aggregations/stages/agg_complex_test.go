@@ -1397,3 +1397,100 @@ func TestAggStage_bucket_MissingBoundariesError(t *testing.T) {
 		t.Errorf("error code = %d, want %d (ErrBucketMissingBoundaries)", cmdErr.Code(), wantCode)
 	}
 }
+
+// TestAggStage_graphLookup_DeterministicOrdering verifies that $graphLookup returns
+// results in a deterministic order even when multiple documents match the same BFS
+// frontier value (i.e., multiple nodes at the same depth level).
+//
+// Graph: ceo has two direct reports, vp (_id=1) and mgr (_id=2), both with
+// reportsTo="ceo". Starting with "ceo" as the search value, both vp and mgr match
+// in the same BFS pass. Their order must be by _id ascending regardless of the
+// collection scan order returned by the storage backend.
+//
+// This is a regression test for the intermittent failure where Dongo returned
+// [{mgr,...},{vp,...}] instead of [{vp,...},{mgr,...}] depending on the run.
+func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
+	t.Parallel()
+
+	// Two subordinates both report to "ceo" — they match in the same BFS pass.
+	// vp has _id=1, mgr has _id=2; expected result order is vp first (lower _id).
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "vp", "reportsTo", "ceo")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "mgr", "reportsTo", "ceo")),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "ceo")),
+	}
+
+	// Intentionally shuffle the fetcher order to simulate a non-deterministic
+	// storage scan that returns mgr before vp.
+	shuffled := []*types.Document{employees[1], employees[2], employees[0]} // mgr, ceo, vp
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": shuffled})
+
+	// Traverse downward: starting from "ceo", find all employees whose reportsTo="ceo",
+	// then enqueue their names as the next search tier.
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "ceo",          // literal: start the BFS at "ceo"
+		"connectFromField", "name",   // enqueue the name of each found doc
+		"connectToField", "reportsTo", // match docs where reportsTo = queued value
+		"as", "subordinates",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(4), "name", "alice"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	subVal, err := results[0].Get("subordinates")
+	if err != nil {
+		t.Fatalf("missing subordinates: %v", err)
+	}
+
+	subs, ok := subVal.(*types.Array)
+	if !ok {
+		t.Fatalf("subordinates not an array: %T", subVal)
+	}
+
+	// Both vp (_id=1) and mgr (_id=2) have reportsTo="ceo", so both match in the
+	// first BFS pass. After sorting fromDocs by _id, vp must appear before mgr.
+	if subs.Len() != 2 {
+		t.Fatalf("expected 2 subordinates (vp and mgr), got %d", subs.Len())
+	}
+
+	expectedNames := []string{"vp", "mgr"}
+
+	for i := 0; i < subs.Len(); i++ {
+		v, _ := subs.Get(i)
+		sub, ok := v.(*types.Document)
+		if !ok {
+			t.Errorf("subordinates[%d] not a document: %T", i, v)
+			continue
+		}
+
+		nameVal, err := sub.Get("name")
+		if err != nil {
+			t.Errorf("subordinates[%d] missing name: %v", i, err)
+			continue
+		}
+
+		if nameVal != expectedNames[i] {
+			t.Errorf("subordinates[%d].name = %v, want %v", i, nameVal, expectedNames[i])
+		}
+	}
+}

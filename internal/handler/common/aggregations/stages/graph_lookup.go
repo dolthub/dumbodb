@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdsort "sort"
 	"strings"
 
 	"github.com/dolthub/dongo/internal/handler/common"
@@ -235,6 +236,21 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 // Cycle prevention: each connectToField search-value is only processed once, so
 // cycles in the graph terminate naturally.
 func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document) ([]*types.Document, error) {
+	// Sort fromDocs by _id ascending before traversal so that when multiple documents
+	// match at the same BFS depth level, they are discovered in a deterministic order
+	// that matches MongoDB's natural (insertion-order) collection scan.
+	sorted := make([]*types.Document, len(fromDocs))
+	copy(sorted, fromDocs)
+	stdsort.SliceStable(sorted, func(i, j int) bool {
+		idI, errI := sorted[i].Get("_id")
+		idJ, errJ := sorted[j].Get("_id")
+		if errI != nil || errJ != nil {
+			return false
+		}
+		return types.CompareOrder(idI, idJ, types.Ascending) == types.Less
+	})
+	fromDocs = sorted
+
 	// searchedKeys guards against re-processing the same connectToField search value.
 	searchedKeys := make(map[string]bool)
 
