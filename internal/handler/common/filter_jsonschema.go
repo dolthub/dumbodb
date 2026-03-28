@@ -180,16 +180,63 @@ func validateJSONSchemaValue(value any, schema *types.Document, isDocument bool)
 			}
 
 		case "exclusiveMinimum":
-			ok, err := checkNumericRange("exclusiveMinimum", value, schemaVal)
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				return false, nil
+			if boolVal, isBool := schemaVal.(bool); isBool {
+				// JSON Schema draft-04: boolean modifier for 'minimum'.
+				// exclusiveMinimum: true means the 'minimum' boundary is exclusive (value > minimum).
+				if boolVal {
+					minVal, getErr := schema.Get("minimum")
+					if getErr == nil {
+						ok, err := checkNumericRange("exclusiveMinimum", value, minVal)
+						if err != nil {
+							return false, err
+						}
+						if !ok {
+							return false, nil
+						}
+					}
+				}
+				// exclusiveMinimum: false means inclusive, handled by 'minimum' case.
+			} else {
+				// JSON Schema draft-07: numeric exclusive minimum.
+				ok, err := checkNumericRange("exclusiveMinimum", value, schemaVal)
+				if err != nil {
+					return false, err
+				}
+				if !ok {
+					return false, nil
+				}
 			}
 
 		case "exclusiveMaximum":
-			ok, err := checkNumericRange("exclusiveMaximum", value, schemaVal)
+			if boolVal, isBool := schemaVal.(bool); isBool {
+				// JSON Schema draft-04: boolean modifier for 'maximum'.
+				// exclusiveMaximum: true means the 'maximum' boundary is exclusive (value < maximum).
+				if boolVal {
+					maxVal, getErr := schema.Get("maximum")
+					if getErr == nil {
+						ok, err := checkNumericRange("exclusiveMaximum", value, maxVal)
+						if err != nil {
+							return false, err
+						}
+						if !ok {
+							return false, nil
+						}
+					}
+				}
+				// exclusiveMaximum: false means inclusive, handled by 'maximum' case.
+			} else {
+				// JSON Schema draft-07: numeric exclusive maximum.
+				ok, err := checkNumericRange("exclusiveMaximum", value, schemaVal)
+				if err != nil {
+					return false, err
+				}
+				if !ok {
+					return false, nil
+				}
+			}
+
+		case "multipleOf":
+			ok, err := checkMultipleOf(value, schemaVal)
 			if err != nil {
 				return false, err
 			}
@@ -772,4 +819,48 @@ func arrayItemsUnique(arr *types.Array) bool {
 		}
 	}
 	return true
+}
+
+// checkMultipleOf validates the multipleOf constraint.
+// The numeric value must be evenly divisible by the given modulus.
+// Non-numeric values pass the constraint.
+func checkMultipleOf(value, modVal any) (bool, error) {
+	var val float64
+	switch v := value.(type) {
+	case float64:
+		val = v
+	case int32:
+		val = float64(v)
+	case int64:
+		val = float64(v)
+	default:
+		return true, nil
+	}
+
+	var mod float64
+	switch m := modVal.(type) {
+	case float64:
+		mod = m
+	case int32:
+		mod = float64(m)
+	case int64:
+		mod = float64(m)
+	default:
+		return false, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"$jsonSchema keyword 'multipleOf' must be a number",
+			"$jsonSchema",
+		)
+	}
+
+	if mod <= 0 {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"$jsonSchema keyword 'multipleOf' must be a positive number",
+			"$jsonSchema",
+		)
+	}
+
+	rem := math.Remainder(val, mod)
+	return math.Abs(rem) <= 1e-9, nil
 }
