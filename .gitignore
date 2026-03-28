@@ -4,3 +4,8 @@
 dongo
 CLAUDE.md
 .idea/
+
+# Gas Town (added by gt)
+.logs/
+__pycache__/
+state.json
