@@ -67,19 +67,22 @@ type Regex struct {
 // Compile returns Go Regexp object.
 func (r Regex) Compile() (*regexp.Regexp, error) {
 	var opts string
+	extendedMode := false
 	for _, o := range r.Options {
 		switch o {
 		case 'i', 'm', 's':
 			opts += string(o)
 		case 'x':
-			// TODO https://github.com/dolthub/dongo/issues/592
-			return nil, ErrOptionNotImplemented
+			extendedMode = true
 		default:
 			continue
 		}
 	}
 
 	expr := r.Pattern
+	if extendedMode {
+		expr = stripExtendedWhitespace(expr)
+	}
 	if opts != "" {
 		expr = "(?" + opts + ")" + expr
 	}
@@ -120,6 +123,63 @@ func (r Regex) Compile() (*regexp.Regexp, error) {
 	}
 
 	return nil, lazyerrors.Error(err)
+}
+
+// stripExtendedWhitespace preprocesses a regex pattern for the x flag (extended whitespace mode).
+// Unescaped whitespace outside of character classes is removed.
+// '#' outside of character classes starts a comment until end of line.
+func stripExtendedWhitespace(pattern string) string {
+	var result []rune
+	runes := []rune(pattern)
+	i := 0
+	inClass := false
+
+	for i < len(runes) {
+		ch := runes[i]
+
+		if ch == '\\' && i+1 < len(runes) {
+			result = append(result, ch, runes[i+1])
+			i += 2
+			continue
+		}
+
+		if ch == '[' && !inClass {
+			inClass = true
+			result = append(result, ch)
+			i++
+			continue
+		}
+
+		if ch == ']' && inClass {
+			inClass = false
+			result = append(result, ch)
+			i++
+			continue
+		}
+
+		if inClass {
+			result = append(result, ch)
+			i++
+			continue
+		}
+
+		if ch == '#' {
+			for i < len(runes) && runes[i] != '\n' {
+				i++
+			}
+			continue
+		}
+
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v' {
+			i++
+			continue
+		}
+
+		result = append(result, ch)
+		i++
+	}
+
+	return string(result)
 }
 
 // LogValue implements [slog.LogValuer].

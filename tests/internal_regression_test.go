@@ -341,6 +341,97 @@ func TestQuery_geo_within_box(t *testing.T) {
 	require.Equal(t, []int32{1, 3}, ids)
 }
 
+// TestQuery_proj_slice_first_n verifies $slice first-N projection in a Find call.
+func TestQuery_proj_slice_first_n(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40)})),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Find(ctx, bson.D{},
+		options.Find().SetProjection(d(e("_id", int32(0)), e("nums", d(e("$slice", int32(2)))))),
+	)
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	var arr bson.A
+	for _, el := range results[0] {
+		if el.Key == "nums" {
+			arr = el.Value.(bson.A)
+		}
+	}
+	require.NotNil(t, arr)
+	require.Equal(t, bson.A{int32(10), int32(20)}, arr)
+}
+
+// TestQuery_jsonSchema_required_invalid verifies that $jsonSchema with a required array
+// containing a non-string element returns a command error.
+func TestQuery_jsonSchema_required_invalid(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("x", int32(1))),
+	)
+
+	ctx := context.Background()
+	// required must be an array of strings; passing an integer element should error.
+	_, err := coll.Find(ctx,
+		d(e("$jsonSchema", d(
+			e("required", bson.A{int32(42)}),
+		))),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "required")
+}
+
+// TestQuery_type_decimal verifies {field: {$type: "decimal"}} matches Decimal128 values.
+func TestQuery_type_decimal(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	decVal, decErr := primitive.ParseDecimal128("3.14")
+	require.NoError(t, decErr)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("val", decVal)),
+		d(e("_id", int32(2)), e("val", int32(42))),
+		d(e("_id", int32(3)), e("val", "text")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Find(ctx,
+		d(e("val", d(e("$type", "decimal")))),
+	)
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	var gotID int32
+	for _, el := range results[0] {
+		if el.Key == "_id" {
+			gotID = el.Value.(int32)
+		}
+	}
+	require.Equal(t, int32(1), gotID)
+}
+
 // TestQuery_geo_within_polygon verifies {field: {$geoWithin: {$polygon: [...]}}}
 // matches documents whose coordinate lies inside the polygon.
 func TestQuery_geo_within_polygon(t *testing.T) {
@@ -749,3 +840,4 @@ func TestQuery_type_objectid(t *testing.T) {
 	}
 	require.Equal(t, []int32{1, 3}, ids)
 }
+

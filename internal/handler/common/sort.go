@@ -61,6 +61,12 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 
 		sortField := must.NotFail(sortDoc.Get(sortKey))
 
+		if isMetaTextScore(sortField) {
+			// All docs have the same text score (0.0); preserve stable order.
+			sortFuncs[i] = func(a, b *types.Document) bool { return false }
+			continue
+		}
+
 		sortType, err := GetSortType(sortKey, sortField)
 		if err != nil {
 			return err
@@ -124,6 +130,12 @@ func ValidateSortDocument(sortDoc *types.Document) (*types.Document, error) {
 		}
 
 		sortField := must.NotFail(sortDoc.Get(sortKey))
+
+		if isMetaTextScore(sortField) {
+			// Preserve {$meta: "textScore"} as-is; SortDocuments handles it.
+			res.Set(sortKey, sortField)
+			continue
+		}
 
 		sortValue, err := getSortValue(sortKey, sortField)
 		if err != nil {
@@ -218,9 +230,32 @@ func GetSortType(key string, value any) (types.SortType, error) {
 	}
 }
 
+// isMetaTextScore returns true if value is {$meta: "textScore"}.
+func isMetaTextScore(value any) bool {
+	doc, ok := value.(*types.Document)
+	if !ok {
+		return false
+	}
+	if doc.Len() != 1 {
+		return false
+	}
+	v, err := doc.Get("$meta")
+	if err != nil {
+		return false
+	}
+	s, ok := v.(string)
+	return ok && s == "textScore"
+}
+
 // getSortValue validates if the value from sort document is the proper sort field,
 // and returns it.
 func getSortValue(key string, value any) (int64, error) {
+	// {$meta: "textScore"} is a valid sort value — sort descending by text score.
+	// Dongo assigns score 0 to all docs so stable order is preserved.
+	if isMetaTextScore(value) {
+		return -1, nil
+	}
+
 	sortValue, err := handlerparams.GetWholeNumberParam(value)
 	if err != nil {
 		switch {

@@ -83,7 +83,9 @@ func NewTypeCode(code int32) (TypeCode, error) {
 		TypeCodeBinData, TypeCodeObjectID, TypeCodeBool, TypeCodeDate,
 		TypeCodeNull, TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeNumber:
 		return c, nil
-	case TypeCodeDecimal, TypeCodeMinKey, TypeCodeMaxKey:
+	case TypeCodeDecimal:
+		return c, nil
+	case TypeCodeMinKey, TypeCodeMaxKey:
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			fmt.Sprintf(`Type code %v not implemented`, code),
@@ -134,7 +136,7 @@ func init() {
 	for _, i := range []TypeCode{
 		TypeCodeDouble, TypeCodeString, TypeCodeObject, TypeCodeArray,
 		TypeCodeBinData, TypeCodeObjectID, TypeCodeBool, TypeCodeDate, TypeCodeNull,
-		TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeNumber,
+		TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeDecimal, TypeCodeNumber,
 	} {
 		aliasToTypeCode[i.String()] = i
 	}

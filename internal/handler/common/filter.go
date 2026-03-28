@@ -903,13 +903,6 @@ func filterFieldRegex(fieldValue any, regex types.Regex) (bool, error) {
 	}
 
 	re, err := regex.Compile()
-	if err != nil && err == types.ErrOptionNotImplemented {
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			`option 'x' not implemented`,
-			"$options",
-		)
-	}
 	if err != nil {
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrRegexMissingParen,
@@ -1662,7 +1655,11 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 		default:
 			return false, nil
 		}
-	case handlerparams.TypeCodeDecimal, handlerparams.TypeCodeMinKey, handlerparams.TypeCodeMaxKey:
+	case handlerparams.TypeCodeDecimal:
+		if _, ok := fieldValue.(types.Decimal128); !ok {
+			return false, nil
+		}
+	case handlerparams.TypeCodeMinKey, handlerparams.TypeCodeMaxKey:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			fmt.Sprintf(`Type code %v not implemented`, code),
@@ -1888,11 +1885,15 @@ type textTerm struct {
 }
 
 // docMatchesTextTerms returns true if the document's string fields satisfy the text search terms.
-// All positive terms must match at least one string field; no negative terms may match.
+// MongoDB $text semantics: at least one positive term must match (OR logic),
+// and no negated term may match (AND NOT logic).
 func docMatchesTextTerms(doc *types.Document, terms []textTerm, caseSensitive, diacriticSensitive bool) bool {
 	// Collect all string values from the document recursively.
 	var allStrings []string
 	collectStrings(doc, &allStrings)
+
+	anyPositiveMatch := false
+	hasPositiveTerm := false
 
 	for _, term := range terms {
 		word := term.word
@@ -1906,17 +1907,24 @@ func docMatchesTextTerms(doc *types.Document, terms []textTerm, caseSensitive, d
 		}
 
 		if term.negated {
+			// A negated term must not appear in the document.
 			if found {
 				return false
 			}
 		} else {
-			if !found {
-				return false
+			hasPositiveTerm = true
+			if found {
+				anyPositiveMatch = true
 			}
 		}
 	}
 
-	return true
+	// If there are no positive terms (only negations), any doc that passes negation checks matches.
+	if !hasPositiveTerm {
+		return true
+	}
+
+	return anyPositiveMatch
 }
 
 // collectStrings appends all string values from a document (recursively) to the slice.
