@@ -465,9 +465,24 @@ func substituteVarsInValue(val any, vars map[string]any) any {
 }
 
 // getFieldValue retrieves the value of a field from a document.
+// Supports dotted paths (e.g. "items.sku") via GetByPath.
 // Returns nil if the field does not exist.
 func getFieldValue(doc *types.Document, field string) any {
-	v, err := doc.Get(field)
+	if !strings.Contains(field, ".") {
+		v, err := doc.Get(field)
+		if err != nil {
+			return nil
+		}
+
+		return v
+	}
+
+	path, err := types.NewPathFromString(field)
+	if err != nil {
+		return nil
+	}
+
+	v, err := doc.GetByPath(path)
 	if err != nil {
 		return nil
 	}

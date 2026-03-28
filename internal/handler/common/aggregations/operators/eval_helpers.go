@@ -51,6 +51,36 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	case string:
 		if strings.HasPrefix(v, "$$") {
 			// Variable reference: look up "$$name" key stored in the document by $filter/$map/$reduce/$let.
+			// Handle dotted paths: "$$varname.field.sub" → resolve $$varname then traverse field.sub.
+			withoutPrefix := strings.TrimPrefix(v, "$$")
+			if dotIdx := strings.Index(withoutPrefix, "."); dotIdx >= 0 {
+				varKey := "$$" + withoutPrefix[:dotIdx]
+				fieldPath := withoutPrefix[dotIdx+1:]
+
+				varVal, err := doc.Get(varKey)
+				if err != nil {
+					// Unknown variable — treat as a literal string.
+					return v, nil
+				}
+
+				varDoc, ok := varVal.(*types.Document)
+				if !ok {
+					return types.Null, nil
+				}
+
+				path, err := types.NewPathFromString(fieldPath)
+				if err != nil {
+					return types.Null, nil
+				}
+
+				result, err := varDoc.GetByPath(path)
+				if err != nil {
+					return types.Null, nil
+				}
+
+				return result, nil
+			}
+
 			val, err := doc.Get(v)
 			if err != nil {
 				// Unknown variable — treat as a literal system variable string (e.g. $$PRUNE, $$KEEP,
