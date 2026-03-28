@@ -445,3 +445,144 @@ func (op *toBoolOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*toBoolOp)(nil)
+
+// ── $convert ──────────────────────────────────────────────────────────────────
+
+// convertOp represents { $convert: { input: <expr>, to: <type>, onError: <expr>, onNull: <expr> } }.
+// Converts input to the specified type. Uses onError result on conversion failure,
+// onNull result when input is null.
+type convertOp struct {
+	inputArg   any
+	toType     string
+	onErrorArg any // nil means propagate error
+	onNullArg  any // nil means return null
+}
+
+func newConvert(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
+			"$convert requires a document argument")
+	}
+
+	doc, ok := args[0].(*types.Document)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
+			"$convert requires a document argument")
+	}
+
+	inputArg, err := doc.Get("input")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
+			"Missing 'input' parameter to $convert")
+	}
+
+	toVal, err := doc.Get("to")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
+			"Missing 'to' parameter to $convert")
+	}
+
+	var toType string
+	switch tv := toVal.(type) {
+	case string:
+		toType = tv
+	case int32:
+		toType = bsonTypeAlias(tv)
+	case int64:
+		toType = bsonTypeAlias(int32(tv))
+	default:
+		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
+			fmt.Sprintf("$convert 'to' must be a string or numeric type code, got %T", toVal))
+	}
+
+	var onErrorArg, onNullArg any
+	if v, err := doc.Get("onError"); err == nil {
+		onErrorArg = v
+	}
+	if v, err := doc.Get("onNull"); err == nil {
+		onNullArg = v
+	}
+
+	return &convertOp{inputArg: inputArg, toType: toType, onErrorArg: onErrorArg, onNullArg: onNullArg}, nil
+}
+
+// bsonTypeAlias converts a BSON type number to its string alias.
+func bsonTypeAlias(code int32) string {
+	switch code {
+	case 1:
+		return "double"
+	case 2:
+		return "string"
+	case 8:
+		return "bool"
+	case 9:
+		return "date"
+	case 16:
+		return "int"
+	case 18:
+		return "long"
+	case 19:
+		return "decimal"
+	default:
+		return fmt.Sprintf("%d", code)
+	}
+}
+
+func (op *convertOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.inputArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		if op.onNullArg != nil {
+			return evalArgValue(op.onNullArg, doc)
+		}
+
+		return types.Null, nil
+	}
+
+	result, convErr := convertValue(v, op.toType)
+	if convErr != nil {
+		if op.onErrorArg != nil {
+			return evalArgValue(op.onErrorArg, doc)
+		}
+
+		return nil, convErr
+	}
+
+	return result, nil
+}
+
+// convertValue performs the actual type conversion.
+func convertValue(v any, toType string) (any, error) {
+	// Delegate to existing specific-type operators where possible.
+	switch toType {
+	case "int", "integer":
+		op, _ := newToInt(v)
+		return op.Process(nil)
+	case "long":
+		op, _ := newToLong(v)
+		return op.Process(nil)
+	case "double":
+		op, _ := newToDouble(v)
+		return op.Process(nil)
+	case "decimal":
+		op, _ := newToDecimal(v)
+		return op.Process(nil)
+	case "string":
+		op, _ := newToString(v)
+		return op.Process(nil)
+	case "bool", "boolean":
+		op, _ := newToBool(v)
+		return op.Process(nil)
+	case "date":
+		op, _ := newToDate(v)
+		return op.Process(nil)
+	default:
+		return nil, newOperatorError(ErrArgsInvalidLen, "$convert",
+			fmt.Sprintf("$convert to type '%s' is not supported", toType))
+	}
+}
+
+var _ Operator = (*convertOp)(nil)

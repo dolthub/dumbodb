@@ -96,3 +96,50 @@ func (c *cmpOperator) Process(doc *types.Document) (any, error) {
 
 // check interfaces
 var _ Operator = (*cmpOperator)(nil)
+
+// ── $cmp ─────────────────────────────────────────────────────────────────────
+
+// cmpOp represents { $cmp: [ <expr1>, <expr2> ] }.
+// Returns -1 if expr1 < expr2, 0 if equal, 1 if expr1 > expr2.
+type cmpOp struct {
+	left  any
+	right any
+}
+
+// newCmp creates a new $cmp operator.
+func newCmp(args ...any) (Operator, error) {
+	if len(args) != 2 {
+		return nil, newOperatorError(
+			ErrArgsInvalidLen,
+			"$cmp",
+			fmt.Sprintf("Expression $cmp takes exactly 2 arguments. %d were passed in.", len(args)),
+		)
+	}
+
+	return &cmpOp{left: args[0], right: args[1]}, nil
+}
+
+// Process implements Operator.
+func (c *cmpOp) Process(doc *types.Document) (any, error) {
+	lv, err := evalArgValue(c.left, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	rv, err := evalArgValue(c.right, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	switch types.Compare(lv, rv) {
+	case types.Less:
+		return int32(-1), nil
+	case types.Equal:
+		return int32(0), nil
+	default:
+		return int32(1), nil
+	}
+}
+
+// check interfaces
+var _ Operator = (*cmpOp)(nil)

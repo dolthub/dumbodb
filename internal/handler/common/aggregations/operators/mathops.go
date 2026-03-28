@@ -200,6 +200,34 @@ func (op *expOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*expOp)(nil)
 
+// ── $ln ───────────────────────────────────────────────────────────────────────
+
+type lnOp struct{ arg any }
+
+func newLn(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$ln",
+			fmt.Sprintf("Expression $ln takes exactly 1 argument. %d were passed in.", len(args)))
+	}
+
+	return &lnOp{arg: args[0]}, nil
+}
+
+func (op *lnOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.arg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		return types.Null, nil
+	}
+
+	return math.Log(toFloat64(v)), nil
+}
+
+var _ Operator = (*lnOp)(nil)
+
 // ── $log10 ────────────────────────────────────────────────────────────────────
 
 type log10Op struct{ arg any }

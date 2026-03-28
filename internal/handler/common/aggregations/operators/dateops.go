@@ -222,3 +222,264 @@ func formatDate(format string, t time.Time) string {
 }
 
 var _ Operator = (*dateToStringOp)(nil)
+
+// ── $dateAdd ──────────────────────────────────────────────────────────────────
+
+// dateAddOp represents { $dateAdd: { startDate: <expr>, unit: <string>, amount: <number> } }.
+type dateAddOp struct {
+	startDateArg any
+	unitArg      any
+	amountArg    any
+}
+
+func newDateAdd(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			"$dateAdd requires a document argument")
+	}
+
+	doc, ok := args[0].(*types.Document)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			"$dateAdd requires a document argument")
+	}
+
+	startDateArg, err := doc.Get("startDate")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			"Missing 'startDate' parameter to $dateAdd")
+	}
+
+	unitArg, err := doc.Get("unit")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			"Missing 'unit' parameter to $dateAdd")
+	}
+
+	amountArg, err := doc.Get("amount")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			"Missing 'amount' parameter to $dateAdd")
+	}
+
+	return &dateAddOp{startDateArg: startDateArg, unitArg: unitArg, amountArg: amountArg}, nil
+}
+
+func (op *dateAddOp) Process(doc *types.Document) (any, error) {
+	sv, err := evalArgValue(op.startDateArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if sv == types.Null {
+		return types.Null, nil
+	}
+
+	t, ok := toTime(sv)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			fmt.Sprintf("$dateAdd startDate must be a date, got %T", sv))
+	}
+
+	uv, err := evalArgValue(op.unitArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	unit, ok := uv.(string)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			"$dateAdd unit must be a string")
+	}
+
+	av, err := evalArgValue(op.amountArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	amount := toInt64(av)
+
+	return addDateUnit(t, unit, amount)
+}
+
+// addDateUnit adds the given amount of the specified date unit to t.
+func addDateUnit(t time.Time, unit string, amount int64) (time.Time, error) {
+	switch strings.ToLower(unit) {
+	case "year":
+		return t.AddDate(int(amount), 0, 0), nil
+	case "quarter":
+		return t.AddDate(0, int(amount*3), 0), nil
+	case "month":
+		return t.AddDate(0, int(amount), 0), nil
+	case "week":
+		return t.Add(time.Duration(amount) * 7 * 24 * time.Hour), nil
+	case "day":
+		return t.AddDate(0, 0, int(amount)), nil
+	case "hour":
+		return t.Add(time.Duration(amount) * time.Hour), nil
+	case "minute":
+		return t.Add(time.Duration(amount) * time.Minute), nil
+	case "second":
+		return t.Add(time.Duration(amount) * time.Second), nil
+	case "millisecond":
+		return t.Add(time.Duration(amount) * time.Millisecond), nil
+	default:
+		return time.Time{}, newOperatorError(ErrArgsInvalidLen, "$dateAdd",
+			fmt.Sprintf("unknown date unit: %s", unit))
+	}
+}
+
+// toInt64 converts a numeric value to int64.
+func toInt64(v any) int64 {
+	switch n := v.(type) {
+	case int32:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	}
+
+	return 0
+}
+
+var _ Operator = (*dateAddOp)(nil)
+
+// ── $dateDiff ─────────────────────────────────────────────────────────────────
+
+// dateDiffOp represents { $dateDiff: { startDate: <expr>, endDate: <expr>, unit: <string> } }.
+type dateDiffOp struct {
+	startDateArg any
+	endDateArg   any
+	unitArg      any
+}
+
+func newDateDiff(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			"$dateDiff requires a document argument")
+	}
+
+	doc, ok := args[0].(*types.Document)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			"$dateDiff requires a document argument")
+	}
+
+	startDateArg, err := doc.Get("startDate")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			"Missing 'startDate' parameter to $dateDiff")
+	}
+
+	endDateArg, err := doc.Get("endDate")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			"Missing 'endDate' parameter to $dateDiff")
+	}
+
+	unitArg, err := doc.Get("unit")
+	if err != nil {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			"Missing 'unit' parameter to $dateDiff")
+	}
+
+	return &dateDiffOp{startDateArg: startDateArg, endDateArg: endDateArg, unitArg: unitArg}, nil
+}
+
+func (op *dateDiffOp) Process(doc *types.Document) (any, error) {
+	sv, err := evalArgValue(op.startDateArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	ev, err := evalArgValue(op.endDateArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if sv == types.Null || ev == types.Null {
+		return types.Null, nil
+	}
+
+	start, ok := toTime(sv)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			fmt.Sprintf("$dateDiff startDate must be a date, got %T", sv))
+	}
+
+	end, ok := toTime(ev)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			fmt.Sprintf("$dateDiff endDate must be a date, got %T", ev))
+	}
+
+	uv, err := evalArgValue(op.unitArg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	unit, ok := uv.(string)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			"$dateDiff unit must be a string")
+	}
+
+	diff, err := diffDateUnit(start, end, unit)
+	if err != nil {
+		return nil, err
+	}
+
+	return diff, nil
+}
+
+// diffDateUnit computes the integer difference between two dates in the specified unit.
+func diffDateUnit(start, end time.Time, unit string) (int64, error) {
+	switch strings.ToLower(unit) {
+	case "millisecond":
+		return end.UnixMilli() - start.UnixMilli(), nil
+	case "second":
+		return int64(end.Sub(start).Seconds()), nil
+	case "minute":
+		return int64(end.Sub(start).Minutes()), nil
+	case "hour":
+		return int64(end.Sub(start).Hours()), nil
+	case "day":
+		return int64(end.Sub(start).Hours() / 24), nil
+	case "week":
+		return int64(end.Sub(start).Hours() / (24 * 7)), nil
+	case "month":
+		years := int64(end.Year() - start.Year())
+		months := int64(end.Month() - start.Month())
+		total := years*12 + months
+		// Adjust if end day < start day (incomplete month)
+		if end.Day() < start.Day() {
+			total--
+		}
+
+		return total, nil
+	case "quarter":
+		months, err := diffDateUnit(start, end, "month")
+		if err != nil {
+			return 0, err
+		}
+
+		return months / 3, nil
+	case "year":
+		years := int64(end.Year() - start.Year())
+		// Adjust if end month/day < start month/day (incomplete year)
+		startMD := time.Date(0, start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+		endMD := time.Date(0, end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
+
+		if endMD.Before(startMD) {
+			years--
+		}
+
+		return years, nil
+	default:
+		return 0, newOperatorError(ErrArgsInvalidLen, "$dateDiff",
+			fmt.Sprintf("unknown date unit: %s", unit))
+	}
+}
+
+var _ Operator = (*dateDiffOp)(nil)

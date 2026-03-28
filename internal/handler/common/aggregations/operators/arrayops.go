@@ -20,6 +20,7 @@ import (
 
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/dongo/internal/util/must"
 )
 
 // collectArray evaluates arg to a *types.Array. Returns nil if null, error if not array.
@@ -932,3 +933,50 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*zipOp)(nil)
+
+// ── $objectToArray ────────────────────────────────────────────────────────────
+
+// objectToArrayOp represents { $objectToArray: <object-expr> }.
+// Converts a document to an array of {k, v} documents.
+type objectToArrayOp struct{ arg any }
+
+func newObjectToArray(args ...any) (Operator, error) {
+	if len(args) != 1 {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$objectToArray",
+			fmt.Sprintf("Expression $objectToArray takes exactly 1 argument. %d were passed in.", len(args)))
+	}
+
+	return &objectToArrayOp{arg: args[0]}, nil
+}
+
+func (op *objectToArrayOp) Process(doc *types.Document) (any, error) {
+	v, err := evalArgValue(op.arg, doc)
+	if err != nil {
+		return nil, err
+	}
+
+	if v == types.Null {
+		return types.Null, nil
+	}
+
+	src, ok := v.(*types.Document)
+	if !ok {
+		return nil, newOperatorError(ErrArgsInvalidLen, "$objectToArray",
+			fmt.Sprintf("$objectToArray requires a document argument, got %T", v))
+	}
+
+	result := types.MakeArray(src.Len())
+
+	for _, k := range src.Keys() {
+		pair, err := types.NewDocument("k", k, "v", must.NotFail(src.Get(k)))
+		if err != nil {
+			return nil, err
+		}
+
+		result.Append(pair)
+	}
+
+	return result, nil
+}
+
+var _ Operator = (*objectToArrayOp)(nil)
