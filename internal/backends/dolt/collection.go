@@ -218,6 +218,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				return nil, err
 			}
 			for i, idx := range uniqueIndexes {
+				// For partial indexes, only include existing docs that satisfy the filter.
+				if idx.MatchesPartialFilter != nil {
+					matches, filterErr := idx.MatchesPartialFilter(existingDoc)
+					if filterErr != nil || !matches {
+						continue
+					}
+				}
 				existingUniqueKeys[i] = append(existingUniqueKeys[i], extractIndexKey(existingDoc, idx))
 			}
 		}
@@ -259,6 +266,15 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 		// Check unique secondary index constraints.
 		for i, idx := range uniqueIndexes {
+			// For partial indexes, only documents that satisfy the partial filter
+			// expression are indexed. Skip uniqueness checks for non-matching docs.
+			if idx.MatchesPartialFilter != nil {
+				matches, filterErr := idx.MatchesPartialFilter(doc)
+				if filterErr != nil || !matches {
+					continue
+				}
+			}
+
 			newKey := extractIndexKey(doc, idx)
 
 			// For sparse indexes, documents where all indexed fields are missing

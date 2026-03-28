@@ -575,6 +575,34 @@ func geometryIntersectsGeometry(docGeomVal any, queryGeomDoc *types.Document) (b
 		if err != nil {
 			return false, err
 		}
+		// If the document geometry is a Polygon or MultiPolygon, check whether the
+		// query point lies inside it (point-in-polygon intersection).
+		if docGeom, ok := docGeomVal.(*types.Document); ok {
+			docType, _ := geoJSONType(docGeom)
+			switch docType {
+			case "Polygon":
+				rings, err := polygonRings(docGeom)
+				if err != nil {
+					return false, err
+				}
+				if pointInRing(qLon, qLat, rings[0]) {
+					return true, nil
+				}
+				return false, nil
+			case "MultiPolygon":
+				polys, err := multiPolygonRings(docGeom)
+				if err != nil {
+					return false, err
+				}
+				for _, rings := range polys {
+					if pointInRing(qLon, qLat, rings[0]) {
+						return true, nil
+					}
+				}
+				return false, nil
+			}
+		}
+		// For Point and LineString documents: check exact coordinate match.
 		pts := extractAllPoints(docGeomVal)
 		for _, p := range pts {
 			if p[0] == qLon && p[1] == qLat {

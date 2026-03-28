@@ -372,10 +372,17 @@ type ListIndexesResult struct {
 
 // IndexInfo represents information about a single index.
 type IndexInfo struct {
-	Name   string
-	Key    []IndexKeyPair
-	Unique bool
-	Sparse bool // true if the index only covers documents with the indexed field(s)
+	Name                  string
+	Key                   []IndexKeyPair
+	Unique                bool
+	Sparse                bool // true if the index only covers documents with the indexed field(s)
+	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
+
+	// MatchesPartialFilter, when non-nil, reports whether doc satisfies the partial
+	// filter expression. If nil, all documents are considered as matching (no partial
+	// filter). Set by the handler layer so that the backend can use it without
+	// importing handler/common (which would create a circular import).
+	MatchesPartialFilter func(doc *types.Document) (bool, error)
 }
 
 // IndexKeyPair consists of a field name and a sort order that are part of the index.

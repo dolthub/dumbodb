@@ -377,10 +377,22 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 			"2dsphereIndexVersion":
 			// Index options — accepted but not stored in the backend for now.
 
-		case "partialFilterExpression", "expireAfterSeconds", "hidden", "storageEngine",
+		case "partialFilterExpression":
+			// Store the partial filter expression so that unique enforcement can
+			// exclude documents that don't satisfy the filter.
+			if pfe, ok := must.NotFail(indexDoc.Get("partialFilterExpression")).(*types.Document); ok {
+				index.PartialFilterExpression = pfe
+				// Capture pfe for the closure so it survives loop iteration.
+				captured := pfe
+				index.MatchesPartialFilter = func(doc *types.Document) (bool, error) {
+					return common.FilterDocument(doc, captured)
+				}
+			}
+
+		case "expireAfterSeconds", "hidden", "storageEngine",
 			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
 			// Accepted but not enforced — stored index behaves as a regular index.
-			// TTL expiry, partial filter enforcement, etc. are not yet implemented.
+			// TTL expiry, collation enforcement, etc. are not yet implemented.
 
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(

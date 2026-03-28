@@ -316,3 +316,409 @@ func TestIndex_IndexStats_NoIndexes(t *testing.T) {
 	// Only _id_ index
 	require.Equal(t, 1, len(stats))
 }
+
+// TestIndex_TTL_InsertAndVerifyNotExpiredYet verifies that a document inserted into a
+// TTL-indexed collection is still present immediately after insertion (do-x0vc).
+func TestIndex_TTL_InsertAndVerifyNotExpiredYet(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	expireAfter := int32(3600)
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: "createdAt", Value: 1}},
+		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+	}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	_, err = coll.InsertOne(ctx, bson.D{
+		{Key: "createdAt", Value: time.Now()},
+		{Key: "payload", Value: "not-yet-expired"},
+	})
+	require.NoError(t, err)
+
+	// Document should still be visible immediately (TTL expiry runs on a background task).
+	count, err := coll.CountDocuments(ctx, bson.D{{Key: "payload", Value: "not-yet-expired"}})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+// TestIndex_TTL_OnNestedDateField verifies that a TTL index can be created on a nested
+// date field (do-x0vc).
+func TestIndex_TTL_OnNestedDateField(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	expireAfter := int32(86400)
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: "meta.expiresAt", Value: 1}},
+		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+	}
+	name, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+	require.Equal(t, "meta.expiresAt_1", name)
+
+	_, err = coll.InsertOne(ctx, bson.D{
+		{Key: "meta", Value: bson.D{{Key: "expiresAt", Value: time.Now().Add(24 * time.Hour)}}},
+		{Key: "data", Value: "alive"},
+	})
+	require.NoError(t, err)
+
+	count, err := coll.CountDocuments(ctx, bson.D{{Key: "data", Value: "alive"}})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+// TestIndex_Partial_OnlyIndexesMatchingDocs verifies that a partial index can be created
+// and queries still work on all docs (do-x0vc).
+func TestIndex_Partial_OnlyIndexesMatchingDocs(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	filter := bson.D{{Key: "active", Value: true}}
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: "score", Value: 1}},
+		Options: options.Index().SetPartialFilterExpression(filter),
+	}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "score", Value: int32(10)}, {Key: "active", Value: true}},
+		bson.D{{Key: "score", Value: int32(20)}, {Key: "active", Value: true}},
+		bson.D{{Key: "score", Value: int32(5)}, {Key: "active", Value: false}},
+	)
+
+	// All three docs are present regardless of partial index.
+	count, err := coll.CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), count)
+
+	// Active-only query.
+	count, err = coll.CountDocuments(ctx, bson.D{{Key: "active", Value: true}})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), count)
+}
+
+// TestIndex_Partial_UniquePartial verifies that a unique partial index can be created and
+// allows duplicate values when the partial filter is not satisfied (do-x0vc).
+func TestIndex_Partial_UniquePartial(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	unique := true
+	filter := bson.D{{Key: "status", Value: "active"}}
+	model := mongo.IndexModel{
+		Keys: bson.D{{Key: "email", Value: 1}},
+		Options: options.Index().
+			SetUnique(unique).
+			SetPartialFilterExpression(filter),
+	}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	// Two inactive docs with the same email — allowed because filter not satisfied.
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "email", Value: "x@x.com"}, {Key: "status", Value: "inactive"}})
+	require.NoError(t, err)
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "email", Value: "x@x.com"}, {Key: "status", Value: "inactive"}})
+	require.NoError(t, err)
+
+	count, err := coll.CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), count)
+}
+
+// TestIndex_Partial_CompoundKeys verifies that a partial index with compound keys can be
+// created (do-x0vc).
+func TestIndex_Partial_CompoundKeys(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	filter := bson.D{{Key: "published", Value: true}}
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: "author", Value: 1}, {Key: "date", Value: -1}},
+		Options: options.Index().SetPartialFilterExpression(filter),
+	}
+	name, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+	require.Equal(t, "author_1_date_-1", name)
+}
+
+// TestIndex_Wildcard_WithWildcardProjection verifies that a wildcard index with
+// wildcardProjection can be created and basic queries work (do-x0vc).
+func TestIndex_Wildcard_WithWildcardProjection(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{
+		Keys: bson.D{{Key: "$**", Value: 1}},
+		Options: options.Index().SetWildcardProjection(bson.D{
+			{Key: "tags", Value: int32(1)},
+		}),
+	}
+	name, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+	require.Equal(t, "$**_1", name)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "tags", Value: bson.A{"go", "db"}}, {Key: "x", Value: 1}},
+		bson.D{{Key: "tags", Value: bson.A{"mongo"}}, {Key: "x", Value: 2}},
+	)
+
+	count, err := coll.CountDocuments(ctx, bson.D{{Key: "x", Value: 1}})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+// TestIndex_Collation_CaseInsensitive verifies that a collation index can be created and
+// exact-case queries still work (do-x0vc).
+func TestIndex_Collation_CaseInsensitive(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	collation := options.Collation{Locale: "en", Strength: 2}
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: "name", Value: 1}},
+		Options: options.Index().SetCollation(&collation),
+	}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "name", Value: "Alice"}},
+		bson.D{{Key: "name", Value: "Bob"}},
+	)
+
+	// Exact-case queries work even when a collation index is present.
+	count, err := coll.CountDocuments(ctx, bson.D{{Key: "name", Value: "Alice"}})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+// TestIndex_Collation_UniqueWithCollation verifies that a unique collation index can be
+// created and exact-case uniqueness is enforced (do-x0vc).
+func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	collation := options.Collation{Locale: "en", Strength: 2}
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: "handle", Value: 1}},
+		Options: options.Index().SetCollation(&collation).SetUnique(true),
+	}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "handle", Value: "alice"}})
+	require.NoError(t, err)
+
+	// Exact duplicate — must fail.
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "handle", Value: "alice"}})
+	require.Error(t, err, "duplicate exact-case value must be rejected")
+}
+
+// TestIndex_2dsphere_CreateOne verifies that a 2dsphere index can be created (do-x0vc).
+func TestIndex_2dsphere_CreateOne(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "location", Value: "2dsphere"}}}
+	name, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+	require.Equal(t, "location_2dsphere", name)
+}
+
+// TestIndex_2dsphere_NearQuery verifies that $near queries work on a 2dsphere-indexed
+// collection (do-x0vc).
+func TestIndex_2dsphere_NearQuery(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "name", Value: "nearby"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Point"},
+			{Key: "coordinates", Value: bson.A{-73.97, 40.77}},
+		}}},
+		bson.D{{Key: "name", Value: "faraway"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Point"},
+			{Key: "coordinates", Value: bson.A{2.35, 48.86}},
+		}}},
+	)
+
+	cur, err := coll.Find(ctx, bson.D{
+		{Key: "loc", Value: bson.D{
+			{Key: "$near", Value: bson.D{
+				{Key: "$geometry", Value: bson.D{
+					{Key: "type", Value: "Point"},
+					{Key: "coordinates", Value: bson.A{-73.97, 40.77}},
+				}},
+				{Key: "$maxDistance", Value: 500},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cur.All(ctx, &results))
+	require.Equal(t, 1, len(results))
+}
+
+// TestIndex_2dsphere_GeoWithinQuery verifies that $geoWithin queries work on a
+// 2dsphere-indexed collection (do-x0vc).
+func TestIndex_2dsphere_GeoWithinQuery(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "name", Value: "inside"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Point"},
+			{Key: "coordinates", Value: bson.A{0.5, 0.5}},
+		}}},
+		bson.D{{Key: "name", Value: "outside"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Point"},
+			{Key: "coordinates", Value: bson.A{5.0, 5.0}},
+		}}},
+	)
+
+	cur, err := coll.Find(ctx, bson.D{
+		{Key: "loc", Value: bson.D{
+			{Key: "$geoWithin", Value: bson.D{
+				{Key: "$geometry", Value: bson.D{
+					{Key: "type", Value: "Polygon"},
+					{Key: "coordinates", Value: bson.A{bson.A{
+						bson.A{-1.0, -1.0},
+						bson.A{2.0, -1.0},
+						bson.A{2.0, 2.0},
+						bson.A{-1.0, 2.0},
+						bson.A{-1.0, -1.0},
+					}}},
+				}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cur.All(ctx, &results))
+	require.Equal(t, 1, len(results))
+}
+
+// TestIndex_2dsphere_Compound verifies that a compound index with a 2dsphere field
+// can be created (do-x0vc).
+func TestIndex_2dsphere_Compound(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "category", Value: 1},
+			{Key: "loc", Value: "2dsphere"},
+		},
+	}
+	name, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+	require.Equal(t, "category_1_loc_2dsphere", name)
+}
+
+// TestIndex_2dsphere_GeoIntersects verifies that $geoIntersects queries work on a
+// 2dsphere-indexed collection (do-x0vc).
+func TestIndex_2dsphere_GeoIntersects(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "name", Value: "poly"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Polygon"},
+			{Key: "coordinates", Value: bson.A{bson.A{
+				bson.A{0.0, 0.0},
+				bson.A{1.0, 0.0},
+				bson.A{1.0, 1.0},
+				bson.A{0.0, 1.0},
+				bson.A{0.0, 0.0},
+			}}},
+		}}},
+	)
+
+	cur, err := coll.Find(ctx, bson.D{
+		{Key: "loc", Value: bson.D{
+			{Key: "$geoIntersects", Value: bson.D{
+				{Key: "$geometry", Value: bson.D{
+					{Key: "type", Value: "Point"},
+					{Key: "coordinates", Value: bson.A{0.5, 0.5}},
+				}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cur.All(ctx, &results))
+	require.Equal(t, 1, len(results))
+}
+
+// TestIndex_IndexStats_AfterInsert verifies that $indexStats returns the correct number
+// of index entries after inserting documents (do-x0vc).
+func TestIndex_IndexStats_AfterInsert(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "val", Value: 1}}}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "val", Value: int32(1)}},
+		bson.D{{Key: "val", Value: int32(2)}},
+		bson.D{{Key: "val", Value: int32(3)}},
+	)
+
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$indexStats", Value: bson.D{}}},
+	}
+	cur, err := coll.Aggregate(ctx, pipeline)
+	require.NoError(t, err)
+
+	var stats []bson.D
+	require.NoError(t, cur.All(ctx, &stats))
+	// _id_ + val_1 = 2 indexes
+	require.Equal(t, 2, len(stats))
+
+	// Each stat entry must have a "name" field.
+	for _, s := range stats {
+		var name string
+		for _, elem := range s {
+			if elem.Key == "name" {
+				if v, ok := elem.Value.(string); ok {
+					name = v
+				}
+			}
+		}
+		require.NotEmpty(t, name, "indexStats entry must have a non-empty name")
+	}
+}
