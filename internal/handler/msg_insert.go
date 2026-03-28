@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/FerretDB/wire"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -79,15 +80,19 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Fetch collection info for validator and view checks.
+	// Fetch collection info for validator, view, and time series checks.
 	var collValidator *types.Document
 	var validationAction string
+	var tsTimeField string
 	if collRes, collErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
 		if len(collRes.Collections) == 1 {
 			ci := collRes.Collections[0]
 			if ci.IsView {
 				msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "insert")
+			}
+			if ci.IsTimeSeries {
+				tsTimeField = ci.TimeField
 			}
 			if ci.Validator != nil && ci.ValidationLevel != "off" {
 				collValidator = ci.Validator
@@ -158,6 +163,35 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				}
 
 				continue
+			}
+
+			// Apply time series validation if this is a time series collection.
+			if tsTimeField != "" {
+				tsFieldVal, tsErr := doc.Get(tsTimeField)
+				if tsErr != nil {
+					// Missing time field.
+					writeErrors = append(writeErrors, &mongo.WriteError{
+						Index:   i,
+						Code:    int(handlererrors.ErrBadValue),
+						Message: fmt.Sprintf("time series document is missing the '%s' field", tsTimeField),
+					})
+					if params.Ordered {
+						break
+					}
+					continue
+				}
+				if _, ok := tsFieldVal.(time.Time); !ok {
+					// Time field is not a Date type.
+					writeErrors = append(writeErrors, &mongo.WriteError{
+						Index:   i,
+						Code:    int(handlererrors.ErrBadValue),
+						Message: fmt.Sprintf("time series document '%s' field must be of type Date", tsTimeField),
+					})
+					if params.Ordered {
+						break
+					}
+					continue
+				}
 			}
 
 			// Apply schema validator if set.

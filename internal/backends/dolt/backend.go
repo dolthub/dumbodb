@@ -93,6 +93,13 @@ type viewMeta struct {
 	Pipeline *types.Array
 }
 
+// timeSeriesMeta holds time series collection configuration (in-memory only).
+type timeSeriesMeta struct {
+	TimeField   string
+	MetaField   string
+	Granularity string
+}
+
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	mu     sync.RWMutex
@@ -108,7 +115,8 @@ type dbState struct {
 	capped     map[string]*cappedCollectionMeta // collection name → capped config (in-memory)
 	// insertionOrder tracks document _id values in insertion order for FIFO eviction in capped collections.
 	insertionOrder map[string][]any
-	views          map[string]*viewMeta // collection name → view definition (in-memory)
+	views          map[string]*viewMeta         // collection name → view definition (in-memory)
+	timeSeries     map[string]*timeSeriesMeta   // collection name → time series config (in-memory)
 
 	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
 	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
@@ -518,6 +526,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		capped:         make(map[string]*cappedCollectionMeta),
 		insertionOrder: make(map[string][]any),
 		views:          make(map[string]*viewMeta),
+		timeSeries:     make(map[string]*timeSeriesMeta),
 	}
 
 	// Initialize DTBL construction helpers: write the shared DSCH chunk once

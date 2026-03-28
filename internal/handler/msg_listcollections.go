@@ -95,6 +95,16 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 				options.Set("pipeline", types.MakeArray(0))
 			}
 			info.Set("readOnly", true)
+		} else if collection.IsTimeSeries {
+			collType = "timeseries"
+			tsOpts := must.NotFail(types.NewDocument("timeField", collection.TimeField))
+			if collection.MetaField != "" {
+				tsOpts.Set("metaField", collection.MetaField)
+			}
+			if collection.Granularity != "" {
+				tsOpts.Set("granularity", collection.Granularity)
+			}
+			options.Set("timeseries", tsOpts)
 		} else {
 			if collection.Capped() {
 				options.Set("capped", true)

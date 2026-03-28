@@ -108,6 +108,14 @@ type CollectionInfo struct {
 	ViewOn string
 	// ViewPipeline is the aggregation pipeline for a view.
 	ViewPipeline *types.Array
+	// IsTimeSeries is true if this is a time series collection.
+	IsTimeSeries bool
+	// TimeField is the time field name for a time series collection.
+	TimeField string
+	// MetaField is the meta field name for a time series collection.
+	MetaField string
+	// Granularity is the granularity for a time series collection (seconds, minutes, hours).
+	Granularity string
 	_ struct{} // prevent unkeyed literals
 }
 
@@ -161,6 +169,14 @@ type CreateCollectionParams struct {
 	ViewOn string
 	// ViewPipeline is the aggregation pipeline for a view.
 	ViewPipeline *types.Array
+	// IsTimeSeries indicates this is a time series collection.
+	IsTimeSeries bool
+	// TimeField is the time field name for a time series collection.
+	TimeField string
+	// MetaField is the meta field name for a time series collection.
+	MetaField string
+	// Granularity is the granularity for a time series collection.
+	Granularity string
 	_ struct{} // prevent unkeyed literals
 }
 

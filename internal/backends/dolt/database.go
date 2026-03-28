@@ -97,6 +97,20 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		colls = append(colls, ci)
 	}
 
+	// Include time series collections (already in the address map, but add TS metadata).
+	for name, ts := range state.timeSeries {
+		// Find and update the existing entry in colls (it's already there from the address map iteration).
+		for i, c := range colls {
+			if c.Name == name {
+				colls[i].IsTimeSeries = true
+				colls[i].TimeField = ts.TimeField
+				colls[i].MetaField = ts.MetaField
+				colls[i].Granularity = ts.Granularity
+				break
+			}
+		}
+	}
+
 	slices.SortFunc(colls, func(a, b backends.CollectionInfo) int {
 		return strings.Compare(a.Name, b.Name)
 	})
@@ -180,6 +194,15 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		}
 	}
 
+	// Store time series metadata if provided.
+	if params.IsTimeSeries {
+		state.timeSeries[params.Name] = &timeSeriesMeta{
+			TimeField:   params.TimeField,
+			MetaField:   params.MetaField,
+			Granularity: params.Granularity,
+		}
+	}
+
 	return nil
 }
 
@@ -225,6 +248,7 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	delete(state.validators, params.Name)
 	delete(state.capped, params.Name)
 	delete(state.insertionOrder, params.Name)
+	delete(state.timeSeries, params.Name)
 
 	return nil
 }

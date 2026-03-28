@@ -40,8 +40,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	unimplementedFields := []string{
-		"timeseries",
-		"expireAfterSeconds",
 		"collation",
 	}
 	if err = common.Unimplemented(document, unimplementedFields...); err != nil {
@@ -54,6 +52,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		"indexOptionDefaults",
 		"writeConcern",
 		"comment",
+		"expireAfterSeconds",
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
@@ -108,6 +107,71 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	} else if sizeVal, _ := document.Get("size"); sizeVal != nil {
 		// size was provided without capped=true — still counts as explicit options.
 		hasExplicitOptions = true
+	}
+
+	// Parse time series options.
+	if tsVal, _ := document.Get("timeseries"); tsVal != nil {
+		tsDoc, ok := tsVal.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'timeseries' option must be a document",
+				"create",
+			)
+		}
+		hasExplicitOptions = true
+		params.IsTimeSeries = true
+
+		timeFieldVal, _ := tsDoc.Get("timeField")
+		if timeFieldVal == nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'timeField' option must be set",
+				"create",
+			)
+		}
+		timeField, ok := timeFieldVal.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'timeField' option must be a string",
+				"create",
+			)
+		}
+		params.TimeField = timeField
+
+		if metaFieldVal, _ := tsDoc.Get("metaField"); metaFieldVal != nil {
+			metaField, ok := metaFieldVal.(string)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"'metaField' option must be a string",
+					"create",
+				)
+			}
+			params.MetaField = metaField
+		}
+
+		if granularityVal, _ := tsDoc.Get("granularity"); granularityVal != nil {
+			granularity, ok := granularityVal.(string)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"'granularity' option must be a string",
+					"create",
+				)
+			}
+			switch granularity {
+			case "seconds", "minutes", "hours":
+				params.Granularity = granularity
+			default:
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"'granularity' option must be 'seconds', 'minutes', or 'hours'",
+					"create",
+				)
+			}
+		}
 	}
 
 	// Parse view options (viewOn + pipeline).

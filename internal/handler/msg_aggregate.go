@@ -380,6 +380,47 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			cInfo = cList.Collections[0]
 		}
 
+		// If the target is a view, redirect to the source collection and prepend
+		// the view's pipeline to the user-supplied stages.
+		if cInfo.IsView {
+			viewSourceName := cInfo.ViewOn
+			// Reload collection info for the source.
+			srcParam := backends.ListCollectionsParams{Name: viewSourceName}
+			var srcList *backends.ListCollectionsResult
+			if srcList, err = db.ListCollections(ctx, &srcParam); err != nil {
+				closer.Close()
+				return nil, handleMaxTimeMSError(err, maxTimeMS, "aggregate")
+			}
+			cInfo = backends.CollectionInfo{}
+			if len(srcList.Collections) > 0 {
+				cInfo = srcList.Collections[0]
+			}
+			c, err = db.Collection(viewSourceName)
+			if err != nil {
+				closer.Close()
+				return nil, lazyerrors.Error(err)
+			}
+			// Prepend view pipeline stages (if any) ahead of the user stages.
+			if viewPipeline := cList.Collections[0].ViewPipeline; viewPipeline != nil && viewPipeline.Len() > 0 {
+				viewStages := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
+				prepended := make([]aggregations.Stage, 0, len(viewStages)+len(stagesDocuments))
+				for _, v := range viewStages {
+					vd, vok := v.(*types.Document)
+					if !vok {
+						continue
+					}
+					var vs aggregations.Stage
+					vs, err = stages.NewStage(vd)
+					if err != nil {
+						closer.Close()
+						return nil, err
+					}
+					prepended = append(prepended, vs)
+				}
+				stagesDocuments = append(prepended, stagesDocuments...)
+			}
+		}
+
 		switch {
 		case h.DisablePushdown:
 			// Pushdown disabled
