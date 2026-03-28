@@ -105,9 +105,8 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 
 	if boundariesArr.Len() < 2 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"The $bucket stage specification requires 'boundaries' to have at least 2 elements, but found "+
-				fmt.Sprintf("%d", boundariesArr.Len()),
+			handlererrors.ErrBucketNotEnoughBoundaries,
+			fmt.Sprintf("The $bucket 'boundaries' field must have at least 2 values, but found %d value(s).", boundariesArr.Len()),
 			"$bucket (stage)",
 		)
 	}

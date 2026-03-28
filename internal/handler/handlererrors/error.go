@@ -219,6 +219,9 @@ const (
 	// ErrStageUnsetInvalidType indicates that $unset stage arguments has unexpected type.
 	ErrStageUnsetInvalidType = ErrorCode(31002) // Location31002
 
+	// ErrSearchNotEnabled indicates that $search requires Atlas Search which is not enabled.
+	ErrSearchNotEnabled = ErrorCode(31082) // SearchNotEnabled
+
 	// ErrStageSampleInvalidArg indicates invalid argument for the aggregation $sample stage.
 	ErrStageSampleInvalidArg = ErrorCode(28745) // Location28745
 
@@ -274,6 +277,9 @@ const (
 	// amount of arguments.
 	ErrAddFieldsExpressionWrongAmountOfArgs = ErrorCode(40181) // Location40181
 
+	// ErrBucketNotEnoughBoundaries indicates that $bucket 'boundaries' must have at least 2 values.
+	ErrBucketNotEnoughBoundaries = ErrorCode(40192) // Location40192
+
 	// ErrBucketMissingBoundaries indicates that $bucket stage specification is missing the required 'boundaries' field.
 	ErrBucketMissingBoundaries = ErrorCode(40198) // Location40198
 
@@ -302,7 +308,7 @@ const (
 	ErrInvalidFieldPath = ErrorCode(40353) // Location40353
 
 	// ErrMissingField indicates that the required field in document is missing.
-	ErrMissingField = ErrorCode(40414) // Location40414
+	ErrMissingField = ErrorCode(40414) // IDLFailedToParse
 
 	// ErrFailedToParseInput indicates invalid input (absent or malformed fields).
 	ErrFailedToParseInput = ErrorCode(40415) // Location40415

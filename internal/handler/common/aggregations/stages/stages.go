@@ -34,7 +34,9 @@ var Stages = map[string]newStageFunc{
 	"$bucketAuto":  newBucketAuto,
 	"$collStats":   newCollStats,
 	"$count":       newCount,
+	"$densify":     newDensify,
 	"$facet":       newFacet,
+	"$fill":        newFill,
 	"$geoNear":     newGeoNear,
 	"$group":       newGroup,
 	"$limit":       newLimit,
@@ -43,6 +45,7 @@ var Stages = map[string]newStageFunc{
 	"$redact":      newRedact,
 	"$replaceRoot": newReplaceRoot,
 	"$replaceWith": newReplaceWith,
+	"$search":           newSearch,
 	"$set":              newSet,
 	"$sample":           newSample,
 	"$setWindowFields":  newSetWindowFields,
@@ -59,9 +62,9 @@ var unsupportedStages = map[string]struct{}{
 	// sorted alphabetically
 	"$changeStream":           {},
 	"$currentOp":              {},
-	"$densify":                {},
 	"$documents":              {},
-	"$fill":                   {},
+	// $densify is handled in Stages above (validates required fields before returning error)
+	// $fill is handled in Stages above (validates required fields before returning error)
 	// $geoNear is now implemented in stages.go
 	// $graphLookup is handled specially in msg_aggregate.go via NewGraphLookupStage
 	// $indexStats is handled specially in msg_aggregate.go via NewIndexStatsStage
@@ -70,7 +73,7 @@ var unsupportedStages = map[string]struct{}{
 	"$lookup": {}, // handled specially in msg_aggregate.go via NewLookupStage
 	// $merge and $out handled specially in msg_aggregate.go via NewMergeStage/NewOutStage
 	"$planCacheStats":         {},
-	"$search":                 {},
+	// $search is handled in Stages above (returns SearchNotEnabled error)
 	"$searchMeta":             {},
 	// "$setWindowFields" is now implemented above
 

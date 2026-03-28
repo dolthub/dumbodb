@@ -72,7 +72,7 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBucketAutoMissingRequiredFields,
-			"$bucketAuto requires 'groupBy' and 'buckets' to be specified.",
+			"$bucketAuto requires 'groupBy' and 'buckets' to be specified",
 			"$bucketAuto (stage)",
 		)
 	}
@@ -82,7 +82,7 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBucketAutoMissingRequiredFields,
-			"$bucketAuto requires 'groupBy' and 'buckets' to be specified.",
+			"$bucketAuto requires 'groupBy' and 'buckets' to be specified",
 			"$bucketAuto (stage)",
 		)
 	}
