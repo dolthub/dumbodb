@@ -23,10 +23,11 @@ import (
 	"github.com/dolthub/dongo/internal/util/must"
 )
 
-// init sets wire package to return error if float64 NaN value is present in wire messages.
-func init() {
-	wire.CheckNaNs = true
-}
+// init leaves wire.CheckNaNs at its default (false) so that incoming messages
+// containing NaN float64 values (e.g. in query filters like {$mod: [NaN, 0]})
+// are not rejected at the wire layer. NaN values in filter operators are
+// validated and rejected with the correct error code (ErrBadValue / code 2)
+// inside the individual filter handlers (see filterFieldMod, etc.).
 
 // opMsgDocument gets a raw document from section 0 and converts to [*types.Document].
 // Then it iterates raw documents from sections 1 if any, appends them
