@@ -681,6 +681,77 @@ func TestIndex_2dsphere_GeoIntersects(t *testing.T) {
 	require.Equal(t, 1, len(results))
 }
 
+// TestGeo_GeoIntersects_LineString verifies that $geoIntersects with a LineString query
+// does not match stored Point documents that lie on the line (do-29rp).
+func TestGeo_GeoIntersects_LineString(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	// Query line: horizontal at lat=40.7, from lon=-74.5 to lon=-73.5
+	insertDocs(t, coll,
+		bson.D{{Key: "name", Value: "poly-intersects"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Polygon"},
+			{Key: "coordinates", Value: bson.A{bson.A{
+				bson.A{-74.2, 40.5},
+				bson.A{-73.8, 40.5},
+				bson.A{-73.8, 40.9},
+				bson.A{-74.2, 40.9},
+				bson.A{-74.2, 40.5},
+			}}},
+		}}},
+		bson.D{{Key: "name", Value: "poly-disjoint"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Polygon"},
+			{Key: "coordinates", Value: bson.A{bson.A{
+				bson.A{-72.0, 41.0},
+				bson.A{-71.0, 41.0},
+				bson.A{-71.0, 42.0},
+				bson.A{-72.0, 42.0},
+				bson.A{-72.0, 41.0},
+			}}},
+		}}},
+		bson.D{{Key: "name", Value: "point-on-line"}, {Key: "loc", Value: bson.D{
+			{Key: "type", Value: "Point"},
+			{Key: "coordinates", Value: bson.A{-74.0, 40.7}},
+		}}},
+	)
+
+	cur, err := coll.Find(ctx, bson.D{
+		{Key: "loc", Value: bson.D{
+			{Key: "$geoIntersects", Value: bson.D{
+				{Key: "$geometry", Value: bson.D{
+					{Key: "type", Value: "LineString"},
+					{Key: "coordinates", Value: bson.A{
+						bson.A{-74.5, 40.7},
+						bson.A{-73.5, 40.7},
+					}},
+				}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cur.All(ctx, &results))
+
+	var names []string
+	for _, r := range results {
+		for _, e := range r {
+			if e.Key == "name" {
+				names = append(names, e.Value.(string))
+			}
+		}
+	}
+
+	require.Contains(t, names, "poly-intersects", "polygon crossing query line should match")
+	require.NotContains(t, names, "poly-disjoint", "disjoint polygon should not match")
+	require.NotContains(t, names, "point-on-line", "point on line should not match (MongoDB behavior)")
+}
+
 // TestIndex_IndexStats_AfterInsert verifies that $indexStats returns the correct number
 // of index entries after inserting documents (do-x0vc).
 func TestIndex_IndexStats_AfterInsert(t *testing.T) {

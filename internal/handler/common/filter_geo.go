@@ -670,6 +670,14 @@ func docGeomIntersectsPolygon(docGeomVal any, exterior [][2]float64) bool {
 // docGeomIntersectsLineString returns true if any part of the document geometry
 // intersects the given LineString coordinate sequence.
 func docGeomIntersectsLineString(docGeomVal any, lineCoords [][2]float64) bool {
+	// MongoDB does not match stored Point documents against a LineString query
+	// geometry, even when the point lies exactly on the line.
+	if v, ok := docGeomVal.(*types.Document); ok {
+		if gtype, _ := geoJSONType(v); gtype == "Point" {
+			return false
+		}
+	}
+
 	// Check if any vertex of the document geometry lies exactly on the LineString.
 	pts := extractAllPoints(docGeomVal)
 	for _, p := range pts {
