@@ -1648,9 +1648,9 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 			return false, nil
 		}
 	case handlerparams.TypeCodeNumber:
-		// TypeCodeNumber should match int32, int64 and float64 types
+		// TypeCodeNumber should match int32, int64, float64, and Decimal128 types
 		switch fieldValue.(type) {
-		case float64, int32, int64:
+		case float64, int32, int64, types.Decimal128:
 			return true, nil
 		default:
 			return false, nil

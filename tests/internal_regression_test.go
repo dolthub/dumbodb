@@ -816,6 +816,48 @@ func TestQuery_proj_slice_skip_limit(t *testing.T) {
 	require.Equal(t, bson.A{int32(30), int32(40)}, arr)
 }
 
+// TestQuery_type_number_alias_decimal verifies {field: {$type: "number"}} matches Decimal128 values.
+// Regression for do-74lo: the 'number' alias was not matching Decimal128.
+func TestQuery_type_number_alias_decimal(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	decVal, decErr := primitive.ParseDecimal128("9.99")
+	require.NoError(t, decErr)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("val", float64(1.5))),
+		d(e("_id", int32(2)), e("val", int32(42))),
+		d(e("_id", int32(3)), e("val", int64(100))),
+		d(e("_id", int32(4)), e("val", decVal)),
+		d(e("_id", int32(5)), e("val", "text")),
+	)
+
+	ctx := context.Background()
+	cursor, err := coll.Find(ctx,
+		d(e("val", d(e("$type", "number")))),
+		options.Find().SetSort(d(e("_id", int32(1)))),
+	)
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 4)
+
+	ids := make([]int32, len(results))
+	for i, r := range results {
+		for _, el := range r {
+			if el.Key == "_id" {
+				ids[i] = el.Value.(int32)
+			}
+		}
+	}
+	require.Equal(t, []int32{1, 2, 3, 4}, ids)
+}
+
 // TestQuery_type_objectid verifies {field: {$type: "objectId"}} matches documents
 // where the field value is an ObjectID.
 func TestQuery_type_objectid(t *testing.T) {

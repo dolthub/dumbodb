@@ -29,7 +29,7 @@ import (
 // TypeCode represents BSON type codes.
 // BSON type codes represent corresponding codes in BSON specification.
 // They could be used to query fields with particular type values using $type operator.
-// Type code `number` is added to support MongoDB surrogate alias `number` which matches double, int and long type values.
+// Type code `number` is added to support MongoDB surrogate alias `number` which matches double, int, long, and decimal type values.
 type TypeCode int32
 
 const (
@@ -69,7 +69,7 @@ const (
 	// TypeCodeMaxKey is a maxKey type code.
 	TypeCodeMaxKey = TypeCode(127) // maxKey
 
-	// Not actual type code. `number` matches double, int and long.
+	// Not actual type code. `number` matches double, int, long, and decimal.
 
 	// TypeCodeNumber is a number type code.
 	TypeCodeNumber = TypeCode(-128) // number
@@ -171,6 +171,8 @@ func AliasFromType(v any) string {
 		return TypeCodeTimestamp.String()
 	case int64:
 		return TypeCodeLong.String()
+	case types.Decimal128:
+		return TypeCodeDecimal.String()
 	default:
 		panic(fmt.Sprintf("not supported type %T", v))
 	}
