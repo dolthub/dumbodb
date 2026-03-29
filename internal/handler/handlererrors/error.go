@@ -311,7 +311,7 @@ const (
 	ErrMissingField = ErrorCode(40414) // IDLFailedToParse
 
 	// ErrFailedToParseInput indicates invalid input (absent or malformed fields).
-	ErrFailedToParseInput = ErrorCode(40415) // Location40415
+	ErrFailedToParseInput = ErrorCode(40415) // IDLUnknownField
 
 	// ErrChangeStreamNotSupported indicates that $changeStream is not supported on a standalone server.
 	ErrChangeStreamNotSupported = ErrorCode(40573) // Location40573

@@ -101,8 +101,14 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 	// Verify the collection exists by fetching its stats.
 	_, err = c.Stats(connCtx, new(backends.CollectionStatsParams))
 	if err != nil {
-		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
-			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+		switch {
+		case backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist):
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrNamespaceNotFound,
+				fmt.Sprintf("database %s not found", dbName),
+				command,
+			)
+		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNamespaceNotFound,
 				fmt.Sprintf("source collection %s.%s does not exist", dbName, collectionName),
