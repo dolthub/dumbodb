@@ -87,15 +87,8 @@ func (h *Handler) MsgCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	statsBefore, err := c.Stats(connCtx, new(backends.CollectionStatsParams))
-	if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNamespaceNotFound,
-			"database does not exist",
-			command,
-		)
-	}
-
-	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
+	if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) ||
+		backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNamespaceNotFound,
 			"collection does not exist",

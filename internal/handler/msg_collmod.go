@@ -50,6 +50,31 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
+	// Reject unknown fields (MongoDB returns IDLUnknownField for unrecognized options).
+	knownFields := map[string]struct{}{
+		// command name
+		"collMod": {},
+		// known options
+		"validator": {}, "validationLevel": {}, "validationAction": {},
+		// ignored options
+		"index": {}, "pipeline": {}, "viewOn": {}, "recordPreImages": {},
+		"changeStreamPreAndPostImages": {}, "expireAfterSeconds": {}, "timeseries": {},
+		"writeConcern": {}, "comment": {},
+		// protocol/system fields
+		"$db": {}, "lsid": {}, "$readPreference": {}, "txnNumber": {},
+		"autocommit": {}, "startTransaction": {}, "$audit": {}, "$client": {},
+		"readConcern": {}, "apiVersion": {}, "apiStrict": {}, "apiDeprecationErrors": {},
+	}
+	for _, key := range document.Keys() {
+		if _, ok := knownFields[key]; !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrFailedToParseInput,
+				fmt.Sprintf("BSON field 'collMod.%s' is an unknown field.", key),
+				"collMod",
+			)
+		}
+	}
+
 	dbName, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -140,8 +165,7 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	if err = db.CollMod(connCtx, &params); err != nil {
 		switch {
 		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):
-			msg := fmt.Sprintf("ns does not exist: %s.%s", dbName, collectionName)
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceNotFound, msg, "collMod")
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceNotFound, "ns does not exist", "collMod")
 		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
 			msg := fmt.Sprintf("Invalid collection name: %s", collectionName)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "collMod")

@@ -40,13 +40,12 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
-	// implement dropTarget param
-	// TODO https://github.com/dolthub/dongo/issues/2565
-	if err = common.UnimplementedNonDefault(document, "dropTarget", func(v any) bool {
-		b, ok := v.(bool)
-		return ok && !b
-	}); err != nil {
-		return nil, err
+	// Parse dropTarget param (drop existing target collection before renaming).
+	var dropTarget bool
+	if v, _ := document.Get("dropTarget"); v != nil {
+		if b, ok := v.(bool); ok {
+			dropTarget = b
+		}
 	}
 
 	ignoredFields := []string{
@@ -132,6 +131,15 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		}
 
 		return nil, lazyerrors.Error(err)
+	}
+
+	// If dropTarget is requested, drop the target collection first (ignore not-found errors).
+	if dropTarget {
+		dropErr := db.DropCollection(connCtx, &backends.DropCollectionParams{Name: newCName})
+		if dropErr != nil && !backends.ErrorCodeIs(dropErr, backends.ErrorCodeCollectionDoesNotExist) &&
+			!backends.ErrorCodeIs(dropErr, backends.ErrorCodeDatabaseDoesNotExist) {
+			return nil, lazyerrors.Error(dropErr)
+		}
 	}
 
 	err = db.RenameCollection(connCtx, &backends.RenameCollectionParams{
