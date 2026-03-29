@@ -157,7 +157,7 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 
 					stageName := stage.Keys()[0]
 					switch stageName {
-					case "$set", "$unset", "$addFields", "$project":
+					case "$set", "$unset", "$addFields", "$project", "$replaceWith", "$replaceRoot":
 						// supported pipeline stages for updates
 					default:
 						return nil, handlererrors.NewWriteErrorMsg(

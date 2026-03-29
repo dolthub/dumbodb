@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/dongo/internal/handler/common/aggregations"
 	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
 	stageProjection "github.com/dolthub/dongo/internal/handler/common/aggregations/stages/projection"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
@@ -268,10 +269,136 @@ func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, er
 			for _, key := range projected.Keys() {
 				doc.Set(key, must.NotFail(projected.Get(key)))
 			}
+
+		case "$replaceWith":
+			replaced, err := evaluateReplaceExpr(stageVal, doc)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			for _, key := range doc.Keys() {
+				doc.Remove(key)
+			}
+
+			for _, key := range replaced.Keys() {
+				doc.Set(key, must.NotFail(replaced.Get(key)))
+			}
+
+		case "$replaceRoot":
+			specDoc, ok := stageVal.(*types.Document)
+			if !ok {
+				return false, fmt.Errorf("$replaceRoot stage must be an object")
+			}
+
+			newRootVal, err := specDoc.Get("newRoot")
+			if err != nil {
+				return false, fmt.Errorf("$replaceRoot requires a 'newRoot' option")
+			}
+
+			replaced, err := evaluateReplaceExpr(newRootVal, doc)
+			if err != nil {
+				return false, lazyerrors.Error(err)
+			}
+
+			for _, key := range doc.Keys() {
+				doc.Remove(key)
+			}
+
+			for _, key := range replaced.Keys() {
+				doc.Set(key, must.NotFail(replaced.Get(key)))
+			}
 		}
 	}
 
 	return types.Compare(before, doc) != types.Equal, nil
+}
+
+// evaluateReplaceExpr evaluates a $replaceWith/$replaceRoot expression against doc
+// and returns the resulting document. expr may be a field-path string (e.g. "$sub")
+// or an operator document (e.g. {$mergeObjects: [...]}).
+func evaluateReplaceExpr(expr any, doc *types.Document) (*types.Document, error) {
+	switch e := expr.(type) {
+	case string:
+		fieldExpr, err := aggregations.NewExpression(e, nil)
+		if err != nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrFailedToParse,
+				fmt.Sprintf("invalid expression for $replaceWith: %s", e),
+				"$replaceWith (stage)",
+			)
+		}
+
+		val, err := fieldExpr.Evaluate(doc)
+		if err != nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrOperationFailed,
+				"'newRoot' expression for $replaceWith must evaluate to an object",
+				"$replaceWith (stage)",
+			)
+		}
+
+		result, ok := val.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrOperationFailed,
+				fmt.Sprintf(
+					"'newRoot' expression for $replaceWith must evaluate to an object, got %s",
+					types.FormatAnyValue(val),
+				),
+				"$replaceWith (stage)",
+			)
+		}
+
+		return result.DeepCopy(), nil
+
+	case *types.Document:
+		if operators.IsOperator(e) {
+			op, err := operators.NewOperator(e)
+			if err != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf("'newRoot' expression for $replaceWith failed: %s", err.Error()),
+					"$replaceWith (stage)",
+				)
+			}
+
+			val, err := op.Process(doc)
+			if err != nil {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf("'newRoot' expression for $replaceWith failed: %s", err.Error()),
+					"$replaceWith (stage)",
+				)
+			}
+
+			result, ok := val.(*types.Document)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf(
+						"'newRoot' expression for $replaceWith must evaluate to an object, got %s",
+						types.FormatAnyValue(val),
+					),
+					"$replaceWith (stage)",
+				)
+			}
+
+			return result, nil
+		}
+
+		// Literal document — return a copy.
+		return e.DeepCopy(), nil
+
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf(
+				"'newRoot' expression for $replaceWith must evaluate to an object, got %s",
+				types.FormatAnyValue(expr),
+			),
+			"$replaceWith (stage)",
+		)
+	}
 }
 
 // processReplacementDoc replaces the given document with a new document while retaining its
