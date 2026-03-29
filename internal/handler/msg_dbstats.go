@@ -81,6 +81,7 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	var nIndexes int64
+	var totalBSONSize int64
 
 	for _, cInfo := range list.Collections {
 		var c backends.Collection
@@ -103,6 +104,15 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 
 		nIndexes += int64(len(iList.Indexes))
+
+		// Compute BSON data size for this collection.
+		colBSONSize, _, colErr := collectionBSONDataSize(connCtx, c, nil)
+		if colErr != nil && !backends.ErrorCodeIs(colErr, backends.ErrorCodeCollectionDoesNotExist) &&
+			!backends.ErrorCodeIs(colErr, backends.ErrorCodeDatabaseDoesNotExist) {
+			return nil, lazyerrors.Error(colErr)
+		}
+
+		totalBSONSize += colBSONSize
 	}
 
 	stats, err := db.Stats(connCtx, &backends.DatabaseStatsParams{Refresh: true})
@@ -117,7 +127,7 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	var avgObjSize float64
 	if stats.CountDocuments > 0 {
-		avgObjSize = float64(stats.SizeCollections) / float64(stats.CountDocuments)
+		avgObjSize = float64(totalBSONSize) / float64(stats.CountDocuments)
 	}
 
 	pairs := []any{
@@ -127,7 +137,7 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		"views", int64(0),
 		"objects", stats.CountDocuments,
 		"avgObjSize", avgObjSize,
-		"dataSize", float64(stats.SizeCollections) / float64(scale),
+		"dataSize", float64(totalBSONSize) / float64(scale),
 		"storageSize", float64(stats.SizeCollections) / float64(scale),
 		"indexes", nIndexes,
 		"indexSize", float64(stats.SizeIndexes) / float64(scale),

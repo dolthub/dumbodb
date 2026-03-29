@@ -22,6 +22,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dongo/internal/backends"
+	internalbson "github.com/dolthub/dongo/internal/bson"
 	"github.com/dolthub/dongo/internal/handler/common"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/handler/handlerparams"
@@ -37,10 +38,6 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
-	}
-
-	if err = common.Unimplemented(document, "keyPattern", "min", "max"); err != nil {
-		return nil, err
 	}
 
 	common.Ignored(document, h.L, "estimate")
@@ -90,10 +87,40 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	started := time.Now()
 
-	stats, err := c.Stats(connCtx, new(backends.CollectionStatsParams))
+	// Build key range filter if keyPattern, min, and max are provided.
+	var rangeFilter *types.Document
+	if kp, kpErr := document.Get("keyPattern"); kpErr == nil {
+		if kpDoc, ok := kp.(*types.Document); ok && kpDoc.Len() > 0 {
+			// Get the first field name from the key pattern.
+			fieldName := kpDoc.Keys()[0]
+
+			minDoc, minErr := document.Get("min")
+			maxDoc, maxErr := document.Get("max")
+
+			if minErr == nil && maxErr == nil {
+				if minD, ok := minDoc.(*types.Document); ok {
+					if maxD, ok := maxDoc.(*types.Document); ok {
+						minVal, _ := minD.Get(fieldName)
+						maxVal, _ := maxD.Get(fieldName)
+						if minVal != nil && maxVal != nil {
+							rangeFilter = must.NotFail(types.NewDocument(
+								fieldName, must.NotFail(types.NewDocument(
+									"$gte", minVal,
+									"$lt", maxVal,
+								)),
+							))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	bsonSize, numDocs, err := collectionBSONDataSize(connCtx, c, rangeFilter)
 	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
 		backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
-		stats = new(backends.CollectionStatsResult)
+		bsonSize = 0
+		numDocs = 0
 		err = nil
 	}
 
@@ -102,12 +129,12 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	}
 
 	pairs := []any{
-		"size", stats.SizeTotal,
-		"numObjects", stats.CountDocuments,
+		"size", bsonSize,
+		"numObjects", numDocs,
 		"millis", int64(time.Since(started).Milliseconds()),
 	}
 
-	if stats.CountDocuments > 0 || stats.SizeTotal > 0 {
+	if numDocs > 0 || bsonSize > 0 {
 		pairs = append(pairs, "estimate", false)
 	}
 
@@ -116,4 +143,58 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(pairs...)),
 	)
+}
+
+// collectionBSONDataSize iterates documents in a collection and returns the sum
+// of their encoded BSON sizes and the document count. filter, if non-nil, is
+// passed to Query to limit the scan (e.g. for a key range). This matches
+// MongoDB's dataSize semantics (raw BSON bytes, not storage overhead).
+func collectionBSONDataSize(ctx context.Context, c backends.Collection, filter *types.Document) (int64, int64, error) {
+	var qp *backends.QueryParams
+	if filter != nil {
+		qp = &backends.QueryParams{Filter: filter}
+	}
+
+	qRes, err := c.Query(ctx, qp)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	iter := qRes.Iter
+	defer iter.Close()
+
+	var totalSize, numDocs int64
+
+	for {
+		_, doc, iterErr := iter.Next()
+		if iterErr != nil {
+			break
+		}
+
+		// Post-filter: the backend may not fully apply the filter, so we check here.
+		if filter != nil {
+			matches, filterErr := common.FilterDocument(doc, filter)
+			if filterErr != nil {
+				return 0, 0, lazyerrors.Error(filterErr)
+			}
+			if !matches {
+				continue
+			}
+		}
+
+		wdoc, convErr := internalbson.FromDocument(doc)
+		if convErr != nil {
+			return 0, 0, lazyerrors.Error(convErr)
+		}
+
+		raw, encErr := wdoc.Encode()
+		if encErr != nil {
+			return 0, 0, lazyerrors.Error(encErr)
+		}
+
+		totalSize += int64(len(raw))
+		numDocs++
+	}
+
+	return totalSize, numDocs, nil
 }
