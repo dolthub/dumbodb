@@ -15,6 +15,7 @@
 package operators
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strconv"
@@ -269,6 +270,10 @@ func (op *toDateOp) Process(doc *types.Document) (any, error) {
 	case float64:
 		ms := int64(val)
 		return time.Unix(0, ms*int64(time.Millisecond)).UTC(), nil
+	case types.ObjectID:
+		// ObjectID first 4 bytes are a big-endian uint32 Unix timestamp (seconds).
+		sec := binary.BigEndian.Uint32(val[0:4])
+		return time.Unix(int64(sec), 0).UTC(), nil
 	case string:
 		// try RFC3339 / ISO 8601 formats
 		for _, layout := range []string{

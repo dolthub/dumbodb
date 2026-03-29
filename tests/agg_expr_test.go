@@ -667,6 +667,36 @@ func TestExpr_project_in_operator(t *testing.T) {
 	assert.Equal(t, true, results[2].Map()["r"], "finance is in the set")
 }
 
+// TestExpr_toDate_objectid tests that $toDate converts an ObjectID to its embedded timestamp. (DongoFull)
+// MongoDB ObjectIDs encode a 4-byte Unix timestamp in their first 4 bytes; $toDate must
+// extract that timestamp and return it as a date.
+func TestExpr_toDate_objectid(t *testing.T) {
+	t.Parallel()
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	// Use a fixed time truncated to second precision (ObjectID only stores seconds).
+	ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	oid := primitive.NewObjectIDFromTimestamp(ts)
+	insertDocs(t, coll, bson.D{{Key: "_id", Value: oid}})
+
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		bson.D{{"$project", bson.D{
+			{"_id", false},
+			{"ts", bson.D{{"$toDate", "$_id"}}},
+		}}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	got := results[0].Map()["ts"].(primitive.DateTime).Time().UTC()
+	assert.Equal(t, ts, got, "$toDate should return the ObjectID's embedded timestamp")
+}
+
 // TestExpr_dateTrunc tests the $dateTrunc aggregation expression operator. (DongoFull)
 // $dateTrunc truncates a date to the start of a specified time unit.
 func TestExpr_dateTrunc(t *testing.T) {
