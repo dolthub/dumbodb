@@ -9,3 +9,6 @@ CLAUDE.md
 .logs/
 __pycache__/
 state.json
+
+# Dongo runtime data directory (default --data-dir)
+data/
