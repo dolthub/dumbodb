@@ -60,8 +60,7 @@ type FindParams struct {
 	OplogReplay         bool `ferretdb:"oplogReplay,ignored"`
 	AllowPartialResults bool `ferretdb:"allowPartialResults,ignored"`
 
-	// TODO https://github.com/dolthub/dongo/issues/4035
-	NoCursorTimeout bool `ferretdb:"noCursorTimeout,unimplemented-non-default"`
+	NoCursorTimeout bool `ferretdb:"noCursorTimeout,ignored"`
 
 	ApiVersion           string `ferretdb:"apiVersion,ignored"`
 	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
