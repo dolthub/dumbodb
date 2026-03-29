@@ -1332,9 +1332,11 @@ func TestAggStage_graphLookup_MaxDepthLimitsTraversal(t *testing.T) {
 		t.Fatalf("expected 3 managers (bob, carol, dave), got %d", managers.Len())
 	}
 
-	// Verify depthField is int32 (matching MongoDB BSON wire type) and values are 0, 1, 2.
-	expectedNames := []string{"bob", "carol", "dave"}
-	expectedDepths := []int32{0, 1, 2}
+	// MongoDB ordering: depth-0 first, then remaining levels deepest-first.
+	// For this linear chain: bob(d0), dave(d2), carol(d1).
+	// Verify depthField is int32 (matching MongoDB BSON wire type).
+	expectedNames := []string{"bob", "dave", "carol"}
+	expectedDepths := []int32{0, 2, 1}
 
 	for i := 0; i < managers.Len(); i++ {
 		v, _ := managers.Get(i)

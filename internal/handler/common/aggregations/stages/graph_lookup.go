@@ -236,11 +236,10 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 // Cycle prevention: each connectToField search-value is only processed once, so
 // cycles in the graph terminate naturally.
 //
-// Ordering: within each BFS depth level, results appear in _id-ascending order.
-// This mirrors MongoDB's behaviour, which yields documents in collection-scan order
-// (effectively insertion order); sorting by _id gives us a deterministic proxy for
-// that because documents are discovered by scanning fromDocs once per depth level
-// rather than once per frontier value.
+// Ordering: MongoDB returns depth-0 results first, then the remaining depth levels in
+// reverse order (deepest first). Within each depth level, results appear in _id-ascending
+// order (collection-scan proxy). Concretely, for a chain a(d0)→b(d1)→c(d2), MongoDB
+// returns [a, c, b] — depth-0 first, then d2 before d1.
 func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document) ([]*types.Document, error) {
 	// Sort fromDocs by _id ascending once. All per-level scans then proceed in this
 	// fixed order, so within-level results always appear in _id order — matching
@@ -263,7 +262,9 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 	// resultIDs deduplicates result documents by their _id (or connectToField value).
 	resultIDs := make(map[string]bool)
 
-	var results []*types.Document
+	// levelResults accumulates per-depth-level slices so we can reconstruct MongoDB's
+	// ordering: depth-0 first, then depth-N, depth-(N-1), ..., depth-1.
+	var levelResults [][]*types.Document
 
 	frontier := evaluateStartWith(gl.startWith, doc)
 	currentDepth := int64(0)
@@ -293,6 +294,8 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 		// nextFrontierSet deduplicates values enqueued for the next depth level.
 		nextFrontierSet := make(map[string]bool)
 		var nextFrontier []any
+
+		var levelDocs []*types.Document
 
 		// Scan fromDocs in sorted order — the outer loop is the collection, not the
 		// frontier. This matches MongoDB's per-level collection scan: all frontier values
@@ -325,7 +328,7 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 				result.Set(gl.depthField, int32(currentDepth))
 			}
 
-			results = append(results, result)
+			levelDocs = append(levelDocs, result)
 
 			// Enqueue the connectFromField value(s) for the next depth level.
 			fromVal := getFieldValue(fromDoc, gl.connectFromField)
@@ -347,8 +350,22 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 			}
 		}
 
+		if len(levelDocs) > 0 {
+			levelResults = append(levelResults, levelDocs)
+		}
+
 		frontier = nextFrontier
 		currentDepth++
+	}
+
+	// Reconstruct MongoDB's ordering: depth-0 first, then remaining levels deepest-first.
+	// For levels [L0, L1, L2, ..., LN], output: [L0, LN, LN-1, ..., L1].
+	var results []*types.Document
+	if len(levelResults) > 0 {
+		results = append(results, levelResults[0]...)
+		for i := len(levelResults) - 1; i >= 1; i-- {
+			results = append(results, levelResults[i]...)
+		}
 	}
 
 	return results, nil
