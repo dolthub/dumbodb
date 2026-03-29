@@ -52,7 +52,7 @@ func (h *Handler) initCommands() {
 		},
 		"autoCompact": {
 			Handler: h.MsgAutoCompact,
-			Help:    "Enables or disables background compaction (admin-only).",
+			Help:    "Enables or disables background compaction (MongoDB 8.0+).",
 		},
 		"buildInfo": {
 			Handler:   h.MsgBuildInfo,
@@ -68,6 +68,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgCollMod,
 			Help:    "Adds options to a collection or modify view definitions.",
 		},
+		"convertToCapped": {
+			Handler: h.MsgConvertToCapped,
+			Help:    "Converts an existing collection to a capped collection.",
+		},
 		"collStats": {
 			Handler: h.MsgCollStats,
 			Help:    "Returns storage data for a collection.",
@@ -81,10 +85,6 @@ func (h *Handler) initCommands() {
 			anonymous: true,
 			Help: "Returns information about the current connection, " +
 				"specifically the state of authenticated users and their available permissions.",
-		},
-		"convertToCapped": {
-			Handler: h.MsgConvertToCapped,
-			Help:    "Converts an existing collection to a capped collection.",
 		},
 		"count": {
 			Handler: h.MsgCount,

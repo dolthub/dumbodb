@@ -261,7 +261,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 	}
 
 	if state == nil {
-		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+		return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("dolt: database %q does not exist", db.name))
 	}
 
@@ -333,7 +333,7 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	}
 
 	if state == nil {
-		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+		return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 			fmt.Errorf("dolt: database %q does not exist", db.name))
 	}
 
@@ -371,6 +371,13 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 		delete(state.validators, params.Name)
 	} else {
 		state.validators[params.Name] = v
+	}
+
+	// Update capped metadata if CappedSize is specified.
+	if params.CappedSize > 0 {
+		state.capped[params.Name] = &cappedCollectionMeta{
+			CappedSize: params.CappedSize,
+		}
 	}
 
 	return nil

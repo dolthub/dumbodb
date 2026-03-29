@@ -40,11 +40,10 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Parse dropTarget param (drop existing target collection before renaming).
 	var dropTarget bool
-	if v, _ := document.Get("dropTarget"); v != nil {
-		if b, ok := v.(bool); ok {
-			dropTarget = b
+	if dt, dtErr := document.Get("dropTarget"); dtErr == nil && dt != nil {
+		if dropTarget, err = handlerparams.GetBoolOptionalParam("dropTarget", dt); err != nil {
+			return nil, err
 		}
 	}
 
@@ -133,12 +132,14 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
-	// If dropTarget is requested, drop the target collection first (ignore not-found errors).
+	// When dropTarget is true and the target already exists, drop it first.
 	if dropTarget {
-		dropErr := db.DropCollection(connCtx, &backends.DropCollectionParams{Name: newCName})
-		if dropErr != nil && !backends.ErrorCodeIs(dropErr, backends.ErrorCodeCollectionDoesNotExist) &&
-			!backends.ErrorCodeIs(dropErr, backends.ErrorCodeDatabaseDoesNotExist) {
-			return nil, lazyerrors.Error(dropErr)
+		if err = db.DropCollection(connCtx, &backends.DropCollectionParams{Name: newCName}); err != nil {
+			if !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) &&
+				!backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+				return nil, lazyerrors.Error(err)
+			}
+			// Target doesn't exist — that's fine, proceed with rename.
 		}
 	}
 
@@ -154,6 +155,12 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNamespaceExists,
 			"target namespace exists",
+			command,
+		)
+	case backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist):
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrNamespaceNotFound,
+			fmt.Sprintf("Database %s does not exist or is drop pending", oldDBName),
 			command,
 		)
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):

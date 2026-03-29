@@ -310,8 +310,8 @@ const (
 	// ErrMissingField indicates that the required field in document is missing.
 	ErrMissingField = ErrorCode(40414) // IDLFailedToParse
 
-	// ErrFailedToParseInput indicates invalid input (absent or malformed fields).
-	ErrFailedToParseInput = ErrorCode(40415) // IDLUnknownField
+	// ErrIDLUnknownField indicates that an unknown field was encountered in a command document.
+	ErrIDLUnknownField = ErrorCode(40415) // IDLUnknownField
 
 	// ErrChangeStreamNotSupported indicates that $changeStream is not supported on a standalone server.
 	ErrChangeStreamNotSupported = ErrorCode(40573) // Location40573

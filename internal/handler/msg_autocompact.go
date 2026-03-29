@@ -20,25 +20,36 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
+	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/dongo/internal/util/must"
 )
 
-// MsgAutoCompact implements `autoCompact` command.
+// MsgAutoCompact implements the `autoCompact` command (MongoDB 8.0+).
 //
-// autoCompact is a MongoDB 8.0 admin-only command that enables/disables background
-// compaction. Dongo returns Unauthorized to match MongoDB's behaviour when called
-// outside the admin database.
+// autoCompact must be run against the admin database. When run against any other
+// database, MongoDB returns Unauthorized (code 13). Dongo mirrors this behavior.
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgAutoCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	_, err := opMsgDocument(msg)
+	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	return nil, handlererrors.NewCommandErrorMsgWithArgument(
-		handlererrors.ErrUnauthorized,
-		"autoCompact may only be run against the admin database.",
-		"autoCompact",
+	dbName, _ := document.Get("$db")
+	if db, ok := dbName.(string); !ok || db != "admin" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrUnauthorized,
+			"autoCompact may only be run against the admin database.",
+			"autoCompact",
+		)
+	}
+
+	// When run against admin, return success (background compaction is a no-op in Dongo).
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"ok", float64(1),
+		)),
 	)
 }

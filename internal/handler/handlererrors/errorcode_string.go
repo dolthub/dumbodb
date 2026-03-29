@@ -101,7 +101,7 @@ func _() {
 	_ = x[ErrEmptyFieldPath-40352]
 	_ = x[ErrInvalidFieldPath-40353]
 	_ = x[ErrMissingField-40414]
-	_ = x[ErrFailedToParseInput-40415]
+	_ = x[ErrIDLUnknownField-40415]
 	_ = x[ErrChangeStreamNotSupported-40573]
 	_ = x[ErrCollStatsIsNotFirstStage-40602]
 	_ = x[ErrOpQueryInvalidField-40621]

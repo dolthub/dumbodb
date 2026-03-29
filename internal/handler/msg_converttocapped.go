@@ -31,8 +31,8 @@ import (
 
 // MsgConvertToCapped implements `convertToCapped` command.
 //
-// It converts an existing collection to a capped collection by dropping the
-// original and recreating it with the specified capped size.
+// convertToCapped converts a regular collection to a capped collection by
+// marking it with the specified size limit. The data is preserved.
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -55,18 +55,21 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 		return nil, err
 	}
 
-	// Validate the size parameter — required and must be > 0.
+	// size is required and must be > 0.
 	sizeVal, sizeErr := document.Get("size")
-	if sizeErr != nil || sizeVal == nil {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrInvalidOptions,
-			"Capped collection size must be greater than zero",
-			command,
-		)
+	var cappedSize int64
+
+	if sizeErr != nil || sizeVal == nil || sizeVal == types.Null {
+		// Missing size field.
+		cappedSize = 0
+	} else {
+		cappedSize, err = handlerparams.GetWholeNumberParam(sizeVal)
+		if err != nil {
+			cappedSize = 0
+		}
 	}
 
-	size, err := handlerparams.GetWholeNumberParam(sizeVal)
-	if err != nil || size <= 0 {
+	if cappedSize <= 0 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrInvalidOptions,
 			"Capped collection size must be greater than zero",
@@ -77,30 +80,20 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 	db, err := h.b.Database(dbName)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
-			msg := fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, command)
-		}
-
-		return nil, lazyerrors.Error(err)
-	}
-
-	// Collect existing documents so they can be reinserted into the new capped collection.
-	c, err := db.Collection(collectionName)
-	if err != nil {
-		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrInvalidNamespace,
-				fmt.Sprintf("Invalid collection name: %s", collectionName),
+				fmt.Sprintf("Invalid database specified '%s'", dbName),
 				command,
 			)
 		}
-
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Verify the collection exists by fetching its stats.
-	_, err = c.Stats(connCtx, new(backends.CollectionStatsParams))
-	if err != nil {
+	// Update the collection to be capped by modifying its options.
+	if err = db.CollMod(connCtx, &backends.CollModParams{
+		Name:       collectionName,
+		CappedSize: cappedSize,
+	}); err != nil {
 		switch {
 		case backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist):
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -114,52 +107,14 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 				fmt.Sprintf("source collection %s.%s does not exist", dbName, collectionName),
 				command,
 			)
-		}
-
-		return nil, lazyerrors.Error(err)
-	}
-
-	// Read all existing documents so they can be reinserted after conversion.
-	qRes, err := c.Query(connCtx, nil)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	var docs []*types.Document
-
-	iter := qRes.Iter
-	defer iter.Close()
-
-	for {
-		_, doc, iterErr := iter.Next()
-		if iterErr != nil {
-			break
-		}
-
-		docs = append(docs, doc)
-	}
-
-	// Drop the original collection and recreate it as capped.
-	if err = db.DropCollection(connCtx, &backends.DropCollectionParams{Name: collectionName}); err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	if err = db.CreateCollection(connCtx, &backends.CreateCollectionParams{
-		Name:        collectionName,
-		CappedSize:  size,
-	}); err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	// Reinsert existing documents into the new capped collection.
-	if len(docs) > 0 {
-		newCol, colErr := db.Collection(collectionName)
-		if colErr != nil {
-			return nil, lazyerrors.Error(colErr)
-		}
-
-		if _, insertErr := newCol.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs}); insertErr != nil {
-			return nil, lazyerrors.Error(insertErr)
+		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrInvalidNamespace,
+				fmt.Sprintf("Invalid collection name: %s", collectionName),
+				command,
+			)
+		default:
+			return nil, lazyerrors.Error(err)
 		}
 	}
 

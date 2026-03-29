@@ -50,27 +50,29 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
-	// Reject unknown fields (MongoDB returns IDLUnknownField for unrecognized options).
-	knownFields := map[string]struct{}{
-		// command name
-		"collMod": {},
-		// known options
-		"validator": {}, "validationLevel": {}, "validationAction": {},
-		// ignored options
-		"index": {}, "pipeline": {}, "viewOn": {}, "recordPreImages": {},
-		"changeStreamPreAndPostImages": {}, "expireAfterSeconds": {}, "timeseries": {},
-		"writeConcern": {}, "comment": {},
-		// protocol/system fields
-		"$db": {}, "lsid": {}, "$readPreference": {}, "txnNumber": {},
-		"autocommit": {}, "startTransaction": {}, "$audit": {}, "$client": {},
-		"readConcern": {}, "apiVersion": {}, "apiStrict": {}, "apiDeprecationErrors": {},
+	// Detect unknown fields. Protocol fields ($db, lsid, $readPreference, etc.) are always allowed.
+	// Known fields are the command key plus the ones we handle or ignore.
+	knownFields := map[string]bool{
+		"$db":             true,
+		"lsid":            true,
+		"txnNumber":       true,
+		"$readPreference": true,
+		"$clusterTime":    true,
+		"collMod":         true,
+		"validator":       true,
+		"validationLevel": true,
+		"validationAction": true,
 	}
+	for _, ig := range ignoredFields {
+		knownFields[ig] = true
+	}
+	command := document.Command()
 	for _, key := range document.Keys() {
-		if _, ok := knownFields[key]; !ok {
+		if !knownFields[key] {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParseInput,
-				fmt.Sprintf("BSON field 'collMod.%s' is an unknown field.", key),
-				"collMod",
+				handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '%s.%s' is an unknown field.", command, key),
+				command,
 			)
 		}
 	}
@@ -79,8 +81,6 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	if err != nil {
 		return nil, err
 	}
-
-	command := document.Command()
 
 	collectionName, err := common.GetRequiredParam[string](document, command)
 	if err != nil {

@@ -196,6 +196,8 @@ type CollModParams struct {
 	ValidationLevel string
 	// ValidationAction replaces the existing action when non-empty.
 	ValidationAction string
+	// CappedSize, when > 0, converts the collection to a capped collection with this size in bytes.
+	CappedSize int64
 	_ struct{} // prevent unkeyed literals
 }
 
@@ -258,7 +260,8 @@ type RenameCollectionParams struct {
 // RenameCollection renames existing collection in the database.
 // Both old and new names should be valid.
 //
-// The errors for non-existing database and non-existing collection are the same.
+// Returns ErrorCodeDatabaseDoesNotExist when the database does not exist,
+// and ErrorCodeCollectionDoesNotExist when the database exists but the collection does not.
 func (dbc *databaseContract) RenameCollection(ctx context.Context, params *RenameCollectionParams) error {
 	ctx, span := otel.Tracer("").Start(ctx, "RenameCollection")
 	defer span.End()
@@ -277,7 +280,7 @@ func (dbc *databaseContract) RenameCollection(ctx context.Context, params *Renam
 		span.SetStatus(otelcodes.Error, "")
 	}
 
-	checkError(err, ErrorCodeCollectionNameIsInvalid, ErrorCodeCollectionDoesNotExist, ErrorCodeCollectionAlreadyExists)
+	checkError(err, ErrorCodeCollectionNameIsInvalid, ErrorCodeCollectionDoesNotExist, ErrorCodeCollectionAlreadyExists, ErrorCodeDatabaseDoesNotExist)
 	return err
 }
 
@@ -297,7 +300,7 @@ func (dbc *databaseContract) CollMod(ctx context.Context, params *CollModParams)
 		span.SetStatus(otelcodes.Error, "")
 	}
 
-	checkError(err, ErrorCodeCollectionNameIsInvalid, ErrorCodeCollectionDoesNotExist)
+	checkError(err, ErrorCodeCollectionNameIsInvalid, ErrorCodeCollectionDoesNotExist, ErrorCodeDatabaseDoesNotExist)
 
 	return err
 }
