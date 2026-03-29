@@ -116,6 +116,9 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("minWireVersion", common.MinWireVersion)
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
+	res.Set("topologyVersion", must.NotFail(types.NewDocument(
+		"counter", int64(0),
+	)))
 
 	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
 		res.Set("saslSupportedMechs", resSupportedMechs)

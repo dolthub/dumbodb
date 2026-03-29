@@ -39,13 +39,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
-	unimplementedFields := []string{
-		"collation",
-	}
-	if err = common.Unimplemented(document, unimplementedFields...); err != nil {
-		return nil, err
-	}
-
 	ignoredFields := []string{
 		"autoIndexId",
 		"storageEngine",
@@ -53,6 +46,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		"writeConcern",
 		"comment",
 		"expireAfterSeconds",
+		"collation",
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
