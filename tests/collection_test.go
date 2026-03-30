@@ -218,6 +218,171 @@ func TestExplain_Distinct(t *testing.T) {
 	assertExplainResponse(t, res, "queryPlanner")
 }
 
+// TestDB_RunCommand_DbStats verifies that the dbStats command issued via RunCommand
+// returns a response document structurally compatible with MongoDB, including the
+// expected field names and types (int32 for collection/index counts, float64 for sizes).
+//
+// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DongoFull)
+func TestDB_RunCommand_DbStats(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert documents so counts and sizes are non-zero.
+	insertDocs(t, coll,
+		bson.D{{Key: "x", Value: int32(1)}},
+		bson.D{{Key: "x", Value: int32(2)}},
+	)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "dbStats", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "dbStats via RunCommand must not error")
+
+	m := res.Map()
+
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// db must be the database name.
+	db, ok := m["db"].(string)
+	require.True(t, ok, "db must be a string, got %T", m["db"])
+	assert.Equal(t, coll.Database().Name(), db, "db must match collection database name")
+
+	// collections must be int32 and >= 1.
+	collections, ok := m["collections"].(int32)
+	require.True(t, ok, "collections must be int32, got %T", m["collections"])
+	assert.GreaterOrEqual(t, collections, int32(1), "collections must be >= 1")
+
+	// views must be int32.
+	_, ok = m["views"].(int32)
+	assert.True(t, ok, "views must be int32, got %T", m["views"])
+
+	// objects must reflect the inserted document count.
+	assert.EqualValues(t, 2, m["objects"], "objects must equal inserted document count")
+
+	// avgObjSize must be float64 (not scaled).
+	_, ok = m["avgObjSize"].(float64)
+	assert.True(t, ok, "avgObjSize must be float64, got %T", m["avgObjSize"])
+
+	// Size fields must be float64.
+	for _, field := range []string{"dataSize", "storageSize", "indexSize", "totalSize"} {
+		_, ok := m[field].(float64)
+		assert.True(t, ok, "%s must be float64, got %T", field, m[field])
+	}
+
+	// indexes must be int32 and >= 1 (at least the _id index).
+	indexes, ok := m["indexes"].(int32)
+	require.True(t, ok, "indexes must be int32, got %T", m["indexes"])
+	assert.GreaterOrEqual(t, indexes, int32(1), "indexes must be >= 1")
+
+	// scaleFactor must be int32 with default value 1.
+	scaleFactor, ok := m["scaleFactor"].(int32)
+	require.True(t, ok, "scaleFactor must be int32, got %T", m["scaleFactor"])
+	assert.EqualValues(t, 1, scaleFactor, "default scaleFactor must be 1")
+
+	// Filesystem size fields must be float64.
+	_, ok = m["fsUsedSize"].(float64)
+	assert.True(t, ok, "fsUsedSize must be float64, got %T", m["fsUsedSize"])
+	_, ok = m["fsTotalSize"].(float64)
+	assert.True(t, ok, "fsTotalSize must be float64, got %T", m["fsTotalSize"])
+}
+
+// TestDB_RunCommand_CollStats verifies that the collStats command issued via RunCommand
+// returns a response document structurally compatible with MongoDB, including all
+// required fields with correct types, and that storageSize >= size (storage allocation
+// is always at least as large as logical data size).
+//
+// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DongoFull)
+func TestDB_RunCommand_CollStats(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert documents so count and size fields are non-zero.
+	insertDocs(t, coll,
+		bson.D{{Key: "x", Value: int32(1)}},
+		bson.D{{Key: "x", Value: int32(2)}},
+	)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "collStats", Value: coll.Name()},
+	}).Decode(&res)
+	require.NoError(t, err, "collStats via RunCommand must not error")
+
+	m := res.Map()
+
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// ns must be db.collection.
+	ns, ok := m["ns"].(string)
+	require.True(t, ok, "ns must be a string, got %T", m["ns"])
+	assert.Equal(t, coll.Database().Name()+"."+coll.Name(), ns, "ns must be db.collection")
+
+	// size must be int32.
+	size, ok := m["size"].(int32)
+	require.True(t, ok, "size must be int32, got %T", m["size"])
+
+	// count must be int32 reflecting the inserted document count.
+	count, ok := m["count"].(int32)
+	require.True(t, ok, "count must be int32, got %T", m["count"])
+	assert.EqualValues(t, 2, count, "count must equal inserted document count")
+
+	// avgObjSize must be int32 (present when count > 0).
+	_, ok = m["avgObjSize"].(int32)
+	assert.True(t, ok, "avgObjSize must be int32, got %T", m["avgObjSize"])
+
+	// numOrphanDocs must be int32.
+	_, ok = m["numOrphanDocs"].(int32)
+	assert.True(t, ok, "numOrphanDocs must be int32, got %T", m["numOrphanDocs"])
+
+	// storageSize must be int32 and >= size (storage allocation >= logical data size).
+	storageSize, ok := m["storageSize"].(int32)
+	require.True(t, ok, "storageSize must be int32, got %T", m["storageSize"])
+	assert.GreaterOrEqual(t, storageSize, size,
+		"storageSize (%d) must be >= size (%d)", storageSize, size)
+
+	// capped must be bool.
+	_, ok = m["capped"].(bool)
+	assert.True(t, ok, "capped must be bool, got %T", m["capped"])
+
+	// nindexes must be int32 and >= 1 (at least the _id index).
+	nindexes, ok := m["nindexes"].(int32)
+	require.True(t, ok, "nindexes must be int32, got %T", m["nindexes"])
+	assert.GreaterOrEqual(t, nindexes, int32(1), "nindexes must be >= 1")
+
+	// indexDetails must be a document.
+	_, ok = m["indexDetails"].(bson.D)
+	assert.True(t, ok, "indexDetails must be a document, got %T", m["indexDetails"])
+
+	// indexBuilds must be an array.
+	_, ok = m["indexBuilds"].(bson.A)
+	assert.True(t, ok, "indexBuilds must be an array, got %T", m["indexBuilds"])
+
+	// totalIndexSize must be int32.
+	_, ok = m["totalIndexSize"].(int32)
+	assert.True(t, ok, "totalIndexSize must be int32, got %T", m["totalIndexSize"])
+
+	// indexSizes must be a document.
+	_, ok = m["indexSizes"].(bson.D)
+	assert.True(t, ok, "indexSizes must be a document, got %T", m["indexSizes"])
+
+	// totalSize must be int32 and > 0.
+	totalSize, ok := m["totalSize"].(int32)
+	require.True(t, ok, "totalSize must be int32, got %T", m["totalSize"])
+	assert.Greater(t, totalSize, int32(0), "totalSize must be > 0")
+
+	// scaleFactor must be int32 with default value 1.
+	scaleFactor, ok := m["scaleFactor"].(int32)
+	require.True(t, ok, "scaleFactor must be int32, got %T", m["scaleFactor"])
+	assert.EqualValues(t, 1, scaleFactor, "default scaleFactor must be 1")
+}
+
 // TestDB_RunCommand_ListCollections verifies that listCollections issued via
 // RunCommand returns a proper cursor response document — not a raw array —
 // matching the MongoDB wire protocol:

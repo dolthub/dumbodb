@@ -135,7 +135,7 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			"size", int32(stats.SizeCollection / scale),
 			"count", int32(stats.CountDocuments),
 			"numOrphanDocs", int32(0),
-			"storageSize", int32(stats.SizeCollection / scale),
+			"storageSize", int32((stats.SizeTotal - stats.SizeIndexes) / scale),
 			"totalSize", int32(stats.SizeTotal / scale),
 			"nindexes", int32(len(indexes.Indexes)),
 			"totalIndexSize", int32(stats.SizeIndexes / scale),
@@ -158,7 +158,7 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		pairs = append(pairs,
 			"numOrphanDocs", int32(0),
-			"storageSize", int32(stats.SizeCollection/scale),
+			"storageSize", int32((stats.SizeTotal-stats.SizeIndexes)/scale),
 			"freeStorageSize", int32(stats.SizeFreeStorage/scale),
 			"capped", cInfo.Capped(),
 			"nindexes", int32(len(indexes.Indexes)),

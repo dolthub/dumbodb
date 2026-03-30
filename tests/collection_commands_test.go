@@ -277,3 +277,68 @@ func TestValidate_Repair(t *testing.T) {
 	m := res.Map()
 	assert.Equal(t, false, m["repaired"], "repaired must be false when no repairs were needed")
 }
+
+// TestDbStats_ScaleOption verifies that the dbStats scale parameter correctly divides all
+// size fields (dataSize, storageSize, indexSize, totalSize) by the scale factor, while
+// leaving document counts and avgObjSize unaffected.
+//
+// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DongoFull)
+func TestDbStats_ScaleOption(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert documents so that size fields are non-zero.
+	for i := 0; i < 10; i++ {
+		insertDocs(t, coll, bson.D{
+			{Key: "idx", Value: int32(i)},
+			{Key: "payload", Value: "test-data-for-sizing"},
+		})
+	}
+
+	// Retrieve dbStats with default scale (1).
+	var unscaled bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "dbStats", Value: int32(1)},
+	}).Decode(&unscaled)
+	require.NoError(t, err, "dbStats without scale must not error")
+	um := unscaled.Map()
+
+	// Retrieve dbStats with scale=1024.
+	const scale = int32(1024)
+	var scaled bson.D
+	err = coll.Database().RunCommand(ctx, bson.D{
+		{Key: "dbStats", Value: int32(1)},
+		{Key: "scale", Value: scale},
+	}).Decode(&scaled)
+	require.NoError(t, err, "dbStats with scale must not error")
+	sm := scaled.Map()
+
+	assert.Equal(t, float64(1), um["ok"], "unscaled ok must be 1")
+	assert.Equal(t, float64(1), sm["ok"], "scaled ok must be 1")
+
+	// scaleFactor must reflect the requested scale.
+	assert.EqualValues(t, 1, um["scaleFactor"], "default scaleFactor must be 1")
+	assert.EqualValues(t, scale, sm["scaleFactor"], "scaleFactor must equal requested scale")
+
+	// Document count must not be affected by scale.
+	assert.Equal(t, um["objects"], sm["objects"], "objects must not change with scale")
+
+	// avgObjSize must not be affected by scale.
+	assert.Equal(t, um["avgObjSize"], sm["avgObjSize"], "avgObjSize must not change with scale")
+
+	// Size fields must be divided by scale.  We verify by checking that
+	// scaledValue * 1024 ≈ unscaledValue (within 1.0 due to float truncation).
+	for _, field := range []string{"dataSize", "storageSize", "indexSize", "totalSize"} {
+		uv, ok := um[field].(float64)
+		require.True(t, ok, "unscaled %s must be float64, got %T", field, um[field])
+		sv, ok := sm[field].(float64)
+		require.True(t, ok, "scaled %s must be float64, got %T", field, sm[field])
+
+		assert.InDelta(t, uv, sv*float64(scale), 1.0,
+			"scaled %s * %d must approximate unscaled %s (got unscaled=%.2f, scaled=%.4f)",
+			field, scale, field, uv, sv)
+	}
+}
