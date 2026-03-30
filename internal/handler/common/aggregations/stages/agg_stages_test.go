@@ -239,3 +239,73 @@ func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestAggStage_sortByCount_TieBreakingOrder verifies that $sortByCount applies an
+// implicit secondary sort by _id ascending when counts are equal, matching MongoDB's
+// documented tiebreaking behavior.
+//
+// Six documents produce three groups with counts 2, 2, 2 (all tied).
+// Ascending _id tiebreaker must produce: p, q, r.
+func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tag", "r")),
+		must.NotFail(types.NewDocument("_id", int32(2), "tag", "p")),
+		must.NotFail(types.NewDocument("_id", int32(3), "tag", "q")),
+		must.NotFail(types.NewDocument("_id", int32(4), "tag", "r")),
+		must.NotFail(types.NewDocument("_id", int32(5), "tag", "p")),
+		must.NotFail(types.NewDocument("_id", int32(6), "tag", "q")),
+	}
+
+	stageDoc := must.NotFail(types.NewDocument("$sortByCount", "$tag"))
+	stage, err := stages.NewStage(stageDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sortByCount): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	out, err := stage.Process(context.Background(), iterator.Values(iterator.ForSlice(docs)), closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 result docs, got %d", len(results))
+	}
+
+	// All counts are equal (2). Tiebreaker: _id ascending → p, q, r.
+	wantIDs := []string{"p", "q", "r"}
+
+	for i, wantID := range wantIDs {
+		idVal, err := results[i].Get("_id")
+		if err != nil {
+			t.Errorf("results[%d] missing _id: %v", i, err)
+			continue
+		}
+
+		if idVal != wantID {
+			t.Errorf("results[%d]._id = %v, want %q (ascending _id tiebreaker)", i, idVal, wantID)
+		}
+
+		countVal, err := results[i].Get("count")
+		if err != nil {
+			t.Errorf("results[%d] missing count: %v", i, err)
+			continue
+		}
+
+		count, ok := countVal.(int32)
+		if !ok {
+			t.Errorf("results[%d].count is %T, want int32", i, countVal)
+			continue
+		}
+
+		if count != 2 {
+			t.Errorf("results[%d].count = %d, want 2", i, count)
+		}
+	}
+}

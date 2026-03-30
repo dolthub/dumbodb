@@ -1708,7 +1708,7 @@ func TestAggComplex_graphLookup_bfsOrder(t *testing.T) {
 
 // TestAgg_sortByCount_after_unwind verifies that $unwind followed by $sortByCount
 // correctly counts unwound array elements and sorts the results by count descending,
-// with _id descending as the tiebreaker (matching MongoDB spec).
+// with _id ascending as the tiebreaker (matching MongoDB spec).
 func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	t.Parallel()
 
@@ -1761,14 +1761,14 @@ func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	results := collectResults(t, out, closer)
 
 	// "x" count=2, "y" count=2, "z" count=1.
-	// Tie at count=2: sorted by _id descending → "y" > "x".
-	// Expected: [{_id:"y",count:2}, {_id:"x",count:2}, {_id:"z",count:1}]
+	// Tie at count=2: sorted by _id ascending → "x" < "y".
+	// Expected: [{_id:"x",count:2}, {_id:"y",count:2}, {_id:"z",count:1}]
 	if len(results) != 3 {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
 	type entry struct{ id string; count int32 }
-	want := []entry{{"y", 2}, {"x", 2}, {"z", 1}}
+	want := []entry{{"x", 2}, {"y", 2}, {"z", 1}}
 
 	for i, w := range want {
 		idVal, err := results[i].Get("_id")
@@ -1866,6 +1866,82 @@ func TestAggComplex_matchUnwindGroupSort_SameTotalQty(t *testing.T) {
 	for i, want := range wantIDs {
 		if id := getID(results[i]); id != want {
 			t.Errorf("results[%d]: expected _id=%s (stable tie-break), got %q", i, want, id)
+		}
+	}
+}
+
+// TestAggComplex_sortByCount verifies the full $sortByCount behavior:
+// primary sort by count descending, tiebreaker by _id ascending.
+//
+// Input: 5 docs with tags a(×3), b(×2), c(×2), d(×1).
+// Expected: [{_id:"a",count:3}, {_id:"b",count:2}, {_id:"c",count:2}, {_id:"d",count:1}]
+// b and c have the same count=2; ascending _id → "b" before "c".
+func TestAggComplex_sortByCount(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tag", "a")),
+		must.NotFail(types.NewDocument("_id", int32(2), "tag", "a")),
+		must.NotFail(types.NewDocument("_id", int32(3), "tag", "a")),
+		must.NotFail(types.NewDocument("_id", int32(4), "tag", "b")),
+		must.NotFail(types.NewDocument("_id", int32(5), "tag", "b")),
+		must.NotFail(types.NewDocument("_id", int32(6), "tag", "c")),
+		must.NotFail(types.NewDocument("_id", int32(7), "tag", "c")),
+		must.NotFail(types.NewDocument("_id", int32(8), "tag", "d")),
+	}
+
+	stageDoc := must.NotFail(types.NewDocument("$sortByCount", "$tag"))
+	stage, err := stages.NewStage(stageDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sortByCount): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	out, err := stage.Process(context.Background(), iterator.Values(iterator.ForSlice(docs)), closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 result docs, got %d", len(results))
+	}
+
+	type entry struct {
+		id    string
+		count int32
+	}
+
+	want := []entry{{"a", 3}, {"b", 2}, {"c", 2}, {"d", 1}}
+
+	for i, w := range want {
+		idVal, err := results[i].Get("_id")
+		if err != nil {
+			t.Errorf("results[%d] missing _id: %v", i, err)
+			continue
+		}
+
+		countVal, err := results[i].Get("count")
+		if err != nil {
+			t.Errorf("results[%d] missing count: %v", i, err)
+			continue
+		}
+
+		if idVal != w.id {
+			t.Errorf("results[%d]._id = %v, want %q", i, idVal, w.id)
+		}
+
+		count, ok := countVal.(int32)
+		if !ok {
+			t.Errorf("results[%d].count is %T, want int32", i, countVal)
+			continue
+		}
+
+		if count != w.count {
+			t.Errorf("results[%d].count = %d, want %d", i, count, w.count)
 		}
 	}
 }
