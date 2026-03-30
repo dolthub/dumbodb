@@ -33,7 +33,8 @@ type indexStatsStage struct {
 
 // NewIndexStatsStage creates a new $indexStats stage.
 // It pre-fetches the index list from the collection at construction time.
-func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.Collection) (aggregations.Stage, error) {
+// host is the server's "hostname:port" included in each stats document.
+func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.Collection, host string) (aggregations.Stage, error) {
 	res, err := c.ListIndexes(ctx, nil)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
@@ -76,6 +77,7 @@ func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.C
 		doc := must.NotFail(types.NewDocument(
 			"name", idx.Name,
 			"key", keyDoc,
+			"host", host,
 			"accesses", must.NotFail(types.NewDocument(
 				"ops", int64(0),
 				"since", now,

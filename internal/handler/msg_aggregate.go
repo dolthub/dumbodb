@@ -247,7 +247,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		case "$indexStats":
 			// $indexStats requires collection access to retrieve index metadata.
-			s, err = stages.NewIndexStatsStage(d, connCtx, c)
+			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost)
 
 		default:
 			s, err = stages.NewStage(d)
