@@ -638,3 +638,163 @@ func TestDB_ListDatabases(t *testing.T) {
 	// user collections.
 	assert.True(t, dbNames["admin"], "databases must include the 'admin' system database")
 }
+
+// TestDB_RunCommand_Hello verifies that the hello command returns the expected
+// topology and capability fields matching MongoDB's response format.
+// Parity test: hello command via RunCommand must include isWritablePrimary,
+// wire version bounds, session timeout, and ok=1. (DongoFull)
+func TestDB_RunCommand_Hello(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "hello", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "hello via RunCommand must not error")
+
+	m := res.Map()
+
+	// ok must be 1.
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// isWritablePrimary must be true (standalone/primary node).
+	assert.Equal(t, true, m["isWritablePrimary"], "isWritablePrimary must be true")
+
+	// readOnly must be false.
+	assert.Equal(t, false, m["readOnly"], "readOnly must be false")
+
+	// maxBsonObjectSize must be int32.
+	assert.IsType(t, int32(0), m["maxBsonObjectSize"], "maxBsonObjectSize must be int32")
+
+	// maxMessageSizeBytes must be int32.
+	assert.IsType(t, int32(0), m["maxMessageSizeBytes"], "maxMessageSizeBytes must be int32")
+
+	// maxWriteBatchSize must be int32.
+	assert.IsType(t, int32(0), m["maxWriteBatchSize"], "maxWriteBatchSize must be int32")
+
+	// minWireVersion and maxWireVersion must be int32, with maxWireVersion > minWireVersion.
+	minWireVersion, ok := m["minWireVersion"].(int32)
+	require.True(t, ok, "minWireVersion must be int32, got %T", m["minWireVersion"])
+	maxWireVersion, ok := m["maxWireVersion"].(int32)
+	require.True(t, ok, "maxWireVersion must be int32, got %T", m["maxWireVersion"])
+	assert.GreaterOrEqual(t, maxWireVersion, minWireVersion, "maxWireVersion must be >= minWireVersion")
+
+	// logicalSessionTimeoutMinutes must be int32.
+	assert.IsType(t, int32(0), m["logicalSessionTimeoutMinutes"], "logicalSessionTimeoutMinutes must be int32")
+
+	// connectionId must be int32.
+	assert.IsType(t, int32(0), m["connectionId"], "connectionId must be int32")
+
+	// localTime must be present (primitive.DateTime is an int64 alias decoded from BSON UTC datetime).
+	_, ok = m["localTime"]
+	assert.True(t, ok, "localTime must be present in hello response")
+}
+
+// TestDB_RunCommand_IsMaster verifies that the deprecated isMaster command
+// returns the expected topology fields matching MongoDB's response format.
+// Parity test: isMaster command via RunCommand must include ismaster=true,
+// wire version bounds, session timeout, and ok=1. (DongoFull)
+func TestDB_RunCommand_IsMaster(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "isMaster", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "isMaster via RunCommand must not error")
+
+	m := res.Map()
+
+	// ok must be 1.
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// isMaster uses the legacy "ismaster" field (lowercase), not "isWritablePrimary".
+	assert.Equal(t, true, m["ismaster"], "ismaster must be true")
+
+	// readOnly must be false.
+	assert.Equal(t, false, m["readOnly"], "readOnly must be false")
+
+	// maxBsonObjectSize must be int32.
+	assert.IsType(t, int32(0), m["maxBsonObjectSize"], "maxBsonObjectSize must be int32")
+
+	// maxMessageSizeBytes must be int32.
+	assert.IsType(t, int32(0), m["maxMessageSizeBytes"], "maxMessageSizeBytes must be int32")
+
+	// maxWriteBatchSize must be int32.
+	assert.IsType(t, int32(0), m["maxWriteBatchSize"], "maxWriteBatchSize must be int32")
+
+	// minWireVersion and maxWireVersion must be int32.
+	minWireVersion, ok := m["minWireVersion"].(int32)
+	require.True(t, ok, "minWireVersion must be int32, got %T", m["minWireVersion"])
+	maxWireVersion, ok := m["maxWireVersion"].(int32)
+	require.True(t, ok, "maxWireVersion must be int32, got %T", m["maxWireVersion"])
+	assert.GreaterOrEqual(t, maxWireVersion, minWireVersion, "maxWireVersion must be >= minWireVersion")
+
+	// logicalSessionTimeoutMinutes must be int32.
+	assert.IsType(t, int32(0), m["logicalSessionTimeoutMinutes"], "logicalSessionTimeoutMinutes must be int32")
+
+	// connectionId must be int32.
+	assert.IsType(t, int32(0), m["connectionId"], "connectionId must be int32")
+
+	// localTime must be present.
+	_, ok = m["localTime"]
+	assert.True(t, ok, "localTime must be present in isMaster response")
+}
+
+// TestDB_RunCommand_ServerStatus verifies that the serverStatus command returns
+// process identity fields and timing metrics matching MongoDB's response format.
+// Parity test: serverStatus must include host, version, process, pid, uptime
+// variants, localTime, and ok=1. (DongoFull)
+func TestDB_RunCommand_ServerStatus(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "serverStatus", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "serverStatus via RunCommand must not error")
+
+	m := res.Map()
+
+	// ok must be 1.
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// host must be a non-empty string.
+	host, ok := m["host"].(string)
+	require.True(t, ok, "host must be a string, got %T", m["host"])
+	assert.NotEmpty(t, host, "host must not be empty")
+
+	// version must be a non-empty string.
+	version, ok := m["version"].(string)
+	require.True(t, ok, "version must be a string, got %T", m["version"])
+	assert.NotEmpty(t, version, "version must not be empty")
+
+	// process must be a non-empty string.
+	process, ok := m["process"].(string)
+	require.True(t, ok, "process must be a string, got %T", m["process"])
+	assert.NotEmpty(t, process, "process must not be empty")
+
+	// pid must be int64.
+	assert.IsType(t, int64(0), m["pid"], "pid must be int64")
+
+	// uptime must be float64 and non-negative.
+	uptime, ok := m["uptime"].(float64)
+	require.True(t, ok, "uptime must be float64, got %T", m["uptime"])
+	assert.GreaterOrEqual(t, uptime, float64(0), "uptime must be non-negative")
+
+	// uptimeMillis must be int64.
+	assert.IsType(t, int64(0), m["uptimeMillis"], "uptimeMillis must be int64")
+
+	// uptimeEstimate must be int64.
+	assert.IsType(t, int64(0), m["uptimeEstimate"], "uptimeEstimate must be int64")
+
+	// localTime must be present.
+	_, ok = m["localTime"]
+	assert.True(t, ok, "localTime must be present in serverStatus response")
+}
