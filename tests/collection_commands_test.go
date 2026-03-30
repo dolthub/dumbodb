@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -276,6 +277,68 @@ func TestValidate_Repair(t *testing.T) {
 	// A fresh, consistent collection requires no repairs — repaired must be false.
 	m := res.Map()
 	assert.Equal(t, false, m["repaired"], "repaired must be false when no repairs were needed")
+}
+
+// TestConvertToCapped_VerifyCapped verifies that after convertToCapped succeeds,
+// a subsequent listCollections call reports options.capped=true and options.size
+// equal to the requested capped size.
+//
+// Parity test for do-tfox: convertToCapped should mark collection as capped in listCollections.
+func TestConvertToCapped_VerifyCapped(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert a document so the collection exists.
+	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
+
+	const cappedSize = int64(1024 * 1024) // 1 MiB
+
+	// Convert the collection to a capped collection.
+	var convertRes bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "convertToCapped", Value: coll.Name()},
+		{Key: "size", Value: cappedSize},
+	}).Decode(&convertRes)
+	require.NoError(t, err, "convertToCapped must succeed")
+	assert.Equal(t, float64(1), convertRes.Map()["ok"], "convertToCapped ok must be 1")
+
+	// Verify listCollections shows capped=true and size=cappedSize for this collection.
+	cursor, err := coll.Database().ListCollections(ctx, bson.D{
+		{Key: "name", Value: coll.Name()},
+	})
+	require.NoError(t, err, "listCollections must not error")
+	defer cursor.Close(ctx) //nolint:errcheck
+
+	var results []bson.Raw
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1, "listCollections must return exactly one entry for the collection")
+
+	entry := results[0]
+	optionsDoc, ok := entry.Lookup("options").DocumentOK()
+	require.True(t, ok, "listCollections entry must have an 'options' document, got %T", entry.Lookup("options"))
+
+	// options.capped must be true.
+	cappedVal, ok := optionsDoc.Lookup("capped").BooleanOK()
+	require.True(t, ok, "options.capped must be a boolean, got type %s", optionsDoc.Lookup("capped").Type)
+	assert.True(t, cappedVal, "options.capped must be true after convertToCapped")
+
+	// options.size must equal the requested capped size.
+	sizeVal := optionsDoc.Lookup("size")
+	var gotSize int64
+	switch sizeVal.Type {
+	case bsontype.Int32:
+		gotSize = int64(sizeVal.Int32())
+	case bsontype.Int64:
+		gotSize = sizeVal.Int64()
+	case bsontype.Double:
+		gotSize = int64(sizeVal.Double())
+	default:
+		t.Fatalf("options.size must be a numeric type, got %s", sizeVal.Type)
+	}
+	assert.Equal(t, cappedSize, gotSize, "options.size must equal the convertToCapped size parameter")
 }
 
 // TestDbStats_ScaleOption verifies that the dbStats scale parameter correctly divides all
