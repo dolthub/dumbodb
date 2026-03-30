@@ -752,6 +752,63 @@ func TestGeo_GeoIntersects_LineString(t *testing.T) {
 	require.NotContains(t, names, "point-on-line", "point on line should not match (MongoDB behavior)")
 }
 
+// TestGeo_DocType_GeometryCollection verifies that documents with a GeometryCollection
+// geo field are matched by $geoIntersects queries (do-f7x8).
+func TestGeo_DocType_GeometryCollection(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	model := mongo.IndexModel{Keys: bson.D{{Key: "geo", Value: "2dsphere"}}}
+	_, err := coll.Indexes().CreateOne(ctx, model)
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{
+			{Key: "_id", Value: "gc1"},
+			{Key: "geo", Value: bson.D{
+				{Key: "type", Value: "GeometryCollection"},
+				{Key: "geometries", Value: bson.A{
+					bson.D{{Key: "type", Value: "Point"}, {Key: "coordinates", Value: bson.A{-74.006, 40.7128}}},
+					bson.D{
+						{Key: "type", Value: "Polygon"},
+						{Key: "coordinates", Value: bson.A{bson.A{
+							bson.A{-75.0, 40.0}, bson.A{-73.0, 40.0},
+							bson.A{-73.0, 41.5}, bson.A{-75.0, 41.5},
+							bson.A{-75.0, 40.0},
+						}}},
+					},
+				}},
+			}},
+		},
+	)
+
+	// Query point lies inside the polygon sub-geometry of the GeometryCollection.
+	cur, err := coll.Find(ctx, bson.D{
+		{Key: "geo", Value: bson.D{
+			{Key: "$geoIntersects", Value: bson.D{
+				{Key: "$geometry", Value: bson.D{
+					{Key: "type", Value: "Point"},
+					{Key: "coordinates", Value: bson.A{-74.0, 40.5}},
+				}},
+			}},
+		}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cur.All(ctx, &results))
+	require.Len(t, results, 1, "GeometryCollection document should be matched by $geoIntersects")
+
+	var id string
+	for _, e := range results[0] {
+		if e.Key == "_id" {
+			id, _ = e.Value.(string)
+		}
+	}
+	require.Equal(t, "gc1", id)
+}
+
 // TestIndex_IndexStats_AfterInsert verifies that $indexStats returns the correct number
 // of index entries after inserting documents (do-x0vc).
 func TestIndex_IndexStats_AfterInsert(t *testing.T) {

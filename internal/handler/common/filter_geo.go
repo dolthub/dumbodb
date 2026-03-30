@@ -600,6 +600,23 @@ func geometryIntersectsGeometry(docGeomVal any, queryGeomDoc *types.Document) (b
 					}
 				}
 				return false, nil
+			case "GeometryCollection":
+				geomsAny, _ := docGeom.Get("geometries")
+				arr, ok := geomsAny.(*types.Array)
+				if !ok {
+					return false, nil
+				}
+				for i := 0; i < arr.Len(); i++ {
+					sub := must.NotFail(arr.Get(i))
+					match, err := geometryIntersectsGeometry(sub, queryGeomDoc)
+					if err != nil {
+						continue
+					}
+					if match {
+						return true, nil
+					}
+				}
+				return false, nil
 			}
 		}
 		// For Point and LineString documents: check exact coordinate match.
