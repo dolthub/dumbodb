@@ -25,8 +25,7 @@ import (
 )
 
 // TestGeo_near_InvalidPointLongitude verifies that $near with $geometry and
-// longitude > 180 returns MongoDB-compatible error "longitude/latitude is out
-// of bounds, lng: X lat: Y". Parity test for do-f6pz.
+// longitude > 180 returns MongoDB-compatible error. Parity test for do-bpmo.
 func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 	t.Parallel()
 
@@ -46,12 +45,11 @@ func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 	cmdErr, ok := err.(mongo.CommandError)
 	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
 	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
-	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "Longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
 }
 
 // TestGeo_near_InvalidPointLatitude verifies that $near with $geometry and
-// latitude > 90 returns MongoDB-compatible error "longitude/latitude is out
-// of bounds, lng: X lat: Y". Parity test for do-f6pz.
+// latitude > 90 returns MongoDB-compatible error. Parity test for do-bpmo.
 func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 	t.Parallel()
 
@@ -71,12 +69,11 @@ func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 	cmdErr, ok := err.(mongo.CommandError)
 	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
 	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
-	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "Longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
 }
 
 // TestGeo_nearSphere_InvalidPoint verifies that $nearSphere with $geometry and
-// an out-of-range longitude returns MongoDB-compatible error
-// "longitude/latitude is out of bounds, lng: X lat: Y". Parity test for do-f6pz.
+// an out-of-range longitude returns MongoDB-compatible error. Parity test for do-bpmo.
 func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
@@ -96,12 +93,12 @@ func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 	cmdErr, ok := err.(mongo.CommandError)
 	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
 	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
-	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "Longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
 }
 
 // TestGeo_geoNear_InvalidPoint verifies that the $geoNear aggregation stage
-// with an out-of-range longitude returns MongoDB-compatible error
-// "longitude/latitude is out of bounds, lng: X lat: Y". Parity test for do-f6pz.
+// with an out-of-range coordinate returns MongoDB-compatible error
+// "invalid argument in geo near query: type". Parity test for do-bpmo.
 func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
@@ -123,7 +120,7 @@ func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 	cmdErr, ok := err.(mongo.CommandError)
 	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
 	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
-	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "invalid argument in geo near query: type", "unexpected error message: %s", cmdErr.Message)
 }
 
 // TestGeo_Legacy_NearSphere_2d verifies that $nearSphere with a legacy 2d index

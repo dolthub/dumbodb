@@ -211,7 +211,7 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 		if g.nearLon < -180 || g.nearLon > 180 || g.nearLat < -90 || g.nearLat > 90 {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				fmt.Sprintf("longitude/latitude is out of bounds, lng: %g lat: %g", g.nearLon, g.nearLat),
+				"invalid argument in geo near query: type",
 				"$geoNear (stage)",
 			)
 		}

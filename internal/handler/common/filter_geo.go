@@ -30,6 +30,34 @@ import (
 // earthRadiusMeters is the mean radius of the Earth in metres (WGS84 approximation).
 const earthRadiusMeters = 6378137.0
 
+// geoFormatBSON formats a float64 like MongoDB's BSON coordinate representation:
+// whole numbers show ".0" suffix (e.g. 200.0 → "200.0"), others as-is (e.g. 40.7 → "40.7").
+func geoFormatBSON(f float64) string {
+	if f == math.Trunc(f) && !math.IsInf(f, 0) {
+		return fmt.Sprintf("%.1f", f)
+	}
+	return fmt.Sprintf("%g", f)
+}
+
+// geoFormatCoord formats a float64 like MongoDB's lng/lat display in geo error messages:
+// whole numbers show as integers (e.g. 200.0 → "200"), others as-is (e.g. 40.7 → "40.7").
+func geoFormatCoord(f float64) string {
+	if f == math.Trunc(f) && !math.IsInf(f, 0) {
+		return fmt.Sprintf("%d", int64(f))
+	}
+	return fmt.Sprintf("%g", f)
+}
+
+// geoNearInvalidPointMsg builds the MongoDB-compatible error message for an out-of-bounds
+// coordinate in a $near / $nearSphere $geometry argument.
+func geoNearInvalidPointMsg(lon, lat float64) string {
+	return fmt.Sprintf(
+		`invalid point in geo near query $geometry argument: { type: "Point", coordinates: [ %s, %s ] }  Longitude/latitude is out of bounds, lng: %s lat: %s`,
+		geoFormatBSON(lon), geoFormatBSON(lat),
+		geoFormatCoord(lon), geoFormatCoord(lat),
+	)
+}
+
 // GeoSortKey holds the parameters needed to sort documents by geo distance.
 type GeoSortKey struct {
 	Field     string  // document field that contains the geometry
@@ -164,7 +192,7 @@ func ValidateGeoFilter(filter *types.Document) error {
 			if lon < -180 || lon > 180 || lat < -90 || lat > 90 {
 				return handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,
-					fmt.Sprintf("longitude/latitude is out of bounds, lng: %g lat: %g", lon, lat),
+					geoNearInvalidPointMsg(lon, lat),
 					opKey,
 				)
 			}
@@ -399,7 +427,7 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 		if lon < -180 || lon > 180 || lat < -90 || lat > 90 {
 			return false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				fmt.Sprintf("longitude/latitude is out of bounds, lng: %g lat: %g", lon, lat),
+				geoNearInvalidPointMsg(lon, lat),
 				"$near",
 			)
 		}
