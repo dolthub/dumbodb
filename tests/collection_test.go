@@ -282,3 +282,59 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 	}
 	assert.True(t, found, "firstBatch must contain an entry for collection %q", coll.Name())
 }
+
+// TestDB_RunCommand_BuildInfo verifies that the buildInfo command returns
+// version strings and fields structurally compatible with MongoDB, including
+// the 'storageEngines' field that was previously missing from the response.
+//
+// Regression for do-0wpo: version fields diverged from MongoDB (DongoFull)
+func TestDB_RunCommand_BuildInfo(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "buildInfo", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "buildInfo must not error")
+
+	m := res.Map()
+
+	// ok must be 1.
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// version must be a non-empty string matching major.minor.patch format.
+	version, ok := m["version"].(string)
+	require.True(t, ok, "version must be a string, got %T", m["version"])
+	assert.Regexp(t, `^\d+\.\d+\.\d+$`, version, "version must match major.minor.patch")
+
+	// versionArray must be an array of 4 int32 elements.
+	versionArray, ok := m["versionArray"].(bson.A)
+	require.True(t, ok, "versionArray must be an array, got %T", m["versionArray"])
+	assert.Len(t, versionArray, 4, "versionArray must have 4 elements")
+	for i, elem := range versionArray {
+		assert.IsType(t, int32(0), elem, "versionArray[%d] must be int32", i)
+	}
+
+	// gitVersion must be a non-empty string.
+	gitVersion, ok := m["gitVersion"].(string)
+	require.True(t, ok, "gitVersion must be a string, got %T", m["gitVersion"])
+	assert.NotEmpty(t, gitVersion, "gitVersion must not be empty")
+
+	// bits must be int32.
+	assert.IsType(t, int32(0), m["bits"], "bits must be int32")
+
+	// debug must be bool.
+	assert.IsType(t, false, m["debug"], "debug must be bool")
+
+	// storageEngines must be present and be a non-empty array.
+	storageEnginesRaw, ok := m["storageEngines"]
+	require.True(t, ok, "storageEngines must be present in buildInfo response")
+	storageEngines, ok := storageEnginesRaw.(bson.A)
+	require.True(t, ok, "storageEngines must be an array, got %T", storageEnginesRaw)
+	assert.NotEmpty(t, storageEngines, "storageEngines must not be empty")
+	for i, engine := range storageEngines {
+		assert.IsType(t, "", engine, "storageEngines[%d] must be a string", i)
+	}
+}

@@ -40,6 +40,7 @@ func (h *Handler) MsgBuildInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			"bits", int32(strconv.IntSize),
 			"debug", version.Get().DebugBuild,
 			"maxBsonObjectSize", int32(h.MaxBsonObjectSizeBytes),
+			"storageEngines", must.NotFail(types.NewArray("wiredTiger")),
 			"ok", float64(1),
 		)),
 	)
