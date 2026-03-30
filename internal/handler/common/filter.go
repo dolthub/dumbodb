@@ -858,8 +858,18 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 					"coordinates", coordArr,
 				))
 				nearDoc := must.NotFail(types.NewDocument("$geometry", ptDoc))
+				// For $nearSphere with legacy 2d-index coordinates, $maxDistance and
+				// $minDistance are specified in radians (not meters). Convert to meters
+				// because filterFieldNear uses haversineMeters for distance comparison.
 				if maxAny, e2 := expr.Get("$maxDistance"); e2 == nil {
-					nearDoc.Set("$maxDistance", maxAny)
+					if maxRad, e3 := toFloat64(maxAny); e3 == nil {
+						nearDoc.Set("$maxDistance", maxRad*earthRadiusMeters)
+					}
+				}
+				if minAny, e2 := expr.Get("$minDistance"); e2 == nil {
+					if minRad, e3 := toFloat64(minAny); e3 == nil {
+						nearDoc.Set("$minDistance", minRad*earthRadiusMeters)
+					}
 				}
 				res, err := filterFieldNear(fieldValue, nearDoc, true)
 				if !res || err != nil {

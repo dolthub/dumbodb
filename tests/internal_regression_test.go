@@ -592,6 +592,41 @@ func TestQuery_geo_nearSphere(t *testing.T) {
 	require.Equal(t, int32(1), gotID)
 }
 
+// TestQuery_geo_nearSphere_legacy2d verifies {field: {$nearSphere: [lon, lat], $maxDistance: radians}}
+// on a plain 2d index (legacy coordinates). $maxDistance is in radians; dongo must convert to metres
+// before applying the haversine filter. Regression for do-twgm.
+func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	// Two points near the origin.  In radians the great-circle radius of ~111 km is ~0.0175.
+	// doc1 is at (0,0) — ~111 km from query point (1,0).
+	// doc2 is at (0.5,0) — ~55 km from query point (1,0).
+	// doc3 is at (10,0) — ~1000 km from query point (1,0), well outside 0.0175 rad.
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("loc", bson.A{float64(0), float64(0)})),
+		d(e("_id", int32(2)), e("loc", bson.A{float64(0.5), float64(0)})),
+		d(e("_id", int32(3)), e("loc", bson.A{float64(10), float64(0)})),
+	)
+
+	ctx := context.Background()
+	// maxDistance = 0.0175 radians ≈ 111 km — should include doc1 and doc2, not doc3.
+	cursor, err := coll.Find(ctx,
+		d(e("loc", d(
+			e("$nearSphere", bson.A{float64(1), float64(0)}),
+			e("$maxDistance", float64(0.0175)),
+		))),
+	)
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 2)
+}
+
 // TestQuery_geo_intersects_point verifies {field: {$geoIntersects: {$geometry: {type:"Point",...}}}}
 // matches documents that contain the exact point.
 func TestQuery_geo_intersects_point(t *testing.T) {
