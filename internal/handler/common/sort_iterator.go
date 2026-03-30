@@ -45,3 +45,30 @@ func SortIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, so
 
 	return res, nil
 }
+
+// SortIteratorWithCollation returns an iterator of sorted documents using
+// collation-aware comparison when caseInsensitive is true.
+// It will be added to the given closer.
+func SortIteratorWithCollation(iter types.DocumentsIterator, closer *iterator.MultiCloser, sort *types.Document, caseInsensitive bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if !caseInsensitive {
+		return SortIterator(iter, closer, sort)
+	}
+
+	if sort.Len() == 0 {
+		return iter, nil
+	}
+
+	docs, err := iterator.ConsumeValues(iter)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = SortDocumentsWithCollation(docs, sort, true); err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	res := iterator.Values(iterator.ForSlice(docs))
+	closer.Add(res)
+
+	return res, nil
+}

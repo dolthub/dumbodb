@@ -315,7 +315,16 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams) (types.DocumentsIterator, error) {
 	closer.Add(iter)
 
-	iter = common.FilterIterator(iter, closer, params.Filter)
+	// When a case-insensitive collation is active, transform string equality
+	// filters into case-insensitive regex matches before applying the filter.
+	filterDoc := params.Filter
+	caseInsensitive := params.ParsedCollation.CaseInsensitive()
+
+	if caseInsensitive {
+		filterDoc = common.TransformFilterForCollation(params.Filter, params.ParsedCollation)
+	}
+
+	iter = common.FilterIterator(iter, closer, filterDoc)
 
 	// Apply min/max index bounds filter if specified (used with hint to constrain index scan range).
 	if params.Min != nil || params.Max != nil {
@@ -324,12 +333,12 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	}
 
 	// If the filter contains $near or $nearSphere, sort results by geo distance.
-	// Otherwise use the regular sort.
+	// Otherwise use the regular sort (with collation-aware comparison if needed).
 	var sortErr error
-	if geoSort := common.FindGeoSortKey(params.Filter); geoSort != nil {
+	if geoSort := common.FindGeoSortKey(filterDoc); geoSort != nil {
 		iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
 	} else {
-		iter, sortErr = common.SortIterator(iter, closer, params.Sort)
+		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, caseInsensitive)
 	}
 
 	if sortErr != nil {

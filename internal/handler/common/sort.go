@@ -91,6 +91,70 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 	return nil
 }
 
+// SortDocumentsWithCollation sorts documents like SortDocuments but uses
+// case-insensitive string comparison when caseInsensitive is true.
+func SortDocumentsWithCollation(docs []*types.Document, sortDoc *types.Document, caseInsensitive bool) error {
+	if !caseInsensitive {
+		return SortDocuments(docs, sortDoc)
+	}
+
+	if sortDoc.Len() == 0 {
+		return nil
+	}
+
+	if sortDoc.Len() > 32 {
+		return lazyerrors.Errorf("maximum sort keys exceeded: %v", sortDoc.Len())
+	}
+
+	sortFuncs := make([]sortFunc, sortDoc.Len())
+
+	for i, sortKey := range sortDoc.Keys() {
+		fields := strings.Split(sortKey, ".")
+
+		switch {
+		case sortKey == "$natural":
+		default:
+			for _, field := range fields {
+				if strings.HasPrefix(field, "$") {
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrFieldPathInvalidName,
+						"FieldPath field names may not start with '$'. Consider using $getField or $setField.",
+						"sort",
+					)
+				}
+			}
+		}
+
+		sortField := must.NotFail(sortDoc.Get(sortKey))
+
+		if isMetaTextScore(sortField) {
+			sortFuncs[i] = func(a, b *types.Document) bool { return false }
+			continue
+		}
+
+		sortType, err := GetSortType(sortKey, sortField)
+		if err != nil {
+			return err
+		}
+
+		sortPath, err := types.NewPathFromString(sortKey)
+		if err != nil {
+			return err
+		}
+
+		sortFuncs[i] = lessFuncCaseInsensitive(sortPath, sortType)
+	}
+
+	if len(sortFuncs) == 0 {
+		return nil
+	}
+
+	sorter := &docsSorter{docs: docs, sorts: sortFuncs}
+	sort.Stable(sorter)
+
+	return nil
+}
+
 // ValidateSortDocument validates sort documents, and return
 // proper error if it's invalid.
 func ValidateSortDocument(sortDoc *types.Document) (*types.Document, error) {

@@ -41,8 +41,11 @@ type FindParams struct {
 	Tailable     bool            `ferretdb:"tailable,opt"`
 	AwaitData    bool            `ferretdb:"awaitData,opt"`
 
-	Collation *types.Document `ferretdb:"collation,ignored"`
+	Collation *types.Document `ferretdb:"collation,opt"`
 	Let       *types.Document `ferretdb:"let,unimplemented"`
+
+	// ParsedCollation is derived from Collation after ExtractParams.
+	ParsedCollation *Collation `ferretdb:"-"`
 
 	AllowDiskUse     bool            `ferretdb:"allowDiskUse,ignored"`
 	ReadConcern      *types.Document `ferretdb:"readConcern,ignored"`
@@ -103,6 +106,8 @@ func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 	if err := handlerparams.ExtractParams(doc, "find", &params, l); err != nil {
 		return nil, err
 	}
+
+	params.ParsedCollation = ParseCollation(params.Collation)
 
 	if params.AwaitData && !params.Tailable {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(

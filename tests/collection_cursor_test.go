@@ -93,10 +93,9 @@ func TestCollection_ListCollectionsIdIndex(t *testing.T) {
 	require.True(t, found, "collection %q not found in listCollections output", coll.Name())
 }
 
-// TestCursor_CollationCaseInsensitive verifies that cursor-level collation is
-// accepted by the find command without returning an error (do-ch3o).
-// Dongo accepts the collation option but does not enforce case-insensitive
-// matching — the exact-case document is still returned.
+// TestCursor_CollationCaseInsensitive verifies that find with a case-insensitive
+// collation (strength ≤ 2) returns both exact-case and differently-cased documents.
+// Parity test for do-7133: collation case-insensitive find returns empty results. (DongoFull)
 func TestCursor_CollationCaseInsensitive(t *testing.T) {
 	env := startDongo(t)
 	ctx := context.Background()
@@ -107,7 +106,7 @@ func TestCursor_CollationCaseInsensitive(t *testing.T) {
 		bson.D{{Key: "name", Value: "alice"}},
 	)
 
-	// Find with case-insensitive collation — must not return an error.
+	// Find with case-insensitive collation — must return both variants.
 	findOpts := options.Find().SetCollation(&options.Collation{
 		Locale:   "en",
 		Strength: 2,
@@ -118,8 +117,8 @@ func TestCursor_CollationCaseInsensitive(t *testing.T) {
 
 	var results []bson.D
 	require.NoError(t, cur.All(ctx, &results))
-	// Exact-case match must always be returned.
-	require.NotEmpty(t, results, "find must return at least the exact-case match")
+	// Both "alice" and "Alice" must be returned with case-insensitive collation.
+	require.Len(t, results, 2, "case-insensitive find must return both case variants")
 }
 
 // TestCursor_CollationSort verifies that a find command with both a collation
