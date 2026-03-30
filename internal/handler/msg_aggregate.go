@@ -410,7 +410,32 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 						continue
 					}
 					var vs aggregations.Stage
-					vs, err = stages.NewStage(vd)
+					switch vd.Command() {
+					case "$lookup", "$graphLookup":
+						fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
+							fromColl, collErr := db.Collection(collName)
+							if collErr != nil {
+								return nil, collErr
+							}
+
+							qRes, qErr := fromColl.Query(ctx, new(backends.QueryParams))
+							if qErr != nil {
+								return nil, qErr
+							}
+
+							defer qRes.Iter.Close()
+
+							return iterator.ConsumeValues(qRes.Iter)
+						}
+
+						if vd.Command() == "$graphLookup" {
+							vs, err = stages.NewGraphLookupStage(vd, fetcher)
+						} else {
+							vs, err = stages.NewLookupStage(vd, fetcher)
+						}
+					default:
+						vs, err = stages.NewStage(vd)
+					}
 					if err != nil {
 						closer.Close()
 						return nil, err
