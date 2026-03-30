@@ -41,7 +41,9 @@ type ExplainParams struct {
 	Aggregate  bool            `ferretdb:"-"`
 	Command    *types.Document `ferretdb:"-"`
 
-	Verbosity string `ferretdb:"verbosity,ignored"`
+	// Verbosity controls what explain returns:
+	// "queryPlanner" (default), "executionStats", or "allPlansExecution".
+	Verbosity string
 
 	ApiVersion           string `ferretdb:"apiVersion,ignored"`
 	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
@@ -58,7 +60,15 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		return nil, lazyerrors.Error(err)
 	}
 
-	Ignored(document, l, "verbosity")
+	var verbosity string
+	if v, _ := document.Get("verbosity"); v != nil {
+		if s, ok := v.(string); ok {
+			verbosity = s
+		}
+	}
+	if verbosity == "" {
+		verbosity = "queryPlanner"
+	}
 
 	var cmd *types.Document
 
@@ -171,5 +181,6 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		StagesDocs: stagesDocs,
 		Aggregate:  cmd.Command() == "aggregate",
 		Command:    cmd,
+		Verbosity:  verbosity,
 	}, nil
 }

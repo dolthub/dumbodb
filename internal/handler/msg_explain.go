@@ -161,13 +161,37 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"explainVersion", "1",
-			"queryPlanner", res.QueryPlanner,
-			"command", cmd,
-			"serverInfo", serverInfo,
-			"ok", float64(1),
-		)),
-	)
+	response := must.NotFail(types.NewDocument(
+		"explainVersion", "1",
+		"queryPlanner", res.QueryPlanner,
+	))
+
+	// Add executionStats for "executionStats" and "allPlansExecution" verbosity.
+	if params.Verbosity == "executionStats" || params.Verbosity == "allPlansExecution" {
+		executionStages := must.NotFail(types.NewDocument(
+			"stage", "COLLSCAN",
+			"nReturned", int32(0),
+			"executionTimeMillisEstimate", int64(0),
+		))
+		executionStats := must.NotFail(types.NewDocument(
+			"executionSuccess", true,
+			"nReturned", int32(0),
+			"executionTimeMillis", int64(0),
+			"totalKeysExamined", int32(0),
+			"totalDocsExamined", int32(0),
+			"executionStages", executionStages,
+		))
+		response.Set("executionStats", executionStats)
+	}
+
+	// Add allPlansExecution for "allPlansExecution" verbosity.
+	if params.Verbosity == "allPlansExecution" {
+		response.Set("allPlansExecution", types.MakeArray(0))
+	}
+
+	response.Set("command", cmd)
+	response.Set("serverInfo", serverInfo)
+	response.Set("ok", float64(1))
+
+	return documentOpMsg(response)
 }
