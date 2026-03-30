@@ -164,7 +164,8 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	if err = db.CollMod(connCtx, &params); err != nil {
 		switch {
-		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):
+		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist),
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist):
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceNotFound, "ns does not exist", "collMod")
 		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
 			msg := fmt.Sprintf("Invalid collection name: %s", collectionName)
