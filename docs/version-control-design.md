@@ -124,7 +124,34 @@ Object store (content-addressed by SHA-1/SHA-256)
 
 ---
 
-## 3. The Dongo Opportunity
+## 3. Core Architectural Principle
+
+**Dongo is a presentation layer. Dolt does the work.**
+
+This is a hard requirement, not a preference. Every version control feature in
+Dongo must be backed directly by an existing Dolt primitive. Dongo's job is to
+translate MongoDB wire protocol commands into Dolt SQL calls or NBS operations,
+then translate the results back into BSON responses. Dongo must not reimplement
+history walking, diff computation, merge logic, or any other algorithm that Dolt
+already provides.
+
+Dolt is purpose-built for this work and is extremely fast at it:
+- Prolly Tree diff is O(changes), not O(data size) — large collections with few
+  changes diff in microseconds.
+- DAG history walk reuses content-addressed chunk caching — repeated traversals
+  of the same subtrees are essentially free.
+- Cell-wise merge is already implemented, tested, and battle-hardened.
+- `dolt_diff_$TABLE`, `dolt_history_$TABLE`, `dolt_blame_$TABLE`,
+  `dolt_commits`, `dolt_branches` are all queryable via SQL today.
+
+When designing a Dongo VC feature, the question is always: **"Which Dolt SQL
+table or stored procedure already does this?"** — not "How do we implement it?"
+If no Dolt primitive exists, escalate to the Dolt team rather than building
+it in Dongo.
+
+---
+
+## 4. The Dongo Opportunity — What to Expose
 
 Dongo sits at a unique intersection: MongoDB wire protocol (document store UX)
 backed by Dolt storage (version-controlled prolly trees). This creates an
@@ -182,10 +209,11 @@ The following Git/Dolt capabilities don't have Dongo equivalents yet:
 
 ---
 
-## 4. Suggested Feature List
+## 5. Suggested Feature List
 
 Features ranked by **impact/feasibility**. For each: the MongoDB wire protocol
-surface, and the Dolt primitive that backs it.
+surface and the **existing Dolt SQL primitive** that backs it. Dongo translates;
+Dolt executes. No VC logic should be reimplemented in Dongo.
 
 ---
 
@@ -291,18 +319,14 @@ db.runCommand({
 // Returns: {history: [{hash: "...", timestamp: ISODate, doc: {...}}, ...], ok: 1}
 ```
 
-**Dolt primitive**: Walk the commit DAG from HEAD to root. For each commit,
-load its collections ADRM, look up the collection's prolly.Map, look up `_id`
-in that map. Emit an entry only when the document changes (or disappears).
-Stop at `limit` changes.
+**Dolt primitive**: `SELECT * FROM dolt_history_$TABLE WHERE _id = ?` — Dolt
+already maintains a full per-row history table for every collection. Dongo reads
+this table via the Dolt SQL engine and translates results to BSON.
 
-**Performance note**: Prolly Trees share content-addressed subtrees. If a commit
-changes an unrelated document, the subtree containing `_id` has the same hash —
-we can skip it. In practice this means `dongoDocHistory` is O(changes to that
-document) not O(all commits), by comparing subtree hashes.
+**Performance note**: Dolt's Prolly Tree history walk is O(changes to that row),
+not O(all commits). This is Dolt's core design — Dongo gets it for free.
 
-**Feasibility**: Medium. Requires DAG traversal but no new storage primitives.
-The key insight (subtree hash comparison) makes it efficient.
+**Feasibility**: High. Pure translation: SQL query → BSON cursor response.
 
 ---
 
@@ -340,12 +364,10 @@ db.runCommand({dongoBlame: 1, collection: "users"})
 // Returns: {blame: [{_id: ..., hash: "...", author: "...", timestamp: ISODate}, ...], ok: 1}
 ```
 
-**Dolt primitive**: Walk the commit DAG. For each document ID, track the most
-recent commit that changed it. Uses the same subtree-hash optimization as
-`dongoDocHistory`.
+**Dolt primitive**: `SELECT * FROM dolt_blame_$TABLE` — Dolt provides a blame
+table per collection out of the box. Dongo reads it via SQL and translates to BSON.
 
-**Feasibility**: Medium-high. `dongoDocHistory` is the per-document version;
-blame is the same logic applied across all documents in a collection.
+**Feasibility**: High. Pure translation: SQL query → BSON cursor response.
 
 ---
 
@@ -498,15 +520,15 @@ the RTVL from the specified commit instead of the working set.
 
 ### Conflict Model
 
-Dongo's current merge doesn't track conflicts — it presumably last-writer-wins or
-errors. A proper conflict model needs:
-1. A new chunk type (or a per-db collection `_dongo_conflicts`) to store conflict triples.
-2. `dongoMerge` to populate it on conflict.
-3. `dongoConflicts` to read it.
-4. `dongoResolveConflict` to resolve and complete the merge.
+Dolt already tracks merge conflicts in `dolt_conflicts_$TABLE` (base/ours/theirs
+triples per conflicting row) and exposes resolution via `CALL DOLT_CONFLICTS_RESOLVE()`.
+Dongo's work is purely presentation:
+1. `dongoConflicts` → `SELECT * FROM dolt_conflicts_$TABLE` → BSON response
+2. `dongoResolveConflict` → `CALL DOLT_CONFLICTS_RESOLVE(table, 'ours'|'theirs')` → ok response
+3. `dongoMerge` already calls `CALL DOLT_MERGE()` — it just needs to detect and
+   surface conflict state rather than silently failing.
 
-This is the most complex feature listed, but it's also required for safe multi-branch
-workflows in production.
+No new storage. No new conflict logic. Dolt owns it.
 
 ### DoltHub Integration
 
