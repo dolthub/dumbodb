@@ -217,3 +217,68 @@ func TestExplain_Distinct(t *testing.T) {
 
 	assertExplainResponse(t, res, "queryPlanner")
 }
+
+// TestDB_RunCommand_ListCollections verifies that listCollections issued via
+// RunCommand returns a proper cursor response document — not a raw array —
+// matching the MongoDB wire protocol:
+//
+//	{cursor: {id: 0, ns: "<db>.$cmd.listCollections", firstBatch: [...]}, ok: 1}
+//
+// Regression for do-3n5p: the cursor wrapper and/or the ns field were missing
+// or incorrectly formatted when listCollections was invoked via RunCommand. (DongoFull)
+func TestDB_RunCommand_ListCollections(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert a document so the collection exists.
+	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
+
+	dbName := coll.Database().Name()
+	expectedNS := dbName + ".$cmd.listCollections"
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "listCollections via RunCommand must not error")
+
+	m := res.Map()
+
+	// Top-level ok must be 1.
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// cursor must be present and be a document.
+	cursorRaw, ok := m["cursor"]
+	require.True(t, ok, "response must contain a 'cursor' field")
+	cursor, ok := cursorRaw.(bson.D)
+	require.True(t, ok, "cursor must be a document (bson.D), got %T", cursorRaw)
+
+	cm := cursor.Map()
+
+	// cursor.id must be 0 (no server-side cursor for listCollections).
+	assert.EqualValues(t, int64(0), cm["id"], "cursor.id must be 0")
+
+	// cursor.ns must match <db>.$cmd.listCollections.
+	assert.Equal(t, expectedNS, cm["ns"], "cursor.ns must be %q", expectedNS)
+
+	// cursor.firstBatch must be present and contain the collection we created.
+	firstBatchRaw, ok := cm["firstBatch"]
+	require.True(t, ok, "cursor must contain 'firstBatch'")
+	firstBatch, ok := firstBatchRaw.(bson.A)
+	require.True(t, ok, "cursor.firstBatch must be an array (bson.A), got %T", firstBatchRaw)
+
+	// Find the collection entry by name.
+	found := false
+	for _, item := range firstBatch {
+		entry, ok := item.(bson.D)
+		if !ok {
+			continue
+		}
+		if entry.Map()["name"] == coll.Name() {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "firstBatch must contain an entry for collection %q", coll.Name())
+}
