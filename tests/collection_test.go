@@ -338,3 +338,67 @@ func TestDB_RunCommand_BuildInfo(t *testing.T) {
 		assert.IsType(t, "", engine, "storageEngines[%d] must be a string", i)
 	}
 }
+
+// TestDB_RunCommand_Validate verifies that the validate command issued via RunCommand
+// returns a collection integrity report matching MongoDB's response format:
+// valid, nrecords, nIndexes, keysPerIndex, repaired, and related arrays.
+//
+// Parity test for do-h7a9: validate command options and RunCommand response. (DongoFull)
+func TestDB_RunCommand_Validate(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert two documents so nrecords is non-zero.
+	insertDocs(t, coll,
+		bson.D{{Key: "x", Value: int32(1)}},
+		bson.D{{Key: "x", Value: int32(2)}},
+	)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "validate", Value: coll.Name()},
+	}).Decode(&res)
+	require.NoError(t, err, "validate via RunCommand must not error")
+
+	m := res.Map()
+
+	// ok must be 1.
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// valid must be true for a healthy collection.
+	assert.Equal(t, true, m["valid"], "valid must be true")
+
+	// ns must match the collection namespace.
+	ns, ok := m["ns"].(string)
+	require.True(t, ok, "ns must be a string, got %T", m["ns"])
+	assert.Equal(t, coll.Database().Name()+"."+coll.Name(), ns, "ns must be db.collection")
+
+	// nrecords must be a positive int32.
+	nrecords, ok := m["nrecords"].(int32)
+	require.True(t, ok, "nrecords must be int32, got %T", m["nrecords"])
+	assert.EqualValues(t, 2, nrecords, "nrecords must reflect inserted document count")
+
+	// nIndexes must be at least 1 (the _id index).
+	nIndexes, ok := m["nIndexes"].(int32)
+	require.True(t, ok, "nIndexes must be int32, got %T", m["nIndexes"])
+	assert.GreaterOrEqual(t, nIndexes, int32(1), "nIndexes must be >= 1")
+
+	// keysPerIndex must be a document with at least one entry.
+	keysPerIndex, ok := m["keysPerIndex"].(bson.D)
+	require.True(t, ok, "keysPerIndex must be a document, got %T", m["keysPerIndex"])
+	assert.NotEmpty(t, keysPerIndex, "keysPerIndex must have at least one entry")
+
+	// indexDetails must be a document.
+	_, ok = m["indexDetails"].(bson.D)
+	assert.True(t, ok, "indexDetails must be a document, got %T", m["indexDetails"])
+
+	// repaired must be false (no repairs needed for a fresh collection).
+	assert.Equal(t, false, m["repaired"], "repaired must be false for a healthy collection")
+
+	// warnings, errors, extraIndexEntries, missingIndexEntries, corruptRecords must be arrays.
+	for _, field := range []string{"warnings", "errors", "extraIndexEntries", "missingIndexEntries", "corruptRecords"} {
+		_, ok := m[field].(bson.A)
+		assert.True(t, ok, "%s must be an array, got %T", field, m[field])
+	}
+}

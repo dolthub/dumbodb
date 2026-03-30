@@ -184,3 +184,96 @@ func TestAutoCompact_Enable_Disable_FreeSpaceTargetMB(t *testing.T) {
 		})
 	}
 }
+
+// assertValidateResponse checks the structural correctness of a validate command response,
+// verifying that all MongoDB-required fields are present with appropriate types.
+func assertValidateResponse(t *testing.T, res bson.D, coll *mongo.Collection) {
+	t.Helper()
+
+	m := res.Map()
+
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+	assert.Equal(t, true, m["valid"], "valid must be true for a healthy collection")
+
+	ns, ok := m["ns"].(string)
+	require.True(t, ok, "ns must be a string, got %T", m["ns"])
+	assert.Equal(t, coll.Database().Name()+"."+coll.Name(), ns, "ns must be db.collection")
+
+	_, ok = m["nrecords"].(int32)
+	assert.True(t, ok, "nrecords must be int32, got %T", m["nrecords"])
+
+	nIndexes, ok := m["nIndexes"].(int32)
+	require.True(t, ok, "nIndexes must be int32, got %T", m["nIndexes"])
+	assert.GreaterOrEqual(t, nIndexes, int32(1), "nIndexes must be >= 1")
+
+	_, ok = m["keysPerIndex"].(bson.D)
+	assert.True(t, ok, "keysPerIndex must be a document, got %T", m["keysPerIndex"])
+
+	_, ok = m["indexDetails"].(bson.D)
+	assert.True(t, ok, "indexDetails must be a document, got %T", m["indexDetails"])
+
+	for _, field := range []string{"warnings", "errors", "extraIndexEntries", "missingIndexEntries", "corruptRecords"} {
+		_, ok := m[field].(bson.A)
+		assert.True(t, ok, "%s must be an array, got %T", field, m[field])
+	}
+}
+
+// TestValidate_Full verifies that validate with full:true performs a deeper collection
+// check and returns a response document structurally compatible with MongoDB's format.
+//
+// Parity test for do-h7a9: validate command options diverge from MongoDB. (DongoFull)
+func TestValidate_Full(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "a", Value: int32(1)}},
+		bson.D{{Key: "a", Value: int32(2)}},
+	)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "validate", Value: coll.Name()},
+		{Key: "full", Value: true},
+	}).Decode(&res)
+	require.NoError(t, err, "validate with full:true must not error")
+
+	assertValidateResponse(t, res, coll)
+
+	// repaired must be false — full:true is a read-only deep scan, not a repair.
+	m := res.Map()
+	assert.Equal(t, false, m["repaired"], "full:true must not set repaired:true")
+}
+
+// TestValidate_Repair verifies that validate with repair:true attempts to fix
+// inconsistencies and returns repaired:false for a collection that needs no repairs.
+//
+// Parity test for do-h7a9: validate command options diverge from MongoDB. (DongoFull)
+func TestValidate_Repair(t *testing.T) {
+	// Do not run in parallel — repair acquires exclusive collection locks.
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "b", Value: int32(1)}},
+		bson.D{{Key: "b", Value: int32(2)}},
+	)
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "validate", Value: coll.Name()},
+		{Key: "repair", Value: true},
+	}).Decode(&res)
+	require.NoError(t, err, "validate with repair:true must not error")
+
+	assertValidateResponse(t, res, coll)
+
+	// A fresh, consistent collection requires no repairs — repaired must be false.
+	m := res.Map()
+	assert.Equal(t, false, m["repaired"], "repaired must be false when no repairs were needed")
+}
