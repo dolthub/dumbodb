@@ -736,3 +736,33 @@ func TestExpr_dateTrunc(t *testing.T) {
 	byHour := results[0].Map()["byHour"].(primitive.DateTime).Time().UTC()
 	assert.Equal(t, time.Date(2024, 3, 15, 14, 0, 0, 0, time.UTC), byHour)
 }
+
+// TestExpr_mod_nan_divisor verifies that $mod with a NaN divisor returns NaN
+// rather than an error (matching MongoDB's IEEE 754 behavior). (DongoFull)
+func TestExpr_mod_nan_divisor(t *testing.T) {
+	t.Parallel()
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("v", float64(10))),
+	)
+
+	// $mod with a literal NaN divisor: {$mod: [10, NaN]} → NaN (no error)
+	cursor, err := coll.Aggregate(ctx, bson.A{
+		bson.D{{"$project", bson.D{
+			{"_id", false},
+			{"r", bson.D{{"$mod", bson.A{float64(10), math.NaN()}}}},
+		}}},
+	})
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+
+	r, ok := results[0].Map()["r"].(float64)
+	require.True(t, ok, "expected float64 result, got %T", results[0].Map()["r"])
+	assert.True(t, math.IsNaN(r), "expected NaN for $mod with NaN divisor, got %v", r)
+}

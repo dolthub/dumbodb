@@ -1607,3 +1607,285 @@ func TestAggStage_graphLookup_TraverseHierarchyFromLeaf(t *testing.T) {
 		}
 	}
 }
+
+// TestAggComplex_graphLookup_bfsOrder verifies that $graphLookup returns results in
+// MongoDB's defined order: depth-0 results first, then remaining depth levels in
+// reverse (deepest-first) order.
+//
+// Graph structure (org-chart with two branches):
+//
+//	root → {A(_id=1), B(_id=2)}           depth 0
+//	A    → {C(_id=3)}                     depth 1
+//	B    → {D(_id=4)}                     depth 1
+//	C    → {E(_id=5)}                     depth 2
+//
+// Expected BFS visit order: A(d0), B(d0), C(d1), D(d1), E(d2)
+// MongoDB output order: [d0...] then [dN, dN-1, ..., d1] ⟹ [A, B, E, C, D]
+func TestAggComplex_graphLookup_bfsOrder(t *testing.T) {
+	t.Parallel()
+
+	employees := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "name", "A", "reportsTo", "root")),
+		must.NotFail(types.NewDocument("_id", int32(2), "name", "B", "reportsTo", "root")),
+		must.NotFail(types.NewDocument("_id", int32(3), "name", "C", "reportsTo", "A")),
+		must.NotFail(types.NewDocument("_id", int32(4), "name", "D", "reportsTo", "B")),
+		must.NotFail(types.NewDocument("_id", int32(5), "name", "E", "reportsTo", "C")),
+	}
+
+	fetcher := makeFetcher(map[string][]*types.Document{"employees": employees})
+
+	spec := must.NotFail(types.NewDocument(
+		"from", "employees",
+		"startWith", "root",
+		"connectFromField", "name",
+		"connectToField", "reportsTo",
+		"as", "tree",
+	))
+	stageDoc := must.NotFail(types.NewDocument("$graphLookup", spec))
+
+	s, err := stages.NewGraphLookupStage(stageDoc, fetcher)
+	if err != nil {
+		t.Fatalf("NewGraphLookupStage: %v", err)
+	}
+
+	// Input: the root node (not in the employees collection)
+	inputDoc := must.NotFail(types.NewDocument("_id", int32(0), "name", "root"))
+	inputIter := iterator.Values(iterator.ForSlice([]*types.Document{inputDoc}))
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	outIter, err := s.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, outIter, closer)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 output doc, got %d", len(results))
+	}
+
+	treeVal, err := results[0].Get("tree")
+	if err != nil {
+		t.Fatalf("missing tree field: %v", err)
+	}
+
+	tree, ok := treeVal.(*types.Array)
+	if !ok {
+		t.Fatalf("tree not an array: %T", treeVal)
+	}
+
+	if tree.Len() != 5 {
+		t.Fatalf("expected 5 tree entries (A, B, C, D, E), got %d", tree.Len())
+	}
+
+	// MongoDB output ordering: depth-0 first, then remaining levels deepest-first.
+	//   L0 = [A, B]    → first
+	//   L1 = [C, D]    → last (after deeper levels)
+	//   L2 = [E]       → second (deepest non-zero level)
+	// Final: [A, B, E, C, D]
+	wantNames := []string{"A", "B", "E", "C", "D"}
+
+	for i := 0; i < tree.Len(); i++ {
+		v, _ := tree.Get(i)
+		entry, ok := v.(*types.Document)
+		if !ok {
+			t.Errorf("tree[%d] not a document: %T", i, v)
+			continue
+		}
+
+		nameVal, err := entry.Get("name")
+		if err != nil {
+			t.Errorf("tree[%d] missing name: %v", i, err)
+			continue
+		}
+
+		if nameVal != wantNames[i] {
+			t.Errorf("tree[%d].name = %v, want %v (BFS level order)", i, nameVal, wantNames[i])
+		}
+	}
+}
+
+// TestAgg_sortByCount_after_unwind verifies that $unwind followed by $sortByCount
+// correctly counts unwound array elements and sorts the results by count descending,
+// with _id descending as the tiebreaker (matching MongoDB spec).
+func TestAgg_sortByCount_after_unwind(t *testing.T) {
+	t.Parallel()
+
+	// Three docs with tag arrays. Tag frequencies: x=2, y=2, z=1.
+	// After $unwind: x,y from doc1; x from doc2; y,z from doc3 → [x,y,x,y,z]
+	doc1Tags := types.MakeArray(2)
+	doc1Tags.Append("x")
+	doc1Tags.Append("y")
+
+	doc2Tags := types.MakeArray(1)
+	doc2Tags.Append("x")
+
+	doc3Tags := types.MakeArray(2)
+	doc3Tags.Append("y")
+	doc3Tags.Append("z")
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tags", doc1Tags)),
+		must.NotFail(types.NewDocument("_id", int32(2), "tags", doc2Tags)),
+		must.NotFail(types.NewDocument("_id", int32(3), "tags", doc3Tags)),
+	}
+
+	unwindDoc := must.NotFail(types.NewDocument("$unwind", "$tags"))
+	unwindStage, err := stages.NewStage(unwindDoc)
+	if err != nil {
+		t.Fatalf("NewStage($unwind): %v", err)
+	}
+
+	sortByCountDoc := must.NotFail(types.NewDocument("$sortByCount", "$tags"))
+	sortByCountStage, err := stages.NewStage(sortByCountDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sortByCount): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := unwindStage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("$unwind Process: %v", err)
+	}
+
+	out, err = sortByCountStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$sortByCount Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	// "x" count=2, "y" count=2, "z" count=1.
+	// Tie at count=2: sorted by _id descending → "y" > "x".
+	// Expected: [{_id:"y",count:2}, {_id:"x",count:2}, {_id:"z",count:1}]
+	if len(results) != 3 {
+		t.Fatalf("expected 3 result docs, got %d", len(results))
+	}
+
+	type entry struct{ id string; count int32 }
+	want := []entry{{"y", 2}, {"x", 2}, {"z", 1}}
+
+	for i, w := range want {
+		idVal, err := results[i].Get("_id")
+		if err != nil {
+			t.Errorf("results[%d] missing _id: %v", i, err)
+			continue
+		}
+
+		countVal, err := results[i].Get("count")
+		if err != nil {
+			t.Errorf("results[%d] missing count: %v", i, err)
+			continue
+		}
+
+		if idVal != w.id {
+			t.Errorf("results[%d]._id = %v, want %q", i, idVal, w.id)
+		}
+
+		count, ok := countVal.(int32)
+		if !ok {
+			t.Errorf("results[%d].count is %T, want int32", i, countVal)
+			continue
+		}
+
+		if count != w.count {
+			t.Errorf("results[%d].count = %d, want %d", i, count, w.count)
+		}
+	}
+}
+
+// TestAggPipeline_sort_TieBreakingAfterGroup verifies that $sort with multiple keys
+// correctly breaks ties using secondary sort fields after a $group stage.
+//
+// Four groups (A, B, C, D) have counts of 3, 3, 2, 2 respectively.
+// Sorting by {count: -1, _id: 1} should produce: A(3), B(3), C(2), D(2) —
+// ties in count are broken by _id ascending.
+func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tag", "A")),
+		must.NotFail(types.NewDocument("_id", int32(2), "tag", "A")),
+		must.NotFail(types.NewDocument("_id", int32(3), "tag", "A")),
+		must.NotFail(types.NewDocument("_id", int32(4), "tag", "B")),
+		must.NotFail(types.NewDocument("_id", int32(5), "tag", "B")),
+		must.NotFail(types.NewDocument("_id", int32(6), "tag", "B")),
+		must.NotFail(types.NewDocument("_id", int32(7), "tag", "C")),
+		must.NotFail(types.NewDocument("_id", int32(8), "tag", "C")),
+		must.NotFail(types.NewDocument("_id", int32(9), "tag", "D")),
+		must.NotFail(types.NewDocument("_id", int32(10), "tag", "D")),
+	}
+
+	// $group: {_id: "$tag", count: {$sum: 1}}
+	groupSpec := must.NotFail(types.NewDocument(
+		"_id", "$tag",
+		"count", must.NotFail(types.NewDocument("$sum", int32(1))),
+	))
+	groupDoc := must.NotFail(types.NewDocument("$group", groupSpec))
+	groupStage, err := stages.NewStage(groupDoc)
+	if err != nil {
+		t.Fatalf("NewStage($group): %v", err)
+	}
+
+	// $sort: {count: -1, _id: 1}  — primary by count desc, tiebreak by _id asc
+	sortSpec := must.NotFail(types.NewDocument("count", int32(-1), "_id", int32(1)))
+	sortDoc := must.NotFail(types.NewDocument("$sort", sortSpec))
+	sortStage, err := stages.NewStage(sortDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sort): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := groupStage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("$group Process: %v", err)
+	}
+
+	out, err = sortStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$sort Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 groups, got %d", len(results))
+	}
+
+	getID := func(doc *types.Document) string {
+		v, _ := doc.Get("_id")
+		s, _ := v.(string)
+		return s
+	}
+
+	getCount := func(doc *types.Document) int32 {
+		v, _ := doc.Get("count")
+		n, _ := v.(int32)
+		return n
+	}
+
+	// Expected order: A(3), B(3), C(2), D(2)
+	// A and B both have count=3 — sorted by _id asc → A before B.
+	// C and D both have count=2 — sorted by _id asc → C before D.
+	type want struct{ id string; count int32 }
+	wantOrder := []want{{"A", 3}, {"B", 3}, {"C", 2}, {"D", 2}}
+
+	for i, w := range wantOrder {
+		if id := getID(results[i]); id != w.id {
+			t.Errorf("results[%d]._id = %q, want %q", i, id, w.id)
+		}
+
+		if cnt := getCount(results[i]); cnt != w.count {
+			t.Errorf("results[%d].count = %d, want %d", i, cnt, w.count)
+		}
+	}
+}
