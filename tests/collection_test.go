@@ -402,3 +402,74 @@ func TestDB_RunCommand_Validate(t *testing.T) {
 		assert.True(t, ok, "%s must be an array, got %T", field, m[field])
 	}
 }
+
+// TestDB_ListDatabases verifies that the listDatabases command returns a
+// response structure compatible with MongoDB, including the admin system
+// database and correct field types for each database entry.
+//
+// Regression for do-27zw: listDatabases result structure diverges from MongoDB (DongoFull)
+func TestDB_ListDatabases(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert a document so the user database (testdb) exists and is non-empty.
+	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
+
+	dbName := coll.Database().Name()
+
+	// Issue listDatabases via RunCommand against the admin database (the
+	// canonical target for admin commands in MongoDB).
+	var res bson.D
+	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "listDatabases", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "listDatabases via RunCommand must not error")
+
+	m := res.Map()
+
+	// Top-level ok must be 1 (float64).
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	// totalSize and totalSizeMb must be present and int64.
+	totalSizeRaw, ok := m["totalSize"]
+	require.True(t, ok, "response must contain 'totalSize'")
+	assert.IsType(t, int64(0), totalSizeRaw, "totalSize must be int64")
+
+	totalSizeMbRaw, ok := m["totalSizeMb"]
+	require.True(t, ok, "response must contain 'totalSizeMb'")
+	assert.IsType(t, int64(0), totalSizeMbRaw, "totalSizeMb must be int64")
+
+	// databases must be a non-empty array.
+	databasesRaw, ok := m["databases"]
+	require.True(t, ok, "response must contain 'databases'")
+	databases, ok := databasesRaw.(bson.A)
+	require.True(t, ok, "databases must be an array (bson.A), got %T", databasesRaw)
+	assert.NotEmpty(t, databases, "databases array must not be empty")
+
+	// Collect database names and verify each entry's field types.
+	dbNames := make(map[string]bool)
+	for i, item := range databases {
+		entry, ok := item.(bson.D)
+		require.True(t, ok, "databases[%d] must be a document (bson.D), got %T", i, item)
+
+		em := entry.Map()
+
+		name, ok := em["name"].(string)
+		require.True(t, ok, "databases[%d].name must be a string, got %T", i, em["name"])
+		dbNames[name] = true
+
+		assert.IsType(t, int64(0), em["sizeOnDisk"],
+			"databases[%d].sizeOnDisk (%q) must be int64, got %T", i, name, em["sizeOnDisk"])
+		assert.IsType(t, false, em["empty"],
+			"databases[%d].empty (%q) must be bool, got %T", i, name, em["empty"])
+	}
+
+	// The user database must appear.
+	assert.True(t, dbNames[dbName], "databases must include user database %q", dbName)
+
+	// The admin system database must appear, matching MongoDB's behavior where
+	// admin is always present in listDatabases regardless of whether it has
+	// user collections.
+	assert.True(t, dbNames["admin"], "databases must include the 'admin' system database")
+}

@@ -227,22 +227,29 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 
 		dbName := entry.Name()
 
-		// Filter empty databases (no collections).
-		state, err := b.getOrOpenDB(ctx, dbName, false)
-		if err != nil {
-			continue
-		}
+		// System databases are always included, matching MongoDB's behavior where
+		// admin, config, and local always appear in listDatabases regardless of
+		// whether they contain user collections.
+		isSystemDB := dbName == "admin" || dbName == "config" || dbName == "local"
 
-		if state == nil {
-			continue
-		}
+		if !isSystemDB {
+			// Filter empty user databases (no collections).
+			state, err := b.getOrOpenDB(ctx, dbName, false)
+			if err != nil {
+				continue
+			}
 
-		state.mu.RLock()
-		count, _ := state.am.Count()
-		state.mu.RUnlock()
+			if state == nil {
+				continue
+			}
 
-		if count == 0 {
-			continue
+			state.mu.RLock()
+			count, _ := state.am.Count()
+			state.mu.RUnlock()
+
+			if count == 0 {
+				continue
+			}
 		}
 
 		if params != nil && params.Name != "" && dbName != params.Name {
