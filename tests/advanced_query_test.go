@@ -125,6 +125,37 @@ func TestAdvancedQuery_JsonSchema_NoMatch(t *testing.T) {
 	assert.Empty(t, results)
 }
 
+// TestAdvancedQuery_JsonSchema_DuplicateRequired verifies that $jsonSchema with duplicate
+// 'required' keys applies last-value-wins semantics (BSON key override). (DongoFull)
+func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("x", int32(1))),
+		d(e("_id", int32(2)), e("x", int32(2))),
+	)
+
+	ctx := context.Background()
+	// bson.D allows duplicate keys. The first 'required' lists "x" (present in both docs),
+	// but the second 'required' lists a nonexistent field. MongoDB applies last-value-wins
+	// for duplicate BSON keys, so only the second 'required' is effective and no docs match.
+	cursor, err := coll.Find(ctx,
+		bson.D{{Key: "$jsonSchema", Value: bson.D{
+			{Key: "required", Value: bson.A{"x"}},
+			{Key: "required", Value: bson.A{"nonexistent_field_xyz"}},
+		}}},
+	)
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	assert.Empty(t, results)
+}
+
 // TestAdvancedQuery_JsonSchema_OneOf verifies $jsonSchema oneOf constraint. (DongoFull)
 func TestAdvancedQuery_JsonSchema_OneOf(t *testing.T) {
 	t.Parallel()
