@@ -1799,32 +1799,27 @@ func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	}
 }
 
-// TestAggPipeline_sort_TieBreakingAfterGroup verifies that $sort with multiple keys
-// correctly breaks ties using secondary sort fields after a $group stage.
+// TestAggComplex_matchUnwindGroupSort_SameTotalQty verifies that $sort is stable when
+// ALL groups have the same sort key value. In this case the sort must preserve the
+// insertion order produced by the preceding $group stage, which itself preserves the
+// order in which groups were first seen.
 //
-// Four groups (A, B, C, D) have counts of 3, 3, 2, 2 respectively.
-// Sorting by {count: -1, _id: 1} should produce: A(3), B(3), C(2), D(2) —
-// ties in count are broken by _id ascending.
-func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
+// Three docs: C, B, A — each with qty=5. After $group by category (sum of qty),
+// all groups have totalQty=5. After $sort by totalQty desc (fully tied), stable sort
+// must preserve group-creation order: C, B, A.
+func TestAggComplex_matchUnwindGroupSort_SameTotalQty(t *testing.T) {
 	t.Parallel()
 
 	docs := []*types.Document{
-		must.NotFail(types.NewDocument("_id", int32(1), "tag", "A")),
-		must.NotFail(types.NewDocument("_id", int32(2), "tag", "A")),
-		must.NotFail(types.NewDocument("_id", int32(3), "tag", "A")),
-		must.NotFail(types.NewDocument("_id", int32(4), "tag", "B")),
-		must.NotFail(types.NewDocument("_id", int32(5), "tag", "B")),
-		must.NotFail(types.NewDocument("_id", int32(6), "tag", "B")),
-		must.NotFail(types.NewDocument("_id", int32(7), "tag", "C")),
-		must.NotFail(types.NewDocument("_id", int32(8), "tag", "C")),
-		must.NotFail(types.NewDocument("_id", int32(9), "tag", "D")),
-		must.NotFail(types.NewDocument("_id", int32(10), "tag", "D")),
+		must.NotFail(types.NewDocument("_id", int32(1), "category", "C", "qty", int32(5))),
+		must.NotFail(types.NewDocument("_id", int32(2), "category", "B", "qty", int32(5))),
+		must.NotFail(types.NewDocument("_id", int32(3), "category", "A", "qty", int32(5))),
 	}
 
-	// $group: {_id: "$tag", count: {$sum: 1}}
+	// $group: {_id: "$category", totalQty: {$sum: "$qty"}}
 	groupSpec := must.NotFail(types.NewDocument(
-		"_id", "$tag",
-		"count", must.NotFail(types.NewDocument("$sum", int32(1))),
+		"_id", "$category",
+		"totalQty", must.NotFail(types.NewDocument("$sum", "$qty")),
 	))
 	groupDoc := must.NotFail(types.NewDocument("$group", groupSpec))
 	groupStage, err := stages.NewStage(groupDoc)
@@ -1832,9 +1827,8 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 		t.Fatalf("NewStage($group): %v", err)
 	}
 
-	// $sort: {count: -1, _id: 1}  — primary by count desc, tiebreak by _id asc
-	sortSpec := must.NotFail(types.NewDocument("count", int32(-1), "_id", int32(1)))
-	sortDoc := must.NotFail(types.NewDocument("$sort", sortSpec))
+	// $sort: {totalQty: -1}
+	sortDoc := must.NotFail(types.NewDocument("$sort", must.NotFail(types.NewDocument("totalQty", int32(-1)))))
 	sortStage, err := stages.NewStage(sortDoc)
 	if err != nil {
 		t.Fatalf("NewStage($sort): %v", err)
@@ -1857,8 +1851,8 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 
 	results := collectResults(t, out, closer)
 
-	if len(results) != 4 {
-		t.Fatalf("expected 4 groups, got %d", len(results))
+	if len(results) != 3 {
+		t.Fatalf("expected 3 output docs, got %d", len(results))
 	}
 
 	getID := func(doc *types.Document) string {
@@ -1867,25 +1861,11 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 		return s
 	}
 
-	getCount := func(doc *types.Document) int32 {
-		v, _ := doc.Get("count")
-		n, _ := v.(int32)
-		return n
-	}
-
-	// Expected order: A(3), B(3), C(2), D(2)
-	// A and B both have count=3 — sorted by _id asc → A before B.
-	// C and D both have count=2 — sorted by _id asc → C before D.
-	type want struct{ id string; count int32 }
-	wantOrder := []want{{"A", 3}, {"B", 3}, {"C", 2}, {"D", 2}}
-
-	for i, w := range wantOrder {
-		if id := getID(results[i]); id != w.id {
-			t.Errorf("results[%d]._id = %q, want %q", i, id, w.id)
-		}
-
-		if cnt := getCount(results[i]); cnt != w.count {
-			t.Errorf("results[%d].count = %d, want %d", i, cnt, w.count)
+	// All three have totalQty=5. Stable sort must preserve first-seen order: C, B, A.
+	wantIDs := []string{"C", "B", "A"}
+	for i, want := range wantIDs {
+		if id := getID(results[i]); id != want {
+			t.Errorf("results[%d]: expected _id=%s (stable tie-break), got %q", i, want, id)
 		}
 	}
 }

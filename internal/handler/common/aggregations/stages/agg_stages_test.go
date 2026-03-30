@@ -1,0 +1,241 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package stages_test
+
+// Tests for multi-stage aggregation pipeline behaviour — $group, $unwind, $sort
+// ordering and tie-breaking.
+
+import (
+	"context"
+	"testing"
+
+	"github.com/dolthub/dongo/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/dongo/internal/util/must"
+)
+
+// TestAggPipeline_sort_TieBreakingAfterGroup verifies that $sort with multiple keys
+// correctly breaks ties using secondary sort fields after a $group stage.
+//
+// Four groups (A, B, C, D) have counts of 3, 3, 2, 2 respectively.
+// Sorting by {count: -1, _id: 1} should produce: A(3), B(3), C(2), D(2) —
+// ties in count are broken by _id ascending.
+func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tag", "A")),
+		must.NotFail(types.NewDocument("_id", int32(2), "tag", "A")),
+		must.NotFail(types.NewDocument("_id", int32(3), "tag", "A")),
+		must.NotFail(types.NewDocument("_id", int32(4), "tag", "B")),
+		must.NotFail(types.NewDocument("_id", int32(5), "tag", "B")),
+		must.NotFail(types.NewDocument("_id", int32(6), "tag", "B")),
+		must.NotFail(types.NewDocument("_id", int32(7), "tag", "C")),
+		must.NotFail(types.NewDocument("_id", int32(8), "tag", "C")),
+		must.NotFail(types.NewDocument("_id", int32(9), "tag", "D")),
+		must.NotFail(types.NewDocument("_id", int32(10), "tag", "D")),
+	}
+
+	// $group: {_id: "$tag", count: {$sum: 1}}
+	groupSpec := must.NotFail(types.NewDocument(
+		"_id", "$tag",
+		"count", must.NotFail(types.NewDocument("$sum", int32(1))),
+	))
+	groupDoc := must.NotFail(types.NewDocument("$group", groupSpec))
+	groupStage, err := stages.NewStage(groupDoc)
+	if err != nil {
+		t.Fatalf("NewStage($group): %v", err)
+	}
+
+	// $sort: {count: -1, _id: 1}  — primary by count desc, tiebreak by _id asc
+	sortSpec := must.NotFail(types.NewDocument("count", int32(-1), "_id", int32(1)))
+	sortDoc := must.NotFail(types.NewDocument("$sort", sortSpec))
+	sortStage, err := stages.NewStage(sortDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sort): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := groupStage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("$group Process: %v", err)
+	}
+
+	out, err = sortStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$sort Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 groups, got %d", len(results))
+	}
+
+	getID := func(doc *types.Document) string {
+		v, _ := doc.Get("_id")
+		s, _ := v.(string)
+		return s
+	}
+
+	getCount := func(doc *types.Document) int32 {
+		v, _ := doc.Get("count")
+		n, _ := v.(int32)
+		return n
+	}
+
+	// Expected order: A(3), B(3), C(2), D(2)
+	// A and B both have count=3 — sorted by _id asc → A before B.
+	// C and D both have count=2 — sorted by _id asc → C before D.
+	type want struct {
+		id    string
+		count int32
+	}
+
+	wantOrder := []want{{"A", 3}, {"B", 3}, {"C", 2}, {"D", 2}}
+
+	for i, w := range wantOrder {
+		if id := getID(results[i]); id != w.id {
+			t.Errorf("results[%d]._id = %q, want %q", i, id, w.id)
+		}
+
+		if cnt := getCount(results[i]); cnt != w.count {
+			t.Errorf("results[%d].count = %d, want %d", i, cnt, w.count)
+		}
+	}
+}
+
+// TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder verifies that a
+// $unwind → $group → $sort pipeline produces deterministic output when $sort
+// keys are tied.
+//
+// Three documents each carry a two-element "tags" array:
+//
+//	{_id:1, tags:["a","b"]}, {_id:2, tags:["a","c"]}, {_id:3, tags:["b","d"]}
+//
+// After $unwind "$tags" the stream is: a, b, a, c, b, d.
+// After $group by "$tags" (count=$sum:1): a→2, b→2, c→1, d→1.
+// After $sort {count:-1, _id:1}: a(2), b(2) first (tied on count, _id asc keeps
+// a before b), then c(1), d(1) (insertion order via stable sort).
+func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
+	t.Parallel()
+
+	doc1Tags := types.MakeArray(2)
+	doc1Tags.Append("a")
+	doc1Tags.Append("b")
+
+	doc2Tags := types.MakeArray(2)
+	doc2Tags.Append("a")
+	doc2Tags.Append("c")
+
+	doc3Tags := types.MakeArray(2)
+	doc3Tags.Append("b")
+	doc3Tags.Append("d")
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tags", doc1Tags)),
+		must.NotFail(types.NewDocument("_id", int32(2), "tags", doc2Tags)),
+		must.NotFail(types.NewDocument("_id", int32(3), "tags", doc3Tags)),
+	}
+
+	// $unwind "$tags"
+	unwindDoc := must.NotFail(types.NewDocument("$unwind", "$tags"))
+	unwindStage, err := stages.NewStage(unwindDoc)
+	if err != nil {
+		t.Fatalf("NewStage($unwind): %v", err)
+	}
+
+	// $group: {_id: "$tags", count: {$sum: 1}}
+	groupSpec := must.NotFail(types.NewDocument(
+		"_id", "$tags",
+		"count", must.NotFail(types.NewDocument("$sum", int32(1))),
+	))
+	groupDoc := must.NotFail(types.NewDocument("$group", groupSpec))
+	groupStage, err := stages.NewStage(groupDoc)
+	if err != nil {
+		t.Fatalf("NewStage($group): %v", err)
+	}
+
+	// $sort: {count: -1, _id: 1} — primary by count desc, tiebreak by _id asc
+	sortSpec := must.NotFail(types.NewDocument("count", int32(-1), "_id", int32(1)))
+	sortDoc := must.NotFail(types.NewDocument("$sort", sortSpec))
+	sortStage, err := stages.NewStage(sortDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sort): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	inputIter := iterator.Values(iterator.ForSlice(docs))
+
+	out, err := unwindStage.Process(context.Background(), inputIter, closer)
+	if err != nil {
+		t.Fatalf("$unwind Process: %v", err)
+	}
+
+	out, err = groupStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$group Process: %v", err)
+	}
+
+	out, err = sortStage.Process(context.Background(), out, closer)
+	if err != nil {
+		t.Fatalf("$sort Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 4 {
+		t.Fatalf("expected 4 groups (a,b,c,d), got %d", len(results))
+	}
+
+	getID := func(doc *types.Document) string {
+		v, _ := doc.Get("_id")
+		s, _ := v.(string)
+		return s
+	}
+
+	getCount := func(doc *types.Document) int32 {
+		v, _ := doc.Get("count")
+		n, _ := v.(int32)
+		return n
+	}
+
+	// Expected: a(2), b(2), c(1), d(1)
+	// a and b tied at 2 — _id asc puts "a" before "b".
+	// c and d tied at 1 — _id asc puts "c" before "d".
+	type want struct {
+		id    string
+		count int32
+	}
+
+	wantOrder := []want{{"a", 2}, {"b", 2}, {"c", 1}, {"d", 1}}
+
+	for i, w := range wantOrder {
+		if id := getID(results[i]); id != w.id {
+			t.Errorf("results[%d]._id = %q, want %q", i, id, w.id)
+		}
+
+		if cnt := getCount(results[i]); cnt != w.count {
+			t.Errorf("results[%d].count = %d, want %d", i, cnt, w.count)
+		}
+	}
+}
