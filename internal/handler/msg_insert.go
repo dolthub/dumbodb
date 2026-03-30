@@ -80,23 +80,24 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Fetch collection info for validator, view, and time series checks.
+	// Fetch collection info for validator, view, time series, and capped checks.
 	var collValidator *types.Document
 	var validationAction string
 	var tsTimeField string
+	var cInfo backends.CollectionInfo
 	if collRes, collErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
 		if len(collRes.Collections) == 1 {
-			ci := collRes.Collections[0]
-			if ci.IsView {
+			cInfo = collRes.Collections[0]
+			if cInfo.IsView {
 				msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "insert")
 			}
-			if ci.IsTimeSeries {
-				tsTimeField = ci.TimeField
+			if cInfo.IsTimeSeries {
+				tsTimeField = cInfo.TimeField
 			}
-			if ci.Validator != nil && ci.ValidationLevel != "off" {
-				collValidator = ci.Validator
-				validationAction = ci.ValidationAction
+			if cInfo.Validator != nil && cInfo.ValidationLevel != "off" {
+				collValidator = cInfo.Validator
+				validationAction = cInfo.ValidationAction
 				if validationAction == "" {
 					validationAction = "error"
 				}
@@ -262,6 +263,13 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			if params.Ordered {
 				break
 			}
+		}
+	}
+
+	// Enforce capped collection size limit by evicting oldest documents after insert.
+	if inserted > 0 && cInfo.Capped() {
+		if _, _, cleanupErr := h.cleanupCappedCollection(connCtx, db, &cInfo, false); cleanupErr != nil {
+			h.L.Warn("capped collection cleanup after insert failed", "error", cleanupErr)
 		}
 	}
 
