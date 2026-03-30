@@ -85,6 +85,16 @@ func convertFromTypes(v any) (any, error) {
 	case types.Decimal128:
 		return wirebson.Decimal128{L: v.L, H: v.H}, nil
 
+	case types.MinKeyType:
+		// wirebson doesn't support MinKey; callers that need raw BSON should use FromDocumentRaw.
+		// This path is a best-effort fallback that encodes MinKey as null.
+		return wirebson.Null, nil
+
+	case types.MaxKeyType:
+		// wirebson doesn't support MaxKey; callers that need raw BSON should use FromDocumentRaw.
+		// This path is a best-effort fallback that encodes MaxKey as null.
+		return wirebson.Null, nil
+
 	default:
 		panic(fmt.Sprintf("invalid type %T", v))
 	}
@@ -259,6 +269,11 @@ func ToArray(a wirebson.AnyArray) (*types.Array, error) {
 
 // ToDocument converts wirebson document to [*types.Document].
 func ToDocument(d wirebson.AnyDocument) (*types.Document, error) {
+	// Check for MinKey/MaxKey which wirebson cannot decode.
+	if result, err := ToDocumentHandlingMinMaxKey(d); result != nil || err != nil {
+		return result, err
+	}
+
 	doc, err := d.Decode()
 	if err != nil {
 		return nil, lazyerrors.Error(err)

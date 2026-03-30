@@ -930,18 +930,41 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	return emptyMap, nil
 }
 
+// docHasMinMaxKey returns true if the document contains any MinKey or MaxKey values.
+func docHasMinMaxKey(doc *types.Document) bool {
+	for _, key := range doc.Keys() {
+		v := must.NotFail(doc.Get(key))
+		switch v.(type) {
+		case types.MinKeyType, types.MaxKeyType:
+			return true
+		}
+	}
+	return false
+}
+
 // writeDocJSON converts a types.Document to JSON bytes via BSON encoding,
 // writes those bytes to the dolt JSON chunk store, and returns the root hash.
 func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (hash.Hash, error) {
-	// Step 1: Convert types.Document → wirebson.Document → BSON bytes.
-	wdoc, err := bson.FromDocument(doc)
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: encoding document to wirebson: %w", err)
-	}
+	var bsonBytes []byte
 
-	bsonBytes, err := wdoc.Encode()
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: encoding document to BSON: %w", err)
+	if docHasMinMaxKey(doc) {
+		// Use raw BSON encoding to handle MinKey/MaxKey (wirebson doesn't support them).
+		var err error
+		bsonBytes, err = bson.FromDocumentRaw(doc)
+		if err != nil {
+			return hash.Hash{}, fmt.Errorf("dolt: encoding document with MinKey/MaxKey to BSON: %w", err)
+		}
+	} else {
+		// Step 1: Convert types.Document → wirebson.Document → BSON bytes.
+		wdoc, err := bson.FromDocument(doc)
+		if err != nil {
+			return hash.Hash{}, fmt.Errorf("dolt: encoding document to wirebson: %w", err)
+		}
+
+		bsonBytes, err = wdoc.Encode()
+		if err != nil {
+			return hash.Hash{}, fmt.Errorf("dolt: encoding document to BSON: %w", err)
+		}
 	}
 
 	// Step 2: Convert BSON bytes → Canonical Extended JSON bytes.

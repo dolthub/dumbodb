@@ -28,6 +28,7 @@ type compareTypeOrderResult uint8
 
 const (
 	_ compareTypeOrderResult = iota
+	minKeyDataType
 	nullDataType
 	nanDataType
 	numbersDataType
@@ -40,6 +41,7 @@ const (
 	dateDataType
 	timestampDataType
 	regexDataType
+	maxKeyDataType
 )
 
 // detectDataType returns a sequence for build-in type.
@@ -80,6 +82,10 @@ func detectDataType(value any) compareTypeOrderResult {
 		return numbersDataType
 	case Decimal128:
 		return numbersDataType
+	case MinKeyType:
+		return minKeyDataType
+	case MaxKeyType:
+		return maxKeyDataType
 	default:
 		panic(fmt.Sprintf("value cannot be defined, value is %[1]v, data type of value is %[1]T", value))
 	}

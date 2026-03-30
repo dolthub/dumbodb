@@ -179,6 +179,12 @@ func Identical(a, b any) bool {
 		}
 
 		return a == b
+	case MinKeyType:
+		_, ok := b.(MinKeyType)
+		return ok
+	case MaxKeyType:
+		_, ok := b.(MaxKeyType)
+		return ok
 	}
 
 	panic("not reached")

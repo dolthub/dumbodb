@@ -1659,12 +1659,14 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 		if _, ok := fieldValue.(types.Decimal128); !ok {
 			return false, nil
 		}
-	case handlerparams.TypeCodeMinKey, handlerparams.TypeCodeMaxKey:
-		return false, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			fmt.Sprintf(`Type code %v not implemented`, code),
-			"$type",
-		)
+	case handlerparams.TypeCodeMinKey:
+		if _, ok := fieldValue.(types.MinKeyType); !ok {
+			return false, nil
+		}
+	case handlerparams.TypeCodeMaxKey:
+		if _, ok := fieldValue.(types.MaxKeyType); !ok {
+			return false, nil
+		}
 	default:
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,

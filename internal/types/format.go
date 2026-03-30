@@ -76,6 +76,10 @@ func FormatAnyValue(value any) string {
 		return fmt.Sprintf("%d", value)
 	case Decimal128:
 		return fmt.Sprintf("Decimal128(%d, %d)", value.H, value.L)
+	case MinKeyType:
+		return "MinKey"
+	case MaxKeyType:
+		return "MaxKey"
 	default:
 		panic(fmt.Sprintf("unknown type %T", value))
 	}

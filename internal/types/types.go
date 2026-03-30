@@ -64,7 +64,7 @@ const MaxSafeDouble = float64(1<<53 - 1) // 52bit mantissa max value = 900719925
 
 // ScalarType represents scalar type.
 type ScalarType interface {
-	float64 | string | Binary | ObjectID | bool | time.Time | NullType | Regex | int32 | Timestamp | int64 | Decimal128
+	float64 | string | Binary | ObjectID | bool | time.Time | NullType | Regex | int32 | Timestamp | int64 | Decimal128 | MinKeyType | MaxKeyType
 }
 
 // CompositeType represents composite type - *Document or *Array.
@@ -99,7 +99,7 @@ func assertType(value any) {
 	switch value := value.(type) {
 	case *Document, *Array:
 		return
-	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128:
+	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128, MinKeyType, MaxKeyType:
 		return
 	case nil:
 		panic("types: unexpected nil type")
@@ -115,7 +115,7 @@ func isScalar(value any) bool {
 	assertType(value)
 
 	switch value.(type) {
-	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128:
+	case float64, string, Binary, ObjectID, bool, time.Time, NullType, Regex, int32, Timestamp, int64, Decimal128, MinKeyType, MaxKeyType:
 		return true
 	}
 
@@ -177,6 +177,10 @@ func deepCopy(value any) any {
 	case int64:
 		return value
 	case Decimal128:
+		return value
+	case MinKeyType:
+		return value
+	case MaxKeyType:
 		return value
 
 	default:

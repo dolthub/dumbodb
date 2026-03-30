@@ -86,11 +86,7 @@ func NewTypeCode(code int32) (TypeCode, error) {
 	case TypeCodeDecimal:
 		return c, nil
 	case TypeCodeMinKey, TypeCodeMaxKey:
-		return 0, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrNotImplemented,
-			fmt.Sprintf(`Type code %v not implemented`, code),
-			"$type",
-		)
+		return c, nil
 	default:
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
@@ -137,6 +133,7 @@ func init() {
 		TypeCodeDouble, TypeCodeString, TypeCodeObject, TypeCodeArray,
 		TypeCodeBinData, TypeCodeObjectID, TypeCodeBool, TypeCodeDate, TypeCodeNull,
 		TypeCodeRegex, TypeCodeInt, TypeCodeTimestamp, TypeCodeLong, TypeCodeDecimal, TypeCodeNumber,
+		TypeCodeMinKey, TypeCodeMaxKey,
 	} {
 		aliasToTypeCode[i.String()] = i
 	}
@@ -173,6 +170,10 @@ func AliasFromType(v any) string {
 		return TypeCodeLong.String()
 	case types.Decimal128:
 		return TypeCodeDecimal.String()
+	case types.MinKeyType:
+		return TypeCodeMinKey.String()
+	case types.MaxKeyType:
+		return TypeCodeMaxKey.String()
 	default:
 		panic(fmt.Sprintf("not supported type %T", v))
 	}

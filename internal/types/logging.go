@@ -108,6 +108,10 @@ func slogValue(v any, depth int) slog.Value {
 
 	case Decimal128:
 		return slog.StringValue(fmt.Sprintf("Decimal128(%d, %d)", v.H, v.L))
+	case MinKeyType:
+		return slog.StringValue("MinKey")
+	case MaxKeyType:
+		return slog.StringValue("MaxKey")
 
 	default:
 		panic(fmt.Sprintf("invalid BSON type %T", v))
