@@ -1,0 +1,598 @@
+# Dongo Version Control Features: Research & Design Proposal
+
+**Date:** 2026-03-30
+**Bead:** do-m6au
+**Author:** jasper (polecat)
+
+---
+
+## 1. How Dolt Works — Core Concepts
+
+Dolt is "Git for SQL databases." It implements Git's version control model on top
+of a content-addressed chunk store (Noms Block Store / NBS), extended with Prolly
+Trees for efficient ordered-key storage and efficient O(log N) diffs.
+
+### Storage Model
+
+```
+NBS chunk store (content-addressed by SHA-256)
+  StoreRoot (STRT)
+    refsAM: "refs/heads/main" → DCMT hash
+             "workingSets/heads/main" → WRST hash
+  
+  Commit (DCMT)
+    rootValue → RTVL hash     # full DB state at this commit
+    parents   → [DCMT hash]   # DAG of commits
+    meta      → {author, email, message, timestamp}
+  
+  RootValue (RTVL)
+    tables → ADRM             # tableName → table prolly.Map root
+  
+  Table (prolly.Map)
+    key:   primary key bytes
+    value: row bytes (BSON for Dongo)
+```
+
+### Git-Equivalent Operations (CLI + SQL)
+
+| Git operation       | Dolt CLI          | Dolt SQL                          |
+|---------------------|-------------------|-----------------------------------|
+| `git commit`        | `dolt commit`     | `CALL DOLT_COMMIT()`              |
+| `git branch`        | `dolt branch`     | `SELECT * FROM dolt_branches`     |
+| `git checkout`      | `dolt checkout`   | `CALL DOLT_CHECKOUT()`            |
+| `git merge`         | `dolt merge`      | `CALL DOLT_MERGE()`               |
+| `git log`           | `dolt log`        | `SELECT * FROM dolt_commits`      |
+| `git diff`          | `dolt diff`       | `SELECT * FROM dolt_diff_$TABLE`  |
+| `git blame`         | `dolt blame`      | `SELECT * FROM dolt_blame_$TABLE` |
+| `git push`          | `dolt push`       | `CALL DOLT_PUSH()`                |
+| `git pull`          | `dolt pull`       | `CALL DOLT_PULL()`                |
+| `git tag`           | `dolt tag`        | `SELECT * FROM dolt_tags`         |
+| `git stash`         | `dolt stash`      | `CALL DOLT_STASH()`               |
+| Point-in-time read  | n/a (checkout)    | `SELECT * FROM db/commit:table`   |
+
+### Key Dolt Differentiators
+
+1. **Cell-wise merges**: Dolt merges at the cell level, not the row level.
+   If two branches modify different fields of the same row, both changes are
+   accepted without conflict. Git-style 3-way merge, but applied to structured data.
+
+2. **Prolly Trees enable efficient diffs**: Content-addressed B-tree variant where
+   two trees sharing the same subtree hash skip that subtree entirely. Diffs are
+   O(changes) not O(total data size).
+
+3. **Staging area**: Dolt has HEAD (last commit), staged (to be committed), and
+   working (current in-memory state). This three-tier model allows selective
+   commits and partial staging.
+
+4. **SQL system tables**: All version control state is queryable via SQL.
+   `dolt_diff_$TABLE` returns individual row diffs with `diff_type` (added/removed/modified)
+   and both `$TABLE_diff` columns (before/after values per field).
+
+5. **History tables**: `dolt_history_$TABLE` returns every version of every row
+   across all commits — full time-series of the table.
+
+---
+
+## 2. How Git Works — Core Concepts
+
+Git is a content-addressed DAG of snapshots.
+
+### Storage Model
+
+```
+Object store (content-addressed by SHA-1/SHA-256)
+  commit object
+    tree  → tree hash    # full repo snapshot
+    parent → commit hash  # DAG
+    author, committer, message
+
+  tree object
+    entries: [mode, name, hash]  # directory listing
+    each entry → blob or nested tree
+
+  blob object
+    raw file bytes
+```
+
+### Key Git Concepts
+
+1. **Content-addressed storage**: Objects identified by their content hash.
+   Two identical files share one blob. Moving a file costs nothing in content.
+
+2. **DAG of commits**: Commits form a directed acyclic graph. Branches are
+   mutable pointers to commit hashes. Tags are immutable pointers.
+
+3. **Refs and branches**: `refs/heads/main` is a file containing a commit hash.
+   Branches are cheap — creating one is writing a 40-byte hash.
+
+4. **Staging area (index)**: Three-tier model: HEAD, index (staged), working tree.
+   Allows fine-grained control over what enters each commit.
+
+5. **Merge strategies**:
+   - Fast-forward: if target is ancestor of source, just move the pointer
+   - Recursive 3-way: find common ancestor, merge both diffs
+   - Octopus: N-parent merges (rare)
+
+6. **Remotes**: Named URLs for other repos. `git push origin main` writes local
+   commits to the remote. `git pull` fetches and merges. Protocol is simple
+   (pack files over HTTP/SSH).
+
+7. **What makes Git the standard**: The DAG model is mathematically elegant.
+   All operations reduce to graph traversal. The content-addressed store means
+   corruption is detectable. Remotes are first-class citizens. The workflow
+   (branch → edit → commit → push → PR → merge) maps naturally to software
+   development.
+
+---
+
+## 3. The Dongo Opportunity
+
+Dongo sits at a unique intersection: MongoDB wire protocol (document store UX)
+backed by Dolt storage (version-controlled prolly trees). This creates an
+opportunity for a "version-controlled MongoDB" that no existing product offers.
+
+### Current Dongo Versioning State
+
+Dongo already implements these commands (all behind the `dongoXxx` namespace):
+
+| Command          | What it does                                    | Status      |
+|------------------|-------------------------------------------------|-------------|
+| `dongoCommit`    | Commit working set with message                 | Implemented |
+| `dongoBranch`    | Create branch from current branch               | Implemented |
+| `dongoMerge`     | Merge branch into current                       | Implemented |
+| `dongoLog`       | Commit history (hash, parent, message, ts)      | Implemented |
+| `dongoDiff`      | Document-level diff between two states          | Implemented |
+| `dongoReset`     | Move HEAD (soft or hard)                        | Implemented |
+| `dongoStatus`    | Show uncommitted collection changes             | Implemented |
+
+Branch access is via the `dbname__branchname` naming convention.
+
+### What's Missing (Gap Analysis)
+
+The following Git/Dolt capabilities don't have Dongo equivalents yet:
+
+1. **Point-in-time reads**: No way to query a collection as of a specific commit
+   without doing a hard reset. Users need `db.collection.find()` at a past state.
+
+2. **Tag support**: No named immutable checkpoints. Useful for release tagging,
+   snapshot marking, or labeling known-good states.
+
+3. **Document history**: No "show me all versions of document _id=X across all
+   commits." Requires traversing the commit DAG per document.
+
+4. **Document blame**: No "which commit last modified this field?" Dolt has
+   `dolt_blame_$TABLE` for this.
+
+5. **Checkout**: No command to move the working set of a branch to a different
+   commit without changing HEAD (or with HEAD update). Needed for "go back to X".
+
+6. **Remote push/pull**: No cross-server synchronization. Can't clone a Dongo
+   instance or publish a database to a hub.
+
+7. **Conflict resolution**: `dongoMerge` exists but no interface for inspecting
+   or resolving merge conflicts when they occur.
+
+8. **List branches**: No command to enumerate existing branches. Users must know
+   branch names in advance.
+
+9. **Delete branch**: No cleanup of merged branches.
+
+10. **Stash**: No "save uncommitted changes, clean working set, restore later."
+
+11. **Cherry-pick**: No "apply commit X from branch Y to current branch."
+
+12. **Collection-level point-in-time reads**: No way to say "give me this
+    collection's documents as they existed at timestamp T or commit H."
+
+---
+
+## 4. Suggested Feature List
+
+Features ranked by **impact/feasibility**. For each: the MongoDB wire protocol
+surface, and the Dolt primitive that backs it.
+
+---
+
+### Priority 1 (High Impact, Straightforward)
+
+#### P1-A: Point-in-Time Reads (`@commitHash` db suffix)
+
+**What**: Read any collection as of a historical commit, without modifying state.
+
+**Wire protocol**: Extend the `dbname__branch` naming convention with `@`:
+- `mydb__main@abc123` = read database `mydb`, branch `main`, at commit `abc123`
+- `mydb@abc123` = shorthand (implicit `main`)
+
+Any standard MongoDB read (`find`, `aggregate`, `count`) on the `@`-suffixed
+database name reads from the historical snapshot.
+
+**Dolt primitive**: Read the RTVL at the given commit hash. Load its collections
+ADRM. Look up the collection's prolly.Map by name. Iterate/query the prolly.Map
+at that root — no writes, completely non-destructive.
+
+**Example**:
+```javascript
+// Fetch the users collection as it was at commit abc123
+db.getSiblingDB("mydb@abc123").users.find({active: true})
+```
+
+**Feasibility**: High. The backend already has the mechanics to load a collection
+by RTVL hash. It's a matter of parsing the `@` suffix in `branchFromDBName` and
+routing reads to the historical AM rather than the working set.
+
+---
+
+#### P1-B: List Branches (`dongoListBranches`)
+
+**What**: Return all branches for a database.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoListBranches: 1})
+// Returns: {branches: [{name: "main", hash: "abc..."}, ...], ok: 1}
+```
+
+**Dolt primitive**: Read `STRT.refsAM`; enumerate all entries starting with
+`refs/heads/`. Each entry yields a branch name and its HEAD commit hash.
+
+**Feasibility**: Very high. The STRT refsAM is already read at startup.
+
+---
+
+#### P1-C: Tag Support (`dongoTag`, `dongoListTags`)
+
+**What**: Create named immutable pointers to commits. Useful for release markers,
+snapshot labels, and as readable aliases for commit hashes.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoTag: 1, name: "v1.0", message: "production release"})
+db.runCommand({dongoListTags: 1})
+// Returns: {tags: [{name: "v1.0", hash: "abc...", message: "..."}], ok: 1}
+```
+
+**Dolt primitive**: Tags are stored in `STRT.refsAM` as `refs/tags/<name>`.
+Creating a tag writes a new entry to the refsAM pointing to the current HEAD
+commit hash. Tags are readable in the same pass as branches.
+
+**Point-in-time reads with tags**: Tags integrate with P1-A:
+```javascript
+db.getSiblingDB("mydb@v1.0").users.find()  // reads at the v1.0 tag
+```
+
+**Feasibility**: High. Same infrastructure as branches; just a different ref prefix.
+
+---
+
+#### P1-D: Delete Branch (`dongoDeleteBranch`)
+
+**What**: Remove a branch from the refsAM after it's been merged.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoDeleteBranch: 1, branch: "feature-x"})
+```
+
+**Dolt primitive**: Remove the `refs/heads/<branch>` and
+`workingSets/heads/<branch>` entries from `STRT.refsAM`, write new STRT.
+
+**Feasibility**: High. Straightforward NBS update.
+
+---
+
+#### P1-E: Document History (`dongoDocHistory`)
+
+**What**: Return all versions of a single document across all commits on a branch.
+
+**Wire protocol**:
+```javascript
+db.runCommand({
+  dongoDocHistory: 1,
+  collection: "users",
+  _id: ObjectId("abc123"),
+  limit: 20
+})
+// Returns: {history: [{hash: "...", timestamp: ISODate, doc: {...}}, ...], ok: 1}
+```
+
+**Dolt primitive**: Walk the commit DAG from HEAD to root. For each commit,
+load its collections ADRM, look up the collection's prolly.Map, look up `_id`
+in that map. Emit an entry only when the document changes (or disappears).
+Stop at `limit` changes.
+
+**Performance note**: Prolly Trees share content-addressed subtrees. If a commit
+changes an unrelated document, the subtree containing `_id` has the same hash —
+we can skip it. In practice this means `dongoDocHistory` is O(changes to that
+document) not O(all commits), by comparing subtree hashes.
+
+**Feasibility**: Medium. Requires DAG traversal but no new storage primitives.
+The key insight (subtree hash comparison) makes it efficient.
+
+---
+
+### Priority 2 (Medium Impact, Moderate Effort)
+
+#### P2-A: Checkout (`dongoCheckout`)
+
+**What**: Move the working set of a branch to a specific commit's state,
+either destructively (hard reset working tree) or by creating a new branch.
+
+**Wire protocol**:
+```javascript
+// Create a new branch at a specific commit
+db.runCommand({dongoCheckout: 1, commit: "abc123", branch: "hotfix"})
+
+// Reset current branch's working set to a commit (same as hard dongoReset)
+db.getSiblingDB("mydb__feature").runCommand({dongoCheckout: 1, commit: "abc123"})
+```
+
+**Dolt primitive**: Load the RTVL at `commit`. Update WRST's `working_root_addr`
+and `staged_root_addr` to point to that RTVL. Optionally advance HEAD.
+
+**Feasibility**: Medium. The `dongoReset` command already does the hard-reset
+variant. `dongoCheckout` would add the "create branch at commit" form.
+
+---
+
+#### P2-B: Conflict Report (`dongoConflicts`)
+
+**What**: After a merge that produced conflicts, show the conflicting documents.
+
+**Wire protocol**:
+```javascript
+db.getSiblingDB("mydb__main").runCommand({dongoConflicts: 1, collection: "users"})
+// Returns: {conflicts: [{_id: ..., base: {...}, ours: {...}, theirs: {...}}, ...], ok: 1}
+```
+
+**Dolt primitive**: During a merge, when two branches have modified the same
+document's same fields to different values, a conflict is generated. The backend
+needs to write conflict entries (base/ours/theirs triples) to a separate map.
+`dongoConflicts` reads that map.
+
+**Resolution**: Add `dongoResolveConflict` to accept one side or a custom document.
+
+**Feasibility**: Medium. Requires conflict state to be stored (new BSON map per
+conflicting collection). The merge logic needs to populate it.
+
+---
+
+#### P2-C: Collection Blame (`dongoBlame`)
+
+**What**: For each document in a collection, show which commit last modified it.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoBlame: 1, collection: "users"})
+// Returns: {blame: [{_id: ..., hash: "...", author: "...", timestamp: ISODate}, ...], ok: 1}
+```
+
+**Dolt primitive**: Walk the commit DAG. For each document ID, track the most
+recent commit that changed it. Uses the same subtree-hash optimization as
+`dongoDocHistory`.
+
+**Feasibility**: Medium-high. `dongoDocHistory` is the per-document version;
+blame is the same logic applied across all documents in a collection.
+
+---
+
+#### P2-D: Stash (`dongoStash`, `dongoStashPop`)
+
+**What**: Save the current working set without committing, return to the last
+committed state, restore the stashed state later.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoStash: 1, message: "WIP: migrating schema"})
+db.runCommand({dongoStashPop: 1})
+db.runCommand({dongoStashList: 1})
+```
+
+**Dolt primitive**: Save the current WRST.working_root_addr as a separate
+named entry in the STRT refsAM (e.g., `stash/0`, `stash/1`). Reset the
+working set to HEAD's RTVL. Pop restores the saved addr and removes the stash entry.
+
+**Feasibility**: Medium. No new chunk types needed; uses existing ADRM and WRST.
+
+---
+
+### Priority 3 (Lower Impact or Higher Effort)
+
+#### P3-A: Remote Push/Pull (`dongoPush`, `dongoPull`)
+
+**What**: Synchronize a Dongo database with a remote Dongo or DoltHub instance.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoPush: 1, remote: "origin", branch: "main"})
+db.runCommand({dongoPull: 1, remote: "origin", branch: "main"})
+db.runCommand({dongoAddRemote: 1, name: "origin", url: "dongo://host:27017/dbname"})
+```
+
+**Dolt primitive**: Dolt's NBS implements a chunk sync protocol: serialize all
+chunks reachable from a commit that the remote doesn't have (pack file), send
+over the wire, update remote's refsAM. Dongo can reuse Dolt's existing push/pull
+protocol since both use the same NBS format.
+
+**Why high value**: Enables multi-server workflows. "Branch in dev, push to prod
+when ready." DoltHub integration would allow public database sharing.
+
+**Feasibility**: Low-medium. Significant networking layer to build. But the chunk
+format is already Dolt-compatible — the protocol work is the main cost.
+
+---
+
+#### P3-B: Cherry-Pick (`dongoCherryPick`)
+
+**What**: Apply the changes introduced by a specific commit to the current branch.
+
+**Wire protocol**:
+```javascript
+db.getSiblingDB("mydb__main").runCommand({dongoCherryPick: 1, commit: "abc123"})
+```
+
+**Dolt primitive**: Compute the diff between `commit`'s parent and `commit`.
+Apply that diff as a patch to the current working set. Create a new commit.
+
+**Feasibility**: Medium. Requires the diff primitive (already implemented) plus
+a patch-apply step. May produce conflicts if the target branch diverged significantly.
+
+---
+
+#### P3-C: Schema Evolution Tracking
+
+**What**: When a collection's document shape changes (fields added/removed/renamed),
+track these schema migrations in the commit history. Auto-generate migration notes.
+
+**Wire protocol**:
+```javascript
+db.runCommand({dongoSchemaHistory: 1, collection: "users"})
+// Returns a diff of field presence/type across commits
+```
+
+**Dolt primitive**: Diff the field keys across documents in two commits of the same
+collection. Summarize which fields appeared, disappeared, or changed type.
+
+**Feasibility**: Low (requires heuristic field analysis; MongoDB is schemaless so
+this is statistical not structural).
+
+---
+
+#### P3-D: Point-in-Time Aggregation Pipeline Stage (`$asOf`)
+
+**What**: A MongoDB aggregation pipeline stage that reads from a historical snapshot
+mid-pipeline, enabling joins between current and historical data.
+
+**Wire protocol**:
+```javascript
+db.orders.aggregate([
+  {$match: {status: "pending"}},
+  {$lookup: {
+    from: {collection: "products", asOf: "v1.0"},
+    localField: "productId",
+    foreignField: "_id",
+    as: "historicalProduct"
+  }}
+])
+```
+
+**Dolt primitive**: During aggregation pipeline execution, when `asOf` is present
+in a `$lookup`, resolve the commit hash (or tag), load the historical prolly.Map,
+and use it as the join source.
+
+**Feasibility**: Low. Requires deep integration into the aggregation pipeline.
+Worth designing but not implementing soon.
+
+---
+
+## 5. Feature Ranking Summary
+
+| Feature                       | Impact | Feasibility | Priority | Dolt Primitive          |
+|-------------------------------|--------|-------------|----------|-------------------------|
+| P1-A: Point-in-time reads     | High   | High        | **P1**   | RTVL load at hash       |
+| P1-B: List branches           | High   | Very High   | **P1**   | refsAM enumeration      |
+| P1-C: Tag support             | High   | High        | **P1**   | refs/tags/* in refsAM   |
+| P1-D: Delete branch           | Medium | High        | **P1**   | refsAM update           |
+| P1-E: Document history        | High   | Medium      | **P1**   | DAG walk + prolly hash  |
+| P2-A: Checkout                | Medium | Medium      | **P2**   | WRST update             |
+| P2-B: Conflict report/resolve | Medium | Medium      | **P2**   | Conflict map (new)      |
+| P2-C: Collection blame        | Medium | Medium      | **P2**   | DAG walk (all docs)     |
+| P2-D: Stash                   | Medium | Medium      | **P2**   | stash/* in refsAM       |
+| P3-A: Remote push/pull        | High   | Low         | **P3**   | Dolt chunk sync protocol|
+| P3-B: Cherry-pick             | Low    | Medium      | **P3**   | Diff + patch apply      |
+| P3-C: Schema tracking         | Low    | Low         | **P3**   | Field key diff          |
+| P3-D: $asOf aggregation stage | High   | Very Low    | **P3**   | Pipeline + RTVL lookup  |
+
+---
+
+## 6. Implementation Notes
+
+### The `dbname@commitHash` Convention
+
+The cleanest way to expose point-in-time reads without new commands is extending
+the existing `__` branch separator with an `@` marker:
+
+```
+mydb                   → main branch, working set
+mydb__feature          → feature branch, working set
+mydb__feature@abc123   → feature branch, at commit abc123
+mydb@abc123            → main branch, at commit abc123
+mydb@v1.0              → main branch, at tag v1.0
+```
+
+This is purely a database-name parsing change in `branchFromDBName`. The rest of
+the handler and backend remain unchanged: reads on an `@`-suffixed db simply load
+the RTVL from the specified commit instead of the working set.
+
+### Conflict Model
+
+Dongo's current merge doesn't track conflicts — it presumably last-writer-wins or
+errors. A proper conflict model needs:
+1. A new chunk type (or a per-db collection `_dongo_conflicts`) to store conflict triples.
+2. `dongoMerge` to populate it on conflict.
+3. `dongoConflicts` to read it.
+4. `dongoResolveConflict` to resolve and complete the merge.
+
+This is the most complex feature listed, but it's also required for safe multi-branch
+workflows in production.
+
+### DoltHub Integration
+
+If remote push/pull is implemented to be DoltHub-compatible (same chunk protocol
+and ref format), Dongo databases become compatible with DoltHub — the largest public
+database sharing platform. A Dongo user could `dongoPush` to DoltHub and browse
+their MongoDB data with the DoltHub web UI. This is a significant moat.
+
+---
+
+## 7. What "Version-Controlled MongoDB" Looks Like in Practice
+
+A user-facing story for each tier of features:
+
+**Basic (P1 features — near term)**:
+> "I'm building a migration script. I want to test it on a branch, inspect the
+> diff to verify my changes, then merge to main. If something goes wrong, I can
+> reset to a known-good tag."
+```javascript
+db.getSiblingDB("mydb__migration").runCommand({dongoBranch: 1, branch: "migration-v2"})
+// ... run migration ...
+db.getSiblingDB("mydb__main").runCommand({dongoDiff: 1, from: "abc123"})
+db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, from: "migration-v2"})
+db.runCommand({dongoTag: 1, name: "pre-migration"})  // before the merge
+```
+
+**Intermediate (P2 features — mid term)**:
+> "I want an audit trail. Show me every version of customer document _id=42, and
+> which commit introduced the `gdpr_consent: true` field."
+```javascript
+db.runCommand({dongoDocHistory: 1, collection: "customers", _id: 42})
+db.runCommand({dongoBlame: 1, collection: "customers"})  // who last touched each doc
+```
+
+**Advanced (P3 features — long term)**:
+> "I have a dev Dongo instance and a prod Dongo instance. I push tested changes
+> to prod. If prod goes wrong, I pull the last good state from DoltHub."
+```javascript
+db.runCommand({dongoAddRemote: 1, name: "prod", url: "dongo://prod:27017/app"})
+db.runCommand({dongoPush: 1, remote: "prod", branch: "main"})
+db.runCommand({dongoPull: 1, remote: "backup", branch: "main"})
+```
+
+---
+
+## 8. Conclusion
+
+Dongo's version control foundation is solid. The Dolt storage layer already
+provides the primitives for all features described above. The work is primarily
+in exposing these capabilities through the MongoDB wire protocol.
+
+The highest-leverage near-term features are:
+1. **Point-in-time reads** (`@commitHash` suffix) — one parsing change, zero new
+   backend logic, immediate user value.
+2. **List/delete branches + tags** — simple refsAM operations, complete the
+   branch management workflow.
+3. **Document history** — turns Dongo into an audit log database without any
+   external tooling.
+
+Together these three make Dongo genuinely useful as "version-controlled MongoDB"
+for the most common use cases: branched development, audit trails, and snapshot
+reads.
