@@ -39,7 +39,6 @@ NBS chunk store (content-addressed by SHA-256)
 |---------------------|-------------------|-----------------------------------|
 | `git commit`        | `dolt commit`     | `CALL DOLT_COMMIT()`              |
 | `git branch`        | `dolt branch`     | `SELECT * FROM dolt_branches`     |
-| `git checkout`      | `dolt checkout`   | `CALL DOLT_CHECKOUT()`            |
 | `git merge`         | `dolt merge`      | `CALL DOLT_MERGE()`               |
 | `git log`           | `dolt log`        | `SELECT * FROM dolt_commits`      |
 | `git diff`          | `dolt diff`       | `SELECT * FROM dolt_diff_$TABLE`  |
@@ -48,7 +47,7 @@ NBS chunk store (content-addressed by SHA-256)
 | `git pull`          | `dolt pull`       | `CALL DOLT_PULL()`                |
 | `git tag`           | `dolt tag`        | `SELECT * FROM dolt_tags`         |
 | `git stash`         | `dolt stash`      | `CALL DOLT_STASH()`               |
-| Point-in-time read  | n/a (checkout)    | `SELECT * FROM db/commit:table`   |
+| Point-in-time read  | n/a               | `SELECT * FROM db/commit:table`   |
 
 ### Key Dolt Differentiators
 
@@ -163,25 +162,22 @@ The following Git/Dolt capabilities don't have Dongo equivalents yet:
 4. **Document blame**: No "which commit last modified this field?" Dolt has
    `dolt_blame_$TABLE` for this.
 
-5. **Checkout**: No command to move the working set of a branch to a different
-   commit without changing HEAD (or with HEAD update). Needed for "go back to X".
-
-6. **Remote push/pull**: No cross-server synchronization. Can't clone a Dongo
+5. **Remote push/pull**: No cross-server synchronization. Can't clone a Dongo
    instance or publish a database to a hub.
 
-7. **Conflict resolution**: `dongoMerge` exists but no interface for inspecting
+6. **Conflict resolution**: `dongoMerge` exists but no interface for inspecting
    or resolving merge conflicts when they occur.
 
-8. **List branches**: No command to enumerate existing branches. Users must know
+7. **List branches**: No command to enumerate existing branches. Users must know
    branch names in advance.
 
-9. **Delete branch**: No cleanup of merged branches.
+8. **Delete branch**: No cleanup of merged branches.
 
-10. **Stash**: No "save uncommitted changes, clean working set, restore later."
+9. **Stash**: No "save uncommitted changes, clean working set, restore later."
 
-11. **Cherry-pick**: No "apply commit X from branch Y to current branch."
+10. **Cherry-pick**: No "apply commit X from branch Y to current branch."
 
-12. **Collection-level point-in-time reads**: No way to say "give me this
+11. **Collection-level point-in-time reads**: No way to say "give me this
     collection's documents as they existed at timestamp T or commit H."
 
 ---
@@ -312,29 +308,7 @@ The key insight (subtree hash comparison) makes it efficient.
 
 ### Priority 2 (Medium Impact, Moderate Effort)
 
-#### P2-A: Checkout (`dongoCheckout`)
-
-**What**: Move the working set of a branch to a specific commit's state,
-either destructively (hard reset working tree) or by creating a new branch.
-
-**Wire protocol**:
-```javascript
-// Create a new branch at a specific commit
-db.runCommand({dongoCheckout: 1, commit: "abc123", branch: "hotfix"})
-
-// Reset current branch's working set to a commit (same as hard dongoReset)
-db.getSiblingDB("mydb__feature").runCommand({dongoCheckout: 1, commit: "abc123"})
-```
-
-**Dolt primitive**: Load the RTVL at `commit`. Update WRST's `working_root_addr`
-and `staged_root_addr` to point to that RTVL. Optionally advance HEAD.
-
-**Feasibility**: Medium. The `dongoReset` command already does the hard-reset
-variant. `dongoCheckout` would add the "create branch at commit" form.
-
----
-
-#### P2-B: Conflict Report (`dongoConflicts`)
+#### P2-A: Conflict Report (`dongoConflicts`)
 
 **What**: After a merge that produced conflicts, show the conflicting documents.
 
@@ -356,7 +330,7 @@ conflicting collection). The merge logic needs to populate it.
 
 ---
 
-#### P2-C: Collection Blame (`dongoBlame`)
+#### P2-B: Collection Blame (`dongoBlame`)
 
 **What**: For each document in a collection, show which commit last modified it.
 
@@ -375,7 +349,7 @@ blame is the same logic applied across all documents in a collection.
 
 ---
 
-#### P2-D: Stash (`dongoStash`, `dongoStashPop`)
+#### P2-C: Stash (`dongoStash`, `dongoStashPop`)
 
 **What**: Save the current working set without committing, return to the last
 committed state, restore the stashed state later.
@@ -493,10 +467,9 @@ Worth designing but not implementing soon.
 | P1-C: Tag support             | High   | High        | **P1**   | refs/tags/* in refsAM   |
 | P1-D: Delete branch           | Medium | High        | **P1**   | refsAM update           |
 | P1-E: Document history        | High   | Medium      | **P1**   | DAG walk + prolly hash  |
-| P2-A: Checkout                | Medium | Medium      | **P2**   | WRST update             |
-| P2-B: Conflict report/resolve | Medium | Medium      | **P2**   | Conflict map (new)      |
-| P2-C: Collection blame        | Medium | Medium      | **P2**   | DAG walk (all docs)     |
-| P2-D: Stash                   | Medium | Medium      | **P2**   | stash/* in refsAM       |
+| P2-A: Conflict report/resolve | Medium | Medium      | **P2**   | Conflict map (new)      |
+| P2-B: Collection blame        | Medium | Medium      | **P2**   | DAG walk (all docs)     |
+| P2-C: Stash                   | Medium | Medium      | **P2**   | stash/* in refsAM       |
 | P3-A: Remote push/pull        | High   | Low         | **P3**   | Dolt chunk sync protocol|
 | P3-B: Cherry-pick             | Low    | Medium      | **P3**   | Diff + patch apply      |
 | P3-C: Schema tracking         | Low    | Low         | **P3**   | Field key diff          |
