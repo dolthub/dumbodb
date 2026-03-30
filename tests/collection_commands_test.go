@@ -341,6 +341,286 @@ func TestConvertToCapped_VerifyCapped(t *testing.T) {
 	assert.Equal(t, cappedSize, gotSize, "options.size must equal the convertToCapped size parameter")
 }
 
+// TestConvertToCapped_Basic verifies that convertToCapped succeeds on an existing collection
+// and returns ok=1.
+//
+// Parity test for do-ncv8: convertToCapped, validate, dataSize, renameCollection parity.
+func TestConvertToCapped_Basic(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert a document so the collection exists.
+	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "convertToCapped", Value: coll.Name()},
+		{Key: "size", Value: int64(1024 * 1024)},
+	}).Decode(&res)
+	require.NoError(t, err, "convertToCapped on existing collection must succeed")
+	assert.Equal(t, float64(1), res.Map()["ok"], "ok must be 1")
+}
+
+// TestConvertToCapped_NonExistentCollection verifies that convertToCapped on a collection
+// that does not exist returns NamespaceNotFound (code 26).
+//
+// Parity test for do-ncv8.
+func TestConvertToCapped_NonExistentCollection(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Do not insert — collection was never created.
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "convertToCapped", Value: coll.Name()},
+		{Key: "size", Value: int64(1024 * 1024)},
+	}).Decode(&res)
+
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 26, cmdErr.Code, "expected NamespaceNotFound (26), got code %d: %s", cmdErr.Code, cmdErr.Message)
+}
+
+// TestConvertToCapped_ZeroSize verifies that convertToCapped with size=0 returns
+// an error indicating the capped size must be greater than zero.
+//
+// Parity test for do-ncv8.
+func TestConvertToCapped_ZeroSize(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "convertToCapped", Value: coll.Name()},
+		{Key: "size", Value: int64(0)},
+	}).Decode(&res)
+
+	require.Error(t, err, "convertToCapped with size=0 must fail")
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 72, cmdErr.Code, "expected InvalidOptions (72), got code %d: %s", cmdErr.Code, cmdErr.Message)
+}
+
+// TestConvertToCapped_MissingSize verifies that convertToCapped without a size field
+// returns an error indicating the capped size must be greater than zero.
+//
+// Parity test for do-ncv8.
+func TestConvertToCapped_MissingSize(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
+
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "convertToCapped", Value: coll.Name()},
+		// size field intentionally omitted
+	}).Decode(&res)
+
+	require.Error(t, err, "convertToCapped without size must fail")
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 72, cmdErr.Code, "expected InvalidOptions (72), got code %d: %s", cmdErr.Code, cmdErr.Message)
+}
+
+// TestDataSize_BasicCollection verifies that the dataSize command returns a valid
+// response for an existing collection with documents.
+//
+// Parity test for do-ncv8.
+func TestDataSize_BasicCollection(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "a", Value: int32(1)}},
+		bson.D{{Key: "a", Value: int32(2)}},
+		bson.D{{Key: "a", Value: int32(3)}},
+	)
+
+	namespace := coll.Database().Name() + "." + coll.Name()
+	var res bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "dataSize", Value: namespace},
+	}).Decode(&res)
+	require.NoError(t, err, "dataSize on existing collection must not error")
+
+	m := res.Map()
+	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
+
+	size, ok := m["size"].(int64)
+	require.True(t, ok, "size must be int64, got %T", m["size"])
+	assert.Greater(t, size, int64(0), "size must be > 0 for non-empty collection")
+
+	numObjects, ok := m["numObjects"].(int64)
+	require.True(t, ok, "numObjects must be int64, got %T", m["numObjects"])
+	assert.EqualValues(t, 3, numObjects, "numObjects must equal the number of inserted documents")
+
+	_, ok = m["millis"]
+	assert.True(t, ok, "millis field must be present")
+}
+
+// TestDataSize_WithKeyRange verifies that the dataSize command with keyPattern, min, and
+// max parameters returns only the size of documents within the specified range.
+//
+// Parity test for do-ncv8.
+func TestDataSize_WithKeyRange(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// Insert 5 documents with values 1-5 on field "v".
+	for i := int32(1); i <= 5; i++ {
+		insertDocs(t, coll, bson.D{{Key: "v", Value: i}})
+	}
+
+	namespace := coll.Database().Name() + "." + coll.Name()
+
+	// Retrieve total size (all 5 docs).
+	var fullRes bson.D
+	err := coll.Database().RunCommand(ctx, bson.D{
+		{Key: "dataSize", Value: namespace},
+	}).Decode(&fullRes)
+	require.NoError(t, err)
+	fullNum := fullRes.Map()["numObjects"].(int64)
+	assert.EqualValues(t, 5, fullNum, "full dataSize must count all 5 documents")
+
+	// Retrieve size for range v in [2, 4) — expects documents with v=2 and v=3.
+	var rangeRes bson.D
+	err = coll.Database().RunCommand(ctx, bson.D{
+		{Key: "dataSize", Value: namespace},
+		{Key: "keyPattern", Value: bson.D{{Key: "v", Value: int32(1)}}},
+		{Key: "min", Value: bson.D{{Key: "v", Value: int32(2)}}},
+		{Key: "max", Value: bson.D{{Key: "v", Value: int32(4)}}},
+	}).Decode(&rangeRes)
+	require.NoError(t, err, "dataSize with key range must not error")
+
+	rm := rangeRes.Map()
+	assert.Equal(t, float64(1), rm["ok"], "ok must be 1")
+
+	rangeNum := rm["numObjects"].(int64)
+	assert.EqualValues(t, 2, rangeNum, "dataSize with range [2,4) must count 2 documents (v=2, v=3)")
+
+	rangeSize := rm["size"].(int64)
+	fullSize := fullRes.Map()["size"].(int64)
+	assert.Less(t, rangeSize, fullSize, "range size must be less than full collection size")
+}
+
+// TestRenameCollection_NonExistentSource verifies that renameCollection returns
+// NamespaceNotFound (code 26) when the source collection does not exist.
+//
+// Parity test for do-ncv8.
+func TestRenameCollection_NonExistentSource(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	// coll was never inserted into — it does not exist.
+	dbName := coll.Database().Name()
+	from := dbName + "." + coll.Name()
+	to := dbName + "." + coll.Name() + "_renamed"
+
+	var res bson.D
+	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "renameCollection", Value: from},
+		{Key: "to", Value: to},
+	}).Decode(&res)
+
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 26, cmdErr.Code, "expected NamespaceNotFound (26), got code %d: %s", cmdErr.Code, cmdErr.Message)
+}
+
+// TestRenameCollection_DropTarget verifies that renameCollection with dropTarget:true
+// succeeds even when the target collection already exists by dropping it first.
+//
+// Parity test for do-ncv8.
+func TestRenameCollection_DropTarget(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+
+	dbName := "testdb_rename_droptarget"
+	srcName := "src_col"
+	dstName := "dst_col"
+
+	db := env.client.Database(dbName)
+	t.Cleanup(func() { db.Drop(context.Background()) }) //nolint:errcheck
+
+	// Create source collection.
+	src := db.Collection(srcName)
+	insertDocs(t, src, bson.D{{Key: "x", Value: int32(1)}})
+
+	// Create target collection that will be dropped.
+	dst := db.Collection(dstName)
+	insertDocs(t, dst, bson.D{{Key: "y", Value: int32(99)}})
+
+	from := dbName + "." + srcName
+	to := dbName + "." + dstName
+
+	var res bson.D
+	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "renameCollection", Value: from},
+		{Key: "to", Value: to},
+		{Key: "dropTarget", Value: true},
+	}).Decode(&res)
+	require.NoError(t, err, "renameCollection with dropTarget:true must succeed when target exists")
+	assert.Equal(t, float64(1), res.Map()["ok"], "ok must be 1")
+
+	// Verify the renamed collection has the source document (not the old target doc).
+	var doc bson.D
+	require.NoError(t, db.Collection(dstName).FindOne(ctx, bson.D{}).Decode(&doc))
+	m := doc.Map()
+	_, hasX := m["x"]
+	assert.True(t, hasX, "renamed collection must contain source document with field 'x'")
+}
+
+// TestServerStatus_ReplicationField verifies that serverStatus on a standalone
+// server does not include a repl field (replication is not configured).
+//
+// Parity test for do-ncv8.
+func TestServerStatus_ReplicationField(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	ctx := context.Background()
+
+	var res bson.D
+	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "serverStatus", Value: int32(1)},
+	}).Decode(&res)
+	require.NoError(t, err, "serverStatus must not error")
+	assert.Equal(t, float64(1), res.Map()["ok"], "ok must be 1")
+
+	// On a standalone server, the repl field must be absent.
+	// MongoDB only includes repl when the server is part of a replica set.
+	_, hasRepl := res.Map()["repl"]
+	assert.False(t, hasRepl, "standalone server must not include a 'repl' field in serverStatus")
+}
+
 // TestDbStats_ScaleOption verifies that the dbStats scale parameter correctly divides all
 // size fields (dataSize, storageSize, indexSize, totalSize) by the scale factor, while
 // leaving document counts and avgObjSize unaffected.
