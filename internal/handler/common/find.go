@@ -46,9 +46,9 @@ type FindParams struct {
 
 	AllowDiskUse     bool            `ferretdb:"allowDiskUse,ignored"`
 	ReadConcern      *types.Document `ferretdb:"readConcern,ignored"`
-	Max              *types.Document `ferretdb:"max,ignored"`
-	Min              *types.Document `ferretdb:"min,ignored"`
-	Hint             any             `ferretdb:"hint,ignored"`
+	Max              *types.Document `ferretdb:"max,opt"`
+	Min              *types.Document `ferretdb:"min,opt"`
+	Hint             any             `ferretdb:"hint,opt"`
 	LSID             any             `ferretdb:"lsid,ignored"`
 	TxnNumber        int64           `ferretdb:"txnNumber,ignored"`
 	StartTransaction bool            `ferretdb:"startTransaction,ignored"`
@@ -56,7 +56,7 @@ type FindParams struct {
 	ClusterTime      any             `ferretdb:"$clusterTime,ignored"`
 	ReadPreference   *types.Document `ferretdb:"$readPreference,ignored"`
 
-	ReturnKey           bool `ferretdb:"returnKey,unimplemented-non-default"`
+	ReturnKey           bool `ferretdb:"returnKey,opt"`
 	OplogReplay         bool `ferretdb:"oplogReplay,ignored"`
 	AllowPartialResults bool `ferretdb:"allowPartialResults,ignored"`
 

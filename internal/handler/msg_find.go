@@ -317,6 +317,12 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 
 	iter = common.FilterIterator(iter, closer, params.Filter)
 
+	// Apply min/max index bounds filter if specified (used with hint to constrain index scan range).
+	if params.Min != nil || params.Max != nil {
+		hintDoc, _ := params.Hint.(*types.Document)
+		iter = minMaxBoundsIterator(iter, closer, hintDoc, params.Min, params.Max)
+	}
+
 	// If the filter contains $near or $nearSphere, sort results by geo distance.
 	// Otherwise use the regular sort.
 	var sortErr error
@@ -345,6 +351,17 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 
 	iter = common.LimitIterator(iter, closer, params.Limit)
 
+	// If returnKey is true, project only the index key fields (from hint) instead of regular projection.
+	if params.ReturnKey {
+		keyProj := buildReturnKeyProjection(params.Hint)
+		var err error
+		if iter, err = common.ProjectionIterator(iter, closer, keyProj, params.Filter); err != nil {
+			closer.Close()
+			return nil, lazyerrors.Error(err)
+		}
+		return iterator.WithClose(iter, closer.Close), nil
+	}
+
 	var err error
 	if iter, err = common.ProjectionIterator(iter, closer, params.Projection, params.Filter); err != nil {
 		closer.Close()
@@ -353,6 +370,125 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 
 	return iterator.WithClose(iter, closer.Close), nil
 }
+
+// buildReturnKeyProjection creates a projection document that includes only the
+// fields specified in the hint (index key fields), with _id excluded.
+// This is used when returnKey=true is set in a find command.
+func buildReturnKeyProjection(hint any) *types.Document {
+	hintDoc, ok := hint.(*types.Document)
+	if !ok || hintDoc == nil {
+		return must.NotFail(types.NewDocument("_id", int32(0)))
+	}
+
+	pairs := make([]any, 0, hintDoc.Len()*2+2)
+	for _, field := range hintDoc.Keys() {
+		pairs = append(pairs, field, int32(1))
+	}
+	// Exclude _id by default for returnKey projections.
+	pairs = append(pairs, "_id", int32(0))
+	return must.NotFail(types.NewDocument(pairs...))
+}
+
+// minMaxBoundsIterator wraps an iterator and filters out documents that fall
+// outside the min/max index bounds. min is inclusive, max is exclusive.
+// If hintDoc is provided, only its fields are checked; otherwise all fields
+// in min/max documents are checked.
+func minMaxBoundsIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, hintDoc, minDoc, maxDoc *types.Document) types.DocumentsIterator {
+	res := &minMaxIter{iter: iter, hintDoc: hintDoc, minDoc: minDoc, maxDoc: maxDoc}
+	closer.Add(res)
+	return res
+}
+
+// minMaxIter filters documents based on min/max index bounds.
+type minMaxIter struct {
+	iter    types.DocumentsIterator
+	hintDoc *types.Document
+	minDoc  *types.Document
+	maxDoc  *types.Document
+}
+
+// Next implements iterator.Interface.
+func (it *minMaxIter) Next() (struct{}, *types.Document, error) {
+	var unused struct{}
+
+	for {
+		_, doc, err := it.iter.Next()
+		if err != nil {
+			return unused, nil, err
+		}
+
+		if it.matchesBounds(doc) {
+			return unused, doc, nil
+		}
+	}
+}
+
+// Close implements iterator.Interface.
+func (it *minMaxIter) Close() {
+	it.iter.Close()
+}
+
+// matchesBounds returns true if the document satisfies the min/max bounds.
+// min is inclusive, max is exclusive.
+func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
+	// Determine which fields to check: use hint fields if available,
+	// otherwise use all fields from min/max documents.
+	var fields []string
+	if it.hintDoc != nil && it.hintDoc.Len() > 0 {
+		fields = it.hintDoc.Keys()
+	} else {
+		seen := make(map[string]bool)
+		if it.minDoc != nil {
+			for _, f := range it.minDoc.Keys() {
+				if !seen[f] {
+					fields = append(fields, f)
+					seen[f] = true
+				}
+			}
+		}
+		if it.maxDoc != nil {
+			for _, f := range it.maxDoc.Keys() {
+				if !seen[f] {
+					fields = append(fields, f)
+					seen[f] = true
+				}
+			}
+		}
+	}
+
+	for _, field := range fields {
+		docVal, err := doc.Get(field)
+		if err != nil {
+			// Field missing from document — doesn't satisfy bounds.
+			return false
+		}
+
+		if it.minDoc != nil {
+			minVal, err := it.minDoc.Get(field)
+			if err == nil {
+				// min is inclusive: docVal >= minVal
+				if cmp := types.Compare(docVal, minVal); cmp == types.Less {
+					return false
+				}
+			}
+		}
+
+		if it.maxDoc != nil {
+			maxVal, err := it.maxDoc.Get(field)
+			if err == nil {
+				// max is exclusive: docVal < maxVal
+				if cmp := types.Compare(docVal, maxVal); cmp != types.Less {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+// check interfaces
+var _ types.DocumentsIterator = (*minMaxIter)(nil)
 
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.
 // The MaxTimeMSExpired error won't be returned if maxTimeMS wasn't set.
