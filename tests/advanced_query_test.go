@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -230,9 +229,9 @@ func TestAdvancedQuery_Regex_ExtendedWhitespace_x_Flag(t *testing.T) {
 	assert.Equal(t, int32(1), gotID)
 }
 
-// TestAdvancedQuery_Regex_LookaheadUnsupported verifies that a regex with a lookahead
-// assertion returns an error (Go's regexp engine does not support lookaheads). (DongoFull)
-func TestAdvancedQuery_Regex_LookaheadUnsupported(t *testing.T) {
+// TestAdvancedQuery_Regex_LookaheadSupported verifies that a regex with a PCRE lookahead
+// assertion is evaluated correctly using the PCRE-compatible engine. (DongoFull)
+func TestAdvancedQuery_Regex_LookaheadSupported(t *testing.T) {
 	t.Parallel()
 
 	env := startDongo(t)
@@ -240,17 +239,21 @@ func TestAdvancedQuery_Regex_LookaheadUnsupported(t *testing.T) {
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("name", "foobar")),
+		d(e("_id", int32(2)), e("name", "bazqux")),
 	)
 
 	ctx := context.Background()
-	// "(?=foo)" is a lookahead — not supported by Go's regexp engine.
-	_, err := coll.Find(ctx,
+	// "(?=foo)" is a PCRE lookahead — matches strings where "foo" follows at the current position.
+	// "foobar" matches (lookahead succeeds at position 0); "bazqux" does not.
+	cursor, err := coll.Find(ctx,
 		d(e("name", d(e("$regex", "(?=foo)")))),
 	)
-	require.Error(t, err, "lookahead regex should return an error")
-	cmdErr, ok := err.(mongo.CommandError)
-	require.True(t, ok, "expected a CommandError, got %T: %v", err, err)
-	assert.NotZero(t, cmdErr.Code)
+	require.NoError(t, err, "lookahead regex should be supported via PCRE engine")
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1)
+	assert.Equal(t, int32(1), results[0].Map()["_id"])
 }
 
 // TestAdvancedQuery_TextSearch_MetaTextScore_Projection verifies that $text search

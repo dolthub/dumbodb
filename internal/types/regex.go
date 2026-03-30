@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"regexp/syntax"
 
+	"github.com/dlclark/regexp2"
+
 	"github.com/dolthub/dongo/internal/util/lazyerrors"
 )
 
@@ -58,14 +60,36 @@ var (
 	ErrInvalidRepeatSize = fmt.Errorf("Regular expression is invalid: regular expression is too large")
 )
 
+// Matcher is implemented by compiled regular expressions returned by Regex.Compile.
+type Matcher interface {
+	MatchString(s string) bool
+	String() string
+}
+
+// regexp2Matcher wraps regexp2.Regexp to implement Matcher.
+type regexp2Matcher struct {
+	re *regexp2.Regexp
+}
+
+func (m *regexp2Matcher) MatchString(s string) bool {
+	matched, _ := m.re.MatchString(s)
+	return matched
+}
+
+func (m *regexp2Matcher) String() string {
+	return m.re.String()
+}
+
 // Regex represents BSON type Regex.
 type Regex struct {
 	Pattern string
 	Options string
 }
 
-// Compile returns Go Regexp object.
-func (r Regex) Compile() (*regexp.Regexp, error) {
+// Compile returns a Matcher that can evaluate the regex pattern.
+// For patterns that require PCRE features (such as lookaheads) that Go's
+// regexp engine does not support, it falls back to the regexp2 engine.
+func (r Regex) Compile() (Matcher, error) {
 	var opts string
 	extendedMode := false
 	for _, o := range r.Options {
@@ -92,37 +116,46 @@ func (r Regex) Compile() (*regexp.Regexp, error) {
 		return re, nil
 	}
 
-	if err, ok := err.(*syntax.Error); ok {
-		//nolint:exhaustive // we don't need to handle all possible errors there
-		switch err.Code {
-		case syntax.ErrInvalidCharRange:
-			return nil, ErrInvalidClassRange
-		case syntax.ErrInvalidEscape:
-			return nil, ErrInvalidEscape
-		case syntax.ErrInvalidNamedCapture:
-			return nil, ErrMissingTerminator
-		case syntax.ErrInvalidPerlOp:
-			return nil, ErrUnsupportedPerlOp
-		case syntax.ErrInvalidRepeatOp:
-			return nil, ErrNothingToRepeat
-		case syntax.ErrInvalidRepeatSize:
-			return nil, ErrInvalidRepeatSize
-		case syntax.ErrMissingBracket:
-			return nil, ErrMissingBracket
-		case syntax.ErrMissingParen:
-			return nil, ErrMissingParen
-		case syntax.ErrMissingRepeatArgument:
-			return nil, ErrNothingToRepeat
-		case syntax.ErrTrailingBackslash:
-			return nil, ErrTrailingBackslash
-		case syntax.ErrUnexpectedParen:
-			return nil, ErrUnmatchedParentheses
-		default:
-			return nil, lazyerrors.Error(err)
-		}
+	syntaxErr, ok := err.(*syntax.Error)
+	if !ok {
+		return nil, lazyerrors.Error(err)
 	}
 
-	return nil, lazyerrors.Error(err)
+	//nolint:exhaustive // we don't need to handle all possible errors there
+	switch syntaxErr.Code {
+	case syntax.ErrInvalidCharRange:
+		return nil, ErrInvalidClassRange
+	case syntax.ErrInvalidEscape:
+		return nil, ErrInvalidEscape
+	case syntax.ErrInvalidNamedCapture:
+		return nil, ErrMissingTerminator
+	case syntax.ErrInvalidRepeatOp:
+		return nil, ErrNothingToRepeat
+	case syntax.ErrInvalidRepeatSize:
+		return nil, ErrInvalidRepeatSize
+	case syntax.ErrMissingBracket:
+		return nil, ErrMissingBracket
+	case syntax.ErrMissingParen:
+		return nil, ErrMissingParen
+	case syntax.ErrMissingRepeatArgument:
+		return nil, ErrNothingToRepeat
+	case syntax.ErrTrailingBackslash:
+		return nil, ErrTrailingBackslash
+	case syntax.ErrUnexpectedParen:
+		return nil, ErrUnmatchedParentheses
+
+	case syntax.ErrInvalidPerlOp:
+		// Go's regexp engine does not support PCRE features like lookaheads.
+		// Fall back to regexp2 which provides PCRE-compatible evaluation.
+		re2, err2 := regexp2.Compile(expr, 0)
+		if err2 != nil {
+			return nil, ErrUnsupportedPerlOp
+		}
+		return &regexp2Matcher{re: re2}, nil
+
+	default:
+		return nil, lazyerrors.Error(syntaxErr)
+	}
 }
 
 // stripExtendedWhitespace preprocesses a regex pattern for the x flag (extended whitespace mode).
