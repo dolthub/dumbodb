@@ -161,17 +161,10 @@ func ValidateGeoFilter(filter *types.Document) error {
 			if err2 != nil {
 				continue
 			}
-			if lon < -180 || lon > 180 {
+			if lon < -180 || lon > 180 || lat < -90 || lat > 90 {
 				return handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,
-					fmt.Sprintf("longitude must be in [-180, 180], got %v", lon),
-					opKey,
-				)
-			}
-			if lat < -90 || lat > 90 {
-				return handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					fmt.Sprintf("latitude must be in [-90, 90], got %v", lat),
+					fmt.Sprintf("longitude/latitude is out of bounds, lng: %g lat: %g", lon, lat),
 					opKey,
 				)
 			}
@@ -403,17 +396,10 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 			return false, err
 		}
 		// Validate coordinate ranges
-		if lon < -180 || lon > 180 {
+		if lon < -180 || lon > 180 || lat < -90 || lat > 90 {
 			return false, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				fmt.Sprintf("longitude must be in [-180, 180], got %v", lon),
-				"$near",
-			)
-		}
-		if lat < -90 || lat > 90 {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("latitude must be in [-90, 90], got %v", lat),
+				fmt.Sprintf("longitude/latitude is out of bounds, lng: %g lat: %g", lon, lat),
 				"$near",
 			)
 		}

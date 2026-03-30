@@ -208,17 +208,10 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 
 	// Validate near coordinates when spherical
 	if g.spherical {
-		if g.nearLon < -180 || g.nearLon > 180 {
+		if g.nearLon < -180 || g.nearLon > 180 || g.nearLat < -90 || g.nearLat > 90 {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				fmt.Sprintf("longitude must be in [-180, 180], got %v", g.nearLon),
-				"$geoNear (stage)",
-			)
-		}
-		if g.nearLat < -90 || g.nearLat > 90 {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrBadValue,
-				fmt.Sprintf("latitude must be in [-90, 90], got %v", g.nearLat),
+				fmt.Sprintf("longitude/latitude is out of bounds, lng: %g lat: %g", g.nearLon, g.nearLat),
 				"$geoNear (stage)",
 			)
 		}

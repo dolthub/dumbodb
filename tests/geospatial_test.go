@@ -18,10 +18,113 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
+// TestGeo_near_InvalidPointLongitude verifies that $near with $geometry and
+// longitude > 180 returns MongoDB-compatible error "longitude/latitude is out
+// of bounds, lng: X lat: Y". Parity test for do-f6pz.
+func TestGeo_near_InvalidPointLongitude(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	_, err := coll.Find(ctx,
+		d(e("loc", d(e("$near", d(
+			e("$geometry", d(
+				e("type", "Point"),
+				e("coordinates", bson.A{float64(200), float64(0)}), // lon 200 > 180
+			)),
+		))))),
+	)
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+}
+
+// TestGeo_near_InvalidPointLatitude verifies that $near with $geometry and
+// latitude > 90 returns MongoDB-compatible error "longitude/latitude is out
+// of bounds, lng: X lat: Y". Parity test for do-f6pz.
+func TestGeo_near_InvalidPointLatitude(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	_, err := coll.Find(ctx,
+		d(e("loc", d(e("$near", d(
+			e("$geometry", d(
+				e("type", "Point"),
+				e("coordinates", bson.A{float64(0), float64(100)}), // lat 100 > 90
+			)),
+		))))),
+	)
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+}
+
+// TestGeo_nearSphere_InvalidPoint verifies that $nearSphere with $geometry and
+// an out-of-range longitude returns MongoDB-compatible error
+// "longitude/latitude is out of bounds, lng: X lat: Y". Parity test for do-f6pz.
+func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	_, err := coll.Find(ctx,
+		d(e("loc", d(e("$nearSphere", d(
+			e("$geometry", d(
+				e("type", "Point"),
+				e("coordinates", bson.A{float64(200), float64(0)}), // lon 200 > 180
+			)),
+		))))),
+	)
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+}
+
+// TestGeo_geoNear_InvalidPoint verifies that the $geoNear aggregation stage
+// with an out-of-range longitude returns MongoDB-compatible error
+// "longitude/latitude is out of bounds, lng: X lat: Y". Parity test for do-f6pz.
+func TestGeo_geoNear_InvalidPoint(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	ctx := context.Background()
+	_, err := coll.Aggregate(ctx, bson.A{
+		d(e("$geoNear", d(
+			e("near", d(
+				e("type", "Point"),
+				e("coordinates", bson.A{float64(200), float64(0)}), // lon 200 > 180
+			)),
+			e("distanceField", "dist"),
+			e("spherical", true),
+		))),
+	})
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 2, cmdErr.Code, "expected BadValue (2), got code %d: %s", cmdErr.Code, cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "longitude/latitude is out of bounds", "unexpected error message: %s", cmdErr.Message)
+}
 
 // TestGeo_Legacy_NearSphere_2d verifies that $nearSphere with a legacy 2d index
 // correctly handles $maxDistance given in radians.  The query is centred on London
