@@ -386,8 +386,8 @@ func evaluateReplaceExpr(expr any, doc *types.Document) (*types.Document, error)
 			return result, nil
 		}
 
-		// Literal document — return a copy.
-		return e.DeepCopy(), nil
+		// Literal document template — evaluate field path expressions in values.
+		return evaluateReplaceDocTemplate(e, doc)
 
 	default:
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -399,6 +399,73 @@ func evaluateReplaceExpr(expr any, doc *types.Document) (*types.Document, error)
 			"$replaceWith (stage)",
 		)
 	}
+}
+
+// evaluateReplaceDocTemplate evaluates a literal document template against doc,
+// substituting string values that begin with "$" as field path expressions.
+// Non-string values and strings that are not field paths are copied as literals.
+func evaluateReplaceDocTemplate(templateDoc *types.Document, doc *types.Document) (*types.Document, error) {
+	result := must.NotFail(types.NewDocument())
+
+	iter := templateDoc.Iterator()
+	defer iter.Close()
+
+	for {
+		k, v, iterErr := iter.Next()
+		if iterErr != nil {
+			break
+		}
+
+		var outVal any
+
+		switch val := v.(type) {
+		case string:
+			if len(val) > 0 && val[0] == '$' {
+				fieldExpr, exprErr := aggregations.NewExpression(val, nil)
+				if exprErr != nil {
+					outVal = val
+				} else {
+					evaluated, evalErr := fieldExpr.Evaluate(doc)
+					if evalErr != nil {
+						outVal = types.Null
+					} else {
+						outVal = evaluated
+					}
+				}
+			} else {
+				outVal = val
+			}
+
+		case *types.Document:
+			if operators.IsOperator(val) {
+				op, opErr := operators.NewOperator(val)
+				if opErr != nil {
+					return nil, lazyerrors.Error(opErr)
+				}
+
+				evaluated, opErr := op.Process(doc)
+				if opErr != nil {
+					return nil, lazyerrors.Error(opErr)
+				}
+
+				outVal = evaluated
+			} else {
+				nested, nestedErr := evaluateReplaceDocTemplate(val, doc)
+				if nestedErr != nil {
+					return nil, nestedErr
+				}
+
+				outVal = nested
+			}
+
+		default:
+			outVal = v
+		}
+
+		result.Set(k, outVal)
+	}
+
+	return result, nil
 }
 
 // processReplacementDoc replaces the given document with a new document while retaining its
