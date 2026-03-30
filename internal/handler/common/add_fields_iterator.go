@@ -16,7 +16,9 @@ package common
 
 import (
 	"errors"
+	"strings"
 
+	"github.com/dolthub/dongo/internal/handler/common/aggregations"
 	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/types"
@@ -73,6 +75,22 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 			val, err = op.Process(doc)
 			if err = processAddFieldsError(err); err != nil {
 				return unused, nil, err
+			}
+		case string:
+			// Evaluate field reference expressions like "$fieldName".
+			// Non-expression strings (no "$" prefix) are used as literals.
+			if strings.HasPrefix(v, "$") {
+				expr, exprErr := aggregations.NewExpression(v, nil)
+				if exprErr == nil {
+					evaluated, evalErr := expr.Evaluate(doc)
+					if evalErr == nil {
+						val = evaluated
+					} else {
+						// Field not found: omit this field (MongoDB $set/$addFields behavior).
+						continue
+					}
+				}
+				// If NewExpression fails (e.g. invalid syntax), fall through and set literal.
 			}
 		}
 
