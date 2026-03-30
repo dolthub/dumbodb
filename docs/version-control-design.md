@@ -129,11 +129,17 @@ Object store (content-addressed by SHA-1/SHA-256)
 **Dongo is a presentation layer. Dolt does the work.**
 
 This is a hard requirement, not a preference. Every version control feature in
-Dongo must be backed directly by an existing Dolt primitive. Dongo's job is to
-translate MongoDB wire protocol commands into Dolt SQL calls or NBS operations,
-then translate the results back into BSON responses. Dongo must not reimplement
+Dongo must be backed directly by an existing Dolt abstraction. Dongo's job is to
+translate MongoDB wire protocol commands into calls to Dolt's Go APIs, then
+translate the results back into BSON responses. Dongo must not reimplement
 history walking, diff computation, merge logic, or any other algorithm that Dolt
 already provides.
+
+**Dolt exposes its VC capabilities through Go abstraction methods**, not raw SQL
+strings. The SQL engine (and system tables like `dolt_history_$TABLE`,
+`dolt_blame_$TABLE`, `dolt_commits`) may power those abstractions internally, but
+Dongo calls the Go API layer — the same interfaces the Dolt CLI and SQL engine
+themselves use. Do not construct SQL query strings in Dongo VC handlers.
 
 Dolt is purpose-built for this work and is extremely fast at it:
 - Prolly Tree diff is O(changes), not O(data size) — large collections with few
@@ -141,13 +147,10 @@ Dolt is purpose-built for this work and is extremely fast at it:
 - DAG history walk reuses content-addressed chunk caching — repeated traversals
   of the same subtrees are essentially free.
 - Cell-wise merge is already implemented, tested, and battle-hardened.
-- `dolt_diff_$TABLE`, `dolt_history_$TABLE`, `dolt_blame_$TABLE`,
-  `dolt_commits`, `dolt_branches` are all queryable via SQL today.
 
-When designing a Dongo VC feature, the question is always: **"Which Dolt SQL
-table or stored procedure already does this?"** — not "How do we implement it?"
-If no Dolt primitive exists, escalate to the Dolt team rather than building
-it in Dongo.
+When designing a Dongo VC feature, the question is always: **"Which Dolt Go API
+already does this?"** — not "How do we implement it?" If no Dolt abstraction
+exists, escalate to the Dolt team rather than building it in Dongo.
 
 ---
 
@@ -319,14 +322,14 @@ db.runCommand({
 // Returns: {history: [{hash: "...", timestamp: ISODate, doc: {...}}, ...], ok: 1}
 ```
 
-**Dolt primitive**: `SELECT * FROM dolt_history_$TABLE WHERE _id = ?` — Dolt
-already maintains a full per-row history table for every collection. Dongo reads
-this table via the Dolt SQL engine and translates results to BSON.
+**Dolt primitive**: Dolt exposes per-row history via Go abstraction methods on
+the database/table interfaces (backed by `dolt_history_$TABLE` internally). Dongo
+calls those methods and translates the resulting row iterator to a BSON cursor.
 
 **Performance note**: Dolt's Prolly Tree history walk is O(changes to that row),
 not O(all commits). This is Dolt's core design — Dongo gets it for free.
 
-**Feasibility**: High. Pure translation: SQL query → BSON cursor response.
+**Feasibility**: High. Pure translation: Dolt Go API call → BSON cursor response.
 
 ---
 
@@ -364,10 +367,11 @@ db.runCommand({dongoBlame: 1, collection: "users"})
 // Returns: {blame: [{_id: ..., hash: "...", author: "...", timestamp: ISODate}, ...], ok: 1}
 ```
 
-**Dolt primitive**: `SELECT * FROM dolt_blame_$TABLE` — Dolt provides a blame
-table per collection out of the box. Dongo reads it via SQL and translates to BSON.
+**Dolt primitive**: Dolt exposes blame via Go abstraction methods (backed by
+`dolt_blame_$TABLE` internally). Dongo calls those methods and translates the
+result iterator to a BSON cursor.
 
-**Feasibility**: High. Pure translation: SQL query → BSON cursor response.
+**Feasibility**: High. Pure translation: Dolt Go API call → BSON cursor response.
 
 ---
 
@@ -520,15 +524,16 @@ the RTVL from the specified commit instead of the working set.
 
 ### Conflict Model
 
-Dolt already tracks merge conflicts in `dolt_conflicts_$TABLE` (base/ours/theirs
-triples per conflicting row) and exposes resolution via `CALL DOLT_CONFLICTS_RESOLVE()`.
-Dongo's work is purely presentation:
-1. `dongoConflicts` → `SELECT * FROM dolt_conflicts_$TABLE` → BSON response
-2. `dongoResolveConflict` → `CALL DOLT_CONFLICTS_RESOLVE(table, 'ours'|'theirs')` → ok response
-3. `dongoMerge` already calls `CALL DOLT_MERGE()` — it just needs to detect and
-   surface conflict state rather than silently failing.
+Dolt already tracks merge conflicts (base/ours/theirs triples per conflicting row)
+and exposes resolution through Go abstraction methods (backed internally by
+`dolt_conflicts_$TABLE` and `DOLT_CONFLICTS_RESOLVE`). Dongo's work is purely
+presentation:
+1. `dongoConflicts` → call Dolt conflicts iterator → BSON response
+2. `dongoResolveConflict` → call Dolt resolve method → ok response
+3. `dongoMerge` already uses Dolt merge — it just needs to detect and surface
+   conflict state rather than silently failing.
 
-No new storage. No new conflict logic. Dolt owns it.
+No new storage. No new conflict logic. Dolt owns it all.
 
 ### DoltHub Integration
 
