@@ -706,7 +706,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 		case "$all":
 			// {field: {$all: [value, another_value, ...]}}
-			res, err := filterFieldExprAll(fieldValue, exprValue)
+			res, err := filterFieldExprAll(doc, filterKey, filterSuffix, fieldValue, exprValue)
 			if !res || err != nil {
 				return false, err
 			}
@@ -1045,7 +1045,10 @@ func filterFieldExprSize(fieldValue any, sizeValue any) (bool, error) {
 // filterFieldExprAll handles {field: {$all: [value, another_value, ...]}} filter.
 // The main purpose of $all is to filter arrays.
 // It is possible to filter non-arrays: {field: {$all: [value]}}, but such statement is equivalent to {field: value}.
-func filterFieldExprAll(fieldValue any, allValue any) (bool, error) {
+//
+// Special case: if any query element is {$elemMatch: expr}, it is treated as an $elemMatch
+// condition applied to the field array (MongoDB extension: $all + $elemMatch).
+func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fieldValue any, allValue any) (bool, error) {
 	query, ok := allValue.(*types.Array)
 	if !ok {
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "$all needs an array", "$all")
@@ -1053,6 +1056,46 @@ func filterFieldExprAll(fieldValue any, allValue any) (bool, error) {
 
 	if query.Len() == 0 {
 		return false, nil
+	}
+
+	// Check if any query element is an {$elemMatch: ...} expression.
+	// In that case, $all with $elemMatch has special semantics: for each
+	// {$elemMatch: expr} in the query list, the field array must have at least
+	// one element matching the expression.
+	hasElemMatch := false
+	for i := 0; i < query.Len(); i++ {
+		elem := must.NotFail(query.Get(i))
+		if d, ok := elem.(*types.Document); ok {
+			if _, err := d.Get("$elemMatch"); err == nil {
+				hasElemMatch = true
+				break
+			}
+		}
+	}
+
+	if hasElemMatch {
+		// For $all with $elemMatch elements, process each query element:
+		// - {$elemMatch: expr} → field array must contain an element matching expr
+		// - other values → not supported in mixed mode; treat as no-match
+		for i := 0; i < query.Len(); i++ {
+			elem := must.NotFail(query.Get(i))
+			elemDoc, ok := elem.(*types.Document)
+			if !ok {
+				return false, nil
+			}
+			elemMatchValue, err := elemDoc.Get("$elemMatch")
+			if err != nil {
+				return false, nil
+			}
+			matched, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, elemMatchValue)
+			if err != nil {
+				return false, err
+			}
+			if !matched {
+				return false, nil
+			}
+		}
+		return true, nil
 	}
 
 	switch value := fieldValue.(type) {
@@ -1691,9 +1734,12 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 // filterFieldExprElemMatch handles {field: {$elemMatch: value}}.
 // Returns false if doc value is not an array.
 //
-// Two condition forms are supported:
-//   - Operator conditions (all keys start with "$", e.g. {$gte: 80}): delegated to filterFieldExpr
-//     which uses array-aware comparison.
+// Three condition forms are supported:
+//   - Pure operator conditions (all keys start with "$", no logical ops, e.g. {$gte: 80, $lt: 90}):
+//     iterates each array element and checks all conditions against that single element.
+//     This correctly enforces that ALL conditions must be satisfied by the SAME element.
+//   - Logical operator conditions ($and, $or, $nor): iterates array elements and calls
+//     FilterDocument on each embedded document element.
 //   - Field conditions (at least one key without "$", e.g. {a: 1, b: 2} or {score: {$gt: 5}}):
 //     iterates array elements and calls FilterDocument on each embedded document element.
 func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix string, exprValue any) (bool, error) {
@@ -1706,7 +1752,9 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 		)
 	}
 
-	isOperatorCondition := true
+	// Classify the expression type by scanning its keys.
+	isPureOperator := true // all keys start with "$"
+	hasLogical := false    // contains $and, $or, or $nor
 
 	for _, key := range expr.Keys() {
 		if slices.Contains([]string{"$text", "$where"}, key) {
@@ -1717,26 +1765,12 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			)
 		}
 
-		// TODO https://github.com/dolthub/dongo/issues/730
 		if slices.Contains([]string{"$and", "$or", "$nor"}, key) {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNotImplemented,
-				fmt.Sprintf("$elemMatch: support for %s not implemented yet", key),
-				"$elemMatch",
-			)
-		}
-
-		// TODO https://github.com/dolthub/dongo/issues/731
-		if slices.Contains([]string{"$ne", "$not"}, key) {
-			return false, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNotImplemented,
-				fmt.Sprintf("$elemMatch: support for %s not implemented yet", key),
-				"$elemMatch",
-			)
+			hasLogical = true
 		}
 
 		if !strings.HasPrefix(key, "$") {
-			isOperatorCondition = false
+			isPureOperator = false
 		}
 	}
 
@@ -1750,14 +1784,6 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 		return false, nil
 	}
 
-	if isOperatorCondition {
-		// For pure operator conditions like {$gte: 80}, delegate to filterFieldExpr
-		// which handles array comparison semantics.
-		return filterFieldExpr(doc, filterKey, filterSuffix, expr)
-	}
-
-	// For field conditions like {a: 1, b: 2} or {score: {$gt: 5, $lt: 10}}, iterate
-	// each array element and check if it matches the condition as an embedded document.
 	iter := arr.Iterator()
 	defer iter.Close()
 
@@ -1771,12 +1797,25 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			return false, lazyerrors.Error(iterErr)
 		}
 
-		elemDoc, ok := elem.(*types.Document)
-		if !ok {
-			continue
+		var matches bool
+
+		if isPureOperator && !hasLogical {
+			// Pure operator conditions (e.g. {$gte: 80, $lt: 90}): check all conditions
+			// against each individual element. This ensures multi-condition $elemMatch
+			// correctly requires ALL conditions to be satisfied by the SAME element,
+			// rather than allowing different elements to satisfy different conditions.
+			tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
+			matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr)
+		} else {
+			// Logical operators ($and/$or/$nor) or field conditions: the element must be
+			// a document and satisfy the expression as a document filter.
+			elemDoc, ok := elem.(*types.Document)
+			if !ok {
+				continue
+			}
+			matches, err = FilterDocument(elemDoc, expr)
 		}
 
-		matches, err := FilterDocument(elemDoc, expr)
 		if err != nil {
 			return false, err
 		}
