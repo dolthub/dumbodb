@@ -132,14 +132,14 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	pairs := []any{
 		"db", dbName,
-		"collections", int32(len(list.Collections)),
+		"collections", int64(len(list.Collections)),
 		// TODO https://github.com/dolthub/dongo/issues/176
-		"views", int32(0),
+		"views", int64(0),
 		"objects", stats.CountDocuments,
 		"avgObjSize", avgObjSize,
 		"dataSize", float64(totalBSONSize) / float64(scale),
 		"storageSize", float64(stats.SizeCollections) / float64(scale),
-		"indexes", int32(nIndexes),
+		"indexes", int64(nIndexes),
 		"indexSize", float64(stats.SizeIndexes) / float64(scale),
 		"totalSize", float64(stats.SizeTotal) / float64(scale),
 	}
@@ -160,7 +160,7 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	pairs = append(pairs,
-		"scaleFactor", int32(scale),
+		"scaleFactor", int64(scale),
 		"fsUsedSize", fsUsedSize/float64(scale),
 		"fsTotalSize", fsTotalSize/float64(scale),
 		"ok", float64(1),

@@ -58,8 +58,11 @@ func newSum(args ...any) (Operator, error) {
 
 			var exErr *aggregations.ExpressionError
 			if errors.As(err, &exErr) {
-				if exErr.Code() == aggregations.ErrUndefinedVariable {
+				switch exErr.Code() {
+				case aggregations.ErrUndefinedVariable:
 					operator.rawArgs = append(operator.rawArgs, arg)
+				case aggregations.ErrEmptyFieldPath, aggregations.ErrEmptyVariable, aggregations.ErrInvalidExpression:
+					return nil, err
 				}
 
 				continue
