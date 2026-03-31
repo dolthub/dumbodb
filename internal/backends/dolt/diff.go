@@ -20,12 +20,16 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
+	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dongo/internal/backends"
 	"github.com/dolthub/dongo/internal/types"
@@ -36,9 +40,10 @@ import (
 //
 // Resolution order:
 //  1. Dolt commit hash (32 base32 chars 0-9a-v): load AM from that commit directly.
-//  2. Tag name: resolve via refs/tags/<rootish>, then load AM from the target commit.
+//  2. Relative ancestor expression (<branch>~<N>): resolve branch HEAD, walk N first-parents.
+//  3. Tag name: resolve via refs/tags/<rootish>, then load AM from the target commit.
 //
-// This function is used for historical reads (e.g. mydb__<commit-hash> or mydb__<tag>).
+// This function is used for historical reads (e.g. mydb__<commit-hash>, mydb__main~3, or mydb__<tag>).
 // Branch-name rootishes (e.g. "main") return an error; callers should use the
 // current working set AM (state.am) for branches.
 func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.AddressMap, error) {
@@ -47,7 +52,12 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 		return amFromCommitHash(ctx, state, rootish)
 	}
 
-	// Case 2: tag name — try refs/tags/<rootish>.
+	// Case 2: relative ancestor expression <branch>~<N>.
+	if strings.Contains(rootish, "~") {
+		return amFromAncestorExpr(ctx, state, rootish)
+	}
+
+	// Case 3: tag name — try refs/tags/<rootish>.
 	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not a commit hash and tag lookup failed: %w", rootish, err)
@@ -60,6 +70,54 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 		return prolly.AddressMap{}, fmt.Errorf("rootish %q: tag has no head address", rootish)
 	}
 	return amFromCommitHash(ctx, state, tagHead.String())
+}
+
+// amFromAncestorExpr resolves a relative ancestor expression like "main~3" to a
+// collections AddressMap.
+//
+// It resolves the branch portion to its HEAD commit via refs/heads/<branch>, then
+// walks N first-parents up the commit DAG using the Dolt parent-chain API.
+// ~0 returns the branch HEAD itself.
+func amFromAncestorExpr(ctx context.Context, state *dbState, rootish string) (prolly.AddressMap, error) {
+	idx := strings.LastIndex(rootish, "~")
+	branch := rootish[:idx]
+	nStr := rootish[idx+1:]
+
+	n, err := strconv.Atoi(nStr)
+	if err != nil || n < 0 {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: invalid ancestor count %q", rootish, nStr)
+	}
+
+	// Resolve branch to HEAD commit hash.
+	branchDS, dsErr := state.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if dsErr != nil {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: resolving branch %q: %w", rootish, branch, dsErr)
+	}
+	if !branchDS.HasHead() {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: branch %q has no commits", rootish, branch)
+	}
+	currentHash, ok := branchDS.MaybeHeadAddr()
+	if !ok {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: branch %q has no head address", rootish, branch)
+	}
+
+	// Walk N first-parents up the commit DAG.
+	for i := 0; i < n; i++ {
+		commit, loadErr := datas.LoadCommitAddr(ctx, state.vs, currentHash)
+		if loadErr != nil {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: loading commit at depth %d: %w", rootish, i, loadErr)
+		}
+		parentAddrs, parErr := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if parErr != nil {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: reading parents at depth %d: %w", rootish, i, parErr)
+		}
+		if len(parentAddrs) == 0 {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: commit at depth %d has no parent (only %d ancestors exist)", rootish, i, i)
+		}
+		currentHash = parentAddrs[0]
+	}
+
+	return amFromCommitHash(ctx, state, currentHash.String())
 }
 
 // amFromCommitHash loads the collections AddressMap from a specific commit
