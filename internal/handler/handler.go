@@ -68,9 +68,10 @@ type Handler struct {
 
 	b backends.Backend
 
-	cursors  *cursor.Registry
-	commands map[string]*command
-	wg       sync.WaitGroup
+	cursors   *cursor.Registry
+	commands  map[string]*command
+	wg        sync.WaitGroup
+	processID types.ObjectID
 
 	cappedCleanupStop             chan struct{}
 	cleanupCappedCollectionsDocs  *prometheus.CounterVec
@@ -128,9 +129,10 @@ func New(opts *NewOpts) (*Handler, error) {
 	b := oplog.NewBackend(opts.Backend, logging.WithName(opts.L, "oplog"))
 
 	h := &Handler{
-		b:       b,
-		NewOpts: opts,
-		cursors: cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
+		b:         b,
+		NewOpts:   opts,
+		cursors:   cursor.NewRegistry(logging.WithName(opts.L, "cursors")),
+		processID: types.NewObjectID(),
 
 		cappedCleanupStop: make(chan struct{}),
 		cleanupCappedCollectionsDocs: prometheus.NewCounterVec(

@@ -117,6 +117,7 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
 	res.Set("topologyVersion", must.NotFail(types.NewDocument(
+		"processId", h.processID,
 		"counter", int64(0),
 	)))
 
