@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -125,7 +126,7 @@ func TestAdvancedQuery_JsonSchema_NoMatch(t *testing.T) {
 }
 
 // TestAdvancedQuery_JsonSchema_DuplicateRequired verifies that $jsonSchema with duplicate
-// 'required' keys applies last-value-wins semantics (BSON key override). (DongoFull)
+// 'required' keys is rejected with FailedToParse (code 9). (DongoFull)
 func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	t.Parallel()
 
@@ -138,21 +139,19 @@ func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// bson.D allows duplicate keys. The first 'required' lists "x" (present in both docs),
-	// but the second 'required' lists a nonexistent field. MongoDB applies last-value-wins
-	// for duplicate BSON keys, so only the second 'required' is effective and no docs match.
-	cursor, err := coll.Find(ctx,
+	// bson.D allows duplicate keys, but MongoDB rejects $jsonSchema with duplicate
+	// keyword names with FailedToParse: "Duplicate $jsonSchema keyword: required".
+	_, err := coll.Find(ctx,
 		bson.D{{Key: "$jsonSchema", Value: bson.D{
 			{Key: "required", Value: bson.A{"x"}},
 			{Key: "required", Value: bson.A{"nonexistent_field_xyz"}},
 		}}},
 	)
-	require.NoError(t, err)
-	defer cursor.Close(ctx)
-
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	assert.Empty(t, results)
+	require.Error(t, err)
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 9, cmdErr.Code, "expected FailedToParse (9), got code %d: %s", cmdErr.Code, cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "Duplicate $jsonSchema keyword: required")
 }
 
 // TestAdvancedQuery_JsonSchema_OneOf verifies $jsonSchema oneOf constraint. (DongoFull)

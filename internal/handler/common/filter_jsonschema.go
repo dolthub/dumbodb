@@ -34,42 +34,14 @@ func filterJSONSchema(doc *types.Document, schema *types.Document) (bool, error)
 	return validateJSONSchemaValue(doc, schema, true)
 }
 
-// deduplicateSchema returns a new Document with duplicate keys resolved using
-// last-value-wins semantics (matching BSON key override behavior in MongoDB).
-// The key order is preserved based on first occurrence.
-func deduplicateSchema(schema *types.Document) *types.Document {
-	keys := schema.Keys()
-	values := schema.Values()
-
-	// Determine the last value for each key.
-	lastValue := make(map[string]any, len(keys))
-	for i, key := range keys {
-		lastValue[key] = values[i]
-	}
-
-	// Build a deduplicated document in original key order (first occurrence position),
-	// but using the last-seen value for each key.
-	result := types.MakeDocument(len(lastValue))
-	seen := make(map[string]bool, len(keys))
-
-	for _, key := range keys {
-		if seen[key] {
-			continue
-		}
-
-		seen[key] = true
-		result.Set(key, lastValue[key])
-	}
-
-	return result
-}
-
 // validateJSONSchemaValue recursively validates a value against a JSON Schema document.
 func validateJSONSchemaValue(value any, schema *types.Document, isDocument bool) (bool, error) {
-	if _, ok := schema.FindDuplicateKey(); ok {
-		// MongoDB applies last-value-wins BSON semantics for duplicate schema keys
-		// rather than rejecting the schema. Deduplicate before validation.
-		schema = deduplicateSchema(schema)
+	if dupKey, ok := schema.FindDuplicateKey(); ok {
+		return false, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse,
+			fmt.Sprintf("Duplicate $jsonSchema keyword: %s", dupKey),
+			"$jsonSchema",
+		)
 	}
 
 	for _, key := range schema.Keys() {
