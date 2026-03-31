@@ -47,6 +47,10 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
+	if err = enforceWritableRootish(dbName); err != nil {
+		return nil, err
+	}
+
 	collectionVal, _ := document.Get(command)
 
 	var collection string

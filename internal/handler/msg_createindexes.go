@@ -49,6 +49,10 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	if err = enforceWritableRootish(dbName); err != nil {
+		return nil, err
+	}
+
 	collection, err := common.GetCollectionNameParam(document, command)
 	if err != nil {
 		return nil, err

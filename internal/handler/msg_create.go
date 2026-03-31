@@ -57,6 +57,10 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, err
 	}
 
+	if err = enforceWritableRootish(dbName); err != nil {
+		return nil, err
+	}
+
 	collectionName, err := common.GetRequiredParam[string](document, command)
 	if err != nil {
 		return nil, err

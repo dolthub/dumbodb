@@ -18,6 +18,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
 )
 
@@ -102,25 +105,26 @@ func TestBranchFromDBName(t *testing.T) {
 	t.Parallel()
 
 	validCases := []struct {
-		name           string
-		encoded        string
-		wantDBName     string
-		wantRootish    string
+		name         string
+		encoded      string
+		wantDBName   string
+		wantRootish  string
+		wantReadOnly bool
 	}{
-		{"no separator defaults to main", "mydb", "mydb", "main"},
-		{"branch separator", "mydb__main", "mydb", "main"},
-		{"feature branch", "mydb__feature-x", "mydb", "feature-x"},
-		{"tag name", "mydb__v1.0", "mydb", "v1.0"},
-		{"commit hash", "mydb__a1b2c3d", "mydb", "a1b2c3d"},
-		{"relative ancestor", "mydb__main~3", "mydb", "main~3"},
-		{"db name with underscore", "my_db__main", "my_db", "main"},
+		{"no separator defaults to main writable", "mydb", "mydb", "main", false},
+		{"branch separator main", "mydb__main", "mydb", "main", false},
+		{"feature branch writable", "mydb__feature-x", "mydb", "feature-x", false},
+		{"tag name not all-hex writable", "mydb__v1.0", "mydb", "v1.0", false},
+		{"commit hash read-only", "mydb__a1b2c3d", "mydb", "a1b2c3d", true},
+		{"relative ancestor read-only", "mydb__main~3", "mydb", "main~3", true},
+		{"db name with underscore", "my_db__main", "my_db", "main", false},
 	}
 
 	for _, tc := range validCases {
 		tc := tc
 		t.Run("valid/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			dbName, rootish, err := branchFromDBName(tc.encoded)
+			dbName, rootish, readOnly, err := branchFromDBName(tc.encoded)
 			if err != nil {
 				t.Fatalf("branchFromDBName(%q) unexpected error: %v", tc.encoded, err)
 			}
@@ -129,6 +133,9 @@ func TestBranchFromDBName(t *testing.T) {
 			}
 			if rootish != tc.wantRootish {
 				t.Errorf("branchFromDBName(%q) rootish = %q, want %q", tc.encoded, rootish, tc.wantRootish)
+			}
+			if readOnly != tc.wantReadOnly {
+				t.Errorf("branchFromDBName(%q) readOnly = %v, want %v", tc.encoded, readOnly, tc.wantReadOnly)
 			}
 		})
 	}
@@ -150,7 +157,7 @@ func TestBranchFromDBName(t *testing.T) {
 		tc := tc
 		t.Run("invalid/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, _, err := branchFromDBName(tc.encoded)
+			_, _, _, err := branchFromDBName(tc.encoded)
 			if err == nil {
 				t.Errorf("branchFromDBName(%q) expected error, got nil", tc.encoded)
 				return
@@ -170,6 +177,76 @@ func TestBranchFromDBName(t *testing.T) {
 			msg := cmdErr.Error()
 			if msg == "" {
 				t.Errorf("branchFromDBName(%q) error message must not be empty", tc.encoded)
+			}
+		})
+	}
+}
+
+func TestRootishIsReadOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		rootish  string
+		readOnly bool
+	}{
+		// Branch names (writable)
+		{"main", false},
+		{"feature", false},
+		{"feature-branch", false},
+		{"release/v2", false},
+
+		// Commit hashes (read-only): all hex chars
+		{"abc123", true},
+		{"deadbeef", true},
+		{"a1b2c3d4e5f6", true},
+		{"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true}, // 40-char SHA1
+
+		// Ancestor expressions (read-only): contain ~
+		{"main~1", true},
+		{"main~3", true},
+		{"feature~10", true},
+
+		// Tag-like names that look like branches (writable — tags indistinguishable from branches at parse time)
+		{"v1.0", false},
+		{"v2.3.4", false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.rootish, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.readOnly, rootishIsReadOnly(tt.rootish))
+		})
+	}
+}
+
+func TestEnforceWritableRootish(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		encodedDB string
+		wantErr   bool
+		errMsg    string
+	}{
+		{"mydb", false, ""},
+		{"mydb__main", false, ""},
+		{"mydb__feature", false, ""},
+		{"mydb__abc123", true, "cannot write to a read-only database snapshot"},
+		{"mydb__main~1", true, "cannot write to a read-only database snapshot"},
+		{"mydb__deadbeef", true, "cannot write to a read-only database snapshot"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.encodedDB, func(t *testing.T) {
+			t.Parallel()
+
+			err := enforceWritableRootish(tt.encodedDB)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}

@@ -51,7 +51,7 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, err
 	}
 
-	dbName, _, err := branchFromDBName(encodedDB)
+	dbName, _, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -138,23 +138,68 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 //
 // Dongo encodes version information in the database name using a double-underscore separator:
 //
-//	"mydb__branchname"   → dbName="mydb", rootish="branchname"
-//	"mydb__abc123"       → dbName="mydb", rootish="abc123"   (commit hash)
-//	"mydb__main~3"       → dbName="mydb", rootish="main~3"   (ancestor expression)
+//	"mydb__branchname"   → dbName="mydb", rootish="branchname",  readOnly=false
+//	"mydb__abc123"       → dbName="mydb", rootish="abc123",       readOnly=true  (commit hash)
+//	"mydb__main~3"       → dbName="mydb", rootish="main~3",       readOnly=true  (ancestor expression)
 //
-// If no separator is present the rootish defaults to "main".
+// If no separator is present the rootish defaults to "main" and readOnly is false.
+//
+// readOnly is true when the rootish is syntactically a commit hash or ancestor expression.
+// Bare names are assumed to be branch names (writable); tag detection requires a backend call
+// not performed here.
 //
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
-func branchFromDBName(encoded string) (dbName, rootish string, err error) {
+func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, err error) {
 	if idx := strings.Index(encoded, "__"); idx >= 0 {
 		rootish = encoded[idx+2:]
 		if err = parseRootish(rootish); err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
-		return encoded[:idx], rootish, nil
+		return encoded[:idx], rootish, rootishIsReadOnly(rootish), nil
 	}
 
-	return encoded, "main", nil
+	return encoded, "main", false, nil
+}
+
+// rootishIsReadOnly reports whether the rootish is a read-only snapshot reference.
+//
+// A rootish is read-only if it is syntactically a commit hash (all hex digits) or a
+// relative ancestor expression (contains ~). Bare names are assumed to be branch names
+// and are treated as writable.
+func rootishIsReadOnly(rootish string) bool {
+	// Ancestor expression: <branch>~<N>
+	if strings.Contains(rootish, "~") {
+		return true
+	}
+
+	// Commit hash: non-empty string of hex digits only.
+	if rootish == "" {
+		return false
+	}
+	for _, c := range rootish {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// enforceWritableRootish returns an OperationFailed error if the encoded database name
+// resolves to a read-only rootish (commit hash or ancestor expression).
+//
+// Call this at the top of any write handler before touching the backend.
+func enforceWritableRootish(encodedDB string) error {
+	_, _, readOnly, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return err
+	}
+	if readOnly {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"cannot write to a read-only database snapshot",
+		)
+	}
+	return nil
 }
 
 // parseRootish validates a rootish expression at parse time.
@@ -276,7 +321,7 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	dbName, branch, err := branchFromDBName(encodedDB)
+	dbName, branch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +375,7 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	dbName, fromBranch, err := branchFromDBName(encodedDB)
+	dbName, fromBranch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +435,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	dbName, intoBranch, err := branchFromDBName(encodedDB)
+	dbName, intoBranch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +496,7 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
-	dbName, branch, err := branchFromDBName(encodedDB)
+	dbName, branch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +583,7 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	dbName, branch, err := branchFromDBName(encodedDB)
+	dbName, branch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +649,7 @@ func (h *Handler) MsgDongoStatus(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	dbName, branch, err := branchFromDBName(encodedDB)
+	dbName, branch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}

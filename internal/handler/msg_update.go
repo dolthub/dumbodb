@@ -43,6 +43,10 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = enforceWritableRootish(params.DB); err != nil {
+		return nil, err
+	}
+
 	// TODO https://github.com/dolthub/dongo/issues/2612
 	_ = params.Ordered
 

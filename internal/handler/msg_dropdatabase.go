@@ -42,6 +42,10 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
+	if err = enforceWritableRootish(dbName); err != nil {
+		return nil, err
+	}
+
 	// Most backends would block on `DropDatabase` below otherwise.
 	//
 	// There is a race condition: another client could create a new cursor for that database

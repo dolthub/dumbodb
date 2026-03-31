@@ -53,6 +53,10 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	if err = enforceWritableRootish(params.DB); err != nil {
+		return nil, err
+	}
+
 	if params.Update != nil {
 		if err = common.ValidateUpdateOperators(document.Command(), params.Update); err != nil {
 			return nil, err
