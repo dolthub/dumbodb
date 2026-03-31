@@ -191,6 +191,120 @@ func TestSplitEncodedDBName(t *testing.T) {
 	}
 }
 
+// TestRTVLLoad_AncestorExpr_Query verifies that mydb__main~N returns the correct
+// historical document set for each ancestor depth.
+//
+// Setup: 3 commits, each adding one document.
+//   - main~0 (or main) → all 3 docs
+//   - main~1           → 2 docs (third commit not visible)
+//   - main~2           → 1 doc
+//   - main~3           → 0 docs (initial empty commit)
+func TestRTVLLoad_AncestorExpr_Query(t *testing.T) {
+	b := newTestBackend(t)
+
+	// First commit: add doc1.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	commitDB(t, b, "testdb", "add doc1")
+
+	// Second commit: add doc2.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
+	commitDB(t, b, "testdb", "add doc2")
+
+	// Third commit: add doc3.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "v", int64(3)))
+	commitDB(t, b, "testdb", "add doc3")
+
+	cases := []struct {
+		rootish  string
+		wantDocs int
+	}{
+		{"testdb__main~0", 3},
+		{"testdb__main~1", 2},
+		{"testdb__main~2", 1},
+		{"testdb__main~3", 0},
+	}
+
+	for _, tc := range cases {
+		n := countDocs(t, b, tc.rootish, "col")
+		if n != tc.wantDocs {
+			t.Errorf("%s: want %d docs, got %d", tc.rootish, tc.wantDocs, n)
+		}
+	}
+}
+
+// TestRTVLLoad_AncestorExpr_IsolatedFromMain verifies that an open ~N cursor is
+// not affected by subsequent inserts on main.
+func TestRTVLLoad_AncestorExpr_IsolatedFromMain(t *testing.T) {
+	b := newTestBackend(t)
+
+	// Three commits.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, "testdb", "add doc1")
+
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2)))
+	commitDB(t, b, "testdb", "add doc2")
+
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3)))
+	commitDB(t, b, "testdb", "add doc3")
+
+	// main~1 should see 2 docs at this point.
+	nBefore := countDocs(t, b, "testdb__main~1", "col")
+	if nBefore != 2 {
+		t.Fatalf("testdb__main~1 before new insert: want 2, got %d", nBefore)
+	}
+
+	// Insert a new doc (uncommitted) on main — the ~N view must remain unchanged.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(4)))
+
+	nAfter := countDocs(t, b, "testdb__main~1", "col")
+	if nAfter != 2 {
+		t.Errorf("testdb__main~1 after uncommitted insert: want 2, got %d", nAfter)
+	}
+
+	// Commit the new doc and verify ~1 still points to the same snapshot.
+	commitDB(t, b, "testdb", "add doc4")
+
+	nCommitted := countDocs(t, b, "testdb__main~1", "col")
+	if nCommitted != 3 {
+		// After a 4th commit, main~1 now points to the 3-doc snapshot.
+		t.Errorf("testdb__main~1 after 4th commit: want 3, got %d", nCommitted)
+	}
+}
+
+// TestRTVLLoad_AncestorExpr_TooDeep verifies that requesting an ancestor
+// beyond the commit history returns an error rather than silent empty results.
+//
+// When a database is first opened, Dolt creates an initial STRT commit with no
+// parent. After one user-level commitDB call, "main" has 2 commits:
+//   - STRT (no parent)
+//   - "only commit"
+//
+// So main~1 resolves to the STRT commit (0 docs, no error), and main~2 tries to
+// walk past the STRT commit's non-existent parent — that is the "too deep" case.
+func TestRTVLLoad_AncestorExpr_TooDeep(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// One user commit on top of the STRT commit; main~2 exceeds history.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, "testdb", "only commit")
+
+	db, err := b.Database("testdb__main~2")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	_, err = coll.Query(ctx, &backends.QueryParams{})
+	if err == nil {
+		t.Error("expected error when ancestor depth exceeds history, got nil")
+	}
+}
+
 // TestRTVLLoad_Tag_Query verifies that a tag rootish reads from the tagged commit.
 func TestRTVLLoad_Tag_Query(t *testing.T) {
 	ctx := context.Background()
