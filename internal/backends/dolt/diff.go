@@ -32,6 +32,36 @@ import (
 	"github.com/dolthub/dongo/internal/util/iterator"
 )
 
+// amFromRootish resolves a rootish string to a collections AddressMap.
+//
+// Resolution order:
+//  1. Dolt commit hash (32 base32 chars 0-9a-v): load AM from that commit directly.
+//  2. Tag name: resolve via refs/tags/<rootish>, then load AM from the target commit.
+//
+// This function is used for historical reads (e.g. mydb__<commit-hash> or mydb__<tag>).
+// Branch-name rootishes (e.g. "main") return an error; callers should use the
+// current working set AM (state.am) for branches.
+func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.AddressMap, error) {
+	// Case 1: commit hash (exactly 32 base32 chars 0-9a-v).
+	if _, ok := hash.MaybeParse(rootish); ok && len(rootish) == 32 {
+		return amFromCommitHash(ctx, state, rootish)
+	}
+
+	// Case 2: tag name — try refs/tags/<rootish>.
+	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not a commit hash and tag lookup failed: %w", rootish, err)
+	}
+	if !tagDS.HasHead() {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: tag not found", rootish)
+	}
+	tagHead, ok := tagDS.MaybeHeadAddr()
+	if !ok {
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: tag has no head address", rootish)
+	}
+	return amFromCommitHash(ctx, state, tagHead.String())
+}
+
 // amFromCommitHash loads the collections AddressMap from a specific commit
 // identified by its hash string (32-char base32 dolt hash).
 //

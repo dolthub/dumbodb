@@ -30,7 +30,22 @@ import (
 // database implements backends.Database.
 type database struct {
 	backend *Backend
-	name    string
+	name    string // base database name (actual directory name, without rootish suffix)
+	rootish string // rootish from encoded name (branch, commit hash, tag, or ancestor expression)
+}
+
+// resolveAM returns the collections AddressMap for the database's rootish.
+//
+// When the rootish is "main" (the default for a plain db name), the current
+// working-set AM (state.am) is returned. When the rootish is a commit hash
+// or tag name, the AM is loaded from the historical RTVL at that revision.
+//
+// The caller must hold at least state.mu.RLock().
+func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.AddressMap, error) {
+	if db.rootish == "main" {
+		return state.am, nil
+	}
+	return amFromRootish(ctx, state, db.rootish)
 }
 
 // Collection implements backends.Database.
@@ -56,10 +71,15 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
+	am, err := db.resolveAM(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+
 	var colls []backends.CollectionInfo
 
 	// Include regular collections from the address map.
-	if err := state.am.IterAll(ctx, func(name string, _ hash.Hash) error {
+	if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
 		if params != nil && params.Name != "" && name != params.Name {
 			return nil
 		}
@@ -397,6 +417,11 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
+	am, err := db.resolveAM(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+
 	const (
 		avgDocSize      = 512 // rough bytes per document estimate
 		avgIndexEntSize = 32  // rough bytes per index entry estimate
@@ -404,7 +429,7 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 
 	var totalDocs, totalSizeCollection, totalSizeIndexes int64
 
-	if err := state.am.IterAll(ctx, func(_ string, collHash hash.Hash) error {
+	if err := am.IterAll(ctx, func(_ string, collHash hash.Hash) error {
 		if collHash.IsEmpty() {
 			return nil
 		}
@@ -430,7 +455,7 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 	// Preserve a non-zero SizeTotal when the database has collections but no documents,
 	// so that listDatabases reports empty=false.
 	if totalSizeCollection == 0 {
-		collCount, _ := state.am.Count()
+		collCount, _ := am.Count()
 		if collCount > 0 {
 			totalSizeCollection = int64(collCount) * 4096
 		}

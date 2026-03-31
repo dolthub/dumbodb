@@ -46,8 +46,13 @@ type collection struct {
 	name string
 }
 
-// getMap returns the current prolly.Map for this collection.
-// Returns (emptyMap, false, nil) if the database or collection doesn't exist.
+// getMap returns the prolly.Map for this collection.
+//
+// When the database's rootish is "main" (the default), the current working-set
+// AM (state.am) is used. When the rootish is a bare commit hash or a tag name,
+// the AM is loaded from the historical RTVL at that commit.
+//
+// Returns (emptyMap, false, nil, nil) if the database or collection doesn't exist.
 func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
 	if err != nil {
@@ -61,7 +66,12 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
-	rootHash, err := state.am.Get(ctx, c.name)
+	am, err := c.db.resolveAM(ctx, state)
+	if err != nil {
+		return prolly.Map{}, false, nil, err
+	}
+
+	rootHash, err := am.Get(ctx, c.name)
 	if err != nil {
 		return prolly.Map{}, false, nil, err
 	}

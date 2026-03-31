@@ -200,11 +200,28 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 }
 
 // Database implements backends.Backend.
+//
+// name may be an encoded database name of the form "dbname__rootish" where
+// rootish is a branch name, commit hash, tag name, or ancestor expression.
+// The base db name and rootish are parsed here; collection reads use the
+// rootish to load the historical RTVL when it is a commit hash or tag.
 func (b *Backend) Database(name string) (backends.Database, error) {
+	baseName, rootish := splitEncodedDBName(name)
 	return backends.DatabaseContract(&database{
 		backend: b,
-		name:    name,
+		name:    baseName,
+		rootish: rootish,
 	}), nil
+}
+
+// splitEncodedDBName splits an encoded database name "dbname__rootish" into
+// the base database name and rootish. If no __ separator is present, the
+// rootish defaults to "main" (the default branch).
+func splitEncodedDBName(encoded string) (dbName, rootish string) {
+	if idx := strings.Index(encoded, "__"); idx >= 0 {
+		return encoded[:idx], encoded[idx+2:]
+	}
+	return encoded, "main"
 }
 
 // ListDatabases implements backends.Backend.
