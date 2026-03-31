@@ -161,8 +161,8 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	pairs = append(pairs,
 		"scaleFactor", int32(scale),
-		"fsUsedSize", fsUsedSize,
-		"fsTotalSize", fsTotalSize,
+		"fsUsedSize", fsUsedSize/float64(scale),
+		"fsTotalSize", fsTotalSize/float64(scale),
 		"ok", float64(1),
 	)
 
