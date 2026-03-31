@@ -19,9 +19,11 @@ package stages_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/dolthub/dongo/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/dongo/internal/handler/handlererrors"
 	"github.com/dolthub/dongo/internal/types"
 	"github.com/dolthub/dongo/internal/util/iterator"
 	"github.com/dolthub/dongo/internal/util/must"
@@ -307,5 +309,129 @@ func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
 		if count != 2 {
 			t.Errorf("results[%d].count = %d, want 2", i, count)
 		}
+	}
+}
+
+// TestAggStage_unsupportedErrors_changeStream verifies that $changeStream returns
+// ErrChangeStreamNotSupported (code 40573) — standalone servers do not support
+// change streams.
+func TestAggStage_unsupportedErrors_changeStream(t *testing.T) {
+	t.Parallel()
+
+	stageDoc := must.NotFail(types.NewDocument("$changeStream", must.NotFail(types.NewDocument())))
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for $changeStream, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrChangeStreamNotSupported
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrChangeStreamNotSupported)", cmdErr.Code(), wantCode)
+	}
+}
+
+// TestAggStage_unsupportedErrors_densify verifies that $densify with the required
+// 'field' field returns ErrNotImplemented (238) — $densify is not yet implemented.
+func TestAggStage_unsupportedErrors_densify(t *testing.T) {
+	t.Parallel()
+
+	spec := must.NotFail(types.NewDocument(
+		"field", "price",
+		"range", must.NotFail(types.NewDocument("step", int32(1), "bounds", "full")),
+	))
+	stageDoc := must.NotFail(types.NewDocument("$densify", spec))
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for $densify, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrNotImplemented
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrNotImplemented)", cmdErr.Code(), wantCode)
+	}
+}
+
+// TestAggStage_unsupportedErrors_fill verifies that $fill with the required 'output'
+// field returns ErrNotImplemented (238) — $fill is not yet implemented.
+func TestAggStage_unsupportedErrors_fill(t *testing.T) {
+	t.Parallel()
+
+	spec := must.NotFail(types.NewDocument(
+		"output", must.NotFail(types.NewDocument(
+			"price", must.NotFail(types.NewDocument("method", "locf")),
+		)),
+	))
+	stageDoc := must.NotFail(types.NewDocument("$fill", spec))
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for $fill, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrNotImplemented
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrNotImplemented)", cmdErr.Code(), wantCode)
+	}
+}
+
+// TestAggStage_unsupportedErrors_indexStats verifies that $indexStats returns
+// ErrStageUnrecognized when called via NewStage, since $indexStats is handled
+// specially in the aggregate handler before stage parsing.
+func TestAggStage_unsupportedErrors_indexStats(t *testing.T) {
+	t.Parallel()
+
+	stageDoc := must.NotFail(types.NewDocument("$indexStats", must.NotFail(types.NewDocument())))
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for $indexStats via NewStage, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrStageUnrecognized
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrStageUnrecognized)", cmdErr.Code(), wantCode)
+	}
+}
+
+// TestAggStage_unsupportedErrors_search verifies that $search returns
+// ErrSearchNotEnabled (code 31082) — Atlas Search is not available in this deployment.
+func TestAggStage_unsupportedErrors_search(t *testing.T) {
+	t.Parallel()
+
+	stageDoc := must.NotFail(types.NewDocument("$search", must.NotFail(types.NewDocument(
+		"index", "default",
+		"text", must.NotFail(types.NewDocument("query", "foo", "path", "bar")),
+	))))
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for $search, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrSearchNotEnabled
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", cmdErr.Code(), wantCode)
 	}
 }

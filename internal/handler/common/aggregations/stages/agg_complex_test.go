@@ -1400,6 +1400,59 @@ func TestAggStage_bucket_MissingBoundariesError(t *testing.T) {
 	}
 }
 
+// TestAggStage_bucket_OneBoundaryError verifies that $bucket returns error code 40192
+// when the 'boundaries' array has fewer than 2 values (here: exactly 1).
+// MongoDB requires at least 2 boundaries to define at least one bucket.
+func TestAggStage_bucket_OneBoundaryError(t *testing.T) {
+	t.Parallel()
+
+	bounds := types.MakeArray(1)
+	bounds.Append(int32(0))
+
+	spec := must.NotFail(types.NewDocument("groupBy", "$x", "boundaries", bounds))
+	stageDoc := must.NotFail(types.NewDocument("$bucket", spec))
+
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for one boundary, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrBucketNotEnoughBoundaries
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrBucketNotEnoughBoundaries)", cmdErr.Code(), wantCode)
+	}
+}
+
+// TestAggStage_bucketAuto_MissingBucketsError verifies that $bucketAuto returns error
+// code 40246 when the required 'buckets' field is absent.
+func TestAggStage_bucketAuto_MissingBucketsError(t *testing.T) {
+	t.Parallel()
+
+	// Build a $bucketAuto spec with groupBy but no buckets field.
+	spec := must.NotFail(types.NewDocument("groupBy", "$x"))
+	stageDoc := must.NotFail(types.NewDocument("$bucketAuto", spec))
+
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for missing buckets, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	const wantCode = handlererrors.ErrBucketAutoMissingRequiredFields
+	if cmdErr.Code() != wantCode {
+		t.Errorf("error code = %d, want %d (ErrBucketAutoMissingRequiredFields)", cmdErr.Code(), wantCode)
+	}
+}
+
 // TestAggStage_graphLookup_DeterministicOrdering verifies that $graphLookup returns
 // results in a deterministic order even when multiple documents match the same BFS
 // frontier value (i.e., multiple nodes at the same depth level).
@@ -1942,6 +1995,73 @@ func TestAggComplex_sortByCount(t *testing.T) {
 
 		if count != w.count {
 			t.Errorf("results[%d].count = %d, want %d", i, count, w.count)
+		}
+	}
+}
+
+// TestAggComplex_sortByCount_TieBreaking verifies that $sortByCount uses _id ascending
+// as a tiebreaker when multiple groups share the same count. This test has all groups
+// with the same count=1 so the tiebreaker fully determines the output order.
+//
+// Input: 3 docs each with a unique tag: "z", "m", "a".
+// Expected: [{_id:"a",count:1}, {_id:"m",count:1}, {_id:"z",count:1}] — ascending _id.
+func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
+	t.Parallel()
+
+	docs := []*types.Document{
+		must.NotFail(types.NewDocument("_id", int32(1), "tag", "z")),
+		must.NotFail(types.NewDocument("_id", int32(2), "tag", "m")),
+		must.NotFail(types.NewDocument("_id", int32(3), "tag", "a")),
+	}
+
+	stageDoc := must.NotFail(types.NewDocument("$sortByCount", "$tag"))
+	stage, err := stages.NewStage(stageDoc)
+	if err != nil {
+		t.Fatalf("NewStage($sortByCount): %v", err)
+	}
+
+	closer := iterator.NewMultiCloser()
+	defer closer.Close()
+
+	out, err := stage.Process(context.Background(), iterator.Values(iterator.ForSlice(docs)), closer)
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+
+	results := collectResults(t, out, closer)
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 result docs, got %d", len(results))
+	}
+
+	// All counts are 1 — tiebreaker: _id ascending → a, m, z.
+	wantIDs := []string{"a", "m", "z"}
+
+	for i, wantID := range wantIDs {
+		idVal, err := results[i].Get("_id")
+		if err != nil {
+			t.Errorf("results[%d] missing _id: %v", i, err)
+			continue
+		}
+
+		if idVal != wantID {
+			t.Errorf("results[%d]._id = %v, want %q (ascending _id tiebreaker)", i, idVal, wantID)
+		}
+
+		countVal, err := results[i].Get("count")
+		if err != nil {
+			t.Errorf("results[%d] missing count: %v", i, err)
+			continue
+		}
+
+		count, ok := countVal.(int32)
+		if !ok {
+			t.Errorf("results[%d].count is %T, want int32", i, countVal)
+			continue
+		}
+
+		if count != 1 {
+			t.Errorf("results[%d].count = %d, want 1", i, count)
 		}
 	}
 }
