@@ -450,9 +450,9 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 
 // TestDB_RunCommand_BuildInfo verifies that the buildInfo command returns
 // version strings and fields structurally compatible with MongoDB, including
-// the 'storageEngines' field that was previously missing from the response.
+// allocator, javascriptEngine, openssl, and storageEngines fields.
 //
-// Regression for do-0wpo: version fields diverged from MongoDB (DongoFull)
+// Regression for do-87bd: missing fields and wrong version (DongoFull)
 func TestDB_RunCommand_BuildInfo(t *testing.T) {
 	env := startDongo(t)
 	ctx := context.Background()
@@ -492,6 +492,27 @@ func TestDB_RunCommand_BuildInfo(t *testing.T) {
 
 	// debug must be bool.
 	assert.IsType(t, false, m["debug"], "debug must be bool")
+
+	// allocator must be a non-empty string.
+	allocator, ok := m["allocator"].(string)
+	require.True(t, ok, "allocator must be a string, got %T", m["allocator"])
+	assert.NotEmpty(t, allocator, "allocator must not be empty")
+
+	// javascriptEngine must be a non-empty string.
+	jsEngine, ok := m["javascriptEngine"].(string)
+	require.True(t, ok, "javascriptEngine must be a string, got %T", m["javascriptEngine"])
+	assert.NotEmpty(t, jsEngine, "javascriptEngine must not be empty")
+
+	// openssl must be a document with compiled and running fields.
+	opensslRaw, ok := m["openssl"]
+	require.True(t, ok, "openssl must be present in buildInfo response")
+	openssl, ok := opensslRaw.(bson.D)
+	require.True(t, ok, "openssl must be a document, got %T", opensslRaw)
+	opensslMap := openssl.Map()
+	_, ok = opensslMap["compiled"].(string)
+	assert.True(t, ok, "openssl.compiled must be a string, got %T", opensslMap["compiled"])
+	_, ok = opensslMap["running"].(string)
+	assert.True(t, ok, "openssl.running must be a string, got %T", opensslMap["running"])
 
 	// storageEngines must be present and be a non-empty array.
 	storageEnginesRaw, ok := m["storageEngines"]
