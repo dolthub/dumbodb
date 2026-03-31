@@ -39,6 +39,13 @@ func init() {
 func convertFromTypes(v any) (any, error) {
 	switch v := v.(type) {
 	case *types.Document:
+		if AnyContainsMinMaxKey(v) {
+			raw, err := FromDocumentRaw(v)
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			return wirebson.RawDocument(raw), nil
+		}
 		doc, err := FromDocument(v)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
@@ -47,6 +54,13 @@ func convertFromTypes(v any) (any, error) {
 		return doc, nil
 
 	case *types.Array:
+		if AnyContainsMinMaxKey(v) {
+			raw, err := FromArrayRaw(v)
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			return wirebson.RawArray(raw), nil
+		}
 		arr, err := FromArray(v)
 		if err != nil {
 			return nil, lazyerrors.Error(err)

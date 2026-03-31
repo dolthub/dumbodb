@@ -1013,7 +1013,17 @@ func readDocJSON(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*types.Do
 
 // decodeDocument deserializes BSON bytes to a types.Document.
 func decodeDocument(data []byte) (*types.Document, error) {
-	doc, err := bson.ToDocument(wirebson.RawDocument(data))
+	// Try the MinKey/MaxKey-aware path first.
+	doc, err := bson.ToDocumentHandlingMinMaxKey(wirebson.RawDocument(data))
+	if err != nil {
+		return nil, fmt.Errorf("dolt: decoding document: %w", err)
+	}
+	if doc != nil {
+		return doc, nil
+	}
+
+	// No MinKey/MaxKey — use the normal path.
+	doc, err = bson.ToDocument(wirebson.RawDocument(data))
 	if err != nil {
 		return nil, fmt.Errorf("dolt: decoding document: %w", err)
 	}

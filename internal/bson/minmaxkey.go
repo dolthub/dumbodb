@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/FerretDB/wire/wirebson"
 
@@ -215,8 +216,59 @@ func ToDocumentHandlingMinMaxKey(d wirebson.AnyDocument) (*types.Document, error
 	return result, nil
 }
 
-// FromDocumentRaw encodes a types.Document to raw BSON bytes, handling MinKey and MaxKey.
-// For documents without MinKey/MaxKey, prefer FromDocument which uses wirebson.
+// AnyContainsMinMaxKey reports whether a value (or any value nested within it)
+// is a MinKey or MaxKey.
+func AnyContainsMinMaxKey(v any) bool {
+	switch val := v.(type) {
+	case types.MinKeyType, types.MaxKeyType:
+		return true
+	case *types.Document:
+		return docContainsMinMaxKey(val)
+	case *types.Array:
+		return arrContainsMinMaxKey(val)
+	}
+	return false
+}
+
+// docContainsMinMaxKey recursively checks a document for MinKey/MaxKey.
+func docContainsMinMaxKey(doc *types.Document) bool {
+	if doc == nil {
+		return false
+	}
+	iter := doc.Iterator()
+	defer iter.Close()
+	for {
+		_, v, err := iter.Next()
+		if err != nil {
+			return false
+		}
+		if AnyContainsMinMaxKey(v) {
+			return true
+		}
+	}
+}
+
+// arrContainsMinMaxKey recursively checks an array for MinKey/MaxKey.
+func arrContainsMinMaxKey(arr *types.Array) bool {
+	if arr == nil {
+		return false
+	}
+	iter := arr.Iterator()
+	defer iter.Close()
+	for {
+		_, v, err := iter.Next()
+		if err != nil {
+			return false
+		}
+		if AnyContainsMinMaxKey(v) {
+			return true
+		}
+	}
+}
+
+// FromDocumentRaw encodes a types.Document to raw BSON bytes, handling MinKey and MaxKey
+// at all nesting levels. For documents without MinKey/MaxKey, prefer FromDocument which
+// uses wirebson.
 func FromDocumentRaw(doc *types.Document) ([]byte, error) {
 	if doc == nil {
 		panic("bson.FromDocumentRaw: doc is nil")
@@ -238,33 +290,8 @@ func FromDocumentRaw(doc *types.Document) ([]byte, error) {
 			return nil, lazyerrors.Error(err)
 		}
 
-		switch val := v.(type) {
-		case types.MinKeyType:
-			buf.WriteByte(bsonTagMinKey)
-			writeRawCString(&buf, k)
-			// No value bytes.
-		case types.MaxKeyType:
-			buf.WriteByte(bsonTagMaxKey)
-			writeRawCString(&buf, k)
-			// No value bytes.
-		default:
-			// Use wirebson for all other types.
-			wDoc := wirebson.MakeDocument(1)
-			wv, err := convertFromTypes(val)
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-			if err := wDoc.Add(k, wv); err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-			encoded, err := wDoc.Encode()
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-			// Extract just the field from the encoded document:
-			// Skip 4-byte length, extract until 0x00 terminator.
-			fieldBytes := encoded[4 : len(encoded)-1]
-			buf.Write(fieldBytes)
+		if err := writeRawField(&buf, k, v); err != nil {
+			return nil, lazyerrors.Error(err)
 		}
 	}
 
@@ -275,6 +302,92 @@ func FromDocumentRaw(doc *types.Document) ([]byte, error) {
 	// Write length prefix (4 bytes, little-endian).
 	binary.LittleEndian.PutUint32(result, uint32(len(result)))
 	return result, nil
+}
+
+// FromArrayRaw encodes a types.Array to raw BSON bytes (as a BSON array document),
+// handling MinKey and MaxKey at all nesting levels.
+func FromArrayRaw(arr *types.Array) ([]byte, error) {
+	if arr == nil {
+		panic("bson.FromArrayRaw: arr is nil")
+	}
+
+	var buf bytes.Buffer
+	buf.Write([]byte{0, 0, 0, 0})
+
+	iter := arr.Iterator()
+	defer iter.Close()
+
+	for {
+		i, v, err := iter.Next()
+		if err != nil {
+			if errors.Is(err, iterator.ErrIteratorDone) {
+				break
+			}
+			return nil, lazyerrors.Error(err)
+		}
+
+		k := strconv.Itoa(i)
+		if err := writeRawField(&buf, k, v); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+	}
+
+	buf.WriteByte(0)
+
+	result := buf.Bytes()
+	binary.LittleEndian.PutUint32(result, uint32(len(result)))
+	return result, nil
+}
+
+// writeRawField encodes a single BSON key-value pair into buf,
+// handling MinKey, MaxKey, nested documents, and nested arrays recursively.
+// All other types are encoded via wirebson.
+func writeRawField(buf *bytes.Buffer, k string, v any) error {
+	switch val := v.(type) {
+	case types.MinKeyType:
+		buf.WriteByte(bsonTagMinKey)
+		writeRawCString(buf, k)
+		// No value bytes.
+	case types.MaxKeyType:
+		buf.WriteByte(bsonTagMaxKey)
+		writeRawCString(buf, k)
+		// No value bytes.
+	case *types.Document:
+		subRaw, err := FromDocumentRaw(val)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+		buf.WriteByte(0x03) // embedded document
+		writeRawCString(buf, k)
+		buf.Write(subRaw)
+	case *types.Array:
+		subRaw, err := FromArrayRaw(val)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+		buf.WriteByte(0x04) // array
+		writeRawCString(buf, k)
+		buf.Write(subRaw)
+	default:
+		// Use wirebson for all other types.
+		wDoc := wirebson.MakeDocument(1)
+		wv, err := convertFromTypes(val)
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+		if err := wDoc.Add(k, wv); err != nil {
+			return lazyerrors.Error(err)
+		}
+		encoded, err := wDoc.Encode()
+		if err != nil {
+			return lazyerrors.Error(err)
+		}
+		// Extract just the field from the encoded document:
+		// Skip 4-byte length, extract until 0x00 terminator.
+		fieldBytes := encoded[4 : len(encoded)-1]
+		buf.Write(fieldBytes)
+	}
+	return nil
 }
 
 // writeRawCString writes a null-terminated string to buf.
