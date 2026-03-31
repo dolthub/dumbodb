@@ -251,14 +251,15 @@ func TestDB_RunCommand_DbStats(t *testing.T) {
 	require.True(t, ok, "db must be a string, got %T", m["db"])
 	assert.Equal(t, coll.Database().Name(), db, "db must match collection database name")
 
-	// collections must be int32 and >= 1.
-	collections, ok := m["collections"].(int32)
-	require.True(t, ok, "collections must be int32, got %T", m["collections"])
-	assert.GreaterOrEqual(t, collections, int32(1), "collections must be >= 1")
+	// collections must be int64 and >= 1.
+	// MongoDB returns int64 for dbStats count fields (verified against MongoDB 7.0 via FerretDB integration tests).
+	collections, ok := m["collections"].(int64)
+	require.True(t, ok, "collections must be int64, got %T", m["collections"])
+	assert.GreaterOrEqual(t, collections, int64(1), "collections must be >= 1")
 
-	// views must be int32.
-	_, ok = m["views"].(int32)
-	assert.True(t, ok, "views must be int32, got %T", m["views"])
+	// views must be int64.
+	_, ok = m["views"].(int64)
+	assert.True(t, ok, "views must be int64, got %T", m["views"])
 
 	// objects must reflect the inserted document count.
 	assert.EqualValues(t, 2, m["objects"], "objects must equal inserted document count")
@@ -273,14 +274,14 @@ func TestDB_RunCommand_DbStats(t *testing.T) {
 		assert.True(t, ok, "%s must be float64, got %T", field, m[field])
 	}
 
-	// indexes must be int32 and >= 1 (at least the _id index).
-	indexes, ok := m["indexes"].(int32)
-	require.True(t, ok, "indexes must be int32, got %T", m["indexes"])
-	assert.GreaterOrEqual(t, indexes, int32(1), "indexes must be >= 1")
+	// indexes must be int64 and >= 1 (at least the _id index).
+	indexes, ok := m["indexes"].(int64)
+	require.True(t, ok, "indexes must be int64, got %T", m["indexes"])
+	assert.GreaterOrEqual(t, indexes, int64(1), "indexes must be >= 1")
 
-	// scaleFactor must be int32 with default value 1.
-	scaleFactor, ok := m["scaleFactor"].(int32)
-	require.True(t, ok, "scaleFactor must be int32, got %T", m["scaleFactor"])
+	// scaleFactor must be int64 with default value 1.
+	scaleFactor, ok := m["scaleFactor"].(int64)
+	require.True(t, ok, "scaleFactor must be int64, got %T", m["scaleFactor"])
 	assert.EqualValues(t, 1, scaleFactor, "default scaleFactor must be 1")
 
 	// Filesystem size fields must be float64.
