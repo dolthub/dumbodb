@@ -308,6 +308,61 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 	return vb
 }
 
+// MsgDongoCurrentBranch implements the `dongoCurrentBranch` command.
+//
+// It returns the branch name for the connection encoded in $db.
+// Usage: db.getSiblingDB("mydb__feature").runCommand({dongoCurrentBranch: 1})
+//
+// Returns an OperationFailed error if the connection is read-only (commit hash or ancestor expression).
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDongoCurrentBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, readOnly, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	if readOnly {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dongoCurrentBranch: connection is read-only (commit hash or ancestor expression); there is no current branch",
+		)
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dongoCurrentBranch: versioning is not supported by the current backend",
+		)
+	}
+
+	res, err := vb.DongoCurrentBranch(connCtx, &backends.CurrentBranchParams{
+		DBName: dbName,
+		Branch: branch,
+	})
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"branch", res.Branch,
+			"ok", float64(1),
+		)),
+	)
+}
+
 // MsgDongoCommit implements the `dongoCommit` command.
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname__branch").

@@ -262,6 +262,14 @@ func (bc *backendContract) DongoDiff(ctx context.Context, params *DiffParams) (*
 	return nil, newVersioningUnsupportedError("DongoDiff")
 }
 
+func (bc *backendContract) DongoCurrentBranch(ctx context.Context, params *CurrentBranchParams) (*CurrentBranchResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoCurrentBranch(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoCurrentBranch")
+}
+
 func (bc *backendContract) DongoReset(ctx context.Context, params *ResetParams) (*ResetResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DongoReset(ctx, params)

@@ -130,6 +130,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDongoCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
+		"dongoCurrentBranch": {
+			Handler: h.MsgDongoCurrentBranch,
+			Help:    "Returns the current branch name for the connection encoded in the database name.",
+		},
 		"dongoLog": {
 			Handler: h.MsgDongoLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",

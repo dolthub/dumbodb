@@ -781,6 +781,14 @@ func (b *Backend) DongoBranch(_ context.Context, _ *backends.BranchParams) (*bac
 	return nil, fmt.Errorf("dolt: DongoBranch not yet implemented")
 }
 
+// DongoCurrentBranch implements backends.VersioningBackend.
+// It returns the branch name encoded in the connection's database name.
+// The handler has already rejected read-only rootishes before reaching here,
+// so params.Branch is always a branch name.
+func (b *Backend) DongoCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
+}
+
 // DongoMerge implements backends.VersioningBackend.
 func (b *Backend) DongoMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
 	return nil, fmt.Errorf("dolt: DongoMerge not yet implemented")

@@ -153,6 +153,17 @@ type ResetResult struct {
 	Hash string
 }
 
+// CurrentBranchParams represents the parameters of VersioningBackend.DongoCurrentBranch method.
+type CurrentBranchParams struct {
+	DBName string
+	Branch string
+}
+
+// CurrentBranchResult represents the result of VersioningBackend.DongoCurrentBranch method.
+type CurrentBranchResult struct {
+	Branch string
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dongo versioning commands to return an unsupported error.
@@ -162,6 +173,9 @@ type VersioningBackend interface {
 
 	// DongoBranch creates a new branch starting from the given source branch.
 	DongoBranch(context.Context, *BranchParams) (*BranchResult, error)
+
+	// DongoCurrentBranch returns the current branch name for the connection.
+	DongoCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
 
 	// DongoMerge merges the source branch (From) into the target branch (Into).
 	DongoMerge(context.Context, *MergeParams) (*MergeResult, error)
