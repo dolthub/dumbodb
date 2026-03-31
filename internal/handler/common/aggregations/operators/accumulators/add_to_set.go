@@ -16,7 +16,6 @@ package accumulators
 
 import (
 	"errors"
-	stdsort "sort"
 
 	"github.com/dolthub/dongo/internal/handler/common/aggregations"
 	"github.com/dolthub/dongo/internal/handler/handlererrors"
@@ -95,23 +94,7 @@ func (a *addToSetAccumulator) Accumulate(iter types.DocumentsIterator) (any, err
 		}
 	}
 
-	// Sort the set for deterministic output ordering.
-	vals := make([]any, result.Len())
-	for i := range vals {
-		v, _ := result.Get(i)
-		vals[i] = v
-	}
-
-	stdsort.SliceStable(vals, func(i, j int) bool {
-		return types.CompareOrder(vals[i], vals[j], types.Ascending) == types.Less
-	})
-
-	sorted := types.MakeArray(len(vals))
-	for _, v := range vals {
-		sorted.Append(v)
-	}
-
-	return sorted, nil
+	return result, nil
 }
 
 // containsValue returns true if the array already contains a value equal to val

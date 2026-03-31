@@ -974,14 +974,14 @@ func TestGraphLookup_StartWithMissingField(t *testing.T) {
 }
 
 // TestAggComplex_matchGroupProject_addToSet verifies that a pipeline of
-// $match → $group (with $addToSet) → $project produces deterministically
-// ordered set elements matching MongoDB's sorted output.
+// $match → $group (with $addToSet) → $project preserves encounter order,
+// matching MongoDB's behavior where $addToSet retains first-seen order.
 func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 	t.Parallel()
 
 	// Three orders with two distinct statuses: "pending" appears first in the
-	// slice, "cancelled" second. Without explicit sorting in $addToSet the
-	// output order is document-iteration-dependent; with sorting it is stable.
+	// slice, "cancelled" second. $addToSet preserves encounter order:
+	// "pending" is seen first and "cancelled" second.
 	docs := []*types.Document{
 		must.NotFail(types.NewDocument("_id", int32(1), "customerId", int32(100), "status", "pending")),
 		must.NotFail(types.NewDocument("_id", int32(2), "customerId", int32(100), "status", "cancelled")),
@@ -1056,12 +1056,12 @@ func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 		t.Fatalf("expected 2 unique statuses, got %d", statuses.Len())
 	}
 
-	// MongoDB returns $addToSet elements sorted; we expect ["cancelled", "pending"].
+	// MongoDB preserves encounter order; "pending" is seen before "cancelled".
 	s0, _ := statuses.Get(0)
 	s1, _ := statuses.Get(1)
 
-	if s0 != "cancelled" || s1 != "pending" {
-		t.Errorf("expected [cancelled pending], got [%v %v]", s0, s1)
+	if s0 != "pending" || s1 != "cancelled" {
+		t.Errorf("expected [pending cancelled], got [%v %v]", s0, s1)
 	}
 }
 
