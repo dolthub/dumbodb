@@ -594,6 +594,7 @@ func TestDB_RunCommand_Validate(t *testing.T) {
 // database and correct field types for each database entry.
 //
 // Regression for do-27zw: listDatabases result structure diverges from MongoDB (DongoFull)
+// Regression for do-ma7c: listDatabases crashes dongo connection with EOF
 func TestDB_ListDatabases(t *testing.T) {
 	env := startDongo(t)
 	ctx := context.Background()
@@ -658,6 +659,15 @@ func TestDB_ListDatabases(t *testing.T) {
 	// admin is always present in listDatabases regardless of whether it has
 	// user collections.
 	assert.True(t, dbNames["admin"], "databases must include the 'admin' system database")
+
+	// Regression for do-ma7c: verify the connection is still alive after listDatabases.
+	// Before the fix, the handler could crash the TCP connection (EOF) during listDatabases,
+	// leaving the driver unable to issue subsequent commands.
+	var pingRes bson.D
+	err = env.client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "ping", Value: int32(1)},
+	}).Decode(&pingRes)
+	require.NoError(t, err, "connection must remain alive after listDatabases")
 }
 
 // TestDB_RunCommand_Hello verifies that the hello command returns the expected
