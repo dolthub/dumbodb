@@ -174,7 +174,8 @@ Dongo already implements these commands (all behind the `dongoXxx` namespace):
 | `dongoReset`     | Move HEAD (soft or hard)                        | Implemented |
 | `dongoStatus`    | Show uncommitted collection changes             | Implemented |
 
-Branch access is via the `dbname__branchname` naming convention.
+Branch access is via the `dbname__rootish` naming convention, where the
+rootish resolves to a commit (see Section 6 for the full specification).
 
 ### What's Missing (Gap Analysis)
 
@@ -222,30 +223,67 @@ Dolt executes. No VC logic should be reimplemented in Dongo.
 
 ### Priority 1 (High Impact, Straightforward)
 
-#### P1-A: Point-in-Time Reads (`@commitHash` db suffix)
+#### P1-A: Point-in-Time Reads (rootish db suffix)
 
-**What**: Read any collection as of a historical commit, without modifying state.
+**What**: Read any collection as of any historical commit, tag, or relative
+ancestor — without modifying state.
 
-**Wire protocol**: Extend the `dbname__branch` naming convention with `@`:
-- `mydb__main@abc123` = read database `mydb`, branch `main`, at commit `abc123`
-- `mydb@abc123` = shorthand (implicit `main`)
+**Wire protocol**: Generalize the existing `dbname__branchname` convention so
+that anything after `__` is a **rootish** — a string that resolves to a specific
+commit in Dolt's DAG. This is a strict superset of the current branch-name
+behaviour; existing connection strings are unaffected.
 
-Any standard MongoDB read (`find`, `aggregate`, `count`) on the `@`-suffixed
-database name reads from the historical snapshot.
+Supported rootish forms:
 
-**Dolt primitive**: Read the RTVL at the given commit hash. Load its collections
-ADRM. Look up the collection's prolly.Map by name. Iterate/query the prolly.Map
-at that root — no writes, completely non-destructive.
+| Connection string | Resolves to | Writable? |
+|---|---|---|
+| `mydb` | default branch, working set | ✅ yes |
+| `mydb__main` | branch `main` tip | ✅ yes |
+| `mydb__feature-x` | branch `feature-x` tip | ✅ yes |
+| `mydb__v1.0` | tag `v1.0` | ❌ read-only |
+| `mydb__abc123` | bare commit hash | ❌ read-only |
+| `mydb__main~1` | parent of `main` | ❌ read-only |
+| `mydb__main~3` | 3rd ancestor of `main` | ❌ read-only |
 
-**Example**:
+**Write semantics**: writable if and only if the rootish is a bare branch name
+(or omitted). Tags, hashes, and relative expressions are always read-only.
+Writes to a read-only rootish return an explicit error.
+
+**Explicitly not supported** (connection-string hostile — require local stateful
+context or are ambiguous outside a working directory):
+- `HEAD` and `HEAD`-relative forms (`HEAD~1`, `HEAD^`)
+- Reflog syntax (`main@{yesterday}`, `@{5 minutes ago}`)
+- Range syntax (`main..feature`, `main...feature`)
+- Regex commit search (`:/fix bug`)
+- Type dereferencing (`v1.0^{commit}`, `^{}`)
+
+**Examples**:
 ```javascript
-// Fetch the users collection as it was at commit abc123
-db.getSiblingDB("mydb@abc123").users.find({active: true})
+// Current working set (default)
+db.users.find({active: true})
+
+// Specific branch
+db.getSiblingDB("mydb__feature-x").users.find({active: true})
+
+// Tagged release snapshot
+db.getSiblingDB("mydb__v1.0").users.find({active: true})
+
+// Bare commit hash
+db.getSiblingDB("mydb__abc123f").users.find({active: true})
+
+// One commit behind main (parent)
+db.getSiblingDB("mydb__main~1").users.find({active: true})
 ```
 
+**Dolt primitive**: Parse the rootish out of the db name. Resolve it to a commit
+hash via Dolt's ref resolution API (handles branch names, tag names, hashes, and
+`~N` ancestor traversal). Load the RTVL at that hash. Iterate/query the
+prolly.Map at that root — no writes, completely non-destructive.
+
 **Feasibility**: High. The backend already has the mechanics to load a collection
-by RTVL hash. It's a matter of parsing the `@` suffix in `branchFromDBName` and
-routing reads to the historical AM rather than the working set.
+by RTVL hash. It's a matter of generalising the rootish parsing in
+`branchFromDBName` to resolve hashes, tags, and `~N` expressions in addition to
+bare branch names.
 
 ---
 
@@ -282,9 +320,10 @@ db.runCommand({dongoListTags: 1})
 Creating a tag writes a new entry to the refsAM pointing to the current HEAD
 commit hash. Tags are readable in the same pass as branches.
 
-**Point-in-time reads with tags**: Tags integrate with P1-A:
+**Point-in-time reads with tags**: Tags integrate naturally with P1-A — tag
+names are valid rootish values:
 ```javascript
-db.getSiblingDB("mydb@v1.0").users.find()  // reads at the v1.0 tag
+db.getSiblingDB("mydb__v1.0").users.find()  // reads at the v1.0 tag
 ```
 
 **Feasibility**: High. Same infrastructure as branches; just a different ref prefix.
@@ -505,22 +544,48 @@ Worth designing but not implementing soon.
 
 ## 6. Implementation Notes
 
-### The `dbname@commitHash` Convention
+### The `dbname__rootish` Convention
 
-The cleanest way to expose point-in-time reads without new commands is extending
-the existing `__` branch separator with an `@` marker:
+The `__` separator already exists to select a branch. It is generalised so that
+anything after `__` is a **rootish**: a string that resolves to a specific commit
+in Dolt's DAG.
 
 ```
-mydb                   → main branch, working set
-mydb__feature          → feature branch, working set
-mydb__feature@abc123   → feature branch, at commit abc123
-mydb@abc123            → main branch, at commit abc123
-mydb@v1.0              → main branch, at tag v1.0
+mydb                  → default branch, working set (writable)
+mydb__main            → branch main tip             (writable)
+mydb__feature-x       → branch feature-x tip        (writable)
+mydb__v1.0            → tag v1.0                    (read-only)
+mydb__abc123          → bare commit hash             (read-only)
+mydb__main~1          → parent of main              (read-only)
+mydb__main~3          → 3rd ancestor of main        (read-only)
 ```
 
-This is purely a database-name parsing change in `branchFromDBName`. The rest of
-the handler and backend remain unchanged: reads on an `@`-suffixed db simply load
-the RTVL from the specified commit instead of the working set.
+**Parsing rule**: split on the first `__`. The right-hand side is the rootish.
+If no `__` is present, use the default branch working set.
+
+**Rootish resolution order** (mirrors Dolt/Git ref lookup):
+1. Branch name (`refs/heads/<rootish>`)
+2. Tag name (`refs/tags/<rootish>`)
+3. Bare commit hash (full or unambiguous prefix)
+4. Relative ancestor expression (`<branch>~<N>` — resolve branch first, then
+   walk N first-parents up the commit DAG)
+
+**Not supported** (connection-string hostile):
+- `HEAD` and `HEAD`-relative forms (`HEAD~1`, `HEAD^`) — HEAD has no meaning
+  outside a local working directory; the default branch serves this role
+- Reflog syntax (`main@{yesterday}`, `@{5 minutes ago}`)
+- Range syntax (`main..feature`, `main...feature`)
+- Regex commit search (`:/fix bug`)
+- Type dereferencing (`v1.0^{commit}`, `^{}`)
+- `^N` caret parent selection (use `~N` instead for clarity)
+
+**Write-safety rule**: a connection is writable if and only if the rootish is a
+bare branch name (or omitted). Everything else is read-only. Dongo enforces this
+at the handler layer — write commands (`insert`, `update`, `delete`, `drop`, etc.)
+on a read-only rootish return an explicit `OperationFailed` error.
+
+This is a parsing change in `branchFromDBName` plus a read-only flag threaded
+through to write handlers. The backend RTVL/prolly.Map loading is unchanged.
 
 ### Conflict Model
 
@@ -586,7 +651,7 @@ provides the primitives for all features described above. The work is primarily
 in exposing these capabilities through the MongoDB wire protocol.
 
 The highest-leverage near-term features are:
-1. **Point-in-time reads** (`@commitHash` suffix) — one parsing change, zero new
+1. **Point-in-time reads** (rootish `__` suffix) — one parsing change, zero new
    backend logic, immediate user value.
 2. **List/delete branches + tags** — simple refsAM operations, complete the
    branch management workflow.
