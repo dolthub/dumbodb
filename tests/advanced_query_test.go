@@ -355,6 +355,37 @@ func TestAdvancedQuery_TextSearch_MultipleTerms(t *testing.T) {
 	assert.Equal(t, []int32{1, 2}, ids)
 }
 
+// TestAdvancedQuery_TextSearch_WithAdditionalFilter verifies that $text search
+// combined with an additional equality filter returns only documents that satisfy
+// both conditions. (DongoFull)
+func TestAdvancedQuery_TextSearch_WithAdditionalFilter(t *testing.T) {
+	t.Parallel()
+
+	env := startDongo(t)
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		d(e("_id", int32(1)), e("body", "apple pie"), e("category", "food")),
+		d(e("_id", int32(2)), e("body", "apple juice"), e("category", "drink")),
+		d(e("_id", int32(3)), e("body", "banana split"), e("category", "food")),
+	)
+
+	ctx := context.Background()
+	// Text search for "apple" AND category == "food" — only doc 1 qualifies.
+	cursor, err := coll.Find(ctx,
+		d(e("$text", d(e("$search", "apple"))), e("category", "food")),
+	)
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 1, "combined text+field filter must return only matching docs")
+
+	ids := collectIDs(results)
+	assert.Equal(t, []int32{1}, ids)
+}
+
 // collectIDs extracts int32 _id values from a slice of documents, in order.
 func collectIDs(docs []bson.D) []int32 {
 	ids := make([]int32, 0, len(docs))
