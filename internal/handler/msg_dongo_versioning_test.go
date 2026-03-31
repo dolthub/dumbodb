@@ -35,7 +35,7 @@ func TestParseRootish(t *testing.T) {
 		{"hyphenated branch name", "feature-x"},
 		{"tag name", "v1.0"},
 		{"release tag", "release-2024"},
-		{"full commit hash", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"},
+		{"full commit hash", "na7kfra98h45fr2u5qtr30o2ggm7vh61"},
 		{"abbreviated hash", "a1b2c3d"},
 		{"relative ancestor tilde-1", "main~1"},
 		{"relative ancestor tilde-3", "main~3"},
@@ -114,8 +114,8 @@ func TestBranchFromDBName(t *testing.T) {
 		{"no separator defaults to main writable", "mydb", "mydb", "main", false},
 		{"branch separator main", "mydb__main", "mydb", "main", false},
 		{"feature branch writable", "mydb__feature-x", "mydb", "feature-x", false},
-		{"tag name not all-hex writable", "mydb__v1.0", "mydb", "v1.0", false},
-		{"commit hash read-only", "mydb__a1b2c3d", "mydb", "a1b2c3d", true},
+		{"tag name not all-base32 writable", "mydb__v1.0", "mydb", "v1.0", false},
+		{"commit hash read-only", "mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61", true},
 		{"relative ancestor read-only", "mydb__main~3", "mydb", "main~3", true},
 		{"db name with underscore", "my_db__main", "my_db", "main", false},
 	}
@@ -195,11 +195,15 @@ func TestRootishIsReadOnly(t *testing.T) {
 		{"feature-branch", false},
 		{"release/v2", false},
 
-		// Commit hashes (read-only): all hex chars
-		{"abc123", true},
-		{"deadbeef", true},
-		{"a1b2c3d4e5f6", true},
-		{"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", true}, // 40-char SHA1
+		// Dolt commit hashes (read-only): exactly 32 lowercase base32 chars (0-9a-v).
+		// Abbreviated hashes are not detectable at parse time; they resolve as branches.
+		{"na7kfra98h45fr2u5qtr30o2ggm7vh61", true}, // full 32-char Dolt hash
+		{"00000000000000000000000000000000", true},  // all-zero hash (edge case)
+
+		// Abbreviated hash-like strings — treated as branches at parse time (writable).
+		{"abc123", false},
+		{"deadbeef", false},
+		{"a1b2c3d4e5f6", false},
 
 		// Ancestor expressions (read-only): contain ~
 		{"main~1", true},
@@ -231,9 +235,9 @@ func TestEnforceWritableRootish(t *testing.T) {
 		{"mydb", false, ""},
 		{"mydb__main", false, ""},
 		{"mydb__feature", false, ""},
-		{"mydb__abc123", true, "cannot write to a read-only database snapshot"},
+		{"mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61", true, "cannot write to a read-only database snapshot"},
 		{"mydb__main~1", true, "cannot write to a read-only database snapshot"},
-		{"mydb__deadbeef", true, "cannot write to a read-only database snapshot"},
+		{"mydb__00000000000000000000000000000000", true, "cannot write to a read-only database snapshot"},
 	}
 
 	for _, tt := range tests {

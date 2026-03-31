@@ -138,9 +138,9 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 //
 // Dongo encodes version information in the database name using a double-underscore separator:
 //
-//	"mydb__branchname"   → dbName="mydb", rootish="branchname",  readOnly=false
-//	"mydb__abc123"       → dbName="mydb", rootish="abc123",       readOnly=true  (commit hash)
-//	"mydb__main~3"       → dbName="mydb", rootish="main~3",       readOnly=true  (ancestor expression)
+//	"mydb__branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
+//	"mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
+//	"mydb__main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
 //
 // If no separator is present the rootish defaults to "main" and readOnly is false.
 //
@@ -163,21 +163,25 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 
 // rootishIsReadOnly reports whether the rootish is a read-only snapshot reference.
 //
-// A rootish is read-only if it is syntactically a commit hash (all hex digits) or a
-// relative ancestor expression (contains ~). Bare names are assumed to be branch names
-// and are treated as writable.
+// A rootish is read-only if it is syntactically a Dolt commit hash or a relative
+// ancestor expression (contains ~). Bare names are assumed to be branch names and
+// are treated as writable.
+//
+// Dolt commit hashes are exactly 32 lowercase base32 characters (0-9a-v). Only
+// full-length hashes are detected here; abbreviated forms are indistinguishable
+// from branch names at parse time and are resolved at runtime by the backend.
 func rootishIsReadOnly(rootish string) bool {
 	// Ancestor expression: <branch>~<N>
 	if strings.Contains(rootish, "~") {
 		return true
 	}
 
-	// Commit hash: non-empty string of hex digits only.
-	if rootish == "" {
+	// Dolt commit hash: exactly 32 lowercase base32 characters (0-9a-v).
+	if len(rootish) != 32 {
 		return false
 	}
 	for _, c := range rootish {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'v')) {
 			return false
 		}
 	}
@@ -207,7 +211,7 @@ func enforceWritableRootish(encodedDB string) error {
 // Accepted forms:
 //   - Branch name (resolved as refs/heads/<rootish>)
 //   - Tag name (resolved as refs/tags/<rootish>)
-//   - Bare commit hash (full 40-char hex or unambiguous shorter prefix)
+//   - Bare commit hash (full 32-char lowercase base32, i.e. 0-9a-v)
 //   - Relative ancestor expression (<branch>~<N>)
 //
 // Rejected forms (returned as ErrOperationFailed):
