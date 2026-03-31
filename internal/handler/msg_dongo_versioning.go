@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -50,7 +51,10 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, err
 	}
 
-	dbName, _ := branchFromDBName(encodedDB)
+	dbName, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	from, err := common.GetOptionalParam[string](document, "from", "")
 	if err != nil {
@@ -130,18 +134,119 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	)
 }
 
-// branchFromDBName parses the real database name and branch from an encoded db name.
+// branchFromDBName parses the real database name and rootish from an encoded db name.
 //
-// Dongo encodes branch information in the database name using a double-underscore separator:
-// "mydb__branchname" → dbName="mydb", branch="branchname"
+// Dongo encodes version information in the database name using a double-underscore separator:
 //
-// If no separator is present the branch defaults to "main".
-func branchFromDBName(encoded string) (dbName, branch string) {
+//	"mydb__branchname"   → dbName="mydb", rootish="branchname"
+//	"mydb__abc123"       → dbName="mydb", rootish="abc123"   (commit hash)
+//	"mydb__main~3"       → dbName="mydb", rootish="main~3"   (ancestor expression)
+//
+// If no separator is present the rootish defaults to "main".
+//
+// The rootish is validated by parseRootish; an error is returned for unsupported forms.
+func branchFromDBName(encoded string) (dbName, rootish string, err error) {
 	if idx := strings.Index(encoded, "__"); idx >= 0 {
-		return encoded[:idx], encoded[idx+2:]
+		rootish = encoded[idx+2:]
+		if err = parseRootish(rootish); err != nil {
+			return "", "", err
+		}
+		return encoded[:idx], rootish, nil
 	}
 
-	return encoded, "main"
+	return encoded, "main", nil
+}
+
+// parseRootish validates a rootish expression at parse time.
+//
+// Accepted forms:
+//   - Branch name (resolved as refs/heads/<rootish>)
+//   - Tag name (resolved as refs/tags/<rootish>)
+//   - Bare commit hash (full 40-char hex or unambiguous shorter prefix)
+//   - Relative ancestor expression (<branch>~<N>)
+//
+// Rejected forms (returned as ErrOperationFailed):
+//   - HEAD and HEAD-relative forms (HEAD, HEAD~1, HEAD^)
+//   - Reflog syntax (<ref>@{<spec>})
+//   - Range syntax (<ref>..<ref>)
+//   - Regex commit search (:/<pattern>)
+//   - Type dereferencing (<ref>^{<type>})
+//   - Caret parent selection (<ref>^, <ref>^N)
+func parseRootish(s string) error {
+	if s == "" {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"rootish must not be empty",
+		)
+	}
+
+	// Reject HEAD and HEAD-relative forms.
+	if s == "HEAD" || strings.HasPrefix(s, "HEAD~") || strings.HasPrefix(s, "HEAD^") {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish %q: HEAD and HEAD-relative forms are not supported; use a branch name, tag, commit hash, or <branch>~<N>", s),
+		)
+	}
+
+	// Reject reflog syntax (<ref>@{...}).
+	if strings.Contains(s, "@{") {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish %q: reflog syntax is not supported", s),
+		)
+	}
+
+	// Reject range syntax (<ref>..<ref>).
+	if strings.Contains(s, "..") {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish %q: range syntax is not supported", s),
+		)
+	}
+
+	// Reject regex commit search (:/<pattern>).
+	if strings.HasPrefix(s, ":/") {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish %q: regex commit search is not supported", s),
+		)
+	}
+
+	// Reject caret forms: type dereferencing (^{...}) and caret parent selection (^, ^N).
+	if strings.Contains(s, "^") {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish %q: caret syntax (^, ^N, ^{type}) is not supported; use ~N for ancestor traversal", s),
+		)
+	}
+
+	// Validate relative ancestor expression <branch>~<N>.
+	if idx := strings.LastIndex(s, "~"); idx >= 0 {
+		branch := s[:idx]
+		nStr := s[idx+1:]
+		if branch == "" {
+			return handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrOperationFailed,
+				fmt.Sprintf("rootish %q: branch name must not be empty in relative ancestor expression", s),
+			)
+		}
+		if nStr == "" {
+			return handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrOperationFailed,
+				fmt.Sprintf("rootish %q: ancestor count must not be empty in <branch>~<N>", s),
+			)
+		}
+		for _, c := range nStr {
+			if c < '0' || c > '9' {
+				return handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrOperationFailed,
+					fmt.Sprintf("rootish %q: ancestor count must be a non-negative integer in <branch>~<N>", s),
+				)
+			}
+		}
+	}
+
+	return nil
 }
 
 // versioningBackend returns the VersioningBackend for the handler, or nil if not supported.
@@ -171,7 +276,10 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	dbName, branch := branchFromDBName(encodedDB)
+	dbName, branch, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	message, err := common.GetOptionalParam[string](document, "message", "")
 	if err != nil {
@@ -222,7 +330,10 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	dbName, fromBranch := branchFromDBName(encodedDB)
+	dbName, fromBranch, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	newBranch, err := common.GetRequiredParam[string](document, "branch")
 	if err != nil {
@@ -279,7 +390,10 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	dbName, intoBranch := branchFromDBName(encodedDB)
+	dbName, intoBranch, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	fromBranch, err := common.GetRequiredParam[string](document, "from")
 	if err != nil {
@@ -337,7 +451,10 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
-	dbName, branch := branchFromDBName(encodedDB)
+	dbName, branch, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	limit, err := common.GetOptionalParam[int32](document, "limit", int32(0))
 	if err != nil {
@@ -421,7 +538,10 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	dbName, branch := branchFromDBName(encodedDB)
+	dbName, branch, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	to, err := common.GetRequiredParam[string](document, "to")
 	if err != nil {
@@ -484,7 +604,10 @@ func (h *Handler) MsgDongoStatus(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	dbName, branch := branchFromDBName(encodedDB)
+	dbName, branch, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
 
 	vb := h.versioningBackend()
 	if vb == nil {
