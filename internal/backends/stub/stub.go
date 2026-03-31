@@ -118,6 +118,13 @@ func (b *Backend) DongoCommit(_ context.Context, params *backends.CommitParams) 
 	}, nil
 }
 
+// DongoCurrentBranch implements backends.VersioningBackend interface.
+func (b *Backend) DongoCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+	b.l.Info("stub: DongoCurrentBranch", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+
+	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
+}
+
 // DongoBranch implements backends.VersioningBackend interface.
 func (b *Backend) DongoBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	b.l.Info("stub: DongoBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
