@@ -845,8 +845,269 @@ func (b *Backend) DongoCurrentBranch(_ context.Context, params *backends.Current
 }
 
 // DongoMerge implements backends.VersioningBackend.
-func (b *Backend) DongoMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
-	return nil, fmt.Errorf("dolt: DongoMerge not yet implemented")
+//
+// It merges the From branch into the Into branch of the specified database.
+// Three cases are handled:
+//
+//   - Already up-to-date: From's HEAD is an ancestor of (or equal to) Into's HEAD.
+//   - Fast-forward: Into's HEAD is an ancestor of From's HEAD; the Into pointer is
+//     simply advanced to From's HEAD without creating a new commit.
+//   - True 3-way merge: a merge commit is created on the Into branch with both
+//     branch HEADs as parents. Document-level conflicts return an error.
+func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DongoMerge: database %q does not exist", params.DBName))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Resolve the Into branch dataset.
+	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.Into)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: resolving into branch %q: %w", params.Into, err)
+	}
+	if !intoBranchDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DongoMerge: into branch %q has no commits", params.Into)
+	}
+	intoHash, ok := intoBranchDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoMerge: into branch %q has no head address", params.Into)
+	}
+
+	// Resolve the From branch dataset.
+	fromBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.From)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: resolving from branch %q: %w", params.From, err)
+	}
+	if !fromBranchDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DongoMerge: from branch %q has no commits", params.From)
+	}
+	fromHash, ok := fromBranchDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoMerge: from branch %q has no head address", params.From)
+	}
+
+	// Load commit objects for LCA computation.
+	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, intoHash)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: loading into commit: %w", err)
+	}
+	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, fromHash)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: loading from commit: %w", err)
+	}
+
+	// Find the lowest common ancestor.
+	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: finding common ancestor: %w", err)
+	}
+	if !hasBase {
+		return nil, fmt.Errorf("dolt: DongoMerge: branches %q and %q have no common ancestor", params.Into, params.From)
+	}
+
+	// Already up-to-date: From's HEAD is an ancestor of (or equal to) Into's HEAD.
+	if baseHash == fromHash {
+		return &backends.MergeResult{
+			Hash:    intoHash.String(),
+			Message: "already up-to-date",
+		}, nil
+	}
+
+	// Fast-forward: Into's HEAD is an ancestor of From's HEAD.
+	if baseHash == intoHash {
+		newDS, ffErr := db.doltDB.SetHead(ctx, intoBranchDS, fromHash, "")
+		if ffErr != nil {
+			return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: advancing branch pointer: %w", ffErr)
+		}
+		if params.Into == "main" {
+			db.ds = newDS
+			db.am, err = amFromCommitHash(ctx, db, fromHash.String())
+			if err != nil {
+				return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: loading AM: %w", err)
+			}
+			if err := updateWorkingSet(ctx, db.doltDB, db.am, db.am); err != nil {
+				return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: updating working set: %w", err)
+			}
+		}
+		return &backends.MergeResult{
+			Hash:    fromHash.String(),
+			Message: "fast-forward",
+		}, nil
+	}
+
+	// True 3-way merge: load the three-way AddressMaps and merge them.
+	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: loading into AM: %w", err)
+	}
+	fromAM, err := amFromCommitHash(ctx, db, fromHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: loading from AM: %w", err)
+	}
+	baseAM, err := amFromCommitHash(ctx, db, baseHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: loading base AM: %w", err)
+	}
+
+	mergedAM, err := mergeAddressMaps(ctx, db, intoAM, fromAM, baseAM)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: %w", err)
+	}
+
+	// Build and write a merge commit with both branch HEADs as parents.
+	mergeMessage := fmt.Sprintf("Merge branch '%s' into '%s'", params.From, params.Into)
+	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", mergeMessage)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: building commit meta: %w", err)
+	}
+
+	rtvlMsg := buildRootValueFlatbuffer(mergedAM)
+	newDS, err := db.doltDB.Commit(ctx, intoBranchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+		Meta:    meta,
+		Parents: []hash.Hash{intoHash, fromHash},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoMerge: committing merge: %w", err)
+	}
+
+	mergeHash, ok := newDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoMerge: no head after merge commit")
+	}
+
+	if params.Into == "main" {
+		db.ds = newDS
+		db.am = mergedAM
+		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM); err != nil {
+			return nil, fmt.Errorf("dolt: DongoMerge: updating working set: %w", err)
+		}
+	}
+
+	return &backends.MergeResult{
+		Hash:    mergeHash.String(),
+		Message: mergeMessage,
+	}, nil
+}
+
+// mergeAddressMaps performs a 3-way merge of three collections AddressMaps.
+//
+// For each collection name found in any of the three maps:
+//   - If only From changed it (added, modified, or deleted): apply From's change.
+//   - If only Into changed it: keep Into's version (already present in intoAM).
+//   - If both changed it and both deleted it: keep the deletion (already absent in intoAM).
+//   - If both changed it and one deleted while the other modified: return a conflict error.
+//   - If both changed the same collection's documents differently: return a conflict error.
+func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap) (prolly.AddressMap, error) {
+	// Collect all collection names across all three maps.
+	allNames := make(map[string]struct{})
+	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
+		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
+			allNames[name] = struct{}{}
+			return nil
+		}); err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("iterating collections AM: %w", err)
+		}
+	}
+
+	editor := intoAM.Editor()
+
+	for name := range allNames {
+		intoH, err := intoAM.Get(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("reading into AM for %q: %w", name, err)
+		}
+		fromH, err := fromAM.Get(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("reading from AM for %q: %w", name, err)
+		}
+		baseH, err := baseAM.Get(ctx, name)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("reading base AM for %q: %w", name, err)
+		}
+
+		intoChanged := intoH != baseH
+		fromChanged := fromH != baseH
+
+		if !fromChanged {
+			// From did not touch this collection; keep Into's version.
+			continue
+		}
+
+		if !intoChanged {
+			// Only From changed this collection; apply From's change to the editor.
+			switch {
+			case fromH.IsEmpty():
+				// From deleted the collection.
+				if err := editor.Delete(ctx, name); err != nil {
+					return prolly.AddressMap{}, fmt.Errorf("deleting collection %q: %w", name, err)
+				}
+			case intoH.IsEmpty():
+				// From added a collection that was not in base or into.
+				if err := editor.Add(ctx, name, fromH); err != nil {
+					return prolly.AddressMap{}, fmt.Errorf("adding collection %q: %w", name, err)
+				}
+			default:
+				// From modified an existing collection.
+				if err := editor.Update(ctx, name, fromH); err != nil {
+					return prolly.AddressMap{}, fmt.Errorf("updating collection %q: %w", name, err)
+				}
+			}
+			continue
+		}
+
+		// Both sides changed this collection.
+		if fromH.IsEmpty() && intoH.IsEmpty() {
+			// Both independently deleted the collection; result is deletion (already absent in intoAM).
+			continue
+		}
+		if fromH.IsEmpty() || intoH.IsEmpty() {
+			// One side deleted while the other modified — unresolvable conflict.
+			return prolly.AddressMap{}, fmt.Errorf("conflict in collection %q: deleted on one branch and modified on the other", name)
+		}
+
+		// Both sides modified the collection; merge at the document level.
+		intoMap, err := openCollection(ctx, state.cs, state.ns, intoH)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("opening into collection %q: %w", name, err)
+		}
+		fromMap, err := openCollection(ctx, state.cs, state.ns, fromH)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("opening from collection %q: %w", name, err)
+		}
+		baseMap, err := openCollection(ctx, state.cs, state.ns, baseH)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("opening base collection %q: %w", name, err)
+		}
+
+		var conflictDetected bool
+		mergedMap, _, err := prolly.MergeMaps(ctx, intoMap, fromMap, baseMap, func(left, right tree.Diff) (tree.Diff, bool) {
+			conflictDetected = true
+			return tree.Diff{}, false
+		})
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("merging collection %q documents: %w", name, err)
+		}
+		if conflictDetected {
+			return prolly.AddressMap{}, fmt.Errorf("conflict in collection %q: same document modified differently on both branches", name)
+		}
+
+		mergedH, err := state.dtblHashForMap(ctx, mergedMap)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("writing merged collection %q: %w", name, err)
+		}
+		if err := editor.Update(ctx, name, mergedH); err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("updating merged collection %q in AM: %w", name, err)
+		}
+	}
+
+	return editor.Flush(ctx)
 }
 
 // DongoLog implements backends.VersioningBackend.
