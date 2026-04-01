@@ -3,6 +3,13 @@
 Manual verification guide for Dongo rootish connection string behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup, so run them in order.
 
+> **Automated equivalent:** `tests/versioning_rootish_verify_test.go` (`TestRootishVerify`)
+> covers every scenario in this document as sequential subtests using the same setup.
+> Run it with:
+> ```
+> go test ./tests/... -run TestRootishVerify -v
+> ```
+
 ## Prerequisites
 
 A running Dongo instance and `mongosh` installed. Connect to your instance:
