@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -829,5 +830,248 @@ func TestDongoDiff_NoChangesMeanNoDiff(t *testing.T) {
 
 	if len(res.Collections) != 0 {
 		t.Errorf("expected 0 changed collections for identical update, got %d", len(res.Collections))
+	}
+}
+
+// TestDongoDiff_MultipleDocsWithMixedChanges verifies that when multiple documents
+// in the same collection have different change types, each is reported correctly and
+// independently. Baseline has docs 1, 2, 3. Working set: doc1 deleted, doc2 field
+// modified, doc3 unchanged, doc4 added.
+func TestDongoDiff_MultipleDocsWithMixedChanges(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "name", "alpha", "v", int64(1)))
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "name", "beta", "v", int64(2)))
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "name", "gamma", "v", int64(3)))
+	commitDB(t, b, "testdb", "baseline")
+
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	// Delete doc1.
+	if _, err = coll.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{int64(1)}}); err != nil {
+		t.Fatalf("DeleteAll: %v", err)
+	}
+
+	// Modify doc2 (change v, leave name).
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(2), "name", "beta", "v", int64(99)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	// doc3: no change.
+
+	// Add doc4.
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(4), "name", "delta", "v", int64(4)),
+	}}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 {
+		t.Fatalf("expected 1 changed collection, got %d", len(res.Collections))
+	}
+
+	cd := res.Collections[0]
+
+	// added: doc4 only.
+	if len(cd.Added) != 1 {
+		t.Fatalf("expected 1 added doc, got %d", len(cd.Added))
+	}
+
+	addedID, _ := cd.Added[0].Get("_id")
+	if addedID != int64(4) {
+		t.Errorf("added doc _id = %v, want 4", addedID)
+	}
+
+	// removed: doc1 only.
+	if len(cd.Removed) != 1 {
+		t.Fatalf("expected 1 removed doc, got %d", len(cd.Removed))
+	}
+
+	removedID, _ := cd.Removed[0].Get("_id")
+	if removedID != int64(1) {
+		t.Errorf("removed doc _id = %v, want 1", removedID)
+	}
+
+	// modified: doc2 only (doc3 unchanged).
+	if len(cd.Modified) != 1 {
+		t.Fatalf("expected 1 modified doc (doc2), got %d; doc3 must not appear (unchanged)", len(cd.Modified))
+	}
+
+	m := cd.Modified[0]
+	if m.ID != int64(2) {
+		t.Errorf("modified doc _id = %v, want 2", m.ID)
+	}
+
+	// Only $.v changed; $.name must not appear.
+	vDiff := findFieldDiff(t, m, "$.v")
+	if vDiff.Type != "modified" {
+		t.Errorf("$.v type = %q, want %q", vDiff.Type, "modified")
+	}
+	if vDiff.A != int64(2) || vDiff.B != int64(99) {
+		t.Errorf("$.v a=%v b=%v, want a=2 b=99", vDiff.A, vDiff.B)
+	}
+
+	for _, fd := range m.Diff {
+		if fd.Path == "$.name" {
+			t.Errorf("unchanged field '$.name' must not appear in diff")
+		}
+	}
+}
+
+// TestDongoDiff_SingleDocMixedFieldOps verifies that a single document update that
+// simultaneously modifies one field, adds a new field, and removes an existing field
+// produces exactly three FieldDiff entries — one per operation.
+func TestDongoDiff_SingleDocMixedFieldOps(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Baseline: doc has fields x (will be modified), y (will be removed), _id.
+	insertDoc(t, b, "testdb", "col",
+		mustDoc(t, "_id", int64(1), "x", int64(10), "y", "remove-me"))
+	commitDB(t, b, "testdb", "baseline")
+
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	// Update: x modified (10→99), y removed, z added.
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "x", int64(99), "z", "new-field"),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 collection with 1 modified doc")
+	}
+
+	m := res.Collections[0].Modified[0]
+
+	// $.x: modified, a=10, b=99.
+	xDiff := findFieldDiff(t, m, "$.x")
+	if xDiff.Type != "modified" {
+		t.Errorf("$.x type = %q, want %q", xDiff.Type, "modified")
+	}
+	if xDiff.A != int64(10) || xDiff.B != int64(99) {
+		t.Errorf("$.x a=%v b=%v, want a=10 b=99", xDiff.A, xDiff.B)
+	}
+
+	// $.y: removed, a="remove-me", b=nil.
+	yDiff := findFieldDiff(t, m, "$.y")
+	if yDiff.Type != "removed" {
+		t.Errorf("$.y type = %q, want %q", yDiff.Type, "removed")
+	}
+	if yDiff.A != "remove-me" {
+		t.Errorf("$.y a = %v, want 'remove-me'", yDiff.A)
+	}
+	if yDiff.B != nil {
+		t.Errorf("$.y b should be nil for removed, got %v", yDiff.B)
+	}
+
+	// $.z: added, a=nil, b="new-field".
+	zDiff := findFieldDiff(t, m, "$.z")
+	if zDiff.Type != "added" {
+		t.Errorf("$.z type = %q, want %q", zDiff.Type, "added")
+	}
+	if zDiff.A != nil {
+		t.Errorf("$.z a should be nil for added, got %v", zDiff.A)
+	}
+	if zDiff.B != "new-field" {
+		t.Errorf("$.z b = %v, want 'new-field'", zDiff.B)
+	}
+
+	// Exactly three diff entries (x modified, y removed, z added).
+	if len(m.Diff) != 3 {
+		paths := make([]string, len(m.Diff))
+		for i, fd := range m.Diff {
+			paths[i] = fmt.Sprintf("%s(%s)", fd.Path, fd.Type)
+		}
+		t.Errorf("expected exactly 3 field diffs, got %d: %v", len(m.Diff), paths)
+	}
+}
+
+// TestDongoDiff_FieldTypeChange verifies that changing a field's type (e.g. int64 → string)
+// is reported as "modified" with the correct old and new values.
+func TestDongoDiff_FieldTypeChange(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Baseline: field "val" is an int64.
+	insertDoc(t, b, "testdb", "col",
+		mustDoc(t, "_id", int64(1), "val", int64(42), "stable", "unchanged"))
+	commitDB(t, b, "testdb", "baseline")
+
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	// Update: val changes from int64(42) to string "forty-two".
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "val", "forty-two", "stable", "unchanged"),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	if err != nil {
+		t.Fatalf("DongoDiff: %v", err)
+	}
+
+	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 collection with 1 modified doc")
+	}
+
+	m := res.Collections[0].Modified[0]
+
+	// $.val: modified, a=int64(42) (old type), b="forty-two" (new type).
+	valDiff := findFieldDiff(t, m, "$.val")
+	if valDiff.Type != "modified" {
+		t.Errorf("$.val type = %q, want %q", valDiff.Type, "modified")
+	}
+	if valDiff.A != int64(42) {
+		t.Errorf("$.val a = %v (%T), want int64(42)", valDiff.A, valDiff.A)
+	}
+	if valDiff.B != "forty-two" {
+		t.Errorf("$.val b = %v (%T), want string 'forty-two'", valDiff.B, valDiff.B)
+	}
+
+	// $.stable must not appear (unchanged).
+	for _, fd := range m.Diff {
+		if fd.Path == "$.stable" {
+			t.Errorf("unchanged field '$.stable' must not appear in diff")
+		}
 	}
 }
