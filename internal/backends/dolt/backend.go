@@ -794,8 +794,46 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 }
 
 // DongoBranch implements backends.VersioningBackend.
-func (b *Backend) DongoBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
-	return nil, fmt.Errorf("dolt: DongoBranch not yet implemented")
+// It creates a new Dolt branch named params.Name, starting from the HEAD commit
+// of the source branch params.From.  Both branch names map to dataset IDs of
+// the form "refs/heads/<name>".
+func (b *Backend) DongoBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoBranch: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DongoBranch: database %q does not exist", params.DBName))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	fromDatasetID := "refs/heads/" + params.From
+	sourceDS, err := db.doltDB.GetDataset(ctx, fromDatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoBranch: getting source branch %q: %w", params.From, err)
+	}
+	headHash, ok := sourceDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoBranch: source branch %q has no commits", params.From)
+	}
+
+	newDatasetID := "refs/heads/" + params.Name
+	newDS, err := db.doltDB.GetDataset(ctx, newDatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoBranch: getting new branch dataset %q: %w", params.Name, err)
+	}
+	if newDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DongoBranch: branch %q already exists", params.Name)
+	}
+
+	if _, err = db.doltDB.SetHead(ctx, newDS, headHash, ""); err != nil {
+		return nil, fmt.Errorf("dolt: DongoBranch: creating branch %q: %w", params.Name, err)
+	}
+
+	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
 // DongoCurrentBranch implements backends.VersioningBackend.
