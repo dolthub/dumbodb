@@ -150,7 +150,7 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 //
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
 func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, err error) {
-	if idx := strings.Index(encoded, "__"); idx >= 0 {
+	if idx := strings.Index(encoded, "__"); idx > 0 {
 		rootish = encoded[idx+2:]
 		if err = parseRootish(rootish); err != nil {
 			return "", "", false, err

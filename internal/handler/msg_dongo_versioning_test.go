@@ -118,6 +118,8 @@ func TestBranchFromDBName(t *testing.T) {
 		{"commit hash read-only", "mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61", true},
 		{"relative ancestor read-only", "mydb__main~3", "mydb", "main~3", true},
 		{"db name with underscore", "my_db__main", "my_db", "main", false},
+		{"double underscore db name treated as plain", "__", "__", "main", false},
+		{"leading double underscore treated as plain", "__main", "__main", "main", false},
 	}
 
 	for _, tc := range validCases {
