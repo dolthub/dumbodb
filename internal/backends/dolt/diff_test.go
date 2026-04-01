@@ -300,12 +300,12 @@ func TestDongoDiff_UpdateShowsModified(t *testing.T) {
 		t.Errorf("$.x type = %q, want %q", xDiff.Type, "modified")
 	}
 
-	if xDiff.A != int64(10) {
-		t.Errorf("$.x a = %v, want 10", xDiff.A)
+	if xDiff.From != int64(10) {
+		t.Errorf("$.x a = %v, want 10", xDiff.From)
 	}
 
-	if xDiff.B != int64(99) {
-		t.Errorf("$.x b = %v, want 99", xDiff.B)
+	if xDiff.To != int64(99) {
+		t.Errorf("$.x b = %v, want 99", xDiff.To)
 	}
 }
 
@@ -539,12 +539,12 @@ func TestDongoDiff_TwoCommitsDeltaCorrect(t *testing.T) {
 		t.Errorf("$.v type = %q, want %q", vDiff.Type, "modified")
 	}
 
-	if vDiff.A != int64(1) {
-		t.Errorf("$.v a = %v, want 1", vDiff.A)
+	if vDiff.From != int64(1) {
+		t.Errorf("$.v a = %v, want 1", vDiff.From)
 	}
 
-	if vDiff.B != int64(2) {
-		t.Errorf("$.v b = %v, want 2", vDiff.B)
+	if vDiff.To != int64(2) {
+		t.Errorf("$.v b = %v, want 2", vDiff.To)
 	}
 }
 
@@ -593,12 +593,12 @@ func TestDongoDiff_AddFieldShowsAdded(t *testing.T) {
 		t.Errorf("$.y type = %q, want %q", yDiff.Type, "added")
 	}
 
-	if yDiff.A != nil {
-		t.Errorf("$.y a should be nil for added, got %v", yDiff.A)
+	if yDiff.From != nil {
+		t.Errorf("$.y a should be nil for added, got %v", yDiff.From)
 	}
 
-	if yDiff.B != int64(2) {
-		t.Errorf("$.y b = %v, want 2", yDiff.B)
+	if yDiff.To != int64(2) {
+		t.Errorf("$.y b = %v, want 2", yDiff.To)
 	}
 
 	// x must not appear (unchanged).
@@ -654,12 +654,12 @@ func TestDongoDiff_RemoveFieldShowsRemoved(t *testing.T) {
 		t.Errorf("$.y type = %q, want %q", yDiff.Type, "removed")
 	}
 
-	if yDiff.A != int64(99) {
-		t.Errorf("$.y a = %v, want 99", yDiff.A)
+	if yDiff.From != int64(99) {
+		t.Errorf("$.y a = %v, want 99", yDiff.From)
 	}
 
-	if yDiff.B != nil {
-		t.Errorf("$.y b should be nil for removed, got %v", yDiff.B)
+	if yDiff.To != nil {
+		t.Errorf("$.y b should be nil for removed, got %v", yDiff.To)
 	}
 }
 
@@ -712,12 +712,12 @@ func TestDongoDiff_NestedFieldChange(t *testing.T) {
 		t.Errorf("$.address.city type = %q, want %q", cityDiff.Type, "modified")
 	}
 
-	if cityDiff.A != "Seattle" {
-		t.Errorf("$.address.city a = %v, want Seattle", cityDiff.A)
+	if cityDiff.From != "Seattle" {
+		t.Errorf("$.address.city a = %v, want Seattle", cityDiff.From)
 	}
 
-	if cityDiff.B != "Portland" {
-		t.Errorf("$.address.city b = %v, want Portland", cityDiff.B)
+	if cityDiff.To != "Portland" {
+		t.Errorf("$.address.city b = %v, want Portland", cityDiff.To)
 	}
 
 	// Unchanged fields must not appear.
@@ -787,12 +787,12 @@ func TestDongoDiff_ArrayElementChange(t *testing.T) {
 		t.Errorf("$.scores[2] type = %q, want %q", elemDiff.Type, "modified")
 	}
 
-	if elemDiff.A != int64(91) {
-		t.Errorf("$.scores[2] a = %v, want 91", elemDiff.A)
+	if elemDiff.From != int64(91) {
+		t.Errorf("$.scores[2] a = %v, want 91", elemDiff.From)
 	}
 
-	if elemDiff.B != int64(95) {
-		t.Errorf("$.scores[2] b = %v, want 95", elemDiff.B)
+	if elemDiff.To != int64(95) {
+		t.Errorf("$.scores[2] b = %v, want 95", elemDiff.To)
 	}
 }
 
@@ -923,8 +923,8 @@ func TestDongoDiff_MultipleDocsWithMixedChanges(t *testing.T) {
 	if vDiff.Type != "modified" {
 		t.Errorf("$.v type = %q, want %q", vDiff.Type, "modified")
 	}
-	if vDiff.A != int64(2) || vDiff.B != int64(99) {
-		t.Errorf("$.v a=%v b=%v, want a=2 b=99", vDiff.A, vDiff.B)
+	if vDiff.From != int64(2) || vDiff.To != int64(99) {
+		t.Errorf("$.v a=%v b=%v, want a=2 b=99", vDiff.From, vDiff.To)
 	}
 
 	for _, fd := range m.Diff {
@@ -979,8 +979,8 @@ func TestDongoDiff_SingleDocMixedFieldOps(t *testing.T) {
 	if xDiff.Type != "modified" {
 		t.Errorf("$.x type = %q, want %q", xDiff.Type, "modified")
 	}
-	if xDiff.A != int64(10) || xDiff.B != int64(99) {
-		t.Errorf("$.x a=%v b=%v, want a=10 b=99", xDiff.A, xDiff.B)
+	if xDiff.From != int64(10) || xDiff.To != int64(99) {
+		t.Errorf("$.x a=%v b=%v, want a=10 b=99", xDiff.From, xDiff.To)
 	}
 
 	// $.y: removed, a="remove-me", b=nil.
@@ -988,11 +988,11 @@ func TestDongoDiff_SingleDocMixedFieldOps(t *testing.T) {
 	if yDiff.Type != "removed" {
 		t.Errorf("$.y type = %q, want %q", yDiff.Type, "removed")
 	}
-	if yDiff.A != "remove-me" {
-		t.Errorf("$.y a = %v, want 'remove-me'", yDiff.A)
+	if yDiff.From != "remove-me" {
+		t.Errorf("$.y a = %v, want 'remove-me'", yDiff.From)
 	}
-	if yDiff.B != nil {
-		t.Errorf("$.y b should be nil for removed, got %v", yDiff.B)
+	if yDiff.To != nil {
+		t.Errorf("$.y b should be nil for removed, got %v", yDiff.To)
 	}
 
 	// $.z: added, a=nil, b="new-field".
@@ -1000,11 +1000,11 @@ func TestDongoDiff_SingleDocMixedFieldOps(t *testing.T) {
 	if zDiff.Type != "added" {
 		t.Errorf("$.z type = %q, want %q", zDiff.Type, "added")
 	}
-	if zDiff.A != nil {
-		t.Errorf("$.z a should be nil for added, got %v", zDiff.A)
+	if zDiff.From != nil {
+		t.Errorf("$.z a should be nil for added, got %v", zDiff.From)
 	}
-	if zDiff.B != "new-field" {
-		t.Errorf("$.z b = %v, want 'new-field'", zDiff.B)
+	if zDiff.To != "new-field" {
+		t.Errorf("$.z b = %v, want 'new-field'", zDiff.To)
 	}
 
 	// Exactly three diff entries (x modified, y removed, z added).
@@ -1061,11 +1061,11 @@ func TestDongoDiff_FieldTypeChange(t *testing.T) {
 	if valDiff.Type != "modified" {
 		t.Errorf("$.val type = %q, want %q", valDiff.Type, "modified")
 	}
-	if valDiff.A != int64(42) {
-		t.Errorf("$.val a = %v (%T), want int64(42)", valDiff.A, valDiff.A)
+	if valDiff.From != int64(42) {
+		t.Errorf("$.val a = %v (%T), want int64(42)", valDiff.From, valDiff.From)
 	}
-	if valDiff.B != "forty-two" {
-		t.Errorf("$.val b = %v (%T), want string 'forty-two'", valDiff.B, valDiff.B)
+	if valDiff.To != "forty-two" {
+		t.Errorf("$.val b = %v (%T), want string 'forty-two'", valDiff.To, valDiff.To)
 	}
 
 	// $.stable must not appear (unchanged).

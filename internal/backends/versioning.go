@@ -115,8 +115,8 @@ type DiffParams struct {
 type FieldDiff struct {
 	Type string // "added", "modified", or "removed"
 	Path string // JSON Path (e.g. "$.field", "$.nested.field", "$.array[0]")
-	A    any    // old value; nil for Type=="added"
-	B    any    // new value; nil for Type=="removed"
+	From any    // old value; nil for Type=="added"
+	To   any    // new value; nil for Type=="removed"
 }
 
 // ModifiedDoc represents a document that was changed between two commits.

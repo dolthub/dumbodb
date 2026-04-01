@@ -81,7 +81,7 @@ Expected result structure:
         {
           "_id": 1,
           "diff": [
-            { "type": "modified", "path": "$.score", "a": 10, "b": 99 }
+            { "type": "modified", "path": "$.score", "from": 10, "to": 99 }
           ]
         }
       ]
@@ -194,9 +194,9 @@ db.runCommand({ dongoDiff: 1 })
 ```
 
 Expected for `_id:1` in the `mixedfields` collection:
-- `$.x`: `{ type: "modified", a: 10, b: 99 }`
-- `$.y`: `{ type: "removed", a: "remove-me" }` — `b` absent
-- `$.z`: `{ type: "added", b: "new-field" }` — `a` absent
+- `$.x`: `{ type: "modified", from: 10, to: 99 }`
+- `$.y`: `{ type: "removed", from: "remove-me" }` — `to` absent
+- `$.z`: `{ type: "added", to: "new-field" }` — `from` absent
 - Exactly **3** diff entries total
 
 ---
@@ -218,7 +218,7 @@ db.runCommand({ dongoDiff: 1 })
 ```
 
 Expected for `_id:1` in the `typechg` collection:
-- `$.val`: `{ type: "modified", a: 42, b: "forty-two" }` — note different types
+- `$.val`: `{ type: "modified", from: 42, to: "forty-two" }` — note different types
 - `$.stable` does **not** appear — it was not changed
 
 ---
@@ -244,7 +244,7 @@ db.runCommand({ dongoDiff: 1 })
 ```
 
 Expected for `_id:1` in the `nested` collection:
-- `$.address.city`: `{ type: "modified", a: "Seattle", b: "Portland" }`
+- `$.address.city`: `{ type: "modified", from: "Seattle", to: "Portland" }`
 - `$.address.zip` does **not** appear — unchanged
 - `$.name` does **not** appear — unchanged
 

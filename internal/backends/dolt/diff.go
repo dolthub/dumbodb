@@ -384,7 +384,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 		bVal, inB := bFieldMap[k]
 		if !inB {
 			// Field was removed.
-			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: path, A: aVal})
+			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: path, From: aVal})
 		} else {
 			// Field in both — compare values recursively.
 			subdiffs, err := compareFieldPaths(path, aVal, bVal)
@@ -400,7 +400,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 	for k, bVal := range bFieldMap {
 		if _, inA := aFieldsSeen[k]; !inA {
 			path := prefix + "." + k
-			diffs = append(diffs, backends.FieldDiff{Type: "added", Path: path, B: bVal})
+			diffs = append(diffs, backends.FieldDiff{Type: "added", Path: path, To: bVal})
 		}
 	}
 
@@ -431,7 +431,7 @@ func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error
 		return nil, nil
 	}
 
-	return []backends.FieldDiff{{Type: "modified", Path: path, A: aVal, B: bVal}}, nil
+	return []backends.FieldDiff{{Type: "modified", Path: path, From: aVal, To: bVal}}, nil
 }
 
 // diffArrayPaths compares two arrays element-by-element and returns path-based
@@ -457,7 +457,7 @@ func diffArrayPaths(path string, arrA, arrB *types.Array) ([]backends.FieldDiff,
 				return nil, fmt.Errorf("reading array b[%d]: %w", i, err)
 			}
 
-			diffs = append(diffs, backends.FieldDiff{Type: "added", Path: elemPath, B: bVal})
+			diffs = append(diffs, backends.FieldDiff{Type: "added", Path: elemPath, To: bVal})
 
 		case i >= lenB:
 			aVal, err := arrA.Get(i)
@@ -465,7 +465,7 @@ func diffArrayPaths(path string, arrA, arrB *types.Array) ([]backends.FieldDiff,
 				return nil, fmt.Errorf("reading array a[%d]: %w", i, err)
 			}
 
-			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: elemPath, A: aVal})
+			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: elemPath, From: aVal})
 
 		default:
 			aVal, err := arrA.Get(i)

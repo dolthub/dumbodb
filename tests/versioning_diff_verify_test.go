@@ -61,8 +61,8 @@ type modifiedDocResult struct {
 type fieldDiffResult struct {
 	Type string
 	Path string
-	A    any
-	B    any
+	From any
+	To   any
 }
 
 // decodeDiffResult parses the raw bson.M from a dongoDiff RunCommand into the
@@ -113,8 +113,8 @@ func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 						fd := fieldDiffResult{
 							Type: fmt.Sprintf("%v", dm["type"]),
 							Path: fmt.Sprintf("%v", dm["path"]),
-							A:    dm["a"],
-							B:    dm["b"],
+							From: dm["from"],
+							To:   dm["to"],
 						}
 						md.Diff = append(md.Diff, fd)
 					}
@@ -255,8 +255,8 @@ func TestDiffVerify(t *testing.T) {
 		scoreDiff := findFieldDiffResult(mod, "$.score")
 		require.NotNil(t, scoreDiff, "$.score must appear in modified diff")
 		assert.Equal(t, "modified", scoreDiff.Type)
-		assert.Equal(t, int32(10), scoreDiff.A, "$.score a (old) must be 10")
-		assert.Equal(t, int32(99), scoreDiff.B, "$.score b (new) must be 99")
+		assert.Equal(t, int32(10), scoreDiff.From, "$.score a (old) must be 10")
+		assert.Equal(t, int32(99), scoreDiff.To, "$.score b (new) must be 99")
 
 		// label must NOT appear (unchanged field)
 		labelDiff := findFieldDiffResult(mod, "$.label")
@@ -297,8 +297,8 @@ func TestDiffVerify(t *testing.T) {
 		scoreDiff := findFieldDiffResult(mod, "$.score")
 		require.NotNil(t, scoreDiff, "$.score must appear in modified diff")
 		assert.Equal(t, "modified", scoreDiff.Type)
-		assert.Equal(t, int32(10), scoreDiff.A)
-		assert.Equal(t, int32(99), scoreDiff.B)
+		assert.Equal(t, int32(10), scoreDiff.From)
+		assert.Equal(t, int32(99), scoreDiff.To)
 	})
 
 	// -------------------------------------------------------------------------
@@ -361,8 +361,8 @@ func TestDiffVerify(t *testing.T) {
 		scoreDiff := findFieldDiffResult(mod, "$.score")
 		require.NotNil(t, scoreDiff, "$.score must appear in modified diff")
 		assert.Equal(t, "modified", scoreDiff.Type)
-		assert.Equal(t, int32(10), scoreDiff.A)
-		assert.Equal(t, int32(99), scoreDiff.B)
+		assert.Equal(t, int32(10), scoreDiff.From)
+		assert.Equal(t, int32(99), scoreDiff.To)
 	})
 
 	// -------------------------------------------------------------------------
@@ -412,8 +412,8 @@ func TestDiffVerify(t *testing.T) {
 		vDiff := findFieldDiffResult(mod, "$.v")
 		require.NotNil(t, vDiff, "$.v must appear in modified diff")
 		assert.Equal(t, "modified", vDiff.Type)
-		assert.Equal(t, int32(2), vDiff.A)
-		assert.Equal(t, int32(99), vDiff.B)
+		assert.Equal(t, int32(2), vDiff.From)
+		assert.Equal(t, int32(99), vDiff.To)
 		assert.Nil(t, findFieldDiffResult(mod, "$.name"), "unchanged $.name must not appear")
 
 		// added: exactly _id:4
@@ -469,22 +469,22 @@ func TestDiffVerify(t *testing.T) {
 		xDiff := findFieldDiffResult(mod, "$.x")
 		require.NotNil(t, xDiff, "$.x must appear in diff")
 		assert.Equal(t, "modified", xDiff.Type)
-		assert.Equal(t, int32(10), xDiff.A)
-		assert.Equal(t, int32(99), xDiff.B)
+		assert.Equal(t, int32(10), xDiff.From)
+		assert.Equal(t, int32(99), xDiff.To)
 
 		// $.y: removed, a="remove-me", b absent
 		yDiff := findFieldDiffResult(mod, "$.y")
 		require.NotNil(t, yDiff, "$.y must appear in diff")
 		assert.Equal(t, "removed", yDiff.Type)
-		assert.Equal(t, "remove-me", yDiff.A)
-		assert.Nil(t, yDiff.B, "$.y b must be absent for removed")
+		assert.Equal(t, "remove-me", yDiff.From)
+		assert.Nil(t, yDiff.To, "$.y b must be absent for removed")
 
 		// $.z: added, a absent, b="new-field"
 		zDiff := findFieldDiffResult(mod, "$.z")
 		require.NotNil(t, zDiff, "$.z must appear in diff")
 		assert.Equal(t, "added", zDiff.Type)
-		assert.Nil(t, zDiff.A, "$.z a must be absent for added")
-		assert.Equal(t, "new-field", zDiff.B)
+		assert.Nil(t, zDiff.From, "$.z a must be absent for added")
+		assert.Equal(t, "new-field", zDiff.To)
 
 		// Exactly 3 diff entries.
 		assert.Len(t, mod.Diff, 3, "expected exactly 3 field diffs (x modified, y removed, z added)")
@@ -536,8 +536,8 @@ func TestDiffVerify(t *testing.T) {
 		valDiff := findFieldDiffResult(mod, "$.val")
 		require.NotNil(t, valDiff, "$.val must appear in diff")
 		assert.Equal(t, "modified", valDiff.Type)
-		assert.Equal(t, int32(42), valDiff.A, "$.val a must be the original number")
-		assert.Equal(t, "forty-two", valDiff.B, "$.val b must be the new string")
+		assert.Equal(t, int32(42), valDiff.From, "$.val a must be the original number")
+		assert.Equal(t, "forty-two", valDiff.To, "$.val b must be the new string")
 
 		// $.stable must not appear (unchanged).
 		assert.Nil(t, findFieldDiffResult(mod, "$.stable"), "unchanged $.stable must not appear")
@@ -589,8 +589,8 @@ func TestDiffVerify(t *testing.T) {
 		cityDiff := findFieldDiffResult(mod, "$.address.city")
 		require.NotNil(t, cityDiff, "$.address.city must appear in diff")
 		assert.Equal(t, "modified", cityDiff.Type)
-		assert.Equal(t, "Seattle", cityDiff.A)
-		assert.Equal(t, "Portland", cityDiff.B)
+		assert.Equal(t, "Seattle", cityDiff.From)
+		assert.Equal(t, "Portland", cityDiff.To)
 
 		// $.address.zip and $.name must not appear (unchanged).
 		assert.Nil(t, findFieldDiffResult(mod, "$.address.zip"), "unchanged $.address.zip must not appear")
