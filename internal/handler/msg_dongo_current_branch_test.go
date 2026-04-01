@@ -87,7 +87,7 @@ func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {
 
 // TestMsgDongoCurrentBranch_ReadOnly verifies that dongoCurrentBranch returns
 // ErrOperationFailed for read-only rootishes (commit hashes and ancestor expressions).
-// The error message must mention "read-only" to be actionable.
+// The error message must mention "no current branch name" to be actionable.
 func TestMsgDongoCurrentBranch_ReadOnly(t *testing.T) {
 	t.Parallel()
 
@@ -121,8 +121,8 @@ func TestMsgDongoCurrentBranch_ReadOnly(t *testing.T) {
 			require.True(t, errors.As(err, &cmdErr), "expected *CommandError, got %T: %v", err, err)
 			assert.Equal(t, handlererrors.ErrOperationFailed, cmdErr.Code(),
 				"read-only rootish must produce ErrOperationFailed")
-			assert.Contains(t, cmdErr.Error(), "read-only",
-				"error message must mention read-only so callers know what to do")
+			assert.Contains(t, cmdErr.Error(), "no current branch name",
+				"error message must mention no current branch name so callers know what to do")
 		})
 	}
 }
