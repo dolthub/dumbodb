@@ -1,0 +1,319 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package tests
+
+// TestRootishVerify is the automated analog of docs/verify/rootish.md.
+//
+// Each top-level subtest corresponds to one scenario in that document.
+// The setup reproduces the manual setup block exactly:
+//
+//   - Commit 1 (hash1): items = [ { _id:1, label:"first",  version:1 } ]
+//   - Commit 2 (hash2): items = [ { _id:1, ... }, { _id:2, label:"second", version:2 } ]
+//   - Branch "v1.0" at commit 2 (same as main HEAD); accessed via dbname__v1%2E0
+//
+// Subtests run sequentially (no t.Parallel inside) so they share a single database
+// and the side effects of one scenario (e.g. branch creation) carry into the next.
+
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+)
+
+// rootishVerifySetup mirrors the Setup section of docs/verify/rootish.md.
+// Returns hash1 (commit 1) and hash2 (commit 2).
+func rootishVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, hash2 string) {
+	t.Helper()
+
+	ctx := context.Background()
+	db := env.client.Database(dbName)
+	items := db.Collection("items")
+
+	// Drop any existing data (mirrors "Start fresh — drop if it exists").
+	require.NoError(t, db.Drop(ctx))
+
+	// Insert first document and commit.
+	_, err := items.InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(1)},
+		{Key: "label", Value: "first"},
+		{Key: "version", Value: int32(1)},
+	})
+	require.NoError(t, err)
+	hash1 = dongoCommit(t, env, dbName, "first commit")
+
+	// Insert second document and commit.
+	_, err = items.InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(2)},
+		{Key: "label", Value: "second"},
+		{Key: "version", Value: int32(2)},
+	})
+	require.NoError(t, err)
+	hash2 = dongoCommit(t, env, dbName, "second commit")
+
+	// Create branch "v1.0" from main HEAD.
+	// The branch name contains a dot; access it via dbname__v1%2E0.
+	var branchResult bson.M
+	err = env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+		{Key: "dongoBranch", Value: int32(1)},
+		{Key: "branch", Value: "v1.0"},
+	}).Decode(&branchResult)
+	require.NoError(t, err, "dongoBranch to create v1.0")
+	assert.Equal(t, "v1.0", branchResult["branch"])
+
+	return hash1, hash2
+}
+
+func TestRootishVerify(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+
+	// Use a randomised db name so parallel test runs don't collide.
+	dbName := fmt.Sprintf("vrfy%d", rand.Int64N(1_000_000))
+
+	hash1, hash2 := rootishVerifySetup(t, env, dbName)
+
+	// -------------------------------------------------------------------------
+	// Scenario 1: verifydb__main — reads and writes work
+	// -------------------------------------------------------------------------
+	t.Run("Scenario1_MainBranch_ReadsAndWritesWork", func(t *testing.T) {
+		main := env.client.Database(dbName + "__main")
+		items := main.Collection("items")
+
+		// Read: should return both documents.
+		docs, err := items.Find(ctx, bson.D{})
+		require.NoError(t, err)
+		var rows []bson.M
+		require.NoError(t, docs.All(ctx, &rows))
+		assert.Len(t, rows, 2, "main items: expected 2 docs")
+
+		// Write: insert a third document then remove it to keep state clean.
+		_, err = items.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(3)},
+			{Key: "label", Value: "third"},
+			{Key: "version", Value: int32(3)},
+		})
+		require.NoError(t, err, "insert into main must succeed")
+
+		n, err := items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), n, "main items: expected 3 docs after insert")
+
+		_, err = items.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
+		require.NoError(t, err, "delete from main must succeed")
+
+		// dongoCurrentBranch returns "main".
+		var result bson.M
+		require.NoError(t, main.RunCommand(ctx, bson.D{
+			{Key: "dongoCurrentBranch", Value: int32(1)},
+		}).Decode(&result))
+		assert.Equal(t, "main", result["branch"])
+		assert.EqualValues(t, 1, result["ok"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 2: verifydb__v1%2E0 — reads and writes work, isolated from main
+	// -------------------------------------------------------------------------
+	t.Run("Scenario2_BranchV1_ReadsWritesIsolated", func(t *testing.T) {
+		// Access the v1.0 branch via its percent-encoded name.
+		v1DB := env.client.Database(dbName + "__v1%2E0")
+		v1Items := v1DB.Collection("items")
+		mainItems := env.client.Database(dbName + "__main").Collection("items")
+
+		// Read: returns both documents (same as main HEAD at setup time).
+		docs, err := v1Items.Find(ctx, bson.D{})
+		require.NoError(t, err)
+		var rows []bson.M
+		require.NoError(t, docs.All(ctx, &rows))
+		assert.Len(t, rows, 2, "v1.0 items: expected 2 docs")
+
+		// Write on v1.0: inserts into the v1.0 working set, NOT main's.
+		_, err = v1Items.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(10)},
+			{Key: "label", Value: "v1-only"},
+		})
+		require.NoError(t, err, "insert into v1.0 branch must succeed")
+
+		// v1.0 now has three documents.
+		nV1, err := v1Items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), nV1, "v1.0 items: expected 3 docs after insert")
+
+		// main is unchanged — the v1.0 write is isolated.
+		nMain, err := mainItems.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), nMain, "main items: must still be 2 (v1.0 write must not leak)")
+
+		// dongoCurrentBranch on v1.0 returns the decoded branch name "v1.0".
+		var result bson.M
+		require.NoError(t, v1DB.RunCommand(ctx, bson.D{
+			{Key: "dongoCurrentBranch", Value: int32(1)},
+		}).Decode(&result))
+		assert.Equal(t, "v1.0", result["branch"])
+
+		// Clean up the test write.
+		_, err = v1Items.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(10)}})
+		require.NoError(t, err, "cleanup delete from v1.0 must succeed")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 3: verifydb__<hash> — correct snapshot, writes blocked, branch OK
+	// -------------------------------------------------------------------------
+	t.Run("Scenario3_CommitHash", func(t *testing.T) {
+		snap1DB := env.client.Database(dbName + "__" + hash1)
+		snap1Items := snap1DB.Collection("items")
+		snap2Items := env.client.Database(dbName + "__" + hash2).Collection("items")
+
+		// hash1: one document only.
+		n1, err := snap1Items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), n1, "hash1 snapshot: expected 1 doc")
+
+		var snap1Rows []bson.M
+		cur, err := snap1Items.Find(ctx, bson.D{})
+		require.NoError(t, err)
+		require.NoError(t, cur.All(ctx, &snap1Rows))
+		require.Len(t, snap1Rows, 1)
+		assert.Equal(t, int32(1), snap1Rows[0]["_id"])
+
+		// hash2: two documents.
+		n2, err := snap2Items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), n2, "hash2 snapshot: expected 2 docs")
+
+		// Write on commit hash: must fail (code 96).
+		_, err = snap1Items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
+		assertWriteBlockedOperationFailed(t, err, "insert on hash1 snapshot")
+
+		// dongoCurrentBranch: no branch name to return (code 96).
+		err = snap1DB.RunCommand(ctx, bson.D{
+			{Key: "dongoCurrentBranch", Value: int32(1)},
+		}).Err()
+		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on hash rootish")
+
+		// dongoBranch: works — branch creation needs only a resolved commit address.
+		var branchResult bson.M
+		require.NoError(t, snap1DB.RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "from-hash1"},
+		}).Decode(&branchResult))
+		assert.Equal(t, "from-hash1", branchResult["branch"])
+
+		// Verify the new branch sees the hash1 state (one document).
+		nNew, err := env.client.Database(dbName+"__from-hash1").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), nNew, "from-hash1 branch: expected 1 doc (hash1 state)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 4: verifydb__main~1 — ancestor data, writes blocked, branch OK
+	// -------------------------------------------------------------------------
+	t.Run("Scenario4_AncestorExpression", func(t *testing.T) {
+		parentDB := env.client.Database(dbName + "__main~1")
+		parentItems := parentDB.Collection("items")
+
+		// main~1 is the parent of HEAD (commit 1: one document).
+		nParent, err := parentItems.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), nParent, "main~1: expected 1 doc")
+
+		var parentRows []bson.M
+		cur, err := parentItems.Find(ctx, bson.D{})
+		require.NoError(t, err)
+		require.NoError(t, cur.All(ctx, &parentRows))
+		require.Len(t, parentRows, 1)
+		assert.Equal(t, int32(1), parentRows[0]["_id"])
+
+		// main~0 is main itself (same as current HEAD): two documents.
+		nSame, err := env.client.Database(dbName+"__main~0").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), nSame, "main~0: expected 2 docs (same as HEAD)")
+
+		// Write on ancestor expression: must fail (code 96).
+		_, err = parentItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
+		assertWriteBlockedOperationFailed(t, err, "insert on main~1")
+
+		// dongoCurrentBranch: no branch name to return (code 96).
+		err = parentDB.RunCommand(ctx, bson.D{
+			{Key: "dongoCurrentBranch", Value: int32(1)},
+		}).Err()
+		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on ancestor rootish")
+
+		// dongoBranch: works — ancestor expression resolves to a commit.
+		var branchResult bson.M
+		require.NoError(t, parentDB.RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "back-one"},
+		}).Decode(&branchResult))
+		assert.Equal(t, "back-one", branchResult["branch"])
+
+		// Verify back-one is at the main~1 state (one document).
+		nNew, err := env.client.Database(dbName+"__back-one").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), nNew, "back-one branch: expected 1 doc (main~1 state)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 5: verifydb__HEAD — any command returns code 96
+	// (getSiblingDB / client.Database is client-side only; error fires on first command)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario5_HEAD_AnyCommandFails", func(t *testing.T) {
+		headDB := env.client.Database(dbName + "__HEAD")
+
+		// find returns code 96.
+		assertRootishRejected(t, headDB, "HEAD find")
+
+		// HEAD-relative forms also rejected.
+		assertRootishRejected(t, env.client.Database(dbName+"__HEAD~1"), "HEAD~1 find")
+		assertRootishRejected(t, env.client.Database(dbName+"__HEAD~2"), "HEAD~2 find")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 6: verifydb__main@{yesterday} — reflog rejected on first command
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_Reflog_AnyCommandFails", func(t *testing.T) {
+		assertRootishRejected(t, env.client.Database(dbName+"__main@{yesterday}"), "reflog_yesterday")
+		assertRootishRejected(t, env.client.Database(dbName+"__main@{5 minutes ago}"), "reflog_minutes_ago")
+		assertRootishRejected(t, env.client.Database(dbName+"__@{1}"), "reflog_bare")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 7: verifydb__main..feature — range rejected on first command
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7_Range_AnyCommandFails", func(t *testing.T) {
+		assertRootishRejected(t, env.client.Database(dbName+"__main..feature"), "range_two_dot")
+		assertRootishRejected(t, env.client.Database(dbName+"__main...feature"), "range_three_dot")
+	})
+}
+
+// assertRootishRejectedCode96 checks that a RunCommand call against the given
+// database returns OperationFailed (96). Used for commands other than find.
+func assertRootishRejectedCode96(tb testing.TB, db *mongo.Database, cmd bson.D, op string) {
+	tb.Helper()
+
+	ctx := context.Background()
+	err := db.RunCommand(ctx, cmd).Err()
+	require.Error(tb, err, "%s: expected code-96 rejection", op)
+
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(tb, ok, "%s: expected CommandError, got %T: %v", op, err, err)
+	assert.EqualValues(tb, 96, cmdErr.Code,
+		"%s: expected OperationFailed (96), got %d: %s", op, cmdErr.Code, cmdErr.Message)
+}
