@@ -356,3 +356,58 @@ func TestRTVLLoad_Tag_Query(t *testing.T) {
 		t.Errorf("testdb__v1.0: want 1 doc, got %d", n)
 	}
 }
+
+// TestRTVLLoad_BranchWrite_Isolation verifies that writes via a non-main branch
+// rootish (mydb__feature) go to that branch's working set and are isolated from main.
+//
+// Setup:
+//   - Commit one doc on main → main has 1 doc committed.
+//   - Create branch "feature" from main HEAD.
+//   - Write a second doc via "testdb__feature" (into feature's working set, uncommitted).
+//   - Write a third doc via "testdb" / "testdb__main" (into main's working set).
+//
+// Expected:
+//   - testdb__feature sees 2 docs (inherited committed doc + feature working-set write).
+//   - testdb / testdb__main sees 2 docs (committed doc + main working-set write).
+//   - The two branches see different second documents (isolated writes).
+func TestRTVLLoad_BranchWrite_Isolation(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit one doc on main.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", "main-committed"))
+	commitDB(t, b, "testdb", "baseline commit")
+
+	// Create branch "feature" from main HEAD.
+	_, err := b.DongoBranch(ctx, &backends.BranchParams{
+		DBName: "testdb",
+		Name:   "feature",
+		From:   "main",
+	})
+	if err != nil {
+		t.Fatalf("DongoBranch: %v", err)
+	}
+
+	// Write to feature branch working set (not committed).
+	insertDoc(t, b, "testdb__feature", "col", mustDoc(t, "_id", int64(2), "v", "feature-only"))
+
+	// Write to main working set (not committed).
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "v", "main-only"))
+
+	// feature branch should see doc1 (committed) + doc2 (feature write) = 2.
+	nFeature := countDocs(t, b, "testdb__feature", "col")
+	if nFeature != 2 {
+		t.Errorf("testdb__feature: want 2 docs, got %d", nFeature)
+	}
+
+	// main should see doc1 (committed) + doc3 (main write) = 2.
+	nMain := countDocs(t, b, "testdb", "col")
+	if nMain != 2 {
+		t.Errorf("testdb (main): want 2 docs, got %d", nMain)
+	}
+
+	// feature branch must NOT see doc3 (main-only write).
+	// main must NOT see doc2 (feature-only write).
+	// We verify this indirectly: if both branches showed 3 docs, the writes leaked.
+	// The count checks above cover this since each branch has exactly 2 docs.
+}

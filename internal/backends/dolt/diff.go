@@ -36,6 +36,30 @@ import (
 	"github.com/dolthub/dongo/internal/util/iterator"
 )
 
+// rootishIsReadOnly reports whether a rootish is read-only (commit hash or ancestor expression).
+// Branch names and tag names are writable (not read-only).
+//
+// Dolt commit hashes are exactly 32 lowercase base32 characters (0-9a-v). Only
+// full-length hashes are detected here; abbreviated forms are indistinguishable
+// from branch names at parse time and are resolved at runtime by the backend.
+func rootishIsReadOnly(rootish string) bool {
+	// Ancestor expression: <branch>~<N>
+	if strings.Contains(rootish, "~") {
+		return true
+	}
+
+	// Dolt commit hash: exactly 32 lowercase base32 characters (0-9a-v).
+	if len(rootish) != 32 {
+		return false
+	}
+	for _, c := range rootish {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'v')) {
+			return false
+		}
+	}
+	return true
+}
+
 // amFromRootish resolves a rootish string to a collections AddressMap.
 //
 // Resolution order:

@@ -109,7 +109,8 @@ type dbState struct {
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
 	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
 	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
-	am         prolly.AddressMap               // current collections address map (name → DTBL hash)
+	am         prolly.AddressMap               // current collections address map (name → DTBL hash) for main
+	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name → AM)
 	uuids      map[string]string               // collection name → UUID string (in-memory)
 	indexes    map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
 	validators map[string]*collectionValidator // collection name → validator (in-memory)
@@ -555,6 +556,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		doltDB:         doltDB,
 		ds:             ds,
 		am:             am,
+		branchAMs:      make(map[string]prolly.AddressMap),
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		validators:     make(map[string]*collectionValidator),
@@ -611,7 +613,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		return datas.Dataset{}, am, err
 	}
 
-	if err := updateWorkingSet(ctx, doltDB, am, am); err != nil {
+	if err := updateWorkingSet(ctx, doltDB, am, am, "main"); err != nil {
 		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
 	}
 
@@ -717,8 +719,13 @@ func buildStoreRootFlatbuffer(refsAM prolly.AddressMap) serial.Message {
 	return serial.FinishMessage(builder, serial.StoreRootEnd(builder), []byte(serial.StoreRootFileID))
 }
 
+// workingSetForBranch returns the Dolt dataset ID for the working set of a branch.
+func workingSetForBranch(branch string) string {
+	return "workingSets/heads/" + branch
+}
+
 // updateWorkingSet writes the working set with independent working and staged roots.
-// This is required for `dolt status` to function — without a workingSets/heads/main
+// This is required for `dolt status` to function — without a workingSets/heads/<branch>
 // entry, dolt panics trying to read the working set.
 //
 // workingAM is the latest uncommitted state; stagedAM is what has been staged for
@@ -726,7 +733,7 @@ func buildStoreRootFlatbuffer(refsAM prolly.AddressMap) serial.Message {
 // The RTVL chunk for workingAM must already be in the value store (written by the
 // caller via vs.WriteValue). The staged RTVL is recomputed from stagedAM and its
 // chunk must also be present in the store (e.g. written by a prior commit).
-func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, stagedAM prolly.AddressMap) error {
+func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, stagedAM prolly.AddressMap, branch string) error {
 	workingRtvlMsg := buildRootValueFlatbuffer(workingAM)
 	workingRtvlRef, err := dolttypes.NewRef(dolttypes.SerialMessage(workingRtvlMsg), dolttypes.Format_DOLT)
 	if err != nil {
@@ -739,7 +746,7 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, sta
 		return fmt.Errorf("creating staged RTVL ref: %w", err)
 	}
 
-	wsDs, err := doltDB.GetDataset(ctx, workingSetDataset)
+	wsDs, err := doltDB.GetDataset(ctx, workingSetForBranch(branch))
 	if err != nil {
 		return fmt.Errorf("getting working set dataset: %w", err)
 	}
@@ -943,7 +950,7 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 			if err != nil {
 				return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: loading AM: %w", err)
 			}
-			if err := updateWorkingSet(ctx, db.doltDB, db.am, db.am); err != nil {
+			if err := updateWorkingSet(ctx, db.doltDB, db.am, db.am, "main"); err != nil {
 				return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: updating working set: %w", err)
 			}
 		}
@@ -996,7 +1003,7 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	if params.Into == "main" {
 		db.ds = newDS
 		db.am = mergedAM
-		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: DongoMerge: updating working set: %w", err)
 		}
 	}
@@ -1320,13 +1327,13 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 
 	if params.Hard {
 		// Hard reset: working tree and staged root both point to the target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: DongoReset: updating working set (hard): %w", err)
 		}
 		db.am = targetAM
 	} else {
 		// Soft reset: keep the working tree as-is; staged root = target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, db.am, targetAM); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, db.am, targetAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: DongoReset: updating working set (soft): %w", err)
 		}
 	}

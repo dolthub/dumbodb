@@ -362,7 +362,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
@@ -563,7 +563,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
@@ -688,7 +688,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
@@ -907,7 +907,12 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 // loadOrCreateMap returns the prolly.Map for this collection, creating an empty
 // one if it doesn't exist. The caller must hold state.mu (write lock).
 func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (prolly.Map, error) {
-	rootHash, err := state.am.Get(ctx, c.name)
+	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
+	if err != nil {
+		return prolly.Map{}, err
+	}
+
+	rootHash, err := am.Get(ctx, c.name)
 	if err != nil {
 		return prolly.Map{}, err
 	}
@@ -926,7 +931,7 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Add(ctx, c.name, dtblHash)
 	}); err != nil {
 		return prolly.Map{}, err

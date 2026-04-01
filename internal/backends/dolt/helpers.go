@@ -364,13 +364,71 @@ func (state *dbState) dtblHashForMap(ctx context.Context, m prolly.Map) (hash.Ha
 	return ref.TargetHash(), nil
 }
 
-// updateAddressMap applies a mutation to the collections address map and
+// getOrInitBranchAM returns the current working-set AddressMap for branch.
+// For "main" it returns state.am. For other branches it checks state.branchAMs
+// and initializes from the branch HEAD if not already cached.
+// The caller must hold state.mu (write lock).
+func (state *dbState) getOrInitBranchAM(ctx context.Context, branch string) (prolly.AddressMap, error) {
+	if branch == "main" {
+		return state.am, nil
+	}
+	if am, ok := state.branchAMs[branch]; ok {
+		return am, nil
+	}
+	// Initialize from the branch HEAD commit.
+	am, err := amFromRootish(ctx, state, branch)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("initializing branch AM for %q: %w", branch, err)
+	}
+	state.branchAMs[branch] = am
+	return am, nil
+}
+
+// headRootAMForBranch returns the collections AddressMap from a branch HEAD's rootValue.
+// For "main" it delegates to headRootAM (uses state.ds). For other branches it loads
+// the branch dataset from doltDB and reads its HEAD. If the branch has no commits,
+// an empty AddressMap is returned (suitable as the initial staged root).
+// The caller must hold state.mu (read or write lock).
+func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (prolly.AddressMap, error) {
+	if branch == "main" {
+		return state.headRootAM(ctx)
+	}
+	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil || !branchDS.HasHead() {
+		return prolly.NewEmptyAddressMap(state.ns)
+	}
+	headValue, _, err := branchDS.MaybeHeadValue()
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("reading HEAD value for branch %q: %w", branch, err)
+	}
+	headMsg, ok := headValue.(dolttypes.SerialMessage)
+	if !ok {
+		return prolly.AddressMap{}, fmt.Errorf("unexpected HEAD value type %T for branch %q", headValue, branch)
+	}
+	rtvl, err := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("parsing HEAD RTVL for branch %q: %w", branch, err)
+	}
+	amNode, _, err := tree.NodeFromBytes(rtvl.TablesBytes())
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("parsing AM from HEAD RTVL for branch %q: %w", branch, err)
+	}
+	return prolly.NewAddressMap(amNode, state.ns)
+}
+
+// updateAddressMap applies a mutation to the collections address map for branch and
 // persists it to the dolt working set only. HEAD stays at the last explicit
 // commit; only working_root_addr advances. staged_root_addr stays at HEAD's
 // rootValue so that `dolt status` shows "Changes not staged for commit".
 // The caller must hold state.mu (write lock).
-func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.AddressMapEditor) error) error {
-	editor := state.am.Editor()
+func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error) error {
+	// Get the current AM for this branch (initializes from HEAD if needed).
+	currentAM, err := state.getOrInitBranchAM(ctx, branch)
+	if err != nil {
+		return err
+	}
+
+	editor := currentAM.Editor()
 
 	if err := fn(editor); err != nil {
 		return err
@@ -388,18 +446,23 @@ func (state *dbState) updateAddressMap(ctx context.Context, fn func(prolly.Addre
 		return fmt.Errorf("dolt: writing RTVL for working set: %w", err)
 	}
 
-	// Get the staged AM from HEAD's rootValue. Staged stays at HEAD until an
+	// Get the staged AM from the branch HEAD's rootValue. Staged stays at HEAD until an
 	// explicit stage operation advances it.
-	stagedAM, err := state.headRootAM(ctx)
+	stagedAM, err := headRootAMForBranch(ctx, state, branch)
 	if err != nil {
 		return fmt.Errorf("dolt: reading HEAD AM for staged root: %w", err)
 	}
 
-	if err := updateWorkingSet(ctx, state.doltDB, newAM, stagedAM); err != nil {
+	if err := updateWorkingSet(ctx, state.doltDB, newAM, stagedAM, branch); err != nil {
 		return fmt.Errorf("dolt: updating working set: %w", err)
 	}
 
-	state.am = newAM
+	// Persist the updated AM.
+	if branch == "main" {
+		state.am = newAM
+	} else {
+		state.branchAMs[branch] = newAM
+	}
 
 	return nil
 }

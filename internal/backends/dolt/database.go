@@ -36,14 +36,22 @@ type database struct {
 
 // resolveAM returns the collections AddressMap for the database's rootish.
 //
-// When the rootish is "main" (the default for a plain db name), the current
-// working-set AM (state.am) is returned. When the rootish is a commit hash
-// or tag name, the AM is loaded from the historical RTVL at that revision.
+// For "main", the current working-set AM (state.am) is returned. For read-only
+// rootishes (commit hashes, ancestor expressions), the AM is loaded from the
+// historical RTVL at that revision. For writable branch rootishes, the in-memory
+// working-set AM is returned if it exists, otherwise the branch HEAD is loaded.
 //
 // The caller must hold at least state.mu.RLock().
 func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.AddressMap, error) {
 	if db.rootish == "main" {
 		return state.am, nil
+	}
+	if rootishIsReadOnly(db.rootish) {
+		return amFromRootish(ctx, state, db.rootish)
+	}
+	// Writable branch: prefer working-set AM if already initialized.
+	if am, ok := state.branchAMs[db.rootish]; ok {
+		return am, nil
 	}
 	return amFromRootish(ctx, state, db.rootish)
 }
@@ -155,7 +163,11 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	}
 
 	// Check if already exists as a regular collection.
-	exists, err := state.am.Has(ctx, params.Name)
+	branchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
+		return err
+	}
+	exists, err := branchAM.Has(ctx, params.Name)
 	if err != nil {
 		return err
 	}
@@ -187,7 +199,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if err != nil {
 		return err
 	}
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Add(ctx, params.Name, dtblHash)
 	}); err != nil {
 		return err
@@ -248,7 +260,11 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 		return nil
 	}
 
-	exists, err := state.am.Has(ctx, params.Name)
+	dropBranchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
+		return err
+	}
+	exists, err := dropBranchAM.Has(ctx, params.Name)
 	if err != nil {
 		return err
 	}
@@ -258,7 +274,7 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 			fmt.Errorf("dolt: collection %q does not exist in %q", params.Name, db.name))
 	}
 
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Delete(ctx, params.Name)
 	}); err != nil {
 		return err
@@ -288,7 +304,12 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	oldAddr, err := state.am.Get(ctx, params.OldName)
+	renameBranchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
+		return err
+	}
+
+	oldAddr, err := renameBranchAM.Get(ctx, params.OldName)
 	if err != nil {
 		return err
 	}
@@ -298,7 +319,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("dolt: collection %q does not exist in %q", params.OldName, db.name))
 	}
 
-	newExists, err := state.am.Has(ctx, params.NewName)
+	newExists, err := renameBranchAM.Has(ctx, params.NewName)
 	if err != nil {
 		return err
 	}
@@ -308,7 +329,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("dolt: collection %q already exists in %q", params.NewName, db.name))
 	}
 
-	if err := state.updateAddressMap(ctx, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}
@@ -360,7 +381,11 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	exists, err := state.am.Has(ctx, params.Name)
+	collModBranchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
+		return err
+	}
+	exists, err := collModBranchAM.Has(ctx, params.Name)
 	if err != nil {
 		return err
 	}
