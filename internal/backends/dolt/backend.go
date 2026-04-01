@@ -903,8 +903,69 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 }
 
 // DongoStatus implements backends.VersioningBackend.
-func (b *Backend) DongoStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
-	return nil, fmt.Errorf("dolt: DongoStatus not yet implemented")
+//
+// It returns the list of collections with uncommitted changes on the working set,
+// comparing the working set AM (state.am) against the HEAD committed AM.
+// Each TableStatus entry carries one of "added", "modified", or "deleted".
+func (b *Backend) DongoStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+	state, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoStatus: opening db %q: %w", params.DBName, err)
+	}
+
+	if state == nil {
+		return &backends.VersioningStatusResult{Branch: params.Branch, Tables: []backends.TableStatus{}}, nil
+	}
+
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	headAM, err := state.headRootAM(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoStatus: reading HEAD AM for db %q: %w", params.DBName, err)
+	}
+
+	workingAM := state.am
+
+	names, err := unionCollectionNames(ctx, headAM, workingAM)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoStatus: collecting collection names for db %q: %w", params.DBName, err)
+	}
+
+	var tables []backends.TableStatus
+
+	for _, name := range names {
+		headHash, headErr := headAM.Get(ctx, name)
+		if headErr != nil {
+			return nil, fmt.Errorf("dolt: DongoStatus: reading HEAD hash for %q: %w", name, headErr)
+		}
+
+		workingHash, workingErr := workingAM.Get(ctx, name)
+		if workingErr != nil {
+			return nil, fmt.Errorf("dolt: DongoStatus: reading working hash for %q: %w", name, workingErr)
+		}
+
+		var status string
+		switch {
+		case headHash.IsEmpty() && !workingHash.IsEmpty():
+			status = "added"
+		case !headHash.IsEmpty() && workingHash.IsEmpty():
+			status = "deleted"
+		case headHash != workingHash:
+			status = "modified"
+		default:
+			// unchanged — skip
+			continue
+		}
+
+		tables = append(tables, backends.TableStatus{Name: name, Status: status})
+	}
+
+	if tables == nil {
+		tables = []backends.TableStatus{}
+	}
+
+	return &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}, nil
 }
 
 // DongoReset implements backends.VersioningBackend.
