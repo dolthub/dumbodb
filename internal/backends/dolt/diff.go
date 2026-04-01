@@ -41,11 +41,11 @@ import (
 // Resolution order:
 //  1. Dolt commit hash (32 base32 chars 0-9a-v): load AM from that commit directly.
 //  2. Relative ancestor expression (<branch>~<N>): resolve branch HEAD, walk N first-parents.
-//  3. Tag name: resolve via refs/tags/<rootish>, then load AM from the target commit.
+//  3. Branch name: resolve via refs/heads/<rootish>, load AM from that branch's HEAD commit.
+//  4. Tag name: resolve via refs/tags/<rootish>, load AM from the tagged commit.
 //
-// This function is used for historical reads (e.g. mydb__<commit-hash>, mydb__main~3, or mydb__<tag>).
-// Branch-name rootishes (e.g. "main") return an error; callers should use the
-// current working set AM (state.am) for branches.
+// Non-main branch reads always reflect the committed HEAD of that branch, not its
+// working set (multi-branch working sets are not yet implemented).
 func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.AddressMap, error) {
 	// Case 1: commit hash (exactly 32 base32 chars 0-9a-v).
 	if _, ok := hash.MaybeParse(rootish); ok && len(rootish) == 32 {
@@ -57,13 +57,23 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 		return amFromAncestorExpr(ctx, state, rootish)
 	}
 
-	// Case 3: tag name — try refs/tags/<rootish>.
+	// Case 3: branch name — try refs/heads/<rootish>.
+	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+rootish)
+	if err == nil && branchDS.HasHead() {
+		branchHead, ok := branchDS.MaybeHeadAddr()
+		if !ok {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: branch has no head address", rootish)
+		}
+		return amFromCommitHash(ctx, state, branchHead.String())
+	}
+
+	// Case 4: tag name — try refs/tags/<rootish>.
 	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not a commit hash and tag lookup failed: %w", rootish, err)
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not a commit hash, branch, or tag: %w", rootish, err)
 	}
 	if !tagDS.HasHead() {
-		return prolly.AddressMap{}, fmt.Errorf("rootish %q: tag not found", rootish)
+		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not found as branch or tag", rootish)
 	}
 	tagHead, ok := tagDS.MaybeHeadAddr()
 	if !ok {
