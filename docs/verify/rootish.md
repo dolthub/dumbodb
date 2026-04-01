@@ -225,18 +225,32 @@ db.getSiblingDB("verifydb__back-one").items.find({}).toArray()
 
 ## Scenario 5: `verifydb__HEAD` — returns a clear 'not supported' error
 
-HEAD is not a valid rootish. Any operation on a `HEAD`-encoded database name fails immediately
-at parse time — no query is executed.
+HEAD is not a valid rootish. The parse error is returned on the **first command** sent to
+the server for that database name.
+
+> **Why doesn't `getSiblingDB` itself fail?**
+> `getSiblingDB()` is pure client-side JavaScript in mongosh — it constructs a local
+> `Database` object and makes zero network calls. The server never sees the database
+> name until a command is issued. There is no mechanism to validate earlier; the error
+> fires on first contact, which is as early as the server can act.
 
 ```js
+// getSiblingDB is client-side only — no server contact, no error yet.
 const head = db.getSiblingDB("verifydb__HEAD")
 
+// The parse error fires on the first command sent to the server:
 head.items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "HEAD": HEAD and HEAD-relative forms are not
 //   supported; use a branch name, tag, commit hash, or <branch>~<N>
 
-// Same for HEAD-relative forms
+// Any other command produces the same parse error:
+head.runCommand({ ping: 1 })
+// Expected error (code 96):
+//   MongoServerError[OperationFailed]: rootish "HEAD": HEAD and HEAD-relative forms are not
+//   supported; use a branch name, tag, commit hash, or <branch>~<N>
+
+// HEAD-relative forms are also rejected on first command:
 db.getSiblingDB("verifydb__HEAD~1").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "HEAD~1": HEAD and HEAD-relative forms are not
@@ -247,7 +261,8 @@ db.getSiblingDB("verifydb__HEAD~1").items.find({}).toArray()
 
 ## Scenario 6: `verifydb__main@{yesterday}` — returns a clear 'not supported' error
 
-Reflog syntax is not supported. Any operation fails at parse time.
+Reflog syntax is not supported. The error fires on the first command (same reason as
+Scenario 5 — `getSiblingDB` is client-side only).
 
 ```js
 db.getSiblingDB("verifydb__main@{yesterday}").items.find({}).toArray()
@@ -268,7 +283,7 @@ db.getSiblingDB("verifydb__@{1}").items.find({}).toArray()
 
 ## Scenario 7: `verifydb__main..feature` — returns a clear 'not supported' error
 
-Range syntax is not supported. Any operation fails at parse time.
+Range syntax is not supported. The error fires on the first command.
 
 ```js
 db.getSiblingDB("verifydb__main..feature").items.find({}).toArray()
@@ -292,9 +307,9 @@ db.getSiblingDB("verifydb__main...feature").items.find({}).toArray()
 | Tag name | `mydb__v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | ✅ | Collection writes blocked; branch creation resolves the tag's commit |
 | Commit hash (32 chars) | `mydb__<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
 | Ancestor expression | `mydb__main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
-| HEAD | `mydb__HEAD` | ❌ | ❌ | ❌ | Rejected at parse time (code 96) |
-| Reflog | `mydb__main@{yesterday}` | ❌ | ❌ | ❌ | Rejected at parse time (code 96) |
-| Range | `mydb__main..feature` | ❌ | ❌ | ❌ | Rejected at parse time (code 96) |
+| HEAD | `mydb__HEAD` | ❌ | ❌ | ❌ | Rejected on first command (code 96); `getSiblingDB` is client-side only |
+| Reflog | `mydb__main@{yesterday}` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
+| Range | `mydb__main..feature` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
 
 ¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
 ² **Branch creation** = `db.runCommand({ dongoBranch: 1, branch: "newname" })`. Works whenever
