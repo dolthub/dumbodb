@@ -3,11 +3,11 @@
 Manual verification guide for `dongoCurrentBranch` end-to-end behavior. Work through
 each scenario top to bottom.
 
-> **Automated equivalent:** `tests/versioning_rootish_verify_test.go` (`TestRootishVerify`)
-> covers `dongoCurrentBranch` in Scenarios 1, 2, 3, and 4.
+> **Automated equivalent:** `tests/versioning_current_branch_verify_test.go` (`TestCurrentBranchVerify`)
+> covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```
-> go test ./tests/... -run TestRootishVerify -v
+> go test ./tests/... -run TestCurrentBranchVerify -v
 > ```
 
 ## Prerequisites
