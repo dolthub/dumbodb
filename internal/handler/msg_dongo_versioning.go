@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -151,7 +152,14 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
 func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, err error) {
 	if idx := strings.Index(encoded, "__"); idx > 0 {
-		rootish = encoded[idx+2:]
+		raw := encoded[idx+2:]
+		rootish, err = url.PathUnescape(raw)
+		if err != nil {
+			return "", "", false, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrOperationFailed,
+				fmt.Sprintf("rootish %q: invalid percent-encoding: %v", raw, err),
+			)
+		}
 		if err = parseRootish(rootish); err != nil {
 			return "", "", false, err
 		}

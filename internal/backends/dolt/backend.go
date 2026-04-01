@@ -42,6 +42,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -217,9 +218,19 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // splitEncodedDBName splits an encoded database name "dbname__rootish" into
 // the base database name and rootish. If no __ separator is present, the
 // rootish defaults to "main" (the default branch).
+//
+// The rootish component is percent-decoded (RFC 3986 path encoding) so that
+// branch names containing characters invalid in MongoDB database names (e.g. '.'
+// in "v1.0", '/' in "feature/foo") can be encoded by the client as "v1%2E0" or
+// "feature%2Ffoo". The handler has already validated the encoding before the
+// backend is reached, so decode errors here fall back to the raw value.
 func splitEncodedDBName(encoded string) (dbName, rootish string) {
 	if idx := strings.Index(encoded, "__"); idx >= 0 {
-		return encoded[:idx], encoded[idx+2:]
+		raw := encoded[idx+2:]
+		if decoded, err := url.PathUnescape(raw); err == nil {
+			return encoded[:idx], decoded
+		}
+		return encoded[:idx], raw
 	}
 	return encoded, "main"
 }

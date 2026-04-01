@@ -174,10 +174,16 @@ func TestSplitEncodedDBName(t *testing.T) {
 		{"mydb", "mydb", "main"},
 		{"mydb__main", "mydb", "main"},
 		{"mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61"},
-		{"mydb__v1.0", "mydb", "v1.0"},
 		{"mydb__feature-branch", "mydb", "feature-branch"},
 		{"mydb__main~3", "mydb", "main~3"},
 		{"a__b__c", "a", "b__c"},
+		// Percent-encoded rootish: dots and slashes in branch names must be encoded
+		// because '.' and '/' are invalid in MongoDB database names.
+		{"mydb__v1%2E0", "mydb", "v1.0"},
+		{"mydb__feature%2Ffoo", "mydb", "feature/foo"},
+		{"mydb__main%7E1", "mydb", "main~1"}, // ~1 encoded (passthrough — still ancestor expr)
+		// Invalid percent sequence: falls back to raw value.
+		{"mydb__%ZZ", "mydb", "%ZZ"},
 	}
 
 	for _, tc := range cases {
