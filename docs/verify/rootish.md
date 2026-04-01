@@ -135,7 +135,9 @@ v1.items.deleteOne({ _id: 10 })
 
 ## Scenario 3: `verifydb__<hash>` — connects to correct snapshot, reads correct historical data
 
-Commit hash rootish. Read-only view of the exact snapshot at that commit.
+Commit hash rootish. Read-only view of the exact snapshot at that commit. Writes to
+the collection are blocked, but branch creation works — creating a branch from a commit
+hash is always valid because the hash is a fully resolved commit address.
 
 ```js
 // Connect to the snapshot at hash1 (one document only)
@@ -154,16 +156,25 @@ const snap2 = db.getSiblingDB("verifydb__" + hash2)
 snap2.items.find({}).toArray()
 // Expected: [ { _id: 1, ... }, { _id: 2, ... } ]
 
-// Write on commit hash: must fail
+// Write on commit hash: must fail — the snapshot is read-only
 snap1.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// dongoCurrentBranch is not available on commit hash rootish
+// dongoCurrentBranch: no branch name to return (connection is at a specific commit)
 snap1.runCommand({ dongoCurrentBranch: 1 })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: dongoCurrentBranch: connection is read-only
-//   (commit hash or ancestor expression); there is no current branch
+//   MongoServerError[OperationFailed]: dongoCurrentBranch: no current branch name
+//   (connection is at a specific commit, not a named branch)
+
+// dongoBranch: works — branch creation only needs a resolved commit, not write access.
+// This creates a new branch "from-hash1" pointing at hash1 (one-document state).
+snap1.runCommand({ dongoBranch: 1, branch: "from-hash1" })
+// Expected: { branch: "from-hash1", ok: 1 }
+
+// Verify the new branch sees the one-document state at hash1.
+db.getSiblingDB("verifydb__from-hash1").items.find({}).toArray()
+// Expected: [ { _id: 1, label: "first", version: 1 } ]
 ```
 
 ---
@@ -171,6 +182,7 @@ snap1.runCommand({ dongoCurrentBranch: 1 })
 ## Scenario 4: `verifydb__main~1` — returns data as of parent commit, not current HEAD
 
 Ancestor expression rootish. Read-only; resolves to the parent of the named branch's HEAD.
+As with commit hashes, writes to the collection are blocked but branch creation works.
 
 ```js
 const parent = db.getSiblingDB("verifydb__main~1")
@@ -188,16 +200,25 @@ const same = db.getSiblingDB("verifydb__main~0")
 same.items.countDocuments({})
 // Expected: 2
 
-// Write on ancestor expression: must fail
+// Write on ancestor expression: must fail — the snapshot is read-only
 parent.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// dongoCurrentBranch is not available on ancestor expression rootish
+// dongoCurrentBranch: no branch name to return (connection is at a specific commit)
 parent.runCommand({ dongoCurrentBranch: 1 })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: dongoCurrentBranch: connection is read-only
-//   (commit hash or ancestor expression); there is no current branch
+//   MongoServerError[OperationFailed]: dongoCurrentBranch: no current branch name
+//   (connection is at a specific commit, not a named branch)
+
+// dongoBranch: works — the ancestor expression resolves to a commit; branch creation
+// only needs a resolved commit address. Creates "back-one" at the main~1 state.
+parent.runCommand({ dongoBranch: 1, branch: "back-one" })
+// Expected: { branch: "back-one", ok: 1 }
+
+// Verify back-one is at the one-document state (main~1).
+db.getSiblingDB("verifydb__back-one").items.find({}).toArray()
+// Expected: [ { _id: 1, label: "first", version: 1 } ]
 ```
 
 ---
@@ -264,16 +285,20 @@ db.getSiblingDB("verifydb__main...feature").items.find({}).toArray()
 
 ## Quick Reference
 
-| Rootish form | Example | Read | Write | Notes |
-|---|---|---|---|---|
-| Branch name (main) | `mydb__main` | ✅ | ✅ | Writes go to main's working set |
-| Branch name (other) | `mydb__v1%2E0` (encodes `v1.0`) | ✅ | ✅ | Writes go to that branch's working set, isolated from main |
-| Tag name | `mydb__v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
-| Commit hash (32 chars) | `mydb__<hash>` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
-| Ancestor expression | `mydb__main~1` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
-| HEAD | `mydb__HEAD` | ❌ | ❌ | `rootish "HEAD": HEAD and HEAD-relative forms are not supported...` (code 96) |
-| Reflog | `mydb__main@{yesterday}` | ❌ | ❌ | `rootish "...": reflog syntax is not supported` (code 96) |
-| Range | `mydb__main..feature` | ❌ | ❌ | `rootish "...": range syntax is not supported` (code 96) |
+| Rootish form | Example | Read | Write¹ | Branch creation² | Notes |
+|---|---|---|---|---|---|
+| Branch name (main) | `mydb__main` | ✅ | ✅ | ✅ | Writes go to main's working set |
+| Branch name (other) | `mydb__v1%2E0` (encodes `v1.0`) | ✅ | ✅ | ✅ | Writes go to that branch's working set, isolated from main |
+| Tag name | `mydb__v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | ✅ | Collection writes blocked; branch creation resolves the tag's commit |
+| Commit hash (32 chars) | `mydb__<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
+| Ancestor expression | `mydb__main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
+| HEAD | `mydb__HEAD` | ❌ | ❌ | ❌ | Rejected at parse time (code 96) |
+| Reflog | `mydb__main@{yesterday}` | ❌ | ❌ | ❌ | Rejected at parse time (code 96) |
+| Range | `mydb__main..feature` | ❌ | ❌ | ❌ | Rejected at parse time (code 96) |
+
+¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
+² **Branch creation** = `db.runCommand({ dongoBranch: 1, branch: "newname" })`. Works whenever
+the rootish resolves to a commit — branch creation only needs a commit address, not write access.
 
 All errors use MongoDB error code **96** (`OperationFailed`).
 

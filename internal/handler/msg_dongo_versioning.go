@@ -343,7 +343,7 @@ func (h *Handler) MsgDongoCurrentBranch(connCtx context.Context, msg *wire.OpMsg
 	if readOnly {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoCurrentBranch: connection is read-only (commit hash or ancestor expression); there is no current branch",
+			"dongoCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)",
 		)
 	}
 

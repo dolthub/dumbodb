@@ -828,14 +828,11 @@ func (b *Backend) DongoBranch(ctx context.Context, params *backends.BranchParams
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	fromDatasetID := "refs/heads/" + params.From
-	sourceDS, err := db.doltDB.GetDataset(ctx, fromDatasetID)
+	// Resolve From to a commit hash. From may be a branch name, commit hash, or
+	// ancestor expression (e.g. "main~1"), so we use the general rootish resolver.
+	headHash, err := resolveRootishToCommitHash(ctx, db, params.From)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: getting source branch %q: %w", params.From, err)
-	}
-	headHash, ok := sourceDS.MaybeHeadAddr()
-	if !ok {
-		return nil, fmt.Errorf("dolt: DongoBranch: source branch %q has no commits", params.From)
+		return nil, fmt.Errorf("dolt: DongoBranch: resolving source %q: %w", params.From, err)
 	}
 
 	newDatasetID := "refs/heads/" + params.Name

@@ -154,6 +154,75 @@ func amFromAncestorExpr(ctx context.Context, state *dbState, rootish string) (pr
 	return amFromCommitHash(ctx, state, currentHash.String())
 }
 
+// resolveRootishToCommitHash resolves any rootish expression to the Dolt commit hash
+// it points to. Resolution order mirrors amFromRootish:
+//  1. Bare 32-char commit hash — parsed and returned directly.
+//  2. Ancestor expression <branch>~<N> — branch HEAD resolved, then N first-parents walked.
+//  3. Branch name — resolved via refs/heads/<rootish>.
+//  4. Tag name — resolved via refs/tags/<rootish>.
+//
+// This is used for branch creation (DongoBranch) which needs the commit hash, not the AM.
+func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish string) (hash.Hash, error) {
+	// Case 1: bare commit hash.
+	if h, ok := hash.MaybeParse(rootish); ok && len(rootish) == 32 {
+		return h, nil
+	}
+
+	// Case 2: ancestor expression <branch>~<N>.
+	if idx := strings.LastIndex(rootish, "~"); idx >= 0 {
+		branch := rootish[:idx]
+		nStr := rootish[idx+1:]
+		n, err := strconv.Atoi(nStr)
+		if err != nil || n < 0 {
+			return hash.Hash{}, fmt.Errorf("rootish %q: invalid ancestor count %q", rootish, nStr)
+		}
+		branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+		if err != nil {
+			return hash.Hash{}, fmt.Errorf("rootish %q: resolving branch %q: %w", rootish, branch, err)
+		}
+		if !branchDS.HasHead() {
+			return hash.Hash{}, fmt.Errorf("rootish %q: branch %q has no commits", rootish, branch)
+		}
+		currentHash, ok := branchDS.MaybeHeadAddr()
+		if !ok {
+			return hash.Hash{}, fmt.Errorf("rootish %q: branch %q has no head address", rootish, branch)
+		}
+		for i := 0; i < n; i++ {
+			commit, loadErr := datas.LoadCommitAddr(ctx, state.vs, currentHash)
+			if loadErr != nil {
+				return hash.Hash{}, fmt.Errorf("rootish %q: loading commit at depth %d: %w", rootish, i, loadErr)
+			}
+			parentAddrs, parErr := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+			if parErr != nil {
+				return hash.Hash{}, fmt.Errorf("rootish %q: reading parents at depth %d: %w", rootish, i, parErr)
+			}
+			if len(parentAddrs) == 0 {
+				return hash.Hash{}, fmt.Errorf("rootish %q: commit at depth %d has no parent (only %d ancestors exist)", rootish, i, i)
+			}
+			currentHash = parentAddrs[0]
+		}
+		return currentHash, nil
+	}
+
+	// Case 3: branch name.
+	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+rootish)
+	if err == nil && branchDS.HasHead() {
+		if h, ok := branchDS.MaybeHeadAddr(); ok {
+			return h, nil
+		}
+	}
+
+	// Case 4: tag name.
+	tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
+	if tagErr == nil && tagDS.HasHead() {
+		if h, ok := tagDS.MaybeHeadAddr(); ok {
+			return h, nil
+		}
+	}
+
+	return hash.Hash{}, fmt.Errorf("rootish %q: not found as commit hash, branch, or tag", rootish)
+}
+
 // amFromCommitHash loads the collections AddressMap from a specific commit
 // identified by its hash string (32-char base32 dolt hash).
 //

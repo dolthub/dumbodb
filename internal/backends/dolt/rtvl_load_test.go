@@ -357,6 +357,68 @@ func TestRTVLLoad_Tag_Query(t *testing.T) {
 	}
 }
 
+// TestRTVLLoad_DongoBranch_FromHash verifies that a branch can be created from a
+// commit-hash rootish. The new branch points to that exact commit, not main HEAD.
+func TestRTVLLoad_DongoBranch_FromHash(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit doc1 → hash1. This is the commit the new branch will point at.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	hash1 := commitDB(t, b, "testdb", "first commit")
+
+	// Commit doc2 on main so main HEAD advances past hash1.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
+	commitDB(t, b, "testdb", "second commit")
+
+	// Create a branch "snap" rooted at hash1 (not main HEAD).
+	_, err := b.DongoBranch(ctx, &backends.BranchParams{
+		DBName: "testdb",
+		Name:   "snap",
+		From:   hash1,
+	})
+	if err != nil {
+		t.Fatalf("DongoBranch from hash: %v", err)
+	}
+
+	// Reading from the new branch should see only doc1 (the state at hash1).
+	n := countDocs(t, b, "testdb__snap", "col")
+	if n != 1 {
+		t.Errorf("testdb__snap: want 1 doc (at hash1), got %d", n)
+	}
+}
+
+// TestRTVLLoad_DongoBranch_FromAncestor verifies that a branch can be created from
+// an ancestor-expression rootish. The new branch points to the resolved ancestor commit.
+func TestRTVLLoad_DongoBranch_FromAncestor(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Three commits.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	commitDB(t, b, "testdb", "first commit")
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
+	commitDB(t, b, "testdb", "second commit")
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "v", int64(3)))
+	commitDB(t, b, "testdb", "third commit")
+
+	// Create branch "back1" from main~1 (parent of HEAD = second commit = 2 docs).
+	_, err := b.DongoBranch(ctx, &backends.BranchParams{
+		DBName: "testdb",
+		Name:   "back1",
+		From:   "main~1",
+	})
+	if err != nil {
+		t.Fatalf("DongoBranch from main~1: %v", err)
+	}
+
+	// back1 should see 2 docs (state at main~1 = second commit).
+	n := countDocs(t, b, "testdb__back1", "col")
+	if n != 2 {
+		t.Errorf("testdb__back1: want 2 docs (at main~1), got %d", n)
+	}
+}
+
 // TestRTVLLoad_BranchWrite_Isolation verifies that writes via a non-main branch
 // rootish (mydb__feature) go to that branch's working set and are isolated from main.
 //
