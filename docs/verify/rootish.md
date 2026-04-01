@@ -22,7 +22,7 @@ with two commits so you have historical data to query.
 
 ```js
 // Start fresh — drop if it exists
-use verifydb
+var db = db.getSiblingDB("verifydb")
 db.dropDatabase()
 
 // Insert a document and commit (commit 1)
