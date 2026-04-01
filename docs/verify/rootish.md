@@ -42,10 +42,11 @@ printjson(result2)
 // { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
 const hash2 = result2.hash
 
-// Create a tag pointing at commit 2
-const tagResult = db.getSiblingDB("verifydb__main").runCommand({ dongoBranch: 1, branch: "v1.0" })
+// Create a branch pointing at commit 2
+// Note: branch names cannot contain '.' — use 'v1' not 'v1'
+const tagResult = db.getSiblingDB("verifydb__main").runCommand({ dongoBranch: 1, branch: "v1" })
 printjson(tagResult)
-// Expected: { branch: "v1.0", ok: 1 }
+// Expected: { branch: "v1", ok: 1 }
 
 print("hash1 =", hash1)
 print("hash2 =", hash2)
@@ -55,7 +56,7 @@ After running setup, `verifydb` has:
 - **main** (HEAD = commit 2): two documents (`_id: 1` and `_id: 2`)
 - **hash1**: snapshot with one document (`_id: 1` only)
 - **hash2**: snapshot identical to current main
-- **v1.0**: branch pointing to commit 2 (same as main HEAD)
+- **v1**: branch pointing to commit 2 (same as main HEAD)
 
 ---
 
@@ -87,15 +88,16 @@ main.runCommand({ dongoCurrentBranch: 1 })
 
 ---
 
-## Scenario 2: `verifydb__v1.0` — reads work, writes return a clear error
+## Scenario 2: `verifydb__v1` — reads work, writes return a clear error
 
-Tag rootish. Read access only; writes are blocked.
+Non-main branch rootish. Read access only; writes are blocked.
 
-> **Note:** Dongo resolves `v1.0` as a branch/tag name. Since it is not a plain branch,
-> writes fail at the backend with code 96.
+> **Note:** Branch names in the `__`-encoded db name cannot contain `.` — that is a
+> MongoDB namespace separator and will be rejected client-side. Use names like `v1`,
+> `release`, `feature-x` instead of `v1`.
 
 ```js
-const tag = db.getSiblingDB("verifydb__v1.0")
+const tag = db.getSiblingDB("verifydb__v1")
 
 // Read: should succeed and return data
 tag.items.find({}).toArray()
@@ -251,7 +253,7 @@ db.getSiblingDB("verifydb__main...feature").items.find({}).toArray()
 | Rootish form | Example | Read | Write | Error on write / parse |
 |---|---|---|---|---|
 | Branch name | `mydb__main` | ✅ | ✅ | — |
-| Tag name | `mydb__v1.0` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
+| Tag name | `mydb__v1` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
 | Commit hash (32 chars) | `mydb__<hash>` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
 | Ancestor expression | `mydb__main~1` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
 | HEAD | `mydb__HEAD` | ❌ | ❌ | `rootish "HEAD": HEAD and HEAD-relative forms are not supported...` (code 96) |
