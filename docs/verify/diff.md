@@ -148,6 +148,108 @@ Expected: the diff includes all changes relative to `hashBase`:
 
 ---
 
+## Scenario 5: Multiple documents with mixed changes
+
+Commit a three-document baseline, then apply different change types to different
+documents — delete one, modify one, leave one unchanged, add a new one. Only
+changed documents appear in the diff.
+
+```js
+// Fresh collection: commit 3 docs
+db.multi.insertOne({ _id: 1, name: "alpha", v: 1 })
+db.multi.insertOne({ _id: 2, name: "beta",  v: 2 })
+db.multi.insertOne({ _id: 3, name: "gamma", v: 3 })
+db.runCommand({ dongoCommit: 1, message: "multi baseline" })
+
+// Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4
+db.multi.deleteOne({ _id: 1 })
+db.multi.updateOne({ _id: 2 }, { $set: { v: 99 } })
+db.multi.insertOne({ _id: 4, name: "delta", v: 4 })
+
+db.runCommand({ dongoDiff: 1 })
+```
+
+Expected (for the `multi` collection):
+- `removed`: exactly `_id:1`
+- `modified`: exactly `_id:2` with `$.v` modified (`a:2`, `b:99`); `$.name` absent
+- `added`: exactly `_id:4`
+- `_id:3` does **not** appear — it was not changed
+
+---
+
+## Scenario 6: Single document with simultaneous modify + add + remove field ops
+
+One `replaceOne` can modify a field, remove a field, and add a new field in a
+single operation. The diff must report all three as separate entries.
+
+```js
+// Fresh collection: commit a doc with fields x and y
+db.mixedfields.insertOne({ _id: 1, x: 10, y: "remove-me" })
+db.runCommand({ dongoCommit: 1, message: "mixedfields baseline" })
+
+// Replace: x changed, y gone, z added
+db.mixedfields.replaceOne({ _id: 1 }, { _id: 1, x: 99, z: "new-field" })
+
+db.runCommand({ dongoDiff: 1 })
+```
+
+Expected for `_id:1` in the `mixedfields` collection:
+- `$.x`: `{ type: "modified", a: 10, b: 99 }`
+- `$.y`: `{ type: "removed", a: "remove-me" }` — `b` absent
+- `$.z`: `{ type: "added", b: "new-field" }` — `a` absent
+- Exactly **3** diff entries total
+
+---
+
+## Scenario 7: Field type change
+
+Changing a field's value type (e.g. number → string) is reported as `modified`
+with the old typed value in `a` and the new typed value in `b`.
+
+```js
+// Fresh collection: commit a doc where "val" is a number
+db.typechg.insertOne({ _id: 1, val: 42, stable: "unchanged" })
+db.runCommand({ dongoCommit: 1, message: "typechg baseline" })
+
+// Replace: val changes from number to string
+db.typechg.replaceOne({ _id: 1 }, { _id: 1, val: "forty-two", stable: "unchanged" })
+
+db.runCommand({ dongoDiff: 1 })
+```
+
+Expected for `_id:1` in the `typechg` collection:
+- `$.val`: `{ type: "modified", a: 42, b: "forty-two" }` — note different types
+- `$.stable` does **not** appear — it was not changed
+
+---
+
+## Scenario 8: Nested document field change
+
+When a document contains a sub-document, only the changed leaf fields appear in
+the diff. Unchanged nested fields and sibling top-level fields do not appear.
+The path uses dot notation: `$.parent.child`.
+
+```js
+db.nested.insertOne({
+  _id: 1,
+  address: { city: "Seattle", zip: "98101" },
+  name: "alice"
+})
+db.runCommand({ dongoCommit: 1, message: "nested baseline" })
+
+// Only address.city changes; address.zip and name are unchanged
+db.nested.updateOne({ _id: 1 }, { $set: { "address.city": "Portland" } })
+
+db.runCommand({ dongoDiff: 1 })
+```
+
+Expected for `_id:1` in the `nested` collection:
+- `$.address.city`: `{ type: "modified", a: "Seattle", b: "Portland" }`
+- `$.address.zip` does **not** appear — unchanged
+- `$.name` does **not** appear — unchanged
+
+---
+
 ## Quick Reference
 
 | Command | "a" side | "b" side |

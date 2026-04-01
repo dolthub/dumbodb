@@ -364,4 +364,236 @@ func TestDiffVerify(t *testing.T) {
 		assert.Equal(t, int32(10), scoreDiff.A)
 		assert.Equal(t, int32(99), scoreDiff.B)
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 5: Multiple documents with mixed changes
+	// Delete one, modify one, leave one unchanged, add one — only changed docs appear.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario5_MultipleDocsWithMixedChanges", func(t *testing.T) {
+		multi := env.client.Database(dbName).Collection("multi")
+
+		// Commit 3-doc baseline.
+		_, err := multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alpha"}, {Key: "v", Value: int32(1)}})
+		require.NoError(t, err)
+		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "name", Value: "beta"}, {Key: "v", Value: int32(2)}})
+		require.NoError(t, err)
+		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "name", Value: "gamma"}, {Key: "v", Value: int32(3)}})
+		require.NoError(t, err)
+		dongoCommit(t, env, dbName, "multi baseline")
+
+		// Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4.
+		_, err = multi.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+		_, err = multi.UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: int32(2)}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
+		)
+		require.NoError(t, err)
+		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(4)}, {Key: "name", Value: "delta"}, {Key: "v", Value: int32(4)}})
+		require.NoError(t, err)
+
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+		}).Decode(&raw))
+
+		dr := decodeDiffResult(t, raw)
+		cd := findCollDiff(dr, "multi")
+		require.NotNil(t, cd, "expected diff for 'multi' collection")
+
+		// removed: exactly _id:1
+		require.Len(t, cd.Removed, 1, "expected 1 removed doc")
+		assert.Equal(t, int32(1), cd.Removed[0]["_id"])
+
+		// modified: exactly _id:2; $.v changed, $.name unchanged so absent
+		require.Len(t, cd.Modified, 1, "expected 1 modified doc (_id:2); _id:3 must not appear")
+		mod := cd.Modified[0]
+		assert.Equal(t, int32(2), mod.ID)
+		vDiff := findFieldDiffResult(mod, "$.v")
+		require.NotNil(t, vDiff, "$.v must appear in modified diff")
+		assert.Equal(t, "modified", vDiff.Type)
+		assert.Equal(t, int32(2), vDiff.A)
+		assert.Equal(t, int32(99), vDiff.B)
+		assert.Nil(t, findFieldDiffResult(mod, "$.name"), "unchanged $.name must not appear")
+
+		// added: exactly _id:4
+		require.Len(t, cd.Added, 1, "expected 1 added doc")
+		assert.Equal(t, int32(4), cd.Added[0]["_id"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 6: Single document with simultaneous modify + add + remove field ops
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_SingleDocMixedFieldOps", func(t *testing.T) {
+		// Commit the working set from Scenario 5 first so HEAD is clean.
+		dongoCommit(t, env, dbName, "pre-scenario6")
+
+		mf := env.client.Database(dbName).Collection("mixedfields")
+
+		// Baseline: doc with x and y.
+		_, err := mf.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)},
+			{Key: "x", Value: int32(10)},
+			{Key: "y", Value: "remove-me"},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, dbName, "mixedfields baseline")
+
+		// Replace: x modified, y removed, z added.
+		_, err = mf.ReplaceOne(ctx,
+			bson.D{{Key: "_id", Value: int32(1)}},
+			bson.D{
+				{Key: "_id", Value: int32(1)},
+				{Key: "x", Value: int32(99)},
+				{Key: "z", Value: "new-field"},
+			},
+		)
+		require.NoError(t, err)
+
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+		}).Decode(&raw))
+
+		dr := decodeDiffResult(t, raw)
+		cd := findCollDiff(dr, "mixedfields")
+		require.NotNil(t, cd, "expected diff for 'mixedfields' collection")
+		require.Len(t, cd.Modified, 1, "expected 1 modified doc")
+		assert.Empty(t, cd.Added, "expected no added docs")
+		assert.Empty(t, cd.Removed, "expected no removed docs")
+
+		mod := cd.Modified[0]
+		assert.Equal(t, int32(1), mod.ID)
+
+		// $.x: modified, a=10, b=99
+		xDiff := findFieldDiffResult(mod, "$.x")
+		require.NotNil(t, xDiff, "$.x must appear in diff")
+		assert.Equal(t, "modified", xDiff.Type)
+		assert.Equal(t, int32(10), xDiff.A)
+		assert.Equal(t, int32(99), xDiff.B)
+
+		// $.y: removed, a="remove-me", b absent
+		yDiff := findFieldDiffResult(mod, "$.y")
+		require.NotNil(t, yDiff, "$.y must appear in diff")
+		assert.Equal(t, "removed", yDiff.Type)
+		assert.Equal(t, "remove-me", yDiff.A)
+		assert.Nil(t, yDiff.B, "$.y b must be absent for removed")
+
+		// $.z: added, a absent, b="new-field"
+		zDiff := findFieldDiffResult(mod, "$.z")
+		require.NotNil(t, zDiff, "$.z must appear in diff")
+		assert.Equal(t, "added", zDiff.Type)
+		assert.Nil(t, zDiff.A, "$.z a must be absent for added")
+		assert.Equal(t, "new-field", zDiff.B)
+
+		// Exactly 3 diff entries.
+		assert.Len(t, mod.Diff, 3, "expected exactly 3 field diffs (x modified, y removed, z added)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 7: Field type change (number → string)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7_FieldTypeChange", func(t *testing.T) {
+		// Commit working set from Scenario 6 for a clean HEAD.
+		dongoCommit(t, env, dbName, "pre-scenario7")
+
+		tc := env.client.Database(dbName).Collection("typechg")
+
+		// Baseline: "val" is a number.
+		_, err := tc.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)},
+			{Key: "val", Value: int32(42)},
+			{Key: "stable", Value: "unchanged"},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, dbName, "typechg baseline")
+
+		// Replace: val changes from number to string.
+		_, err = tc.ReplaceOne(ctx,
+			bson.D{{Key: "_id", Value: int32(1)}},
+			bson.D{
+				{Key: "_id", Value: int32(1)},
+				{Key: "val", Value: "forty-two"},
+				{Key: "stable", Value: "unchanged"},
+			},
+		)
+		require.NoError(t, err)
+
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+		}).Decode(&raw))
+
+		dr := decodeDiffResult(t, raw)
+		cd := findCollDiff(dr, "typechg")
+		require.NotNil(t, cd, "expected diff for 'typechg' collection")
+		require.Len(t, cd.Modified, 1, "expected 1 modified doc")
+
+		mod := cd.Modified[0]
+		assert.Equal(t, int32(1), mod.ID)
+
+		// $.val: modified, a=int32(42), b="forty-two"
+		valDiff := findFieldDiffResult(mod, "$.val")
+		require.NotNil(t, valDiff, "$.val must appear in diff")
+		assert.Equal(t, "modified", valDiff.Type)
+		assert.Equal(t, int32(42), valDiff.A, "$.val a must be the original number")
+		assert.Equal(t, "forty-two", valDiff.B, "$.val b must be the new string")
+
+		// $.stable must not appear (unchanged).
+		assert.Nil(t, findFieldDiffResult(mod, "$.stable"), "unchanged $.stable must not appear")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: Nested document field change
+	// Only the changed leaf field ($.address.city) appears; zip and name do not.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
+		// Commit working set from Scenario 7 for a clean HEAD.
+		dongoCommit(t, env, dbName, "pre-scenario8")
+
+		nested := env.client.Database(dbName).Collection("nested")
+
+		// Baseline: doc with a sub-document address and a top-level name.
+		_, err := nested.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)},
+			{Key: "address", Value: bson.D{
+				{Key: "city", Value: "Seattle"},
+				{Key: "zip", Value: "98101"},
+			}},
+			{Key: "name", Value: "alice"},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, dbName, "nested baseline")
+
+		// Update: only address.city changes.
+		_, err = nested.UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: int32(1)}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "address.city", Value: "Portland"}}}},
+		)
+		require.NoError(t, err)
+
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+		}).Decode(&raw))
+
+		dr := decodeDiffResult(t, raw)
+		cd := findCollDiff(dr, "nested")
+		require.NotNil(t, cd, "expected diff for 'nested' collection")
+		require.Len(t, cd.Modified, 1, "expected 1 modified doc")
+
+		mod := cd.Modified[0]
+		assert.Equal(t, int32(1), mod.ID)
+
+		// $.address.city: modified, a="Seattle", b="Portland"
+		cityDiff := findFieldDiffResult(mod, "$.address.city")
+		require.NotNil(t, cityDiff, "$.address.city must appear in diff")
+		assert.Equal(t, "modified", cityDiff.Type)
+		assert.Equal(t, "Seattle", cityDiff.A)
+		assert.Equal(t, "Portland", cityDiff.B)
+
+		// $.address.zip and $.name must not appear (unchanged).
+		assert.Nil(t, findFieldDiffResult(mod, "$.address.zip"), "unchanged $.address.zip must not appear")
+		assert.Nil(t, findFieldDiffResult(mod, "$.name"), "unchanged $.name must not appear")
+	})
 }
