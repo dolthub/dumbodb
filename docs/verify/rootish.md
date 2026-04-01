@@ -90,9 +90,10 @@ main.runCommand({ dongoCurrentBranch: 1 })
 
 ---
 
-## Scenario 2: `verifydb__v1%2E0` — reads work, writes return a clear error
+## Scenario 2: `verifydb__v1%2E0` — reads and writes work, isolated from main
 
-Non-main branch rootish. Read access only; writes are blocked.
+Non-main branch rootish. Full read/write access; writes go to that branch's working
+set and are isolated from main's working set.
 
 > **Percent-encoding:** Characters invalid in MongoDB database names (`.`, `/`, `$`, space)
 > must be percent-encoded in the rootish part of the db name. Dongo decodes them
@@ -101,24 +102,33 @@ Non-main branch rootish. Read access only; writes are blocked.
 > Common encodings: `.` → `%2E`, `/` → `%2F`, `$` → `%24`
 
 ```js
-const tag = db.getSiblingDB("verifydb__v1%2E0")
+const v1 = db.getSiblingDB("verifydb__v1%2E0")
 
-// Read: should succeed and return data
-tag.items.find({}).toArray()
+// Read: should succeed and return both documents (same as main HEAD at setup time)
+v1.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
 
-// Write: must fail
-tag.items.insertOne({ _id: 99, label: "should fail" })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+// Write on v1.0 branch: inserts into the v1.0 working set, NOT main's working set
+v1.items.insertOne({ _id: 10, label: "v1-only" })
+// Expected: { acknowledged: true, insertedId: 10 }
 
-tag.items.updateOne({ _id: 1 }, { $set: { label: "changed" } })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+// v1.0 now has three documents
+v1.items.find({}).toArray()
+// Expected: [ { _id: 1, ... }, { _id: 2, ... }, { _id: 10, label: "v1-only" } ]
 
-tag.items.deleteOne({ _id: 1 })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+// main is unchanged — the v1.0 write is isolated
+const main = db.getSiblingDB("verifydb__main")
+main.items.find({}).toArray()
+// Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
+// (_id:10 does NOT appear here)
+
+// dongoCurrentBranch works on branch rootish
+v1.runCommand({ dongoCurrentBranch: 1 })
+// Expected: { branch: "v1.0", ok: 1 }
+
+// Clean up the test write so subsequent scenarios start from a known state.
+v1.items.deleteOne({ _id: 10 })
+// Expected: { acknowledged: true, deletedCount: 1 }
 ```
 
 ---
@@ -254,10 +264,11 @@ db.getSiblingDB("verifydb__main...feature").items.find({}).toArray()
 
 ## Quick Reference
 
-| Rootish form | Example | Read | Write | Error on write / parse |
+| Rootish form | Example | Read | Write | Notes |
 |---|---|---|---|---|
-| Branch name | `mydb__main` | ✅ | ✅ | — |
-| Tag/branch name | `mydb__v1%2E0` (encodes `v1.0`) | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
+| Branch name (main) | `mydb__main` | ✅ | ✅ | Writes go to main's working set |
+| Branch name (other) | `mydb__v1%2E0` (encodes `v1.0`) | ✅ | ✅ | Writes go to that branch's working set, isolated from main |
+| Tag name | `mydb__v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
 | Commit hash (32 chars) | `mydb__<hash>` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
 | Ancestor expression | `mydb__main~1` | ✅ | ❌ | `cannot write to a read-only database snapshot` (code 96) |
 | HEAD | `mydb__HEAD` | ❌ | ❌ | `rootish "HEAD": HEAD and HEAD-relative forms are not supported...` (code 96) |
