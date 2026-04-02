@@ -258,13 +258,9 @@ branch or snapshot is encoded in the database name). `HEAD~N` resolves to N ance
 above that commit. Bare branch names are also accepted.
 
 ```js
-// Connect via the feature branch.
+// Create a feature branch from main, then connect to it.
+db.getSiblingDB("diffdb__main").runCommand({ dongoBranch: 1, branch: "feature" })
 var featureDB = db.getSiblingDB("diffdb__feature")
-featureDB.runCommand({
-  dongoBranch: 1,
-  name: "feature",
-  from: "main"
-})
 
 // Make two commits on main.
 var r3 = db.runCommand({ dongoCommit: 1, message: "c3" })
