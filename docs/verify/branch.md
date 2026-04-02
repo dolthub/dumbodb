@@ -32,14 +32,14 @@ db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ dongoCommit: 1, message: "commit one" })
+const r1 = db.runCommand({ dongoCommit: 1, message: "commit one", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
 const hash1 = r1.hash
 
 // Commit 2: second document added
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ dongoCommit: 1, message: "commit two" })
+const r2 = db.runCommand({ dongoCommit: 1, message: "commit two", author: "alice" })
 printjson(r2)
 // Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
 const hash2 = r2.hash
@@ -106,7 +106,7 @@ var feature = db.getSiblingDB("branchvdb__feature")
 
 // Add a document on the feature branch and commit it
 feature.items.insertOne({ _id: 3, label: "gamma" })
-feature.runCommand({ dongoCommit: 1, message: "feature adds gamma" })
+feature.runCommand({ dongoCommit: 1, message: "feature adds gamma", author: "alice" })
 
 // main must not see _id:3
 db.getSiblingDB("branchvdb__main").items.countDocuments({})
@@ -152,9 +152,9 @@ correct document count at the ancestor state.
 var db2 = db.getSiblingDB("branchvdb2")
 db2.dropDatabase()
 db2.items.insertOne({ _id: 1, label: "alpha" })
-db2.runCommand({ dongoCommit: 1, message: "commit one" })
+db2.runCommand({ dongoCommit: 1, message: "commit one", author: "alice" })
 db2.items.insertOne({ _id: 2, label: "beta" })
-db2.runCommand({ dongoCommit: 1, message: "commit two" })
+db2.runCommand({ dongoCommit: 1, message: "commit two", author: "alice" })
 
 // main~1 resolves to commit 1 (one document)
 db2.getSiblingDB("branchvdb2__main~1").runCommand({

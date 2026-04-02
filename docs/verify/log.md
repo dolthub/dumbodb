@@ -58,18 +58,18 @@ Key checks:
 
 ```js
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ dongoCommit: 1, message: "first" })
+const r1 = db.runCommand({ dongoCommit: 1, message: "first", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first", ok: 1 }
 const hash1 = r1.hash
 
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ dongoCommit: 1, message: "second" })
+const r2 = db.runCommand({ dongoCommit: 1, message: "second", author: "alice" })
 printjson(r2)
 const hash2 = r2.hash
 
 db.items.insertOne({ _id: 3, label: "gamma" })
-const r3 = db.runCommand({ dongoCommit: 1, message: "third" })
+const r3 = db.runCommand({ dongoCommit: 1, message: "third", author: "alice" })
 printjson(r3)
 const hash3 = r3.hash
 

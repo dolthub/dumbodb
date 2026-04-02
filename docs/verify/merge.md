@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document, committed on main.
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ dongoCommit: 1, message: "initial" })
+const r1 = db.runCommand({ dongoCommit: 1, message: "initial", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.hash
@@ -59,7 +59,7 @@ nothing to merge — the result is "already up-to-date".
 ```js
 // Commit _id:2 on main (feature stays at C1, behind main).
 db.items.insertOne({ _id: 2, v: 2 })
-const r2 = db.runCommand({ dongoCommit: 1, message: "add-two" })
+const r2 = db.runCommand({ dongoCommit: 1, message: "add-two", author: "alice" })
 const hashC2 = r2.hash
 
 // Merge feature (at C1) into main (at C2).

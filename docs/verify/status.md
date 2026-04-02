@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document in "items", committed.
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
-db.runCommand({ dongoCommit: 1, message: "baseline" })
+db.runCommand({ dongoCommit: 1, message: "baseline", author: "alice" })
 ```
 
 After setup, the working set matches HEAD — no uncommitted changes.
@@ -95,7 +95,7 @@ marks it as `"modified"`.
 
 ```js
 // Commit the "newcoll" addition first.
-db.runCommand({ dongoCommit: 1, message: "add newcoll" })
+db.runCommand({ dongoCommit: 1, message: "add newcoll", author: "alice" })
 
 // Now modify an existing committed collection.
 db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
@@ -128,7 +128,7 @@ working set) marks it as `"deleted"`.
 
 ```js
 // Commit the items modification first.
-db.runCommand({ dongoCommit: 1, message: "modify items" })
+db.runCommand({ dongoCommit: 1, message: "modify items", author: "alice" })
 
 // Delete the entire "items" collection.
 db.items.drop()
@@ -160,7 +160,7 @@ After committing the deletion, the working set matches HEAD and `dongoStatus`
 reports no changes.
 
 ```js
-db.runCommand({ dongoCommit: 1, message: "delete items" })
+db.runCommand({ dongoCommit: 1, message: "delete items", author: "alice" })
 
 db.runCommand({ dongoStatus: 1 })
 ```
