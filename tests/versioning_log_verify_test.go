@@ -51,6 +51,7 @@ type commitEntry struct {
 	Parent1  string
 	Parent2  string
 	Message  string
+	Refs     []string
 }
 
 // decodeLogResult parses the raw bson.M from a dongoLog RunCommand into the
@@ -82,6 +83,13 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 		}
 		if p2, ok := cm["parent2"]; ok {
 			entry.Parent2 = fmt.Sprintf("%v", p2)
+		}
+		if rawRefs, ok := cm["refs"]; ok {
+			if refsArr, ok := rawRefs.(bson.A); ok {
+				for _, r := range refsArr {
+					entry.Refs = append(entry.Refs, fmt.Sprintf("%v", r))
+				}
+			}
 		}
 		out.Commits = append(out.Commits, entry)
 	}
@@ -210,6 +218,54 @@ func TestLogVerify(t *testing.T) {
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hash3, c.CommitID, "hash3 must not appear when from=hash2")
 		}
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 5: Refs annotation — branch heads are decorated (git --decorate)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario5_RefsAnnotation", func(t *testing.T) {
+		// Create a second branch "logvrfy-refs" pointing at the current main HEAD
+		// (hash3), so two branches share the same tip commit.
+		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "logvrfy-refs"},
+		}).Err(), "creating logvrfy-refs branch must succeed")
+
+		// Query dongoLog on main.  hash3 is the tip of both "main" and
+		// "logvrfy-refs", so its refs field must contain "HEAD -> main" and
+		// "logvrfy-refs".  Non-head commits must have no refs field.
+		var rawMain bson.M
+		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+		}).Decode(&rawMain))
+
+		lrMain := decodeLogResult(t, rawMain)
+		require.NotEmpty(t, lrMain.Commits, "dongoLog on main must return commits")
+
+		head := lrMain.Commits[0]
+		assert.Equal(t, hash3, head.CommitID, "HEAD commit must be hash3")
+		assert.Contains(t, head.Refs, "HEAD -> main", "HEAD commit must carry 'HEAD -> main' ref")
+		assert.Contains(t, head.Refs, "logvrfy-refs", "HEAD commit must carry bare 'logvrfy-refs' ref")
+
+		// Non-head commits must carry no refs.
+		for _, c := range lrMain.Commits[1:] {
+			assert.Empty(t, c.Refs, "non-head commit %s must have no refs", c.CommitID)
+		}
+
+		// Query dongoLog on logvrfy-refs.  hash3 is still the tip but now the
+		// connection branch is "logvrfy-refs", so the decoration is reversed.
+		var rawFeature bson.M
+		require.NoError(t, env.client.Database(dbName+"__logvrfy-refs").RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+		}).Decode(&rawFeature))
+
+		lrFeature := decodeLogResult(t, rawFeature)
+		require.NotEmpty(t, lrFeature.Commits, "dongoLog on logvrfy-refs must return commits")
+
+		headF := lrFeature.Commits[0]
+		assert.Equal(t, hash3, headF.CommitID, "HEAD commit on logvrfy-refs must be hash3")
+		assert.Contains(t, headF.Refs, "HEAD -> logvrfy-refs", "must carry 'HEAD -> logvrfy-refs'")
+		assert.Contains(t, headF.Refs, "main", "must carry bare 'main' ref")
 	})
 
 	_ = hash3 // referenced in subtests above

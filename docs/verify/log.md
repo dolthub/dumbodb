@@ -172,6 +172,55 @@ Key checks:
 
 ---
 
+## Scenario 5: Refs annotation — branch head decoration (git --decorate)
+
+When a commit is the HEAD of one or more branches its entry includes a `refs`
+array.  The connection branch gets `"HEAD -> <branch>"`, other branches get
+their bare name.  Non-head commits have no `refs` field.
+
+```js
+// Create a second branch pointing at the current main HEAD.
+db.getSiblingDB("logdb__main").runCommand({ dongoBranch: 1, branch: "feature" })
+
+// Query from main — hash3 is tip of both "main" and "feature".
+db.runCommand({ dongoLog: 1, limit: 2 })
+```
+
+Expected:
+
+```json
+{
+  "branch": "main",
+  "commits": [
+    {
+      "commitId": "<hash3>",
+      "refs": ["HEAD -> main", "feature"],
+      "parent1": "<hash2>",
+      "message": "third",
+      "timestamp": "<...>",
+      "author": "<...>"
+    },
+    {
+      "commitId": "<hash2>",
+      "parent1": "<hash1>",
+      "message": "second",
+      "timestamp": "<...>",
+      "author": "<...>"
+    }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- `commits[0].refs` contains `"HEAD -> main"` (connection branch gets HEAD decoration)
+- `commits[0].refs` also contains `"feature"` (bare name for the other branch)
+- `commits[1]` has no `refs` field (non-head commit)
+- When the same command runs against `logdb__feature`, `commits[0].refs` becomes
+  `["HEAD -> feature", "main"]`
+
+---
+
 ## Quick Reference
 
 | Command | Behaviour |

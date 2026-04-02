@@ -1170,6 +1170,10 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 // It returns the commit history for the given branch, walking HEAD backwards
 // through the parent1 chain up to the specified limit (default 20).
 // If params.From is set, traversal starts from that commit hash instead of HEAD.
+// Each CommitInfo is annotated with Refs when its commitId matches one or more
+// branch heads (git --decorate style). The connection branch (ConnBranch) gets
+// "HEAD -> <branch>"; all other branch heads get their bare branch name.
+// TODO: tag decoration is not yet supported.
 func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -1203,6 +1207,31 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 			return &backends.LogResult{}, nil
 		}
 	}
+
+	// Build a map from commit hash string → ref labels by iterating over all
+	// branch datasets.  The connection branch (ConnBranch) gets "HEAD -> <name>",
+	// every other branch gets its bare name.
+	refsForCommit := make(map[string][]string)
+	dsMap, dsErr := db.doltDB.Datasets(ctx)
+	if dsErr == nil {
+		connBranch := params.ConnBranch
+		_ = dsMap.IterAll(ctx, func(datasetID string, headAddr hash.Hash) error {
+			const prefix = "refs/heads/"
+			if !strings.HasPrefix(datasetID, prefix) {
+				return nil
+			}
+			branchName := datasetID[len(prefix):]
+			commitStr := headAddr.String()
+			if branchName == connBranch {
+				// Connection branch gets HEAD decoration, prepended so it sorts first.
+				refsForCommit[commitStr] = append([]string{"HEAD -> " + branchName}, refsForCommit[commitStr]...)
+			} else {
+				refsForCommit[commitStr] = append(refsForCommit[commitStr], branchName)
+			}
+			return nil
+		})
+	}
+	// Non-fatal: if Datasets() fails we simply omit all ref annotations.
 
 	// Walk the parent chain.
 	var commits []backends.CommitInfo
@@ -1238,6 +1267,7 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 			Author:    meta.Name,
 			Message:   meta.Description,
 			Timestamp: meta.UserTimestamp,
+			Refs:      refsForCommit[currentHash.String()],
 		}
 		if len(parentAddrs) >= 1 {
 			info.Parent1 = parentAddrs[0].String()

@@ -66,21 +66,23 @@ type MergeResult struct {
 
 // LogParams represents the parameters of VersioningBackend.DongoLog method.
 type LogParams struct {
-	DBName string
-	Branch string
-	Limit  int32
-	From   string // optional: start traversal from this commit hash instead of HEAD
+	DBName     string
+	Branch     string
+	ConnBranch string // branch name from the connection's encoded db name (used for HEAD -> decoration)
+	Limit      int32
+	From       string // optional: start traversal from this commit hash instead of HEAD
 }
 
 // CommitInfo represents a single commit entry returned by DongoLog.
 type CommitInfo struct {
 	CommitID  string
-	Parent1   string // empty for root commit (no parent)
-	Parent2   string // non-empty only for merge commits
+	Parent1   string   // empty for root commit (no parent)
+	Parent2   string   // non-empty only for merge commits
 	Author    string
 	Email     string
 	Message   string
-	Timestamp int64 // Unix milliseconds
+	Timestamp int64    // Unix milliseconds
+	Refs      []string // branch/tag decorations; empty when commit is not a branch head
 }
 
 // LogResult represents the result of VersioningBackend.DongoLog method.

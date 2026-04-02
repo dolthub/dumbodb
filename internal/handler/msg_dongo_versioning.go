@@ -602,10 +602,11 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	}
 
 	res, err := vb.DongoLog(connCtx, &backends.LogParams{
-		DBName: dbName,
-		Branch: branch,
-		Limit:  limit,
-		From:   from,
+		DBName:     dbName,
+		Branch:     branch,
+		ConnBranch: branch,
+		Limit:      limit,
+		From:       from,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -616,6 +617,13 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	for _, c := range res.Commits {
 		pairs := []any{
 			"commitId", c.CommitID,
+		}
+		if len(c.Refs) > 0 {
+			refsArr := types.MakeArray(len(c.Refs))
+			for _, r := range c.Refs {
+				refsArr.Append(r)
+			}
+			pairs = append(pairs, "refs", refsArr)
 		}
 		if c.Parent1 != "" {
 			pairs = append(pairs, "parent1", c.Parent1)
