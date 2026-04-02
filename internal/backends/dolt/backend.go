@@ -226,7 +226,7 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // "feature%2Ffoo". The handler has already validated the encoding before the
 // backend is reached, so decode errors here fall back to the raw value.
 func splitEncodedDBName(encoded string) (dbName, rootish string) {
-	if idx := strings.Index(encoded, "__"); idx >= 0 {
+	if idx := strings.Index(encoded, "__"); idx > 0 {
 		raw := encoded[idx+2:]
 		if decoded, err := url.PathUnescape(raw); err == nil {
 			return encoded[:idx], decoded
