@@ -22,44 +22,9 @@ Replace `localhost:27017` with your Dongo address if different.
 
 ---
 
-## Scenario 1: Log with no user commits — only the "Initialize database" root
-
-Every Dongo database is created with an automatic `"Initialize database"` root
-commit. On a fresh database where no user commits have been made, `dongoLog`
-returns exactly that one commit.
-
-```js
-var db = db.getSiblingDB("logdb")
-db.dropDatabase()
-
-// Insert a document to create the database (triggers the Initialize commit),
-// but do not commit.
-db.items.insertOne({ _id: 0 })
-
-db.runCommand({ dongoLog: 1 })
-```
-
-Expected:
-
-```json
-{
-  "branch": "main",
-  "commits": [
-    { "hash": "<initHash>", "message": "Initialize database", "timestamp": <...>, "author": <...> }
-  ],
-  "ok": 1
-}
-```
-
-Key checks:
-- Exactly 1 commit: `"Initialize database"`
-- No `parent1` field — it is the root commit
-
----
-
 ## Setup: Create a database with a commit history
 
-Run this once before the remaining scenarios.
+Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("logdb")
@@ -86,7 +51,41 @@ const hash3 = r3.hash
 print("hash1 =", hash1, "hash2 =", hash2, "hash3 =", hash3)
 ```
 
-After setup, the branch has three commits: `first` ← `second` ← `third` (HEAD).
+After setup, the branch has four commits: `"Initialize database"` ← `first` ← `second` ← `third` (HEAD).
+
+---
+
+## Scenario 1: Log with no user commits — only the "Initialize database" root
+
+Every Dongo database is created with an automatic `"Initialize database"` root
+commit. On a fresh database where no user commits have been made, `dongoLog`
+returns exactly that one commit.
+
+This scenario uses a separate database so it does not disturb the shared setup above.
+
+```js
+var fresh = db.getSiblingDB("logfresh")
+fresh.dropDatabase()
+fresh.items.insertOne({ _id: 0 })  // creates the db without committing
+
+fresh.runCommand({ dongoLog: 1 })
+```
+
+Expected:
+
+```json
+{
+  "branch": "main",
+  "commits": [
+    { "hash": "<initHash>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- Exactly 1 commit: `"Initialize database"`
+- No `parent1` field — it is the root commit
 
 ---
 
@@ -94,6 +93,8 @@ After setup, the branch has three commits: `first` ← `second` ← `third` (HEA
 
 After one user commit, `dongoLog` returns 2 entries: the user commit on top
 and the `"Initialize database"` root below it.
+
+This scenario also uses a separate database to isolate the single-commit case.
 
 ```js
 var single = db.getSiblingDB("logsingle")
@@ -111,8 +112,8 @@ Expected:
 {
   "branch": "main",
   "commits": [
-    { "hash": "<singleHash>", "parent1": "<initHash>", "message": "only commit", ... },
-    { "hash": "<initHash>",                             "message": "Initialize database", ... }
+    { "hash": "<singleHash>", "parent1": "<initHash>", "message": "only commit", "timestamp": "<...>", "author": "<...>" },
+    { "hash": "<initHash>",                             "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
   ],
   "ok": 1
 }
