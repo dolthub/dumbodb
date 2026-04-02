@@ -79,7 +79,7 @@ func commitDB(t *testing.T, b *Backend, dbName, message string) string {
 		t.Fatalf("DongoCommit(%q, %q): %v", dbName, message, err)
 	}
 
-	return res.Hash
+	return res.CommitID
 }
 
 // mustDoc is a test helper that creates a document and fatals on error.

@@ -118,7 +118,7 @@ func (b *Backend) DongoCommit(_ context.Context, params *backends.CommitParams) 
 	}
 
 	return &backends.CommitResult{
-		Hash:      "0000000000000000000000000000000000000000",
+		CommitID:  "0000000000000000000000000000000000000000",
 		Branch:    params.Branch,
 		Message:   params.Message,
 		Author:    params.Author,
@@ -147,8 +147,8 @@ func (b *Backend) DongoMerge(_ context.Context, params *backends.MergeParams) (*
 	b.l.Info("stub: DongoMerge", slog.String("db", params.DBName), slog.String("into", params.Into), slog.String("from", params.From))
 
 	return &backends.MergeResult{
-		Hash:    "0000000000000000000000000000000000000000",
-		Message: fmt.Sprintf("Merged '%s' into '%s'", params.From, params.Into),
+		CommitID: "0000000000000000000000000000000000000000",
+		Message:  fmt.Sprintf("Merged '%s' into '%s'", params.From, params.Into),
 	}, nil
 }
 
@@ -178,9 +178,9 @@ func (b *Backend) DongoDiff(_ context.Context, params *backends.DiffParams) (*ba
 
 // DongoReset implements backends.VersioningBackend interface.
 func (b *Backend) DongoReset(_ context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
-	b.l.Info("stub: DongoReset", slog.String("db", params.DBName), slog.String("hash", params.Hash), slog.Bool("hard", params.Hard))
+	b.l.Info("stub: DongoReset", slog.String("db", params.DBName), slog.String("commitId", params.CommitID), slog.Bool("hard", params.Hard))
 
-	return &backends.ResetResult{Hash: params.Hash}, nil
+	return &backends.ResetResult{CommitID: params.CommitID}, nil
 }
 
 // collection implements backends.Collection interface.

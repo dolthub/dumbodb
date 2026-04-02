@@ -34,13 +34,13 @@ db.items.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ dongoCommit: 1, message: "initial", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
-const hashC1 = r1.hash
+const hashC1 = r1.commitId
 
 db.items.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ dongoCommit: 1, message: "add-two", author: "alice" })
 printjson(r2)
 // Expected: { hash: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
-const hashC2 = r2.hash
+const hashC2 = r2.commitId
 
 print("hashC1 =", hashC1)
 print("hashC2 =", hashC2)
@@ -92,7 +92,7 @@ to C1. Both HEAD and the working set return to the C1 state.
 ```js
 // Commit the current working set (creates C3 with _id:1, 2, 3).
 const r3 = db.runCommand({ dongoCommit: 1, message: "snapshot", author: "alice" })
-const hashC3 = r3.hash
+const hashC3 = r3.commitId
 
 // Add _id:4 to the working set (uncommitted).
 db.items.insertOne({ _id: 4, v: 4 })
@@ -133,7 +133,7 @@ so the previously committed changes are now visible as uncommitted.
 // Insert _id:2 again and commit (creates C4).
 db.items.insertOne({ _id: 2, v: 2 })
 const r4 = db.runCommand({ dongoCommit: 1, message: "re-add-two", author: "alice" })
-const hashC4 = r4.hash
+const hashC4 = r4.commitId
 
 // Soft reset to C1 — this "undoes" the C4 commit.
 db.runCommand({ dongoReset: 1, to: hashC1 })

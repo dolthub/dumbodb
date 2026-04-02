@@ -505,18 +505,18 @@ func TestDongoCommit(t *testing.T) {
 	}
 
 	// Hash must be non-empty and not all-zeros.
-	if res.Hash == "" {
+	if res.CommitID == "" {
 		t.Error("DongoCommit returned empty hash")
 	}
 	allZero := true
-	for _, c := range res.Hash {
+	for _, c := range res.CommitID {
 		if c != '0' {
 			allZero = false
 			break
 		}
 	}
 	if allZero {
-		t.Errorf("DongoCommit returned all-zero hash: %s", res.Hash)
+		t.Errorf("DongoCommit returned all-zero hash: %s", res.CommitID)
 	}
 
 	// Branch should be "main".
@@ -630,8 +630,8 @@ func TestDongoCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("DongoCommit 2: %v", err)
 	}
 
-	if res1.Hash == res2.Hash {
-		t.Errorf("two commits produced the same hash %q", res1.Hash)
+	if res1.CommitID == res2.CommitID {
+		t.Errorf("two commits produced the same hash %q", res1.CommitID)
 	}
 }
 
@@ -669,8 +669,8 @@ func TestDongoCommitNoOpSucceeds(t *testing.T) {
 	}
 
 	// Both hashes must be non-empty.
-	if res1.Hash == "" || res2.Hash == "" {
-		t.Errorf("got empty hash: %q / %q", res1.Hash, res2.Hash)
+	if res1.CommitID == "" || res2.CommitID == "" {
+		t.Errorf("got empty hash: %q / %q", res1.CommitID, res2.CommitID)
 	}
 }
 
@@ -905,7 +905,7 @@ func TestDongoLogFreshDatabase(t *testing.T) {
 	}
 
 	c := res.Commits[0]
-	if c.Hash == "" {
+	if c.CommitID == "" {
 		t.Error("root commit hash is empty")
 	}
 	if c.Message != "Initialize database" {
@@ -949,8 +949,8 @@ func TestDongoLogAfterOneCommit(t *testing.T) {
 	}
 
 	// Newest first: index 0 is the user commit.
-	if res.Commits[0].Hash != commitRes.Hash {
-		t.Errorf("Commits[0].Hash = %q, want %q (the user commit)", res.Commits[0].Hash, commitRes.Hash)
+	if res.Commits[0].CommitID != commitRes.CommitID {
+		t.Errorf("Commits[0].Hash = %q, want %q (the user commit)", res.Commits[0].CommitID, commitRes.CommitID)
 	}
 	if res.Commits[0].Message != "first user commit" {
 		t.Errorf("Commits[0].Message = %q, want %q", res.Commits[0].Message, "first user commit")
@@ -959,8 +959,8 @@ func TestDongoLogAfterOneCommit(t *testing.T) {
 	if res.Commits[0].Parent1 == "" {
 		t.Error("user commit Parent1 is empty, expected init commit hash")
 	}
-	if res.Commits[0].Parent1 != res.Commits[1].Hash {
-		t.Errorf("user commit Parent1 = %q, want init hash %q", res.Commits[0].Parent1, res.Commits[1].Hash)
+	if res.Commits[0].Parent1 != res.Commits[1].CommitID {
+		t.Errorf("user commit Parent1 = %q, want init hash %q", res.Commits[0].Parent1, res.Commits[1].CommitID)
 	}
 
 	// index 1 is the init commit (root — no parent).
@@ -1033,7 +1033,7 @@ func TestDongoLogFromHash(t *testing.T) {
 	}
 
 	// Starting from commit one's hash should return commit one + init commit only.
-	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.Hash})
+	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
 	if err != nil {
 		t.Fatalf("DongoLog from hash: %v", err)
 	}
@@ -1041,8 +1041,8 @@ func TestDongoLogFromHash(t *testing.T) {
 	if len(res.Commits) != 2 {
 		t.Fatalf("expected 2 commits starting from commit one, got %d", len(res.Commits))
 	}
-	if res.Commits[0].Hash != res1.Hash {
-		t.Errorf("Commits[0].Hash = %q, want %q (commit one)", res.Commits[0].Hash, res1.Hash)
+	if res.Commits[0].CommitID != res1.CommitID {
+		t.Errorf("Commits[0].Hash = %q, want %q (commit one)", res.Commits[0].CommitID, res1.CommitID)
 	}
 	if res.Commits[1].Message != "Initialize database" {
 		t.Errorf("Commits[1].Message = %q, want %q", res.Commits[1].Message, "Initialize database")
@@ -1105,11 +1105,11 @@ func TestDongoLogHashOrderAndTimestamps(t *testing.T) {
 	}
 
 	// Newest first: beta is index 0, alpha is index 1.
-	if res.Commits[0].Hash != r2.Hash {
-		t.Errorf("Commits[0].Hash = %q, want %q (beta)", res.Commits[0].Hash, r2.Hash)
+	if res.Commits[0].CommitID != r2.CommitID {
+		t.Errorf("Commits[0].Hash = %q, want %q (beta)", res.Commits[0].CommitID, r2.CommitID)
 	}
-	if res.Commits[1].Hash != r1.Hash {
-		t.Errorf("Commits[1].Hash = %q, want %q (alpha)", res.Commits[1].Hash, r1.Hash)
+	if res.Commits[1].CommitID != r1.CommitID {
+		t.Errorf("Commits[1].Hash = %q, want %q (alpha)", res.Commits[1].CommitID, r1.CommitID)
 	}
 
 	// All timestamps must be non-zero.

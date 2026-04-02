@@ -67,7 +67,7 @@ func logHashes(t *testing.T, b *Backend, dbName string) []string {
 
 	hashes := make([]string, len(res.Commits))
 	for i, c := range res.Commits {
-		hashes[i] = c.Hash
+		hashes[i] = c.CommitID
 	}
 
 	return hashes
@@ -102,15 +102,15 @@ func TestDongoReset_Soft_HeadMovesToTarget(t *testing.T) {
 	// Soft reset to hash1.
 	res, err := b.DongoReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   hash1,
+		CommitID: hash1,
 		Hard:   false,
 	})
 	if err != nil {
 		t.Fatalf("DongoReset: %v", err)
 	}
 
-	if res.Hash != hash1 {
-		t.Errorf("DongoReset returned hash %q, want %q", res.Hash, hash1)
+	if res.CommitID != hash1 {
+		t.Errorf("DongoReset returned hash %q, want %q", res.CommitID, hash1)
 	}
 
 	// After soft reset: working tree should still have both docs.
@@ -135,7 +135,7 @@ func TestDongoReset_Soft_LogShowsTargetAsHead(t *testing.T) {
 	// Soft reset to hash1.
 	_, err := b.DongoReset(context.Background(), &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   hash1,
+		CommitID: hash1,
 		Hard:   false,
 	})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestDongoReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
 	// Soft reset to hash1.
 	_, err := b.DongoReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   hash1,
+		CommitID: hash1,
 		Hard:   false,
 	})
 	if err != nil {
@@ -217,15 +217,15 @@ func TestDongoReset_Hard_WorkingTreeMatchesTarget(t *testing.T) {
 	// Hard reset to hash1.
 	res, err := b.DongoReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   hash1,
+		CommitID: hash1,
 		Hard:   true,
 	})
 	if err != nil {
 		t.Fatalf("DongoReset(hard): %v", err)
 	}
 
-	if res.Hash != hash1 {
-		t.Errorf("DongoReset returned hash %q, want %q", res.Hash, hash1)
+	if res.CommitID != hash1 {
+		t.Errorf("DongoReset returned hash %q, want %q", res.CommitID, hash1)
 	}
 
 	// After hard reset: working tree should have only doc1.
@@ -250,7 +250,7 @@ func TestDongoReset_Hard_LogShowsTargetAsHead(t *testing.T) {
 	// Hard reset to hash1.
 	_, err := b.DongoReset(context.Background(), &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   hash1,
+		CommitID: hash1,
 		Hard:   true,
 	})
 	if err != nil {
@@ -284,7 +284,7 @@ func TestDongoReset_Hard_DiffIsClean(t *testing.T) {
 	// Hard reset to hash1.
 	_, err := b.DongoReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   hash1,
+		CommitID: hash1,
 		Hard:   true,
 	})
 	if err != nil {
@@ -317,7 +317,7 @@ func TestDongoReset_InvalidHash(t *testing.T) {
 
 	_, err = b.DongoReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   "notavalidhash",
+		CommitID: "notavalidhash",
 	})
 	if err == nil {
 		t.Error("expected error for invalid hash, got nil")
@@ -340,7 +340,7 @@ func TestDongoReset_UnknownButValidHash(t *testing.T) {
 
 	_, err = b.DongoReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
-		Hash:   unknownHash,
+		CommitID: unknownHash,
 	})
 	if err == nil {
 		t.Error("expected error for unknown commit hash, got nil")

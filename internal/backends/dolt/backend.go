@@ -844,7 +844,7 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 	}
 
 	return &backends.CommitResult{
-		Hash:      headHash.String(),
+		CommitID:  headHash.String(),
 		Branch:    "main",
 		Message:   message,
 		Author:    params.Author,
@@ -971,8 +971,8 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	// Already up-to-date: From's HEAD is an ancestor of (or equal to) Into's HEAD.
 	if baseHash == fromHash {
 		return &backends.MergeResult{
-			Hash:    intoHash.String(),
-			Message: "already up-to-date",
+			CommitID: intoHash.String(),
+			Message:  "already up-to-date",
 		}, nil
 	}
 
@@ -993,8 +993,8 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 			}
 		}
 		return &backends.MergeResult{
-			Hash:    fromHash.String(),
-			Message: "fast-forward",
+			CommitID: fromHash.String(),
+			Message:  "fast-forward",
 		}, nil
 	}
 
@@ -1047,8 +1047,8 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	}
 
 	return &backends.MergeResult{
-		Hash:    mergeHash.String(),
-		Message: mergeMessage,
+		CommitID: mergeHash.String(),
+		Message:  mergeMessage,
 	}, nil
 }
 
@@ -1234,7 +1234,7 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 		}
 
 		info := backends.CommitInfo{
-			Hash:      currentHash.String(),
+			CommitID:  currentHash.String(),
 			Author:    meta.Name,
 			Message:   meta.Description,
 			Timestamp: meta.UserTimestamp,
@@ -1345,21 +1345,21 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 	defer db.mu.Unlock()
 
 	// Parse and validate the target commit hash.
-	targetHash, ok := hash.MaybeParse(params.Hash)
+	targetHash, ok := hash.MaybeParse(params.CommitID)
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoReset: invalid commit hash %q", params.Hash)
+		return nil, fmt.Errorf("dolt: DongoReset: invalid commit hash %q", params.CommitID)
 	}
 
 	// Load the AM from the target commit.
-	targetAM, err := amFromCommitHash(ctx, db, params.Hash)
+	targetAM, err := amFromCommitHash(ctx, db, params.CommitID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: resolving target commit %q: %w", params.Hash, err)
+		return nil, fmt.Errorf("dolt: DongoReset: resolving target commit %q: %w", params.CommitID, err)
 	}
 
 	// Move HEAD to the target commit without touching the working set.
 	newDS, err := db.doltDB.SetHead(ctx, db.ds, targetHash, "")
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: setting HEAD to %q: %w", params.Hash, err)
+		return nil, fmt.Errorf("dolt: DongoReset: setting HEAD to %q: %w", params.CommitID, err)
 	}
 	db.ds = newDS
 
@@ -1376,7 +1376,7 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 		}
 	}
 
-	return &backends.ResetResult{Hash: params.Hash}, nil
+	return &backends.ResetResult{CommitID: params.CommitID}, nil
 }
 
 // DongoDiff implements backends.VersioningBackend.

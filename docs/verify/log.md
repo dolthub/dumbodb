@@ -42,7 +42,7 @@ Expected:
 {
   "branch": "main",
   "commits": [
-    { "hash": "<initHash>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<initHash>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
   ],
   "ok": 1
 }
@@ -61,17 +61,17 @@ db.items.insertOne({ _id: 1, label: "alpha" })
 const r1 = db.runCommand({ dongoCommit: 1, message: "first", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first", ok: 1 }
-const hash1 = r1.hash
+const hash1 = r1.commitId
 
 db.items.insertOne({ _id: 2, label: "beta" })
 const r2 = db.runCommand({ dongoCommit: 1, message: "second", author: "alice" })
 printjson(r2)
-const hash2 = r2.hash
+const hash2 = r2.commitId
 
 db.items.insertOne({ _id: 3, label: "gamma" })
 const r3 = db.runCommand({ dongoCommit: 1, message: "third", author: "alice" })
 printjson(r3)
-const hash3 = r3.hash
+const hash3 = r3.commitId
 
 print("hash1 =", hash1, "hash2 =", hash2, "hash3 =", hash3)
 ```
@@ -95,10 +95,10 @@ Expected:
 {
   "branch": "main",
   "commits": [
-    { "hash": "<hash3>", "parent1": "<hash2>", "message": "third",               "timestamp": "<...>", "author": "<...>" },
-    { "hash": "<hash2>", "parent1": "<hash1>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
-    { "hash": "<hash1>", "parent1": "<initH>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
-    { "hash": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hash3>", "parent1": "<hash2>", "message": "third",               "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hash2>", "parent1": "<hash1>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hash1>", "parent1": "<initH>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
   ],
   "ok": 1
 }
@@ -106,9 +106,9 @@ Expected:
 
 Key checks:
 - Four entries returned, newest-first
-- `commits[0].hash` equals `hash3`, `commits[0].parent1` equals `hash2`
-- `commits[1].hash` equals `hash2`, `commits[1].parent1` equals `hash1`
-- `commits[2].hash` equals `hash1`, `commits[2].parent1` points to the Initialize root
+- `commits[0].commitId` equals `hash3`, `commits[0].parent1` equals `hash2`
+- `commits[1].commitId` equals `hash2`, `commits[1].parent1` equals `hash1`
+- `commits[2].commitId` equals `hash1`, `commits[2].parent1` points to the Initialize root
 - `commits[3].message` is `"Initialize database"`, no `parent1`
 
 ---
@@ -127,8 +127,8 @@ Expected:
 {
   "branch": "main",
   "commits": [
-    { "hash": "<hash3>", "message": "third",  "timestamp": "<...>", "author": "<...>" },
-    { "hash": "<hash2>", "message": "second", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hash3>", "message": "third",  "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hash2>", "message": "second", "timestamp": "<...>", "author": "<...>" }
   ],
   "ok": 1
 }
@@ -157,9 +157,9 @@ Expected:
 {
   "branch": "main",
   "commits": [
-    { "hash": "<hash2>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
-    { "hash": "<hash1>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
-    { "hash": "<initH>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hash2>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hash1>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<initH>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
   ],
   "ok": 1
 }

@@ -87,8 +87,8 @@ func TestCommitVerify(t *testing.T) {
 			{Key: "author", Value: "alice"},
 		}).Decode(&result))
 
-		hash, ok := result["hash"].(string)
-		require.True(t, ok, "hash must be a string, got %T", result["hash"])
+		hash, ok := result["commitId"].(string)
+		require.True(t, ok, "hash must be a string, got %T", result["commitId"])
 		assert.NotEmpty(t, hash, "hash must not be empty")
 
 		assert.Equal(t, "main", result["branch"], "branch must be 'main' for plain db name")
@@ -128,7 +128,7 @@ func TestCommitVerify(t *testing.T) {
 			{Key: "author", Value: "testuser"},
 		}).Decode(&commitResult))
 
-		hash, ok := commitResult["hash"].(string)
+		hash, ok := commitResult["commitId"].(string)
 		require.True(t, ok, "hash must be a string")
 		assert.NotEmpty(t, hash, "hash must not be empty")
 		assert.Equal(t, "feature commit", commitResult["message"])
@@ -162,7 +162,7 @@ func TestCommitVerify(t *testing.T) {
 			{Key: "message", Value: "commit A"},
 			{Key: "author", Value: "testuser"},
 		}).Decode(&resultA))
-		hashA, _ := resultA["hash"].(string)
+		hashA, _ := resultA["commitId"].(string)
 		require.NotEmpty(t, hashA)
 
 		// Commit B: insert _id:11
@@ -179,7 +179,7 @@ func TestCommitVerify(t *testing.T) {
 			{Key: "message", Value: "commit B"},
 			{Key: "author", Value: "testuser"},
 		}).Decode(&resultB))
-		hashB, _ := resultB["hash"].(string)
+		hashB, _ := resultB["commitId"].(string)
 		require.NotEmpty(t, hashB)
 
 		assert.NotEqual(t, hashA, hashB, "successive commits must return distinct hashes")
@@ -197,7 +197,7 @@ func TestCommitVerify(t *testing.T) {
 			{Key: "author", Value: "testuser"},
 		}).Decode(&result))
 
-		hash, ok := result["hash"].(string)
+		hash, ok := result["commitId"].(string)
 		require.True(t, ok, "hash must be a string even for an empty commit")
 		assert.NotEmpty(t, hash, "hash must not be empty")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")

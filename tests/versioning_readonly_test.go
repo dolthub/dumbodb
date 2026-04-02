@@ -44,8 +44,8 @@ func dongoCommit(tb testing.TB, env *dongoTestEnv, dbName, message string, autho
 	}).Decode(&result)
 	require.NoError(tb, err, "dongoCommit must succeed")
 
-	hash, ok := result["hash"].(string)
-	require.True(tb, ok, "dongoCommit must return a string hash, got %T", result["hash"])
+	hash, ok := result["commitId"].(string)
+	require.True(tb, ok, "dongoCommit must return a string hash, got %T", result["commitId"])
 	require.NotEmpty(tb, hash, "commit hash must not be empty")
 	return hash
 }

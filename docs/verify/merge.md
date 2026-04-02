@@ -35,7 +35,7 @@ db.items.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ dongoCommit: 1, message: "initial", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
-const hashC1 = r1.hash
+const hashC1 = r1.commitId
 
 // Create "feature" branch from main HEAD.
 db.getSiblingDB("mergedb__main").runCommand({ dongoBranch: 1, branch: "feature" })
@@ -60,7 +60,7 @@ nothing to merge — the result is "already up-to-date".
 // Commit _id:2 on main (feature stays at C1, behind main).
 db.items.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ dongoCommit: 1, message: "add-two", author: "alice" })
-const hashC2 = r2.hash
+const hashC2 = r2.commitId
 
 // Merge feature (at C1) into main (at C2).
 const rMerge1 = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, from: "feature" })

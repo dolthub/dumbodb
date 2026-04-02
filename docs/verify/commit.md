@@ -44,7 +44,7 @@ db.items.insertOne({ _id: 2, label: "beta",  v: 2 })
 const r1 = db.runCommand({ dongoCommit: 1, message: "baseline", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice", timestamp: ISODate("..."), ok: 1 }
-const hashBase = r1.hash
+const hashBase = r1.commitId
 
 print("hashBase =", hashBase)
 ```
@@ -68,7 +68,7 @@ Expected result structure:
 
 ```json
 {
-  "hash":      "<non-empty hex string>",
+  "commitId":      "<non-empty hex string>",
   "branch":    "main",
   "message":   "shape check",
   "author":    "alice",
@@ -128,17 +128,17 @@ to the same database must return different hash values.
 // Make a change and commit
 db.items.insertOne({ _id: 10, label: "ten", v: 10 })
 const r3a = db.runCommand({ dongoCommit: 1, message: "commit A", author: "alice" })
-print("hashA =", r3a.hash)
+print("hashA =", r3a.commitId)
 
 db.items.insertOne({ _id: 11, label: "eleven", v: 11 })
 const r3b = db.runCommand({ dongoCommit: 1, message: "commit B", author: "alice" })
-print("hashB =", r3b.hash)
+print("hashB =", r3b.commitId)
 
-print("hashes differ:", r3a.hash !== r3b.hash)
+print("hashes differ:", r3a.commitId !== r3b.commitId)
 // Expected: true
 ```
 
-Key check: `r3a.hash !== r3b.hash`.
+Key check: `r3a.commitId !== r3b.commitId`.
 
 ---
 
@@ -165,11 +165,11 @@ argument in `dongoDiff`.
 
 ```js
 // Record state before a change
-const hashBefore = db.runCommand({ dongoCommit: 1, message: "pre-change", author: "alice" }).hash
+const hashBefore = db.runCommand({ dongoCommit: 1, message: "pre-change", author: "alice" }).commitId
 
 // Make a change and commit
 db.items.insertOne({ _id: 99, label: "new", v: 99 })
-const hashAfter = db.runCommand({ dongoCommit: 1, message: "post-change", author: "alice" }).hash
+const hashAfter = db.runCommand({ dongoCommit: 1, message: "post-change", author: "alice" }).commitId
 
 // Diff between the two commits — must show _id:99 as added
 db.runCommand({ dongoDiff: 1, from: hashBefore, to: hashAfter })

@@ -104,7 +104,7 @@ func TestMergeVerify(t *testing.T) {
 		// Response: { hash: hashC2, message: "already up-to-date", ok: 1 }
 		assert.Equal(t, "already up-to-date", raw["message"],
 			"merging behind branch into main must report 'already up-to-date'")
-		assert.Equal(t, hashC2, raw["hash"],
+		assert.Equal(t, hashC2, raw["commitId"],
 			"already-up-to-date hash must equal main's current HEAD (unchanged)")
 		assert.EqualValues(t, 1, raw["ok"])
 	})
@@ -124,7 +124,7 @@ func TestMergeVerify(t *testing.T) {
 		// Response: { hash: hashC2, message: "fast-forward", ok: 1 }
 		assert.Equal(t, "fast-forward", raw["message"],
 			"merging ahead-of-feature main into feature must report 'fast-forward'")
-		assert.Equal(t, hashC2, raw["hash"],
+		assert.Equal(t, hashC2, raw["commitId"],
 			"fast-forward hash must equal main's HEAD (no new commit created)")
 		assert.EqualValues(t, 1, raw["ok"])
 
@@ -148,7 +148,7 @@ func TestMergeVerify(t *testing.T) {
 		// Response: { hash: hashC2, message: "already up-to-date", ok: 1 }
 		assert.Equal(t, "already up-to-date", raw["message"],
 			"merging equal branches must report 'already up-to-date'")
-		assert.Equal(t, hashC2, raw["hash"],
+		assert.Equal(t, hashC2, raw["commitId"],
 			"already-up-to-date hash must equal the shared HEAD (unchanged)")
 		assert.EqualValues(t, 1, raw["ok"])
 	})

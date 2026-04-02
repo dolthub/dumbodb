@@ -36,7 +36,7 @@ db.items.insertOne({ _id: 2, label: "beta",  score: 20 })
 const r1 = db.runCommand({ dongoCommit: 1, message: "baseline", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hashBase>", branch: "main", message: "baseline", ok: 1 }
-const hashBase = r1.hash
+const hashBase = r1.commitId
 
 // Make three working-set changes (NOT committed):
 //   _id:3 added
@@ -107,7 +107,7 @@ Commit the changes from the setup, then diff the two commits directly.
 const r2 = db.runCommand({ dongoCommit: 1, message: "three changes", author: "alice" })
 printjson(r2)
 // Expected: { hash: "<hashNew>", branch: "main", message: "three changes", ok: 1 }
-const hashNew = r2.hash
+const hashNew = r2.commitId
 
 db.runCommand({ dongoDiff: 1, from: hashBase, to: hashNew })
 ```
@@ -264,9 +264,9 @@ var featureDB = db.getSiblingDB("diffdb__feature")
 
 // Make two commits on main.
 var r3 = db.runCommand({ dongoCommit: 1, message: "c3", author: "alice" })
-const hash3 = r3.hash
+const hash3 = r3.commitId
 db.items.insertOne({ _id: 5, label: "epsilon", score: 50 })
-const hash4 = db.runCommand({ dongoCommit: 1, message: "c4", author: "alice" }).hash
+const hash4 = db.runCommand({ dongoCommit: 1, message: "c4", author: "alice" }).commitId
 
 // 1. from=HEAD~1, to=HEAD on a main connection — HEAD resolves to main tip (c4)
 db.runCommand({ dongoDiff: 1, from: "HEAD~1", to: "HEAD" })

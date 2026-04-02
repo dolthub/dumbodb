@@ -39,7 +39,7 @@ printjson(result1)
 // Expected:
 // { hash: "<hash1>", branch: "main", message: "first commit", ok: 1 }
 // Save hash1 for later:
-const hash1 = result1.hash
+const hash1 = result1.commitId
 
 // Insert a second document and commit (commit 2)
 db.items.insertOne({ _id: 2, label: "second", version: 2 })
@@ -47,7 +47,7 @@ const result2 = db.runCommand({ dongoCommit: 1, message: "second commit", author
 printjson(result2)
 // Expected:
 // { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
-const hash2 = result2.hash
+const hash2 = result2.commitId
 
 // Create a branch named "v1.0" pointing at commit 2.
 // The rootish in the db name must be percent-encoded because '.' is a

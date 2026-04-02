@@ -47,10 +47,10 @@ type logResult struct {
 
 // commitEntry holds one entry from the "commits" array of a dongoLog response.
 type commitEntry struct {
-	Hash    string
-	Parent1 string
-	Parent2 string
-	Message string
+	CommitID string
+	Parent1  string
+	Parent2  string
+	Message  string
 }
 
 // decodeLogResult parses the raw bson.M from a dongoLog RunCommand into the
@@ -74,7 +74,7 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 		require.True(t, ok, "commits entry is not a document, got %T", c)
 
 		entry := commitEntry{
-			Hash:    fmt.Sprintf("%v", cm["hash"]),
+			CommitID: fmt.Sprintf("%v", cm["commitId"]),
 			Message: fmt.Sprintf("%v", cm["message"]),
 		}
 		if p1, ok := cm["parent1"]; ok {
@@ -152,15 +152,15 @@ func TestLogVerify(t *testing.T) {
 		// 4 commits: "third", "second", "first", "Initialize database".
 		require.Len(t, lr.Commits, 4, "expected 4 commits (3 user + Initialize root)")
 
-		assert.Equal(t, hash3, lr.Commits[0].Hash, "commits[0] must be hash3 (HEAD)")
+		assert.Equal(t, hash3, lr.Commits[0].CommitID, "commits[0] must be hash3 (HEAD)")
 		assert.Equal(t, "third", lr.Commits[0].Message)
 		assert.Equal(t, hash2, lr.Commits[0].Parent1, "commits[0].parent1 must be hash2")
 
-		assert.Equal(t, hash2, lr.Commits[1].Hash, "commits[1] must be hash2")
+		assert.Equal(t, hash2, lr.Commits[1].CommitID, "commits[1] must be hash2")
 		assert.Equal(t, "second", lr.Commits[1].Message)
 		assert.Equal(t, hash1, lr.Commits[1].Parent1, "commits[1].parent1 must be hash1")
 
-		assert.Equal(t, hash1, lr.Commits[2].Hash, "commits[2] must be hash1")
+		assert.Equal(t, hash1, lr.Commits[2].CommitID, "commits[2] must be hash1")
 		assert.Equal(t, "first", lr.Commits[2].Message)
 		assert.NotEmpty(t, lr.Commits[2].Parent1, "hash1 must have a parent1 (the Initialize root)")
 
@@ -180,11 +180,11 @@ func TestLogVerify(t *testing.T) {
 
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 2, "expected exactly 2 commits with limit=2")
-		assert.Equal(t, hash3, lr.Commits[0].Hash, "first entry must be hash3 (HEAD)")
-		assert.Equal(t, hash2, lr.Commits[1].Hash, "second entry must be hash2")
+		assert.Equal(t, hash3, lr.Commits[0].CommitID, "first entry must be hash3 (HEAD)")
+		assert.Equal(t, hash2, lr.Commits[1].CommitID, "second entry must be hash2")
 
 		for _, c := range lr.Commits {
-			assert.NotEqual(t, hash1, c.Hash, "hash1 must not appear when limit=2")
+			assert.NotEqual(t, hash1, c.CommitID, "hash1 must not appear when limit=2")
 		}
 	})
 
@@ -200,15 +200,15 @@ func TestLogVerify(t *testing.T) {
 
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 3, "expected 3 commits starting from hash2 (hash2, hash1, Initialize)")
-		assert.Equal(t, hash2, lr.Commits[0].Hash, "first entry must be hash2")
+		assert.Equal(t, hash2, lr.Commits[0].CommitID, "first entry must be hash2")
 		assert.Equal(t, "second", lr.Commits[0].Message)
-		assert.Equal(t, hash1, lr.Commits[1].Hash, "second entry must be hash1")
+		assert.Equal(t, hash1, lr.Commits[1].CommitID, "second entry must be hash1")
 		assert.Equal(t, "first", lr.Commits[1].Message)
 		assert.Equal(t, "Initialize database", lr.Commits[2].Message, "third entry must be Initialize root")
 		assert.Empty(t, lr.Commits[2].Parent1, "Initialize commit is the root — no parent1")
 
 		for _, c := range lr.Commits {
-			assert.NotEqual(t, hash3, c.Hash, "hash3 must not appear when from=hash2")
+			assert.NotEqual(t, hash3, c.CommitID, "hash3 must not appear when from=hash2")
 		}
 	})
 

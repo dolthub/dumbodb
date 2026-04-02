@@ -35,14 +35,14 @@ db.items.insertOne({ _id: 1, label: "alpha" })
 const r1 = db.runCommand({ dongoCommit: 1, message: "commit one", author: "alice" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
-const hash1 = r1.hash
+const hash1 = r1.commitId
 
 // Commit 2: second document added
 db.items.insertOne({ _id: 2, label: "beta" })
 const r2 = db.runCommand({ dongoCommit: 1, message: "commit two", author: "alice" })
 printjson(r2)
 // Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
-const hash2 = r2.hash
+const hash2 = r2.commitId
 
 print("hash1 =", hash1)
 print("hash2 =", hash2)

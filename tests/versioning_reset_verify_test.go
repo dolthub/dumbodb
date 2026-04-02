@@ -94,7 +94,7 @@ func TestResetVerify(t *testing.T) {
 		}).Decode(&raw))
 
 		// Response: { hash: hashC1, ok: 1 }
-		assert.Equal(t, hashC1, raw["hash"], "soft reset response hash must equal hashC1")
+		assert.Equal(t, hashC1, raw["commitId"], "soft reset response hash must equal hashC1")
 		assert.EqualValues(t, 1, raw["ok"])
 
 		// Working set is preserved — diff shows _id:2 and _id:3 as added
@@ -144,7 +144,7 @@ func TestResetVerify(t *testing.T) {
 		}).Decode(&raw))
 
 		// Response: { hash: hashC1, ok: 1 }
-		assert.Equal(t, hashC1, raw["hash"], "hard reset response hash must equal hashC1")
+		assert.Equal(t, hashC1, raw["commitId"], "hard reset response hash must equal hashC1")
 		assert.EqualValues(t, 1, raw["ok"])
 
 		// Working set matches target — diff is empty.
@@ -186,7 +186,7 @@ func TestResetVerify(t *testing.T) {
 			{Key: "to", Value: hashC1},
 		}).Decode(&raw))
 
-		assert.Equal(t, hashC1, raw["hash"], "soft undo-commit response hash must equal hashC1")
+		assert.Equal(t, hashC1, raw["commitId"], "soft undo-commit response hash must equal hashC1")
 
 		// _id:2 was in the last commit but the working tree was not changed.
 		// dongoDiff must show _id:2 as added (HEAD=C1 doesn't have it).

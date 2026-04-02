@@ -32,7 +32,7 @@ type CommitParams struct {
 
 // CommitResult represents the result of VersioningBackend.DongoCommit method.
 type CommitResult struct {
-	Hash      string
+	CommitID  string
 	Branch    string
 	Message   string
 	Author    string // echoes CommitParams.Author
@@ -60,8 +60,8 @@ type MergeParams struct {
 
 // MergeResult represents the result of VersioningBackend.DongoMerge method.
 type MergeResult struct {
-	Hash    string
-	Message string
+	CommitID string
+	Message  string
 }
 
 // LogParams represents the parameters of VersioningBackend.DongoLog method.
@@ -74,7 +74,7 @@ type LogParams struct {
 
 // CommitInfo represents a single commit entry returned by DongoLog.
 type CommitInfo struct {
-	Hash      string
+	CommitID  string
 	Parent1   string // empty for root commit (no parent)
 	Parent2   string // non-empty only for merge commits
 	Author    string
@@ -154,15 +154,15 @@ type DiffResult struct {
 
 // ResetParams represents the parameters of VersioningBackend.DongoReset method.
 type ResetParams struct {
-	DBName string
-	Branch string
-	Hash   string
-	Hard   bool
+	DBName   string
+	Branch   string
+	CommitID string
+	Hard     bool
 }
 
 // ResetResult represents the result of VersioningBackend.DongoReset method.
 type ResetResult struct {
-	Hash string
+	CommitID string
 }
 
 // CurrentBranchParams represents the parameters of VersioningBackend.DongoCurrentBranch method.

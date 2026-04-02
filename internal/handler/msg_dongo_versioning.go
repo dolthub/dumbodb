@@ -430,7 +430,7 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"hash", res.Hash,
+			"commitId", res.CommitID,
 			"branch", res.Branch,
 			"message", res.Message,
 			"author", res.Author,
@@ -554,7 +554,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"hash", res.Hash,
+			"commitId", res.CommitID,
 			"message", res.Message,
 			"ok", float64(1),
 		)),
@@ -615,7 +615,7 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	for _, c := range res.Commits {
 		pairs := []any{
-			"hash", c.Hash,
+			"commitId", c.CommitID,
 		}
 		if c.Parent1 != "" {
 			pairs = append(pairs, "parent1", c.Parent1)
@@ -697,10 +697,10 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 	}
 
 	res, err := vb.DongoReset(connCtx, &backends.ResetParams{
-		DBName: dbName,
-		Branch: branch,
-		Hash:   to,
-		Hard:   hard,
+		DBName:   dbName,
+		Branch:   branch,
+		CommitID: to,
+		Hard:     hard,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -708,7 +708,7 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"hash", res.Hash,
+			"commitId", res.CommitID,
 			"ok", float64(1),
 		)),
 	)
