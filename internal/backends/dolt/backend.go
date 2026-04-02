@@ -39,12 +39,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
-	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
@@ -620,6 +621,39 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 	return newDS, am, nil
 }
 
+// commitCollectionsAMAs creates a new dolt commit with the given collections
+// AddressMap as its root value, using the provided author name and timestamp.
+// Returns the updated dataset and the (unchanged) AM.
+func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc, authorName string, ts time.Time) (datas.Dataset, prolly.AddressMap, error) {
+	var err error
+	if ds.ID() == "" {
+		ds, err = doltDB.GetDataset(ctx, mainDataset)
+		if err != nil {
+			return datas.Dataset{}, am, err
+		}
+	}
+
+	email := authorName + "@dongo"
+	meta, err := datas.NewCommitMetaWithUserTS(authorName, email, desc, ts)
+	if err != nil {
+		return datas.Dataset{}, am, err
+	}
+
+	rtvlMsg := buildRootValueFlatbuffer(am)
+	newDS, err := doltDB.Commit(ctx, ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+		Meta: meta,
+	})
+	if err != nil {
+		return datas.Dataset{}, am, err
+	}
+
+	if err := updateWorkingSet(ctx, doltDB, am, am, "main"); err != nil {
+		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
+	}
+
+	return newDS, am, nil
+}
+
 // migrateADRMtoSTRT converts a legacy ADRM-rooted NBS store to STRT format
 // by writing an initial dolt commit and updating the NBS root atomically.
 // Uses lower-level APIs to avoid datas.Database panicking on the ADRM root.
@@ -774,7 +808,7 @@ var _ backends.VersioningBackend = (*Backend)(nil)
 
 // DongoCommit implements backends.VersioningBackend.
 // It commits the current working set (collections AM) with the given message,
-// creating a new dolt commit on the main branch.
+// author, and timestamp, creating a new dolt commit on the main branch.
 func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -790,10 +824,15 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 		message = "dongo commit"
 	}
 
+	ts := params.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	newDS, _, err := commitCollectionsAM(ctx, db.doltDB, db.ds, db.am, message)
+	newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.am, message, params.Author, ts)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DongoCommit: committing db %q: %w", params.DBName, err)
 	}
@@ -805,9 +844,11 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 	}
 
 	return &backends.CommitResult{
-		Hash:    headHash.String(),
-		Branch:  "main",
-		Message: message,
+		Hash:      headHash.String(),
+		Branch:    "main",
+		Message:   message,
+		Author:    params.Author,
+		Timestamp: ts.UnixMilli(),
 	}, nil
 }
 
@@ -1196,7 +1237,7 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 			Hash:      currentHash.String(),
 			Author:    meta.Name,
 			Message:   meta.Description,
-			Timestamp: int64(meta.Timestamp),
+			Timestamp: meta.UserTimestamp,
 		}
 		if len(parentAddrs) >= 1 {
 			info.Parent1 = parentAddrs[0].String()

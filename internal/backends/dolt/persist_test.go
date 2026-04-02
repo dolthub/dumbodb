@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/datas"
@@ -497,6 +498,7 @@ func TestDongoCommit(t *testing.T) {
 	res, err := b.DongoCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "my first commit",
+		Author:  "testuser",
 	})
 	if err != nil {
 		t.Fatalf("DongoCommit: %v", err)
@@ -561,7 +563,7 @@ func TestDongoCommitDefaultMessage(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb"})
+	res, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit: %v", err)
 	}
@@ -608,7 +610,7 @@ func TestDongoCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one"})
+	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 1: %v", err)
 	}
@@ -623,7 +625,7 @@ func TestDongoCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two"})
+	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 2: %v", err)
 	}
@@ -655,13 +657,13 @@ func TestDongoCommitNoOpSucceeds(t *testing.T) {
 	}
 
 	// First commit (on empty state after init).
-	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first"})
+	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 1: %v", err)
 	}
 
 	// Second commit with no intervening writes — must not error.
-	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op"})
+	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 2 (no-op): %v", err)
 	}
@@ -712,7 +714,7 @@ func TestDongoCommitWorkingSetClean(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check"}); err != nil {
+	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
 		t.Fatalf("DongoCommit: %v", err)
 	}
 
@@ -745,6 +747,100 @@ func TestDongoCommitWorkingSetClean(t *testing.T) {
 
 	if *ws.StagedAddr != headRtvlHash {
 		t.Errorf("working set staged root %v != HEAD rootValue hash %v", *ws.StagedAddr, headRtvlHash)
+	}
+}
+
+// TestDongoCommitAuthorAndTimestamp verifies that DongoCommit stores the provided
+// author name and timestamp, and that dongoLog reflects them on the resulting commit.
+func TestDongoCommitAuthorAndTimestamp(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-author-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	if _, err = b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	res, err := b.DongoCommit(ctx, &backends.CommitParams{
+		DBName:    "testdb",
+		Message:   "authored commit",
+		Author:    "alice",
+		Timestamp: fixedTime,
+	})
+	if err != nil {
+		t.Fatalf("DongoCommit: %v", err)
+	}
+
+	if res.Author != "alice" {
+		t.Errorf("CommitResult.Author = %q, want %q", res.Author, "alice")
+	}
+	if res.Timestamp != fixedTime.UnixMilli() {
+		t.Errorf("CommitResult.Timestamp = %d, want %d", res.Timestamp, fixedTime.UnixMilli())
+	}
+
+	// Verify via dongoLog that author and timestamp were persisted.
+	logRes, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	if err != nil {
+		t.Fatalf("DongoLog: %v", err)
+	}
+	if len(logRes.Commits) == 0 {
+		t.Fatal("expected at least 1 commit from DongoLog")
+	}
+	c := logRes.Commits[0]
+	if c.Author != "alice" {
+		t.Errorf("log commit Author = %q, want %q", c.Author, "alice")
+	}
+	if c.Timestamp != fixedTime.UnixMilli() {
+		t.Errorf("log commit Timestamp = %d, want %d", c.Timestamp, fixedTime.UnixMilli())
+	}
+}
+
+// TestDongoCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
+// the commit timestamp is set to approximately the current time.
+func TestDongoCommitTimestampDefaultsToNow(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dongo-dongo-commit-ts-default-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b := &Backend{
+		dataDir: dir,
+		l:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		dbs:     make(map[string]*dbState),
+	}
+	defer b.Close()
+
+	if _, err = b.getOrOpenDB(ctx, "testdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+
+	before := time.Now().UnixMilli()
+	res, err := b.DongoCommit(ctx, &backends.CommitParams{
+		DBName:  "testdb",
+		Message: "no timestamp",
+		Author:  "bob",
+	})
+	after := time.Now().UnixMilli()
+	if err != nil {
+		t.Fatalf("DongoCommit: %v", err)
+	}
+
+	if res.Timestamp < before || res.Timestamp > after {
+		t.Errorf("CommitResult.Timestamp %d not in [%d, %d]", res.Timestamp, before, after)
 	}
 }
 
@@ -838,7 +934,7 @@ func TestDongoLogAfterOneCommit(t *testing.T) {
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
 
-	commitRes, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit"})
+	commitRes, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit: %v", err)
 	}
@@ -894,6 +990,7 @@ func TestDongoLogLimit(t *testing.T) {
 		if _, err := b.DongoCommit(ctx, &backends.CommitParams{
 			DBName:  "testdb",
 			Message: fmt.Sprintf("commit %d", i),
+			Author:  "testuser",
 		}); err != nil {
 			t.Fatalf("DongoCommit %d: %v", i, err)
 		}
@@ -925,13 +1022,13 @@ func TestDongoLogFromHash(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one"})
+	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two"}); err != nil {
+	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
 		t.Fatalf("DongoCommit 2: %v", err)
 	}
 
@@ -986,13 +1083,13 @@ func TestDongoLogHashOrderAndTimestamps(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	r1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha"})
+	r1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	r2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta"})
+	r2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
 	if err != nil {
 		t.Fatalf("DongoCommit 2: %v", err)
 	}

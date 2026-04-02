@@ -399,6 +399,16 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
+	author, err := common.GetRequiredParam[string](document, "author")
+	if err != nil {
+		return nil, err
+	}
+
+	ts, err := common.GetOptionalParam[time.Time](document, "timestamp", time.Time{})
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -408,9 +418,11 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 
 	res, err := vb.DongoCommit(connCtx, &backends.CommitParams{
-		DBName:  dbName,
-		Branch:  branch,
-		Message: message,
+		DBName:    dbName,
+		Branch:    branch,
+		Message:   message,
+		Author:    author,
+		Timestamp: ts,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -421,6 +433,8 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 			"hash", res.Hash,
 			"branch", res.Branch,
 			"message", res.Message,
+			"author", res.Author,
+			"timestamp", time.UnixMilli(res.Timestamp),
 			"ok", float64(1),
 		)),
 	)

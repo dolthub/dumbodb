@@ -30,10 +30,12 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // commitVerifySetup mirrors the Setup section of docs/verify/commit.md.
@@ -75,13 +77,14 @@ func TestCommitVerify(t *testing.T) {
 	_ = hashBase
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Response shape — hash, branch, message, ok
+	// Scenario 1: Response shape — hash, branch, message, author, timestamp, ok
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_ResponseShape", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "shape check"},
+			{Key: "author", Value: "alice"},
 		}).Decode(&result))
 
 		hash, ok := result["hash"].(string)
@@ -90,6 +93,8 @@ func TestCommitVerify(t *testing.T) {
 
 		assert.Equal(t, "main", result["branch"], "branch must be 'main' for plain db name")
 		assert.Equal(t, "shape check", result["message"], "message must echo the provided string")
+		assert.Equal(t, "alice", result["author"], "author must echo the provided value")
+		assert.NotNil(t, result["timestamp"], "timestamp must be present")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
 	})
 
@@ -120,6 +125,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "feature commit"},
+			{Key: "author", Value: "testuser"},
 		}).Decode(&commitResult))
 
 		hash, ok := commitResult["hash"].(string)
@@ -154,6 +160,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "commit A"},
+			{Key: "author", Value: "testuser"},
 		}).Decode(&resultA))
 		hashA, _ := resultA["hash"].(string)
 		require.NotEmpty(t, hashA)
@@ -170,6 +177,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "commit B"},
+			{Key: "author", Value: "testuser"},
 		}).Decode(&resultB))
 		hashB, _ := resultB["hash"].(string)
 		require.NotEmpty(t, hashB)
@@ -186,6 +194,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
+			{Key: "author", Value: "testuser"},
 		}).Decode(&result))
 
 		hash, ok := result["hash"].(string)
@@ -226,5 +235,78 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, int32(99), cd.Added[0]["_id"], "added doc must be _id:99")
 		assert.Empty(t, cd.Removed, "no documents should be removed")
 		assert.Empty(t, cd.Modified, "no documents should be modified")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 6: Author is echoed in the response and visible in dongoLog
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
+		var result bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoCommit", Value: int32(1)},
+			{Key: "message", Value: "authored commit"},
+			{Key: "author", Value: "bob"},
+		}).Decode(&result))
+
+		assert.Equal(t, "bob", result["author"], "author must be echoed in response")
+		assert.NotNil(t, result["timestamp"], "timestamp must be present in response")
+		assert.EqualValues(t, 1, result["ok"])
+
+		// Verify the author is stored and visible via dongoLog.
+		var logResult bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logResult))
+
+		commits, ok := logResult["commits"].(bson.A)
+		require.True(t, ok, "commits must be an array")
+		require.Len(t, commits, 1, "expected 1 commit in log")
+
+		entry, ok := commits[0].(bson.M)
+		require.True(t, ok)
+		assert.Equal(t, "bob", entry["author"], "dongoLog must reflect the commit author")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 7: Custom timestamp is stored and echoed
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7_CustomTimestampStoredAndEchoed", func(t *testing.T) {
+		fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
+
+		var result bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoCommit", Value: int32(1)},
+			{Key: "message", Value: "fixed-time commit"},
+			{Key: "author", Value: "carol"},
+			{Key: "timestamp", Value: fixedTime},
+		}).Decode(&result))
+
+		assert.Equal(t, "carol", result["author"], "author must be echoed")
+		assert.EqualValues(t, 1, result["ok"])
+
+		// The echoed timestamp must equal the provided value (within millisecond precision).
+		echoedTS, ok := result["timestamp"].(primitive.DateTime)
+		require.True(t, ok, "timestamp must be a BSON datetime, got %T", result["timestamp"])
+		assert.Equal(t, fixedTime.UnixMilli(), int64(echoedTS),
+			"echoed timestamp must match the provided fixed time")
+
+		// Verify via dongoLog that the stored timestamp matches.
+		var logResult bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logResult))
+
+		commits, ok := logResult["commits"].(bson.A)
+		require.True(t, ok)
+		require.Len(t, commits, 1)
+
+		entry, ok := commits[0].(bson.M)
+		require.True(t, ok)
+		logTS, ok := entry["timestamp"].(primitive.DateTime)
+		require.True(t, ok, "log timestamp must be a BSON datetime")
+		assert.Equal(t, fixedTime.UnixMilli(), int64(logTS),
+			"dongoLog timestamp must match the provided fixed time")
 	})
 }

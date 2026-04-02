@@ -73,6 +73,7 @@ func commitDB(t *testing.T, b *Backend, dbName, message string) string {
 	res, err := b.DongoCommit(context.Background(), &backends.CommitParams{
 		DBName:  dbName,
 		Message: message,
+		Author:  "testuser",
 	})
 	if err != nil {
 		t.Fatalf("DongoCommit(%q, %q): %v", dbName, message, err)

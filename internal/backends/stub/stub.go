@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -111,10 +112,17 @@ func (db *database) Stats(_ context.Context, _ *backends.DatabaseStatsParams) (*
 func (b *Backend) DongoCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	b.l.Info("stub: DongoCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
+	ts := params.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+
 	return &backends.CommitResult{
-		Hash:    "0000000000000000000000000000000000000000",
-		Branch:  params.Branch,
-		Message: params.Message,
+		Hash:      "0000000000000000000000000000000000000000",
+		Branch:    params.Branch,
+		Message:   params.Message,
+		Author:    params.Author,
+		Timestamp: ts.UnixMilli(),
 	}, nil
 }
 

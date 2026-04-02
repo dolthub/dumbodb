@@ -27,14 +27,20 @@ import (
 )
 
 // dongoCommit runs dongoCommit on the given database and returns the commit hash.
-func dongoCommit(tb testing.TB, env *dongoTestEnv, dbName, message string) string {
+func dongoCommit(tb testing.TB, env *dongoTestEnv, dbName, message string, author ...string) string {
 	tb.Helper()
+
+	a := "testuser"
+	if len(author) > 0 {
+		a = author[0]
+	}
 
 	ctx := context.Background()
 	var result bson.M
 	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dongoCommit", Value: int32(1)},
 		{Key: "message", Value: message},
+		{Key: "author", Value: a},
 	}).Decode(&result)
 	require.NoError(tb, err, "dongoCommit must succeed")
 

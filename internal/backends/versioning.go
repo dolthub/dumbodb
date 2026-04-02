@@ -16,22 +16,27 @@ package backends
 
 import (
 	"context"
+	"time"
 
 	"github.com/dolthub/dongo/internal/types"
 )
 
 // CommitParams represents the parameters of VersioningBackend.DongoCommit method.
 type CommitParams struct {
-	DBName  string
-	Branch  string
-	Message string
+	DBName    string
+	Branch    string
+	Message   string
+	Author    string    // required: name of the commit author
+	Timestamp time.Time // optional: commit timestamp; zero value means use current time
 }
 
 // CommitResult represents the result of VersioningBackend.DongoCommit method.
 type CommitResult struct {
-	Hash    string
-	Branch  string
-	Message string
+	Hash      string
+	Branch    string
+	Message   string
+	Author    string // echoes CommitParams.Author
+	Timestamp int64  // Unix milliseconds of the commit timestamp
 }
 
 // BranchParams represents the parameters of VersioningBackend.DongoBranch method.
