@@ -547,6 +547,112 @@ func TestDiffVerify(t *testing.T) {
 	// Scenario 8: Nested document field change
 	// Only the changed leaf field ($.address.city) appears; zip and name do not.
 	// -------------------------------------------------------------------------
+	// -------------------------------------------------------------------------
+	// Scenario 9: Rootish expressions in from/to — HEAD, HEAD~N, branch name
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
+		// Commit any pending working set so we start from a clean HEAD.
+		dongoCommit(t, env, dbName, "pre-scenario9")
+
+		// Create a feature branch that starts at current main HEAD.
+		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "rootishtest"},
+		}).Err(), "dongoBranch to create 'rootishtest'")
+
+		rootish := env.client.Database(dbName + "__rootishtest")
+
+		// Two commits on main — feature branch stays behind.
+		hashC1 := dongoCommit(t, env, dbName, "scenario9-c1")
+
+		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)},
+			{Key: "v", Value: int32(1)},
+		})
+		require.NoError(t, err)
+
+		hashC2 := dongoCommit(t, env, dbName, "scenario9-c2")
+
+		// 9a: from=HEAD~1, to=HEAD on main connection — HEAD resolves to c2.
+		// Expect _id:1 added (delta between c1 and c2).
+		var raw9a bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: "HEAD~1"},
+			{Key: "to", Value: "HEAD"},
+		}).Decode(&raw9a))
+
+		dr9a := decodeDiffResult(t, raw9a)
+		cd9a := findCollDiff(dr9a, "scenario9")
+		require.NotNil(t, cd9a, "9a: expected diff for 'scenario9' collection")
+		require.Len(t, cd9a.Added, 1, "9a: expected 1 added doc")
+		assert.Equal(t, int32(1), cd9a.Added[0]["_id"], "9a: added doc must be _id:1")
+
+		// 9b: from=hashC1, to="HEAD" on main connection — HEAD = c2.
+		// Same result as 9a.
+		var raw9b bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: hashC1},
+			{Key: "to", Value: "HEAD"},
+		}).Decode(&raw9b))
+
+		dr9b := decodeDiffResult(t, raw9b)
+		cd9b := findCollDiff(dr9b, "scenario9")
+		require.NotNil(t, cd9b, "9b: expected diff for 'scenario9' collection")
+		require.Len(t, cd9b.Added, 1, "9b: expected 1 added doc")
+		assert.Equal(t, int32(1), cd9b.Added[0]["_id"], "9b: added doc must be _id:1")
+
+		// 9c: from=hashC2, to="HEAD" on rootishtest branch connection.
+		// HEAD resolves to rootishtest tip = c1 (branch was created before c2),
+		// so hashC2 != rootishtest HEAD → expect an error or at least a non-empty diff.
+		// Actually hashC2 is AFTER rootishtest was branched, so rootishtest HEAD == hashC1.
+		// Diff from hashC2 to rootishtest HEAD: rootishtest has _id:1 absent, hashC2 has it.
+		// So _id:1 should appear as removed.
+		var raw9c bson.M
+		require.NoError(t, rootish.RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: hashC2},
+			{Key: "to", Value: "HEAD"},
+		}).Decode(&raw9c))
+
+		dr9c := decodeDiffResult(t, raw9c)
+		cd9c := findCollDiff(dr9c, "scenario9")
+		require.NotNil(t, cd9c, "9c: expected diff for 'scenario9' collection")
+		require.Len(t, cd9c.Removed, 1, "9c: expected 1 removed doc (_id:1 absent from rootishtest)")
+		assert.Equal(t, int32(1), cd9c.Removed[0]["_id"], "9c: removed doc must be _id:1")
+
+		// 9d: from=hashC1, to="HEAD" on rootishtest branch connection.
+		// rootishtest HEAD == c1 == hashC1 → identical → empty diff.
+		var raw9d bson.M
+		require.NoError(t, rootish.RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: hashC1},
+			{Key: "to", Value: "HEAD"},
+		}).Decode(&raw9d))
+
+		dr9d := decodeDiffResult(t, raw9d)
+		cd9d := findCollDiff(dr9d, "scenario9")
+		assert.Nil(t, cd9d, "9d: HEAD on rootishtest resolves to hashC1; diff must be empty, got collection diff")
+
+		// 9e: from="rootishtest" (bare branch name), to="main" — branch name rootish.
+		// rootishtest = c1, main = c2: expect _id:1 added.
+		var raw9e bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: "rootishtest"},
+			{Key: "to", Value: "main"},
+		}).Decode(&raw9e))
+
+		dr9e := decodeDiffResult(t, raw9e)
+		cd9e := findCollDiff(dr9e, "scenario9")
+		require.NotNil(t, cd9e, "9e: expected diff for 'scenario9' collection")
+		require.Len(t, cd9e.Added, 1, "9e: expected 1 added doc")
+		assert.Equal(t, int32(1), cd9e.Added[0]["_id"], "9e: added doc must be _id:1")
+
+		_ = hashC2 // used above
+	})
+
 	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
 		// Commit working set from Scenario 7 for a clean HEAD.
 		dongoCommit(t, env, dbName, "pre-scenario8")

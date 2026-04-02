@@ -223,6 +223,44 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 	return hash.Hash{}, fmt.Errorf("rootish %q: not found as commit hash, branch, or tag", rootish)
 }
 
+// amFromHEADExpr resolves a "HEAD" or "HEAD~N" rootish to a collections AddressMap.
+//
+// HEAD resolves to the committed tip of connRootish — the connection's own branch or
+// snapshot, not necessarily main. HEAD~N walks N first-parents above that commit.
+// HEAD~0 is equivalent to HEAD.
+func amFromHEADExpr(ctx context.Context, state *dbState, connRootish, rootish string) (prolly.AddressMap, error) {
+	currentHash, err := resolveRootishToCommitHash(ctx, state, connRootish)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("HEAD: resolving connection rootish %q: %w", connRootish, err)
+	}
+
+	n := 0
+	if strings.HasPrefix(rootish, "HEAD~") {
+		nStr := rootish[5:]
+		n, err = strconv.Atoi(nStr)
+		if err != nil || n < 0 {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: invalid ancestor count %q", rootish, nStr)
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		commit, loadErr := datas.LoadCommitAddr(ctx, state.vs, currentHash)
+		if loadErr != nil {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: loading commit at depth %d: %w", rootish, i, loadErr)
+		}
+		parentAddrs, parErr := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if parErr != nil {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: reading parents at depth %d: %w", rootish, i, parErr)
+		}
+		if len(parentAddrs) == 0 {
+			return prolly.AddressMap{}, fmt.Errorf("rootish %q: commit at depth %d has no parent (only %d ancestors exist)", rootish, i, i)
+		}
+		currentHash = parentAddrs[0]
+	}
+
+	return amFromCommitHash(ctx, state, currentHash.String())
+}
+
 // amFromCommitHash loads the collections AddressMap from a specific commit
 // identified by its hash string (32-char base32 dolt hash).
 //

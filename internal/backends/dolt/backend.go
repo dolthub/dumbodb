@@ -1341,9 +1341,12 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 // DongoDiff implements backends.VersioningBackend.
 //
 // It computes the document-level diff between two database states:
-//   - If From is empty, the "a" side is HEAD (the last committed state).
+//   - If From is empty, the "a" side is HEAD (last committed state on main).
 //   - If To is empty, the "b" side is the working set (latest uncommitted state).
-//   - Non-empty From/To values are interpreted as dolt commit hashes.
+//   - Non-empty From/To values are resolved as rootish expressions: commit hashes,
+//     branch names, ancestor expressions (e.g. "main~2"), "HEAD", or "HEAD~N".
+//     "HEAD" and "HEAD~N" resolve relative to params.ConnRootish (the connection's
+//     own branch or snapshot, not necessarily main).
 //
 // Only collections with at least one change are included in the result.
 // For modified documents, only the changed fields appear in a/b.
@@ -1363,29 +1366,41 @@ func (b *Backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*
 	// Resolve the "a" (from) side.
 	var aAM prolly.AddressMap
 
-	if params.From == "" {
+	switch {
+	case params.From == "":
 		// Default: HEAD committed state.
 		aAM, err = state.headRootAM(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DongoDiff: reading HEAD AM for db %q: %w", params.DBName, err)
 		}
-	} else {
-		aAM, err = amFromCommitHash(ctx, state, params.From)
+	case params.From == "HEAD" || strings.HasPrefix(params.From, "HEAD~"):
+		aAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.From)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: resolving from hash %q: %w", params.From, err)
+			return nil, fmt.Errorf("dolt: DongoDiff: resolving from %q: %w", params.From, err)
+		}
+	default:
+		aAM, err = amFromRootish(ctx, state, params.From)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: resolving from %q: %w", params.From, err)
 		}
 	}
 
 	// Resolve the "b" (to) side.
 	var bAM prolly.AddressMap
 
-	if params.To == "" {
+	switch {
+	case params.To == "":
 		// Default: current working set (may include uncommitted writes).
 		bAM = state.am
-	} else {
-		bAM, err = amFromCommitHash(ctx, state, params.To)
+	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
+		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: resolving to hash %q: %w", params.To, err)
+			return nil, fmt.Errorf("dolt: DongoDiff: resolving to %q: %w", params.To, err)
+		}
+	default:
+		bAM, err = amFromRootish(ctx, state, params.To)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoDiff: resolving to %q: %w", params.To, err)
 		}
 	}
 

@@ -102,13 +102,20 @@ type VersioningStatusResult struct {
 }
 
 // DiffParams represents the parameters of VersioningBackend.DongoDiff method.
-// From and To are commit hashes (empty string means default):
-//   - From="": use HEAD (committed state) as the "a" side
+//
+// From and To accept rootish expressions (commit hashes, branch names, ancestor
+// expressions like "main~2", or "HEAD"/"HEAD~N"). Empty string means the default:
+//   - From="": use HEAD of the connection's branch as the "a" side
 //   - To="": use the working set (uncommitted state) as the "b" side
+//
+// ConnRootish is the rootish from the connection's encoded database name (e.g.
+// "feature" from "mydb__feature"). It is used to resolve "HEAD" and "HEAD~N" in
+// From/To: HEAD means the committed tip of ConnRootish, not necessarily main.
 type DiffParams struct {
-	DBName string
-	From   string // commit hash; empty means HEAD
-	To     string // commit hash; empty means working set
+	DBName      string
+	ConnRootish string // rootish from the connection's encoded db name (e.g. "main", "feature", "main~2")
+	From        string // rootish; empty means HEAD of the connection's branch
+	To          string // rootish; empty means working set
 }
 
 // FieldDiff represents a single field-level change within a modified document.

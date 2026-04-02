@@ -52,7 +52,7 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, err
 	}
 
-	dbName, _, _, err := branchFromDBName(encodedDB)
+	dbName, connRootish, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +76,10 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	res, err := vb.DongoDiff(connCtx, &backends.DiffParams{
-		DBName: dbName,
-		From:   from,
-		To:     to,
+		DBName:      dbName,
+		ConnRootish: connRootish,
+		From:        from,
+		To:          to,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)

@@ -1075,3 +1075,320 @@ func TestDongoDiff_FieldTypeChange(t *testing.T) {
 		}
 	}
 }
+
+// ── Rootish expression tests ──────────────────────────────────────────────────
+
+// TestDongoDiff_HeadFromTo verifies that from="HEAD" and to="HEAD" resolve to the
+// committed tip of the connection's branch (ConnRootish="main").
+func TestDongoDiff_HeadFromTo(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit 1: one doc.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	hash1 := commitDB(t, b, "testdb", "commit one")
+
+	// Commit 2: update that doc.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "v", int64(2)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	hash2 := commitDB(t, b, "testdb", "commit two")
+
+	// from=hash1, to="HEAD" — HEAD resolves to main's committed tip (hash2).
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        hash1,
+		To:          "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(from=%s, to=HEAD): %v", hash1, err)
+	}
+
+	if len(res.Collections) != 1 {
+		t.Fatalf("expected 1 changed collection, got %d", len(res.Collections))
+	}
+
+	if len(res.Collections[0].Modified) != 1 {
+		t.Fatalf("expected 1 modified doc, got %d", len(res.Collections[0].Modified))
+	}
+
+	// from="HEAD", to=hash2 — HEAD resolves to main's tip; result should be empty (same commit).
+	res2, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        "HEAD",
+		To:          hash2,
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(from=HEAD, to=%s): %v", hash2, err)
+	}
+
+	if len(res2.Collections) != 0 {
+		t.Errorf("HEAD and hash2 are the same commit; expected empty diff, got %d collections", len(res2.Collections))
+	}
+}
+
+// TestDongoDiff_HeadTilde verifies that HEAD~N ancestor expressions in from/to
+// resolve correctly relative to ConnRootish.
+func TestDongoDiff_HeadTilde(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Three commits: doc v=1, then v=2, then v=3.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	commitDB(t, b, "testdb", "c1")
+
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "v", int64(2)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	commitDB(t, b, "testdb", "c2")
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "v", int64(3)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	commitDB(t, b, "testdb", "c3")
+
+	// HEAD~2 → c1, HEAD → c3: should see v=1→3.
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        "HEAD~2",
+		To:          "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(HEAD~2, HEAD): %v", err)
+	}
+
+	if len(res.Collections) != 1 {
+		t.Fatalf("expected 1 changed collection, got %d", len(res.Collections))
+	}
+
+	m := res.Collections[0].Modified[0]
+	vDiff := findFieldDiff(t, m, "$.v")
+
+	if vDiff.From != int64(1) {
+		t.Errorf("expected from=1, got %v", vDiff.From)
+	}
+
+	if vDiff.To != int64(3) {
+		t.Errorf("expected to=3, got %v", vDiff.To)
+	}
+
+	// HEAD~1 → c2, HEAD~0 → c3: should see v=2→3.
+	res2, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        "HEAD~1",
+		To:          "HEAD~0",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(HEAD~1, HEAD~0): %v", err)
+	}
+
+	if len(res2.Collections) != 1 {
+		t.Fatalf("expected 1 changed collection, got %d", len(res2.Collections))
+	}
+
+	m2 := res2.Collections[0].Modified[0]
+	vDiff2 := findFieldDiff(t, m2, "$.v")
+
+	if vDiff2.From != int64(2) {
+		t.Errorf("expected from=2, got %v", vDiff2.From)
+	}
+
+	if vDiff2.To != int64(3) {
+		t.Errorf("expected to=3, got %v", vDiff2.To)
+	}
+}
+
+// TestDongoDiff_BranchNameRootish verifies that bare branch names and branch~N
+// ancestor expressions work as from/to params.
+func TestDongoDiff_BranchNameRootish(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit 1 on main: doc v=1.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	commitDB(t, b, "testdb", "c1")
+
+	// Create a feature branch from main.
+	if _, err := b.DongoBranch(ctx, &backends.BranchParams{
+		DBName: "testdb",
+		From:   "main",
+		Name:   "feature",
+	}); err != nil {
+		t.Fatalf("DongoBranch: %v", err)
+	}
+
+	// Commit 2 on main: doc v=2.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "v", int64(2)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	commitDB(t, b, "testdb", "c2")
+
+	// Diff from="feature" (c1) to="main" (c2): should see v=1→2.
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        "feature",
+		To:          "main",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(from=feature, to=main): %v", err)
+	}
+
+	if len(res.Collections) != 1 {
+		t.Fatalf("expected 1 changed collection, got %d", len(res.Collections))
+	}
+
+	m := res.Collections[0].Modified[0]
+	vDiff := findFieldDiff(t, m, "$.v")
+
+	if vDiff.From != int64(1) {
+		t.Errorf("expected from=1, got %v", vDiff.From)
+	}
+
+	if vDiff.To != int64(2) {
+		t.Errorf("expected to=2, got %v", vDiff.To)
+	}
+
+	// Diff from="main~1" (c1) to="main" (c2): same result via ancestor expression.
+	res2, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        "main~1",
+		To:          "main",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(from=main~1, to=main): %v", err)
+	}
+
+	if len(res2.Collections) != 1 {
+		t.Fatalf("expected 1 changed collection (main~1 vs main), got %d", len(res2.Collections))
+	}
+
+	m2 := res2.Collections[0].Modified[0]
+	vDiff2 := findFieldDiff(t, m2, "$.v")
+
+	if vDiff2.From != int64(1) {
+		t.Errorf("expected from=1, got %v", vDiff2.From)
+	}
+
+	if vDiff2.To != int64(2) {
+		t.Errorf("expected to=2, got %v", vDiff2.To)
+	}
+}
+
+// TestDongoDiff_HeadOnNonMainBranch verifies that HEAD resolves to the connection's
+// own branch tip, not main, when ConnRootish is a non-main branch.
+func TestDongoDiff_HeadOnNonMainBranch(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	// Commit 1 on main: doc v=1.
+	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	hash1 := commitDB(t, b, "testdb", "c1-main")
+
+	// Create feature branch from c1.
+	if _, err := b.DongoBranch(ctx, &backends.BranchParams{
+		DBName: "testdb",
+		From:   "main",
+		Name:   "feature",
+	}); err != nil {
+		t.Fatalf("DongoBranch: %v", err)
+	}
+
+	// Commit 2 on main: doc v=2.
+	db, err := b.Database("testdb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	coll, err := db.Collection("col")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
+		mustDoc(t, "_id", int64(1), "v", int64(2)),
+	}}); err != nil {
+		t.Fatalf("UpdateAll: %v", err)
+	}
+
+	commitDB(t, b, "testdb", "c2-main")
+
+	// from=hash1, to="HEAD" with ConnRootish="feature":
+	// HEAD should resolve to feature branch tip (c1), NOT main (c2).
+	// So hash1 == feature HEAD → diff should be empty.
+	res, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "feature",
+		From:        hash1,
+		To:          "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(from=hash1, to=HEAD, ConnRootish=feature): %v", err)
+	}
+
+	if len(res.Collections) != 0 {
+		t.Errorf("HEAD on feature branch must resolve to feature tip (same as hash1); expected empty diff, got %d collections", len(res.Collections))
+	}
+
+	// Now verify HEAD on main IS different from hash1.
+	res2, err := b.DongoDiff(ctx, &backends.DiffParams{
+		DBName:      "testdb",
+		ConnRootish: "main",
+		From:        hash1,
+		To:          "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("DongoDiff(from=hash1, to=HEAD, ConnRootish=main): %v", err)
+	}
+
+	if len(res2.Collections) != 1 {
+		t.Fatalf("HEAD on main must resolve to c2 (different from hash1); expected 1 changed collection, got %d", len(res2.Collections))
+	}
+}

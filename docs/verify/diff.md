@@ -250,6 +250,57 @@ Expected for `_id:1` in the `nested` collection:
 
 ---
 
+## Scenario 9: Rootish expressions in `from`/`to` — HEAD, HEAD~N, branch name
+
+`from` and `to` accept any valid rootish expression, not just raw commit hashes.
+`HEAD` resolves to the committed tip of the connection's own branch (i.e. whatever
+branch or snapshot is encoded in the database name). `HEAD~N` resolves to N ancestors
+above that commit. Bare branch names are also accepted.
+
+```js
+// Connect via the feature branch.
+var featureDB = db.getSiblingDB("diffdb__feature")
+featureDB.runCommand({
+  dongoBranch: 1,
+  name: "feature",
+  from: "main"
+})
+
+// Make two commits on main.
+var r3 = db.runCommand({ dongoCommit: 1, message: "c3" })
+const hash3 = r3.hash
+db.items.insertOne({ _id: 5, label: "epsilon", score: 50 })
+const hash4 = db.runCommand({ dongoCommit: 1, message: "c4" }).hash
+
+// 1. from=HEAD~1, to=HEAD on a main connection — HEAD resolves to main tip (c4)
+db.runCommand({ dongoDiff: 1, from: "HEAD~1", to: "HEAD" })
+```
+
+Expected: diff between c3 and c4 — only `_id:5` appears as added.
+
+```js
+// 2. from=hash3, to="HEAD" on a main connection — HEAD = main tip = hash4
+db.runCommand({ dongoDiff: 1, from: hash3, to: "HEAD" })
+```
+
+Expected: same result — `_id:5` added.
+
+```js
+// 3. from=hash3, to="HEAD" on the feature branch connection —
+//    HEAD resolves to feature tip (= c3, before the two main commits)
+featureDB.runCommand({ dongoDiff: 1, from: hash3, to: "HEAD" })
+```
+
+Expected: `{ "collections": [], "ok": 1 }` — feature HEAD equals hash3, no diff.
+
+Key checks:
+- `HEAD` on a main connection resolves to the latest main commit.
+- `HEAD` on a feature connection resolves to feature's tip, **not** main.
+- `HEAD~N` works as N ancestors above the connection's HEAD.
+- Bare branch names (`"main"`, `"feature"`) resolve to that branch's HEAD.
+
+---
+
 ## Quick Reference
 
 | Command | `from` side | `to` side |
@@ -257,8 +308,11 @@ Expected for `_id:1` in the `nested` collection:
 | `{ dongoDiff: 1 }` | HEAD (last commit) | working set |
 | `{ dongoDiff: 1, from: "<hash>" }` | `<hash>` | working set |
 | `{ dongoDiff: 1, from: "<hash>", to: "<hash2>" }` | `<hash>` | `<hash2>` |
+| `{ dongoDiff: 1, from: "HEAD~1", to: "HEAD" }` | connection HEAD~1 | connection HEAD |
+| `{ dongoDiff: 1, from: "branch", to: "HEAD" }` | branch tip | connection HEAD |
 
 - Only collections with at least one change appear in the result.
 - `added` and `removed` contain full documents.
 - `modified` contains only the changed fields with `from` (old) and `to` (new) values.
 - Unchanged fields do not appear in `modified[].diff`.
+- `HEAD` always resolves to the connection's own branch tip, not necessarily main.
