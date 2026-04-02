@@ -17,10 +17,10 @@ package tests
 // TestLogVerify is the automated analog of docs/verify/log.md.
 //
 // Each top-level subtest corresponds to one scenario in that document.
-// The setup reproduces the manual setup block exactly:
 //
-//   - Three sequential commits on main: "first", "second", "third" (HEAD)
-//   - hash1 → hash2 → hash3 form the parent chain
+// Scenario 1 runs first on the fresh database (before any user commits).
+// The setup block then creates three commits on the same database.
+// Scenarios 2–4 use that shared three-commit history.
 //
 // Note: every Dongo database begins with an auto-created "Initialize database"
 // root commit. Counts below include that initial commit.
@@ -93,38 +93,32 @@ func TestLogVerify(t *testing.T) {
 	env := startDongo(t)
 	ctx := context.Background()
 
-	// Randomised db name so parallel test runs don't collide.
 	dbName := fmt.Sprintf("logvrfy%d", rand.Int64N(1_000_000))
 
+	// Start fresh.
+	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(0)},
+	})
+	require.NoError(t, err)
+
 	// -------------------------------------------------------------------------
-	// Scenario 1: Log with no user commits — only the "Initialize database" root
+	// Scenario 1: Log before any user commits — only the "Initialize database" root
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_NoUserCommits", func(t *testing.T) {
-		// Insert a document to create the database (triggers the Initialize commit)
-		// but do not commit, so no user commits exist yet.
-		require.NoError(t, env.client.Database(dbName).Drop(ctx))
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
-			{Key: "_id", Value: int32(0)},
-		})
-		require.NoError(t, err)
-
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoLog", Value: int32(1)},
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
-		// Exactly 1 commit: the auto-created "Initialize database" root.
 		require.Len(t, lr.Commits, 1, "expected exactly 1 commit (Initialize database)")
 		assert.Equal(t, "Initialize database", lr.Commits[0].Message)
 		assert.Empty(t, lr.Commits[0].Parent1, "Initialize commit is the root — no parent1")
-
-		// Clean up the uncommitted insert so the setup below starts fresh.
-		require.NoError(t, env.client.Database(dbName).Drop(ctx))
 	})
 
-	// Setup: three sequential commits.
-	_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+	// Setup: three sequential commits on the same database.
+	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "label", Value: "alpha"},
 	})
@@ -146,39 +140,9 @@ func TestLogVerify(t *testing.T) {
 	hash3 := dongoCommit(t, env, dbName, "third")
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: Log after one commit — user commit plus root
+	// Scenario 2: Log after multiple commits — parent chain, newest-first
 	// -------------------------------------------------------------------------
-	t.Run("Scenario2_SingleUserCommit", func(t *testing.T) {
-		singleDB := fmt.Sprintf("logsingle%d", rand.Int64N(1_000_000))
-
-		_, err := env.client.Database(singleDB).Collection("items").InsertOne(ctx, bson.D{
-			{Key: "_id", Value: int32(1)},
-			{Key: "v", Value: int32(1)},
-		})
-		require.NoError(t, err)
-		singleHash := dongoCommit(t, env, singleDB, "only commit")
-
-		var raw bson.M
-		require.NoError(t, env.client.Database(singleDB).RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
-		}).Decode(&raw))
-
-		lr := decodeLogResult(t, raw)
-		// 2 commits: "only commit" on top, "Initialize database" as root.
-		require.Len(t, lr.Commits, 2, "expected 2 commits (user commit + Initialize root)")
-		assert.Equal(t, singleHash, lr.Commits[0].Hash, "first commit must be the user commit")
-		assert.Equal(t, "only commit", lr.Commits[0].Message)
-		assert.NotEmpty(t, lr.Commits[0].Parent1, "user commit must have parent1 (the Initialize root)")
-
-		// The root Initialize commit has no parent.
-		assert.Equal(t, "Initialize database", lr.Commits[1].Message)
-		assert.Empty(t, lr.Commits[1].Parent1, "Initialize commit is the root — no parent1")
-	})
-
-	// -------------------------------------------------------------------------
-	// Scenario 3: Log after multiple commits — parent chain, newest-first
-	// -------------------------------------------------------------------------
-	t.Run("Scenario3_MultipleCommits", func(t *testing.T) {
+	t.Run("Scenario2_MultipleCommits", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoLog", Value: int32(1)},
@@ -188,7 +152,6 @@ func TestLogVerify(t *testing.T) {
 		// 4 commits: "third", "second", "first", "Initialize database".
 		require.Len(t, lr.Commits, 4, "expected 4 commits (3 user + Initialize root)")
 
-		// Newest-first order for the user commits.
 		assert.Equal(t, hash3, lr.Commits[0].Hash, "commits[0] must be hash3 (HEAD)")
 		assert.Equal(t, "third", lr.Commits[0].Message)
 		assert.Equal(t, hash2, lr.Commits[0].Parent1, "commits[0].parent1 must be hash2")
@@ -201,15 +164,14 @@ func TestLogVerify(t *testing.T) {
 		assert.Equal(t, "first", lr.Commits[2].Message)
 		assert.NotEmpty(t, lr.Commits[2].Parent1, "hash1 must have a parent1 (the Initialize root)")
 
-		// Root Initialize commit.
 		assert.Equal(t, "Initialize database", lr.Commits[3].Message)
 		assert.Empty(t, lr.Commits[3].Parent1, "Initialize commit is the root — no parent1")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Log with limit — truncates at the specified count
+	// Scenario 3: Log with limit — truncates at the specified count
 	// -------------------------------------------------------------------------
-	t.Run("Scenario4_WithLimit", func(t *testing.T) {
+	t.Run("Scenario3_WithLimit", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoLog", Value: int32(1)},
@@ -221,16 +183,15 @@ func TestLogVerify(t *testing.T) {
 		assert.Equal(t, hash3, lr.Commits[0].Hash, "first entry must be hash3 (HEAD)")
 		assert.Equal(t, hash2, lr.Commits[1].Hash, "second entry must be hash2")
 
-		// hash1 ("first") and Initialize must not appear.
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hash1, c.Hash, "hash1 must not appear when limit=2")
 		}
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Log from a specific hash — start traversal at that commit
+	// Scenario 4: Log from a specific hash — start traversal at that commit
 	// -------------------------------------------------------------------------
-	t.Run("Scenario5_FromHash", func(t *testing.T) {
+	t.Run("Scenario4_FromHash", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoLog", Value: int32(1)},
@@ -238,8 +199,7 @@ func TestLogVerify(t *testing.T) {
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
-		// 3 commits when starting from hash2: hash2, hash1, Initialize.
-		require.Len(t, lr.Commits, 3, "expected 3 commits when starting from hash2 (hash2, hash1, Initialize)")
+		require.Len(t, lr.Commits, 3, "expected 3 commits starting from hash2 (hash2, hash1, Initialize)")
 		assert.Equal(t, hash2, lr.Commits[0].Hash, "first entry must be hash2")
 		assert.Equal(t, "second", lr.Commits[0].Message)
 		assert.Equal(t, hash1, lr.Commits[1].Hash, "second entry must be hash1")
@@ -247,11 +207,10 @@ func TestLogVerify(t *testing.T) {
 		assert.Equal(t, "Initialize database", lr.Commits[2].Message, "third entry must be Initialize root")
 		assert.Empty(t, lr.Commits[2].Parent1, "Initialize commit is the root — no parent1")
 
-		// hash3 ("third") must not appear.
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hash3, c.Hash, "hash3 must not appear when from=hash2")
 		}
 	})
 
-	_ = hash3 // used in subtests above
+	_ = hash3 // referenced in subtests above
 }
