@@ -252,7 +252,7 @@ Expected for `_id:1` in the `nested` collection:
 
 ## Quick Reference
 
-| Command | "a" side | "b" side |
+| Command | `from` side | `to` side |
 |---|---|---|
 | `{ dongoDiff: 1 }` | HEAD (last commit) | working set |
 | `{ dongoDiff: 1, from: "<hash>" }` | `<hash>` | working set |
@@ -260,5 +260,5 @@ Expected for `_id:1` in the `nested` collection:
 
 - Only collections with at least one change appear in the result.
 - `added` and `removed` contain full documents.
-- `modified` contains only the changed fields with `a` (old) and `b` (new) values.
+- `modified` contains only the changed fields with `from` (old) and `to` (new) values.
 - Unchanged fields do not appear in `modified[].diff`.
