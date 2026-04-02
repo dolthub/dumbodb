@@ -650,6 +650,38 @@ func TestDiffVerify(t *testing.T) {
 		require.Len(t, cd9e.Added, 1, "9e: expected 1 added doc")
 		assert.Equal(t, int32(1), cd9e.Added[0]["_id"], "9e: added doc must be _id:1")
 
+		// 9f: REVERSE — from=HEAD, to=HEAD~1 on main connection.
+		// Inverts 9a: _id:1 was added going forward, so going backward it appears as removed.
+		var raw9f bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: "HEAD"},
+			{Key: "to", Value: "HEAD~1"},
+		}).Decode(&raw9f))
+
+		dr9f := decodeDiffResult(t, raw9f)
+		cd9f := findCollDiff(dr9f, "scenario9")
+		require.NotNil(t, cd9f, "9f: expected diff for 'scenario9' collection")
+		assert.Empty(t, cd9f.Added, "9f: reverse diff must have no added docs")
+		require.Len(t, cd9f.Removed, 1, "9f: reverse diff must have 1 removed doc (_id:1 absent in HEAD~1)")
+		assert.Equal(t, int32(1), cd9f.Removed[0]["_id"], "9f: removed doc must be _id:1")
+
+		// 9g: REVERSE — from="main", to="rootishtest" (bare branch names, reverse of 9e).
+		// 9e showed _id:1 added going rootishtest→main; reversed: _id:1 is removed.
+		var raw9g bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "from", Value: "main"},
+			{Key: "to", Value: "rootishtest"},
+		}).Decode(&raw9g))
+
+		dr9g := decodeDiffResult(t, raw9g)
+		cd9g := findCollDiff(dr9g, "scenario9")
+		require.NotNil(t, cd9g, "9g: expected diff for 'scenario9' collection")
+		assert.Empty(t, cd9g.Added, "9g: reverse diff must have no added docs")
+		require.Len(t, cd9g.Removed, 1, "9g: reverse diff must have 1 removed doc (_id:1 absent in rootishtest)")
+		assert.Equal(t, int32(1), cd9g.Removed[0]["_id"], "9g: removed doc must be _id:1")
+
 		_ = hashC2 // used above
 	})
 

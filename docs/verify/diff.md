@@ -289,11 +289,28 @@ featureDB.runCommand({ dongoDiff: 1, from: hash3, to: "HEAD" })
 
 Expected: `{ "collections": [], "ok": 1 }` — feature HEAD equals hash3, no diff.
 
+```js
+// 4. REVERSE: from=HEAD, to=HEAD~1 — swaps direction.
+//    _id:5 was added going forward; going backward it appears as removed.
+db.runCommand({ dongoDiff: 1, from: "HEAD", to: "HEAD~1" })
+```
+
+Expected: `_id:5` in `removed` (not `added`) — the inverse of case 1.
+
+```js
+// 5. REVERSE via branch names: from="main", to="feature".
+//    Going main→feature reverses the forward feature→main diff.
+db.runCommand({ dongoDiff: 1, from: "main", to: "feature" })
+```
+
+Expected: `_id:5` in `removed` — the inverse of a forward feature→main diff.
+
 Key checks:
 - `HEAD` on a main connection resolves to the latest main commit.
 - `HEAD` on a feature connection resolves to feature's tip, **not** main.
 - `HEAD~N` works as N ancestors above the connection's HEAD.
 - Bare branch names (`"main"`, `"feature"`) resolve to that branch's HEAD.
+- Reversing `from`/`to` inverts the diff: `added` and `removed` swap roles.
 
 ---
 
@@ -305,6 +322,7 @@ Key checks:
 | `{ dongoDiff: 1, from: "<hash>" }` | `<hash>` | working set |
 | `{ dongoDiff: 1, from: "<hash>", to: "<hash2>" }` | `<hash>` | `<hash2>` |
 | `{ dongoDiff: 1, from: "HEAD~1", to: "HEAD" }` | connection HEAD~1 | connection HEAD |
+| `{ dongoDiff: 1, from: "HEAD", to: "HEAD~1" }` | connection HEAD | connection HEAD~1 (reverse) |
 | `{ dongoDiff: 1, from: "branch", to: "HEAD" }` | branch tip | connection HEAD |
 
 - Only collections with at least one change appear in the result.
