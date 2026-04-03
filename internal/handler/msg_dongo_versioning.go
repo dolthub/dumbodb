@@ -527,12 +527,22 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 // Usage:
 //
 //	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, abort: 1})
+//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature", noFF: true})
+//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, continue: true})
+//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, abort: true})
+//
+// Optional parameters for merge initiation:
+//   - message (string): custom merge commit message (ignored on fast-forward / already-up-to-date)
+//   - author (string): 'Name <email>' for the merge commit author
+//   - noFF (bool): force a merge commit even when fast-forward is possible
+//   - ffOnly (bool): fail if a fast-forward is not possible (mutually exclusive with noFF)
 //
 // When a merge produces document-level conflicts, the response includes ok:0 with a
 // conflicts array describing which collections have unresolved conflicts. The branch
 // HEAD is unchanged; the staged working set reflects the partial merge with "ours"
-// values for conflicting documents.
+// values for conflicting documents. Use dongoResolveConflict to resolve conflicts, then
+// dongoMerge continue:true to complete the merge.
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -552,6 +562,11 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 	}
 
 	abort, err := common.GetOptionalParam[bool](document, "abort", false)
+	if err != nil {
+		return nil, err
+	}
+
+	continueParam, err := common.GetOptionalParam[bool](document, "continue", false)
 	if err != nil {
 		return nil, err
 	}
@@ -581,6 +596,52 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
+	if continueParam {
+		message, err := common.GetOptionalParam[string](document, "message", "")
+		if err != nil {
+			return nil, err
+		}
+		author, err := common.GetOptionalParam[string](document, "author", "")
+		if err != nil {
+			return nil, err
+		}
+		res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
+			DBName:   dbName,
+			Into:     intoBranch,
+			Continue: true,
+			Message:  message,
+			Author:   author,
+		})
+		if mergeErr != nil {
+			return nil, lazyerrors.Error(mergeErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"commitId", res.CommitID,
+				"message", res.Message,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	noFF, err := common.GetOptionalParam[bool](document, "noFF", false)
+	if err != nil {
+		return nil, err
+	}
+
+	ffOnly, err := common.GetOptionalParam[bool](document, "ffOnly", false)
+	if err != nil {
+		return nil, err
+	}
+
+	if noFF && ffOnly {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dongoMerge: noFF and ffOnly are mutually exclusive",
+			"noFF",
+		)
+	}
+
 	fromBranch, err := common.GetRequiredParam[string](document, "merge_in")
 	if err != nil {
 		return nil, err
@@ -590,14 +651,28 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
 			"dongoMerge: from branch name must not be empty",
-			"from",
+			"merge_in",
 		)
 	}
 
+	message, err := common.GetOptionalParam[string](document, "message", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
 	res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
-		DBName: dbName,
-		Into:   intoBranch,
-		From:   fromBranch,
+		DBName:  dbName,
+		Into:    intoBranch,
+		From:    fromBranch,
+		Message: message,
+		Author:  author,
+		NoFF:    noFF,
+		FFOnly:  ffOnly,
 	})
 
 	if mergeErr != nil {

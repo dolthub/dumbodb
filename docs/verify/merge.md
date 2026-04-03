@@ -308,7 +308,7 @@ const rContinue = db.getSiblingDB("mergedb__main").runCommand({
     author: "alice <alice@dongo>"          // optional
 })
 printjson(rContinue)
-// Expected: { commitId: "<hashM>", branch: "main", message: "Merge branch 'feature' into 'main'", ok: 1 }
+// Expected: { commitId: "<hashM>", branch: "main", message: "Resolve merge conflicts", ok: 1 }
 ```
 
 `dongoLog` shows a merge commit with two parents:
@@ -361,6 +361,10 @@ After abort the branch is back to its pre-merge state and `dongoCommit` works no
 - For conflicting merges: `{ conflicts: [...], ok: 0, code: 96, errmsg: "..." }`.
 - A fast-forward does not create a new commit; the `commitId` in the response is the
   `merge_in` branch's existing HEAD.
+- Use `{ dongoMerge: 1, noFF: true }` to force a merge commit even when fast-forward is possible.
+- Use `{ dongoMerge: 1, ffOnly: true }` to fail if fast-forward is not possible.
+- `noFF` and `ffOnly` are mutually exclusive.
+- Optional `message` (string) and `author` ('Name <email>') customize the merge commit.
 - Use `dongoConflicts`, `dongoResolveConflict`, then `{ dongoMerge: 1, continue: 1 }` to complete a
   conflicting merge.
 - `dongoCommit` is rejected throughout any in-progress merge; use `continue` to finalize.

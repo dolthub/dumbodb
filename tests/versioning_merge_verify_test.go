@@ -357,8 +357,8 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.Error(t, err, "new dongoMerge while merge in progress must fail")
 	})
 
-	// Scenario 9: Resolve with "ours" and then commit creates a merge commit
-	t.Run("Scenario9_ResolveOurs_ThenCommit", func(t *testing.T) {
+	// Scenario 9: Resolve with "ours" and then dongoMerge continue creates a merge commit
+	t.Run("Scenario9_ResolveOurs_ThenContinue", func(t *testing.T) {
 		// Get the conflict ID
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
@@ -387,12 +387,20 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		colls := summaryRaw["collections"].(bson.A)
 		assert.Len(t, colls, 0, "no more conflicts after resolution")
 
-		// Commit creates a merge commit
+		// dongoCommit is blocked even when all conflicts are resolved — merge in progress
+		err := mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoCommit", Value: int32(1)},
+			{Key: "message", Value: "should fail: merge in progress"},
+			{Key: "author", Value: "tester"},
+		}).Err()
+		require.Error(t, err, "dongoCommit must fail while merge is in progress (even with no conflicts)")
+		assert.Contains(t, err.Error(), "merge in progress", "error must mention merge in progress")
+
+		// dongoMerge continue creates a merge commit
 		var commitRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoCommit", Value: int32(1)},
-			{Key: "message", Value: "resolve conflict: ours"},
-			{Key: "author", Value: "tester"},
+			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "continue", Value: true},
 		}).Decode(&commitRaw))
 		assert.EqualValues(t, 1, commitRaw["ok"])
 
@@ -532,14 +540,13 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
-	// Commit.
-	var commitRaw bson.M
+	// Complete the merge with dongoMerge continue.
+	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoCommit", Value: int32(1)},
-		{Key: "message", Value: "resolve: theirs"},
-		{Key: "author", Value: "tester"},
-	}).Decode(&commitRaw))
-	assert.EqualValues(t, 1, commitRaw["ok"])
+		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "continue", Value: true},
+	}).Decode(&continueRaw))
+	assert.EqualValues(t, 1, continueRaw["ok"])
 
 	// Document must have theirs value (v:22).
 	var doc bson.M
@@ -604,14 +611,13 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
-	// Commit.
-	var commitRaw bson.M
+	// Complete the merge with dongoMerge continue.
+	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoCommit", Value: int32(1)},
-		{Key: "message", Value: "resolve: custom"},
-		{Key: "author", Value: "tester"},
-	}).Decode(&commitRaw))
-	assert.EqualValues(t, 1, commitRaw["ok"])
+		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "continue", Value: true},
+	}).Decode(&continueRaw))
+	assert.EqualValues(t, 1, continueRaw["ok"])
 
 	// Document must have custom value v:99.
 	var doc bson.M

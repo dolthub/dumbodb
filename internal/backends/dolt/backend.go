@@ -849,36 +849,12 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Guard: reject dongoCommit if a merge is in progress with unresolved conflicts.
-	if db.mergeState != nil {
-		if db.mergeState.intoBranch == branch && db.mergeState.hasUnresolvedConflicts() {
+	// Guard: reject dongoCommit during any in-progress merge (resolved or not).
+	if db.mergeState != nil && db.mergeState.intoBranch == branch {
+		if db.mergeState.hasUnresolvedConflicts() {
 			return nil, fmt.Errorf("dongoCommit: unresolved merge conflicts remain")
 		}
-	}
-
-	// If a fully-resolved merge is pending on this branch, complete it as a merge commit.
-	if db.mergeState != nil && db.mergeState.intoBranch == branch {
-		ms := db.mergeState
-
-		intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
-		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoCommit: resolving branch %q for merge commit: %w", branch, err)
-		}
-
-		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM)
-		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoCommit: %w", err)
-		}
-
-		db.mergeState = nil
-
-		return &backends.CommitResult{
-			CommitID:  mergeRes.CommitID,
-			Branch:    branch,
-			Message:   mergeRes.Message,
-			Author:    params.Author,
-			Timestamp: ts.UnixMilli(),
-		}, nil
+		return nil, fmt.Errorf("dongoCommit: merge in progress: use dongoMerge continue")
 	}
 
 	if branch == "main" {
@@ -1154,6 +1130,30 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 		return &backends.MergeResult{Message: "merge aborted"}, nil
 	}
 
+	// Handle continue: resume after conflict resolution and create the merge commit.
+	if params.Continue {
+		if db.mergeState == nil || db.mergeState.intoBranch != params.Into {
+			return nil, fmt.Errorf("dongoMerge: no merge in progress")
+		}
+		if db.mergeState.hasUnresolvedConflicts() {
+			return nil, fmt.Errorf("dongoMerge: unresolved merge conflicts remain")
+		}
+		ms := db.mergeState
+
+		intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
+		}
+
+		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoMerge: continue: %w", err)
+		}
+
+		db.mergeState = nil
+		return mergeRes, nil
+	}
+
 	// Guard: reject new merge initiation if a merge is already in progress.
 	if db.mergeState != nil {
 		return nil, fmt.Errorf("dolt: DongoMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
@@ -1212,8 +1212,13 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 		}, nil
 	}
 
+	// FFOnly: fail if a fast-forward is not possible (i.e. branches have diverged).
+	if params.FFOnly && baseHash != intoHash {
+		return nil, fmt.Errorf("dolt: DongoMerge: not possible to fast-forward")
+	}
+
 	// Fast-forward: Into's HEAD is an ancestor of From's HEAD.
-	if baseHash == intoHash {
+	if baseHash == intoHash && !params.NoFF {
 		newDS, ffErr := db.doltDB.SetHead(ctx, intoBranchDS, fromHash, "")
 		if ffErr != nil {
 			return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: advancing branch pointer: %w", ffErr)
@@ -1234,7 +1239,7 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 		}, nil
 	}
 
-	// True 3-way merge: load the three-way AddressMaps and attempt to merge.
+	// True 3-way merge (or forced non-fast-forward): load AddressMaps and attempt to merge.
 	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DongoMerge: loading into AM: %w", err)
@@ -1281,12 +1286,12 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	}
 
 	// Clean merge — commit immediately.
-	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM)
+	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM, params.Message, params.Author)
 }
 
 // commitMerge creates a merge commit on intoBranch with both branch HEADs as parents.
-// Called for clean merges (no conflicts) from DongoMerge, and for conflict-resolved merges
-// from DongoCommit.
+// Called for clean merges (no conflicts) and for continue (conflict-resolved) merges from DongoMerge.
+// message and author are optional; if empty, defaults are used.
 func (b *Backend) commitMerge(
 	ctx context.Context,
 	db *dbState,
@@ -1294,10 +1299,26 @@ func (b *Backend) commitMerge(
 	intoBranchDS datas.Dataset,
 	intoHash, fromHash hash.Hash,
 	mergedAM prolly.AddressMap,
+	message, author string,
 ) (*backends.MergeResult, error) {
-	mergeMessage := fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
+	mergeMessage := message
+	if mergeMessage == "" {
+		mergeMessage = fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
+	}
 
-	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", mergeMessage)
+	commitName := "dongo"
+	commitEmail := "dongo@localhost"
+	if author != "" {
+		if idx := strings.Index(author, " <"); idx >= 0 {
+			commitName = author[:idx]
+			commitEmail = strings.TrimSuffix(author[idx+2:], ">")
+		} else {
+			commitName = author
+			commitEmail = author + "@dongo"
+		}
+	}
+
+	meta, err := datas.NewCommitMeta(commitName, commitEmail, mergeMessage)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: commitMerge: building commit meta: %w", err)
 	}

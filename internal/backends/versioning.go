@@ -56,10 +56,15 @@ type BranchResult struct {
 
 // MergeParams represents the parameters of VersioningBackend.DongoMerge method.
 type MergeParams struct {
-	DBName string
-	Into   string // target branch (the current branch)
-	From   string // source branch to merge from
-	Abort  bool   // if true, abort the in-progress merge and restore the pre-merge state
+	DBName   string
+	Into     string // target branch (the current branch)
+	From     string // source branch to merge from
+	Abort    bool   // if true, abort the in-progress merge and restore the pre-merge state
+	Continue bool   // if true, resume after conflict resolution and create the merge commit
+	Message  string // optional: custom merge commit message (ignored on fast-forward and already-up-to-date)
+	Author   string // optional: 'Name <email>' for the merge commit author
+	NoFF     bool   // if true, force a merge commit even when fast-forward is possible
+	FFOnly   bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
 }
 
 // MergeResult represents the result of VersioningBackend.DongoMerge method.
