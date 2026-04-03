@@ -476,6 +476,24 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 		)
 	}
 
+	safeDelete, err := common.GetOptionalParam[bool](document, "d", false)
+	if err != nil {
+		return nil, err
+	}
+
+	forceDelete, err := common.GetOptionalParam[bool](document, "D", false)
+	if err != nil {
+		return nil, err
+	}
+
+	if safeDelete && forceDelete {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dongoBranch: d and D are mutually exclusive",
+			"d",
+		)
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -488,6 +506,8 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 		DBName: dbName,
 		From:   fromBranch,
 		Name:   newBranch,
+		Delete: safeDelete || forceDelete,
+		Force:  forceDelete,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)

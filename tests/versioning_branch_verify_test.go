@@ -202,4 +202,91 @@ func TestBranchVerify(t *testing.T) {
 		require.Len(t, docs, 1)
 		assert.Equal(t, int32(1), docs[0]["_id"], "only _id:1 must be visible at main~1 state")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 6: Safe delete (-d) — branch already merged into main
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_SafeDelete_MergedBranch", func(t *testing.T) {
+		delDbName := fmt.Sprintf("branchvrfy_del%d", rand.Int64N(1_000_000))
+		branchVerifySetup(t, env, delDbName)
+
+		// Create "merged-branch" from main HEAD.
+		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "merged-branch"},
+		}).Err(), "creating merged-branch must succeed")
+
+		// Safe delete: merged-branch HEAD equals main HEAD, so it is reachable from
+		// main — delete must succeed.
+		var result bson.M
+		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "merged-branch"},
+			{Key: "d", Value: true},
+		}).Decode(&result), "safe delete of a merged branch must succeed")
+
+		assert.Equal(t, "merged-branch", result["branch"])
+		assert.EqualValues(t, 1, result["ok"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 7: Safe delete (-d) — branch has unmerged commits, rejected
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7_SafeDelete_UnmergedBranch_Rejected", func(t *testing.T) {
+		delDbName := fmt.Sprintf("branchvrfy_unm%d", rand.Int64N(1_000_000))
+		branchVerifySetup(t, env, delDbName)
+
+		// Create "unmerged-branch" from main and advance it with an extra commit.
+		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "unmerged-branch"},
+		}).Err(), "creating unmerged-branch must succeed")
+
+		_, err := env.client.Database(delDbName+"__unmerged-branch").Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(99)},
+			{Key: "label", Value: "extra"},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, delDbName+"__unmerged-branch", "extra commit on unmerged-branch")
+
+		// Safe delete must be rejected because unmerged-branch has a commit not in main.
+		err = env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "unmerged-branch"},
+			{Key: "d", Value: true},
+		}).Err()
+		require.Error(t, err, "safe delete of a branch with unmerged commits must fail")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: Force delete (-D) — branch has unmerged commits, succeeds
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_ForceDelete_UnmergedBranch", func(t *testing.T) {
+		delDbName := fmt.Sprintf("branchvrfy_frc%d", rand.Int64N(1_000_000))
+		branchVerifySetup(t, env, delDbName)
+
+		// Create "force-branch" and advance it with an extra commit.
+		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "force-branch"},
+		}).Err(), "creating force-branch must succeed")
+
+		_, err := env.client.Database(delDbName+"__force-branch").Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(77)},
+			{Key: "label", Value: "gone"},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, delDbName+"__force-branch", "unmerged commit on force-branch")
+
+		// Force delete must succeed regardless of merge status.
+		var result bson.M
+		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "branch", Value: "force-branch"},
+			{Key: "D", Value: true},
+		}).Decode(&result), "force delete must succeed even with unmerged commits")
+
+		assert.Equal(t, "force-branch", result["branch"])
+		assert.EqualValues(t, 1, result["ok"])
+	})
 }

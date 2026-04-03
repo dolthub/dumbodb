@@ -172,6 +172,65 @@ Key check: branch created successfully and sees only commit-1 state.
 
 ---
 
+## Scenario 6: Safe delete (-d) — branch already merged into main
+
+`dongoBranch` with `d: 1` deletes a branch only if its HEAD is reachable from
+another branch (i.e. no data would be lost).  A branch whose HEAD equals the
+source branch HEAD is always safe to delete.
+
+```js
+// Create a branch at current main HEAD and immediately safe-delete it.
+db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "merged-branch" })
+db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "merged-branch", d: 1 })
+// Expected: { "branch": "merged-branch", "ok": 1 }
+```
+
+Key check: `branch` echoes the name, `ok` is `1`.
+
+---
+
+## Scenario 7: Safe delete (-d) — branch has unmerged commits, rejected
+
+If the branch to delete has commits that are not reachable from any other branch,
+safe delete must fail with an error.
+
+```js
+// Create "unmerged-branch" from main and add an exclusive commit.
+db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "unmerged-branch" })
+var ub = db.getSiblingDB("branchvdb__unmerged-branch")
+ub.items.insertOne({ _id: 99, label: "extra" })
+ub.runCommand({ dongoCommit: 1, message: "extra commit", author: "alice <alice@dongo>" })
+
+// Safe delete must fail.
+db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "unmerged-branch", d: 1 })
+// Expected: error response — ok: 0, errmsg contains "unmerged commits"
+```
+
+Key check: command returns an error; `unmerged-branch` still exists afterwards.
+
+---
+
+## Scenario 8: Force delete (-D) — branch has unmerged commits, succeeds
+
+`dongoBranch` with `D: 1` deletes a branch unconditionally, even if it has
+commits that are not reachable from any other branch.
+
+```js
+// Create "force-branch" from main and add an exclusive commit.
+db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "force-branch" })
+var fb = db.getSiblingDB("branchvdb__force-branch")
+fb.items.insertOne({ _id: 77, label: "gone" })
+fb.runCommand({ dongoCommit: 1, message: "unmerged commit", author: "alice <alice@dongo>" })
+
+// Force delete succeeds regardless of merge status.
+db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "force-branch", D: 1 })
+// Expected: { "branch": "force-branch", "ok": 1 }
+```
+
+Key check: `branch` echoes the name, `ok` is `1`; the branch is gone.
+
+---
+
 ## Quick Reference
 
 | Command | Connection | Result |
@@ -180,8 +239,13 @@ Key check: branch created successfully and sees only commit-1 state.
 | `{ dongoBranch: 1, branch: "name" }` | `__feature` | `{ branch: "name", ok: 1 }` |
 | `{ dongoBranch: 1, branch: "name" }` | `__<hash>` | `{ branch: "name", ok: 1 }` |
 | `{ dongoBranch: 1, branch: "name" }` | `__main~1` | `{ branch: "name", ok: 1 }` |
+| `{ dongoBranch: 1, branch: "name", d: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
+| `{ dongoBranch: 1, branch: "name", D: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (always) |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).
 - The new branch HEAD equals the commit that was resolved from the source rootish.
 - Writes on the new branch are isolated from the source branch.
+- `d: 1` (safe delete): fails if the branch has commits not reachable from any other branch.
+- `D: 1` (force delete): succeeds unconditionally.
+- `d` and `D` are mutually exclusive; passing both returns an error.

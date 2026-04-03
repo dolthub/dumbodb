@@ -37,6 +37,7 @@ package dolt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -956,9 +957,16 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 }
 
 // DongoBranch implements backends.VersioningBackend.
-// It creates a new Dolt branch named params.Name, starting from the HEAD commit
-// of the source branch params.From.  Both branch names map to dataset IDs of
-// the form "refs/heads/<name>".
+//
+// When params.Delete is false (default), it creates a new Dolt branch named
+// params.Name, starting from the HEAD commit of the source branch params.From.
+//
+// When params.Delete is true, it deletes the branch named params.Name:
+//   - Safe delete (Force=false, -d semantics): refuses if the branch HEAD is not
+//     reachable from any other branch (i.e. data would be lost).
+//   - Force delete (Force=true, -D semantics): deletes unconditionally.
+//
+// Both branch names map to dataset IDs of the form "refs/heads/<name>".
 func (b *Backend) DongoBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -971,6 +979,10 @@ func (b *Backend) DongoBranch(ctx context.Context, params *backends.BranchParams
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	if params.Delete {
+		return dongoBranchDelete(ctx, db, params)
+	}
 
 	// Resolve From to a commit hash. From may be a branch name, commit hash, or
 	// ancestor expression (e.g. "main~1"), so we use the general rootish resolver.
@@ -991,6 +1003,101 @@ func (b *Backend) DongoBranch(ctx context.Context, params *backends.BranchParams
 	if _, err = db.doltDB.SetHead(ctx, newDS, headHash, ""); err != nil {
 		return nil, fmt.Errorf("dolt: DongoBranch: creating branch %q: %w", params.Name, err)
 	}
+
+	return &backends.BranchResult{Branch: params.Name}, nil
+}
+
+// dongoBranchDelete deletes the branch named params.Name.
+// Caller must hold db.mu.Lock().
+func dongoBranchDelete(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
+	// Refuse to delete the current connection's branch.
+	if params.Name == params.From {
+		return nil, fmt.Errorf("dolt: DongoBranch: cannot delete the currently checked-out branch %q", params.Name)
+	}
+
+	datasetID := "refs/heads/" + params.Name
+	branchDS, err := db.doltDB.GetDataset(ctx, datasetID)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoBranch: getting branch dataset %q: %w", params.Name, err)
+	}
+	if !branchDS.HasHead() {
+		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("dolt: DongoBranch: branch %q does not exist", params.Name))
+	}
+
+	branchHash, ok := branchDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DongoBranch: branch %q has no HEAD commit", params.Name)
+	}
+
+	if !params.Force {
+		// Safe delete: check if branchHash is reachable from any other branch.
+		// "Reachable" means branchHash is an ancestor of (or equal to) another
+		// branch's HEAD.  We use FindCommonAncestor(branchCommit, otherCommit)
+		// and compare the result to branchHash.
+		branchCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, branchHash)
+		if loadErr != nil {
+			return nil, fmt.Errorf("dolt: DongoBranch: loading commit for branch %q: %w", params.Name, loadErr)
+		}
+
+		dsMap, dsErr := db.doltDB.Datasets(ctx)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: DongoBranch: listing datasets: %w", dsErr)
+		}
+
+		errFound := errors.New("reachable") // sentinel to stop IterAll early
+		reachable := false
+		iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
+			const prefix = "refs/heads/"
+			if !strings.HasPrefix(id, prefix) {
+				return nil
+			}
+			otherBranch := id[len(prefix):]
+			if otherBranch == params.Name {
+				return nil // skip self
+			}
+			otherCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, headAddr)
+			if loadErr != nil {
+				return nil // skip branches we can't load
+			}
+			baseHash, hasBase, caErr := datas.FindCommonAncestor(ctx, branchCommit, otherCommit, db.vs, db.vs, db.ns, db.ns)
+			if caErr != nil || !hasBase {
+				return nil
+			}
+			// branchHash is reachable from otherBranch when the common ancestor
+			// equals branchHash (i.e. branch is an ancestor of or equal to other).
+			if baseHash == branchHash {
+				reachable = true
+				return errFound // stop iterating early
+			}
+			return nil
+		})
+		if iterErr != nil && !errors.Is(iterErr, errFound) {
+			return nil, fmt.Errorf("dolt: DongoBranch: iterating datasets: %w", iterErr)
+		}
+
+		if !reachable {
+			return nil, fmt.Errorf(
+				"dolt: DongoBranch: branch %q has unmerged commits; use -D to force delete",
+				params.Name,
+			)
+		}
+	}
+
+	// Delete the working set for this branch if it exists (best-effort).
+	wsID := workingSetForBranch(params.Name)
+	wsDS, wsErr := db.doltDB.GetDataset(ctx, wsID)
+	if wsErr == nil && wsDS.HasHead() {
+		_, _ = db.doltDB.Delete(ctx, wsDS, "")
+	}
+
+	// Delete the branch dataset.
+	if _, err = db.doltDB.Delete(ctx, branchDS, ""); err != nil {
+		return nil, fmt.Errorf("dolt: DongoBranch: deleting branch %q: %w", params.Name, err)
+	}
+
+	// Clear any cached branch AM.
+	delete(db.branchAMs, params.Name)
 
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
