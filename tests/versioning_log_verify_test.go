@@ -270,5 +270,130 @@ func TestLogVerify(t *testing.T) {
 		assert.Contains(t, headF.Refs, "main", "must carry bare 'main' ref")
 	})
 
+	// -------------------------------------------------------------------------
+	// Scenarios 6–8: Non-linear commit graphs (merge commits with parent1+parent2)
+	//
+	// Fresh database with a true three-way merge:
+	//
+	//   init ← hashA ← hashB (main)
+	//                ↖
+	//                 hashC (feat)  →  hashM (merge, parent1=hashB, parent2=hashC)
+	//
+	// DongoLog follows parent1 linearly, so the walk from main is:
+	//   hashM → hashB → hashA → init
+	// The walk from hashC (feat tip) is:
+	//   hashC → hashA → init  (hashB and hashM are unreachable)
+	// -------------------------------------------------------------------------
+	mergeDBName := fmt.Sprintf("logmerge%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(mergeDBName).Drop(ctx))
+	_, err = env.client.Database(mergeDBName).Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(1)},
+		{Key: "v", Value: int32(1)},
+	})
+	require.NoError(t, err)
+	hashA := dongoCommit(t, env, mergeDBName, "add-one")
+
+	// Create "feat" branch from main HEAD (hashA).
+	require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+		{Key: "dongoBranch", Value: int32(1)},
+		{Key: "branch", Value: "feat"},
+	}).Err())
+
+	// Advance main: _id:2 → hashB (diverges from hashA).
+	_, err = env.client.Database(mergeDBName).Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(2)},
+		{Key: "v", Value: int32(2)},
+	})
+	require.NoError(t, err)
+	hashB := dongoCommit(t, env, mergeDBName, "add-two")
+
+	// Advance feat independently: _id:3 → hashC (diverges from hashA).
+	_, err = env.client.Database(mergeDBName+"__feat").Collection("items").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(3)},
+		{Key: "v", Value: int32(3)},
+	})
+	require.NoError(t, err)
+	hashC := dongoCommit(t, env, mergeDBName+"__feat", "add-three-feat")
+
+	// Merge feat into main → three-way merge commit hashM.
+	var mergeRaw bson.M
+	require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "merge_in", Value: "feat"},
+	}).Decode(&mergeRaw))
+	hashM, ok := mergeRaw["commitId"].(string)
+	require.True(t, ok, "merge commitId must be a string")
+	require.NotEmpty(t, hashM, "three-way merge must produce a new commit hash")
+
+	// -------------------------------------------------------------------------
+	// Scenario 6: Merge commit appears in dongoLog with parent1 and parent2
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_MergeCommitParents", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		require.Len(t, lr.Commits, 1, "limit=1 must return exactly 1 commit")
+		head := lr.Commits[0]
+		assert.Equal(t, hashM, head.CommitID, "HEAD must be the merge commit")
+		assert.Equal(t, hashB, head.Parent1, "merge commit parent1 must be main tip before merge (hashB)")
+		assert.Equal(t, hashC, head.Parent2, "merge commit parent2 must be feature tip (hashC)")
+		assert.Contains(t, head.Refs, "HEAD", "merge commit must carry 'HEAD' ref")
+		assert.Contains(t, head.Refs, "main", "merge commit must carry 'main' ref")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 7: dongoLog from feature tip shows only feature branch history
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7_FromFeatureTip", func(t *testing.T) {
+		// Starting at hashC (feat tip) the walk follows parent1 only:
+		// hashC → hashA → "Initialize database".
+		// hashB (main-only) and hashM (merge) must not appear.
+		var raw bson.M
+		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "from", Value: hashC},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		require.Len(t, lr.Commits, 3, "traversal from hashC must return hashC, hashA, and Initialize")
+		assert.Equal(t, hashC, lr.Commits[0].CommitID, "commits[0] must be hashC (feat tip)")
+		assert.Equal(t, "add-three-feat", lr.Commits[0].Message)
+		assert.Equal(t, hashA, lr.Commits[1].CommitID, "commits[1] must be hashA (common ancestor)")
+		assert.Equal(t, "add-one", lr.Commits[1].Message)
+		assert.Equal(t, "Initialize database", lr.Commits[2].Message, "commits[2] must be Initialize root")
+		assert.Empty(t, lr.Commits[2].Parent1, "Initialize root has no parent1")
+
+		for _, c := range lr.Commits {
+			assert.NotEqual(t, hashB, c.CommitID, "hashB (main-only) must not appear when from=hashC")
+			assert.NotEqual(t, hashM, c.CommitID, "hashM (merge commit) must not appear when from=hashC")
+		}
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: limit works correctly on non-linear history
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_LimitOnNonLinearHistory", func(t *testing.T) {
+		// limit=2 from main HEAD follows parent1: hashM → hashB.  hashA must not appear.
+		var raw bson.M
+		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(2)},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		require.Len(t, lr.Commits, 2, "limit=2 must return exactly 2 commits")
+		assert.Equal(t, hashM, lr.Commits[0].CommitID, "commits[0] must be hashM (HEAD/merge)")
+		assert.Equal(t, hashB, lr.Commits[1].CommitID, "commits[1] must be hashB (parent1 of merge)")
+
+		for _, c := range lr.Commits {
+			assert.NotEqual(t, hashA, c.CommitID, "hashA must not appear with limit=2")
+			assert.NotEqual(t, hashC, c.CommitID, "hashC (feat-only) must not appear with limit=2")
+		}
+	})
+
 	_ = hash3 // referenced in subtests above
 }

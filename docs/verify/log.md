@@ -222,6 +222,149 @@ Key checks:
 
 ---
 
+---
+
+## Setup: Create a non-linear history with a merge commit
+
+The next three scenarios require a database that has a true three-way merge.
+
+```js
+var mdb = db.getSiblingDB("logmerge")
+mdb.dropDatabase()
+
+mdb.items.insertOne({ _id: 1, v: 1 })
+const rA = mdb.runCommand({ dongoCommit: 1, message: "add-one", author: "alice <alice@dongo>" })
+const hashA = rA.commitId
+
+// Create "feat" branch from main HEAD (hashA).
+mdb.getSiblingDB("logmerge__main").runCommand({ dongoBranch: 1, branch: "feat" })
+
+// Advance main: _id:2 → hashB.
+mdb.items.insertOne({ _id: 2, v: 2 })
+const rB = mdb.runCommand({ dongoCommit: 1, message: "add-two", author: "alice <alice@dongo>" })
+const hashB = rB.commitId
+
+// Advance feat independently: _id:3 → hashC.
+const featdb = db.getSiblingDB("logmerge__feat")
+featdb.items.insertOne({ _id: 3, v: 3 })
+const rC = featdb.runCommand({ dongoCommit: 1, message: "add-three-feat", author: "alice <alice@dongo>" })
+const hashC = rC.commitId
+
+// Merge feat into main → hashM.
+const rM = mdb.getSiblingDB("logmerge__main").runCommand({ dongoMerge: 1, merge_in: "feat" })
+const hashM = rM.commitId
+
+print("hashA =", hashA, "hashB =", hashB, "hashC =", hashC, "hashM =", hashM)
+```
+
+After setup the commit graph looks like this:
+
+```
+init ← hashA ← hashB (main)
+             ↖
+              hashC (feat)  →  hashM (HEAD on main, parent1=hashB, parent2=hashC)
+```
+
+`dongoLog` follows `parent1` linearly, so the walk from main HEAD is:
+`hashM → hashB → hashA → init`.
+
+---
+
+## Scenario 6: Merge commit appears in dongoLog with parent1 and parent2
+
+```js
+mdb.getSiblingDB("logmerge__main").runCommand({ dongoLog: 1, limit: 1 })
+```
+
+Expected:
+
+```json
+{
+  "branch": "main",
+  "commits": [
+    {
+      "commitId": "<hashM>",
+      "parent1": "<hashB>",
+      "parent2": "<hashC>",
+      "refs": ["HEAD", "main"],
+      "message": "Merge branch 'feat' into 'main'",
+      "timestamp": "<...>",
+      "author": "<...>"
+    }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- `commits[0].commitId` equals `hashM`
+- `commits[0].parent1` equals `hashB` (main tip before the merge)
+- `commits[0].parent2` equals `hashC` (feature tip)
+- `commits[0].refs` contains `"HEAD"` and `"main"`
+
+---
+
+## Scenario 7: dongoLog from feature tip shows only feature branch history
+
+Starting traversal at `hashC` follows `parent1` only: `hashC → hashA → init`.
+`hashB` (reachable only via main) and `hashM` (the merge commit) must **not** appear.
+
+```js
+mdb.getSiblingDB("logmerge__main").runCommand({ dongoLog: 1, from: hashC })
+```
+
+Expected:
+
+```json
+{
+  "branch": "main",
+  "commits": [
+    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- Three commits: `hashC`, `hashA`, then `"Initialize database"`
+- `hashB` (main-only commit) does **not** appear
+- `hashM` (merge commit) does **not** appear
+- The root commit has no `parent1`
+
+---
+
+## Scenario 8: limit works correctly on non-linear history
+
+`limit=2` from main HEAD follows `parent1`: `hashM → hashB`. Commits further back
+(`hashA`, init) must **not** appear.
+
+```js
+mdb.getSiblingDB("logmerge__main").runCommand({ dongoLog: 1, limit: 2 })
+```
+
+Expected:
+
+```json
+{
+  "branch": "main",
+  "commits": [
+    { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hashB>", "parent1": "<hashA>", "message": "add-two", "timestamp": "<...>", "author": "<...>" }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- Exactly 2 entries
+- `commits[0]` is the merge commit `hashM` with both `parent1` and `parent2`
+- `commits[1]` is `hashB` (parent1 of the merge commit)
+- `hashA` and `hashC` do **not** appear
+
+---
+
 ## Quick Reference
 
 | Command | Behaviour |
