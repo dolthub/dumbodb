@@ -50,7 +50,7 @@ After setup:
 
 ---
 
-## Scenario 1: Already up-to-date — from branch is behind into branch
+## Scenario 1: Already up-to-date — merge_in branch is behind into branch
 
 Advance `main` past the feature branch point, then try to merge the now-behind
 `feature` branch into `main`. Since `feature` is an ancestor of `main`, there is
@@ -63,7 +63,7 @@ const r2 = db.runCommand({ dongoCommit: 1, message: "add-two", author: "alice <a
 const hashC2 = r2.commitId
 
 // Merge feature (at C1) into main (at C2).
-const rMerge1 = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, from: "feature" })
+const rMerge1 = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, merge_in: "feature" })
 printjson(rMerge1)
 // Expected: { hash: "<hashC2>", message: "already up-to-date", ok: 1 }
 ```
@@ -83,7 +83,7 @@ merge commit — a fast-forward.
 
 ```js
 // Merge main (at C2) into feature (at C1) — feature fast-forwards.
-const rMerge2 = db.getSiblingDB("mergedb__feature").runCommand({ dongoMerge: 1, from: "main" })
+const rMerge2 = db.getSiblingDB("mergedb__feature").runCommand({ dongoMerge: 1, merge_in: "main" })
 printjson(rMerge2)
 // Expected: { hash: "<hashC2>", message: "fast-forward", ok: 1 }
 ```
@@ -108,7 +108,7 @@ Merging either direction produces "already up-to-date".
 
 ```js
 // feature and main are now both at C2.
-const rMerge3 = db.getSiblingDB("mergedb__feature").runCommand({ dongoMerge: 1, from: "main" })
+const rMerge3 = db.getSiblingDB("mergedb__feature").runCommand({ dongoMerge: 1, merge_in: "main" })
 printjson(rMerge3)
 // Expected: { hash: "<hashC2>", message: "already up-to-date", ok: 1 }
 ```
@@ -123,14 +123,14 @@ Key checks:
 
 | Situation | `message` in response |
 |---|---|
-| `from` branch is at or behind `into` branch | `"already up-to-date"` |
-| `into` branch is strictly behind `from` branch | `"fast-forward"` |
-| Both branches have diverged (independent commits on each) | `"Merge branch '<from>' into '<into>'"` |
+| `merge_in` branch is at or behind `into` branch | `"already up-to-date"` |
+| `into` branch is strictly behind `merge_in` branch | `"fast-forward"` |
+| Both branches have diverged (independent commits on each) | `"Merge branch '<merge_in>' into '<into>'"` |
 
 - `dongoMerge` always operates on named branches, not raw commit hashes.
 - The target branch (`into`) is encoded in the database name: `dbname__branch`.
-- The `from` parameter names the source branch to merge from.
+- The `merge_in` parameter names the source branch to merge from.
 - Returns `{ hash: "<result_hash>", message: "<description>", ok: 1 }`.
-- The `from` parameter is required and must not be empty.
+- The `merge_in` parameter is required and must not be empty.
 - A fast-forward does not create a new commit; the `hash` in the response is the
-  `from` branch's existing HEAD.
+  `merge_in` branch's existing HEAD.

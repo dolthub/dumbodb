@@ -98,7 +98,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
 			{Key: "dongoMerge", Value: int32(1)},
-			{Key: "from", Value: "feature"},
+			{Key: "merge_in", Value: "feature"},
 		}).Decode(&raw))
 
 		// Response: { hash: hashC2, message: "already up-to-date", ok: 1 }
@@ -118,7 +118,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__feature").RunCommand(ctx, bson.D{
 			{Key: "dongoMerge", Value: int32(1)},
-			{Key: "from", Value: "main"},
+			{Key: "merge_in", Value: "main"},
 		}).Decode(&raw))
 
 		// Response: { hash: hashC2, message: "fast-forward", ok: 1 }
@@ -142,7 +142,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__feature").RunCommand(ctx, bson.D{
 			{Key: "dongoMerge", Value: int32(1)},
-			{Key: "from", Value: "main"},
+			{Key: "merge_in", Value: "main"},
 		}).Decode(&raw))
 
 		// Response: { hash: hashC2, message: "already up-to-date", ok: 1 }

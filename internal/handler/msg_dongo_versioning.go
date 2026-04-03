@@ -522,7 +522,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	fromBranch, err := common.GetRequiredParam[string](document, "from")
+	fromBranch, err := common.GetRequiredParam[string](document, "merge_in")
 	if err != nil {
 		return nil, err
 	}
