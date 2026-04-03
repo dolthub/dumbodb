@@ -138,24 +138,31 @@ db.getSiblingDB("mergedb__feature").items.insertOne({ _id: 4, v: 4 })
 const r4 = db.getSiblingDB("mergedb__feature").runCommand({ dongoCommit: 1, message: "add-four", author: "alice <alice@dongo>" })
 const hashC4 = r4.commitId
 
-// Merge feature (at C4) into main (at C3) — true three-way merge.
-const rMerge4 = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, merge_in: "feature" })
+// Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
+const rMerge4 = db.getSiblingDB("mergedb__main").runCommand({
+    dongoMerge: 1,
+    merge_in: "feature",
+    message: "custom merge msg",
+    author: "bob <bob@x>"
+})
 printjson(rMerge4)
-// Expected: { commitId: "<hashM>", message: "Merge branch 'feature' into 'main'", ok: 1 }
+// Expected: { commitId: "<hashM>", message: "custom merge msg", ok: 1 }
 ```
 
 Key checks:
-- `message` equals `"Merge branch 'feature' into 'main'"`
+- `message` equals `"custom merge msg"` (the custom message passed to `dongoMerge`)
 - `commitId` is a new hash — different from both `hashC3` and `hashC4`
 
-Verify the merge commit has two parents via `dongoLog`:
+Verify the merge commit has two parents and the custom message/author via `dongoLog`:
 
 ```js
 const logResult = db.getSiblingDB("mergedb__main").runCommand({ dongoLog: 1, limit: 1 })
 printjson(logResult)
 // Expected: commits[0].commitId === hashM,
 //           commits[0].parent1  === hashC3,
-//           commits[0].parent2  === hashC4
+//           commits[0].parent2  === hashC4,
+//           commits[0].message  === "custom merge msg",
+//           commits[0].author   === "bob <bob@x>"
 ```
 
 Verify `main` now contains all four documents:
@@ -311,13 +318,15 @@ printjson(rContinue)
 // Expected: { commitId: "<hashM>", branch: "main", message: "Resolve merge conflicts", ok: 1 }
 ```
 
-`dongoLog` shows a merge commit with two parents:
+`dongoLog` shows a merge commit with two parents and the custom message/author:
 
 ```js
 const log = db.getSiblingDB("mergedb__main").runCommand({ dongoLog: 1, limit: 1 })
 printjson(log)
-// Expected: commits[0].parent1 === <main pre-merge HEAD>,
-//           commits[0].parent2 === <feature HEAD>
+// Expected: commits[0].parent1  === <main pre-merge HEAD>,
+//           commits[0].parent2  === <feature HEAD>,
+//           commits[0].message  === "Resolve merge conflicts",
+//           commits[0].author   === "alice <alice@dongo>"
 ```
 
 ---

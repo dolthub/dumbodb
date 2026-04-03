@@ -51,6 +51,7 @@ type commitEntry struct {
 	Parent1  string
 	Parent2  string
 	Message  string
+	Author   string
 	Refs     []string
 }
 
@@ -76,7 +77,8 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 
 		entry := commitEntry{
 			CommitID: fmt.Sprintf("%v", cm["commitId"]),
-			Message: fmt.Sprintf("%v", cm["message"]),
+			Message:  fmt.Sprintf("%v", cm["message"]),
+			Author:   fmt.Sprintf("%v", cm["author"]),
 		}
 		if p1, ok := cm["parent1"]; ok {
 			entry.Parent1 = fmt.Sprintf("%v", p1)

@@ -232,6 +232,152 @@ func TestMergeVerify(t *testing.T) {
 	})
 }
 
+// TestMergeCustomMessageAuthor verifies that custom message and author are
+// recorded in the merge commit for both clean three-way merges (Scenario 4)
+// and conflict-resolution continues (Scenario 11 in docs/verify/merge.md).
+func TestMergeCustomMessageAuthor(t *testing.T) {
+	env := startDongo(t)
+	ctx := context.Background()
+
+	// -------------------------------------------------------------------------
+	// Scenario 4 variant: clean three-way merge with custom message/author
+	// -------------------------------------------------------------------------
+	t.Run("Scenario4_ThreeWayMerge_CustomMessageAuthor", func(t *testing.T) {
+		dbName := fmt.Sprintf("mergcustom%d", rand.Int64N(1_000_000))
+		mergeVerifySetup(t, env, dbName)
+
+		mainDB := env.client.Database(dbName + "__main")
+		featDB := env.client.Database(dbName + "__feature")
+
+		// Advance main and feature independently so they diverge.
+		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(2)},
+			{Key: "v", Value: int32(2)},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, dbName+"__main", "add-two")
+
+		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(3)},
+			{Key: "v", Value: int32(3)},
+		})
+		require.NoError(t, err)
+		dongoCommit(t, env, dbName+"__feature", "add-three")
+
+		// Three-way merge with custom message and author.
+		var raw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "merge_in", Value: "feature"},
+			{Key: "message", Value: "custom msg"},
+			{Key: "author", Value: "bob <bob@x>"},
+		}).Decode(&raw))
+		assert.EqualValues(t, 1, raw["ok"])
+		assert.Equal(t, "custom msg", raw["message"], "merge response message must match custom message")
+
+		mergeCommitID, ok := raw["commitId"].(string)
+		require.True(t, ok, "commitId must be a string")
+		require.NotEmpty(t, mergeCommitID)
+
+		// dongoLog HEAD must show message="custom msg" and author="bob <bob@x>".
+		var logRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logRaw))
+		lr := decodeLogResult(t, logRaw)
+		require.Len(t, lr.Commits, 1)
+		head := lr.Commits[0]
+		assert.Equal(t, mergeCommitID, head.CommitID)
+		assert.Equal(t, "custom msg", head.Message, "dongoLog must show the custom message")
+		assert.Equal(t, "bob <bob@x>", head.Author, "dongoLog must show the custom author")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 11 variant: continue after conflict resolution with custom message/author
+	// -------------------------------------------------------------------------
+	t.Run("Scenario11_Continue_CustomMessageAuthor", func(t *testing.T) {
+		dbName := fmt.Sprintf("mergcont%d", rand.Int64N(1_000_000))
+		mergeVerifySetup(t, env, dbName)
+
+		mainDB := env.client.Database(dbName + "__main")
+		featDB := env.client.Database(dbName + "__feature")
+
+		// Both branches modify _id:1 to create a conflict.
+		_, err := mainDB.Collection("items").UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: int32(1)}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
+		)
+		require.NoError(t, err)
+		hashMain := dongoCommit(t, env, dbName+"__main", "main-v10")
+
+		_, err = featDB.Collection("items").UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: int32(1)}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
+		)
+		require.NoError(t, err)
+		hashFeat := dongoCommit(t, env, dbName+"__feature", "feature-v20")
+
+		// Trigger the conflicting merge.
+		raw := runCommandRaw(t, mainDB, bson.D{
+			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "merge_in", Value: "feature"},
+		})
+		require.EqualValues(t, 0, raw["ok"], "conflicting merge must return ok:0")
+
+		// Get conflict ID and resolve with "ours".
+		var detailRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoConflicts", Value: int32(1)},
+			{Key: "collection", Value: "items"},
+		}).Decode(&detailRaw))
+		conflicts := detailRaw["conflicts"].(bson.A)
+		cf := conflicts[0].(bson.M)
+		conflictID := cf["conflictId"].(string)
+
+		var resolveRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoResolveConflict", Value: int32(1)},
+			{Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: conflictID},
+			{Key: "resolution", Value: "ours"},
+		}).Decode(&resolveRaw))
+		assert.EqualValues(t, 1, resolveRaw["ok"])
+
+		// Continue with custom message and author.
+		var continueRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "continue", Value: int32(1)},
+			{Key: "message", Value: "custom resolve msg"},
+			{Key: "author", Value: "carol <carol@x>"},
+		}).Decode(&continueRaw))
+		assert.EqualValues(t, 1, continueRaw["ok"])
+		assert.Equal(t, "custom resolve msg", continueRaw["message"], "continue response message must match custom message")
+
+		mergeCommitID, ok := continueRaw["commitId"].(string)
+		require.True(t, ok, "commitId must be a string")
+		require.NotEmpty(t, mergeCommitID)
+		assert.NotEqual(t, hashMain, mergeCommitID)
+		assert.NotEqual(t, hashFeat, mergeCommitID)
+
+		// dongoLog HEAD must show message="custom resolve msg" and author="carol <carol@x>".
+		var logRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logRaw))
+		lr := decodeLogResult(t, logRaw)
+		require.Len(t, lr.Commits, 1)
+		head := lr.Commits[0]
+		assert.Equal(t, mergeCommitID, head.CommitID)
+		assert.Equal(t, hashMain, head.Parent1, "parent1 must be main's pre-merge HEAD")
+		assert.Equal(t, hashFeat, head.Parent2, "parent2 must be feature's HEAD")
+		assert.Equal(t, "custom resolve msg", head.Message, "dongoLog must show the custom message")
+		assert.Equal(t, "carol <carol@x>", head.Author, "dongoLog must show the custom author")
+	})
+}
+
 // TestMergeConflictWorkflow tests the conflict resolution workflow:
 // two branches independently modify the same document, creating a conflict.
 //
