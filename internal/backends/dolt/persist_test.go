@@ -799,8 +799,9 @@ func TestDongoCommitAuthorAndTimestamp(t *testing.T) {
 		t.Fatal("expected at least 1 commit from DongoLog")
 	}
 	c := logRes.Commits[0]
-	if c.Author != "alice" {
-		t.Errorf("log commit Author = %q, want %q", c.Author, "alice")
+	// dongoLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@dongo>".
+	if c.Author != "alice <alice@dongo>" {
+		t.Errorf("log commit Author = %q, want %q", c.Author, "alice <alice@dongo>")
 	}
 	if c.Timestamp != fixedTime.UnixMilli() {
 		t.Errorf("log commit Timestamp = %d, want %d", c.Timestamp, fixedTime.UnixMilli())

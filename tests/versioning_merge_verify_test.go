@@ -145,11 +145,67 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "merge_in", Value: "main"},
 		}).Decode(&raw))
 
-		// Response: { hash: hashC2, message: "already up-to-date", ok: 1 }
+		// Response: { commitId: hashC2, message: "already up-to-date", ok: 1 }
 		assert.Equal(t, "already up-to-date", raw["message"],
 			"merging equal branches must report 'already up-to-date'")
 		assert.Equal(t, hashC2, raw["commitId"],
-			"already-up-to-date hash must equal the shared HEAD (unchanged)")
+			"already-up-to-date commitId must equal the shared HEAD (unchanged)")
 		assert.EqualValues(t, 1, raw["ok"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 4: True three-way merge — diverged branches produce a merge commit
+	// -------------------------------------------------------------------------
+	t.Run("Scenario4_ThreeWayMerge", func(t *testing.T) {
+		// After Scenario 3: both main and feature point to C2.
+
+		// Commit _id:3 on main → C3.
+		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(3)},
+			{Key: "v", Value: int32(3)},
+		})
+		require.NoError(t, err)
+		hashC3 := dongoCommit(t, env, dbName, "add-three")
+
+		// Commit _id:4 on feature independently → C4.
+		_, err = env.client.Database(dbName + "__feature").Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(4)},
+			{Key: "v", Value: int32(4)},
+		})
+		require.NoError(t, err)
+		hashC4 := dongoCommit(t, env, dbName+"__feature", "add-four")
+
+		// Merge feature (at C4) into main (at C3) — true three-way merge.
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "merge_in", Value: "feature"},
+		}).Decode(&raw))
+
+		mergeCommitID, ok := raw["commitId"].(string)
+		require.True(t, ok, "commitId must be a string")
+		assert.NotEmpty(t, mergeCommitID, "three-way merge must produce a new commit")
+		assert.NotEqual(t, hashC3, mergeCommitID, "merge commitId must differ from main pre-merge HEAD (C3)")
+		assert.NotEqual(t, hashC4, mergeCommitID, "merge commitId must differ from feature HEAD (C4)")
+		assert.Equal(t, "Merge branch 'feature' into 'main'", raw["message"])
+		assert.EqualValues(t, 1, raw["ok"])
+
+		// dongoLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
+		var logRaw bson.M
+		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logRaw))
+		lr := decodeLogResult(t, logRaw)
+		require.Len(t, lr.Commits, 1, "dongoLog with limit=1 must return exactly 1 commit")
+		head := lr.Commits[0]
+		assert.Equal(t, mergeCommitID, head.CommitID, "HEAD must be the merge commit")
+		assert.Equal(t, hashC3, head.Parent1, "merge commit parent1 must be main's pre-merge HEAD (C3)")
+		assert.Equal(t, hashC4, head.Parent2, "merge commit parent2 must be feature's HEAD (C4)")
+
+		// All four documents must be visible on main after the merge.
+		n, err := env.client.Database(dbName + "__main").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(4), n, "main must have all 4 documents after three-way merge")
 	})
 }

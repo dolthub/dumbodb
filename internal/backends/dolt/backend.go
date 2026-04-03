@@ -815,7 +815,8 @@ var _ backends.VersioningBackend = (*Backend)(nil)
 
 // DongoCommit implements backends.VersioningBackend.
 // It commits the current working set (collections AM) with the given message,
-// author, and timestamp, creating a new dolt commit on the main branch.
+// author, and timestamp, creating a new dolt commit on the specified branch.
+// If params.Branch is empty it defaults to "main".
 func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -836,23 +837,83 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 		ts = time.Now()
 	}
 
+	branch := params.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.am, message, params.Author, ts)
-	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: committing db %q: %w", params.DBName, err)
+	if branch == "main" {
+		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.am, message, params.Author, ts)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DongoCommit: committing db %q: %w", params.DBName, err)
+		}
+		db.ds = newDS
+
+		headHash, ok := newDS.MaybeHeadAddr()
+		if !ok {
+			return nil, fmt.Errorf("dolt: DongoCommit: no head after commit for db %q", params.DBName)
+		}
+
+		return &backends.CommitResult{
+			CommitID:  headHash.String(),
+			Branch:    branch,
+			Message:   message,
+			Author:    params.Author,
+			Timestamp: ts.UnixMilli(),
+		}, nil
 	}
-	db.ds = newDS
+
+	// Non-main branch commit: get the branch dataset and its working AM.
+	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: resolving branch %q: %w", branch, err)
+	}
+	if !branchDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DongoCommit: branch %q has no commits", branch)
+	}
+
+	branchAM, err := db.getOrInitBranchAM(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: loading branch AM for %q: %w", branch, err)
+	}
+
+	var name, email string
+	if idx := strings.Index(params.Author, " <"); idx >= 0 {
+		name = params.Author[:idx]
+		email = strings.TrimSuffix(params.Author[idx+2:], ">")
+	} else {
+		name = params.Author
+		email = params.Author + "@dongo"
+	}
+	meta, err := datas.NewCommitMetaWithUserTS(name, email, message, ts)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: building commit meta for branch %q: %w", branch, err)
+	}
+
+	rtvlMsg := buildRootValueFlatbuffer(branchAM)
+	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{Meta: meta})
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: committing branch %q: %w", branch, err)
+	}
+
+	if err := updateWorkingSet(ctx, db.doltDB, branchAM, branchAM, branch); err != nil {
+		return nil, fmt.Errorf("dolt: DongoCommit: updating working set for branch %q: %w", branch, err)
+	}
+
+	// Clear the cached branch AM so the next access reloads from the new HEAD.
+	delete(db.branchAMs, branch)
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoCommit: no head after commit for db %q", params.DBName)
+		return nil, fmt.Errorf("dolt: DongoCommit: no head after commit for branch %q", branch)
 	}
 
 	return &backends.CommitResult{
 		CommitID:  headHash.String(),
-		Branch:    "main",
+		Branch:    branch,
 		Message:   message,
 		Author:    params.Author,
 		Timestamp: ts.UnixMilli(),
