@@ -134,10 +134,6 @@ teardown() {
 
   run dolt show
 
-  echo "----------------------"
-  echo "$output"
-  echo "----------------------"
-
   [ "$status" -eq 0 ]
   [[ "$output" =~ 'my first commit' ]] || false
 }
