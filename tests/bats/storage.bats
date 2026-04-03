@@ -120,13 +120,13 @@ teardown() {
     'JSON.stringify(db.runCommand({dongoCommit: 1, message: "my first commit"}))'
   [ "$status" -eq 0 ]
 
-  # Verify ok:1 and a non-empty hash.
+  # Verify ok:1 and a non-empty commitId.
   echo "$output" | jq -e '.ok == 1'
-  local hash
-  hash="$(echo "$output" | jq -r '.hash')"
-  [ -n "$hash" ]
-  [ "$hash" != "null" ]
-  [ "$hash" != "0000000000000000000000000000000000000000" ]
+  local commitId
+  commitId="$(echo "$output" | jq -r '.commitId')"
+  [ -n "$commitId" ]
+  [ "$commitId" != "null" ]
+  [ "$commitId" != "0000000000000000000000000000000000000000" ]
 
   stop_dongo
   setup_dolt_hack "$DONGO_DATA_DIR"
