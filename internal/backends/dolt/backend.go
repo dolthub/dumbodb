@@ -1382,22 +1382,32 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Resolve empty CommitID to the current HEAD.
+	commitID := params.CommitID
+	if commitID == "" {
+		headHash, ok := db.ds.MaybeHeadAddr()
+		if !ok {
+			return nil, fmt.Errorf("dolt: DongoReset: no HEAD commit for db %q", params.DBName)
+		}
+		commitID = headHash.String()
+	}
+
 	// Parse and validate the target commit hash.
-	targetHash, ok := hash.MaybeParse(params.CommitID)
+	targetHash, ok := hash.MaybeParse(commitID)
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoReset: invalid commit hash %q", params.CommitID)
+		return nil, fmt.Errorf("dolt: DongoReset: invalid commit hash %q", commitID)
 	}
 
 	// Load the AM from the target commit.
-	targetAM, err := amFromCommitHash(ctx, db, params.CommitID)
+	targetAM, err := amFromCommitHash(ctx, db, commitID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: resolving target commit %q: %w", params.CommitID, err)
+		return nil, fmt.Errorf("dolt: DongoReset: resolving target commit %q: %w", commitID, err)
 	}
 
 	// Move HEAD to the target commit without touching the working set.
 	newDS, err := db.doltDB.SetHead(ctx, db.ds, targetHash, "")
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: setting HEAD to %q: %w", params.CommitID, err)
+		return nil, fmt.Errorf("dolt: DongoReset: setting HEAD to %q: %w", commitID, err)
 	}
 	db.ds = newDS
 
@@ -1414,7 +1424,7 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 		}
 	}
 
-	return &backends.ResetResult{CommitID: params.CommitID}, nil
+	return &backends.ResetResult{CommitID: commitID}, nil
 }
 
 // DongoDiff implements backends.VersioningBackend.

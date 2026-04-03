@@ -203,4 +203,57 @@ func TestResetVerify(t *testing.T) {
 		assert.Empty(t, cd.Removed, "no removed documents")
 		assert.Empty(t, cd.Modified, "no modified documents")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 4: Hard reset to HEAD (no `to`) — discards uncommitted changes
+	// -------------------------------------------------------------------------
+	t.Run("Scenario4_HardResetToHEAD_DiscardsUncommitted", func(t *testing.T) {
+		items := env.client.Database(dbName).Collection("items")
+
+		// After Scenario 3: HEAD=C1, working set is clean (only _id:1).
+		// Capture the current HEAD hash so we can assert it is returned.
+		var logRaw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoLog", Value: int32(1)},
+		}).Decode(&logRaw))
+		commits, ok := logRaw["commits"].(bson.A)
+		require.True(t, ok && len(commits) > 0, "dongoLog must return at least one commit")
+		headEntry, ok := commits[0].(bson.M)
+		require.True(t, ok, "first log entry must be a document")
+		headHash, ok := headEntry["commitId"].(string)
+		require.True(t, ok && headHash != "", "first log entry must have a non-empty commitId")
+
+		// Insert _id:5 into the working set (uncommitted).
+		_, err := items.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(5)},
+			{Key: "v", Value: int32(5)},
+		})
+		require.NoError(t, err)
+
+		// Hard reset with no `to` — should default to HEAD.
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoReset", Value: int32(1)},
+			{Key: "hard", Value: true},
+		}).Decode(&raw))
+
+		assert.Equal(t, headHash, raw["commitId"], "reset-to-HEAD response must equal current HEAD hash")
+		assert.EqualValues(t, 1, raw["ok"])
+
+		// Uncommitted insert of _id:5 must be discarded — diff is empty.
+		var diffRaw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dongoDiff", Value: int32(1)},
+		}).Decode(&diffRaw))
+
+		dr := decodeDiffResult(t, diffRaw)
+		assert.Empty(t, dr.Collections,
+			"after hard reset to HEAD: working set must match HEAD — diff must be empty")
+
+		// Only _id:1 should be visible (the HEAD=C1 state).
+		n, err := items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), n,
+			"after hard reset to HEAD: exactly 1 document must be visible")
+	})
 }

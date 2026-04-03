@@ -154,14 +154,53 @@ are empty.
 
 ---
 
+## Scenario 4: Reset to HEAD — discard all uncommitted changes
+
+When `to` is omitted, `dongoReset` defaults to the current HEAD. This is the
+standard "discard all uncommitted changes" operation when combined with `hard: true`.
+
+```js
+// After Scenario 3: HEAD=C1, working set is clean.
+// Insert _id:5 to the working set (do NOT commit).
+db.items.insertOne({ _id: 5, v: 5 })
+
+// Verify there is an uncommitted change.
+db.runCommand({ dongoDiff: 1 })
+// Expected: items.added contains _id:5
+
+// Hard reset to HEAD (no `to` parameter).
+const rHead = db.runCommand({ dongoReset: 1, hard: true })
+printjson(rHead)
+// Expected: { commitId: "<current HEAD hash>", ok: 1 }
+```
+
+Key checks:
+- `commitId` in the response is the current HEAD hash (unchanged)
+- The uncommitted insert of `_id:5` is discarded:
+
+```js
+db.runCommand({ dongoDiff: 1 })
+// Expected: { "collections": [], "ok": 1 }
+
+db.items.find()
+// Expected: only the documents present in the HEAD commit
+```
+
+A soft reset to HEAD is a no-op in effect (HEAD stays the same, working tree
+stays the same), but is valid and returns the HEAD hash.
+
+---
+
 ## Quick Reference
 
 | Command | HEAD after | Working set after |
 |---|---|---|
+| `{ dongoReset: 1 }` | unchanged (HEAD) | unchanged |
+| `{ dongoReset: 1, hard: true }` | unchanged (HEAD) | reset to HEAD state |
 | `{ dongoReset: 1, to: "<hash>" }` | `<hash>` | unchanged |
 | `{ dongoReset: 1, to: "<hash>", hard: true }` | `<hash>` | reset to `<hash>` state |
 
 - Soft reset (default): moves HEAD, preserves working tree changes.
 - Hard reset: moves HEAD **and** resets the working tree to the target state.
-- Both forms return `{ hash: "<target_hash>", ok: 1 }`.
-- `to` is required and must not be empty (`ErrBadValue` if missing or empty).
+- All forms return `{ commitId: "<target_hash>", ok: 1 }`.
+- `to` is optional; when omitted, the target defaults to the current HEAD.

@@ -658,6 +658,7 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 //
 // Usage:
 //
+//	db.runCommand({dongoReset: 1})                       // reset to HEAD (discard uncommitted changes if hard)
 //	db.runCommand({dongoReset: 1, to: "<hash>"})
 //	db.runCommand({dongoReset: 1, to: "<hash>", hard: true})
 //
@@ -678,17 +679,9 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	to, err := common.GetRequiredParam[string](document, "to")
+	to, err := common.GetOptionalParam[string](document, "to", "")
 	if err != nil {
 		return nil, err
-	}
-
-	if to == "" {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"dongoReset: 'to' parameter must not be empty",
-			"to",
-		)
 	}
 
 	hard, err := common.GetOptionalParam[bool](document, "hard", false)
