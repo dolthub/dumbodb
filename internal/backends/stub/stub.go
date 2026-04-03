@@ -183,6 +183,20 @@ func (b *Backend) DongoReset(_ context.Context, params *backends.ResetParams) (*
 	return &backends.ResetResult{CommitID: params.CommitID}, nil
 }
 
+// DongoConflicts implements backends.VersioningBackend interface.
+func (b *Backend) DongoConflicts(_ context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+	b.l.Info("stub: DongoConflicts", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+
+	return &backends.ConflictsResult{}, nil
+}
+
+// DongoResolveConflict implements backends.VersioningBackend interface.
+func (b *Backend) DongoResolveConflict(_ context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+	b.l.Info("stub: DongoResolveConflict", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("conflictId", params.ConflictID))
+
+	return &backends.ResolveConflictResult{}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

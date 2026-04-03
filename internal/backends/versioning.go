@@ -16,6 +16,7 @@ package backends
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/dolthub/dongo/internal/types"
@@ -56,6 +57,7 @@ type MergeParams struct {
 	DBName string
 	Into   string // target branch (the current branch)
 	From   string // source branch to merge from
+	Abort  bool   // if true, abort the in-progress merge and restore the pre-merge state
 }
 
 // MergeResult represents the result of VersioningBackend.DongoMerge method.
@@ -63,6 +65,62 @@ type MergeResult struct {
 	CommitID string
 	Message  string
 }
+
+// ConflictSummary summarizes the number of document conflicts in one collection.
+type ConflictSummary struct {
+	Collection string
+	Count      int
+}
+
+// MergeConflictError is returned by DongoMerge when the merge cannot be completed
+// automatically due to conflicting document changes on both branches. The merge is staged
+// but not committed; conflicts must be resolved via DongoResolveConflict before
+// DongoCommit will succeed.
+type MergeConflictError struct {
+	Conflicts []ConflictSummary
+}
+
+// Error implements the error interface.
+func (e *MergeConflictError) Error() string {
+	return fmt.Sprintf("dongoMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+}
+
+// ConflictInfo describes a single document-level conflict in an in-progress merge.
+type ConflictInfo struct {
+	ConflictID    string
+	Base          *types.Document // nil when the document was absent in the common ancestor (added by one or both branches)
+	Ours          *types.Document // nil when our branch deleted the document
+	Theirs        *types.Document // nil when their branch deleted the document
+	OurDiffType   string          // "added", "modified", "deleted"
+	TheirDiffType string          // "added", "modified", "deleted"
+}
+
+// ConflictsParams represents the parameters of VersioningBackend.DongoConflicts method.
+type ConflictsParams struct {
+	DBName     string
+	Branch     string
+	Collection string // optional: if empty, return per-collection summaries; if set, return per-conflict details
+}
+
+// ConflictsResult represents the result of VersioningBackend.DongoConflicts method.
+// Exactly one of Collections or Conflicts is populated depending on whether ConflictsParams.Collection is empty.
+type ConflictsResult struct {
+	Collections []ConflictSummary // per-collection conflict counts (when Collection is empty)
+	Conflicts   []ConflictInfo    // per-conflict details (when Collection is set)
+}
+
+// ResolveConflictParams represents the parameters of VersioningBackend.DongoResolveConflict method.
+type ResolveConflictParams struct {
+	DBName     string
+	Branch     string
+	Collection string
+	ConflictID string
+	Resolution string          // "ours", "theirs", or "custom"
+	Value      *types.Document // only used when Resolution == "custom"
+}
+
+// ResolveConflictResult represents the result of VersioningBackend.DongoResolveConflict method.
+type ResolveConflictResult struct{}
 
 // LogParams represents the parameters of VersioningBackend.DongoLog method.
 type LogParams struct {
@@ -209,4 +267,16 @@ type VersioningBackend interface {
 	// Hard reset (Hard=true): resets both the working tree and staged root to the target commit,
 	// discarding all uncommitted changes.
 	DongoReset(context.Context, *ResetParams) (*ResetResult, error)
+
+	// DongoConflicts returns conflict information for the current in-progress merge on the given branch.
+	// If ConflictsParams.Collection is empty, returns a per-collection summary (Collections field).
+	// If ConflictsParams.Collection is set, returns per-conflict details for that collection (Conflicts field).
+	// Returns ErrOperationFailed if no merge is in progress on the branch.
+	DongoConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
+
+	// DongoResolveConflict resolves a single document conflict in the current in-progress merge.
+	// Resolution must be "ours", "theirs", or "custom". For "custom", Value provides the document to use.
+	// Returns ErrOperationFailed if no merge is in progress, if the collection or conflict ID is not found,
+	// or if the conflict is already resolved.
+	DongoResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
 }

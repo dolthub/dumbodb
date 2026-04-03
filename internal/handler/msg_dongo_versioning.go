@@ -16,6 +16,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -502,8 +503,16 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 // MsgDongoMerge implements the `dongoMerge` command.
 //
-// It merges a source branch into the current branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, from: "feature"})
+// Merges a source branch into the current branch encoded in $db (format: "dbname__branch").
+// Usage:
+//
+//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature"})
+//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, abort: 1})
+//
+// When a merge produces document-level conflicts, the response includes ok:0 with a
+// conflicts array describing which collections have unresolved conflicts. The branch
+// HEAD is unchanged; the staged working set reflects the partial merge with "ours"
+// values for conflicting documents.
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -522,6 +531,36 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
+	abort, err := common.GetOptionalParam[bool](document, "abort", false)
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dongoMerge: versioning is not supported by the current backend",
+		)
+	}
+
+	if abort {
+		res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
+			DBName: dbName,
+			Into:   intoBranch,
+			Abort:  true,
+		})
+		if mergeErr != nil {
+			return nil, lazyerrors.Error(mergeErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"message", res.Message,
+				"ok", float64(1),
+			)),
+		)
+	}
+
 	fromBranch, err := common.GetRequiredParam[string](document, "merge_in")
 	if err != nil {
 		return nil, err
@@ -535,18 +574,222 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
+	res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
+		DBName: dbName,
+		Into:   intoBranch,
+		From:   fromBranch,
+	})
+
+	if mergeErr != nil {
+		var conflictErr *backends.MergeConflictError
+		if errors.As(mergeErr, &conflictErr) {
+			// Return a structured ok:0 response with per-collection conflict counts.
+			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+			for _, c := range conflictErr.Conflicts {
+				entry := must.NotFail(types.NewDocument(
+					"collection", c.Collection,
+					"count", int32(c.Count),
+				))
+				conflictsArr.Append(entry)
+			}
+			return documentOpMsg(
+				must.NotFail(types.NewDocument(
+					"conflicts", conflictsArr,
+					"ok", float64(0),
+					"code", int32(handlererrors.ErrOperationFailed),
+					"errmsg", conflictErr.Error(),
+				)),
+			)
+		}
+		return nil, lazyerrors.Error(mergeErr)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"commitId", res.CommitID,
+			"message", res.Message,
+			"ok", float64(1),
+		)),
+	)
+}
+
+// MsgDongoConflicts implements the `dongoConflicts` command.
+//
+// Returns conflict information for the current in-progress merge on the branch encoded in $db.
+// Usage:
+//
+//	db.getSiblingDB("mydb__main").runCommand({dongoConflicts: 1})
+//	db.getSiblingDB("mydb__main").runCommand({dongoConflicts: 1, collection: "items"})
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDongoConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	collection, err := common.GetOptionalParam[string](document, "collection", "")
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoMerge: versioning is not supported by the current backend",
+			"dongoConflicts: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoMerge(connCtx, &backends.MergeParams{
-		DBName: dbName,
-		Into:   intoBranch,
-		From:   fromBranch,
+	res, err := vb.DongoConflicts(connCtx, &backends.ConflictsParams{
+		DBName:     dbName,
+		Branch:     branch,
+		Collection: collection,
+	})
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if collection == "" {
+		collectionsArr := types.MakeArray(len(res.Collections))
+		for _, c := range res.Collections {
+			entry := must.NotFail(types.NewDocument(
+				"name", c.Collection,
+				"count", int32(c.Count),
+			))
+			collectionsArr.Append(entry)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"collections", collectionsArr,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	conflictsArr := types.MakeArray(len(res.Conflicts))
+	for _, cf := range res.Conflicts {
+		pairs := []any{
+			"conflictId", cf.ConflictID,
+		}
+
+		if cf.Base != nil {
+			pairs = append(pairs, "base", cf.Base)
+		} else {
+			pairs = append(pairs, "base", types.Null)
+		}
+
+		if cf.Ours != nil {
+			pairs = append(pairs, "ours", cf.Ours)
+		} else {
+			pairs = append(pairs, "ours", types.Null)
+		}
+
+		if cf.Theirs != nil {
+			pairs = append(pairs, "theirs", cf.Theirs)
+		} else {
+			pairs = append(pairs, "theirs", types.Null)
+		}
+
+		pairs = append(pairs,
+			"ourDiffType", cf.OurDiffType,
+			"theirDiffType", cf.TheirDiffType,
+		)
+
+		entry := must.NotFail(types.NewDocument(pairs...))
+		conflictsArr.Append(entry)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"conflicts", conflictsArr,
+			"ok", float64(1),
+		)),
+	)
+}
+
+// MsgDongoResolveConflict implements the `dongoResolveConflict` command.
+//
+// Resolves a single document conflict in the current in-progress merge.
+// Usage:
+//
+//	db.getSiblingDB("mydb__main").runCommand({dongoResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
+//	db.getSiblingDB("mydb__main").runCommand({dongoResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
+//	db.getSiblingDB("mydb__main").runCommand({dongoResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDongoResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	collection, err := common.GetRequiredParam[string](document, "collection")
+	if err != nil {
+		return nil, err
+	}
+
+	conflictID, err := common.GetRequiredParam[string](document, "conflictId")
+	if err != nil {
+		return nil, err
+	}
+
+	resolution, err := common.GetRequiredParam[string](document, "resolution")
+	if err != nil {
+		return nil, err
+	}
+
+	var value *types.Document
+	if resolution == "custom" {
+		rawValue, getErr := common.GetOptionalParam[*types.Document](document, "value", nil)
+		if getErr != nil {
+			return nil, getErr
+		}
+		if rawValue == nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"dongoResolveConflict: resolution 'custom' requires a 'value' document",
+				"value",
+			)
+		}
+		value = rawValue
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dongoResolveConflict: versioning is not supported by the current backend",
+		)
+	}
+
+	_, err = vb.DongoResolveConflict(connCtx, &backends.ResolveConflictParams{
+		DBName:     dbName,
+		Branch:     branch,
+		Collection: collection,
+		ConflictID: conflictID,
+		Resolution: resolution,
+		Value:      value,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -554,8 +797,6 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"commitId", res.CommitID,
-			"message", res.Message,
 			"ok", float64(1),
 		)),
 	)

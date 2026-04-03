@@ -152,6 +152,24 @@ func (b *backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 	return nil, fmt.Errorf("oplog: DongoReset: versioning not supported by wrapped backend")
 }
 
+// DongoConflicts implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoConflicts(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoConflicts: versioning not supported by wrapped backend")
+}
+
+// DongoResolveConflict implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DongoResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DongoResolveConflict(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DongoResolveConflict: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
 	_ backends.Backend          = (*backend)(nil)

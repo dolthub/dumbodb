@@ -278,6 +278,24 @@ func (bc *backendContract) DongoReset(ctx context.Context, params *ResetParams) 
 	return nil, newVersioningUnsupportedError("DongoReset")
 }
 
+// DongoConflicts implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoConflicts(ctx context.Context, params *ConflictsParams) (*ConflictsResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoConflicts(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoConflicts")
+}
+
+// DongoResolveConflict implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DongoResolveConflict(ctx context.Context, params *ResolveConflictParams) (*ResolveConflictResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DongoResolveConflict(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DongoResolveConflict")
+}
+
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {

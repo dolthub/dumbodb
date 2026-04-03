@@ -122,6 +122,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDongoBranch,
 			Help:    "Creates a new Dongo branch from the current branch encoded in the database name.",
 		},
+		"dongoConflicts": {
+			Handler: h.MsgDongoConflicts,
+			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
+		},
 		"dongoDiff": {
 			Handler: h.MsgDongoDiff,
 			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
@@ -145,6 +149,10 @@ func (h *Handler) initCommands() {
 		"dongoReset": {
 			Handler: h.MsgDongoReset,
 			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
+		},
+		"dongoResolveConflict": {
+			Handler: h.MsgDongoResolveConflict,
+			Help:    "Resolves a single document conflict in the current in-progress merge.",
 		},
 		"dongoStatus": {
 			Handler: h.MsgDongoStatus,

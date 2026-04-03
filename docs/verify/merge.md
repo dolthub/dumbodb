@@ -167,18 +167,173 @@ db.getSiblingDB("mergedb__main").items.countDocuments({})
 
 ---
 
+---
+
+## Scenario 5: Conflicting merge — both branches modify the same document
+
+When both branches independently modify the same document, `dongoMerge` cannot
+auto-resolve the conflict. The response has `ok: 0` and includes a `conflicts`
+array summarising which collections have unresolved conflicts. The branch HEAD
+is **not** advanced; the staged working set contains "ours" (current branch)
+values for conflicting documents.
+
+```js
+// After setup: main modifies _id:1 to v:10, feature modifies _id:1 to v:20.
+db.items.updateOne({ _id: 1 }, { $set: { v: 10 } })
+db.getSiblingDB("mergedb__main").runCommand({ dongoCommit: 1, message: "main-v10", author: "alice" })
+
+db.getSiblingDB("mergedb__feature").items.updateOne({ _id: 1 }, { $set: { v: 20 } })
+db.getSiblingDB("mergedb__feature").runCommand({ dongoCommit: 1, message: "feature-v20", author: "bob" })
+
+const rConflict = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, merge_in: "feature" })
+printjson(rConflict)
+// Expected: { conflicts: [ { collection: "items", count: 1 } ], ok: 0, code: 96, errmsg: "..." }
+```
+
+---
+
+## Scenario 6: Inspect conflicts
+
+```js
+// Summary: list which collections have conflicts
+const rSummary = db.getSiblingDB("mergedb__main").runCommand({ dongoConflicts: 1 })
+printjson(rSummary)
+// Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
+
+// Detail: list individual conflicts within a collection
+const rDetail = db.getSiblingDB("mergedb__main").runCommand({ dongoConflicts: 1, collection: "items" })
+printjson(rDetail)
+// Expected: { conflicts: [ { conflictId: "c0", base: { _id: 1, v: 1 }, ours: { _id: 1, v: 10 },
+//             theirs: { _id: 1, v: 20 }, ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
+const conflictId = rDetail.conflicts[0].conflictId
+```
+
+Key checks:
+- `collections` lists per-collection conflict counts.
+- `conflicts` in the per-collection view lists individual document conflicts.
+- `base` is the document at the common ancestor (null for new documents).
+- `ours` / `theirs` are the two conflicting versions (null for deletions).
+- `ourDiffType` / `theirDiffType` are one of `"added"`, `"modified"`, `"deleted"`.
+
+---
+
+## Scenario 7: Resolve conflict — ours
+
+```js
+// Resolve using our version (v:10).
+const rResolve = db.getSiblingDB("mergedb__main").runCommand({
+    dongoResolveConflict: 1,
+    collection: "items",
+    conflictId: conflictId,
+    resolution: "ours"
+})
+printjson(rResolve)
+// Expected: { ok: 1 }
+```
+
+After resolution, `dongoConflicts` returns an empty `collections` array, and
+`dongoCommit` creates a merge commit.
+
+---
+
+## Scenario 8: Resolve conflict — theirs
+
+```js
+// (Re-create a conflict first as shown in Scenario 5.)
+// Resolve using their version (v:20).
+db.getSiblingDB("mergedb__main").runCommand({
+    dongoResolveConflict: 1,
+    collection: "items",
+    conflictId: conflictId,
+    resolution: "theirs"
+})
+// Expected: { ok: 1 }
+```
+
+---
+
+## Scenario 9: Resolve conflict — custom value
+
+```js
+// (Re-create a conflict as in Scenario 5.)
+// Resolve with a custom merged value.
+db.getSiblingDB("mergedb__main").runCommand({
+    dongoResolveConflict: 1,
+    collection: "items",
+    conflictId: conflictId,
+    resolution: "custom",
+    value: { _id: 1, v: 15 }   // custom resolved value
+})
+// Expected: { ok: 1 }
+```
+
+---
+
+## Scenario 10: Commit after conflict resolution
+
+Once all conflicts are resolved, `dongoCommit` creates a merge commit with
+both branch HEADs as parents (just like a clean three-way merge).
+
+```js
+const rCommit = db.getSiblingDB("mergedb__main").runCommand({
+    dongoCommit: 1,
+    message: "Resolve merge conflicts",
+    author: "alice <alice@dongo>"
+})
+printjson(rCommit)
+// Expected: { commitId: "<hashM>", branch: "main", message: "Merge branch 'feature' into 'main'", ok: 1 }
+```
+
+`dongoLog` shows a merge commit with two parents:
+
+```js
+const log = db.getSiblingDB("mergedb__main").runCommand({ dongoLog: 1, limit: 1 })
+printjson(log)
+// Expected: commits[0].parent1 === <main pre-merge HEAD>,
+//           commits[0].parent2 === <feature HEAD>
+```
+
+---
+
+## Scenario 11: Abort an in-progress merge
+
+```js
+// (Re-create a conflict as in Scenario 5.)
+const rAbort = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, abort: true })
+printjson(rAbort)
+// Expected: { message: "merge aborted", ok: 1 }
+```
+
+After abort the branch is back to its pre-merge state.
+
+---
+
+## State Guards
+
+| State | `dongoCommit` | `dongoMerge` (new) |
+|---|---|---|
+| No merge in progress | Normal commit | Normal merge |
+| Merge in progress, conflicts remain | **Rejected**: "unresolved merge conflicts remain" | **Rejected**: "merge already in progress" |
+| Merge in progress, all conflicts resolved | Creates merge commit (two parents) | **Rejected**: "merge already in progress" |
+
+---
+
 ## Quick Reference
 
 | Situation | `message` in response |
 |---|---|
 | `merge_in` branch is at or behind `into` branch | `"already up-to-date"` |
 | `into` branch is strictly behind `merge_in` branch | `"fast-forward"` |
-| Both branches have diverged (independent commits on each) | `"Merge branch '<merge_in>' into '<into>'"` |
+| Both branches have diverged, no conflicts | `"Merge branch '<merge_in>' into '<into>'"` |
+| Both branches have diverged, conflicts exist | `ok: 0` with `conflicts` array |
 
 - `dongoMerge` always operates on named branches, not raw commit hashes.
 - The target branch (`into`) is encoded in the database name: `dbname__branch`.
 - The `merge_in` parameter names the source branch to merge from.
-- Returns `{ commitId: "<result_commitId>", message: "<description>", ok: 1 }`.
-- The `merge_in` parameter is required and must not be empty.
-- A fast-forward does not create a new commit; the `hash` in the response is the
+- Returns `{ commitId: "<result_commitId>", message: "<description>", ok: 1 }` for clean merges.
+- For conflicting merges: `{ conflicts: [...], ok: 0, code: 96, errmsg: "..." }`.
+- A fast-forward does not create a new commit; the `commitId` in the response is the
   `merge_in` branch's existing HEAD.
+- Use `dongoConflicts`, `dongoResolveConflict`, then `dongoCommit` to complete a
+  conflicting merge.
+- Use `{ dongoMerge: 1, abort: true }` to discard an in-progress merge.
