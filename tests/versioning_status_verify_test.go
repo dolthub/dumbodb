@@ -54,18 +54,18 @@ func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 
 	branch, _ := raw["branch"].(string)
 
-	rawTables, ok := raw["tables"]
-	require.True(t, ok, "dongoStatus result missing 'tables' field")
+	rawTables, ok := raw["collections"]
+	require.True(t, ok, "dongoStatus result missing 'collections' field")
 
 	tablesArr, ok := rawTables.(bson.A)
-	require.True(t, ok, "dongoStatus 'tables' is not an array, got %T", rawTables)
+	require.True(t, ok, "dongoStatus 'collections' is not an array, got %T", rawTables)
 
 	var out statusResult
 	out.Branch = branch
 
 	for _, tbl := range tablesArr {
 		tm, ok := tbl.(bson.M)
-		require.True(t, ok, "tables entry is not a document, got %T", tbl)
+		require.True(t, ok, "collections entry is not a document, got %T", tbl)
 
 		entry := tableStatusEntry{
 			Name:   fmt.Sprintf("%v", tm["name"]),

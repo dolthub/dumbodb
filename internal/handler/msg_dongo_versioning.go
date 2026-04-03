@@ -994,20 +994,20 @@ func (h *Handler) MsgDongoStatus(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
-	tables := types.MakeArray(len(res.Tables))
+	collections := types.MakeArray(len(res.Tables))
 
 	for _, t := range res.Tables {
 		entry := must.NotFail(types.NewDocument(
 			"name", t.Name,
 			"status", t.Status,
 		))
-		tables.Append(entry)
+		collections.Append(entry)
 	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"branch", res.Branch,
-			"tables", tables,
+			"collections", collections,
 			"ok", float64(1),
 		)),
 	)

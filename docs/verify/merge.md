@@ -217,7 +217,29 @@ Key checks:
 
 ---
 
-## Scenario 7: Resolve conflict — ours
+## Scenario 7: dongoCommit rejected while conflicts remain
+
+While a merge is in progress, `dongoCommit` is always rejected — even once all
+conflicts are resolved. Use `dongoMerge: 1, continue: 1` to finalize.
+
+```js
+// (Conflicts still unresolved from Scenario 5/6.)
+const rBlockedCommit = db.getSiblingDB("mergedb__main").runCommand({
+    dongoCommit: 1,
+    message: "should not work",
+    author: "alice <alice@dongo>"
+})
+printjson(rBlockedCommit)
+// Expected: { ok: 0, code: 96, errmsg: "unresolved merge conflicts remain" }
+```
+
+Key checks:
+- `ok` equals `0`
+- `errmsg` mentions unresolved conflicts
+
+---
+
+## Scenario 8: Resolve conflict — ours
 
 ```js
 // Resolve using our version (v:10).
@@ -231,12 +253,11 @@ printjson(rResolve)
 // Expected: { ok: 1 }
 ```
 
-After resolution, `dongoConflicts` returns an empty `collections` array, and
-`dongoCommit` creates a merge commit.
+After resolution, `dongoConflicts` returns an empty `collections` array.
 
 ---
 
-## Scenario 8: Resolve conflict — theirs
+## Scenario 9: Resolve conflict — theirs
 
 ```js
 // (Re-create a conflict first as shown in Scenario 5.)
@@ -252,7 +273,7 @@ db.getSiblingDB("mergedb__main").runCommand({
 
 ---
 
-## Scenario 9: Resolve conflict — custom value
+## Scenario 10: Resolve conflict — custom value
 
 ```js
 // (Re-create a conflict as in Scenario 5.)
@@ -269,18 +290,24 @@ db.getSiblingDB("mergedb__main").runCommand({
 
 ---
 
-## Scenario 10: Commit after conflict resolution
+## Scenario 11: Continue after conflict resolution
 
-Once all conflicts are resolved, `dongoCommit` creates a merge commit with
-both branch HEADs as parents (just like a clean three-way merge).
+Once all conflicts are resolved, `dongoMerge: 1, continue: 1` creates the merge
+commit with both branch HEADs as parents. `message` and `author` are optional;
+if omitted, Dongo generates the standard merge message and uses the default author.
+
+`dongoCommit` is rejected throughout an in-progress merge (whether conflicts
+remain or not) — always use `continue` to finalize.
 
 ```js
-const rCommit = db.getSiblingDB("mergedb__main").runCommand({
-    dongoCommit: 1,
-    message: "Resolve merge conflicts",
-    author: "alice <alice@dongo>"
+// (All conflicts resolved in Scenario 8/9/10.)
+const rContinue = db.getSiblingDB("mergedb__main").runCommand({
+    dongoMerge: 1,
+    continue: 1,
+    message: "Resolve merge conflicts",   // optional
+    author: "alice <alice@dongo>"          // optional
 })
-printjson(rCommit)
+printjson(rContinue)
 // Expected: { commitId: "<hashM>", branch: "main", message: "Merge branch 'feature' into 'main'", ok: 1 }
 ```
 
@@ -295,7 +322,7 @@ printjson(log)
 
 ---
 
-## Scenario 11: Abort an in-progress merge
+## Scenario 12: Abort an in-progress merge
 
 ```js
 // (Re-create a conflict as in Scenario 5.)
@@ -304,17 +331,17 @@ printjson(rAbort)
 // Expected: { message: "merge aborted", ok: 1 }
 ```
 
-After abort the branch is back to its pre-merge state.
+After abort the branch is back to its pre-merge state and `dongoCommit` works normally.
 
 ---
 
 ## State Guards
 
-| State | `dongoCommit` | `dongoMerge` (new) |
-|---|---|---|
-| No merge in progress | Normal commit | Normal merge |
-| Merge in progress, conflicts remain | **Rejected**: "unresolved merge conflicts remain" | **Rejected**: "merge already in progress" |
-| Merge in progress, all conflicts resolved | Creates merge commit (two parents) | **Rejected**: "merge already in progress" |
+| State | `dongoCommit` | `dongoMerge` (new) | `dongoMerge continue` |
+|---|---|---|---|
+| No merge in progress | Normal commit | Normal merge | **Rejected**: "no merge in progress" |
+| Merge in progress, conflicts remain | **Rejected**: "unresolved merge conflicts remain" | **Rejected**: "merge already in progress" | **Rejected**: "unresolved merge conflicts remain" |
+| Merge in progress, all conflicts resolved | **Rejected**: "merge in progress: use dongoMerge continue" | **Rejected**: "merge already in progress" | Creates merge commit (two parents) |
 
 ---
 
@@ -334,6 +361,7 @@ After abort the branch is back to its pre-merge state.
 - For conflicting merges: `{ conflicts: [...], ok: 0, code: 96, errmsg: "..." }`.
 - A fast-forward does not create a new commit; the `commitId` in the response is the
   `merge_in` branch's existing HEAD.
-- Use `dongoConflicts`, `dongoResolveConflict`, then `dongoCommit` to complete a
+- Use `dongoConflicts`, `dongoResolveConflict`, then `{ dongoMerge: 1, continue: 1 }` to complete a
   conflicting merge.
+- `dongoCommit` is rejected throughout any in-progress merge; use `continue` to finalize.
 - Use `{ dongoMerge: 1, abort: true }` to discard an in-progress merge.

@@ -51,11 +51,11 @@ db.runCommand({ dongoStatus: 1 })
 Expected:
 
 ```json
-{ "branch": "main", "tables": [], "ok": 1 }
+{ "branch": "main", "collections": [], "ok": 1 }
 ```
 
 Key checks:
-- `tables` is an empty array
+- `collections` is an empty array
 - No collection appears as changed
 
 ---
@@ -75,7 +75,7 @@ Expected:
 ```json
 {
   "branch": "main",
-  "tables": [
+  "collections": [
     { "name": "newcoll", "status": "added" }
   ],
   "ok": 1
@@ -108,7 +108,7 @@ Expected:
 ```json
 {
   "branch": "main",
-  "tables": [
+  "collections": [
     { "name": "items", "status": "modified" }
   ],
   "ok": 1
@@ -141,7 +141,7 @@ Expected:
 ```json
 {
   "branch": "main",
-  "tables": [
+  "collections": [
     { "name": "items", "status": "deleted" }
   ],
   "ok": 1
@@ -168,11 +168,11 @@ db.runCommand({ dongoStatus: 1 })
 Expected:
 
 ```json
-{ "branch": "main", "tables": [], "ok": 1 }
+{ "branch": "main", "collections": [], "ok": 1 }
 ```
 
 Key checks:
-- `tables` is empty — all collections are in sync with HEAD
+- `collections` is empty — all collections are in sync with HEAD
 
 ---
 
@@ -185,6 +185,6 @@ Key checks:
 | Collection exists in both but content differs | `"modified"` |
 | Collection is identical in both | *(not reported)* |
 
-- Only collections with changes appear in `tables`.
+- Only collections with changes appear in `collections`.
 - The `branch` field reflects the connection's active branch.
-- `tables` is always an array (empty when there are no changes).
+- `collections` is always an array (empty when there are no changes).
