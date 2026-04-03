@@ -84,7 +84,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "shape check"},
-			{Key: "author", Value: "alice"},
+			{Key: "author", Value: "alice <alice@dongo>"},
 		}).Decode(&result))
 
 		hash, ok := result["commitId"].(string)
@@ -93,7 +93,7 @@ func TestCommitVerify(t *testing.T) {
 
 		assert.Equal(t, "main", result["branch"], "branch must be 'main' for plain db name")
 		assert.Equal(t, "shape check", result["message"], "message must echo the provided string")
-		assert.Equal(t, "alice", result["author"], "author must echo the provided value")
+		assert.Equal(t, "alice <alice@dongo>", result["author"], "author must echo the provided value")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
 	})
@@ -245,10 +245,10 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "authored commit"},
-			{Key: "author", Value: "bob"},
+			{Key: "author", Value: "bob <bob@dongo>"},
 		}).Decode(&result))
 
-		assert.Equal(t, "bob", result["author"], "author must be echoed in response")
+		assert.Equal(t, "bob <bob@dongo>", result["author"], "author must be echoed in response")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present in response")
 		assert.EqualValues(t, 1, result["ok"])
 
@@ -265,7 +265,7 @@ func TestCommitVerify(t *testing.T) {
 
 		entry, ok := commits[0].(bson.M)
 		require.True(t, ok)
-		assert.Equal(t, "bob", entry["author"], "dongoLog must reflect the commit author")
+		assert.Equal(t, "bob <bob@dongo>", entry["author"], "dongoLog must reflect the commit author")
 	})
 
 	// -------------------------------------------------------------------------
@@ -278,11 +278,11 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dongoCommit", Value: int32(1)},
 			{Key: "message", Value: "fixed-time commit"},
-			{Key: "author", Value: "carol"},
+			{Key: "author", Value: "carol <carol@dongo>"},
 			{Key: "timestamp", Value: fixedTime},
 		}).Decode(&result))
 
-		assert.Equal(t, "carol", result["author"], "author must be echoed")
+		assert.Equal(t, "carol <carol@dongo>", result["author"], "author must be echoed")
 		assert.EqualValues(t, 1, result["ok"])
 
 		// The echoed timestamp must equal the provided value (within millisecond precision).

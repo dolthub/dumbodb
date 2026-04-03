@@ -58,18 +58,18 @@ Key checks:
 
 ```js
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ dongoCommit: 1, message: "first", author: "alice" })
+const r1 = db.runCommand({ dongoCommit: 1, message: "first", author: "alice <alice@dongo>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first", ok: 1 }
 const hash1 = r1.commitId
 
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ dongoCommit: 1, message: "second", author: "alice" })
+const r2 = db.runCommand({ dongoCommit: 1, message: "second", author: "alice <alice@dongo>" })
 printjson(r2)
 const hash2 = r2.commitId
 
 db.items.insertOne({ _id: 3, label: "gamma" })
-const r3 = db.runCommand({ dongoCommit: 1, message: "third", author: "alice" })
+const r3 = db.runCommand({ dongoCommit: 1, message: "third", author: "alice <alice@dongo>" })
 printjson(r3)
 const hash3 = r3.commitId
 
@@ -175,8 +175,9 @@ Key checks:
 ## Scenario 5: Refs annotation — branch head decoration (git --decorate)
 
 When a commit is the HEAD of one or more branches its entry includes a `refs`
-array.  The connection branch gets `"HEAD -> <branch>"`, other branches get
-their bare name.  Non-head commits have no `refs` field.
+array.  The connection branch gets two separate entries: `"HEAD"` and the bare
+branch name.  Other branches get only their bare name.  Non-head commits have
+no `refs` field.
 
 ```js
 // Create a second branch pointing at the current main HEAD.
@@ -194,7 +195,7 @@ Expected:
   "commits": [
     {
       "commitId": "<hash3>",
-      "refs": ["HEAD -> main", "feature"],
+      "refs": ["HEAD", "main", "feature"],
       "parent1": "<hash2>",
       "message": "third",
       "timestamp": "<...>",
@@ -213,11 +214,11 @@ Expected:
 ```
 
 Key checks:
-- `commits[0].refs` contains `"HEAD -> main"` (connection branch gets HEAD decoration)
+- `commits[0].refs` contains `"HEAD"` and `"main"` (connection branch gets HEAD + bare name)
 - `commits[0].refs` also contains `"feature"` (bare name for the other branch)
 - `commits[1]` has no `refs` field (non-head commit)
 - When the same command runs against `logdb__feature`, `commits[0].refs` becomes
-  `["HEAD -> feature", "main"]`
+  `["HEAD", "feature", "main"]`
 
 ---
 

@@ -633,8 +633,15 @@ func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.
 		}
 	}
 
-	email := authorName + "@dongo"
-	meta, err := datas.NewCommitMetaWithUserTS(authorName, email, desc, ts)
+	var name, email string
+	if idx := strings.Index(authorName, " <"); idx >= 0 {
+		name = authorName[:idx]
+		email = strings.TrimSuffix(authorName[idx+2:], ">")
+	} else {
+		name = authorName
+		email = authorName + "@dongo"
+	}
+	meta, err := datas.NewCommitMetaWithUserTS(name, email, desc, ts)
 	if err != nil {
 		return datas.Dataset{}, am, err
 	}
@@ -1172,7 +1179,8 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 // If params.From is set, traversal starts from that commit hash instead of HEAD.
 // Each CommitInfo is annotated with Refs when its commitId matches one or more
 // branch heads (git --decorate style). The connection branch (ConnBranch) gets
-// "HEAD -> <branch>"; all other branch heads get their bare branch name.
+// two entries: "HEAD" and the bare branch name; all other branch heads get only
+// their bare branch name.
 // TODO: tag decoration is not yet supported.
 func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
@@ -1223,8 +1231,8 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 			branchName := datasetID[len(prefix):]
 			commitStr := headAddr.String()
 			if branchName == connBranch {
-				// Connection branch gets HEAD decoration, prepended so it sorts first.
-				refsForCommit[commitStr] = append([]string{"HEAD -> " + branchName}, refsForCommit[commitStr]...)
+				// Connection branch gets HEAD decoration as two separate entries, prepended so they sort first.
+				refsForCommit[commitStr] = append([]string{"HEAD", branchName}, refsForCommit[commitStr]...)
 			} else {
 				refsForCommit[commitStr] = append(refsForCommit[commitStr], branchName)
 			}
@@ -1264,7 +1272,7 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 
 		info := backends.CommitInfo{
 			CommitID:  currentHash.String(),
-			Author:    meta.Name,
+			Author:    meta.Name + " <" + meta.Email + ">",
 			Message:   meta.Description,
 			Timestamp: meta.UserTimestamp,
 			Refs:      refsForCommit[currentHash.String()],

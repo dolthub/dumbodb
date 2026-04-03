@@ -232,7 +232,7 @@ func TestLogVerify(t *testing.T) {
 		}).Err(), "creating logvrfy-refs branch must succeed")
 
 		// Query dongoLog on main.  hash3 is the tip of both "main" and
-		// "logvrfy-refs", so its refs field must contain "HEAD -> main" and
+		// "logvrfy-refs", so its refs field must contain "HEAD", "main", and
 		// "logvrfy-refs".  Non-head commits must have no refs field.
 		var rawMain bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
@@ -244,7 +244,8 @@ func TestLogVerify(t *testing.T) {
 
 		head := lrMain.Commits[0]
 		assert.Equal(t, hash3, head.CommitID, "HEAD commit must be hash3")
-		assert.Contains(t, head.Refs, "HEAD -> main", "HEAD commit must carry 'HEAD -> main' ref")
+		assert.Contains(t, head.Refs, "HEAD", "HEAD commit must carry 'HEAD' ref")
+		assert.Contains(t, head.Refs, "main", "HEAD commit must carry 'main' ref")
 		assert.Contains(t, head.Refs, "logvrfy-refs", "HEAD commit must carry bare 'logvrfy-refs' ref")
 
 		// Non-head commits must carry no refs.
@@ -264,7 +265,8 @@ func TestLogVerify(t *testing.T) {
 
 		headF := lrFeature.Commits[0]
 		assert.Equal(t, hash3, headF.CommitID, "HEAD commit on logvrfy-refs must be hash3")
-		assert.Contains(t, headF.Refs, "HEAD -> logvrfy-refs", "must carry 'HEAD -> logvrfy-refs'")
+		assert.Contains(t, headF.Refs, "HEAD", "must carry 'HEAD' ref")
+		assert.Contains(t, headF.Refs, "logvrfy-refs", "must carry 'logvrfy-refs' ref")
 		assert.Contains(t, headF.Refs, "main", "must carry bare 'main' ref")
 	})
 

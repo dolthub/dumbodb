@@ -34,7 +34,7 @@ db.dropDatabase()
 
 // Insert a document and commit (commit 1)
 db.items.insertOne({ _id: 1, label: "first", version: 1 })
-const result1 = db.runCommand({ dongoCommit: 1, message: "first commit", author: "alice" })
+const result1 = db.runCommand({ dongoCommit: 1, message: "first commit", author: "alice <alice@dongo>" })
 printjson(result1)
 // Expected:
 // { hash: "<hash1>", branch: "main", message: "first commit", ok: 1 }
@@ -43,7 +43,7 @@ const hash1 = result1.commitId
 
 // Insert a second document and commit (commit 2)
 db.items.insertOne({ _id: 2, label: "second", version: 2 })
-const result2 = db.runCommand({ dongoCommit: 1, message: "second commit", author: "alice" })
+const result2 = db.runCommand({ dongoCommit: 1, message: "second commit", author: "alice <alice@dongo>" })
 printjson(result2)
 // Expected:
 // { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
