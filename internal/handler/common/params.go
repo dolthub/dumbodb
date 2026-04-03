@@ -87,6 +87,31 @@ func GetOptionalParam[T types.Type](doc *types.Document, key string, defaultValu
 	return res, nil
 }
 
+// GetOptionalBoolOrIntParam returns doc's value for key as a bool, accepting both bool and
+// int32/int64 values (non-zero is true, zero is false). Returns defaultValue for missing key,
+// or protocol error for other types.
+func GetOptionalBoolOrIntParam(doc *types.Document, key string, defaultValue bool) (bool, error) {
+	v, _ := doc.Get(key)
+	if v == nil {
+		return defaultValue, nil
+	}
+
+	switch val := v.(type) {
+	case bool:
+		return val, nil
+	case int32:
+		return val != 0, nil
+	case int64:
+		return val != 0, nil
+	default:
+		msg := fmt.Sprintf(
+			`BSON field '%s' is the wrong type '%s', expected type 'bool'`,
+			key, handlerparams.AliasFromType(v),
+		)
+		return defaultValue, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch, msg, key)
+	}
+}
+
 // GetOptionalNullParam returns doc's value for key, default value for missing parameter or null,
 // or protocol error for other invalid type.
 func GetOptionalNullParam[T types.Type](doc *types.Document, key string, defaultValue T) (T, error) {

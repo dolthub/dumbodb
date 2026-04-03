@@ -400,7 +400,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		var commitRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "dongoMerge", Value: int32(1)},
-			{Key: "continue", Value: true},
+			{Key: "continue", Value: int32(1)},
 		}).Decode(&commitRaw))
 		assert.EqualValues(t, 1, commitRaw["ok"])
 
@@ -467,7 +467,7 @@ func TestMergeConflictAbort(t *testing.T) {
 	var abortRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "dongoMerge", Value: int32(1)},
-		{Key: "abort", Value: true},
+		{Key: "abort", Value: int32(1)},
 	}).Decode(&abortRaw))
 	assert.EqualValues(t, 1, abortRaw["ok"])
 	assert.Equal(t, "merge aborted", abortRaw["message"])
@@ -544,7 +544,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "dongoMerge", Value: int32(1)},
-		{Key: "continue", Value: true},
+		{Key: "continue", Value: int32(1)},
 	}).Decode(&continueRaw))
 	assert.EqualValues(t, 1, continueRaw["ok"])
 
@@ -615,7 +615,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "dongoMerge", Value: int32(1)},
-		{Key: "continue", Value: true},
+		{Key: "continue", Value: int32(1)},
 	}).Decode(&continueRaw))
 	assert.EqualValues(t, 1, continueRaw["ok"])
 

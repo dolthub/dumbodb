@@ -561,12 +561,12 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	abort, err := common.GetOptionalParam[bool](document, "abort", false)
+	abort, err := common.GetOptionalBoolOrIntParam(document, "abort", false)
 	if err != nil {
 		return nil, err
 	}
 
-	continueParam, err := common.GetOptionalParam[bool](document, "continue", false)
+	continueParam, err := common.GetOptionalBoolOrIntParam(document, "continue", false)
 	if err != nil {
 		return nil, err
 	}

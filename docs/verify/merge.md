@@ -326,7 +326,7 @@ printjson(log)
 
 ```js
 // (Re-create a conflict as in Scenario 5.)
-const rAbort = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, abort: true })
+const rAbort = db.getSiblingDB("mergedb__main").runCommand({ dongoMerge: 1, abort: 1 })
 printjson(rAbort)
 // Expected: { message: "merge aborted", ok: 1 }
 ```
@@ -368,4 +368,4 @@ After abort the branch is back to its pre-merge state and `dongoCommit` works no
 - Use `dongoConflicts`, `dongoResolveConflict`, then `{ dongoMerge: 1, continue: 1 }` to complete a
   conflicting merge.
 - `dongoCommit` is rejected throughout any in-progress merge; use `continue` to finalize.
-- Use `{ dongoMerge: 1, abort: true }` to discard an in-progress merge.
+- Use `{ dongoMerge: 1, abort: 1 }` to discard an in-progress merge.
