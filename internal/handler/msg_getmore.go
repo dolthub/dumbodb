@@ -51,6 +51,13 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, err
 	}
 
+	// Validate rootish before backend access so invalid forms (HEAD, reflog, range)
+	// return OperationFailed (96) rather than silently succeeding or returning
+	// InvalidNamespace (73) from MongoDB's own namespace check.
+	if _, _, _, err := branchFromDBName(db); err != nil {
+		return nil, err
+	}
+
 	// Use ExtractParam.
 	// TODO https://github.com/dolthub/dongo/issues/2859
 	v, _ := document.Get("collection")

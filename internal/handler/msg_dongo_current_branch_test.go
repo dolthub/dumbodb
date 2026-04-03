@@ -78,6 +78,12 @@ func (m *versioningBackendMock) DongoDiff(_ context.Context, _ *backends.DiffPar
 func (m *versioningBackendMock) DongoReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
 	return nil, nil
 }
+func (m *versioningBackendMock) DongoConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+	return nil, nil
+}
+func (m *versioningBackendMock) DongoResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+	return nil, nil
+}
 
 // makeCurrentBranchMsg creates a wire.OpMsg for dongoCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {

@@ -85,6 +85,13 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		)
 	}
 
+	// Validate rootish before backend access so invalid forms (HEAD, reflog, range)
+	// return OperationFailed (96) rather than silently succeeding or returning
+	// InvalidNamespace (73) from MongoDB's own namespace check.
+	if _, _, _, err := branchFromDBName(dbName); err != nil {
+		return nil, err
+	}
+
 	db, err := h.b.Database(dbName)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
