@@ -878,10 +878,16 @@ func (b *Backend) DocudoltCommit(ctx context.Context, params *backends.CommitPar
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Guard: reject docudoltCommit during any in-progress merge (resolved or not).
+	// Guard: reject docudoltCommit during any in-progress merge or cherry-pick.
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
+			if db.mergeState.isCherryPick {
+				return nil, fmt.Errorf("docudoltCommit: unresolved cherry-pick conflicts remain")
+			}
 			return nil, fmt.Errorf("docudoltCommit: unresolved merge conflicts remain")
+		}
+		if db.mergeState.isCherryPick {
+			return nil, fmt.Errorf("docudoltCommit: cherry-pick in progress: use docudoltCherryPick continue")
 		}
 		return nil, fmt.Errorf("docudoltCommit: merge in progress: use docudoltMerge continue")
 	}
@@ -1146,6 +1152,9 @@ func (b *Backend) DocudoltMerge(ctx context.Context, params *backends.MergeParam
 		if db.mergeState == nil {
 			return nil, fmt.Errorf("dolt: DocudoltMerge: no merge in progress to abort")
 		}
+		if db.mergeState.isCherryPick {
+			return nil, fmt.Errorf("dolt: DocudoltMerge: cherry-pick in progress on branch %q; use docudoltCherryPick abort instead", params.Into)
+		}
 		ms := db.mergeState
 		db.mergeState = nil
 
@@ -1163,6 +1172,9 @@ func (b *Backend) DocudoltMerge(ctx context.Context, params *backends.MergeParam
 	if params.Continue {
 		if db.mergeState == nil || db.mergeState.intoBranch != params.Into {
 			return nil, fmt.Errorf("docudoltMerge: no merge in progress")
+		}
+		if db.mergeState.isCherryPick {
+			return nil, fmt.Errorf("dolt: DocudoltMerge: cherry-pick in progress on branch %q; use docudoltCherryPick continue instead", params.Into)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
 			return nil, fmt.Errorf("docudoltMerge: unresolved merge conflicts remain")
@@ -1183,8 +1195,11 @@ func (b *Backend) DocudoltMerge(ctx context.Context, params *backends.MergeParam
 		return mergeRes, nil
 	}
 
-	// Guard: reject new merge initiation if a merge is already in progress.
+	// Guard: reject new merge initiation if a merge or cherry-pick is already in progress.
 	if db.mergeState != nil {
+		if db.mergeState.isCherryPick {
+			return nil, fmt.Errorf("dolt: DocudoltMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
+		}
 		return nil, fmt.Errorf("dolt: DocudoltMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 	}
 
@@ -1379,6 +1394,260 @@ func (b *Backend) commitMerge(
 	return &backends.MergeResult{
 		CommitID: mergeHash.String(),
 		Message:  mergeMessage,
+	}, nil
+}
+
+// DocudoltCherryPick implements backends.VersioningBackend.
+//
+// It applies the diff introduced by the named commit onto the current branch and
+// creates a new single-parent commit. Three cases:
+//
+//   - Abort (Abort=true): discard the in-progress cherry-pick and restore the
+//     pre-cherry-pick state.
+//   - Continue (Continue=true): after conflict resolution, complete the cherry-pick
+//     and create the new commit.
+//   - Normal pick: resolve the commit to cherry-pick, use its parent as the base,
+//     and perform a 3-way merge of (current HEAD, cherry-pick commit, parent of
+//     cherry-pick commit). On conflict, stage the partial result and return
+//     *backends.DocudoltCherryPickConflictError.
+func (b *Backend) DocudoltCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DocudoltCherryPick: database %q does not exist", params.DBName))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	branch := params.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Handle abort: discard in-progress cherry-pick and restore pre-pick state.
+	if params.Abort {
+		if db.mergeState == nil || !db.mergeState.isCherryPick {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: no cherry-pick in progress to abort")
+		}
+		ms := db.mergeState
+		db.mergeState = nil
+
+		// Restore the working set to the pre-pick AM.
+		if ms.intoBranch == "main" {
+			db.am = ms.premergeAM
+		} else {
+			db.branchAMs[ms.intoBranch] = ms.premergeAM
+		}
+
+		return &backends.CherryPickResult{Message: "cherry-pick aborted"}, nil
+	}
+
+	// Handle continue: resume after conflict resolution and create the cherry-pick commit.
+	if params.Continue {
+		if db.mergeState == nil || !db.mergeState.isCherryPick || db.mergeState.intoBranch != branch {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: no cherry-pick in progress on branch %q", branch)
+		}
+		if db.mergeState.hasUnresolvedConflicts() {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: unresolved cherry-pick conflicts remain")
+		}
+		ms := db.mergeState
+
+		intoBranchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
+		}
+
+		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
+		if pickErr != nil {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: continue: %w", pickErr)
+		}
+
+		db.mergeState = nil
+		return pickRes, nil
+	}
+
+	// Guard: reject new cherry-pick if a merge or cherry-pick is already in progress.
+	if db.mergeState != nil {
+		if db.mergeState.isCherryPick {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
+		}
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
+	}
+
+	if params.Commit == "" {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: commit parameter is required")
+	}
+
+	// Resolve the commit to cherry-pick.
+	pickHash, err := resolveRootishToCommitHash(ctx, db, params.Commit)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: resolving commit %q: %w", params.Commit, err)
+	}
+
+	// Load the cherry-pick commit to read its message and find its parent.
+	pickCommit, err := datas.LoadCommitAddr(ctx, db.vs, pickHash)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: loading commit %q: %w", pickHash, err)
+	}
+
+	pickMeta, err := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: reading meta for commit %q: %w", pickHash, err)
+	}
+	originalMsg := pickMeta.Description
+
+	// Get the parent hash of the commit to use as the merge base.
+	parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, pickCommit.NomsValue().(dolttypes.SerialMessage))
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: reading parents for commit %q: %w", pickHash, err)
+	}
+
+	// Load the base AM (parent of the cherry-picked commit).
+	// For a root commit with no parent, use an empty AM as the base.
+	var baseAM prolly.AddressMap
+	if len(parentAddrs) == 0 {
+		baseAM, err = prolly.NewEmptyAddressMap(db.ns)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: creating empty base AM: %w", err)
+		}
+	} else {
+		baseAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DocudoltCherryPick: loading parent AM for commit %q: %w", pickHash, err)
+		}
+	}
+
+	// Load the cherry-pick commit's AM (the "from" side).
+	fromAM, err := amFromCommitHash(ctx, db, pickHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: loading pick AM for commit %q: %w", pickHash, err)
+	}
+
+	// Resolve the current branch dataset.
+	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: resolving into branch %q: %w", branch, err)
+	}
+	if !intoBranchDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: into branch %q has no commits", branch)
+	}
+	intoHash, ok := intoBranchDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: into branch %q has no head address", branch)
+	}
+
+	// Load the current branch's HEAD AM (the "into" side).
+	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: loading into AM for branch %q: %w", branch, err)
+	}
+
+	// Perform the 3-way merge: apply cherry-pick diff (base→from) onto current HEAD (into).
+	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocudoltCherryPick: %w", err)
+	}
+
+	if len(conflicts) > 0 {
+		// Capture the pre-pick AM for abort support.
+		var prePickAM prolly.AddressMap
+		if branch == "main" {
+			prePickAM = db.am
+		} else {
+			prePickAM, err = db.getOrInitBranchAM(ctx, branch)
+			if err != nil {
+				return nil, fmt.Errorf("dolt: DocudoltCherryPick: loading pre-pick AM for branch %q: %w", branch, err)
+			}
+		}
+
+		db.mergeState = &mergeInProgress{
+			intoBranch:   branch,
+			premergeAM:   prePickAM,
+			intoHash:     intoHash,
+			conflicts:    conflicts,
+			resolvedAM:   mergedAM,
+			isCherryPick: true,
+			pickHash:     pickHash,
+			originalMsg:  originalMsg,
+		}
+
+		summaries := db.mergeState.summaries()
+		return nil, &backends.DocudoltCherryPickConflictError{Conflicts: summaries}
+	}
+
+	// Clean cherry-pick — commit immediately.
+	return b.commitCherryPick(ctx, db, branch, intoBranchDS, intoHash, pickHash, mergedAM, originalMsg, params.Message, params.Author)
+}
+
+// commitCherryPick creates a single-parent commit on the branch applying the cherry-picked AM.
+// originalMsg is the cherry-picked commit's message; message (if non-empty) overrides it.
+// author is optional.
+func (b *Backend) commitCherryPick(
+	ctx context.Context,
+	db *dbState,
+	branch string,
+	branchDS datas.Dataset,
+	intoHash, pickHash hash.Hash,
+	pickedAM prolly.AddressMap,
+	originalMsg, message, author string,
+) (*backends.CherryPickResult, error) {
+	commitMsg := message
+	if commitMsg == "" {
+		if originalMsg != "" {
+			commitMsg = originalMsg + "\n\n(cherry picked from commit " + pickHash.String() + ")"
+		} else {
+			commitMsg = "cherry picked from commit " + pickHash.String()
+		}
+	}
+
+	commitName := "docudolt"
+	commitEmail := "docudolt@localhost"
+	if author != "" {
+		if idx := strings.Index(author, " <"); idx >= 0 {
+			commitName = author[:idx]
+			commitEmail = strings.TrimSuffix(author[idx+2:], ">")
+		} else {
+			commitName = author
+			commitEmail = author + "@docudolt"
+		}
+	}
+
+	meta, err := datas.NewCommitMeta(commitName, commitEmail, commitMsg)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: commitCherryPick: building commit meta: %w", err)
+	}
+
+	rtvlMsg := buildRootValueFlatbuffer(pickedAM)
+	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+		Meta:    meta,
+		Parents: []hash.Hash{intoHash},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dolt: commitCherryPick: committing: %w", err)
+	}
+
+	newHash, ok := newDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: commitCherryPick: no head after cherry-pick commit")
+	}
+
+	if branch == "main" {
+		db.ds = newDS
+		db.am = pickedAM
+		if err := updateWorkingSet(ctx, db.doltDB, pickedAM, pickedAM, "main"); err != nil {
+			return nil, fmt.Errorf("dolt: commitCherryPick: updating working set: %w", err)
+		}
+	} else {
+		db.branchAMs[branch] = pickedAM
+	}
+
+	return &backends.CherryPickResult{
+		CommitID: newHash.String(),
+		Message:  commitMsg,
 	}, nil
 }
 

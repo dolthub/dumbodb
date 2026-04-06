@@ -197,6 +197,13 @@ func (b *Backend) DocudoltResolveConflict(_ context.Context, params *backends.Re
 	return &backends.ResolveConflictResult{}, nil
 }
 
+// DocudoltCherryPick implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltCherryPick(_ context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+	b.l.Info("stub: DocudoltCherryPick", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("commit", params.Commit))
+
+	return &backends.CherryPickResult{CommitID: "stub", Message: "stub cherry-pick"}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

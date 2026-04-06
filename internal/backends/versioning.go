@@ -92,6 +92,36 @@ func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("docudoltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
+// CherryPickParams represents the parameters of VersioningBackend.DocudoltCherryPick method.
+type CherryPickParams struct {
+	DBName   string
+	Branch   string // current branch (the target branch to apply the cherry-pick onto)
+	Commit   string // rootish of the commit to cherry-pick (required unless Abort/Continue)
+	Abort    bool   // if true, abandon the in-progress cherry-pick and restore working set
+	Continue bool   // if true, after conflict resolution, complete the cherry-pick and create the commit
+	Message  string // optional: custom commit message override
+	Author   string // optional: 'Name <email>'
+}
+
+// CherryPickResult represents the result of VersioningBackend.DocudoltCherryPick method.
+type CherryPickResult struct {
+	CommitID string
+	Message  string
+}
+
+// DocudoltCherryPickConflictError is returned by DocudoltCherryPick when the cherry-pick
+// cannot be completed automatically due to conflicting document changes. The cherry-pick
+// is staged but not committed; conflicts must be resolved via DocudoltResolveConflict
+// before DocudoltCherryPick continue will succeed.
+type DocudoltCherryPickConflictError struct {
+	Conflicts []ConflictSummary
+}
+
+// Error implements the error interface.
+func (e *DocudoltCherryPickConflictError) Error() string {
+	return fmt.Sprintf("docudoltCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+}
+
 // ConflictInfo describes a single document-level conflict in an in-progress merge.
 type ConflictInfo struct {
 	ConflictID    string
@@ -286,4 +316,12 @@ type VersioningBackend interface {
 	// Returns ErrOperationFailed if no merge is in progress, if the collection or conflict ID is not found,
 	// or if the conflict is already resolved.
 	DocudoltResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
+
+	// DocudoltCherryPick applies the diff introduced by the named commit onto the current branch's
+	// working set and creates a new commit. The commit parameter is a rootish (commit hash or
+	// ancestor expression). On conflict, the cherry-pick is staged but not committed and a
+	// *DocudoltCherryPickConflictError is returned. Conflicts are resolved via
+	// DocudoltResolveConflict/DocudoltConflicts. After resolution, use Continue=true to complete
+	// the cherry-pick. Use Abort=true to abandon an in-progress cherry-pick.
+	DocudoltCherryPick(context.Context, *CherryPickParams) (*CherryPickResult, error)
 }

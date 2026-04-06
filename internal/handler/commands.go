@@ -122,6 +122,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDocudoltBranch,
 			Help:    "Creates a new Docudolt branch from the current branch encoded in the database name.",
 		},
+		"docudoltCherryPick": {
+			Handler: h.MsgDocudoltCherryPick,
+			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
+		},
 		"docudoltConflicts": {
 			Handler: h.MsgDocudoltConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",

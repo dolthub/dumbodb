@@ -296,6 +296,15 @@ func (bc *backendContract) DocudoltResolveConflict(ctx context.Context, params *
 	return nil, newVersioningUnsupportedError("DocudoltResolveConflict")
 }
 
+// DocudoltCherryPick implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltCherryPick(ctx context.Context, params *CherryPickParams) (*CherryPickResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DocudoltCherryPick(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DocudoltCherryPick")
+}
+
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {

@@ -170,6 +170,15 @@ func (b *backend) DocudoltResolveConflict(ctx context.Context, params *backends.
 	return nil, fmt.Errorf("oplog: DocudoltResolveConflict: versioning not supported by wrapped backend")
 }
 
+// DocudoltCherryPick implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocudoltCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DocudoltCherryPick(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DocudoltCherryPick: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
 	_ backends.Backend          = (*backend)(nil)

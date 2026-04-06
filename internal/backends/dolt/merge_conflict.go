@@ -26,15 +26,24 @@ import (
 	"github.com/dolthub/docudolt/internal/backends"
 )
 
-// mergeInProgress holds the state of a merge that could not be automatically
-// completed due to document-level conflicts. It persists in dbState until the
-// user resolves all conflicts and calls DocudoltCommit.
+// mergeInProgress holds the state of a merge or cherry-pick that could not be
+// automatically completed due to document-level conflicts. It persists in dbState
+// until the user resolves all conflicts.
+//
+// When isCherryPick is false: fromBranch and fromHash identify the source branch;
+// the final commit has two parents (intoHash and fromHash).
+//
+// When isCherryPick is true: pickHash is the cherry-picked commit; intoHash is
+// the current branch HEAD; the final commit has one parent (intoHash).
+// fromBranch is unused in cherry-pick mode; pickHash stores the cherry-pick source.
+// originalMsg holds the original commit message of the cherry-picked commit for
+// the default annotation.
 type mergeInProgress struct {
-	fromBranch string
-	intoBranch string
-	premergeAM prolly.AddressMap // ours branch AM before the merge started (used to abort)
-	fromHash   hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent)
-	intoHash   hash.Hash         // intoBranch HEAD hash at merge time (merge commit parent)
+	fromBranch  string
+	intoBranch  string
+	premergeAM  prolly.AddressMap // ours branch AM before the operation started (used to abort)
+	fromHash    hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)
+	intoHash    hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
 	// conflicts: collection name → ordered list of conflict entries.
 	// Entries are never removed; resolved ones have resolved==true.
 	conflicts map[string][]*conflictEntry
@@ -42,6 +51,11 @@ type mergeInProgress struct {
 	// It starts as the partial merged AM (keeping "ours" for conflicting docs) and
 	// is updated as each conflict is resolved.
 	resolvedAM prolly.AddressMap
+
+	// Cherry-pick specific fields (set when isCherryPick is true).
+	isCherryPick bool
+	pickHash     hash.Hash // the cherry-picked commit hash
+	originalMsg  string    // original commit message for the cherry-pick default annotation
 }
 
 // hasUnresolvedConflicts reports whether any conflict entry in the merge state is unresolved.
@@ -119,7 +133,7 @@ func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.Confli
 	db.mu.RUnlock()
 
 	if ms == nil {
-		return nil, fmt.Errorf("dolt: DocudoltConflicts: no merge in progress on branch %q", params.Branch)
+		return nil, fmt.Errorf("dolt: DocudoltConflicts: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
 	if params.Collection == "" {
@@ -201,7 +215,7 @@ func (b *Backend) DocudoltResolveConflict(ctx context.Context, params *backends.
 
 	ms := db.mergeState
 	if ms == nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: no merge in progress on branch %q", params.Branch)
+		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
 	entries, ok := ms.conflicts[params.Collection]

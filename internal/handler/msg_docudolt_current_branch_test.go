@@ -84,6 +84,9 @@ func (m *versioningBackendMock) DocudoltConflicts(_ context.Context, _ *backends
 func (m *versioningBackendMock) DocudoltResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	return nil, nil
 }
+func (m *versioningBackendMock) DocudoltCherryPick(_ context.Context, _ *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+	return nil, nil
+}
 
 // makeCurrentBranchMsg creates a wire.OpMsg for docudoltCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {

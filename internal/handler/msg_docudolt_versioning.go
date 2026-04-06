@@ -1135,3 +1135,164 @@ func (h *Handler) MsgDocudoltStatus(connCtx context.Context, msg *wire.OpMsg) (*
 		)),
 	)
 }
+
+// MsgDocudoltCherryPick implements the `docudoltCherryPick` command.
+//
+// Applies the diff introduced by the named commit onto the current branch encoded
+// in $db and creates a new commit. On conflict, the cherry-pick is staged but not
+// committed; use docudoltConflicts / docudoltResolveConflict to inspect and resolve
+// conflicts, then docudoltCherryPick continue:true to complete.
+//
+// Usage:
+//
+//	db.getSiblingDB("mydb__main").runCommand({docudoltCherryPick: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltCherryPick: 1, abort: 1})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltCherryPick: 1, continue: 1})
+//
+// Optional parameters for cherry-pick initiation:
+//   - message (string): custom commit message (default: original message + annotation)
+//   - author (string): 'Name <email>' for the commit author
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDocudoltCherryPick(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	abort, err := common.GetOptionalBoolOrIntParam(document, "abort", false)
+	if err != nil {
+		return nil, err
+	}
+
+	continueParam, err := common.GetOptionalBoolOrIntParam(document, "continue", false)
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"docudoltCherryPick: versioning is not supported by the current backend",
+		)
+	}
+
+	if abort {
+		res, pickErr := vb.DocudoltCherryPick(connCtx, &backends.CherryPickParams{
+			DBName: dbName,
+			Branch: branch,
+			Abort:  true,
+		})
+		if pickErr != nil {
+			return nil, lazyerrors.Error(pickErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"message", res.Message,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	if continueParam {
+		message, err := common.GetOptionalParam[string](document, "message", "")
+		if err != nil {
+			return nil, err
+		}
+		author, err := common.GetOptionalParam[string](document, "author", "")
+		if err != nil {
+			return nil, err
+		}
+		res, pickErr := vb.DocudoltCherryPick(connCtx, &backends.CherryPickParams{
+			DBName:   dbName,
+			Branch:   branch,
+			Continue: true,
+			Message:  message,
+			Author:   author,
+		})
+		if pickErr != nil {
+			return nil, lazyerrors.Error(pickErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"commitId", res.CommitID,
+				"message", res.Message,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	commit, err := common.GetRequiredParam[string](document, "commit")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := parseRootish(commit); err != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"docudoltCherryPick: "+err.Error(),
+			"commit",
+		)
+	}
+
+	message, err := common.GetOptionalParam[string](document, "message", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
+	res, pickErr := vb.DocudoltCherryPick(connCtx, &backends.CherryPickParams{
+		DBName:  dbName,
+		Branch:  branch,
+		Commit:  commit,
+		Message: message,
+		Author:  author,
+	})
+
+	if pickErr != nil {
+		var conflictErr *backends.DocudoltCherryPickConflictError
+		if errors.As(pickErr, &conflictErr) {
+			// Return a structured ok:0 response with per-collection conflict counts.
+			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+			for _, c := range conflictErr.Conflicts {
+				entry := must.NotFail(types.NewDocument(
+					"collection", c.Collection,
+					"count", int32(c.Count),
+				))
+				conflictsArr.Append(entry)
+			}
+			return documentOpMsg(
+				must.NotFail(types.NewDocument(
+					"conflicts", conflictsArr,
+					"ok", float64(0),
+					"code", int32(handlererrors.ErrOperationFailed),
+					"errmsg", conflictErr.Error(),
+				)),
+			)
+		}
+		return nil, lazyerrors.Error(pickErr)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"commitId", res.CommitID,
+			"message", res.Message,
+			"ok", float64(1),
+		)),
+	)
+}
