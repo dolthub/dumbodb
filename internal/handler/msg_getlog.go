@@ -117,13 +117,6 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		switch {
-		case state.Telemetry == nil:
-			startupWarnings = append(
-				startupWarnings,
-				"The telemetry state is undecided.",
-				"Read more about Docudolt telemetry and how to opt out at https://github.com/dolthub/docudolt.",
-			)
-
 		case state.UpdateInfo != "", state.UpdateAvailable:
 			msg := state.UpdateInfo
 			if msg == "" {
