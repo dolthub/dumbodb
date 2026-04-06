@@ -230,15 +230,44 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // in "v1.0", '/' in "feature/foo") can be encoded by the client as "v1%2E0" or
 // "feature%2Ffoo". The handler has already validated the encoding before the
 // backend is reached, so decode errors here fall back to the raw value.
+//
+// All-digit strings after __ (e.g. Unix nanosecond timestamps) are not valid
+// rootish expressions and cause the whole encoded name to be treated as a plain
+// database name. This prevents spurious "not found as branch or tag" errors when
+// client code accidentally produces database names like "prefix__1775505756999075683".
 func splitEncodedDBName(encoded string) (dbName, rootish string) {
 	if idx := strings.Index(encoded, "__"); idx > 0 {
 		raw := encoded[idx+2:]
+		candidate := raw
 		if decoded, err := url.PathUnescape(raw); err == nil {
-			return encoded[:idx], decoded
+			candidate = decoded
 		}
-		return encoded[:idx], raw
+		// All-digit strings are not valid rootish expressions; treat the whole
+		// encoded name as a plain database name instead.
+		if !splitAllDigits(candidate) {
+			return encoded[:idx], candidate
+		}
 	}
 	return encoded, "main"
+}
+
+// splitAllDigits reports whether s consists entirely of ASCII decimal digits
+// AND is not a valid Dolt commit hash length.
+//
+// Dolt commit hashes are exactly 32 base32 characters (0-9a-v); a 32-char
+// all-digit string is a valid hash and must still be treated as a rootish.
+// Any other all-digit string (e.g. a 19-digit UnixNano timestamp) cannot be
+// a branch name, tag, hash, or ancestor expression.
+func splitAllDigits(s string) bool {
+	if s == "" || len(s) == 32 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ListDatabases implements backends.Backend.

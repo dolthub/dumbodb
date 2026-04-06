@@ -152,23 +152,51 @@ func (h *Handler) MsgDocudoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wi
 // not performed here.
 //
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
+//
+// All-digit strings after __ (e.g. Unix nanosecond timestamps used as database name suffixes)
+// are not valid rootish expressions and cause the whole encoded name to be treated as a plain
+// database name rather than returning an error or misinterpreting the suffix as a branch name.
 func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, err error) {
 	if idx := strings.Index(encoded, "__"); idx > 0 {
 		raw := encoded[idx+2:]
-		rootish, err = url.PathUnescape(raw)
-		if err != nil {
+		candidate, decErr := url.PathUnescape(raw)
+		if decErr != nil {
 			return "", "", false, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrOperationFailed,
-				fmt.Sprintf("rootish %q: invalid percent-encoding: %v", raw, err),
+				fmt.Sprintf("rootish %q: invalid percent-encoding: %v", raw, decErr),
 			)
 		}
-		if err = parseRootish(rootish); err != nil {
-			return "", "", false, err
+		// All-digit strings (e.g. UnixNano timestamps) are not valid rootish
+		// expressions. Fall through to plain-DB treatment so that database names
+		// like "parity_test__1775505756999075683" work without error.
+		if !rootishAllDigits(candidate) {
+			if err = parseRootish(candidate); err != nil {
+				return "", "", false, err
+			}
+			return encoded[:idx], candidate, rootishIsReadOnly(candidate), nil
 		}
-		return encoded[:idx], rootish, rootishIsReadOnly(rootish), nil
 	}
 
 	return encoded, "main", false, nil
+}
+
+// rootishAllDigits reports whether s consists entirely of ASCII decimal digits
+// AND is not a valid Dolt commit hash length.
+//
+// Dolt commit hashes are exactly 32 base32 characters (0-9a-v); a 32-char
+// all-digit string is a valid hash and must still be treated as a rootish.
+// Any other all-digit string (e.g. a 19-digit UnixNano timestamp) cannot be
+// a branch name, tag name, hash, or ancestor expression.
+func rootishAllDigits(s string) bool {
+	if s == "" || len(s) == 32 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // rootishIsReadOnly reports whether the rootish is a read-only snapshot reference.

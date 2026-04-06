@@ -129,6 +129,37 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 	})
 }
 
+// TestRootish_AllDigitSuffix_TreatedAsPlainDB verifies that a database name whose
+// __ suffix is an all-digit string (e.g. a UnixNano timestamp from test harnesses)
+// is treated as a plain database name rather than failing with "not found as branch
+// or tag". This is a regression test for the parity CI failure where names like
+// "parity_AdvancedQuery_Regex_CaseInsensitive__1775505756999075683" caused an
+// InternalError on insert/find.
+func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
+	t.Parallel()
+
+	env := startDocudolt(t)
+	ctx := context.Background()
+
+	// Simulate a parity-harness-style database name: a prefix ending in _ joined to
+	// a UnixNano timestamp, producing a __ separator by accident.
+	// The format "prefix_%s_%d" with a sanitized name ending in _ yields prefix__timestamp.
+	dbName := "parityreg_sometest__1775505756999075683"
+	coll := env.client.Database(dbName).Collection("col")
+
+	// Insert must succeed — the numeric suffix must NOT be misinterpreted as a branch.
+	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "hello"}})
+	require.NoError(t, err, "insert to all-digit-suffix DB must not fail with branch-not-found")
+
+	// Find must return the inserted doc.
+	cur, err := coll.Find(ctx, bson.D{})
+	require.NoError(t, err, "find on all-digit-suffix DB must not fail")
+	var docs []bson.D
+	require.NoError(t, cur.All(ctx, &docs))
+	require.Len(t, docs, 1)
+	assert.Equal(t, int32(1), docs[0].Map()["_id"])
+}
+
 // TestRootish_CommitHash_DataIsolation is a focused end-to-end test of snapshot
 // isolation: the hash rootish sees exactly the data from that commit, regardless
 // of subsequent writes to main.

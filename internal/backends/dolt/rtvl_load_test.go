@@ -184,6 +184,10 @@ func TestSplitEncodedDBName(t *testing.T) {
 		{"mydb__main%7E1", "mydb", "main~1"}, // ~1 encoded (passthrough — still ancestor expr)
 		// Invalid percent sequence: falls back to raw value.
 		{"mydb__%ZZ", "mydb", "%ZZ"},
+		// All-digit suffix (e.g. UnixNano timestamp): treated as plain DB name to
+		// prevent "not found as branch or tag" errors from parity test harnesses.
+		{"parity_sometest__1775505756999075683", "parity_sometest__1775505756999075683", "main"},
+		{"mydb__12345", "mydb__12345", "main"},
 	}
 
 	for _, tc := range cases {

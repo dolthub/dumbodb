@@ -120,6 +120,9 @@ func TestBranchFromDBName(t *testing.T) {
 		{"db name with underscore", "my_db__main", "my_db", "main", false},
 		{"double underscore db name treated as plain", "__", "__", "main", false},
 		{"leading double underscore treated as plain", "__main", "__main", "main", false},
+		// All-digit suffix (e.g. UnixNano timestamp): whole name treated as plain DB.
+		{"all-digit suffix treated as plain DB", "parity_sometest__1775505756999075683", "parity_sometest__1775505756999075683", "main", false},
+		{"short all-digit suffix treated as plain DB", "mydb__12345", "mydb__12345", "main", false},
 	}
 
 	for _, tc := range validCases {
