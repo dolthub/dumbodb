@@ -509,12 +509,12 @@ func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 		)
 	}
 
-	safeDelete, err := common.GetOptionalParam[bool](document, "d", false)
+	safeDelete, err := common.GetOptionalBoolOrIntParam(document, "delete", false)
 	if err != nil {
 		return nil, err
 	}
 
-	forceDelete, err := common.GetOptionalParam[bool](document, "D", false)
+	forceDelete, err := common.GetOptionalBoolOrIntParam(document, "forceDelete", false)
 	if err != nil {
 		return nil, err
 	}
@@ -522,8 +522,8 @@ func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 	if safeDelete && forceDelete {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltBranch: d and D are mutually exclusive",
-			"d",
+			"doltBranch: delete and forceDelete are mutually exclusive",
+			"delete",
 		)
 	}
 

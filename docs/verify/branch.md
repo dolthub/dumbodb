@@ -172,16 +172,16 @@ Key check: branch created successfully and sees only commit-1 state.
 
 ---
 
-## Scenario 6: Safe delete (-d) — branch already merged into main
+## Scenario 6: Safe delete (delete) — branch already merged into main
 
-`doltBranch` with `d: 1` deletes a branch only if its HEAD is reachable from
+`doltBranch` with `delete: 1` deletes a branch only if its HEAD is reachable from
 another branch (i.e. no data would be lost).  A branch whose HEAD equals the
 source branch HEAD is always safe to delete.
 
 ```js
 // Create a branch at current main HEAD and immediately safe-delete it.
 db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "merged-branch" })
-db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "merged-branch", d: 1 })
+db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "merged-branch", delete: 1 })
 // Expected: { "branch": "merged-branch", "ok": 1 }
 ```
 
@@ -189,7 +189,7 @@ Key check: `branch` echoes the name, `ok` is `1`.
 
 ---
 
-## Scenario 7: Safe delete (-d) — branch has unmerged commits, rejected
+## Scenario 7: Safe delete (delete) — branch has unmerged commits, rejected
 
 If the branch to delete has commits that are not reachable from any other branch,
 safe delete must fail with an error.
@@ -202,7 +202,7 @@ ub.items.insertOne({ _id: 99, label: "extra" })
 ub.runCommand({ doltCommit: 1, message: "extra commit", author: "alice <alice@docudolt>" })
 
 // Safe delete must fail.
-db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "unmerged-branch", d: 1 })
+db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "unmerged-branch", delete: 1 })
 // Expected: error response — ok: 0, errmsg contains "unmerged commits"
 ```
 
@@ -210,9 +210,9 @@ Key check: command returns an error; `unmerged-branch` still exists afterwards.
 
 ---
 
-## Scenario 8: Force delete (-D) — branch has unmerged commits, succeeds
+## Scenario 8: Force delete (forceDelete) — branch has unmerged commits, succeeds
 
-`doltBranch` with `D: 1` deletes a branch unconditionally, even if it has
+`doltBranch` with `forceDelete: 1` deletes a branch unconditionally, even if it has
 commits that are not reachable from any other branch.
 
 ```js
@@ -223,7 +223,7 @@ fb.items.insertOne({ _id: 77, label: "gone" })
 fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "alice <alice@docudolt>" })
 
 // Force delete succeeds regardless of merge status.
-db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "force-branch", D: 1 })
+db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "force-branch", forceDelete: 1 })
 // Expected: { "branch": "force-branch", "ok": 1 }
 ```
 
@@ -239,13 +239,13 @@ Key check: `branch` echoes the name, `ok` is `1`; the branch is gone.
 | `{ doltBranch: 1, branch: "name" }` | `__d_feature` | `{ branch: "name", ok: 1 }` |
 | `{ doltBranch: 1, branch: "name" }` | `__d_<hash>` | `{ branch: "name", ok: 1 }` |
 | `{ doltBranch: 1, branch: "name" }` | `__d_main~1` | `{ branch: "name", ok: 1 }` |
-| `{ doltBranch: 1, branch: "name", d: 1 }` | `__d_main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
-| `{ doltBranch: 1, branch: "name", D: 1 }` | `__d_main` | `{ branch: "name", ok: 1 }` (always) |
+| `{ doltBranch: 1, branch: "name", delete: 1 }` | `__d_main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
+| `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `__d_main` | `{ branch: "name", ok: 1 }` (always) |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).
 - The new branch HEAD equals the commit that was resolved from the source rootish.
 - Writes on the new branch are isolated from the source branch.
-- `d: 1` (safe delete): fails if the branch has commits not reachable from any other branch.
-- `D: 1` (force delete): succeeds unconditionally.
-- `d` and `D` are mutually exclusive; passing both returns an error.
+- `delete: 1` (safe delete): fails if the branch has commits not reachable from any other branch.
+- `forceDelete: 1` (force delete): succeeds unconditionally.
+- `delete` and `forceDelete` are mutually exclusive; passing both returns an error.

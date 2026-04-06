@@ -222,7 +222,7 @@ func TestBranchVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "merged-branch"},
-			{Key: "d", Value: true},
+			{Key: "delete", Value: int32(1)},
 		}).Decode(&result), "safe delete of a merged branch must succeed")
 
 		assert.Equal(t, "merged-branch", result["branch"])
@@ -253,7 +253,7 @@ func TestBranchVerify(t *testing.T) {
 		err = env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "unmerged-branch"},
-			{Key: "d", Value: true},
+			{Key: "delete", Value: int32(1)},
 		}).Err()
 		require.Error(t, err, "safe delete of a branch with unmerged commits must fail")
 	})
@@ -283,7 +283,7 @@ func TestBranchVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "force-branch"},
-			{Key: "D", Value: true},
+			{Key: "forceDelete", Value: int32(1)},
 		}).Decode(&result), "force delete must succeed even with unmerged commits")
 
 		assert.Equal(t, "force-branch", result["branch"])
