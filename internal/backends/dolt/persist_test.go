@@ -449,9 +449,9 @@ func TestWritesNoNewCommits(t *testing.T) {
 	}
 }
 
-// TestDocudoltCommit verifies that DocudoltCommit creates a new dolt commit,
+// TestDocuDoltCommit verifies that DocuDoltCommit creates a new dolt commit,
 // advances HEAD, and returns a non-empty hash string.
-func TestDocudoltCommit(t *testing.T) {
+func TestDocuDoltCommit(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-test-*")
 	if err != nil {
 		t.Fatal(err)
@@ -494,19 +494,19 @@ func TestDocudoltCommit(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	// Run DocudoltCommit.
-	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{
+	// Run DocuDoltCommit.
+	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "my first commit",
 		Author:  "testuser",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltCommit: %v", err)
+		t.Fatalf("DocuDoltCommit: %v", err)
 	}
 
 	// Hash must be non-empty and not all-zeros.
 	if res.CommitID == "" {
-		t.Error("DocudoltCommit returned empty hash")
+		t.Error("DocuDoltCommit returned empty hash")
 	}
 	allZero := true
 	for _, c := range res.CommitID {
@@ -516,17 +516,17 @@ func TestDocudoltCommit(t *testing.T) {
 		}
 	}
 	if allZero {
-		t.Errorf("DocudoltCommit returned all-zero hash: %s", res.CommitID)
+		t.Errorf("DocuDoltCommit returned all-zero hash: %s", res.CommitID)
 	}
 
 	// Branch should be "main".
 	if res.Branch != "main" {
-		t.Errorf("DocudoltCommit branch = %q, want %q", res.Branch, "main")
+		t.Errorf("DocuDoltCommit branch = %q, want %q", res.Branch, "main")
 	}
 
 	// Message should match.
 	if res.Message != "my first commit" {
-		t.Errorf("DocudoltCommit message = %q, want %q", res.Message, "my first commit")
+		t.Errorf("DocuDoltCommit message = %q, want %q", res.Message, "my first commit")
 	}
 
 	// HEAD must have advanced past the init commit.
@@ -536,15 +536,15 @@ func TestDocudoltCommit(t *testing.T) {
 	}
 	headAddr, ok := freshDS.MaybeHeadAddr()
 	if !ok {
-		t.Fatal("no HEAD after DocudoltCommit")
+		t.Fatal("no HEAD after DocuDoltCommit")
 	}
 	if headAddr == initAddr {
-		t.Error("HEAD did not advance after DocudoltCommit")
+		t.Error("HEAD did not advance after DocuDoltCommit")
 	}
 }
 
-// TestDocudoltCommitDefaultMessage verifies that an empty Message defaults to "dolt commit".
-func TestDocudoltCommitDefaultMessage(t *testing.T) {
+// TestDocuDoltCommitDefaultMessage verifies that an empty Message defaults to "dolt commit".
+func TestDocuDoltCommitDefaultMessage(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-default-msg-*")
 	if err != nil {
 		t.Fatal(err)
@@ -563,17 +563,17 @@ func TestDocudoltCommitDefaultMessage(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
+	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit: %v", err)
+		t.Fatalf("DocuDoltCommit: %v", err)
 	}
 	if res.Message != "dolt commit" {
 		t.Errorf("default message = %q, want %q", res.Message, "dolt commit")
 	}
 }
 
-// TestDocudoltCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
-func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
+// TestDocuDoltCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
+func TestDocuDoltCommitTwoDistinctHashes(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-two-hashes-*")
 	if err != nil {
 		t.Fatal(err)
@@ -610,9 +610,9 @@ func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
+	res1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 1: %v", err)
+		t.Fatalf("DocuDoltCommit 1: %v", err)
 	}
 
 	// Insert another document, then commit again.
@@ -625,9 +625,9 @@ func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res2, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
+	res2, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 2: %v", err)
+		t.Fatalf("DocuDoltCommit 2: %v", err)
 	}
 
 	if res1.CommitID == res2.CommitID {
@@ -635,9 +635,9 @@ func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
 	}
 }
 
-// TestDocudoltCommitNoOpSucceeds verifies that committing with no changes since the last
+// TestDocuDoltCommitNoOpSucceeds verifies that committing with no changes since the last
 // commit succeeds (a no-op commit is acceptable).
-func TestDocudoltCommitNoOpSucceeds(t *testing.T) {
+func TestDocuDoltCommitNoOpSucceeds(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-noop-*")
 	if err != nil {
 		t.Fatal(err)
@@ -657,15 +657,15 @@ func TestDocudoltCommitNoOpSucceeds(t *testing.T) {
 	}
 
 	// First commit (on empty state after init).
-	res1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
+	res1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 1: %v", err)
+		t.Fatalf("DocuDoltCommit 1: %v", err)
 	}
 
 	// Second commit with no intervening writes — must not error.
-	res2, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
+	res2, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 2 (no-op): %v", err)
+		t.Fatalf("DocuDoltCommit 2 (no-op): %v", err)
 	}
 
 	// Both hashes must be non-empty.
@@ -674,9 +674,9 @@ func TestDocudoltCommitNoOpSucceeds(t *testing.T) {
 	}
 }
 
-// TestDocudoltCommitWorkingSetClean verifies that after a commit the working set's
+// TestDocuDoltCommitWorkingSetClean verifies that after a commit the working set's
 // staged root address equals the HEAD commit's rootValue address (clean state).
-func TestDocudoltCommitWorkingSetClean(t *testing.T) {
+func TestDocuDoltCommitWorkingSetClean(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-ws-clean-*")
 	if err != nil {
 		t.Fatal(err)
@@ -714,8 +714,8 @@ func TestDocudoltCommitWorkingSetClean(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	if _, err = b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
-		t.Fatalf("DocudoltCommit: %v", err)
+	if _, err = b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
+		t.Fatalf("DocuDoltCommit: %v", err)
 	}
 
 	// Read HEAD rootValue hash.
@@ -750,9 +750,9 @@ func TestDocudoltCommitWorkingSetClean(t *testing.T) {
 	}
 }
 
-// TestDocudoltCommitAuthorAndTimestamp verifies that DocudoltCommit stores the provided
-// author name and timestamp, and that docudoltLog reflects them on the resulting commit.
-func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
+// TestDocuDoltCommitAuthorAndTimestamp verifies that DocuDoltCommit stores the provided
+// author name and timestamp, and that docuDoltLog reflects them on the resulting commit.
+func TestDocuDoltCommitAuthorAndTimestamp(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-author-*")
 	if err != nil {
 		t.Fatal(err)
@@ -773,14 +773,14 @@ func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
 
 	fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{
+	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
 		DBName:    "testdb",
 		Message:   "authored commit",
 		Author:    "alice",
 		Timestamp: fixedTime,
 	})
 	if err != nil {
-		t.Fatalf("DocudoltCommit: %v", err)
+		t.Fatalf("DocuDoltCommit: %v", err)
 	}
 
 	if res.Author != "alice" {
@@ -790,16 +790,16 @@ func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
 		t.Errorf("CommitResult.Timestamp = %d, want %d", res.Timestamp, fixedTime.UnixMilli())
 	}
 
-	// Verify via docudoltLog that author and timestamp were persisted.
-	logRes, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	// Verify via docuDoltLog that author and timestamp were persisted.
+	logRes, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
 	if err != nil {
-		t.Fatalf("DocudoltLog: %v", err)
+		t.Fatalf("DocuDoltLog: %v", err)
 	}
 	if len(logRes.Commits) == 0 {
-		t.Fatal("expected at least 1 commit from DocudoltLog")
+		t.Fatal("expected at least 1 commit from DocuDoltLog")
 	}
 	c := logRes.Commits[0]
-	// docudoltLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@docudolt>".
+	// docuDoltLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@docudolt>".
 	if c.Author != "alice <alice@docudolt>" {
 		t.Errorf("log commit Author = %q, want %q", c.Author, "alice <alice@docudolt>")
 	}
@@ -808,9 +808,9 @@ func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
 	}
 }
 
-// TestDocudoltCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
+// TestDocuDoltCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
 // the commit timestamp is set to approximately the current time.
-func TestDocudoltCommitTimestampDefaultsToNow(t *testing.T) {
+func TestDocuDoltCommitTimestampDefaultsToNow(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-ts-default-*")
 	if err != nil {
 		t.Fatal(err)
@@ -830,14 +830,14 @@ func TestDocudoltCommitTimestampDefaultsToNow(t *testing.T) {
 	}
 
 	before := time.Now().UnixMilli()
-	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{
+	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "no timestamp",
 		Author:  "bob",
 	})
 	after := time.Now().UnixMilli()
 	if err != nil {
-		t.Fatalf("DocudoltCommit: %v", err)
+		t.Fatalf("DocuDoltCommit: %v", err)
 	}
 
 	if res.Timestamp < before || res.Timestamp > after {
@@ -863,7 +863,7 @@ func newBackendForTest(t *testing.T) (b *Backend, dir string) {
 }
 
 // insertDocForTest inserts a document with the given integer _id into the named collection,
-// so that a subsequent DocudoltCommit records a real content change.
+// so that a subsequent DocuDoltCommit records a real content change.
 func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName string, id int64) {
 	t.Helper()
 	db, err := b.Database(dbName)
@@ -884,9 +884,9 @@ func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName stri
 	}
 }
 
-// TestDocudoltLogFreshDatabase verifies that DocudoltLog on a brand-new database returns exactly
+// TestDocuDoltLogFreshDatabase verifies that DocuDoltLog on a brand-new database returns exactly
 // one commit — the "Initialize database" root commit — and that the root commit has no Parent1.
-func TestDocudoltLogFreshDatabase(t *testing.T) {
+func TestDocuDoltLogFreshDatabase(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -896,9 +896,9 @@ func TestDocudoltLogFreshDatabase(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DocudoltLog: %v", err)
+		t.Fatalf("DocuDoltLog: %v", err)
 	}
 
 	if len(res.Commits) != 1 {
@@ -921,9 +921,9 @@ func TestDocudoltLogFreshDatabase(t *testing.T) {
 	}
 }
 
-// TestDocudoltLogAfterOneCommit verifies that after one DocudoltCommit the log returns
+// TestDocuDoltLogAfterOneCommit verifies that after one DocuDoltCommit the log returns
 // 2 commits in newest-first order: the user commit followed by the init commit.
-func TestDocudoltLogAfterOneCommit(t *testing.T) {
+func TestDocuDoltLogAfterOneCommit(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -935,14 +935,14 @@ func TestDocudoltLogAfterOneCommit(t *testing.T) {
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
 
-	commitRes, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
+	commitRes, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit: %v", err)
+		t.Fatalf("DocuDoltCommit: %v", err)
 	}
 
-	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DocudoltLog: %v", err)
+		t.Fatalf("DocuDoltLog: %v", err)
 	}
 
 	if len(res.Commits) != 2 {
@@ -973,9 +973,9 @@ func TestDocudoltLogAfterOneCommit(t *testing.T) {
 	}
 }
 
-// TestDocudoltLogLimit verifies that the Limit parameter is respected: limit=1 returns
+// TestDocuDoltLogLimit verifies that the Limit parameter is respected: limit=1 returns
 // only the HEAD commit even when more commits exist.
-func TestDocudoltLogLimit(t *testing.T) {
+func TestDocuDoltLogLimit(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -988,18 +988,18 @@ func TestDocudoltLogLimit(t *testing.T) {
 	// Create 3 user commits so there are 4 total (including init).
 	for i := int64(1); i <= 3; i++ {
 		insertDocForTest(t, ctx, b, "testdb", i)
-		if _, err := b.DocudoltCommit(ctx, &backends.CommitParams{
+		if _, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
 			DBName:  "testdb",
 			Message: fmt.Sprintf("commit %d", i),
 			Author:  "testuser",
 		}); err != nil {
-			t.Fatalf("DocudoltCommit %d: %v", i, err)
+			t.Fatalf("DocuDoltCommit %d: %v", i, err)
 		}
 	}
 
-	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
 	if err != nil {
-		t.Fatalf("DocudoltLog: %v", err)
+		t.Fatalf("DocuDoltLog: %v", err)
 	}
 
 	if len(res.Commits) != 1 {
@@ -1010,9 +1010,9 @@ func TestDocudoltLogLimit(t *testing.T) {
 	}
 }
 
-// TestDocudoltLogFromHash verifies that setting From=<hash> starts traversal from
+// TestDocuDoltLogFromHash verifies that setting From=<hash> starts traversal from
 // that specific commit rather than HEAD.
-func TestDocudoltLogFromHash(t *testing.T) {
+func TestDocuDoltLogFromHash(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1023,20 +1023,20 @@ func TestDocudoltLogFromHash(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	res1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
+	res1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 1: %v", err)
+		t.Fatalf("DocuDoltCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	if _, err = b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
-		t.Fatalf("DocudoltCommit 2: %v", err)
+	if _, err = b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
+		t.Fatalf("DocuDoltCommit 2: %v", err)
 	}
 
 	// Starting from commit one's hash should return commit one + init commit only.
-	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
+	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
 	if err != nil {
-		t.Fatalf("DocudoltLog from hash: %v", err)
+		t.Fatalf("DocuDoltLog from hash: %v", err)
 	}
 
 	if len(res.Commits) != 2 {
@@ -1050,8 +1050,8 @@ func TestDocudoltLogFromHash(t *testing.T) {
 	}
 }
 
-// TestDocudoltLogFromUnknownHash verifies that from=<unknown hash> returns an error.
-func TestDocudoltLogFromUnknownHash(t *testing.T) {
+// TestDocuDoltLogFromUnknownHash verifies that from=<unknown hash> returns an error.
+func TestDocuDoltLogFromUnknownHash(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1064,16 +1064,16 @@ func TestDocudoltLogFromUnknownHash(t *testing.T) {
 	// A syntactically valid but non-existent hash (32 hex bytes = 64 chars).
 	unknownHash := "0000000000000000000000000000000000000000000000000000000000000001"
 
-	_, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
+	_, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
 	if err == nil {
 		t.Error("expected error for unknown from hash, got nil")
 	}
 }
 
-// TestDocudoltLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
-// verifies that returned hashes match what DocudoltCommit reported (newest first) and
+// TestDocuDoltLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
+// verifies that returned hashes match what DocuDoltCommit reported (newest first) and
 // that timestamps are non-zero and non-decreasing from root toward HEAD.
-func TestDocudoltLogHashOrderAndTimestamps(t *testing.T) {
+func TestDocuDoltLogHashOrderAndTimestamps(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1084,20 +1084,20 @@ func TestDocudoltLogHashOrderAndTimestamps(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	r1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
+	r1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 1: %v", err)
+		t.Fatalf("DocuDoltCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	r2, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
+	r2, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocudoltCommit 2: %v", err)
+		t.Fatalf("DocuDoltCommit 2: %v", err)
 	}
 
-	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DocudoltLog: %v", err)
+		t.Fatalf("DocuDoltLog: %v", err)
 	}
 
 	// Expect 3 commits: beta, alpha, init.
@@ -1132,10 +1132,10 @@ func TestDocudoltLogHashOrderAndTimestamps(t *testing.T) {
 	}
 }
 
-// TestDocudoltLogCommitInfoSupportsParent2 is a compile-time structural assertion:
+// TestDocuDoltLogCommitInfoSupportsParent2 is a compile-time structural assertion:
 // CommitInfo must have a Parent2 field to support merge commits in the future.
 // This test documents the requirement and ensures the struct is not accidentally changed.
-func TestDocudoltLogCommitInfoSupportsParent2(t *testing.T) {
+func TestDocuDoltLogCommitInfoSupportsParent2(t *testing.T) {
 	var ci backends.CommitInfo
 	ci.Parent2 = "somemergehash"
 	if ci.Parent2 != "somemergehash" {

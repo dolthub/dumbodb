@@ -33,7 +33,7 @@ import (
 func TestCollMod_NonExistentCollection(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Use a collection handle that was never inserted into — neither the database
@@ -56,7 +56,7 @@ func TestCollMod_NonExistentCollection(t *testing.T) {
 func TestCollMod_InvalidOption(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// First create the collection so the command reaches field-validation logic.
@@ -81,7 +81,7 @@ func TestCollMod_InvalidOption(t *testing.T) {
 func TestCompact_EmptyCollection(t *testing.T) {
 	// Do not run in parallel — compact acquires broad locks internally.
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Explicitly create the collection so it exists but has no documents.
@@ -118,7 +118,7 @@ func TestCompact_EmptyCollection(t *testing.T) {
 func TestCompact_NonExistentCollection(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Use a collection handle that was never inserted into.
@@ -141,7 +141,7 @@ func TestCompact_NonExistentCollection(t *testing.T) {
 func TestAutoCompact_Enable_Disable_FreeSpaceTargetMB(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	admin := env.client.Database("admin")
 
@@ -222,11 +222,11 @@ func assertValidateResponse(t *testing.T, res bson.D, coll *mongo.Collection) {
 // TestValidate_Full verifies that validate with full:true performs a deeper collection
 // check and returns a response document structurally compatible with MongoDB's format.
 //
-// Parity test for do-h7a9: validate command options diverge from MongoDB. (DocudoltFull)
+// Parity test for do-h7a9: validate command options diverge from MongoDB. (DocuDoltFull)
 func TestValidate_Full(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -252,11 +252,11 @@ func TestValidate_Full(t *testing.T) {
 // TestValidate_Repair verifies that validate with repair:true attempts to fix
 // inconsistencies and returns repaired:false for a collection that needs no repairs.
 //
-// Parity test for do-h7a9: validate command options diverge from MongoDB. (DocudoltFull)
+// Parity test for do-h7a9: validate command options diverge from MongoDB. (DocuDoltFull)
 func TestValidate_Repair(t *testing.T) {
 	// Do not run in parallel — repair acquires exclusive collection locks.
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -287,7 +287,7 @@ func TestValidate_Repair(t *testing.T) {
 func TestConvertToCapped_VerifyCapped(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -348,7 +348,7 @@ func TestConvertToCapped_VerifyCapped(t *testing.T) {
 func TestConvertToCapped_Basic(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -371,7 +371,7 @@ func TestConvertToCapped_Basic(t *testing.T) {
 func TestConvertToCapped_NonExistentCollection(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -395,7 +395,7 @@ func TestConvertToCapped_NonExistentCollection(t *testing.T) {
 func TestConvertToCapped_ZeroSize(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -420,7 +420,7 @@ func TestConvertToCapped_ZeroSize(t *testing.T) {
 func TestConvertToCapped_MissingSize(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -445,7 +445,7 @@ func TestConvertToCapped_MissingSize(t *testing.T) {
 func TestDataSize_BasicCollection(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -484,7 +484,7 @@ func TestDataSize_BasicCollection(t *testing.T) {
 func TestDataSize_WithKeyRange(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -532,7 +532,7 @@ func TestDataSize_WithKeyRange(t *testing.T) {
 func TestRenameCollection_NonExistentSource(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -560,7 +560,7 @@ func TestRenameCollection_NonExistentSource(t *testing.T) {
 func TestRenameCollection_DropTarget(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := "testdb_rename_droptarget"
@@ -605,7 +605,7 @@ func TestRenameCollection_DropTarget(t *testing.T) {
 func TestServerStatus_ReplicationField(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	var res bson.D
@@ -625,11 +625,11 @@ func TestServerStatus_ReplicationField(t *testing.T) {
 // size fields (dataSize, storageSize, indexSize, totalSize) by the scale factor, while
 // leaving document counts and avgObjSize unaffected.
 //
-// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DocudoltFull)
+// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DocuDoltFull)
 func TestDbStats_ScaleOption(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 

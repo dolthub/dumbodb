@@ -70,13 +70,13 @@ func insertDoc(t *testing.T, b *Backend, dbName, collName string, doc *types.Doc
 func commitDB(t *testing.T, b *Backend, dbName, message string) string {
 	t.Helper()
 
-	res, err := b.DocudoltCommit(context.Background(), &backends.CommitParams{
+	res, err := b.DocuDoltCommit(context.Background(), &backends.CommitParams{
 		DBName:  dbName,
 		Message: message,
 		Author:  "testuser",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltCommit(%q, %q): %v", dbName, message, err)
+		t.Fatalf("DocuDoltCommit(%q, %q): %v", dbName, message, err)
 	}
 
 	return res.CommitID
@@ -114,11 +114,11 @@ func findFieldDiff(t *testing.T, m backends.ModifiedDoc, path string) backends.F
 	return backends.FieldDiff{}
 }
 
-// ── Backend DocudoltDiff tests ────────────────────────────────────────────────────
+// ── Backend DocuDoltDiff tests ────────────────────────────────────────────────────
 
-// TestDocudoltDiff_NoChanges verifies that diffing HEAD vs working set with no writes
+// TestDocuDoltDiff_NoChanges verifies that diffing HEAD vs working set with no writes
 // returns empty collections.
-func TestDocudoltDiff_NoChanges(t *testing.T) {
+func TestDocuDoltDiff_NoChanges(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -127,9 +127,9 @@ func TestDocudoltDiff_NoChanges(t *testing.T) {
 	commitDB(t, b, "testdb", "init")
 
 	// No writes after commit — diff should be empty.
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 0 {
@@ -137,8 +137,8 @@ func TestDocudoltDiff_NoChanges(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_InsertShowsAdded verifies that inserting a doc then diffing shows it as added.
-func TestDocudoltDiff_InsertShowsAdded(t *testing.T) {
+// TestDocuDoltDiff_InsertShowsAdded verifies that inserting a doc then diffing shows it as added.
+func TestDocuDoltDiff_InsertShowsAdded(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -151,9 +151,9 @@ func TestDocudoltDiff_InsertShowsAdded(t *testing.T) {
 	insertDoc(t, b, "testdb", "users", doc)
 
 	// Diff HEAD (no "users") vs working set (has the doc).
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	// Find the "users" collection in the result.
@@ -188,8 +188,8 @@ func TestDocudoltDiff_InsertShowsAdded(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_DeleteShowsRemoved verifies that deleting a doc then diffing shows it as removed.
-func TestDocudoltDiff_DeleteShowsRemoved(t *testing.T) {
+// TestDocuDoltDiff_DeleteShowsRemoved verifies that deleting a doc then diffing shows it as removed.
+func TestDocuDoltDiff_DeleteShowsRemoved(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -214,9 +214,9 @@ func TestDocudoltDiff_DeleteShowsRemoved(t *testing.T) {
 	}
 
 	// Diff HEAD (has bob) vs working set (empty).
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -238,9 +238,9 @@ func TestDocudoltDiff_DeleteShowsRemoved(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_UpdateShowsModified verifies that updating a doc then diffing shows only
+// TestDocuDoltDiff_UpdateShowsModified verifies that updating a doc then diffing shows only
 // the changed fields in the path-based diff array.
-func TestDocudoltDiff_UpdateShowsModified(t *testing.T) {
+func TestDocuDoltDiff_UpdateShowsModified(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -266,9 +266,9 @@ func TestDocudoltDiff_UpdateShowsModified(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -310,8 +310,8 @@ func TestDocudoltDiff_UpdateShowsModified(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_MixedOps verifies a mix of insert, update, and delete across two collections.
-func TestDocudoltDiff_MixedOps(t *testing.T) {
+// TestDocuDoltDiff_MixedOps verifies a mix of insert, update, and delete across two collections.
+func TestDocuDoltDiff_MixedOps(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -355,9 +355,9 @@ func TestDocudoltDiff_MixedOps(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	// Should see changes in both collections.
@@ -394,8 +394,8 @@ func TestDocudoltDiff_MixedOps(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_BetweenTwoCommits verifies diffing between two specific commit hashes.
-func TestDocudoltDiff_BetweenTwoCommits(t *testing.T) {
+// TestDocuDoltDiff_BetweenTwoCommits verifies diffing between two specific commit hashes.
+func TestDocuDoltDiff_BetweenTwoCommits(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -408,13 +408,13 @@ func TestDocudoltDiff_BetweenTwoCommits(t *testing.T) {
 	hash2 := commitDB(t, b, "testdb", "commit two")
 
 	// Diff from commit1 to commit2: should see doc2 as added.
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName: "testdb",
 		From:   hash1,
 		To:     hash2,
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=%s, to=%s): %v", hash1, hash2, err)
+		t.Fatalf("DocuDoltDiff(from=%s, to=%s): %v", hash1, hash2, err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -432,8 +432,8 @@ func TestDocudoltDiff_BetweenTwoCommits(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_InvalidHashReturnsError verifies that an invalid commit hash returns an error.
-func TestDocudoltDiff_InvalidHashReturnsError(t *testing.T) {
+// TestDocuDoltDiff_InvalidHashReturnsError verifies that an invalid commit hash returns an error.
+func TestDocuDoltDiff_InvalidHashReturnsError(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -442,7 +442,7 @@ func TestDocudoltDiff_InvalidHashReturnsError(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	_, err = b.DocudoltDiff(ctx, &backends.DiffParams{
+	_, err = b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName: "testdb",
 		From:   "notavalidhash",
 	})
@@ -451,9 +451,9 @@ func TestDocudoltDiff_InvalidHashReturnsError(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_CommitThenInsertShowsAdded verifies the integration test from the spec:
-// docudoltCommit then insert then docudoltDiff shows the insert as added.
-func TestDocudoltDiff_CommitThenInsertThenDiff(t *testing.T) {
+// TestDocuDoltDiff_CommitThenInsertShowsAdded verifies the integration test from the spec:
+// docuDoltCommit then insert then docuDoltDiff shows the insert as added.
+func TestDocuDoltDiff_CommitThenInsertThenDiff(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -464,10 +464,10 @@ func TestDocudoltDiff_CommitThenInsertThenDiff(t *testing.T) {
 	// Insert a second document (working set only).
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(42), "msg", "hello"))
 
-	// DocudoltDiff (HEAD vs working set) should show the insert.
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	// DocuDoltDiff (HEAD vs working set) should show the insert.
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -479,9 +479,9 @@ func TestDocudoltDiff_CommitThenInsertThenDiff(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_TwoCommitsDeltaCorrect verifies that diffing from commit1 to commit2 shows
+// TestDocuDoltDiff_TwoCommitsDeltaCorrect verifies that diffing from commit1 to commit2 shows
 // only the delta introduced by commit2.
-func TestDocudoltDiff_TwoCommitsDeltaCorrect(t *testing.T) {
+func TestDocuDoltDiff_TwoCommitsDeltaCorrect(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -508,13 +508,13 @@ func TestDocudoltDiff_TwoCommitsDeltaCorrect(t *testing.T) {
 
 	hash2 := commitDB(t, b, "testdb", "second")
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName: "testdb",
 		From:   hash1,
 		To:     hash2,
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -549,9 +549,9 @@ func TestDocudoltDiff_TwoCommitsDeltaCorrect(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_AddFieldShowsAdded verifies that when a field is added to a document,
+// TestDocuDoltDiff_AddFieldShowsAdded verifies that when a field is added to a document,
 // the diff reports type="added" with path="$.fieldname" and only a "b" value.
-func TestDocudoltDiff_AddFieldShowsAdded(t *testing.T) {
+func TestDocuDoltDiff_AddFieldShowsAdded(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -576,9 +576,9 @@ func TestDocudoltDiff_AddFieldShowsAdded(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
@@ -610,9 +610,9 @@ func TestDocudoltDiff_AddFieldShowsAdded(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_RemoveFieldShowsRemoved verifies that when a field is removed from a document,
+// TestDocuDoltDiff_RemoveFieldShowsRemoved verifies that when a field is removed from a document,
 // the diff reports type="removed" with path="$.fieldname" and only an "a" value.
-func TestDocudoltDiff_RemoveFieldShowsRemoved(t *testing.T) {
+func TestDocuDoltDiff_RemoveFieldShowsRemoved(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -637,9 +637,9 @@ func TestDocudoltDiff_RemoveFieldShowsRemoved(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
@@ -664,9 +664,9 @@ func TestDocudoltDiff_RemoveFieldShowsRemoved(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_NestedFieldChange verifies that changing a nested field reports
+// TestDocuDoltDiff_NestedFieldChange verifies that changing a nested field reports
 // the full JSON path (e.g. "$.address.city") rather than just the top-level key.
-func TestDocudoltDiff_NestedFieldChange(t *testing.T) {
+func TestDocuDoltDiff_NestedFieldChange(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -695,9 +695,9 @@ func TestDocudoltDiff_NestedFieldChange(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
@@ -733,9 +733,9 @@ func TestDocudoltDiff_NestedFieldChange(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_ArrayElementChange verifies that changing an array element reports
+// TestDocuDoltDiff_ArrayElementChange verifies that changing an array element reports
 // the path with bracket notation (e.g. "$.scores[2]").
-func TestDocudoltDiff_ArrayElementChange(t *testing.T) {
+func TestDocuDoltDiff_ArrayElementChange(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -770,9 +770,9 @@ func TestDocudoltDiff_ArrayElementChange(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
@@ -797,9 +797,9 @@ func TestDocudoltDiff_ArrayElementChange(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_NoChangesMeanNoDiff verifies that updating a doc with identical
+// TestDocuDoltDiff_NoChangesMeanNoDiff verifies that updating a doc with identical
 // content produces no modified entries.
-func TestDocudoltDiff_NoChangesMeanNoDiff(t *testing.T) {
+func TestDocuDoltDiff_NoChangesMeanNoDiff(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -824,9 +824,9 @@ func TestDocudoltDiff_NoChangesMeanNoDiff(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 0 {
@@ -834,11 +834,11 @@ func TestDocudoltDiff_NoChangesMeanNoDiff(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_MultipleDocsWithMixedChanges verifies that when multiple documents
+// TestDocuDoltDiff_MultipleDocsWithMixedChanges verifies that when multiple documents
 // in the same collection have different change types, each is reported correctly and
 // independently. Baseline has docs 1, 2, 3. Working set: doc1 deleted, doc2 field
 // modified, doc3 unchanged, doc4 added.
-func TestDocudoltDiff_MultipleDocsWithMixedChanges(t *testing.T) {
+func TestDocuDoltDiff_MultipleDocsWithMixedChanges(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -878,9 +878,9 @@ func TestDocudoltDiff_MultipleDocsWithMixedChanges(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -935,10 +935,10 @@ func TestDocudoltDiff_MultipleDocsWithMixedChanges(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_SingleDocMixedFieldOps verifies that a single document update that
+// TestDocuDoltDiff_SingleDocMixedFieldOps verifies that a single document update that
 // simultaneously modifies one field, adds a new field, and removes an existing field
 // produces exactly three FieldDiff entries — one per operation.
-func TestDocudoltDiff_SingleDocMixedFieldOps(t *testing.T) {
+func TestDocuDoltDiff_SingleDocMixedFieldOps(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -964,9 +964,9 @@ func TestDocudoltDiff_SingleDocMixedFieldOps(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
@@ -1018,9 +1018,9 @@ func TestDocudoltDiff_SingleDocMixedFieldOps(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_FieldTypeChange verifies that changing a field's type (e.g. int64 → string)
+// TestDocuDoltDiff_FieldTypeChange verifies that changing a field's type (e.g. int64 → string)
 // is reported as "modified" with the correct old and new values.
-func TestDocudoltDiff_FieldTypeChange(t *testing.T) {
+func TestDocuDoltDiff_FieldTypeChange(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -1046,9 +1046,9 @@ func TestDocudoltDiff_FieldTypeChange(t *testing.T) {
 		t.Fatalf("UpdateAll: %v", err)
 	}
 
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocudoltDiff: %v", err)
+		t.Fatalf("DocuDoltDiff: %v", err)
 	}
 
 	if len(res.Collections) != 1 || len(res.Collections[0].Modified) != 1 {
@@ -1079,9 +1079,9 @@ func TestDocudoltDiff_FieldTypeChange(t *testing.T) {
 
 // ── Rootish expression tests ──────────────────────────────────────────────────
 
-// TestDocudoltDiff_HeadFromTo verifies that from="HEAD" and to="HEAD" resolve to the
+// TestDocuDoltDiff_HeadFromTo verifies that from="HEAD" and to="HEAD" resolve to the
 // committed tip of the connection's branch (ConnRootish="main").
-func TestDocudoltDiff_HeadFromTo(t *testing.T) {
+func TestDocuDoltDiff_HeadFromTo(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -1109,14 +1109,14 @@ func TestDocudoltDiff_HeadFromTo(t *testing.T) {
 	hash2 := commitDB(t, b, "testdb", "commit two")
 
 	// from=hash1, to="HEAD" — HEAD resolves to main's committed tip (hash2).
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        hash1,
 		To:          "HEAD",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=%s, to=HEAD): %v", hash1, err)
+		t.Fatalf("DocuDoltDiff(from=%s, to=HEAD): %v", hash1, err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -1128,14 +1128,14 @@ func TestDocudoltDiff_HeadFromTo(t *testing.T) {
 	}
 
 	// from="HEAD", to=hash2 — HEAD resolves to main's tip; result should be empty (same commit).
-	res2, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res2, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        "HEAD",
 		To:          hash2,
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=HEAD, to=%s): %v", hash2, err)
+		t.Fatalf("DocuDoltDiff(from=HEAD, to=%s): %v", hash2, err)
 	}
 
 	if len(res2.Collections) != 0 {
@@ -1143,9 +1143,9 @@ func TestDocudoltDiff_HeadFromTo(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_HeadTilde verifies that HEAD~N ancestor expressions in from/to
+// TestDocuDoltDiff_HeadTilde verifies that HEAD~N ancestor expressions in from/to
 // resolve correctly relative to ConnRootish.
-func TestDocudoltDiff_HeadTilde(t *testing.T) {
+func TestDocuDoltDiff_HeadTilde(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -1180,14 +1180,14 @@ func TestDocudoltDiff_HeadTilde(t *testing.T) {
 	commitDB(t, b, "testdb", "c3")
 
 	// HEAD~2 → c1, HEAD → c3: should see v=1→3.
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        "HEAD~2",
 		To:          "HEAD",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(HEAD~2, HEAD): %v", err)
+		t.Fatalf("DocuDoltDiff(HEAD~2, HEAD): %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -1206,14 +1206,14 @@ func TestDocudoltDiff_HeadTilde(t *testing.T) {
 	}
 
 	// HEAD~1 → c2, HEAD~0 → c3: should see v=2→3.
-	res2, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res2, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        "HEAD~1",
 		To:          "HEAD~0",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(HEAD~1, HEAD~0): %v", err)
+		t.Fatalf("DocuDoltDiff(HEAD~1, HEAD~0): %v", err)
 	}
 
 	if len(res2.Collections) != 1 {
@@ -1232,9 +1232,9 @@ func TestDocudoltDiff_HeadTilde(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_BranchNameRootish verifies that bare branch names and branch~N
+// TestDocuDoltDiff_BranchNameRootish verifies that bare branch names and branch~N
 // ancestor expressions work as from/to params.
-func TestDocudoltDiff_BranchNameRootish(t *testing.T) {
+func TestDocuDoltDiff_BranchNameRootish(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -1243,12 +1243,12 @@ func TestDocudoltDiff_BranchNameRootish(t *testing.T) {
 	commitDB(t, b, "testdb", "c1")
 
 	// Create a feature branch from main.
-	if _, err := b.DocudoltBranch(ctx, &backends.BranchParams{
+	if _, err := b.DocuDoltBranch(ctx, &backends.BranchParams{
 		DBName: "testdb",
 		From:   "main",
 		Name:   "feature",
 	}); err != nil {
-		t.Fatalf("DocudoltBranch: %v", err)
+		t.Fatalf("DocuDoltBranch: %v", err)
 	}
 
 	// Commit 2 on main: doc v=2.
@@ -1271,14 +1271,14 @@ func TestDocudoltDiff_BranchNameRootish(t *testing.T) {
 	commitDB(t, b, "testdb", "c2")
 
 	// Diff from="feature" (c1) to="main" (c2): should see v=1→2.
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        "feature",
 		To:          "main",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=feature, to=main): %v", err)
+		t.Fatalf("DocuDoltDiff(from=feature, to=main): %v", err)
 	}
 
 	if len(res.Collections) != 1 {
@@ -1297,14 +1297,14 @@ func TestDocudoltDiff_BranchNameRootish(t *testing.T) {
 	}
 
 	// Diff from="main~1" (c1) to="main" (c2): same result via ancestor expression.
-	res2, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res2, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        "main~1",
 		To:          "main",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=main~1, to=main): %v", err)
+		t.Fatalf("DocuDoltDiff(from=main~1, to=main): %v", err)
 	}
 
 	if len(res2.Collections) != 1 {
@@ -1323,9 +1323,9 @@ func TestDocudoltDiff_BranchNameRootish(t *testing.T) {
 	}
 }
 
-// TestDocudoltDiff_HeadOnNonMainBranch verifies that HEAD resolves to the connection's
+// TestDocuDoltDiff_HeadOnNonMainBranch verifies that HEAD resolves to the connection's
 // own branch tip, not main, when ConnRootish is a non-main branch.
-func TestDocudoltDiff_HeadOnNonMainBranch(t *testing.T) {
+func TestDocuDoltDiff_HeadOnNonMainBranch(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -1334,12 +1334,12 @@ func TestDocudoltDiff_HeadOnNonMainBranch(t *testing.T) {
 	hash1 := commitDB(t, b, "testdb", "c1-main")
 
 	// Create feature branch from c1.
-	if _, err := b.DocudoltBranch(ctx, &backends.BranchParams{
+	if _, err := b.DocuDoltBranch(ctx, &backends.BranchParams{
 		DBName: "testdb",
 		From:   "main",
 		Name:   "feature",
 	}); err != nil {
-		t.Fatalf("DocudoltBranch: %v", err)
+		t.Fatalf("DocuDoltBranch: %v", err)
 	}
 
 	// Commit 2 on main: doc v=2.
@@ -1364,14 +1364,14 @@ func TestDocudoltDiff_HeadOnNonMainBranch(t *testing.T) {
 	// from=hash1, to="HEAD" with ConnRootish="feature":
 	// HEAD should resolve to feature branch tip (c1), NOT main (c2).
 	// So hash1 == feature HEAD → diff should be empty.
-	res, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "feature",
 		From:        hash1,
 		To:          "HEAD",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=hash1, to=HEAD, ConnRootish=feature): %v", err)
+		t.Fatalf("DocuDoltDiff(from=hash1, to=HEAD, ConnRootish=feature): %v", err)
 	}
 
 	if len(res.Collections) != 0 {
@@ -1379,14 +1379,14 @@ func TestDocudoltDiff_HeadOnNonMainBranch(t *testing.T) {
 	}
 
 	// Now verify HEAD on main IS different from hash1.
-	res2, err := b.DocudoltDiff(ctx, &backends.DiffParams{
+	res2, err := b.DocuDoltDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
 		From:        hash1,
 		To:          "HEAD",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltDiff(from=hash1, to=HEAD, ConnRootish=main): %v", err)
+		t.Fatalf("DocuDoltDiff(from=hash1, to=HEAD, ConnRootish=main): %v", err)
 	}
 
 	if len(res2.Collections) != 1 {

@@ -35,7 +35,7 @@ import (
 func TestProbeModNaNDivisor(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

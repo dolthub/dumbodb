@@ -32,7 +32,7 @@ import (
 )
 
 // versioningBackendMock is a minimal Backend + VersioningBackend implementation
-// for handler unit tests. DocudoltCurrentBranch echoes params.Branch; all other
+// for handler unit tests. DocuDoltCurrentBranch echoes params.Branch; all other
 // methods are no-ops that satisfy the interface.
 type versioningBackendMock struct{}
 
@@ -54,50 +54,50 @@ func (m *versioningBackendMock) DropDatabase(_ context.Context, _ *backends.Drop
 
 // backends.VersioningBackend methods.
 
-func (m *versioningBackendMock) DocudoltCurrentBranch(_ context.Context, p *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+func (m *versioningBackendMock) DocuDoltCurrentBranch(_ context.Context, p *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
 	return &backends.CurrentBranchResult{Branch: p.Branch}, nil
 }
-func (m *versioningBackendMock) DocudoltCommit(_ context.Context, _ *backends.CommitParams) (*backends.CommitResult, error) {
+func (m *versioningBackendMock) DocuDoltCommit(_ context.Context, _ *backends.CommitParams) (*backends.CommitResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
+func (m *versioningBackendMock) DocuDoltBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
+func (m *versioningBackendMock) DocuDoltMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
+func (m *versioningBackendMock) DocuDoltLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+func (m *versioningBackendMock) DocuDoltStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltDiff(_ context.Context, _ *backends.DiffParams) (*backends.DiffResult, error) {
+func (m *versioningBackendMock) DocuDoltDiff(_ context.Context, _ *backends.DiffParams) (*backends.DiffResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
+func (m *versioningBackendMock) DocuDoltReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+func (m *versioningBackendMock) DocuDoltConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (m *versioningBackendMock) DocuDoltResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocudoltCherryPick(_ context.Context, _ *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+func (m *versioningBackendMock) DocuDoltCherryPick(_ context.Context, _ *backends.CherryPickParams) (*backends.CherryPickResult, error) {
 	return nil, nil
 }
 
-// makeCurrentBranchMsg creates a wire.OpMsg for docudoltCurrentBranch with the given encoded $db.
+// makeCurrentBranchMsg creates a wire.OpMsg for docuDoltCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {
 	doc := must.NotFail(types.NewDocument("doltCurrentBranch", int32(1), "$db", encodedDB))
 	return must.NotFail(documentOpMsg(doc))
 }
 
-// TestMsgDocudoltCurrentBranch_ReadOnly verifies that docudoltCurrentBranch returns
+// TestMsgDocuDoltCurrentBranch_ReadOnly verifies that docuDoltCurrentBranch returns
 // ErrOperationFailed for read-only rootishes (commit hashes and ancestor expressions).
 // The error message must mention "no current branch name" to be actionable.
-func TestMsgDocudoltCurrentBranch_ReadOnly(t *testing.T) {
+func TestMsgDocuDoltCurrentBranch_ReadOnly(t *testing.T) {
 	t.Parallel()
 
 	// No backend needed: the handler rejects read-only rootishes before ever
@@ -122,7 +122,7 @@ func TestMsgDocudoltCurrentBranch_ReadOnly(t *testing.T) {
 			t.Parallel()
 
 			msg := makeCurrentBranchMsg(tc.encodedDB)
-			_, err := h.MsgDocudoltCurrentBranch(context.Background(), msg)
+			_, err := h.MsgDocuDoltCurrentBranch(context.Background(), msg)
 
 			require.Error(t, err)
 
@@ -136,12 +136,12 @@ func TestMsgDocudoltCurrentBranch_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestMsgDocudoltCurrentBranch_Branch verifies that docudoltCurrentBranch returns the
+// TestMsgDocuDoltCurrentBranch_Branch verifies that docuDoltCurrentBranch returns the
 // correct branch name for writable connections (branch names and tag-like strings).
 //
 // Tags are syntactically indistinguishable from branch names at parse time, so
 // they are treated as writable and the tag name is returned as the branch identifier.
-func TestMsgDocudoltCurrentBranch_Branch(t *testing.T) {
+func TestMsgDocuDoltCurrentBranch_Branch(t *testing.T) {
 	t.Parallel()
 
 	h := &Handler{b: &versioningBackendMock{}}
@@ -155,7 +155,7 @@ func TestMsgDocudoltCurrentBranch_Branch(t *testing.T) {
 		{"explicit_main", "mydb__d_main", "main"},
 		{"feature_branch", "mydb__d_feature-x", "feature-x"},
 		// Tag-like names (e.g. "v1.0") are indistinguishable from branch names at
-		// parse time; docudoltCurrentBranch returns the tag name as the branch.
+		// parse time; docuDoltCurrentBranch returns the tag name as the branch.
 		{"tag_like_v1_0", "mydb__d_v1.0", "v1.0"},
 	}
 
@@ -165,7 +165,7 @@ func TestMsgDocudoltCurrentBranch_Branch(t *testing.T) {
 			t.Parallel()
 
 			msg := makeCurrentBranchMsg(tc.encodedDB)
-			resp, err := h.MsgDocudoltCurrentBranch(context.Background(), msg)
+			resp, err := h.MsgDocuDoltCurrentBranch(context.Background(), msg)
 			require.NoError(t, err)
 
 			doc, err := opMsgDocument(resp)

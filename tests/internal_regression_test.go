@@ -14,7 +14,7 @@
 
 // Package tests contains docudolt-specific regression and integration tests.
 //
-// MongoDB parity tests (compatibility between MongoDB and Docudolt) live in the
+// MongoDB parity tests (compatibility between MongoDB and DocuDolt) live in the
 // dolthub/docudolt-parity-testing repository. This package retains only tests for
 // docudolt-internal behaviors that have no MongoDB equivalent, such as internal
 // resource management and implementation-specific edge cases.
@@ -47,8 +47,8 @@ import (
 // buildOnce ensures the docudolt binary is built exactly once per test run.
 var buildOnce sync.Once
 
-// docudoltTestEnv holds a running docudolt process and a connected MongoDB client.
-type docudoltTestEnv struct {
+// docuDoltTestEnv holds a running docudolt process and a connected MongoDB client.
+type docuDoltTestEnv struct {
 	cmd     *exec.Cmd
 	client  *mongo.Client
 	dataDir string
@@ -61,8 +61,8 @@ func repoRoot() string {
 	return filepath.Join(filepath.Dir(filename), "..")
 }
 
-// startDocudolt launches a fresh docudolt instance on a random free port.
-func startDocudolt(tb testing.TB) *docudoltTestEnv {
+// startDocuDolt launches a fresh docudolt instance on a random free port.
+func startDocuDolt(tb testing.TB) *docuDoltTestEnv {
 	tb.Helper()
 
 	// Find a free port.
@@ -97,7 +97,7 @@ func startDocudolt(tb testing.TB) *docudoltTestEnv {
 	cmd.Stderr = nil
 	require.NoError(tb, cmd.Start())
 
-	env := &docudoltTestEnv{
+	env := &docuDoltTestEnv{
 		cmd:     cmd,
 		dataDir: dataDir,
 		port:    port,
@@ -132,7 +132,7 @@ func startDocudolt(tb testing.TB) *docudoltTestEnv {
 }
 
 // collection returns a fresh collection for each test.
-func (env *docudoltTestEnv) collection(tb testing.TB) *mongo.Collection {
+func (env *docuDoltTestEnv) collection(tb testing.TB) *mongo.Collection {
 	tb.Helper()
 
 	name := fmt.Sprintf("col_%d", rand.Int64())
@@ -172,7 +172,7 @@ func d(elems ...primitive.E) bson.D {
 // MongoDB supports arrays containing arrays; docudolt must store and retrieve them
 // without error.
 func TestBSON_array_nested(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -209,7 +209,7 @@ func TestBSON_array_nested(t *testing.T) {
 // This test does NOT run in parallel so that forcing GC here does not interact
 // with other goroutines' resource tracking.
 func TestFind_CursorCleanupOnFilterError(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -238,7 +238,7 @@ func TestFind_CursorCleanupOnFilterError(t *testing.T) {
 func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// flags: 0b0100 (4) — bits 0 and 1 are clear, bit 2 is set.
@@ -274,7 +274,7 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 func TestQuery_bitsAnySet_positions(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// flags: 0b0001 (1) — bit 0 set.
@@ -317,7 +317,7 @@ func TestQuery_bitsAnySet_positions(t *testing.T) {
 func TestQuery_geo_within_box(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// Store coordinates as legacy [lon, lat] arrays.
@@ -357,7 +357,7 @@ func TestQuery_geo_within_box(t *testing.T) {
 func TestQuery_proj_slice_first_n(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -390,7 +390,7 @@ func TestQuery_proj_slice_first_n(t *testing.T) {
 func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -412,7 +412,7 @@ func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 func TestQuery_type_decimal(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	decVal, decErr := primitive.ParseDecimal128("3.14")
@@ -449,7 +449,7 @@ func TestQuery_type_decimal(t *testing.T) {
 func TestQuery_geo_within_polygon(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -486,7 +486,7 @@ func TestQuery_geo_within_polygon(t *testing.T) {
 func TestQuery_geo_within_centerSphere(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// New York (approx): lon=-74, lat=40.7
@@ -525,7 +525,7 @@ func TestQuery_geo_within_centerSphere(t *testing.T) {
 func TestQuery_geo_near(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// Place two points: one near [0,0], one far away.
@@ -561,7 +561,7 @@ func TestQuery_geo_near(t *testing.T) {
 func TestQuery_geo_nearSphere(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -598,7 +598,7 @@ func TestQuery_geo_nearSphere(t *testing.T) {
 func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// Two points near the origin.  In radians the great-circle radius of ~111 km is ~0.0175.
@@ -632,7 +632,7 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 func TestQuery_geo_intersects_point(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -668,7 +668,7 @@ func TestQuery_geo_intersects_point(t *testing.T) {
 func TestQuery_geo_intersects_polygon(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -711,7 +711,7 @@ func TestQuery_geo_intersects_polygon(t *testing.T) {
 func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -749,7 +749,7 @@ func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -791,7 +791,7 @@ func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 func TestQuery_proj_slice_last_n(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -823,7 +823,7 @@ func TestQuery_proj_slice_last_n(t *testing.T) {
 func TestQuery_proj_slice_skip_limit(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -856,7 +856,7 @@ func TestQuery_proj_slice_skip_limit(t *testing.T) {
 func TestQuery_type_number_alias_decimal(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	decVal, decErr := primitive.ParseDecimal128("9.99")
@@ -898,7 +898,7 @@ func TestQuery_type_number_alias_decimal(t *testing.T) {
 func TestQuery_type_objectid(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

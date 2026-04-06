@@ -315,7 +315,7 @@ func isMetaTextScore(value any) bool {
 // and returns it.
 func getSortValue(key string, value any) (int64, error) {
 	// {$meta: "textScore"} is a valid sort value — sort descending by text score.
-	// Docudolt assigns score 0 to all docs so stable order is preserved.
+	// DocuDolt assigns score 0 to all docs so stable order is preserved.
 	if isMetaTextScore(value) {
 		return -1, nil
 	}

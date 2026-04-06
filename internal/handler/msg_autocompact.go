@@ -28,7 +28,7 @@ import (
 // MsgAutoCompact implements the `autoCompact` command (MongoDB 8.0+).
 //
 // autoCompact must be run against the admin database. When run against any other
-// database, MongoDB returns Unauthorized (code 13). Docudolt mirrors this behavior.
+// database, MongoDB returns Unauthorized (code 13). DocuDolt mirrors this behavior.
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgAutoCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -46,7 +46,7 @@ func (h *Handler) MsgAutoCompact(connCtx context.Context, msg *wire.OpMsg) (*wir
 		)
 	}
 
-	// When run against admin, return success (background compaction is a no-op in Docudolt).
+	// When run against admin, return success (background compaction is a no-op in DocuDolt).
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),

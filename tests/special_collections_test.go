@@ -35,7 +35,7 @@ import (
 func TestCapped_SmallSize_ManyInserts(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_capped_smallsize_%d", rand.Int64())
@@ -78,7 +78,7 @@ func TestCapped_SmallSize_ManyInserts(t *testing.T) {
 func TestView_WithLookupPipeline(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Use a unique database per test to avoid cross-test collection name collisions.

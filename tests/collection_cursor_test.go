@@ -27,9 +27,9 @@ import (
 
 // TestCollection_CreateCollation verifies that a collection can be created with
 // a collation option without returning an error (do-ch3o).
-// Docudolt accepts collation at creation time but does not enforce it.
+// DocuDolt accepts collation at creation time but does not enforce it.
 func TestCollection_CreateCollation(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	db := env.client.Database("testdb")
 
@@ -49,7 +49,7 @@ func TestCollection_CreateCollation(t *testing.T) {
 // TestCollection_ListCollectionsIdIndex verifies that listCollections returns an
 // idIndex field for regular (non-view) collections (do-ch3o).
 func TestCollection_ListCollectionsIdIndex(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -95,9 +95,9 @@ func TestCollection_ListCollectionsIdIndex(t *testing.T) {
 
 // TestCursor_CollationCaseInsensitive verifies that find with a case-insensitive
 // collation (strength ≤ 2) returns both exact-case and differently-cased documents.
-// Parity test for do-7133: collation case-insensitive find returns empty results. (DocudoltFull)
+// Parity test for do-7133: collation case-insensitive find returns empty results. (DocuDoltFull)
 func TestCursor_CollationCaseInsensitive(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -123,10 +123,10 @@ func TestCursor_CollationCaseInsensitive(t *testing.T) {
 
 // TestCursor_CollationSort verifies that a find command with both a collation
 // option and a sort directive is accepted without returning an error (do-ch3o).
-// Docudolt accepts the collation option but does not enforce locale-aware sort
+// DocuDolt accepts the collation option but does not enforce locale-aware sort
 // order — all documents are still returned.
 func TestCursor_CollationSort(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -151,9 +151,9 @@ func TestCursor_CollationSort(t *testing.T) {
 
 // TestCursor_NoCursorTimeout verifies that the noCursorTimeout find option is
 // accepted without returning an error (do-ch3o).
-// Docudolt ignores this option — cursor timeout behaviour is unchanged.
+// DocuDolt ignores this option — cursor timeout behaviour is unchanged.
 func TestCursor_NoCursorTimeout(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 

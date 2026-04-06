@@ -24,11 +24,11 @@ import (
 )
 
 // TestQuery_regex_dotall verifies that {$options: "s"} (dotall mode) makes "."
-// match newline characters in the target string. (DocudoltFull)
+// match newline characters in the target string. (DocuDoltFull)
 func TestQuery_regex_dotall(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

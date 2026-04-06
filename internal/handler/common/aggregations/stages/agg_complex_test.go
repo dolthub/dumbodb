@@ -1200,7 +1200,7 @@ func TestAggComplex_matchUnwindGroupSort(t *testing.T) {
 
 	// Three orders across two customers. After $unwind+$group by category,
 	// groups B and A both have totalQty=2. MongoDB preserves insertion order
-	// for ties; Docudolt must do the same (stable sort).
+	// for ties; DocuDolt must do the same (stable sort).
 	docs := []*types.Document{
 		must.NotFail(types.NewDocument("_id", int32(1), "category", "C", "qty", int32(8))),
 		must.NotFail(types.NewDocument("_id", int32(2), "category", "B", "qty", int32(2))),
@@ -1462,7 +1462,7 @@ func TestAggStage_bucketAuto_MissingBucketsError(t *testing.T) {
 // in the same BFS pass. Their order must be by _id ascending regardless of the
 // collection scan order returned by the storage backend.
 //
-// This is a regression test for the intermittent failure where Docudolt returned
+// This is a regression test for the intermittent failure where DocuDolt returned
 // [{mgr,...},{vp,...}] instead of [{vp,...},{mgr,...}] depending on the run.
 func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
 	t.Parallel()

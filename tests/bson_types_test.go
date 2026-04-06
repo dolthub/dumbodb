@@ -26,11 +26,11 @@ import (
 )
 
 // TestBSON_minkey_maxkey_insert verifies that documents containing MinKey and MaxKey
-// BSON types can be inserted and retrieved correctly. (DocudoltFull)
+// BSON types can be inserted and retrieved correctly. (DocuDoltFull)
 func TestBSON_minkey_maxkey_insert(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -78,11 +78,11 @@ func TestBSON_minkey_maxkey_insert(t *testing.T) {
 }
 
 // TestBSON_minkey_sort_order verifies that MinKey sorts before all other values
-// and MaxKey sorts after all other values. (DocudoltFull)
+// and MaxKey sorts after all other values. (DocuDoltFull)
 func TestBSON_minkey_sort_order(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -136,11 +136,11 @@ func TestBSON_minkey_sort_order(t *testing.T) {
 }
 
 // TestBSON_minkey_type_filter verifies that $type queries with "minKey" and "maxKey"
-// string aliases correctly match documents containing those BSON types. (DocudoltFull)
+// string aliases correctly match documents containing those BSON types. (DocuDoltFull)
 func TestBSON_minkey_type_filter(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

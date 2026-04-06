@@ -40,7 +40,7 @@ import (
 
 // cherryPickVerifySetup mirrors the Setup section of docs/verify/cherry-pick.md.
 // Returns hashC1 (main HEAD, initial commit) and hashC2 (feature HEAD, adds _id:2).
-func cherryPickVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hashC1, hashC2 string) {
+func cherryPickVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1, hashC2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -54,7 +54,7 @@ func cherryPickVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (h
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = docudoltCommit(t, env, dbName, "initial")
+	hashC1 = docuDoltCommit(t, env, dbName, "initial")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
@@ -72,14 +72,14 @@ func cherryPickVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (h
 	})
 	require.NoError(t, err)
 
-	hashC2 = docudoltCommit(t, env, dbName+"__d_feature", "add-two", "bob <bob@docudolt>")
+	hashC2 = docuDoltCommit(t, env, dbName+"__d_feature", "add-two", "bob <bob@docudolt>")
 	require.NotEmpty(t, hashC2, "feature commit hash must not be empty")
 
 	return hashC1, hashC2
 }
 
 func TestCherryPickVerify(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("pickvrfy%d", rand.Int64N(1_000_000))
@@ -148,7 +148,7 @@ func TestCherryPickVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC3feat := docudoltCommit(t, env, dbName+"__d_feature", "add-three")
+		hashC3feat := docuDoltCommit(t, env, dbName+"__d_feature", "add-three")
 
 		// Cherry-pick with custom message and author.
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -177,7 +177,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
 		require.NoError(t, err)
-		hashConflictFeat = docudoltCommit(t, env, dbName+"__d_feature", "conflict-source")
+		hashConflictFeat = docuDoltCommit(t, env, dbName+"__d_feature", "conflict-source")
 
 		// Modify _id:1 on main too (independent change to create conflict).
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -185,7 +185,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 		)
 		require.NoError(t, err)
-		docudoltCommit(t, env, dbName+"__d_main", "conflict-target")
+		docuDoltCommit(t, env, dbName+"__d_main", "conflict-target")
 
 		// Cherry-pick — expect conflict error.
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -266,7 +266,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		hashConflict2 := docudoltCommit(t, env, dbName+"__d_feature", "another-conflict")
+		hashConflict2 := docuDoltCommit(t, env, dbName+"__d_feature", "another-conflict")
 
 		// Create conflicting change on main.
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -274,7 +274,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
 		)
 		require.NoError(t, err)
-		mainHeadBeforeAbort := docudoltCommit(t, env, dbName+"__d_main", "another-conflict-target")
+		mainHeadBeforeAbort := docuDoltCommit(t, env, dbName+"__d_main", "another-conflict-target")
 
 		// Start cherry-pick — expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{

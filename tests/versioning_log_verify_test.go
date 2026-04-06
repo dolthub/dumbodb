@@ -22,7 +22,7 @@ package tests
 // The setup block then creates three commits on the same database.
 // Scenarios 2–4 use that shared three-commit history.
 //
-// Note: every Docudolt database begins with an auto-created "Initialize database"
+// Note: every DocuDolt database begins with an auto-created "Initialize database"
 // root commit. Counts below include that initial commit.
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single
@@ -39,13 +39,13 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// logResult holds the decoded top-level response from a docudoltLog command.
+// logResult holds the decoded top-level response from a docuDoltLog command.
 type logResult struct {
 	Branch  string
 	Commits []commitEntry
 }
 
-// commitEntry holds one entry from the "commits" array of a docudoltLog response.
+// commitEntry holds one entry from the "commits" array of a docuDoltLog response.
 type commitEntry struct {
 	CommitID string
 	Parent1  string
@@ -55,7 +55,7 @@ type commitEntry struct {
 	Refs     []string
 }
 
-// decodeLogResult parses the raw bson.M from a docudoltLog RunCommand into the
+// decodeLogResult parses the raw bson.M from a docuDoltLog RunCommand into the
 // typed helpers above, failing the test if the shape is unexpected.
 func decodeLogResult(t *testing.T, raw bson.M) logResult {
 	t.Helper()
@@ -100,7 +100,7 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 }
 
 func TestLogVerify(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("logvrfy%d", rand.Int64N(1_000_000))
@@ -133,21 +133,21 @@ func TestLogVerify(t *testing.T) {
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 := docudoltCommit(t, env, dbName, "first")
+	hash1 := docuDoltCommit(t, env, dbName, "first")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 := docudoltCommit(t, env, dbName, "second")
+	hash2 := docuDoltCommit(t, env, dbName, "second")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "label", Value: "gamma"},
 	})
 	require.NoError(t, err)
-	hash3 := docudoltCommit(t, env, dbName, "third")
+	hash3 := docuDoltCommit(t, env, dbName, "third")
 
 	// -------------------------------------------------------------------------
 	// Scenario 2: Log after multiple commits — parent chain, newest-first
@@ -233,7 +233,7 @@ func TestLogVerify(t *testing.T) {
 			{Key: "branch", Value: "logvrfy-refs"},
 		}).Err(), "creating logvrfy-refs branch must succeed")
 
-		// Query docudoltLog on main.  hash3 is the tip of both "main" and
+		// Query docuDoltLog on main.  hash3 is the tip of both "main" and
 		// "logvrfy-refs", so its refs field must contain "HEAD", "main", and
 		// "logvrfy-refs".  Non-head commits must have no refs field.
 		var rawMain bson.M
@@ -255,7 +255,7 @@ func TestLogVerify(t *testing.T) {
 			assert.Empty(t, c.Refs, "non-head commit %s must have no refs", c.CommitID)
 		}
 
-		// Query docudoltLog on logvrfy-refs.  hash3 is still the tip but now the
+		// Query docuDoltLog on logvrfy-refs.  hash3 is still the tip but now the
 		// connection branch is "logvrfy-refs", so the decoration is reversed.
 		var rawFeature bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_logvrfy-refs").RunCommand(ctx, bson.D{
@@ -281,7 +281,7 @@ func TestLogVerify(t *testing.T) {
 	//                ↖
 	//                 hashC (feat)  →  hashM (merge, parent1=hashB, parent2=hashC)
 	//
-	// DocudoltLog follows parent1 linearly, so the walk from main is:
+	// DocuDoltLog follows parent1 linearly, so the walk from main is:
 	//   hashM → hashB → hashA → init
 	// The walk from hashC (feat tip) is:
 	//   hashC → hashA → init  (hashB and hashM are unreachable)
@@ -293,7 +293,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashA := docudoltCommit(t, env, mergeDBName, "add-one")
+	hashA := docuDoltCommit(t, env, mergeDBName, "add-one")
 
 	// Create "feat" branch from main HEAD (hashA).
 	require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
@@ -307,7 +307,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashB := docudoltCommit(t, env, mergeDBName, "add-two")
+	hashB := docuDoltCommit(t, env, mergeDBName, "add-two")
 
 	// Advance feat independently: _id:3 → hashC (diverges from hashA).
 	_, err = env.client.Database(mergeDBName+"__d_feat").Collection("items").InsertOne(ctx, bson.D{
@@ -315,7 +315,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(3)},
 	})
 	require.NoError(t, err)
-	hashC := docudoltCommit(t, env, mergeDBName+"__d_feat", "add-three-feat")
+	hashC := docuDoltCommit(t, env, mergeDBName+"__d_feat", "add-three-feat")
 
 	// Merge feat into main → three-way merge commit hashM.
 	var mergeRaw bson.M
@@ -328,7 +328,7 @@ func TestLogVerify(t *testing.T) {
 	require.NotEmpty(t, hashM, "three-way merge must produce a new commit hash")
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Merge commit appears in docudoltLog with parent1 and parent2
+	// Scenario 6: Merge commit appears in docuDoltLog with parent1 and parent2
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_MergeCommitParents", func(t *testing.T) {
 		var raw bson.M
@@ -348,7 +348,7 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: docudoltLog from feature tip shows only feature branch history
+	// Scenario 7: docuDoltLog from feature tip shows only feature branch history
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FromFeatureTip", func(t *testing.T) {
 		// Starting at hashC (feat tip) the walk follows parent1 only:

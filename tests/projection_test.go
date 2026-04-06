@@ -25,11 +25,11 @@ import (
 )
 
 // TestProjection_Slice_AllElements verifies that {$slice: N} where N >= array length
-// returns all elements. (DocudoltFull)
+// returns all elements. (DocuDoltFull)
 func TestProjection_Slice_AllElements(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -52,11 +52,11 @@ func TestProjection_Slice_AllElements(t *testing.T) {
 	assert.Equal(t, bson.A{int32(10), int32(20), int32(30)}, arr)
 }
 
-// TestProjection_Slice_FirstN verifies that {$slice: N} (N>0) returns the first N elements. (DocudoltFull)
+// TestProjection_Slice_FirstN verifies that {$slice: N} (N>0) returns the first N elements. (DocuDoltFull)
 func TestProjection_Slice_FirstN(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -78,11 +78,11 @@ func TestProjection_Slice_FirstN(t *testing.T) {
 	assert.Equal(t, bson.A{int32(10), int32(20), int32(30)}, arr)
 }
 
-// TestProjection_Slice_LastN verifies that {$slice: -N} returns the last N elements. (DocudoltFull)
+// TestProjection_Slice_LastN verifies that {$slice: -N} returns the last N elements. (DocuDoltFull)
 func TestProjection_Slice_LastN(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -105,11 +105,11 @@ func TestProjection_Slice_LastN(t *testing.T) {
 }
 
 // TestProjection_Slice_NegativeSkip verifies that {$slice: [-N, M]} with a negative skip
-// counts from the end and then returns at most M elements. (DocudoltFull)
+// counts from the end and then returns at most M elements. (DocuDoltFull)
 func TestProjection_Slice_NegativeSkip(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -133,11 +133,11 @@ func TestProjection_Slice_NegativeSkip(t *testing.T) {
 }
 
 // TestProjection_Slice_SkipLimit verifies that {$slice: [skip, limit]} returns limit elements
-// starting at skip. (DocudoltFull)
+// starting at skip. (DocuDoltFull)
 func TestProjection_Slice_SkipLimit(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -161,11 +161,11 @@ func TestProjection_Slice_SkipLimit(t *testing.T) {
 }
 
 // TestProjection_ElemMatch_NoMatchInDoc verifies that when a $elemMatch projection
-// condition matches no element in the array, the field is omitted from the result. (DocudoltFull)
+// condition matches no element in the array, the field is omitted from the result. (DocuDoltFull)
 func TestProjection_ElemMatch_NoMatchInDoc(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -193,11 +193,11 @@ func TestProjection_ElemMatch_NoMatchInDoc(t *testing.T) {
 }
 
 // TestSort_FourFields verifies that sorting by four fields produces the correct
-// stable ordering across multiple documents. (DocudoltFull)
+// stable ordering across multiple documents. (DocuDoltFull)
 func TestSort_FourFields(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -239,11 +239,11 @@ func TestSort_FourFields(t *testing.T) {
 }
 
 // TestSort_Natural_Descending verifies that {$natural: -1} returns documents in
-// reverse insertion order. (DocudoltFull)
+// reverse insertion order. (DocuDoltFull)
 func TestSort_Natural_Descending(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -277,11 +277,11 @@ func TestSort_Natural_Descending(t *testing.T) {
 }
 
 // TestSort_MetaTextScore verifies that sorting by {$meta: "textScore"} in a $text query
-// does not return an error and returns the correct matching documents. (DocudoltFull)
+// does not return an error and returns the correct matching documents. (DocuDoltFull)
 func TestSort_MetaTextScore(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

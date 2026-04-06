@@ -26,8 +26,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// docudoltCommit runs docudoltCommit on the given database and returns the commit hash.
-func docudoltCommit(tb testing.TB, env *docudoltTestEnv, dbName, message string, author ...string) string {
+// docuDoltCommit runs docuDoltCommit on the given database and returns the commit hash.
+func docuDoltCommit(tb testing.TB, env *docuDoltTestEnv, dbName, message string, author ...string) string {
 	tb.Helper()
 
 	a := "testuser"
@@ -68,7 +68,7 @@ func assertWriteBlockedOperationFailed(tb testing.TB, err error, op string) {
 // commit hash. After setup:
 //   - Commit 1 (returned hash): has doc {_id:1, v:"first"}
 //   - Commit 2 (HEAD):          has doc {_id:1, v:"first"} + {_id:2, v:"second"}
-func setupVersioningDB(tb testing.TB, env *docudoltTestEnv, dbName, collName string) string {
+func setupVersioningDB(tb testing.TB, env *docuDoltTestEnv, dbName, collName string) string {
 	tb.Helper()
 
 	ctx := context.Background()
@@ -82,7 +82,7 @@ func setupVersioningDB(tb testing.TB, env *docudoltTestEnv, dbName, collName str
 	require.NoError(tb, err)
 
 	// First commit: contains only doc {_id:1}.
-	hash1 := docudoltCommit(tb, env, dbName, "first commit")
+	hash1 := docuDoltCommit(tb, env, dbName, "first commit")
 
 	// Second document.
 	_, err = db.Collection(collName).InsertOne(ctx, bson.D{
@@ -92,7 +92,7 @@ func setupVersioningDB(tb testing.TB, env *docudoltTestEnv, dbName, collName str
 	require.NoError(tb, err)
 
 	// Second commit: contains doc {_id:1} + {_id:2}.
-	docudoltCommit(tb, env, dbName, "second commit")
+	docuDoltCommit(tb, env, dbName, "second commit")
 
 	return hash1
 }
@@ -103,7 +103,7 @@ func setupVersioningDB(tb testing.TB, env *docudoltTestEnv, dbName, collName str
 func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Base name must be ≤ 29 chars so that "dbname__d_<32-char-hash>" fits within the 63-char limit.
@@ -162,7 +162,7 @@ func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Base name must be ≤ 29 chars so that "dbname__d_<32-char-hash>" fits within the 63-char limit.
@@ -216,7 +216,7 @@ func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_ronly_anc_%d", rand.Int64N(1_000_000))
@@ -275,7 +275,7 @@ func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 func TestReadOnlyRootish_AncestorExpr_ReadsSucceed(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_ronly_anc_reads_%d", rand.Int64N(1_000_000))

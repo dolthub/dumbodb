@@ -28,7 +28,7 @@ import (
 
 // MsgStartSession implements the `startSession` command.
 //
-// Docudolt does not implement multi-document transactions, but the driver
+// DocuDolt does not implement multi-document transactions, but the driver
 // requires a valid session ID to annotate operations. We return a
 // well-formed session document so the driver can proceed. Operations
 // tagged with lsid/txnNumber are handled on a per-command basis (the
@@ -56,7 +56,7 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // MsgCommitTransaction implements the `commitTransaction` command.
 //
-// Since Docudolt does not support multi-document ACID transactions, this
+// Since DocuDolt does not support multi-document ACID transactions, this
 // is a no-op acknowledgement. Individual operations within a
 // "transaction" are applied immediately without isolation.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -69,7 +69,7 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 
 // MsgAbortTransaction implements the `abortTransaction` command.
 //
-// Since Docudolt does not support multi-document ACID transactions, this
+// Since DocuDolt does not support multi-document ACID transactions, this
 // is a no-op acknowledgement. Operations already applied cannot be
 // rolled back.
 func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {

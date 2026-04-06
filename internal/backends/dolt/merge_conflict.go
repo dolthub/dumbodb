@@ -114,18 +114,18 @@ func diffTypeString(dt tree.DiffType) string {
 	}
 }
 
-// DocudoltConflicts implements backends.VersioningBackend.
+// DocuDoltConflicts implements backends.VersioningBackend.
 //
 // When ConflictsParams.Collection is empty it returns per-collection conflict counts.
 // When ConflictsParams.Collection is set it returns per-conflict details for that collection.
-func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocudoltConflicts: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocuDoltConflicts: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DocudoltConflicts: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocuDoltConflicts: database %q does not exist", params.DBName))
 	}
 
 	db.mu.RLock()
@@ -133,7 +133,7 @@ func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.Confli
 	db.mu.RUnlock()
 
 	if ms == nil {
-		return nil, fmt.Errorf("dolt: DocudoltConflicts: no merge or cherry-pick in progress on branch %q", params.Branch)
+		return nil, fmt.Errorf("dolt: DocuDoltConflicts: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
 	if params.Collection == "" {
@@ -164,7 +164,7 @@ func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.Confli
 		if e.baseRawVal != nil {
 			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.baseRawVal)
 			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DocudoltConflicts: reading base doc for conflict %q: %w", e.id, docErr)
+				return nil, fmt.Errorf("dolt: DocuDoltConflicts: reading base doc for conflict %q: %w", e.id, docErr)
 			}
 			info.Base = doc
 		}
@@ -172,7 +172,7 @@ func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.Confli
 		if e.oursRawVal != nil {
 			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.oursRawVal)
 			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DocudoltConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
+				return nil, fmt.Errorf("dolt: DocuDoltConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
 			}
 			info.Ours = doc
 		}
@@ -180,7 +180,7 @@ func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.Confli
 		if e.theirsRawVal != nil {
 			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.theirsRawVal)
 			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DocudoltConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
+				return nil, fmt.Errorf("dolt: DocuDoltConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
 			}
 			info.Theirs = doc
 		}
@@ -195,19 +195,19 @@ func (b *Backend) DocudoltConflicts(ctx context.Context, params *backends.Confli
 	return &backends.ConflictsResult{Conflicts: infos}, nil
 }
 
-// DocudoltResolveConflict implements backends.VersioningBackend.
+// DocuDoltResolveConflict implements backends.VersioningBackend.
 //
 // Resolves a single document conflict in the current in-progress merge.
 // After resolution the conflict entry is marked resolved and the resolvedAM is
 // updated to reflect the chosen document state.
-func (b *Backend) DocudoltResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DocudoltResolveConflict: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocuDoltResolveConflict: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -215,12 +215,12 @@ func (b *Backend) DocudoltResolveConflict(ctx context.Context, params *backends.
 
 	ms := db.mergeState
 	if ms == nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
 	entries, ok := ms.conflicts[params.Collection]
 	if !ok {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: collection %q has no conflicts", params.Collection)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: collection %q has no conflicts", params.Collection)
 	}
 
 	var target *conflictEntry
@@ -232,10 +232,10 @@ func (b *Backend) DocudoltResolveConflict(ctx context.Context, params *backends.
 	}
 
 	if target == nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: conflict %q not found in collection %q", params.ConflictID, params.Collection)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: conflict %q not found in collection %q", params.ConflictID, params.Collection)
 	}
 	if target.resolved {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: conflict %q is already resolved", params.ConflictID)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: conflict %q is already resolved", params.ConflictID)
 	}
 
 	// For "ours", the resolvedAM already has our value — just mark resolved, no AM update needed.
@@ -255,71 +255,71 @@ func (b *Backend) DocudoltResolveConflict(ctx context.Context, params *backends.
 
 	case "custom":
 		if params.Value == nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: resolution %q requires a value document", params.Resolution)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: resolution %q requires a value document", params.Resolution)
 		}
 		jsonHash, writeErr := writeDocJSON(ctx, db.ns, params.Value)
 		if writeErr != nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: writing custom document: %w", writeErr)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: writing custom document: %w", writeErr)
 		}
 		v, buildErr := buildValue(jsonHash)
 		if buildErr != nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: building value tuple: %w", buildErr)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: building value tuple: %w", buildErr)
 		}
 		chosenVal = v
 
 	default:
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
 	}
 
 	// Update the collection map in resolvedAM to reflect the chosen resolution.
 	collMap, err := collectionMapFromAM(ctx, db, ms.resolvedAM, params.Collection)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: opening collection %q from resolvedAM: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: opening collection %q from resolvedAM: %w", params.Collection, err)
 	}
 
 	mut := collMap.Mutate()
 
 	if deleteDoc {
 		if err := mut.Delete(ctx, target.rawKey); err != nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: deleting document from collection %q: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: deleting document from collection %q: %w", params.Collection, err)
 		}
 	} else {
 		if err := mut.Put(ctx, target.rawKey, chosenVal); err != nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: updating document in collection %q: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating document in collection %q: %w", params.Collection, err)
 		}
 	}
 
 	newCollMap, err := mut.Map(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: flushing collection map for %q: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: flushing collection map for %q: %w", params.Collection, err)
 	}
 
 	// Update the resolvedAM to point to the new collection map.
 	newCollHash, err := db.dtblHashForMap(ctx, newCollMap)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: getting DTBL hash for %q: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: getting DTBL hash for %q: %w", params.Collection, err)
 	}
 
 	amEditor := ms.resolvedAM.Editor()
 
 	newCollCount, countErr := newCollMap.Count()
 	if countErr != nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: counting new collection map for %q: %w", params.Collection, countErr)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: counting new collection map for %q: %w", params.Collection, countErr)
 	}
 
 	if newCollCount == 0 {
 		if err := amEditor.Delete(ctx, params.Collection); err != nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
 		if err := amEditor.Update(ctx, params.Collection, newCollHash); err != nil {
-			return nil, fmt.Errorf("dolt: DocudoltResolveConflict: updating AM for collection %q: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating AM for collection %q: %w", params.Collection, err)
 		}
 	}
 
 	newAM, err := amEditor.Flush(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocudoltResolveConflict: flushing AM editor: %w", err)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: flushing AM editor: %w", err)
 	}
 
 	ms.resolvedAM = newAM

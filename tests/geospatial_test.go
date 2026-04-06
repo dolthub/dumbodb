@@ -29,7 +29,7 @@ import (
 func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -53,7 +53,7 @@ func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -77,7 +77,7 @@ func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -102,7 +102,7 @@ func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -135,7 +135,7 @@ func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	coll := env.collection(t)
 
 	// Create a legacy 2d index on the location field.
@@ -156,7 +156,7 @@ func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 	ctx := context.Background()
 
 	// $maxDistance in radians: 15° ≈ 0.2618 rad ≈ 1670 km.
-	// Docudolt must convert radians → metres before applying the haversine filter.
+	// DocuDolt must convert radians → metres before applying the haversine filter.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(
 			e("$nearSphere", bson.A{float64(-0.12), float64(51.50)}),

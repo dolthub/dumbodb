@@ -40,7 +40,7 @@ import (
 
 // commitVerifySetup mirrors the Setup section of docs/verify/commit.md.
 // Returns hashBase (the baseline commit hash).
-func commitVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hashBase string) {
+func commitVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashBase string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -63,12 +63,12 @@ func commitVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hashB
 	})
 	require.NoError(t, err)
 
-	hashBase = docudoltCommit(t, env, dbName, "baseline")
+	hashBase = docuDoltCommit(t, env, dbName, "baseline")
 	return hashBase
 }
 
 func TestCommitVerify(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("commitvrfy%d", rand.Int64N(1_000_000))
@@ -204,11 +204,11 @@ func TestCommitVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Committed hash is a valid docudoltDiff reference
+	// Scenario 5: Committed hash is a valid docuDoltDiff reference
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HashIsValidDiffReference", func(t *testing.T) {
 		// Commit current state and save hashBefore.
-		hashBefore := docudoltCommit(t, env, dbName, "pre-change")
+		hashBefore := docuDoltCommit(t, env, dbName, "pre-change")
 
 		// Insert _id:99 and commit — save hashAfter.
 		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
@@ -218,7 +218,7 @@ func TestCommitVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashAfter := docudoltCommit(t, env, dbName, "post-change")
+		hashAfter := docuDoltCommit(t, env, dbName, "post-change")
 
 		// Diff from hashBefore to hashAfter must show _id:99 as added.
 		var raw bson.M
@@ -238,7 +238,7 @@ func TestCommitVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Author is echoed in the response and visible in docudoltLog
+	// Scenario 6: Author is echoed in the response and visible in docuDoltLog
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
 		var result bson.M
@@ -252,7 +252,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.NotNil(t, result["timestamp"], "timestamp must be present in response")
 		assert.EqualValues(t, 1, result["ok"])
 
-		// Verify the author is stored and visible via docudoltLog.
+		// Verify the author is stored and visible via docuDoltLog.
 		var logResult bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -291,7 +291,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, fixedTime.UnixMilli(), int64(echoedTS),
 			"echoed timestamp must match the provided fixed time")
 
-		// Verify via docudoltLog that the stored timestamp matches.
+		// Verify via docuDoltLog that the stored timestamp matches.
 		var logResult bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},

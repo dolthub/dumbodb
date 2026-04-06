@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package main is the entry point for the Docudolt server.
+// Package main is the entry point for the DocuDolt server.
 package main
 
 import (
@@ -110,7 +110,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	logger.Info("Docudolt server started", "addr", *addr, "data-dir", *dataDir)
+	logger.Info("DocuDolt server started", "addr", *addr, "data-dir", *dataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

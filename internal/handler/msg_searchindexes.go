@@ -26,7 +26,7 @@ import (
 // MsgCreateSearchIndexes implements the `createSearchIndexes` command.
 //
 // Atlas Search indexes require a MongoDB Atlas deployment and are not
-// supported by Docudolt. This handler returns a clear "not implemented"
+// supported by DocuDolt. This handler returns a clear "not implemented"
 // error so clients receive a meaningful message instead of a generic
 // "no such command" error.
 func (h *Handler) MsgCreateSearchIndexes(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -36,14 +36,14 @@ func (h *Handler) MsgCreateSearchIndexes(connCtx context.Context, msg *wire.OpMs
 
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrNotImplemented,
-		"Atlas Search indexes are not supported by Docudolt",
+		"Atlas Search indexes are not supported by DocuDolt",
 		"createSearchIndexes",
 	)
 }
 
 // MsgListSearchIndexes implements the `listSearchIndexes` command.
 //
-// Atlas Search indexes are not supported by Docudolt.
+// Atlas Search indexes are not supported by DocuDolt.
 func (h *Handler) MsgListSearchIndexes(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	if _, err := opMsgDocument(msg); err != nil {
 		return nil, lazyerrors.Error(err)
@@ -51,14 +51,14 @@ func (h *Handler) MsgListSearchIndexes(connCtx context.Context, msg *wire.OpMsg)
 
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrNotImplemented,
-		"Atlas Search indexes are not supported by Docudolt",
+		"Atlas Search indexes are not supported by DocuDolt",
 		"listSearchIndexes",
 	)
 }
 
 // MsgDropSearchIndex implements the `dropSearchIndex` command.
 //
-// Atlas Search indexes are not supported by Docudolt.
+// Atlas Search indexes are not supported by DocuDolt.
 func (h *Handler) MsgDropSearchIndex(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	if _, err := opMsgDocument(msg); err != nil {
 		return nil, lazyerrors.Error(err)
@@ -66,14 +66,14 @@ func (h *Handler) MsgDropSearchIndex(connCtx context.Context, msg *wire.OpMsg) (
 
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrNotImplemented,
-		"Atlas Search indexes are not supported by Docudolt",
+		"Atlas Search indexes are not supported by DocuDolt",
 		"dropSearchIndex",
 	)
 }
 
 // MsgUpdateSearchIndex implements the `updateSearchIndex` command.
 //
-// Atlas Search indexes are not supported by Docudolt.
+// Atlas Search indexes are not supported by DocuDolt.
 func (h *Handler) MsgUpdateSearchIndex(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	if _, err := opMsgDocument(msg); err != nil {
 		return nil, lazyerrors.Error(err)
@@ -81,7 +81,7 @@ func (h *Handler) MsgUpdateSearchIndex(connCtx context.Context, msg *wire.OpMsg)
 
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrNotImplemented,
-		"Atlas Search indexes are not supported by Docudolt",
+		"Atlas Search indexes are not supported by DocuDolt",
 		"updateSearchIndex",
 	)
 }

@@ -80,103 +80,103 @@ func (b *backend) Collect(ch chan<- prometheus.Metric) {
 	b.origB.Collect(ch)
 }
 
-// DocudoltCommit implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+// DocuDoltCommit implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltCommit(ctx, params)
+		return vb.DocuDoltCommit(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltCommit: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltCommit: versioning not supported by wrapped backend")
 }
 
-// DocudoltBranch implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+// DocuDoltBranch implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltBranch(ctx, params)
+		return vb.DocuDoltBranch(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltBranch: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltBranch: versioning not supported by wrapped backend")
 }
 
-// DocudoltMerge implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+// DocuDoltMerge implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltMerge(ctx, params)
+		return vb.DocuDoltMerge(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltMerge: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltMerge: versioning not supported by wrapped backend")
 }
 
-// DocudoltLog implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+// DocuDoltLog implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltLog(ctx, params)
+		return vb.DocuDoltLog(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltLog: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltLog: versioning not supported by wrapped backend")
 }
 
-// DocudoltStatus implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+// DocuDoltStatus implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltStatus(ctx, params)
+		return vb.DocuDoltStatus(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltStatus: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltStatus: versioning not supported by wrapped backend")
 }
 
-// DocudoltDiff implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+// DocuDoltDiff implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltDiff(ctx, params)
+		return vb.DocuDoltDiff(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltDiff: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltDiff: versioning not supported by wrapped backend")
 }
 
-// DocudoltCurrentBranch implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltCurrentBranch(ctx context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+// DocuDoltCurrentBranch implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltCurrentBranch(ctx context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltCurrentBranch(ctx, params)
+		return vb.DocuDoltCurrentBranch(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltCurrentBranch: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltCurrentBranch: versioning not supported by wrapped backend")
 }
 
-// DocudoltReset implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+// DocuDoltReset implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltReset(ctx, params)
+		return vb.DocuDoltReset(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltReset: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltReset: versioning not supported by wrapped backend")
 }
 
-// DocudoltConflicts implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+// DocuDoltConflicts implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltConflicts(ctx, params)
+		return vb.DocuDoltConflicts(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltConflicts: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltConflicts: versioning not supported by wrapped backend")
 }
 
-// DocudoltResolveConflict implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+// DocuDoltResolveConflict implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltResolveConflict(ctx, params)
+		return vb.DocuDoltResolveConflict(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltResolveConflict: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltResolveConflict: versioning not supported by wrapped backend")
 }
 
-// DocudoltCherryPick implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocudoltCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+// DocuDoltCherryPick implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocudoltCherryPick(ctx, params)
+		return vb.DocuDoltCherryPick(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocudoltCherryPick: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DocuDoltCherryPick: versioning not supported by wrapped backend")
 }
 
 // check interfaces

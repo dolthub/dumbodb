@@ -28,13 +28,13 @@ import (
 
 // TestTransactionSmoke verifies the basic session and transaction lifecycle:
 // startSession → StartTransaction → insert documents → CommitTransaction → EndSession.
-// (DocudoltFull)
+// (DocuDoltFull)
 //
-// Docudolt does not provide multi-document ACID isolation, but the driver-level
+// DocuDolt does not provide multi-document ACID isolation, but the driver-level
 // transaction API must not produce a crash or "no such command" error. The
 // round-trip is accepted and inserts are applied immediately.
 func TestTransactionSmoke(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -61,11 +61,11 @@ func TestTransactionSmoke(t *testing.T) {
 }
 
 // TestTransactionSmoke_Abort verifies that aborting a transaction does not crash
-// the server. Because Docudolt does not provide ACID isolation, the inserted
+// the server. Because DocuDolt does not provide ACID isolation, the inserted
 // documents remain visible — but the server must not panic or return an error
-// on abortTransaction. (DocudoltFull)
+// on abortTransaction. (DocuDoltFull)
 func TestTransactionSmoke_Abort(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -79,7 +79,7 @@ func TestTransactionSmoke_Abort(t *testing.T) {
 	mongoCtx := mongo.NewSessionContext(ctx, sess)
 	_, _ = coll.InsertOne(mongoCtx, bson.D{{Key: "txn", Value: "abort"}, {Key: "n", Value: int32(2)}})
 
-	// AbortTransaction must not return an error even though Docudolt does not
+	// AbortTransaction must not return an error even though DocuDolt does not
 	// actually roll back the insert.
 	require.NoError(t, sess.AbortTransaction(ctx), "AbortTransaction must not error")
 }

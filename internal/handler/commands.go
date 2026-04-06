@@ -119,47 +119,47 @@ func (h *Handler) initCommands() {
 			Help:    "Returns error for debugging.",
 		},
 		"doltBranch": {
-			Handler: h.MsgDocudoltBranch,
-			Help:    "Creates a new Docudolt branch from the current branch encoded in the database name.",
+			Handler: h.MsgDocuDoltBranch,
+			Help:    "Creates a new DocuDolt branch from the current branch encoded in the database name.",
 		},
 		"doltCherryPick": {
-			Handler: h.MsgDocudoltCherryPick,
+			Handler: h.MsgDocuDoltCherryPick,
 			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
 		},
 		"doltConflicts": {
-			Handler: h.MsgDocudoltConflicts,
+			Handler: h.MsgDocuDoltConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
 		},
 		"doltDiff": {
-			Handler: h.MsgDocudoltDiff,
+			Handler: h.MsgDocuDoltDiff,
 			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
 		},
 		"doltCommit": {
-			Handler: h.MsgDocudoltCommit,
+			Handler: h.MsgDocuDoltCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
 		"doltCurrentBranch": {
-			Handler: h.MsgDocudoltCurrentBranch,
+			Handler: h.MsgDocuDoltCurrentBranch,
 			Help:    "Returns the current branch name for the connection encoded in the database name.",
 		},
 		"doltLog": {
-			Handler: h.MsgDocudoltLog,
+			Handler: h.MsgDocuDoltLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",
 		},
 		"doltMerge": {
-			Handler: h.MsgDocudoltMerge,
+			Handler: h.MsgDocuDoltMerge,
 			Help:    "Merges a source branch into the branch encoded in the database name.",
 		},
 		"doltReset": {
-			Handler: h.MsgDocudoltReset,
+			Handler: h.MsgDocuDoltReset,
 			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
 		},
 		"doltResolveConflict": {
-			Handler: h.MsgDocudoltResolveConflict,
+			Handler: h.MsgDocuDoltResolveConflict,
 			Help:    "Resolves a single document conflict in the current in-progress merge.",
 		},
 		"doltStatus": {
-			Handler: h.MsgDocudoltStatus,
+			Handler: h.MsgDocuDoltStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
 		},
 		"delete": {

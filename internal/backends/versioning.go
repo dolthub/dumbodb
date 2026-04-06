@@ -22,7 +22,7 @@ import (
 	"github.com/dolthub/docudolt/internal/types"
 )
 
-// CommitParams represents the parameters of VersioningBackend.DocudoltCommit method.
+// CommitParams represents the parameters of VersioningBackend.DocuDoltCommit method.
 type CommitParams struct {
 	DBName    string
 	Branch    string
@@ -31,7 +31,7 @@ type CommitParams struct {
 	Timestamp time.Time // optional: commit timestamp; zero value means use current time
 }
 
-// CommitResult represents the result of VersioningBackend.DocudoltCommit method.
+// CommitResult represents the result of VersioningBackend.DocuDoltCommit method.
 type CommitResult struct {
 	CommitID  string
 	Branch    string
@@ -40,7 +40,7 @@ type CommitResult struct {
 	Timestamp int64  // Unix milliseconds of the commit timestamp
 }
 
-// BranchParams represents the parameters of VersioningBackend.DocudoltBranch method.
+// BranchParams represents the parameters of VersioningBackend.DocuDoltBranch method.
 type BranchParams struct {
 	DBName string
 	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
@@ -49,12 +49,12 @@ type BranchParams struct {
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (-D semantics)
 }
 
-// BranchResult represents the result of VersioningBackend.DocudoltBranch method.
+// BranchResult represents the result of VersioningBackend.DocuDoltBranch method.
 type BranchResult struct {
 	Branch string
 }
 
-// MergeParams represents the parameters of VersioningBackend.DocudoltMerge method.
+// MergeParams represents the parameters of VersioningBackend.DocuDoltMerge method.
 type MergeParams struct {
 	DBName   string
 	Into     string // target branch (the current branch)
@@ -67,7 +67,7 @@ type MergeParams struct {
 	FFOnly   bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
 }
 
-// MergeResult represents the result of VersioningBackend.DocudoltMerge method.
+// MergeResult represents the result of VersioningBackend.DocuDoltMerge method.
 type MergeResult struct {
 	CommitID string
 	Message  string
@@ -79,10 +79,10 @@ type ConflictSummary struct {
 	Count      int
 }
 
-// MergeConflictError is returned by DocudoltMerge when the merge cannot be completed
+// MergeConflictError is returned by DocuDoltMerge when the merge cannot be completed
 // automatically due to conflicting document changes on both branches. The merge is staged
-// but not committed; conflicts must be resolved via DocudoltResolveConflict before
-// DocudoltCommit will succeed.
+// but not committed; conflicts must be resolved via DocuDoltResolveConflict before
+// DocuDoltCommit will succeed.
 type MergeConflictError struct {
 	Conflicts []ConflictSummary
 }
@@ -92,7 +92,7 @@ func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("doltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
-// CherryPickParams represents the parameters of VersioningBackend.DocudoltCherryPick method.
+// CherryPickParams represents the parameters of VersioningBackend.DocuDoltCherryPick method.
 type CherryPickParams struct {
 	DBName   string
 	Branch   string // current branch (the target branch to apply the cherry-pick onto)
@@ -103,22 +103,22 @@ type CherryPickParams struct {
 	Author   string // optional: 'Name <email>'
 }
 
-// CherryPickResult represents the result of VersioningBackend.DocudoltCherryPick method.
+// CherryPickResult represents the result of VersioningBackend.DocuDoltCherryPick method.
 type CherryPickResult struct {
 	CommitID string
 	Message  string
 }
 
-// DocudoltCherryPickConflictError is returned by DocudoltCherryPick when the cherry-pick
+// DocuDoltCherryPickConflictError is returned by DocuDoltCherryPick when the cherry-pick
 // cannot be completed automatically due to conflicting document changes. The cherry-pick
-// is staged but not committed; conflicts must be resolved via DocudoltResolveConflict
-// before DocudoltCherryPick continue will succeed.
-type DocudoltCherryPickConflictError struct {
+// is staged but not committed; conflicts must be resolved via DocuDoltResolveConflict
+// before DocuDoltCherryPick continue will succeed.
+type DocuDoltCherryPickConflictError struct {
 	Conflicts []ConflictSummary
 }
 
 // Error implements the error interface.
-func (e *DocudoltCherryPickConflictError) Error() string {
+func (e *DocuDoltCherryPickConflictError) Error() string {
 	return fmt.Sprintf("doltCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
@@ -132,21 +132,21 @@ type ConflictInfo struct {
 	TheirDiffType string          // "added", "modified", "deleted"
 }
 
-// ConflictsParams represents the parameters of VersioningBackend.DocudoltConflicts method.
+// ConflictsParams represents the parameters of VersioningBackend.DocuDoltConflicts method.
 type ConflictsParams struct {
 	DBName     string
 	Branch     string
 	Collection string // optional: if empty, return per-collection summaries; if set, return per-conflict details
 }
 
-// ConflictsResult represents the result of VersioningBackend.DocudoltConflicts method.
+// ConflictsResult represents the result of VersioningBackend.DocuDoltConflicts method.
 // Exactly one of Collections or Conflicts is populated depending on whether ConflictsParams.Collection is empty.
 type ConflictsResult struct {
 	Collections []ConflictSummary // per-collection conflict counts (when Collection is empty)
 	Conflicts   []ConflictInfo    // per-conflict details (when Collection is set)
 }
 
-// ResolveConflictParams represents the parameters of VersioningBackend.DocudoltResolveConflict method.
+// ResolveConflictParams represents the parameters of VersioningBackend.DocuDoltResolveConflict method.
 type ResolveConflictParams struct {
 	DBName     string
 	Branch     string
@@ -156,10 +156,10 @@ type ResolveConflictParams struct {
 	Value      *types.Document // only used when Resolution == "custom"
 }
 
-// ResolveConflictResult represents the result of VersioningBackend.DocudoltResolveConflict method.
+// ResolveConflictResult represents the result of VersioningBackend.DocuDoltResolveConflict method.
 type ResolveConflictResult struct{}
 
-// LogParams represents the parameters of VersioningBackend.DocudoltLog method.
+// LogParams represents the parameters of VersioningBackend.DocuDoltLog method.
 type LogParams struct {
 	DBName     string
 	Branch     string
@@ -168,7 +168,7 @@ type LogParams struct {
 	From       string // optional: start traversal from this commit hash instead of HEAD
 }
 
-// CommitInfo represents a single commit entry returned by DocudoltLog.
+// CommitInfo represents a single commit entry returned by DocuDoltLog.
 type CommitInfo struct {
 	CommitID  string
 	Parent1   string   // empty for root commit (no parent)
@@ -180,12 +180,12 @@ type CommitInfo struct {
 	Refs      []string // branch/tag decorations; empty when commit is not a branch head
 }
 
-// LogResult represents the result of VersioningBackend.DocudoltLog method.
+// LogResult represents the result of VersioningBackend.DocuDoltLog method.
 type LogResult struct {
 	Commits []CommitInfo
 }
 
-// VersioningStatusParams represents the parameters of VersioningBackend.DocudoltStatus method.
+// VersioningStatusParams represents the parameters of VersioningBackend.DocuDoltStatus method.
 type VersioningStatusParams struct {
 	DBName string
 	Branch string
@@ -197,13 +197,13 @@ type TableStatus struct {
 	Status string // "added", "modified", or "deleted"
 }
 
-// VersioningStatusResult represents the result of VersioningBackend.DocudoltStatus method.
+// VersioningStatusResult represents the result of VersioningBackend.DocuDoltStatus method.
 type VersioningStatusResult struct {
 	Branch string
 	Tables []TableStatus
 }
 
-// DiffParams represents the parameters of VersioningBackend.DocudoltDiff method.
+// DiffParams represents the parameters of VersioningBackend.DocuDoltDiff method.
 //
 // From and To accept rootish expressions (commit hashes, branch names, ancestor
 // expressions like "main~2", or "HEAD"/"HEAD~N"). Empty string means the default:
@@ -243,13 +243,13 @@ type CollectionDiff struct {
 	Modified []ModifiedDoc     // documents changed between "a" and "b"
 }
 
-// DiffResult represents the result of VersioningBackend.DocudoltDiff method.
+// DiffResult represents the result of VersioningBackend.DocuDoltDiff method.
 // Only collections with at least one change appear.
 type DiffResult struct {
 	Collections []CollectionDiff
 }
 
-// ResetParams represents the parameters of VersioningBackend.DocudoltReset method.
+// ResetParams represents the parameters of VersioningBackend.DocuDoltReset method.
 type ResetParams struct {
 	DBName   string
 	Branch   string
@@ -257,18 +257,18 @@ type ResetParams struct {
 	Hard     bool
 }
 
-// ResetResult represents the result of VersioningBackend.DocudoltReset method.
+// ResetResult represents the result of VersioningBackend.DocuDoltReset method.
 type ResetResult struct {
 	CommitID string
 }
 
-// CurrentBranchParams represents the parameters of VersioningBackend.DocudoltCurrentBranch method.
+// CurrentBranchParams represents the parameters of VersioningBackend.DocuDoltCurrentBranch method.
 type CurrentBranchParams struct {
 	DBName string
 	Branch string
 }
 
-// CurrentBranchResult represents the result of VersioningBackend.DocudoltCurrentBranch method.
+// CurrentBranchResult represents the result of VersioningBackend.DocuDoltCurrentBranch method.
 type CurrentBranchResult struct {
 	Branch string
 }
@@ -277,51 +277,51 @@ type CurrentBranchResult struct {
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the docudolt versioning commands to return an unsupported error.
 type VersioningBackend interface {
-	// DocudoltCommit commits the current working set on the given branch with the provided message.
-	DocudoltCommit(context.Context, *CommitParams) (*CommitResult, error)
+	// DocuDoltCommit commits the current working set on the given branch with the provided message.
+	DocuDoltCommit(context.Context, *CommitParams) (*CommitResult, error)
 
-	// DocudoltBranch creates a new branch starting from the given source branch.
-	DocudoltBranch(context.Context, *BranchParams) (*BranchResult, error)
+	// DocuDoltBranch creates a new branch starting from the given source branch.
+	DocuDoltBranch(context.Context, *BranchParams) (*BranchResult, error)
 
-	// DocudoltCurrentBranch returns the current branch name for the connection.
-	DocudoltCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
+	// DocuDoltCurrentBranch returns the current branch name for the connection.
+	DocuDoltCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
 
-	// DocudoltMerge merges the source branch (From) into the target branch (Into).
-	DocudoltMerge(context.Context, *MergeParams) (*MergeResult, error)
+	// DocuDoltMerge merges the source branch (From) into the target branch (Into).
+	DocuDoltMerge(context.Context, *MergeParams) (*MergeResult, error)
 
-	// DocudoltLog returns the commit history for the given branch.
-	DocudoltLog(context.Context, *LogParams) (*LogResult, error)
+	// DocuDoltLog returns the commit history for the given branch.
+	DocuDoltLog(context.Context, *LogParams) (*LogResult, error)
 
-	// DocudoltStatus returns the uncommitted changes on the given branch.
-	DocudoltStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
+	// DocuDoltStatus returns the uncommitted changes on the given branch.
+	DocuDoltStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
 
-	// DocudoltDiff returns the document-level diff between two states.
+	// DocuDoltDiff returns the document-level diff between two states.
 	// If From is empty, the "a" side is HEAD. If To is empty, the "b" side is the working set.
-	DocudoltDiff(context.Context, *DiffParams) (*DiffResult, error)
+	DocuDoltDiff(context.Context, *DiffParams) (*DiffResult, error)
 
-	// DocudoltReset moves the branch HEAD to the given commit hash.
+	// DocuDoltReset moves the branch HEAD to the given commit hash.
 	// Soft reset (Hard=false): leaves the working tree unchanged; staged root is updated to the target commit.
 	// Hard reset (Hard=true): resets both the working tree and staged root to the target commit,
 	// discarding all uncommitted changes.
-	DocudoltReset(context.Context, *ResetParams) (*ResetResult, error)
+	DocuDoltReset(context.Context, *ResetParams) (*ResetResult, error)
 
-	// DocudoltConflicts returns conflict information for the current in-progress merge on the given branch.
+	// DocuDoltConflicts returns conflict information for the current in-progress merge on the given branch.
 	// If ConflictsParams.Collection is empty, returns a per-collection summary (Collections field).
 	// If ConflictsParams.Collection is set, returns per-conflict details for that collection (Conflicts field).
 	// Returns ErrOperationFailed if no merge is in progress on the branch.
-	DocudoltConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
+	DocuDoltConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
 
-	// DocudoltResolveConflict resolves a single document conflict in the current in-progress merge.
+	// DocuDoltResolveConflict resolves a single document conflict in the current in-progress merge.
 	// Resolution must be "ours", "theirs", or "custom". For "custom", Value provides the document to use.
 	// Returns ErrOperationFailed if no merge is in progress, if the collection or conflict ID is not found,
 	// or if the conflict is already resolved.
-	DocudoltResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
+	DocuDoltResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
 
-	// DocudoltCherryPick applies the diff introduced by the named commit onto the current branch's
+	// DocuDoltCherryPick applies the diff introduced by the named commit onto the current branch's
 	// working set and creates a new commit. The commit parameter is a rootish (commit hash or
 	// ancestor expression). On conflict, the cherry-pick is staged but not committed and a
-	// *DocudoltCherryPickConflictError is returned. Conflicts are resolved via
-	// DocudoltResolveConflict/DocudoltConflicts. After resolution, use Continue=true to complete
+	// *DocuDoltCherryPickConflictError is returned. Conflicts are resolved via
+	// DocuDoltResolveConflict/DocuDoltConflicts. After resolution, use Continue=true to complete
 	// the cherry-pick. Use Abort=true to abandon an in-progress cherry-pick.
-	DocudoltCherryPick(context.Context, *CherryPickParams) (*CherryPickResult, error)
+	DocuDoltCherryPick(context.Context, *CherryPickParams) (*CherryPickResult, error)
 }

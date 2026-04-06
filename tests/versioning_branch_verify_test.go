@@ -38,7 +38,7 @@ import (
 
 // branchVerifySetup mirrors the Setup section of docs/verify/branch.md.
 // Returns hash1 (commit 1) and hash2 (commit 2, same as main HEAD).
-func branchVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash1, hash2 string) {
+func branchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hash1, hash2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -53,7 +53,7 @@ func branchVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash1
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 = docudoltCommit(t, env, dbName, "commit one")
+	hash1 = docuDoltCommit(t, env, dbName, "commit one")
 
 	// Commit 2: second document added.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -61,13 +61,13 @@ func branchVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash1
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 = docudoltCommit(t, env, dbName, "commit two")
+	hash2 = docuDoltCommit(t, env, dbName, "commit two")
 
 	return hash1, hash2
 }
 
 func TestBranchVerify(t *testing.T) {
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("branchvrfy%d", rand.Int64N(1_000_000))
@@ -124,7 +124,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "gamma"},
 		})
 		require.NoError(t, err)
-		docudoltCommit(t, env, dbName+"__d_feature", "feature adds gamma")
+		docuDoltCommit(t, env, dbName+"__d_feature", "feature adds gamma")
 
 		// main must still have exactly 2 documents.
 		mainCount, err := env.client.Database(dbName+"__d_main").Collection("items").CountDocuments(ctx, bson.D{})
@@ -247,7 +247,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "extra"},
 		})
 		require.NoError(t, err)
-		docudoltCommit(t, env, delDbName+"__d_unmerged-branch", "extra commit on unmerged-branch")
+		docuDoltCommit(t, env, delDbName+"__d_unmerged-branch", "extra commit on unmerged-branch")
 
 		// Safe delete must be rejected because unmerged-branch has a commit not in main.
 		err = env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
@@ -276,7 +276,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "gone"},
 		})
 		require.NoError(t, err)
-		docudoltCommit(t, env, delDbName+"__d_force-branch", "unmerged commit on force-branch")
+		docuDoltCommit(t, env, delDbName+"__d_force-branch", "unmerged commit on force-branch")
 
 		// Force delete must succeed regardless of merge status.
 		var result bson.M

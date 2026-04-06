@@ -361,9 +361,9 @@ func TestRTVLLoad_Tag_Query(t *testing.T) {
 	}
 }
 
-// TestRTVLLoad_DocudoltBranch_FromHash verifies that a branch can be created from a
+// TestRTVLLoad_DocuDoltBranch_FromHash verifies that a branch can be created from a
 // commit-hash rootish. The new branch points to that exact commit, not main HEAD.
-func TestRTVLLoad_DocudoltBranch_FromHash(t *testing.T) {
+func TestRTVLLoad_DocuDoltBranch_FromHash(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -376,13 +376,13 @@ func TestRTVLLoad_DocudoltBranch_FromHash(t *testing.T) {
 	commitDB(t, b, "testdb", "second commit")
 
 	// Create a branch "snap" rooted at hash1 (not main HEAD).
-	_, err := b.DocudoltBranch(ctx, &backends.BranchParams{
+	_, err := b.DocuDoltBranch(ctx, &backends.BranchParams{
 		DBName: "testdb",
 		Name:   "snap",
 		From:   hash1,
 	})
 	if err != nil {
-		t.Fatalf("DocudoltBranch from hash: %v", err)
+		t.Fatalf("DocuDoltBranch from hash: %v", err)
 	}
 
 	// Reading from the new branch should see only doc1 (the state at hash1).
@@ -392,9 +392,9 @@ func TestRTVLLoad_DocudoltBranch_FromHash(t *testing.T) {
 	}
 }
 
-// TestRTVLLoad_DocudoltBranch_FromAncestor verifies that a branch can be created from
+// TestRTVLLoad_DocuDoltBranch_FromAncestor verifies that a branch can be created from
 // an ancestor-expression rootish. The new branch points to the resolved ancestor commit.
-func TestRTVLLoad_DocudoltBranch_FromAncestor(t *testing.T) {
+func TestRTVLLoad_DocuDoltBranch_FromAncestor(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -407,13 +407,13 @@ func TestRTVLLoad_DocudoltBranch_FromAncestor(t *testing.T) {
 	commitDB(t, b, "testdb", "third commit")
 
 	// Create branch "back1" from main~1 (parent of HEAD = second commit = 2 docs).
-	_, err := b.DocudoltBranch(ctx, &backends.BranchParams{
+	_, err := b.DocuDoltBranch(ctx, &backends.BranchParams{
 		DBName: "testdb",
 		Name:   "back1",
 		From:   "main~1",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltBranch from main~1: %v", err)
+		t.Fatalf("DocuDoltBranch from main~1: %v", err)
 	}
 
 	// back1 should see 2 docs (state at main~1 = second commit).
@@ -445,13 +445,13 @@ func TestRTVLLoad_BranchWrite_Isolation(t *testing.T) {
 	commitDB(t, b, "testdb", "baseline commit")
 
 	// Create branch "feature" from main HEAD.
-	_, err := b.DocudoltBranch(ctx, &backends.BranchParams{
+	_, err := b.DocuDoltBranch(ctx, &backends.BranchParams{
 		DBName: "testdb",
 		Name:   "feature",
 		From:   "main",
 	})
 	if err != nil {
-		t.Fatalf("DocudoltBranch: %v", err)
+		t.Fatalf("DocuDoltBranch: %v", err)
 	}
 
 	// Write to feature branch working set (not committed).

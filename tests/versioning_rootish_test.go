@@ -46,7 +46,7 @@ func assertRootishRejected(tb testing.TB, db *mongo.Database, op string) {
 func TestRootish_ParseRejection(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	dbName := fmt.Sprintf("prtest%d", rand.Int64N(1_000_000))
 
 	cases := []struct {
@@ -74,12 +74,12 @@ func TestRootish_ParseRejection(t *testing.T) {
 	}
 }
 
-// TestRootish_DocudoltCurrentBranch_EndToEnd verifies that docudoltCurrentBranch
+// TestRootish_DocuDoltCurrentBranch_EndToEnd verifies that docuDoltCurrentBranch
 // returns the correct branch on branch connections and code 96 on read-only ones.
-func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
+func TestRootish_DocuDoltCurrentBranch_EndToEnd(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("dcbtest%d", rand.Int64N(1_000_000))
 	collName := "col"
@@ -138,7 +138,7 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 
 	// Simulate a parity-harness-style database name: a prefix ending in _ joined to
@@ -166,7 +166,7 @@ func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	t.Parallel()
 
-	env := startDocudolt(t)
+	env := startDocuDolt(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("diso%d", rand.Int64N(1_000_000))
 	collName := "col"
