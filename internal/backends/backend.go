@@ -308,7 +308,7 @@ func (bc *backendContract) DocudoltCherryPick(ctx context.Context, params *Cherr
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {
-	return fmt.Errorf("docudolt versioning not supported by this backend: %s", op)
+	return fmt.Errorf("dolt versioning not supported by this backend: %s", op)
 }
 
 // check interfaces

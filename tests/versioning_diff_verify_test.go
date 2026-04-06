@@ -71,10 +71,10 @@ func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 	t.Helper()
 
 	rawColls, ok := raw["collections"]
-	require.True(t, ok, "docudoltDiff result missing 'collections' field")
+	require.True(t, ok, "doltDiff result missing 'collections' field")
 
 	collsArr, ok := rawColls.(bson.A)
-	require.True(t, ok, "docudoltDiff 'collections' is not an array, got %T", rawColls)
+	require.True(t, ok, "doltDiff 'collections' is not an array, got %T", rawColls)
 
 	var out diffResult
 
@@ -223,7 +223,7 @@ func TestDiffVerify(t *testing.T) {
 	t.Run("Scenario1_WorkingSetVsHEAD", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -273,7 +273,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBase},
 			{Key: "to", Value: hashNew},
 		}).Decode(&raw))
@@ -308,7 +308,7 @@ func TestDiffVerify(t *testing.T) {
 		// After committing in Scenario 2, working set matches HEAD.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -329,7 +329,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBase},
 		}).Decode(&raw))
 
@@ -394,7 +394,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -452,7 +452,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -521,7 +521,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -556,9 +556,9 @@ func TestDiffVerify(t *testing.T) {
 
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "rootishtest"},
-		}).Err(), "docudoltBranch to create 'rootishtest'")
+		}).Err(), "doltBranch to create 'rootishtest'")
 
 		rootish := env.client.Database(dbName + "__d_rootishtest")
 
@@ -577,7 +577,7 @@ func TestDiffVerify(t *testing.T) {
 		// Expect _id:1 added (delta between c1 and c2).
 		var raw9a bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "HEAD~1"},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9a))
@@ -592,7 +592,7 @@ func TestDiffVerify(t *testing.T) {
 		// Same result as 9a.
 		var raw9b bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC1},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9b))
@@ -611,7 +611,7 @@ func TestDiffVerify(t *testing.T) {
 		// So _id:1 should appear as removed.
 		var raw9c bson.M
 		require.NoError(t, rootish.RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC2},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9c))
@@ -626,7 +626,7 @@ func TestDiffVerify(t *testing.T) {
 		// rootishtest HEAD == c1 == hashC1 → identical → empty diff.
 		var raw9d bson.M
 		require.NoError(t, rootish.RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC1},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9d))
@@ -639,7 +639,7 @@ func TestDiffVerify(t *testing.T) {
 		// rootishtest = c1, main = c2: expect _id:1 added.
 		var raw9e bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "rootishtest"},
 			{Key: "to", Value: "main"},
 		}).Decode(&raw9e))
@@ -654,7 +654,7 @@ func TestDiffVerify(t *testing.T) {
 		// Inverts 9a: _id:1 was added going forward, so going backward it appears as removed.
 		var raw9f bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "HEAD"},
 			{Key: "to", Value: "HEAD~1"},
 		}).Decode(&raw9f))
@@ -670,7 +670,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9e showed _id:1 added going rootishtest→main; reversed: _id:1 is removed.
 		var raw9g bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "main"},
 			{Key: "to", Value: "rootishtest"},
 		}).Decode(&raw9g))
@@ -712,7 +712,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)

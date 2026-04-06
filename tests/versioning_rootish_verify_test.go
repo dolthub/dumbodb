@@ -72,10 +72,10 @@ func rootishVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash
 	// The branch name contains a dot; access it via dbname__v1%2E0.
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-		{Key: "docudoltBranch", Value: int32(1)},
+		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "v1.0"},
 	}).Decode(&branchResult)
-	require.NoError(t, err, "docudoltBranch to create v1.0")
+	require.NoError(t, err, "doltBranch to create v1.0")
 	assert.Equal(t, "v1.0", branchResult["branch"])
 
 	return hash1, hash2
@@ -122,7 +122,7 @@ func TestRootishVerify(t *testing.T) {
 		// docudoltCurrentBranch returns "main".
 		var result bson.M
 		require.NoError(t, main.RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -164,7 +164,7 @@ func TestRootishVerify(t *testing.T) {
 		// docudoltCurrentBranch on v1.0 returns the decoded branch name "v1.0".
 		var result bson.M
 		require.NoError(t, v1DB.RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "v1.0", result["branch"])
 
@@ -204,14 +204,14 @@ func TestRootishVerify(t *testing.T) {
 
 		// docudoltCurrentBranch: no branch name to return (code 96).
 		err = snap1DB.RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on hash rootish")
+		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on hash rootish")
 
 		// docudoltBranch: works — branch creation needs only a resolved commit address.
 		var branchResult bson.M
 		require.NoError(t, snap1DB.RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "from-hash1"},
 		}).Decode(&branchResult))
 		assert.Equal(t, "from-hash1", branchResult["branch"])
@@ -252,14 +252,14 @@ func TestRootishVerify(t *testing.T) {
 
 		// docudoltCurrentBranch: no branch name to return (code 96).
 		err = parentDB.RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor rootish")
+		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor rootish")
 
 		// docudoltBranch: works — ancestor expression resolves to a commit.
 		var branchResult bson.M
 		require.NoError(t, parentDB.RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "back-one"},
 		}).Decode(&branchResult))
 		assert.Equal(t, "back-one", branchResult["branch"])

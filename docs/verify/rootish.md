@@ -34,7 +34,7 @@ db.dropDatabase()
 
 // Insert a document and commit (commit 1)
 db.items.insertOne({ _id: 1, label: "first", version: 1 })
-const result1 = db.runCommand({ docudoltCommit: 1, message: "first commit", author: "alice <alice@docudolt>" })
+const result1 = db.runCommand({ doltCommit: 1, message: "first commit", author: "alice <alice@docudolt>" })
 printjson(result1)
 // Expected:
 // { hash: "<hash1>", branch: "main", message: "first commit", ok: 1 }
@@ -43,7 +43,7 @@ const hash1 = result1.commitId
 
 // Insert a second document and commit (commit 2)
 db.items.insertOne({ _id: 2, label: "second", version: 2 })
-const result2 = db.runCommand({ docudoltCommit: 1, message: "second commit", author: "alice <alice@docudolt>" })
+const result2 = db.runCommand({ doltCommit: 1, message: "second commit", author: "alice <alice@docudolt>" })
 printjson(result2)
 // Expected:
 // { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
@@ -53,7 +53,7 @@ const hash2 = result2.commitId
 // The rootish in the db name must be percent-encoded because '.' is a
 // MongoDB namespace separator. Encode client-side: "v1.0" → "v1%2E0".
 // Docudolt decodes it server-side before resolving the branch.
-const tagResult = db.getSiblingDB("verifydb__d_main").runCommand({ docudoltBranch: 1, branch: "v1.0" })
+const tagResult = db.getSiblingDB("verifydb__d_main").runCommand({ doltBranch: 1, branch: "v1.0" })
 printjson(tagResult)
 // Expected: { branch: "v1.0", ok: 1 }
 
@@ -90,8 +90,8 @@ main.items.find({}).toArray()
 main.items.deleteOne({ _id: 3 })
 // Expected: { acknowledged: true, deletedCount: 1 }
 
-// docudoltCurrentBranch works on branch rootish
-main.runCommand({ docudoltCurrentBranch: 1 })
+// doltCurrentBranch works on branch rootish
+main.runCommand({ doltCurrentBranch: 1 })
 // Expected: { branch: "main", ok: 1 }
 ```
 
@@ -129,8 +129,8 @@ main.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
 // (_id:10 does NOT appear here)
 
-// docudoltCurrentBranch works on branch rootish
-v1.runCommand({ docudoltCurrentBranch: 1 })
+// doltCurrentBranch works on branch rootish
+v1.runCommand({ doltCurrentBranch: 1 })
 // Expected: { branch: "v1.0", ok: 1 }
 
 // Clean up the test write so subsequent scenarios start from a known state.
@@ -168,15 +168,15 @@ snap1.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// docudoltCurrentBranch: no branch name to return (connection is at a specific commit)
-snap1.runCommand({ docudoltCurrentBranch: 1 })
+// doltCurrentBranch: no branch name to return (connection is at a specific commit)
+snap1.runCommand({ doltCurrentBranch: 1 })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: docudoltCurrentBranch: no current branch name
+//   MongoServerError[OperationFailed]: doltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
 
-// docudoltBranch: works — branch creation only needs a resolved commit, not write access.
+// doltBranch: works — branch creation only needs a resolved commit, not write access.
 // This creates a new branch "from-hash1" pointing at hash1 (one-document state).
-snap1.runCommand({ docudoltBranch: 1, branch: "from-hash1" })
+snap1.runCommand({ doltBranch: 1, branch: "from-hash1" })
 // Expected: { branch: "from-hash1", ok: 1 }
 
 // Verify the new branch sees the one-document state at hash1.
@@ -212,15 +212,15 @@ parent.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// docudoltCurrentBranch: no branch name to return (connection is at a specific commit)
-parent.runCommand({ docudoltCurrentBranch: 1 })
+// doltCurrentBranch: no branch name to return (connection is at a specific commit)
+parent.runCommand({ doltCurrentBranch: 1 })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: docudoltCurrentBranch: no current branch name
+//   MongoServerError[OperationFailed]: doltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
 
-// docudoltBranch: works — the ancestor expression resolves to a commit; branch creation
+// doltBranch: works — the ancestor expression resolves to a commit; branch creation
 // only needs a resolved commit address. Creates "back-one" at the main~1 state.
-parent.runCommand({ docudoltBranch: 1, branch: "back-one" })
+parent.runCommand({ doltBranch: 1, branch: "back-one" })
 // Expected: { branch: "back-one", ok: 1 }
 
 // Verify back-one is at the one-document state (main~1).
@@ -319,7 +319,7 @@ db.getSiblingDB("verifydb__d_main...feature").items.find({}).toArray()
 | Range | `mydb__d_main..feature` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
 
 ¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
-² **Branch creation** = `db.runCommand({ docudoltBranch: 1, branch: "newname" })`. Works whenever
+² **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "newname" })`. Works whenever
 the rootish resolves to a commit — branch creation only needs a commit address, not write access.
 
 All errors use MongoDB error code **96** (`OperationFailed`).

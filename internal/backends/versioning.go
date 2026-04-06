@@ -89,7 +89,7 @@ type MergeConflictError struct {
 
 // Error implements the error interface.
 func (e *MergeConflictError) Error() string {
-	return fmt.Sprintf("docudoltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+	return fmt.Sprintf("doltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
 // CherryPickParams represents the parameters of VersioningBackend.DocudoltCherryPick method.
@@ -119,7 +119,7 @@ type DocudoltCherryPickConflictError struct {
 
 // Error implements the error interface.
 func (e *DocudoltCherryPickConflictError) Error() string {
-	return fmt.Sprintf("docudoltCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+	return fmt.Sprintf("doltCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
 // ConflictInfo describes a single document-level conflict in an in-progress merge.

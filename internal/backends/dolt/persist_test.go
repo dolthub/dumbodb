@@ -34,7 +34,7 @@ import (
 // root commit with no parents, satisfying the requirement that dolt log shows a clean
 // ancestry for new stores.
 func TestInitialCommitMessage(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-init-commit-test-*")
+	dir, err := os.MkdirTemp("", "dolt-init-commit-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestInitialCommitMessage(t *testing.T) {
 // TestRTVLFormat verifies that the head commit's rootValue has file ID "RTVL"
 // and that the embedded ADRM in RTVL.tables can be parsed.
 func TestRTVLFormat(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-rtvl-test-*")
+	dir, err := os.MkdirTemp("", "dolt-rtvl-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRTVLFormat(t *testing.T) {
 // TestWorkingSetRTVL verifies that both working_root_addr and staged_root_addr
 // in the working set point to RTVL chunks (not raw ADRM).
 func TestWorkingSetRTVL(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-ws-rtvl-test-*")
+	dir, err := os.MkdirTemp("", "dolt-ws-rtvl-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestWorkingSetRTVL(t *testing.T) {
 // This models the git/dolt staging model: `dolt status` should show
 // "Changes not staged for commit" after writes.
 func TestWorkingSetDivergesAfterWrite(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-ws-diverge-test-*")
+	dir, err := os.MkdirTemp("", "dolt-ws-diverge-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestWorkingSetDivergesAfterWrite(t *testing.T) {
 // TestPersistenceAcrossRestart verifies that documents survive a backend close and reopen.
 // This is the end-to-end persistence test described in do-q040.
 func TestPersistenceAcrossRestart(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-persist-test-*")
+	dir, err := os.MkdirTemp("", "dolt-persist-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 // (the "Initialize database" commit from init). Writes must update the working set
 // only; they must NOT advance HEAD.
 func TestWritesNoNewCommits(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-writes-no-commits-test-*")
+	dir, err := os.MkdirTemp("", "dolt-writes-no-commits-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestWritesNoNewCommits(t *testing.T) {
 // TestDocudoltCommit verifies that DocudoltCommit creates a new dolt commit,
 // advances HEAD, and returns a non-empty hash string.
 func TestDocudoltCommit(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-test-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,9 +543,9 @@ func TestDocudoltCommit(t *testing.T) {
 	}
 }
 
-// TestDocudoltCommitDefaultMessage verifies that an empty Message defaults to "docudolt commit".
+// TestDocudoltCommitDefaultMessage verifies that an empty Message defaults to "dolt commit".
 func TestDocudoltCommitDefaultMessage(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-default-msg-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-default-msg-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,14 +567,14 @@ func TestDocudoltCommitDefaultMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DocudoltCommit: %v", err)
 	}
-	if res.Message != "docudolt commit" {
-		t.Errorf("default message = %q, want %q", res.Message, "docudolt commit")
+	if res.Message != "dolt commit" {
+		t.Errorf("default message = %q, want %q", res.Message, "dolt commit")
 	}
 }
 
 // TestDocudoltCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
 func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-two-hashes-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-two-hashes-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +638,7 @@ func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
 // TestDocudoltCommitNoOpSucceeds verifies that committing with no changes since the last
 // commit succeeds (a no-op commit is acceptable).
 func TestDocudoltCommitNoOpSucceeds(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-noop-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-noop-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestDocudoltCommitNoOpSucceeds(t *testing.T) {
 // TestDocudoltCommitWorkingSetClean verifies that after a commit the working set's
 // staged root address equals the HEAD commit's rootValue address (clean state).
 func TestDocudoltCommitWorkingSetClean(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-ws-clean-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-ws-clean-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ func TestDocudoltCommitWorkingSetClean(t *testing.T) {
 // TestDocudoltCommitAuthorAndTimestamp verifies that DocudoltCommit stores the provided
 // author name and timestamp, and that docudoltLog reflects them on the resulting commit.
 func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-author-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-author-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,7 +811,7 @@ func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
 // TestDocudoltCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
 // the commit timestamp is set to approximately the current time.
 func TestDocudoltCommitTimestampDefaultsToNow(t *testing.T) {
-	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-ts-default-*")
+	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-ts-default-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +850,7 @@ func TestDocudoltCommitTimestampDefaultsToNow(t *testing.T) {
 func newBackendForTest(t *testing.T) (b *Backend, dir string) {
 	t.Helper()
 	var err error
-	dir, err = os.MkdirTemp("", "docudolt-log-test-*")
+	dir, err = os.MkdirTemp("", "dolt-log-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}

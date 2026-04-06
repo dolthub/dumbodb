@@ -29,7 +29,7 @@ import (
 func newTestBackend(t *testing.T) *Backend {
 	t.Helper()
 
-	dir, err := os.MkdirTemp("", "docudolt-diff-test-*")
+	dir, err := os.MkdirTemp("", "dolt-diff-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}

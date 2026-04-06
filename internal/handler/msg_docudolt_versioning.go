@@ -77,7 +77,7 @@ func (h *Handler) MsgDocudoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wi
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltDiff: versioning is not supported by the current backend",
+			"doltDiff: versioning is not supported by the current backend",
 		)
 	}
 
@@ -378,7 +378,7 @@ func (h *Handler) MsgDocudoltCurrentBranch(connCtx context.Context, msg *wire.Op
 	if readOnly {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)",
+			"doltCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)",
 		)
 	}
 
@@ -386,7 +386,7 @@ func (h *Handler) MsgDocudoltCurrentBranch(connCtx context.Context, msg *wire.Op
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltCurrentBranch: versioning is not supported by the current backend",
+			"doltCurrentBranch: versioning is not supported by the current backend",
 		)
 	}
 
@@ -447,7 +447,7 @@ func (h *Handler) MsgDocudoltCommit(connCtx context.Context, msg *wire.OpMsg) (*
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltCommit: versioning is not supported by the current backend",
+			"doltCommit: versioning is not supported by the current backend",
 		)
 	}
 
@@ -504,7 +504,7 @@ func (h *Handler) MsgDocudoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 	if newBranch == "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"docudoltBranch: branch name must not be empty",
+			"doltBranch: branch name must not be empty",
 			"branch",
 		)
 	}
@@ -522,7 +522,7 @@ func (h *Handler) MsgDocudoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 	if safeDelete && forceDelete {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"docudoltBranch: d and D are mutually exclusive",
+			"doltBranch: d and D are mutually exclusive",
 			"d",
 		)
 	}
@@ -531,7 +531,7 @@ func (h *Handler) MsgDocudoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltBranch: versioning is not supported by the current backend",
+			"doltBranch: versioning is not supported by the current backend",
 		)
 	}
 
@@ -608,7 +608,7 @@ func (h *Handler) MsgDocudoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltMerge: versioning is not supported by the current backend",
+			"doltMerge: versioning is not supported by the current backend",
 		)
 	}
 
@@ -670,7 +670,7 @@ func (h *Handler) MsgDocudoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 	if noFF && ffOnly {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"docudoltMerge: noFF and ffOnly are mutually exclusive",
+			"doltMerge: noFF and ffOnly are mutually exclusive",
 			"noFF",
 		)
 	}
@@ -683,7 +683,7 @@ func (h *Handler) MsgDocudoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 	if fromBranch == "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"docudoltMerge: from branch name must not be empty",
+			"doltMerge: from branch name must not be empty",
 			"merge_in",
 		)
 	}
@@ -775,7 +775,7 @@ func (h *Handler) MsgDocudoltConflicts(connCtx context.Context, msg *wire.OpMsg)
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltConflicts: versioning is not supported by the current backend",
+			"doltConflicts: versioning is not supported by the current backend",
 		)
 	}
 
@@ -896,7 +896,7 @@ func (h *Handler) MsgDocudoltResolveConflict(connCtx context.Context, msg *wire.
 		if rawValue == nil {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				"docudoltResolveConflict: resolution 'custom' requires a 'value' document",
+				"doltResolveConflict: resolution 'custom' requires a 'value' document",
 				"value",
 			)
 		}
@@ -907,7 +907,7 @@ func (h *Handler) MsgDocudoltResolveConflict(connCtx context.Context, msg *wire.
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltResolveConflict: versioning is not supported by the current backend",
+			"doltResolveConflict: versioning is not supported by the current backend",
 		)
 	}
 
@@ -966,7 +966,7 @@ func (h *Handler) MsgDocudoltLog(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltLog: versioning is not supported by the current backend",
+			"doltLog: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1062,7 +1062,7 @@ func (h *Handler) MsgDocudoltReset(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltReset: versioning is not supported by the current backend",
+			"doltReset: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1110,7 +1110,7 @@ func (h *Handler) MsgDocudoltStatus(connCtx context.Context, msg *wire.OpMsg) (*
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltStatus: versioning is not supported by the current backend",
+			"doltStatus: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1189,7 +1189,7 @@ func (h *Handler) MsgDocudoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"docudoltCherryPick: versioning is not supported by the current backend",
+			"doltCherryPick: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1246,7 +1246,7 @@ func (h *Handler) MsgDocudoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 	if err := parseRootish(commit); err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"docudoltCherryPick: "+err.Error(),
+			"doltCherryPick: "+err.Error(),
 			"commit",
 		)
 	}

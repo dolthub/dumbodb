@@ -72,7 +72,7 @@ func startDocudolt(tb testing.TB) *docudoltTestEnv {
 	listener.Close()
 
 	dataDir := tb.TempDir()
-	binary := filepath.Join(repoRoot(), ".runtime", "bin", "docudolt")
+	binary := filepath.Join(repoRoot(), ".runtime", "bin", "dolt")
 
 	// Build once per test run to ensure the binary is up-to-date with current source.
 	var buildErr error

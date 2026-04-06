@@ -90,7 +90,7 @@ func (m *versioningBackendMock) DocudoltCherryPick(_ context.Context, _ *backend
 
 // makeCurrentBranchMsg creates a wire.OpMsg for docudoltCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {
-	doc := must.NotFail(types.NewDocument("docudoltCurrentBranch", int32(1), "$db", encodedDB))
+	doc := must.NotFail(types.NewDocument("doltCurrentBranch", int32(1), "$db", encodedDB))
 	return must.NotFail(documentOpMsg(doc))
 }
 

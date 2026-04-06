@@ -92,7 +92,7 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 
 		var result bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err)
 		assert.Equal(t, "main", result["branch"])
@@ -104,7 +104,7 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 
 		var result bson.M
 		err := env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err)
 		assert.Equal(t, "main", result["branch"])
@@ -114,18 +114,18 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 		t.Parallel()
 
 		err := env.client.Database(dbName+"__d_"+hash1).RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on hash rootish")
+		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on hash rootish")
 	})
 
 	t.Run("ancestor_expr_returns_code96", func(t *testing.T) {
 		t.Parallel()
 
 		err := env.client.Database(dbName+"__d_main~1").RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor rootish")
+		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor rootish")
 	})
 }
 

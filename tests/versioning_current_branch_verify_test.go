@@ -67,10 +67,10 @@ func currentBranchVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string)
 	// Create branch "feature" from main HEAD.
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-		{Key: "docudoltBranch", Value: int32(1)},
+		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
-	require.NoError(t, err, "docudoltBranch to create 'feature'")
+	require.NoError(t, err, "doltBranch to create 'feature'")
 	assert.Equal(t, "feature", branchResult["branch"])
 
 	return hash1, hash2
@@ -90,7 +90,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	t.Run("Scenario1_PlainDbName_ReturnsMain", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -102,7 +102,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	t.Run("Scenario2_ExplicitMain_ReturnsMain", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -114,7 +114,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	t.Run("Scenario3_FeatureBranch_ReturnsFeature", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_feature").RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "feature", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -125,9 +125,9 @@ func TestCurrentBranchVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_CommitHash_ReturnsError96", func(t *testing.T) {
 		err := env.client.Database(dbName+"__d_"+hash1).RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on commit hash rootish")
+		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on commit hash rootish")
 	})
 
 	// -------------------------------------------------------------------------
@@ -135,8 +135,8 @@ func TestCurrentBranchVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AncestorExpression_ReturnsError96", func(t *testing.T) {
 		err := env.client.Database(dbName+"__d_main~1").RunCommand(ctx, bson.D{
-			{Key: "docudoltCurrentBranch", Value: int32(1)},
+			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor expression rootish")
+		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor expression rootish")
 	})
 }

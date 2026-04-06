@@ -639,7 +639,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		}
 	}
 
-	meta, err := datas.NewCommitMeta("docudolt", "docudolt@localhost", desc)
+	meta, err := datas.NewCommitMeta("dolt", "dolt@localhost", desc)
 	if err != nil {
 		return datas.Dataset{}, am, err
 	}
@@ -709,7 +709,7 @@ func migrateADRMtoSTRT(ctx context.Context, cs *nbs.GenerationalNBS, vs *dolttyp
 		return fmt.Errorf("reading current root: %w", err)
 	}
 
-	meta, err := datas.NewCommitMeta("docudolt", "docudolt@localhost", "migrate: ADRM to STRT")
+	meta, err := datas.NewCommitMeta("dolt", "dolt@localhost", "migrate: ADRM to STRT")
 	if err != nil {
 		return fmt.Errorf("creating commit meta: %w", err)
 	}
@@ -834,9 +834,9 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, sta
 	prevHash, _ := wsDs.MaybeHeadAddr()
 
 	meta := &datas.WorkingSetMeta{
-		Name:        "docudolt",
-		Email:       "docudolt@localhost",
-		Description: "docudolt working set",
+		Name:        "dolt",
+		Email:       "dolt@localhost",
+		Description: "dolt working set",
 	}
 
 	spec := datas.WorkingSetSpec{
@@ -868,7 +868,7 @@ func (b *Backend) DocudoltCommit(ctx context.Context, params *backends.CommitPar
 
 	message := params.Message
 	if message == "" {
-		message = "docudolt commit"
+		message = "dolt commit"
 	}
 
 	ts := params.Timestamp
@@ -888,14 +888,14 @@ func (b *Backend) DocudoltCommit(ctx context.Context, params *backends.CommitPar
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
 			if db.mergeState.isCherryPick {
-				return nil, fmt.Errorf("docudoltCommit: unresolved cherry-pick conflicts remain")
+				return nil, fmt.Errorf("doltCommit: unresolved cherry-pick conflicts remain")
 			}
-			return nil, fmt.Errorf("docudoltCommit: unresolved merge conflicts remain")
+			return nil, fmt.Errorf("doltCommit: unresolved merge conflicts remain")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("docudoltCommit: cherry-pick in progress: use docudoltCherryPick continue")
+			return nil, fmt.Errorf("doltCommit: cherry-pick in progress: use docudoltCherryPick continue")
 		}
-		return nil, fmt.Errorf("docudoltCommit: merge in progress: use docudoltMerge continue")
+		return nil, fmt.Errorf("doltCommit: merge in progress: use docudoltMerge continue")
 	}
 
 	if branch == "main" {
@@ -1177,13 +1177,13 @@ func (b *Backend) DocudoltMerge(ctx context.Context, params *backends.MergeParam
 	// Handle continue: resume after conflict resolution and create the merge commit.
 	if params.Continue {
 		if db.mergeState == nil || db.mergeState.intoBranch != params.Into {
-			return nil, fmt.Errorf("docudoltMerge: no merge in progress")
+			return nil, fmt.Errorf("doltMerge: no merge in progress")
 		}
 		if db.mergeState.isCherryPick {
 			return nil, fmt.Errorf("dolt: DocudoltMerge: cherry-pick in progress on branch %q; use docudoltCherryPick continue instead", params.Into)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("docudoltMerge: unresolved merge conflicts remain")
+			return nil, fmt.Errorf("doltMerge: unresolved merge conflicts remain")
 		}
 		ms := db.mergeState
 
@@ -1356,8 +1356,8 @@ func (b *Backend) commitMerge(
 		mergeMessage = fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
 	}
 
-	commitName := "docudolt"
-	commitEmail := "docudolt@localhost"
+	commitName := "dolt"
+	commitEmail := "dolt@localhost"
 	if author != "" {
 		if idx := strings.Index(author, " <"); idx >= 0 {
 			commitName = author[:idx]
@@ -1610,8 +1610,8 @@ func (b *Backend) commitCherryPick(
 		}
 	}
 
-	commitName := "docudolt"
-	commitEmail := "docudolt@localhost"
+	commitName := "dolt"
+	commitEmail := "dolt@localhost"
 	if author != "" {
 		if idx := strings.Index(author, " <"); idx >= 0 {
 			commitName = author[:idx]

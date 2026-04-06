@@ -162,17 +162,17 @@ opportunity for a "version-controlled MongoDB" that no existing product offers.
 
 ### Current Docudolt Versioning State
 
-Docudolt already implements these commands (all behind the `docudoltXxx` namespace):
+Docudolt already implements these commands (all behind the `doltXxx` namespace):
 
 | Command          | What it does                                    | Status      |
 |------------------|-------------------------------------------------|-------------|
-| `docudoltCommit`    | Commit working set with message                 | Implemented |
-| `docudoltBranch`    | Create branch from current branch               | Implemented |
-| `docudoltMerge`     | Merge branch into current                       | Implemented |
-| `docudoltLog`       | Commit history (hash, parent, message, ts)      | Implemented |
-| `docudoltDiff`      | Document-level diff between two states          | Implemented |
-| `docudoltReset`     | Move HEAD (soft or hard)                        | Implemented |
-| `docudoltStatus`    | Show uncommitted collection changes             | Implemented |
+| `doltCommit`    | Commit working set with message                 | Implemented |
+| `doltBranch`    | Create branch from current branch               | Implemented |
+| `doltMerge`     | Merge branch into current                       | Implemented |
+| `doltLog`       | Commit history (hash, parent, message, ts)      | Implemented |
+| `doltDiff`      | Document-level diff between two states          | Implemented |
+| `doltReset`     | Move HEAD (soft or hard)                        | Implemented |
+| `doltStatus`    | Show uncommitted collection changes             | Implemented |
 
 Branch access is via the `dbname__d_rootish` naming convention, where the
 rootish resolves to a commit (see Section 6 for the full specification).
@@ -196,7 +196,7 @@ The following Git/Dolt capabilities don't have Docudolt equivalents yet:
 5. **Remote push/pull**: No cross-server synchronization. Can't clone a Docudolt
    instance or publish a database to a hub.
 
-6. **Conflict resolution**: `docudoltMerge` exists but no interface for inspecting
+6. **Conflict resolution**: `doltMerge` exists but no interface for inspecting
    or resolving merge conflicts when they occur.
 
 7. **List branches**: No command to enumerate existing branches. Users must know
@@ -287,13 +287,13 @@ bare branch names.
 
 ---
 
-#### P1-B: List Branches (`docudoltListBranches`)
+#### P1-B: List Branches (`doltListBranches`)
 
 **What**: Return all branches for a database.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltListBranches: 1})
+db.runCommand({doltListBranches: 1})
 // Returns: {branches: [{name: "main", hash: "abc..."}, ...], ok: 1}
 ```
 
@@ -304,15 +304,15 @@ db.runCommand({docudoltListBranches: 1})
 
 ---
 
-#### P1-C: Tag Support (`docudoltTag`, `docudoltListTags`)
+#### P1-C: Tag Support (`doltTag`, `doltListTags`)
 
 **What**: Create named immutable pointers to commits. Useful for release markers,
 snapshot labels, and as readable aliases for commit hashes.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltTag: 1, name: "v1.0", message: "production release"})
-db.runCommand({docudoltListTags: 1})
+db.runCommand({doltTag: 1, name: "v1.0", message: "production release"})
+db.runCommand({doltListTags: 1})
 // Returns: {tags: [{name: "v1.0", hash: "abc...", message: "..."}], ok: 1}
 ```
 
@@ -330,13 +330,13 @@ db.getSiblingDB("mydb__d_v1.0").users.find()  // reads at the v1.0 tag
 
 ---
 
-#### P1-D: Delete Branch (`docudoltDeleteBranch`)
+#### P1-D: Delete Branch (`doltDeleteBranch`)
 
 **What**: Remove a branch from the refsAM after it's been merged.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltDeleteBranch: 1, branch: "feature-x"})
+db.runCommand({doltDeleteBranch: 1, branch: "feature-x"})
 ```
 
 **Dolt primitive**: Remove the `refs/heads/<branch>` and
@@ -346,14 +346,14 @@ db.runCommand({docudoltDeleteBranch: 1, branch: "feature-x"})
 
 ---
 
-#### P1-E: Document History (`docudoltDocHistory`)
+#### P1-E: Document History (`doltDocHistory`)
 
 **What**: Return all versions of a single document across all commits on a branch.
 
 **Wire protocol**:
 ```javascript
 db.runCommand({
-  docudoltDocHistory: 1,
+  doltDocHistory: 1,
   collection: "users",
   _id: ObjectId("abc123"),
   limit: 20
@@ -374,35 +374,35 @@ not O(all commits). This is Dolt's core design — Docudolt gets it for free.
 
 ### Priority 2 (Medium Impact, Moderate Effort)
 
-#### P2-A: Conflict Report (`docudoltConflicts`)
+#### P2-A: Conflict Report (`doltConflicts`)
 
 **What**: After a merge that produced conflicts, show the conflicting documents.
 
 **Wire protocol**:
 ```javascript
-db.getSiblingDB("mydb__d_main").runCommand({docudoltConflicts: 1, collection: "users"})
+db.getSiblingDB("mydb__d_main").runCommand({doltConflicts: 1, collection: "users"})
 // Returns: {conflicts: [{_id: ..., base: {...}, ours: {...}, theirs: {...}}, ...], ok: 1}
 ```
 
 **Dolt primitive**: During a merge, when two branches have modified the same
 document's same fields to different values, a conflict is generated. The backend
 needs to write conflict entries (base/ours/theirs triples) to a separate map.
-`docudoltConflicts` reads that map.
+`doltConflicts` reads that map.
 
-**Resolution**: Add `docudoltResolveConflict` to accept one side or a custom document.
+**Resolution**: Add `doltResolveConflict` to accept one side or a custom document.
 
 **Feasibility**: Medium. Requires conflict state to be stored (new BSON map per
 conflicting collection). The merge logic needs to populate it.
 
 ---
 
-#### P2-B: Collection Blame (`docudoltBlame`)
+#### P2-B: Collection Blame (`doltBlame`)
 
 **What**: For each document in a collection, show which commit last modified it.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltBlame: 1, collection: "users"})
+db.runCommand({doltBlame: 1, collection: "users"})
 // Returns: {blame: [{_id: ..., hash: "...", author: "...", timestamp: ISODate}, ...], ok: 1}
 ```
 
@@ -414,16 +414,16 @@ result iterator to a BSON cursor.
 
 ---
 
-#### P2-C: Stash (`docudoltStash`, `docudoltStashPop`)
+#### P2-C: Stash (`doltStash`, `doltStashPop`)
 
 **What**: Save the current working set without committing, return to the last
 committed state, restore the stashed state later.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltStash: 1, message: "WIP: migrating schema"})
-db.runCommand({docudoltStashPop: 1})
-db.runCommand({docudoltStashList: 1})
+db.runCommand({doltStash: 1, message: "WIP: migrating schema"})
+db.runCommand({doltStashPop: 1})
+db.runCommand({doltStashList: 1})
 ```
 
 **Dolt primitive**: Save the current WRST.working_root_addr as a separate
@@ -436,15 +436,15 @@ working set to HEAD's RTVL. Pop restores the saved addr and removes the stash en
 
 ### Priority 3 (Lower Impact or Higher Effort)
 
-#### P3-A: Remote Push/Pull (`docudoltPush`, `docudoltPull`)
+#### P3-A: Remote Push/Pull (`doltPush`, `doltPull`)
 
 **What**: Synchronize a Docudolt database with a remote Docudolt or DoltHub instance.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltPush: 1, remote: "origin", branch: "main"})
-db.runCommand({docudoltPull: 1, remote: "origin", branch: "main"})
-db.runCommand({docudoltAddRemote: 1, name: "origin", url: "docudolt://host:27017/dbname"})
+db.runCommand({doltPush: 1, remote: "origin", branch: "main"})
+db.runCommand({doltPull: 1, remote: "origin", branch: "main"})
+db.runCommand({doltAddRemote: 1, name: "origin", url: "dolt://host:27017/dbname"})
 ```
 
 **Dolt primitive**: Dolt's NBS implements a chunk sync protocol: serialize all
@@ -460,13 +460,13 @@ format is already Dolt-compatible — the protocol work is the main cost.
 
 ---
 
-#### P3-B: Cherry-Pick (`docudoltCherryPick`)
+#### P3-B: Cherry-Pick (`doltCherryPick`)
 
 **What**: Apply the changes introduced by a specific commit to the current branch.
 
 **Wire protocol**:
 ```javascript
-db.getSiblingDB("mydb__d_main").runCommand({docudoltCherryPick: 1, commit: "abc123"})
+db.getSiblingDB("mydb__d_main").runCommand({doltCherryPick: 1, commit: "abc123"})
 ```
 
 **Dolt primitive**: Compute the diff between `commit`'s parent and `commit`.
@@ -484,7 +484,7 @@ track these schema migrations in the commit history. Auto-generate migration not
 
 **Wire protocol**:
 ```javascript
-db.runCommand({docudoltSchemaHistory: 1, collection: "users"})
+db.runCommand({doltSchemaHistory: 1, collection: "users"})
 // Returns a diff of field presence/type across commits
 ```
 
@@ -593,9 +593,9 @@ Dolt already tracks merge conflicts (base/ours/theirs triples per conflicting ro
 and exposes resolution through Go abstraction methods (backed internally by
 `dolt_conflicts_$TABLE` and `DOLT_CONFLICTS_RESOLVE`). Docudolt's work is purely
 presentation:
-1. `docudoltConflicts` → call Dolt conflicts iterator → BSON response
-2. `docudoltResolveConflict` → call Dolt resolve method → ok response
-3. `docudoltMerge` already uses Dolt merge — it just needs to detect and surface
+1. `doltConflicts` → call Dolt conflicts iterator → BSON response
+2. `doltResolveConflict` → call Dolt resolve method → ok response
+3. `doltMerge` already uses Dolt merge — it just needs to detect and surface
    conflict state rather than silently failing.
 
 No new storage. No new conflict logic. Dolt owns it all.
@@ -604,7 +604,7 @@ No new storage. No new conflict logic. Dolt owns it all.
 
 If remote push/pull is implemented to be DoltHub-compatible (same chunk protocol
 and ref format), Docudolt databases become compatible with DoltHub — the largest public
-database sharing platform. A Docudolt user could `docudoltPush` to DoltHub and browse
+database sharing platform. A Docudolt user could `doltPush` to DoltHub and browse
 their MongoDB data with the DoltHub web UI. This is a significant moat.
 
 ---
@@ -618,28 +618,28 @@ A user-facing story for each tier of features:
 > diff to verify my changes, then merge to main. If something goes wrong, I can
 > reset to a known-good tag."
 ```javascript
-db.getSiblingDB("mydb__d_migration").runCommand({docudoltBranch: 1, branch: "migration-v2"})
+db.getSiblingDB("mydb__d_migration").runCommand({doltBranch: 1, branch: "migration-v2"})
 // ... run migration ...
-db.getSiblingDB("mydb__d_main").runCommand({docudoltDiff: 1, from: "abc123"})
-db.getSiblingDB("mydb__d_main").runCommand({docudoltMerge: 1, from: "migration-v2"})
-db.runCommand({docudoltTag: 1, name: "pre-migration"})  // before the merge
+db.getSiblingDB("mydb__d_main").runCommand({doltDiff: 1, from: "abc123"})
+db.getSiblingDB("mydb__d_main").runCommand({doltMerge: 1, from: "migration-v2"})
+db.runCommand({doltTag: 1, name: "pre-migration"})  // before the merge
 ```
 
 **Intermediate (P2 features — mid term)**:
 > "I want an audit trail. Show me every version of customer document _id=42, and
 > which commit introduced the `gdpr_consent: true` field."
 ```javascript
-db.runCommand({docudoltDocHistory: 1, collection: "customers", _id: 42})
-db.runCommand({docudoltBlame: 1, collection: "customers"})  // who last touched each doc
+db.runCommand({doltDocHistory: 1, collection: "customers", _id: 42})
+db.runCommand({doltBlame: 1, collection: "customers"})  // who last touched each doc
 ```
 
 **Advanced (P3 features — long term)**:
 > "I have a dev Docudolt instance and a prod Docudolt instance. I push tested changes
 > to prod. If prod goes wrong, I pull the last good state from DoltHub."
 ```javascript
-db.runCommand({docudoltAddRemote: 1, name: "prod", url: "docudolt://prod:27017/app"})
-db.runCommand({docudoltPush: 1, remote: "prod", branch: "main"})
-db.runCommand({docudoltPull: 1, remote: "backup", branch: "main"})
+db.runCommand({doltAddRemote: 1, name: "prod", url: "dolt://prod:27017/app"})
+db.runCommand({doltPush: 1, remote: "prod", branch: "main"})
+db.runCommand({doltPull: 1, remote: "backup", branch: "main"})
 ```
 
 ---

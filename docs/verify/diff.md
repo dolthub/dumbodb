@@ -1,6 +1,6 @@
-# docudoltDiff Verification
+# doltDiff Verification
 
-Manual verification guide for `docudoltDiff` end-to-end behavior. Work through each
+Manual verification guide for `doltDiff` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
 > **Automated equivalent:** `tests/versioning_diff_verify_test.go` (`TestDiffVerify`)
@@ -33,7 +33,7 @@ db.dropDatabase()
 // Baseline: two documents, committed
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
 db.items.insertOne({ _id: 2, label: "beta",  score: 20 })
-const r1 = db.runCommand({ docudoltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
 printjson(r1)
 // Expected: { hash: "<hashBase>", branch: "main", message: "baseline", ok: 1 }
 const hashBase = r1.commitId
@@ -58,10 +58,10 @@ After setup, the working set differs from `hashBase` in three ways:
 
 ## Scenario 1: Working set vs HEAD (default diff)
 
-`docudoltDiff` with no `from`/`to` compares HEAD (committed) to the current working set.
+`doltDiff` with no `from`/`to` compares HEAD (committed) to the current working set.
 
 ```js
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected result structure:
@@ -104,12 +104,12 @@ Key checks:
 Commit the changes from the setup, then diff the two commits directly.
 
 ```js
-const r2 = db.runCommand({ docudoltCommit: 1, message: "three changes", author: "alice <alice@docudolt>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "three changes", author: "alice <alice@docudolt>" })
 printjson(r2)
 // Expected: { hash: "<hashNew>", branch: "main", message: "three changes", ok: 1 }
 const hashNew = r2.commitId
 
-db.runCommand({ docudoltDiff: 1, from: hashBase, to: hashNew })
+db.runCommand({ doltDiff: 1, from: hashBase, to: hashNew })
 ```
 
 Expected: same structure as Scenario 1 — the same three changes appear, now between
@@ -123,7 +123,7 @@ After committing, the working set matches HEAD. Diffing HEAD vs working set prod
 no output.
 
 ```js
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 // Expected:
 // { "collections": [], "ok": 1 }
 ```
@@ -137,7 +137,7 @@ Make one more change (do not commit), then diff from `hashBase` to the working s
 ```js
 db.items.insertOne({ _id: 4, label: "delta", score: 40 })
 
-db.runCommand({ docudoltDiff: 1, from: hashBase })
+db.runCommand({ doltDiff: 1, from: hashBase })
 ```
 
 Expected: the diff includes all changes relative to `hashBase`:
@@ -159,14 +159,14 @@ changed documents appear in the diff.
 db.multi.insertOne({ _id: 1, name: "alpha", v: 1 })
 db.multi.insertOne({ _id: 2, name: "beta",  v: 2 })
 db.multi.insertOne({ _id: 3, name: "gamma", v: 3 })
-db.runCommand({ docudoltCommit: 1, message: "multi baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "multi baseline", author: "alice <alice@docudolt>" })
 
 // Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4
 db.multi.deleteOne({ _id: 1 })
 db.multi.updateOne({ _id: 2 }, { $set: { v: 99 } })
 db.multi.insertOne({ _id: 4, name: "delta", v: 4 })
 
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected (for the `multi` collection):
@@ -185,12 +185,12 @@ single operation. The diff must report all three as separate entries.
 ```js
 // Fresh collection: commit a doc with fields x and y
 db.mixedfields.insertOne({ _id: 1, x: 10, y: "remove-me" })
-db.runCommand({ docudoltCommit: 1, message: "mixedfields baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "mixedfields baseline", author: "alice <alice@docudolt>" })
 
 // Replace: x changed, y gone, z added
 db.mixedfields.replaceOne({ _id: 1 }, { _id: 1, x: 99, z: "new-field" })
 
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected for `_id:1` in the `mixedfields` collection:
@@ -209,12 +209,12 @@ with the old typed value in `a` and the new typed value in `b`.
 ```js
 // Fresh collection: commit a doc where "val" is a number
 db.typechg.insertOne({ _id: 1, val: 42, stable: "unchanged" })
-db.runCommand({ docudoltCommit: 1, message: "typechg baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "typechg baseline", author: "alice <alice@docudolt>" })
 
 // Replace: val changes from number to string
 db.typechg.replaceOne({ _id: 1 }, { _id: 1, val: "forty-two", stable: "unchanged" })
 
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected for `_id:1` in the `typechg` collection:
@@ -235,12 +235,12 @@ db.nested.insertOne({
   address: { city: "Seattle", zip: "98101" },
   name: "alice"
 })
-db.runCommand({ docudoltCommit: 1, message: "nested baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "nested baseline", author: "alice <alice@docudolt>" })
 
 // Only address.city changes; address.zip and name are unchanged
 db.nested.updateOne({ _id: 1 }, { $set: { "address.city": "Portland" } })
 
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected for `_id:1` in the `nested` collection:
@@ -259,24 +259,24 @@ above that commit. Bare branch names are also accepted.
 
 ```js
 // Create a feature branch from main, then connect to it.
-db.getSiblingDB("diffdb__d_main").runCommand({ docudoltBranch: 1, branch: "feature" })
+db.getSiblingDB("diffdb__d_main").runCommand({ doltBranch: 1, branch: "feature" })
 var featureDB = db.getSiblingDB("diffdb__d_feature")
 
 // Make two commits on main.
-var r3 = db.runCommand({ docudoltCommit: 1, message: "c3", author: "alice <alice@docudolt>" })
+var r3 = db.runCommand({ doltCommit: 1, message: "c3", author: "alice <alice@docudolt>" })
 const hash3 = r3.commitId
 db.items.insertOne({ _id: 5, label: "epsilon", score: 50 })
-const hash4 = db.runCommand({ docudoltCommit: 1, message: "c4", author: "alice <alice@docudolt>" }).commitId
+const hash4 = db.runCommand({ doltCommit: 1, message: "c4", author: "alice <alice@docudolt>" }).commitId
 
 // 1. from=HEAD~1, to=HEAD on a main connection — HEAD resolves to main tip (c4)
-db.runCommand({ docudoltDiff: 1, from: "HEAD~1", to: "HEAD" })
+db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })
 ```
 
 Expected: diff between c3 and c4 — only `_id:5` appears as added.
 
 ```js
 // 2. from=hash3, to="HEAD" on a main connection — HEAD = main tip = hash4
-db.runCommand({ docudoltDiff: 1, from: hash3, to: "HEAD" })
+db.runCommand({ doltDiff: 1, from: hash3, to: "HEAD" })
 ```
 
 Expected: same result — `_id:5` added.
@@ -284,7 +284,7 @@ Expected: same result — `_id:5` added.
 ```js
 // 3. from=hash3, to="HEAD" on the feature branch connection —
 //    HEAD resolves to feature tip (= c3, before the two main commits)
-featureDB.runCommand({ docudoltDiff: 1, from: hash3, to: "HEAD" })
+featureDB.runCommand({ doltDiff: 1, from: hash3, to: "HEAD" })
 ```
 
 Expected: `{ "collections": [], "ok": 1 }` — feature HEAD equals hash3, no diff.
@@ -292,7 +292,7 @@ Expected: `{ "collections": [], "ok": 1 }` — feature HEAD equals hash3, no dif
 ```js
 // 4. REVERSE: from=HEAD, to=HEAD~1 — swaps direction.
 //    _id:5 was added going forward; going backward it appears as removed.
-db.runCommand({ docudoltDiff: 1, from: "HEAD", to: "HEAD~1" })
+db.runCommand({ doltDiff: 1, from: "HEAD", to: "HEAD~1" })
 ```
 
 Expected: `_id:5` in `removed` (not `added`) — the inverse of case 1.
@@ -300,7 +300,7 @@ Expected: `_id:5` in `removed` (not `added`) — the inverse of case 1.
 ```js
 // 5. REVERSE via branch names: from="main", to="feature".
 //    Going main→feature reverses the forward feature→main diff.
-db.runCommand({ docudoltDiff: 1, from: "main", to: "feature" })
+db.runCommand({ doltDiff: 1, from: "main", to: "feature" })
 ```
 
 Expected: `_id:5` in `removed` — the inverse of a forward feature→main diff.
@@ -318,12 +318,12 @@ Key checks:
 
 | Command | `from` side | `to` side |
 |---|---|---|
-| `{ docudoltDiff: 1 }` | HEAD (last commit) | working set |
-| `{ docudoltDiff: 1, from: "<hash>" }` | `<hash>` | working set |
-| `{ docudoltDiff: 1, from: "<hash>", to: "<hash2>" }` | `<hash>` | `<hash2>` |
-| `{ docudoltDiff: 1, from: "HEAD~1", to: "HEAD" }` | connection HEAD~1 | connection HEAD |
-| `{ docudoltDiff: 1, from: "HEAD", to: "HEAD~1" }` | connection HEAD | connection HEAD~1 (reverse) |
-| `{ docudoltDiff: 1, from: "branch", to: "HEAD" }` | branch tip | connection HEAD |
+| `{ doltDiff: 1 }` | HEAD (last commit) | working set |
+| `{ doltDiff: 1, from: "<hash>" }` | `<hash>` | working set |
+| `{ doltDiff: 1, from: "<hash>", to: "<hash2>" }` | `<hash>` | `<hash2>` |
+| `{ doltDiff: 1, from: "HEAD~1", to: "HEAD" }` | connection HEAD~1 | connection HEAD |
+| `{ doltDiff: 1, from: "HEAD", to: "HEAD~1" }` | connection HEAD | connection HEAD~1 (reverse) |
+| `{ doltDiff: 1, from: "branch", to: "HEAD" }` | branch tip | connection HEAD |
 
 - Only collections with at least one change appear in the result.
 - `added` and `removed` contain full documents.

@@ -55,10 +55,10 @@ func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 	branch, _ := raw["branch"].(string)
 
 	rawTables, ok := raw["collections"]
-	require.True(t, ok, "docudoltStatus result missing 'collections' field")
+	require.True(t, ok, "doltStatus result missing 'collections' field")
 
 	tablesArr, ok := rawTables.(bson.A)
-	require.True(t, ok, "docudoltStatus 'collections' is not an array, got %T", rawTables)
+	require.True(t, ok, "doltStatus 'collections' is not an array, got %T", rawTables)
 
 	var out statusResult
 	out.Branch = branch
@@ -110,7 +110,7 @@ func TestStatusVerify(t *testing.T) {
 	t.Run("Scenario1_CleanRepo", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltStatus", Value: int32(1)},
+			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -129,7 +129,7 @@ func TestStatusVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltStatus", Value: int32(1)},
+			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -159,7 +159,7 @@ func TestStatusVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltStatus", Value: int32(1)},
+			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -185,7 +185,7 @@ func TestStatusVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltStatus", Value: int32(1)},
+			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -208,7 +208,7 @@ func TestStatusVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltStatus", Value: int32(1)},
+			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)

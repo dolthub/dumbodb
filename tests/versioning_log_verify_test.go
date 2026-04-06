@@ -63,10 +63,10 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 	branch, _ := raw["branch"].(string)
 
 	rawCommits, ok := raw["commits"]
-	require.True(t, ok, "docudoltLog result missing 'commits' field")
+	require.True(t, ok, "doltLog result missing 'commits' field")
 
 	commitsArr, ok := rawCommits.(bson.A)
-	require.True(t, ok, "docudoltLog 'commits' is not an array, got %T", rawCommits)
+	require.True(t, ok, "doltLog 'commits' is not an array, got %T", rawCommits)
 
 	var out logResult
 	out.Branch = branch
@@ -118,7 +118,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario1_NoUserCommits", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
@@ -155,7 +155,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario2_MultipleCommits", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
@@ -184,7 +184,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario3_WithLimit", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))
 
@@ -204,7 +204,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario4_FromHash", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "from", Value: hash2},
 		}).Decode(&raw))
 
@@ -229,7 +229,7 @@ func TestLogVerify(t *testing.T) {
 		// Create a second branch "logvrfy-refs" pointing at the current main HEAD
 		// (hash3), so two branches share the same tip commit.
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "logvrfy-refs"},
 		}).Err(), "creating logvrfy-refs branch must succeed")
 
@@ -238,11 +238,11 @@ func TestLogVerify(t *testing.T) {
 		// "logvrfy-refs".  Non-head commits must have no refs field.
 		var rawMain bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&rawMain))
 
 		lrMain := decodeLogResult(t, rawMain)
-		require.NotEmpty(t, lrMain.Commits, "docudoltLog on main must return commits")
+		require.NotEmpty(t, lrMain.Commits, "doltLog on main must return commits")
 
 		head := lrMain.Commits[0]
 		assert.Equal(t, hash3, head.CommitID, "HEAD commit must be hash3")
@@ -259,11 +259,11 @@ func TestLogVerify(t *testing.T) {
 		// connection branch is "logvrfy-refs", so the decoration is reversed.
 		var rawFeature bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_logvrfy-refs").RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&rawFeature))
 
 		lrFeature := decodeLogResult(t, rawFeature)
-		require.NotEmpty(t, lrFeature.Commits, "docudoltLog on logvrfy-refs must return commits")
+		require.NotEmpty(t, lrFeature.Commits, "doltLog on logvrfy-refs must return commits")
 
 		headF := lrFeature.Commits[0]
 		assert.Equal(t, hash3, headF.CommitID, "HEAD commit on logvrfy-refs must be hash3")
@@ -297,7 +297,7 @@ func TestLogVerify(t *testing.T) {
 
 	// Create "feat" branch from main HEAD (hashA).
 	require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
-		{Key: "docudoltBranch", Value: int32(1)},
+		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feat"},
 	}).Err())
 
@@ -320,7 +320,7 @@ func TestLogVerify(t *testing.T) {
 	// Merge feat into main → three-way merge commit hashM.
 	var mergeRaw bson.M
 	require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
-		{Key: "docudoltMerge", Value: int32(1)},
+		{Key: "doltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feat"},
 	}).Decode(&mergeRaw))
 	hashM, ok := mergeRaw["commitId"].(string)
@@ -333,7 +333,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario6_MergeCommitParents", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -356,7 +356,7 @@ func TestLogVerify(t *testing.T) {
 		// hashB (main-only) and hashM (merge) must not appear.
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "from", Value: hashC},
 		}).Decode(&raw))
 
@@ -382,7 +382,7 @@ func TestLogVerify(t *testing.T) {
 		// limit=2 from main HEAD follows parent1: hashM → hashB.  hashA must not appear.
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))
 

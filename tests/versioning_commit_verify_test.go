@@ -82,7 +82,7 @@ func TestCommitVerify(t *testing.T) {
 	t.Run("Scenario1_ResponseShape", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "shape check"},
 			{Key: "author", Value: "alice <alice@docudolt>"},
 		}).Decode(&result))
@@ -105,10 +105,10 @@ func TestCommitVerify(t *testing.T) {
 		// Create a "feature" branch from main HEAD.
 		var branchResult bson.M
 		err := env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Decode(&branchResult)
-		require.NoError(t, err, "docudoltBranch must succeed")
+		require.NoError(t, err, "doltBranch must succeed")
 		assert.Equal(t, "feature", branchResult["branch"])
 
 		// Insert a document on the feature branch.
@@ -123,7 +123,7 @@ func TestCommitVerify(t *testing.T) {
 		// Commit on feature — verify response shape.
 		var commitResult bson.M
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "feature commit"},
 			{Key: "author", Value: "testuser"},
 		}).Decode(&commitResult))
@@ -158,7 +158,7 @@ func TestCommitVerify(t *testing.T) {
 
 		var resultA bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit A"},
 			{Key: "author", Value: "testuser"},
 		}).Decode(&resultA))
@@ -175,7 +175,7 @@ func TestCommitVerify(t *testing.T) {
 
 		var resultB bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit B"},
 			{Key: "author", Value: "testuser"},
 		}).Decode(&resultB))
@@ -192,7 +192,7 @@ func TestCommitVerify(t *testing.T) {
 		// After Scenario 3, all changes are committed. No pending changes exist.
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
 			{Key: "author", Value: "testuser"},
 		}).Decode(&result))
@@ -223,7 +223,7 @@ func TestCommitVerify(t *testing.T) {
 		// Diff from hashBefore to hashAfter must show _id:99 as added.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBefore},
 			{Key: "to", Value: hashAfter},
 		}).Decode(&raw))
@@ -243,7 +243,7 @@ func TestCommitVerify(t *testing.T) {
 	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "authored commit"},
 			{Key: "author", Value: "bob <bob@docudolt>"},
 		}).Decode(&result))
@@ -255,7 +255,7 @@ func TestCommitVerify(t *testing.T) {
 		// Verify the author is stored and visible via docudoltLog.
 		var logResult bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logResult))
 
@@ -265,7 +265,7 @@ func TestCommitVerify(t *testing.T) {
 
 		entry, ok := commits[0].(bson.M)
 		require.True(t, ok)
-		assert.Equal(t, "bob <bob@docudolt>", entry["author"], "docudoltLog must reflect the commit author")
+		assert.Equal(t, "bob <bob@docudolt>", entry["author"], "doltLog must reflect the commit author")
 	})
 
 	// -------------------------------------------------------------------------
@@ -276,7 +276,7 @@ func TestCommitVerify(t *testing.T) {
 
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltCommit", Value: int32(1)},
+			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "fixed-time commit"},
 			{Key: "author", Value: "carol <carol@docudolt>"},
 			{Key: "timestamp", Value: fixedTime},
@@ -294,7 +294,7 @@ func TestCommitVerify(t *testing.T) {
 		// Verify via docudoltLog that the stored timestamp matches.
 		var logResult bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logResult))
 
@@ -307,6 +307,6 @@ func TestCommitVerify(t *testing.T) {
 		logTS, ok := entry["timestamp"].(primitive.DateTime)
 		require.True(t, ok, "log timestamp must be a BSON datetime")
 		assert.Equal(t, fixedTime.UnixMilli(), int64(logTS),
-			"docudoltLog timestamp must match the provided fixed time")
+			"doltLog timestamp must match the provided fixed time")
 	})
 }

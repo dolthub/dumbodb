@@ -38,14 +38,14 @@ func docudoltCommit(tb testing.TB, env *docudoltTestEnv, dbName, message string,
 	ctx := context.Background()
 	var result bson.M
 	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-		{Key: "docudoltCommit", Value: int32(1)},
+		{Key: "doltCommit", Value: int32(1)},
 		{Key: "message", Value: message},
 		{Key: "author", Value: a},
 	}).Decode(&result)
-	require.NoError(tb, err, "docudoltCommit must succeed")
+	require.NoError(tb, err, "doltCommit must succeed")
 
 	hash, ok := result["commitId"].(string)
-	require.True(tb, ok, "docudoltCommit must return a string hash, got %T", result["commitId"])
+	require.True(tb, ok, "doltCommit must return a string hash, got %T", result["commitId"])
 	require.NotEmpty(tb, hash, "commit hash must not be empty")
 	return hash
 }

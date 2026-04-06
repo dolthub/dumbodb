@@ -89,7 +89,7 @@ func TestResetVerify(t *testing.T) {
 		// Soft reset to hashC1 (no `hard` parameter — defaults to false).
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltReset", Value: int32(1)},
+			{Key: "doltReset", Value: int32(1)},
 			{Key: "to", Value: hashC1},
 		}).Decode(&raw))
 
@@ -101,7 +101,7 @@ func TestResetVerify(t *testing.T) {
 		// (HEAD=C1 has only _id:1).
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&diffRaw))
 
 		dr := decodeDiffResult(t, diffRaw)
@@ -138,7 +138,7 @@ func TestResetVerify(t *testing.T) {
 		// Hard reset to hashC1.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltReset", Value: int32(1)},
+			{Key: "doltReset", Value: int32(1)},
 			{Key: "to", Value: hashC1},
 			{Key: "hard", Value: true},
 		}).Decode(&raw))
@@ -150,7 +150,7 @@ func TestResetVerify(t *testing.T) {
 		// Working set matches target — diff is empty.
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&diffRaw))
 
 		dr := decodeDiffResult(t, diffRaw)
@@ -182,7 +182,7 @@ func TestResetVerify(t *testing.T) {
 		// Soft reset to hashC1 — "undoes" the re-add-two commit.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltReset", Value: int32(1)},
+			{Key: "doltReset", Value: int32(1)},
 			{Key: "to", Value: hashC1},
 		}).Decode(&raw))
 
@@ -192,7 +192,7 @@ func TestResetVerify(t *testing.T) {
 		// docudoltDiff must show _id:2 as added (HEAD=C1 doesn't have it).
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&diffRaw))
 
 		dr := decodeDiffResult(t, diffRaw)
@@ -214,10 +214,10 @@ func TestResetVerify(t *testing.T) {
 		// Capture the current HEAD hash so we can assert it is returned.
 		var logRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltLog", Value: int32(1)},
+			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&logRaw))
 		commits, ok := logRaw["commits"].(bson.A)
-		require.True(t, ok && len(commits) > 0, "docudoltLog must return at least one commit")
+		require.True(t, ok && len(commits) > 0, "doltLog must return at least one commit")
 		headEntry, ok := commits[0].(bson.M)
 		require.True(t, ok, "first log entry must be a document")
 		headHash, ok := headEntry["commitId"].(string)
@@ -233,7 +233,7 @@ func TestResetVerify(t *testing.T) {
 		// Hard reset with no `to` — should default to HEAD.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltReset", Value: int32(1)},
+			{Key: "doltReset", Value: int32(1)},
 			{Key: "hard", Value: true},
 		}).Decode(&raw))
 
@@ -243,7 +243,7 @@ func TestResetVerify(t *testing.T) {
 		// Uncommitted insert of _id:5 must be discarded — diff is empty.
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&diffRaw))
 
 		dr := decodeDiffResult(t, diffRaw)

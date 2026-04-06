@@ -1,6 +1,6 @@
-# docudoltStatus Verification
+# doltStatus Verification
 
-Manual verification guide for `docudoltStatus` end-to-end behavior. Work through each
+Manual verification guide for `doltStatus` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
 > **Automated equivalent:** `tests/versioning_status_verify_test.go` (`TestStatusVerify`)
@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document in "items", committed.
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
-db.runCommand({ docudoltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
 ```
 
 After setup, the working set matches HEAD — no uncommitted changes.
@@ -41,11 +41,11 @@ After setup, the working set matches HEAD — no uncommitted changes.
 
 ## Scenario 1: Status on clean repo — empty tables
 
-After committing, the working set matches HEAD. `docudoltStatus` reports no changed
+After committing, the working set matches HEAD. `doltStatus` reports no changed
 collections.
 
 ```js
-db.runCommand({ docudoltStatus: 1 })
+db.runCommand({ doltStatus: 1 })
 ```
 
 Expected:
@@ -67,7 +67,7 @@ Inserting into a collection that has no HEAD state marks it as `"added"`.
 ```js
 db.newcoll.insertOne({ _id: 1, v: "new" })
 
-db.runCommand({ docudoltStatus: 1 })
+db.runCommand({ doltStatus: 1 })
 ```
 
 Expected:
@@ -95,12 +95,12 @@ marks it as `"modified"`.
 
 ```js
 // Commit the "newcoll" addition first.
-db.runCommand({ docudoltCommit: 1, message: "add newcoll", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "add newcoll", author: "alice <alice@docudolt>" })
 
 // Now modify an existing committed collection.
 db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
 
-db.runCommand({ docudoltStatus: 1 })
+db.runCommand({ doltStatus: 1 })
 ```
 
 Expected:
@@ -128,12 +128,12 @@ working set) marks it as `"deleted"`.
 
 ```js
 // Commit the items modification first.
-db.runCommand({ docudoltCommit: 1, message: "modify items", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "modify items", author: "alice <alice@docudolt>" })
 
 // Delete the entire "items" collection.
 db.items.drop()
 
-db.runCommand({ docudoltStatus: 1 })
+db.runCommand({ doltStatus: 1 })
 ```
 
 Expected:
@@ -156,13 +156,13 @@ Key checks:
 
 ## Scenario 5: Status after commit — clean again
 
-After committing the deletion, the working set matches HEAD and `docudoltStatus`
+After committing the deletion, the working set matches HEAD and `doltStatus`
 reports no changes.
 
 ```js
-db.runCommand({ docudoltCommit: 1, message: "delete items", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "delete items", author: "alice <alice@docudolt>" })
 
-db.runCommand({ docudoltStatus: 1 })
+db.runCommand({ doltStatus: 1 })
 ```
 
 Expected:

@@ -80,10 +80,10 @@ func TestBranchVerify(t *testing.T) {
 	t.Run("Scenario1_CreateBranch_ResponseShape", func(t *testing.T) {
 		var result bson.M
 		err := env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Decode(&result)
-		require.NoError(t, err, "docudoltBranch must succeed")
+		require.NoError(t, err, "doltBranch must succeed")
 
 		assert.Equal(t, "feature", result["branch"], "branch must echo the provided name")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
@@ -95,14 +95,14 @@ func TestBranchVerify(t *testing.T) {
 	t.Run("Scenario2_NewBranchMatchesSourceCommit", func(t *testing.T) {
 		// Create "snapshot" branch from current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "snapshot"},
-		}).Err(), "docudoltBranch to create 'snapshot'")
+		}).Err(), "doltBranch to create 'snapshot'")
 
 		// Diff main vs snapshot — identical commits → empty collections.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltDiff", Value: int32(1)},
+			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "snapshot"},
 			{Key: "to", Value: "main"},
 		}).Decode(&raw))
@@ -146,10 +146,10 @@ func TestBranchVerify(t *testing.T) {
 		// Create "at-commit-one" from the commit-hash rootish at hash1.
 		var result bson.M
 		err := env.client.Database(dbName+"__d_"+hash1).RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "at-commit-one"},
 		}).Decode(&result)
-		require.NoError(t, err, "docudoltBranch from hash rootish must succeed")
+		require.NoError(t, err, "doltBranch from hash rootish must succeed")
 
 		assert.Equal(t, "at-commit-one", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -181,10 +181,10 @@ func TestBranchVerify(t *testing.T) {
 		// main~1 resolves to commit 1 (one document).
 		var result bson.M
 		err := env.client.Database(ancDbName+"__d_main~1").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "back-one"},
 		}).Decode(&result)
-		require.NoError(t, err, "docudoltBranch from ancestor expression rootish must succeed")
+		require.NoError(t, err, "doltBranch from ancestor expression rootish must succeed")
 
 		assert.Equal(t, "back-one", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -212,7 +212,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Create "merged-branch" from main HEAD.
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "merged-branch"},
 		}).Err(), "creating merged-branch must succeed")
 
@@ -220,7 +220,7 @@ func TestBranchVerify(t *testing.T) {
 		// main — delete must succeed.
 		var result bson.M
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "merged-branch"},
 			{Key: "d", Value: true},
 		}).Decode(&result), "safe delete of a merged branch must succeed")
@@ -238,7 +238,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Create "unmerged-branch" from main and advance it with an extra commit.
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "unmerged-branch"},
 		}).Err(), "creating unmerged-branch must succeed")
 
@@ -251,7 +251,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Safe delete must be rejected because unmerged-branch has a commit not in main.
 		err = env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "unmerged-branch"},
 			{Key: "d", Value: true},
 		}).Err()
@@ -267,7 +267,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Create "force-branch" and advance it with an extra commit.
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "force-branch"},
 		}).Err(), "creating force-branch must succeed")
 
@@ -281,7 +281,7 @@ func TestBranchVerify(t *testing.T) {
 		// Force delete must succeed regardless of merge status.
 		var result bson.M
 		require.NoError(t, env.client.Database(delDbName+"__d_main").RunCommand(ctx, bson.D{
-			{Key: "docudoltBranch", Value: int32(1)},
+			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "force-branch"},
 			{Key: "D", Value: true},
 		}).Decode(&result), "force delete must succeed even with unmerged commits")

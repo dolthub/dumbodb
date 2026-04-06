@@ -118,47 +118,47 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDebugError,
 			Help:    "Returns error for debugging.",
 		},
-		"docudoltBranch": {
+		"doltBranch": {
 			Handler: h.MsgDocudoltBranch,
 			Help:    "Creates a new Docudolt branch from the current branch encoded in the database name.",
 		},
-		"docudoltCherryPick": {
+		"doltCherryPick": {
 			Handler: h.MsgDocudoltCherryPick,
 			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
 		},
-		"docudoltConflicts": {
+		"doltConflicts": {
 			Handler: h.MsgDocudoltConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
 		},
-		"docudoltDiff": {
+		"doltDiff": {
 			Handler: h.MsgDocudoltDiff,
 			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
 		},
-		"docudoltCommit": {
+		"doltCommit": {
 			Handler: h.MsgDocudoltCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
-		"docudoltCurrentBranch": {
+		"doltCurrentBranch": {
 			Handler: h.MsgDocudoltCurrentBranch,
 			Help:    "Returns the current branch name for the connection encoded in the database name.",
 		},
-		"docudoltLog": {
+		"doltLog": {
 			Handler: h.MsgDocudoltLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",
 		},
-		"docudoltMerge": {
+		"doltMerge": {
 			Handler: h.MsgDocudoltMerge,
 			Help:    "Merges a source branch into the branch encoded in the database name.",
 		},
-		"docudoltReset": {
+		"doltReset": {
 			Handler: h.MsgDocudoltReset,
 			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
 		},
-		"docudoltResolveConflict": {
+		"doltResolveConflict": {
 			Handler: h.MsgDocudoltResolveConflict,
 			Help:    "Resolves a single document conflict in the current in-progress merge.",
 		},
-		"docudoltStatus": {
+		"doltStatus": {
 			Handler: h.MsgDocudoltStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
 		},

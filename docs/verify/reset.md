@@ -1,6 +1,6 @@
-# docudoltReset Verification
+# doltReset Verification
 
-Manual verification guide for `docudoltReset` end-to-end behavior. Work through each
+Manual verification guide for `doltReset` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
 > **Automated equivalent:** `tests/versioning_reset_verify_test.go` (`TestResetVerify`)
@@ -31,13 +31,13 @@ var db = db.getSiblingDB("resetdb")
 db.dropDatabase()
 
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ docudoltCommit: 1, message: "initial", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@docudolt>" })
 printjson(r1)
 // Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
 
 db.items.insertOne({ _id: 2, v: 2 })
-const r2 = db.runCommand({ docudoltCommit: 1, message: "add-two", author: "alice <alice@docudolt>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "alice <alice@docudolt>" })
 printjson(r2)
 // Expected: { hash: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
 const hashC2 = r2.commitId
@@ -63,7 +63,7 @@ is preserved; the diff shows both staged changes relative to the new HEAD.
 db.items.insertOne({ _id: 3, v: 3 })
 
 // Soft reset to hashC1 (no `hard` parameter — defaults to false).
-const rReset = db.runCommand({ docudoltReset: 1, to: hashC1 })
+const rReset = db.runCommand({ doltReset: 1, to: hashC1 })
 printjson(rReset)
 // Expected: { hash: "<hashC1>", ok: 1 }
 ```
@@ -76,7 +76,7 @@ unchanged and still contains `_id:1`, `_id:2`, and `_id:3`. Diffing HEAD vs the
 working set shows two additions:
 
 ```js
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected: `items.added` contains both `_id:2` and `_id:3`; `items.removed` and
@@ -91,14 +91,14 @@ to C1. Both HEAD and the working set return to the C1 state.
 
 ```js
 // Commit the current working set (creates C3 with _id:1, 2, 3).
-const r3 = db.runCommand({ docudoltCommit: 1, message: "snapshot", author: "alice <alice@docudolt>" })
+const r3 = db.runCommand({ doltCommit: 1, message: "snapshot", author: "alice <alice@docudolt>" })
 const hashC3 = r3.commitId
 
 // Add _id:4 to the working set (uncommitted).
 db.items.insertOne({ _id: 4, v: 4 })
 
 // Hard reset to hashC1.
-const rHard = db.runCommand({ docudoltReset: 1, to: hashC1, hard: true })
+const rHard = db.runCommand({ doltReset: 1, to: hashC1, hard: true })
 printjson(rHard)
 // Expected: { hash: "<hashC1>", ok: 1 }
 ```
@@ -109,7 +109,7 @@ Key checks:
 After the hard reset, both HEAD and the working set reflect the C1 state:
 
 ```js
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 // Expected: { "collections": [], "ok": 1 }
 ```
 
@@ -132,21 +132,21 @@ so the previously committed changes are now visible as uncommitted.
 // After Scenario 2: HEAD=C1, working set is clean.
 // Insert _id:2 again and commit (creates C4).
 db.items.insertOne({ _id: 2, v: 2 })
-const r4 = db.runCommand({ docudoltCommit: 1, message: "re-add-two", author: "alice <alice@docudolt>" })
+const r4 = db.runCommand({ doltCommit: 1, message: "re-add-two", author: "alice <alice@docudolt>" })
 const hashC4 = r4.commitId
 
 // Soft reset to C1 — this "undoes" the C4 commit.
-db.runCommand({ docudoltReset: 1, to: hashC1 })
+db.runCommand({ doltReset: 1, to: hashC1 })
 // Expected: { hash: "<hashC1>", ok: 1 }
 ```
 
 After this soft reset:
 - HEAD is at C1 (only `_id:1` committed)
 - Working set still has `_id:2` (it was committed in C4 but the working tree was not changed)
-- `docudoltDiff` shows `_id:2` as added (uncommitted):
+- `doltDiff` shows `_id:2` as added (uncommitted):
 
 ```js
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 ```
 
 Expected: `items.added` contains exactly `_id:2`; `items.removed` and `items.modified`
@@ -156,7 +156,7 @@ are empty.
 
 ## Scenario 4: Reset to HEAD — discard all uncommitted changes
 
-When `to` is omitted, `docudoltReset` defaults to the current HEAD. This is the
+When `to` is omitted, `doltReset` defaults to the current HEAD. This is the
 standard "discard all uncommitted changes" operation when combined with `hard: true`.
 
 ```js
@@ -165,11 +165,11 @@ standard "discard all uncommitted changes" operation when combined with `hard: t
 db.items.insertOne({ _id: 5, v: 5 })
 
 // Verify there is an uncommitted change.
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 // Expected: items.added contains _id:5
 
 // Hard reset to HEAD (no `to` parameter).
-const rHead = db.runCommand({ docudoltReset: 1, hard: true })
+const rHead = db.runCommand({ doltReset: 1, hard: true })
 printjson(rHead)
 // Expected: { commitId: "<current HEAD hash>", ok: 1 }
 ```
@@ -179,7 +179,7 @@ Key checks:
 - The uncommitted insert of `_id:5` is discarded:
 
 ```js
-db.runCommand({ docudoltDiff: 1 })
+db.runCommand({ doltDiff: 1 })
 // Expected: { "collections": [], "ok": 1 }
 
 db.items.find()
@@ -195,10 +195,10 @@ stays the same), but is valid and returns the HEAD hash.
 
 | Command | HEAD after | Working set after |
 |---|---|---|
-| `{ docudoltReset: 1 }` | unchanged (HEAD) | unchanged |
-| `{ docudoltReset: 1, hard: true }` | unchanged (HEAD) | reset to HEAD state |
-| `{ docudoltReset: 1, to: "<hash>" }` | `<hash>` | unchanged |
-| `{ docudoltReset: 1, to: "<hash>", hard: true }` | `<hash>` | reset to `<hash>` state |
+| `{ doltReset: 1 }` | unchanged (HEAD) | unchanged |
+| `{ doltReset: 1, hard: true }` | unchanged (HEAD) | reset to HEAD state |
+| `{ doltReset: 1, to: "<hash>" }` | `<hash>` | unchanged |
+| `{ doltReset: 1, to: "<hash>", hard: true }` | `<hash>` | reset to `<hash>` state |
 
 - Soft reset (default): moves HEAD, preserves working tree changes.
 - Hard reset: moves HEAD **and** resets the working tree to the target state.
