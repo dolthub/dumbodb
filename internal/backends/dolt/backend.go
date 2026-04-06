@@ -59,8 +59,8 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 const (
@@ -129,7 +129,7 @@ type dbState struct {
 	// emptyIndexAM is an empty AddressMap used for the DTBL secondary_indexes field.
 	emptyIndexAM prolly.AddressMap
 	// mergeState is non-nil when a merge is in progress (conflicts exist that must be resolved
-	// before DongoCommit will succeed). Protected by mu.
+	// before DocudoltCommit will succeed). Protected by mu.
 	mergeState *mergeInProgress
 }
 
@@ -604,7 +604,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		}
 	}
 
-	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", desc)
+	meta, err := datas.NewCommitMeta("docudolt", "docudolt@localhost", desc)
 	if err != nil {
 		return datas.Dataset{}, am, err
 	}
@@ -643,7 +643,7 @@ func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.
 		email = strings.TrimSuffix(authorName[idx+2:], ">")
 	} else {
 		name = authorName
-		email = authorName + "@dongo"
+		email = authorName + "@docudolt"
 	}
 	meta, err := datas.NewCommitMetaWithUserTS(name, email, desc, ts)
 	if err != nil {
@@ -674,7 +674,7 @@ func migrateADRMtoSTRT(ctx context.Context, cs *nbs.GenerationalNBS, vs *dolttyp
 		return fmt.Errorf("reading current root: %w", err)
 	}
 
-	meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", "migrate: ADRM to STRT")
+	meta, err := datas.NewCommitMeta("docudolt", "docudolt@localhost", "migrate: ADRM to STRT")
 	if err != nil {
 		return fmt.Errorf("creating commit meta: %w", err)
 	}
@@ -799,9 +799,9 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, sta
 	prevHash, _ := wsDs.MaybeHeadAddr()
 
 	meta := &datas.WorkingSetMeta{
-		Name:        "dongo",
-		Email:       "dongo@localhost",
-		Description: "dongo working set",
+		Name:        "docudolt",
+		Email:       "docudolt@localhost",
+		Description: "docudolt working set",
 	}
 
 	spec := datas.WorkingSetSpec{
@@ -817,23 +817,23 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, sta
 // Verify that Backend implements VersioningBackend.
 var _ backends.VersioningBackend = (*Backend)(nil)
 
-// DongoCommit implements backends.VersioningBackend.
+// DocudoltCommit implements backends.VersioningBackend.
 // It commits the current working set (collections AM) with the given message,
 // author, and timestamp, creating a new dolt commit on the specified branch.
 // If params.Branch is empty it defaults to "main".
-func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+func (b *Backend) DocudoltCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DongoCommit: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocudoltCommit: database %q does not exist", params.DBName))
 	}
 
 	message := params.Message
 	if message == "" {
-		message = "dongo commit"
+		message = "docudolt commit"
 	}
 
 	ts := params.Timestamp
@@ -849,24 +849,24 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Guard: reject dongoCommit during any in-progress merge (resolved or not).
+	// Guard: reject docudoltCommit during any in-progress merge (resolved or not).
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("dongoCommit: unresolved merge conflicts remain")
+			return nil, fmt.Errorf("docudoltCommit: unresolved merge conflicts remain")
 		}
-		return nil, fmt.Errorf("dongoCommit: merge in progress: use dongoMerge continue")
+		return nil, fmt.Errorf("docudoltCommit: merge in progress: use docudoltMerge continue")
 	}
 
 	if branch == "main" {
 		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.am, message, params.Author, ts)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoCommit: committing db %q: %w", params.DBName, err)
+			return nil, fmt.Errorf("dolt: DocudoltCommit: committing db %q: %w", params.DBName, err)
 		}
 		db.ds = newDS
 
 		headHash, ok := newDS.MaybeHeadAddr()
 		if !ok {
-			return nil, fmt.Errorf("dolt: DongoCommit: no head after commit for db %q", params.DBName)
+			return nil, fmt.Errorf("dolt: DocudoltCommit: no head after commit for db %q", params.DBName)
 		}
 
 		return &backends.CommitResult{
@@ -881,15 +881,15 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 	// Non-main branch commit: get the branch dataset and its working AM.
 	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: resolving branch %q: %w", branch, err)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: resolving branch %q: %w", branch, err)
 	}
 	if !branchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DongoCommit: branch %q has no commits", branch)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: branch %q has no commits", branch)
 	}
 
 	branchAM, err := db.getOrInitBranchAM(ctx, branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: loading branch AM for %q: %w", branch, err)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: loading branch AM for %q: %w", branch, err)
 	}
 
 	var name, email string
@@ -898,21 +898,21 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 		email = strings.TrimSuffix(params.Author[idx+2:], ">")
 	} else {
 		name = params.Author
-		email = params.Author + "@dongo"
+		email = params.Author + "@docudolt"
 	}
 	meta, err := datas.NewCommitMetaWithUserTS(name, email, message, ts)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: building commit meta for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: building commit meta for branch %q: %w", branch, err)
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(branchAM)
 	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{Meta: meta})
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: committing branch %q: %w", branch, err)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: committing branch %q: %w", branch, err)
 	}
 
 	if err := updateWorkingSet(ctx, db.doltDB, branchAM, branchAM, branch); err != nil {
-		return nil, fmt.Errorf("dolt: DongoCommit: updating working set for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: updating working set for branch %q: %w", branch, err)
 	}
 
 	// Clear the cached branch AM so the next access reloads from the new HEAD.
@@ -920,7 +920,7 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoCommit: no head after commit for branch %q", branch)
+		return nil, fmt.Errorf("dolt: DocudoltCommit: no head after commit for branch %q", branch)
 	}
 
 	return &backends.CommitResult{
@@ -932,7 +932,7 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 	}, nil
 }
 
-// DongoBranch implements backends.VersioningBackend.
+// DocudoltBranch implements backends.VersioningBackend.
 //
 // When params.Delete is false (default), it creates a new Dolt branch named
 // params.Name, starting from the HEAD commit of the source branch params.From.
@@ -943,67 +943,67 @@ func (b *Backend) DongoCommit(ctx context.Context, params *backends.CommitParams
 //   - Force delete (Force=true, -D semantics): deletes unconditionally.
 //
 // Both branch names map to dataset IDs of the form "refs/heads/<name>".
-func (b *Backend) DongoBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+func (b *Backend) DocudoltBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DongoBranch: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocudoltBranch: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	if params.Delete {
-		return dongoBranchDelete(ctx, db, params)
+		return docudoltBranchDelete(ctx, db, params)
 	}
 
 	// Resolve From to a commit hash. From may be a branch name, commit hash, or
 	// ancestor expression (e.g. "main~1"), so we use the general rootish resolver.
 	headHash, err := resolveRootishToCommitHash(ctx, db, params.From)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: resolving source %q: %w", params.From, err)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: resolving source %q: %w", params.From, err)
 	}
 
 	newDatasetID := "refs/heads/" + params.Name
 	newDS, err := db.doltDB.GetDataset(ctx, newDatasetID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: getting new branch dataset %q: %w", params.Name, err)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: getting new branch dataset %q: %w", params.Name, err)
 	}
 	if newDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DongoBranch: branch %q already exists", params.Name)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: branch %q already exists", params.Name)
 	}
 
 	if _, err = db.doltDB.SetHead(ctx, newDS, headHash, ""); err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: creating branch %q: %w", params.Name, err)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: creating branch %q: %w", params.Name, err)
 	}
 
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
-// dongoBranchDelete deletes the branch named params.Name.
+// docudoltBranchDelete deletes the branch named params.Name.
 // Caller must hold db.mu.Lock().
-func dongoBranchDelete(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
+func docudoltBranchDelete(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
 	// Refuse to delete the current connection's branch.
 	if params.Name == params.From {
-		return nil, fmt.Errorf("dolt: DongoBranch: cannot delete the currently checked-out branch %q", params.Name)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: cannot delete the currently checked-out branch %q", params.Name)
 	}
 
 	datasetID := "refs/heads/" + params.Name
 	branchDS, err := db.doltDB.GetDataset(ctx, datasetID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: getting branch dataset %q: %w", params.Name, err)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: getting branch dataset %q: %w", params.Name, err)
 	}
 	if !branchDS.HasHead() {
 		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: DongoBranch: branch %q does not exist", params.Name))
+			fmt.Errorf("dolt: DocudoltBranch: branch %q does not exist", params.Name))
 	}
 
 	branchHash, ok := branchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoBranch: branch %q has no HEAD commit", params.Name)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: branch %q has no HEAD commit", params.Name)
 	}
 
 	if !params.Force {
@@ -1013,12 +1013,12 @@ func dongoBranchDelete(ctx context.Context, db *dbState, params *backends.Branch
 		// and compare the result to branchHash.
 		branchCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, branchHash)
 		if loadErr != nil {
-			return nil, fmt.Errorf("dolt: DongoBranch: loading commit for branch %q: %w", params.Name, loadErr)
+			return nil, fmt.Errorf("dolt: DocudoltBranch: loading commit for branch %q: %w", params.Name, loadErr)
 		}
 
 		dsMap, dsErr := db.doltDB.Datasets(ctx)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DongoBranch: listing datasets: %w", dsErr)
+			return nil, fmt.Errorf("dolt: DocudoltBranch: listing datasets: %w", dsErr)
 		}
 
 		errFound := errors.New("reachable") // sentinel to stop IterAll early
@@ -1049,12 +1049,12 @@ func dongoBranchDelete(ctx context.Context, db *dbState, params *backends.Branch
 			return nil
 		})
 		if iterErr != nil && !errors.Is(iterErr, errFound) {
-			return nil, fmt.Errorf("dolt: DongoBranch: iterating datasets: %w", iterErr)
+			return nil, fmt.Errorf("dolt: DocudoltBranch: iterating datasets: %w", iterErr)
 		}
 
 		if !reachable {
 			return nil, fmt.Errorf(
-				"dolt: DongoBranch: branch %q has unmerged commits; use -D to force delete",
+				"dolt: DocudoltBranch: branch %q has unmerged commits; use -D to force delete",
 				params.Name,
 			)
 		}
@@ -1069,7 +1069,7 @@ func dongoBranchDelete(ctx context.Context, db *dbState, params *backends.Branch
 
 	// Delete the branch dataset.
 	if _, err = db.doltDB.Delete(ctx, branchDS, ""); err != nil {
-		return nil, fmt.Errorf("dolt: DongoBranch: deleting branch %q: %w", params.Name, err)
+		return nil, fmt.Errorf("dolt: DocudoltBranch: deleting branch %q: %w", params.Name, err)
 	}
 
 	// Clear any cached branch AM.
@@ -1078,15 +1078,15 @@ func dongoBranchDelete(ctx context.Context, db *dbState, params *backends.Branch
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
-// DongoCurrentBranch implements backends.VersioningBackend.
+// DocudoltCurrentBranch implements backends.VersioningBackend.
 // It returns the branch name encoded in the connection's database name.
 // The handler has already rejected read-only rootishes before reaching here,
 // so params.Branch is always a branch name.
-func (b *Backend) DongoCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+func (b *Backend) DocudoltCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
 	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
 }
 
-// DongoMerge implements backends.VersioningBackend.
+// DocudoltMerge implements backends.VersioningBackend.
 //
 // It merges the From branch into the Into branch of the specified database.
 // Four cases are handled:
@@ -1098,15 +1098,15 @@ func (b *Backend) DongoCurrentBranch(_ context.Context, params *backends.Current
 //   - True 3-way merge: a merge commit is created on the Into branch with both
 //     branch HEADs as parents. When document-level conflicts exist, the merge is staged
 //     but not committed; a *backends.MergeConflictError is returned and the caller must
-//     resolve conflicts via DongoResolveConflict before DongoCommit will succeed.
-func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+//     resolve conflicts via DocudoltResolveConflict before DocudoltCommit will succeed.
+func (b *Backend) DocudoltMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DongoMerge: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocudoltMerge: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -1115,7 +1115,7 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	// Handle abort: discard in-progress merge and restore pre-merge state.
 	if params.Abort {
 		if db.mergeState == nil {
-			return nil, fmt.Errorf("dolt: DongoMerge: no merge in progress to abort")
+			return nil, fmt.Errorf("dolt: DocudoltMerge: no merge in progress to abort")
 		}
 		ms := db.mergeState
 		db.mergeState = nil
@@ -1133,21 +1133,21 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	// Handle continue: resume after conflict resolution and create the merge commit.
 	if params.Continue {
 		if db.mergeState == nil || db.mergeState.intoBranch != params.Into {
-			return nil, fmt.Errorf("dongoMerge: no merge in progress")
+			return nil, fmt.Errorf("docudoltMerge: no merge in progress")
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("dongoMerge: unresolved merge conflicts remain")
+			return nil, fmt.Errorf("docudoltMerge: unresolved merge conflicts remain")
 		}
 		ms := db.mergeState
 
 		intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
+			return nil, fmt.Errorf("dolt: DocudoltMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
 		}
 
 		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoMerge: continue: %w", err)
+			return nil, fmt.Errorf("dolt: DocudoltMerge: continue: %w", err)
 		}
 
 		db.mergeState = nil
@@ -1156,52 +1156,52 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 
 	// Guard: reject new merge initiation if a merge is already in progress.
 	if db.mergeState != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 	}
 
 	// Resolve the Into branch dataset.
 	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.Into)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: resolving into branch %q: %w", params.Into, err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: resolving into branch %q: %w", params.Into, err)
 	}
 	if !intoBranchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DongoMerge: into branch %q has no commits", params.Into)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: into branch %q has no commits", params.Into)
 	}
 	intoHash, ok := intoBranchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoMerge: into branch %q has no head address", params.Into)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: into branch %q has no head address", params.Into)
 	}
 
 	// Resolve the From branch dataset.
 	fromBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.From)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: resolving from branch %q: %w", params.From, err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: resolving from branch %q: %w", params.From, err)
 	}
 	if !fromBranchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DongoMerge: from branch %q has no commits", params.From)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: from branch %q has no commits", params.From)
 	}
 	fromHash, ok := fromBranchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoMerge: from branch %q has no head address", params.From)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: from branch %q has no head address", params.From)
 	}
 
 	// Load commit objects for LCA computation.
 	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, intoHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: loading into commit: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: loading into commit: %w", err)
 	}
 	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, fromHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: loading from commit: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: loading from commit: %w", err)
 	}
 
 	// Find the lowest common ancestor.
 	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: finding common ancestor: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: finding common ancestor: %w", err)
 	}
 	if !hasBase {
-		return nil, fmt.Errorf("dolt: DongoMerge: branches %q and %q have no common ancestor", params.Into, params.From)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: branches %q and %q have no common ancestor", params.Into, params.From)
 	}
 
 	// Already up-to-date: From's HEAD is an ancestor of (or equal to) Into's HEAD.
@@ -1214,23 +1214,23 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 
 	// FFOnly: fail if a fast-forward is not possible (i.e. branches have diverged).
 	if params.FFOnly && baseHash != intoHash {
-		return nil, fmt.Errorf("dolt: DongoMerge: not possible to fast-forward")
+		return nil, fmt.Errorf("dolt: DocudoltMerge: not possible to fast-forward")
 	}
 
 	// Fast-forward: Into's HEAD is an ancestor of From's HEAD.
 	if baseHash == intoHash && !params.NoFF {
 		newDS, ffErr := db.doltDB.SetHead(ctx, intoBranchDS, fromHash, "")
 		if ffErr != nil {
-			return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: advancing branch pointer: %w", ffErr)
+			return nil, fmt.Errorf("dolt: DocudoltMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
 		if params.Into == "main" {
 			db.ds = newDS
 			db.am, err = amFromCommitHash(ctx, db, fromHash.String())
 			if err != nil {
-				return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: loading AM: %w", err)
+				return nil, fmt.Errorf("dolt: DocudoltMerge: fast-forward: loading AM: %w", err)
 			}
 			if err := updateWorkingSet(ctx, db.doltDB, db.am, db.am, "main"); err != nil {
-				return nil, fmt.Errorf("dolt: DongoMerge: fast-forward: updating working set: %w", err)
+				return nil, fmt.Errorf("dolt: DocudoltMerge: fast-forward: updating working set: %w", err)
 			}
 		}
 		return &backends.MergeResult{
@@ -1242,20 +1242,20 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 	// True 3-way merge (or forced non-fast-forward): load AddressMaps and attempt to merge.
 	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: loading into AM: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: loading into AM: %w", err)
 	}
 	fromAM, err := amFromCommitHash(ctx, db, fromHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: loading from AM: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: loading from AM: %w", err)
 	}
 	baseAM, err := amFromCommitHash(ctx, db, baseHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: loading base AM: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: loading base AM: %w", err)
 	}
 
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoMerge: %w", err)
+		return nil, fmt.Errorf("dolt: DocudoltMerge: %w", err)
 	}
 
 	if len(conflicts) > 0 {
@@ -1266,7 +1266,7 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 		} else {
 			preMergeAM, err = db.getOrInitBranchAM(ctx, params.Into)
 			if err != nil {
-				return nil, fmt.Errorf("dolt: DongoMerge: loading premerge AM for branch %q: %w", params.Into, err)
+				return nil, fmt.Errorf("dolt: DocudoltMerge: loading premerge AM for branch %q: %w", params.Into, err)
 			}
 		}
 
@@ -1290,7 +1290,7 @@ func (b *Backend) DongoMerge(ctx context.Context, params *backends.MergeParams) 
 }
 
 // commitMerge creates a merge commit on intoBranch with both branch HEADs as parents.
-// Called for clean merges (no conflicts) and for continue (conflict-resolved) merges from DongoMerge.
+// Called for clean merges (no conflicts) and for continue (conflict-resolved) merges from DocudoltMerge.
 // message and author are optional; if empty, defaults are used.
 func (b *Backend) commitMerge(
 	ctx context.Context,
@@ -1306,15 +1306,15 @@ func (b *Backend) commitMerge(
 		mergeMessage = fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
 	}
 
-	commitName := "dongo"
-	commitEmail := "dongo@localhost"
+	commitName := "docudolt"
+	commitEmail := "docudolt@localhost"
 	if author != "" {
 		if idx := strings.Index(author, " <"); idx >= 0 {
 			commitName = author[:idx]
 			commitEmail = strings.TrimSuffix(author[idx+2:], ">")
 		} else {
 			commitName = author
-			commitEmail = author + "@dongo"
+			commitEmail = author + "@docudolt"
 		}
 	}
 
@@ -1467,7 +1467,7 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 	return editor.Flush(ctx)
 }
 
-// DongoLog implements backends.VersioningBackend.
+// DocudoltLog implements backends.VersioningBackend.
 // It returns the commit history for the given branch, walking HEAD backwards
 // through the parent1 chain up to the specified limit (default 20).
 // If params.From is set, traversal starts from that commit hash instead of HEAD.
@@ -1476,14 +1476,14 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 // two entries: "HEAD" and the bare branch name; all other branch heads get only
 // their bare branch name.
 // TODO: tag decoration is not yet supported.
-func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+func (b *Backend) DocudoltLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoLog: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltLog: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DongoLog: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocudoltLog: database %q does not exist", params.DBName))
 	}
 
 	db.mu.RLock()
@@ -1500,7 +1500,7 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 		var ok bool
 		startHash, ok = hash.MaybeParse(params.From)
 		if !ok {
-			return nil, fmt.Errorf("dolt: DongoLog: invalid from hash %q", params.From)
+			return nil, fmt.Errorf("dolt: DocudoltLog: invalid from hash %q", params.From)
 		}
 	} else {
 		var ok bool
@@ -1545,23 +1545,23 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 		if loadErr != nil {
 			if loadErr == datas.ErrCommitNotFound {
 				if checkFrom {
-					return nil, fmt.Errorf("dolt: DongoLog: commit not found: %q", params.From)
+					return nil, fmt.Errorf("dolt: DocudoltLog: commit not found: %q", params.From)
 				}
 				break
 			}
-			return nil, fmt.Errorf("dolt: DongoLog: loading commit %q: %w", currentHash, loadErr)
+			return nil, fmt.Errorf("dolt: DocudoltLog: loading commit %q: %w", currentHash, loadErr)
 		}
 		// The from hash was successfully resolved on the first iteration.
 		checkFrom = false
 
 		meta, err := datas.GetCommitMeta(ctx, commit.NomsValue())
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoLog: reading meta for %q: %w", currentHash, err)
+			return nil, fmt.Errorf("dolt: DocudoltLog: reading meta for %q: %w", currentHash, err)
 		}
 
 		parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoLog: reading parents for %q: %w", currentHash, err)
+			return nil, fmt.Errorf("dolt: DocudoltLog: reading parents for %q: %w", currentHash, err)
 		}
 
 		info := backends.CommitInfo{
@@ -1589,15 +1589,15 @@ func (b *Backend) DongoLog(ctx context.Context, params *backends.LogParams) (*ba
 	return &backends.LogResult{Commits: commits}, nil
 }
 
-// DongoStatus implements backends.VersioningBackend.
+// DocudoltStatus implements backends.VersioningBackend.
 //
 // It returns the list of collections with uncommitted changes on the working set,
 // comparing the working set AM (state.am) against the HEAD committed AM.
 // Each TableStatus entry carries one of "added", "modified", or "deleted".
-func (b *Backend) DongoStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+func (b *Backend) DocudoltStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoStatus: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltStatus: opening db %q: %w", params.DBName, err)
 	}
 
 	if state == nil {
@@ -1609,14 +1609,14 @@ func (b *Backend) DongoStatus(ctx context.Context, params *backends.VersioningSt
 
 	headAM, err := state.headRootAM(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoStatus: reading HEAD AM for db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltStatus: reading HEAD AM for db %q: %w", params.DBName, err)
 	}
 
 	workingAM := state.am
 
 	names, err := unionCollectionNames(ctx, headAM, workingAM)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoStatus: collecting collection names for db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltStatus: collecting collection names for db %q: %w", params.DBName, err)
 	}
 
 	var tables []backends.TableStatus
@@ -1624,12 +1624,12 @@ func (b *Backend) DongoStatus(ctx context.Context, params *backends.VersioningSt
 	for _, name := range names {
 		headHash, headErr := headAM.Get(ctx, name)
 		if headErr != nil {
-			return nil, fmt.Errorf("dolt: DongoStatus: reading HEAD hash for %q: %w", name, headErr)
+			return nil, fmt.Errorf("dolt: DocudoltStatus: reading HEAD hash for %q: %w", name, headErr)
 		}
 
 		workingHash, workingErr := workingAM.Get(ctx, name)
 		if workingErr != nil {
-			return nil, fmt.Errorf("dolt: DongoStatus: reading working hash for %q: %w", name, workingErr)
+			return nil, fmt.Errorf("dolt: DocudoltStatus: reading working hash for %q: %w", name, workingErr)
 		}
 
 		var status string
@@ -1655,7 +1655,7 @@ func (b *Backend) DongoStatus(ctx context.Context, params *backends.VersioningSt
 	return &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}, nil
 }
 
-// DongoReset implements backends.VersioningBackend.
+// DocudoltReset implements backends.VersioningBackend.
 //
 // Soft reset (Hard=false): moves HEAD to the target commit; staged root is updated to match
 // the target commit's rootValue; the working tree (db.am) is left unchanged so that any
@@ -1663,14 +1663,14 @@ func (b *Backend) DongoStatus(ctx context.Context, params *backends.VersioningSt
 //
 // Hard reset (Hard=true): moves HEAD to the target commit and resets both the working tree
 // and the staged root to the target commit's rootValue, discarding all uncommitted changes.
-func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+func (b *Backend) DocudoltReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltReset: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DongoReset: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DocudoltReset: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -1681,7 +1681,7 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 	if commitID == "" {
 		headHash, ok := db.ds.MaybeHeadAddr()
 		if !ok {
-			return nil, fmt.Errorf("dolt: DongoReset: no HEAD commit for db %q", params.DBName)
+			return nil, fmt.Errorf("dolt: DocudoltReset: no HEAD commit for db %q", params.DBName)
 		}
 		commitID = headHash.String()
 	}
@@ -1689,39 +1689,39 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 	// Parse and validate the target commit hash.
 	targetHash, ok := hash.MaybeParse(commitID)
 	if !ok {
-		return nil, fmt.Errorf("dolt: DongoReset: invalid commit hash %q", commitID)
+		return nil, fmt.Errorf("dolt: DocudoltReset: invalid commit hash %q", commitID)
 	}
 
 	// Load the AM from the target commit.
 	targetAM, err := amFromCommitHash(ctx, db, commitID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: resolving target commit %q: %w", commitID, err)
+		return nil, fmt.Errorf("dolt: DocudoltReset: resolving target commit %q: %w", commitID, err)
 	}
 
 	// Move HEAD to the target commit without touching the working set.
 	newDS, err := db.doltDB.SetHead(ctx, db.ds, targetHash, "")
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoReset: setting HEAD to %q: %w", commitID, err)
+		return nil, fmt.Errorf("dolt: DocudoltReset: setting HEAD to %q: %w", commitID, err)
 	}
 	db.ds = newDS
 
 	if params.Hard {
 		// Hard reset: working tree and staged root both point to the target commit.
 		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, "main"); err != nil {
-			return nil, fmt.Errorf("dolt: DongoReset: updating working set (hard): %w", err)
+			return nil, fmt.Errorf("dolt: DocudoltReset: updating working set (hard): %w", err)
 		}
 		db.am = targetAM
 	} else {
 		// Soft reset: keep the working tree as-is; staged root = target commit.
 		if err := updateWorkingSet(ctx, db.doltDB, db.am, targetAM, "main"); err != nil {
-			return nil, fmt.Errorf("dolt: DongoReset: updating working set (soft): %w", err)
+			return nil, fmt.Errorf("dolt: DocudoltReset: updating working set (soft): %w", err)
 		}
 	}
 
 	return &backends.ResetResult{CommitID: commitID}, nil
 }
 
-// DongoDiff implements backends.VersioningBackend.
+// DocudoltDiff implements backends.VersioningBackend.
 //
 // It computes the document-level diff between two database states:
 //   - If From is empty, the "a" side is HEAD (last committed state on main).
@@ -1733,10 +1733,10 @@ func (b *Backend) DongoReset(ctx context.Context, params *backends.ResetParams) 
 //
 // Only collections with at least one change are included in the result.
 // For modified documents, only the changed fields appear in a/b.
-func (b *Backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+func (b *Backend) DocudoltDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoDiff: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltDiff: opening db %q: %w", params.DBName, err)
 	}
 
 	if state == nil {
@@ -1754,17 +1754,17 @@ func (b *Backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*
 		// Default: HEAD committed state.
 		aAM, err = state.headRootAM(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: reading HEAD AM for db %q: %w", params.DBName, err)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: reading HEAD AM for db %q: %w", params.DBName, err)
 		}
 	case params.From == "HEAD" || strings.HasPrefix(params.From, "HEAD~"):
 		aAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.From)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: resolving from %q: %w", params.From, err)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: resolving from %q: %w", params.From, err)
 		}
 	default:
 		aAM, err = amFromRootish(ctx, state, params.From)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: resolving from %q: %w", params.From, err)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: resolving from %q: %w", params.From, err)
 		}
 	}
 
@@ -1778,19 +1778,19 @@ func (b *Backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*
 	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
 		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: resolving to %q: %w", params.To, err)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: resolving to %q: %w", params.To, err)
 		}
 	default:
 		bAM, err = amFromRootish(ctx, state, params.To)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: resolving to %q: %w", params.To, err)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: resolving to %q: %w", params.To, err)
 		}
 	}
 
 	// Enumerate all collection names present in either side.
 	names, err := unionCollectionNames(ctx, aAM, bAM)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DongoDiff: collecting collection names for db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DocudoltDiff: collecting collection names for db %q: %w", params.DBName, err)
 	}
 
 	var diffs []backends.CollectionDiff
@@ -1799,17 +1799,17 @@ func (b *Backend) DongoDiff(ctx context.Context, params *backends.DiffParams) (*
 		// Load or substitute an empty map for each side.
 		aMap, mapErr := collectionMapFromAM(ctx, state, aAM, name)
 		if mapErr != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
 		}
 
 		bMap, mapErr := collectionMapFromAM(ctx, state, bAM, name)
 		if mapErr != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
 		}
 
 		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, aMap, bMap)
 		if diffErr != nil {
-			return nil, fmt.Errorf("dolt: DongoDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
+			return nil, fmt.Errorf("dolt: DocudoltDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
 		}
 
 		if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {

@@ -1,4 +1,4 @@
-module github.com/dolthub/dongo
+module github.com/dolthub/docudolt
 
 go 1.25.6
 

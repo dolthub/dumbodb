@@ -19,7 +19,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/iterator"
 )
 
 // Identical returns true if a and b are the same type

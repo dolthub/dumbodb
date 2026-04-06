@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dolthub/dongo/internal/util/resource"
+	"github.com/dolthub/docudolt/internal/util/resource"
 )
 
 // NextFunc is a part of Interface for the Next method.

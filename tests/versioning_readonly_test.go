@@ -26,8 +26,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// dongoCommit runs dongoCommit on the given database and returns the commit hash.
-func dongoCommit(tb testing.TB, env *dongoTestEnv, dbName, message string, author ...string) string {
+// docudoltCommit runs docudoltCommit on the given database and returns the commit hash.
+func docudoltCommit(tb testing.TB, env *docudoltTestEnv, dbName, message string, author ...string) string {
 	tb.Helper()
 
 	a := "testuser"
@@ -38,14 +38,14 @@ func dongoCommit(tb testing.TB, env *dongoTestEnv, dbName, message string, autho
 	ctx := context.Background()
 	var result bson.M
 	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-		{Key: "dongoCommit", Value: int32(1)},
+		{Key: "docudoltCommit", Value: int32(1)},
 		{Key: "message", Value: message},
 		{Key: "author", Value: a},
 	}).Decode(&result)
-	require.NoError(tb, err, "dongoCommit must succeed")
+	require.NoError(tb, err, "docudoltCommit must succeed")
 
 	hash, ok := result["commitId"].(string)
-	require.True(tb, ok, "dongoCommit must return a string hash, got %T", result["commitId"])
+	require.True(tb, ok, "docudoltCommit must return a string hash, got %T", result["commitId"])
 	require.NotEmpty(tb, hash, "commit hash must not be empty")
 	return hash
 }
@@ -68,7 +68,7 @@ func assertWriteBlockedOperationFailed(tb testing.TB, err error, op string) {
 // commit hash. After setup:
 //   - Commit 1 (returned hash): has doc {_id:1, v:"first"}
 //   - Commit 2 (HEAD):          has doc {_id:1, v:"first"} + {_id:2, v:"second"}
-func setupVersioningDB(tb testing.TB, env *dongoTestEnv, dbName, collName string) string {
+func setupVersioningDB(tb testing.TB, env *docudoltTestEnv, dbName, collName string) string {
 	tb.Helper()
 
 	ctx := context.Background()
@@ -82,7 +82,7 @@ func setupVersioningDB(tb testing.TB, env *dongoTestEnv, dbName, collName string
 	require.NoError(tb, err)
 
 	// First commit: contains only doc {_id:1}.
-	hash1 := dongoCommit(tb, env, dbName, "first commit")
+	hash1 := docudoltCommit(tb, env, dbName, "first commit")
 
 	// Second document.
 	_, err = db.Collection(collName).InsertOne(ctx, bson.D{
@@ -92,7 +92,7 @@ func setupVersioningDB(tb testing.TB, env *dongoTestEnv, dbName, collName string
 	require.NoError(tb, err)
 
 	// Second commit: contains doc {_id:1} + {_id:2}.
-	dongoCommit(tb, env, dbName, "second commit")
+	docudoltCommit(tb, env, dbName, "second commit")
 
 	return hash1
 }
@@ -103,7 +103,7 @@ func setupVersioningDB(tb testing.TB, env *dongoTestEnv, dbName, collName string
 func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// Base name must be ≤ 29 chars so that "dbname__<32-char-hash>" fits within the 63-char limit.
@@ -162,7 +162,7 @@ func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// Base name must be ≤ 29 chars so that "dbname__<32-char-hash>" fits within the 63-char limit.
@@ -216,7 +216,7 @@ func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_ronly_anc_%d", rand.Int64N(1_000_000))
@@ -275,7 +275,7 @@ func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 func TestReadOnlyRootish_AncestorExpr_ReadsSucceed(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_ronly_anc_reads_%d", rand.Int64N(1_000_000))

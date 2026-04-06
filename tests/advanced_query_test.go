@@ -26,11 +26,11 @@ import (
 )
 
 // TestAdvancedQuery_JsonSchema_ExclusiveMinimum_Maximum verifies $jsonSchema with
-// exclusiveMinimum and exclusiveMaximum numeric constraints. (DongoFull)
+// exclusiveMinimum and exclusiveMaximum numeric constraints. (DocudoltFull)
 func TestAdvancedQuery_JsonSchema_ExclusiveMinimum_Maximum(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -63,11 +63,11 @@ func TestAdvancedQuery_JsonSchema_ExclusiveMinimum_Maximum(t *testing.T) {
 	assert.Equal(t, []int32{2, 3}, ids)
 }
 
-// TestAdvancedQuery_JsonSchema_MultipleOf verifies $jsonSchema multipleOf constraint. (DongoFull)
+// TestAdvancedQuery_JsonSchema_MultipleOf verifies $jsonSchema multipleOf constraint. (DocudoltFull)
 func TestAdvancedQuery_JsonSchema_MultipleOf(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -98,11 +98,11 @@ func TestAdvancedQuery_JsonSchema_MultipleOf(t *testing.T) {
 }
 
 // TestAdvancedQuery_JsonSchema_NoMatch verifies that $jsonSchema returns no documents when
-// the schema doesn't match any document. (DongoFull)
+// the schema doesn't match any document. (DocudoltFull)
 func TestAdvancedQuery_JsonSchema_NoMatch(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -126,11 +126,11 @@ func TestAdvancedQuery_JsonSchema_NoMatch(t *testing.T) {
 }
 
 // TestAdvancedQuery_JsonSchema_DuplicateRequired verifies that $jsonSchema with duplicate
-// 'required' keys is rejected with FailedToParse (code 9). (DongoFull)
+// 'required' keys is rejected with FailedToParse (code 9). (DocudoltFull)
 func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -154,11 +154,11 @@ func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	assert.Contains(t, cmdErr.Message, "Duplicate $jsonSchema keyword: required")
 }
 
-// TestAdvancedQuery_JsonSchema_OneOf verifies $jsonSchema oneOf constraint. (DongoFull)
+// TestAdvancedQuery_JsonSchema_OneOf verifies $jsonSchema oneOf constraint. (DocudoltFull)
 func TestAdvancedQuery_JsonSchema_OneOf(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -195,11 +195,11 @@ func TestAdvancedQuery_JsonSchema_OneOf(t *testing.T) {
 }
 
 // TestAdvancedQuery_Regex_ExtendedWhitespace_x_Flag verifies that the regex x flag
-// strips whitespace and comments from the pattern. (DongoFull)
+// strips whitespace and comments from the pattern. (DocudoltFull)
 func TestAdvancedQuery_Regex_ExtendedWhitespace_x_Flag(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -229,11 +229,11 @@ func TestAdvancedQuery_Regex_ExtendedWhitespace_x_Flag(t *testing.T) {
 }
 
 // TestAdvancedQuery_Regex_LookaheadSupported verifies that a regex with a PCRE lookahead
-// assertion is evaluated correctly using the PCRE-compatible engine. (DongoFull)
+// assertion is evaluated correctly using the PCRE-compatible engine. (DocudoltFull)
 func TestAdvancedQuery_Regex_LookaheadSupported(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -256,11 +256,11 @@ func TestAdvancedQuery_Regex_LookaheadSupported(t *testing.T) {
 }
 
 // TestAdvancedQuery_TextSearch_MetaTextScore_Projection verifies that $text search
-// combined with {$meta: "textScore"} projection returns the score field (0.0). (DongoFull)
+// combined with {$meta: "textScore"} projection returns the score field (0.0). (DocudoltFull)
 func TestAdvancedQuery_TextSearch_MetaTextScore_Projection(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -283,7 +283,7 @@ func TestAdvancedQuery_TextSearch_MetaTextScore_Projection(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	// score field must be present and numeric (Dongo returns 0.0).
+	// score field must be present and numeric (Docudolt returns 0.0).
 	var scoreFound bool
 	for _, el := range results[0] {
 		if el.Key == "score" {
@@ -296,11 +296,11 @@ func TestAdvancedQuery_TextSearch_MetaTextScore_Projection(t *testing.T) {
 }
 
 // TestAdvancedQuery_TextSearch_MetaTextScore_Sort verifies that $text search results
-// can be sorted by {$meta: "textScore"} without error. (DongoFull)
+// can be sorted by {$meta: "textScore"} without error. (DocudoltFull)
 func TestAdvancedQuery_TextSearch_MetaTextScore_Sort(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -325,11 +325,11 @@ func TestAdvancedQuery_TextSearch_MetaTextScore_Sort(t *testing.T) {
 }
 
 // TestAdvancedQuery_TextSearch_MultipleTerms verifies that $text search with multiple
-// terms matches documents containing any of the terms. (DongoFull)
+// terms matches documents containing any of the terms. (DocudoltFull)
 func TestAdvancedQuery_TextSearch_MultipleTerms(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -356,11 +356,11 @@ func TestAdvancedQuery_TextSearch_MultipleTerms(t *testing.T) {
 
 // TestAdvancedQuery_TextSearch_WithAdditionalFilter verifies that $text search
 // combined with an additional equality filter returns only documents that satisfy
-// both conditions. (DongoFull)
+// both conditions. (DocudoltFull)
 func TestAdvancedQuery_TextSearch_WithAdditionalFilter(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

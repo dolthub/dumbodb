@@ -14,7 +14,7 @@
 
 package iterator
 
-import "github.com/dolthub/dongo/internal/util/resource"
+import "github.com/dolthub/docudolt/internal/util/resource"
 
 // Closer is a part of Interface for closing iterators.
 type Closer interface {

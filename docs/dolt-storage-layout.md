@@ -1,4 +1,4 @@
-# Dolt-Compatible Storage Layout for Dongo
+# Dolt-Compatible Storage Layout for Docudolt
 
 **Issue:** hq-ao0wx
 **Date:** 2026-03-24
@@ -8,7 +8,7 @@
 
 ## 1. Current State
 
-Dongo uses Dolt's NBS (Noms Block Store) as its storage engine, structured as a
+Docudolt uses Dolt's NBS (Noms Block Store) as its storage engine, structured as a
 Dolt-compatible repository layout. As of this writing, the layout is:
 
 ```
@@ -54,11 +54,11 @@ BSON chunk (raw BSON document bytes)
 
 Dolt's `LoadRootValueFromRootIshAddr` reads the working set's `working_root_addr`
 and calls `decodeRootNomsValue`, which validates the file ID against `"RTVL"`
-(RootValue) and `"DGRV"` (DoltgresRootValue). When dongo stores an ADRM hash
+(RootValue) and `"DGRV"` (DoltgresRootValue). When docudolt stores an ADRM hash
 there instead, the validation fails with `ErrNoRootValAtHash`.
 
 The same applies to the commit's `rootValue`: dolt expects an RTVL chunk, but
-dongo stores an ADRM chunk directly.
+docudolt stores an ADRM chunk directly.
 
 ---
 
@@ -164,7 +164,7 @@ RTVL.tables → ADRM
 
 **When `dolt status` is safe:**
 - Working/staged/HEAD all point to the same RTVL → "nothing to commit" ✓
-- After a write, dongo updates all three to the new RTVL → remains clean ✓
+- After a write, docudolt updates all three to the new RTVL → remains clean ✓
 
 ### Option B: Stub RTVL (empty tables) + collections ADRM stored separately
 
@@ -206,7 +206,7 @@ and the single column is a `BLOB` of BSON bytes.
 This is the minimal change that makes `dolt status` and `dolt fsck` work without
 breaking the existing storage or data access patterns. The key insight is that
 `dolt status` only hashes the tables ADRM; it does not decode individual entries
-for a clean-state comparison. As long as dongo always keeps HEAD commit RTVL ==
+for a clean-state comparison. As long as docudolt always keeps HEAD commit RTVL ==
 working set RTVL == staged RTVL, `dolt status` will show "nothing to commit".
 
 ### Rationale
@@ -223,7 +223,7 @@ working set RTVL == staged RTVL, `dolt status` will show "nothing to commit".
 
 ## 5. Target Storage Layout
 
-After the change, each dongo database has this chunk graph:
+After the change, each docudolt database has this chunk graph:
 
 ```
 NBS root → STRT (StoreRoot, "STRT")
@@ -367,7 +367,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, vs *dolttyp
     rtvlValue := dolttypes.SerialMessage(rtvlMsg)
 
     // Commit the RTVL as the new rootValue.
-    meta, err := datas.NewCommitMeta("dongo", "dongo@localhost", desc)
+    meta, err := datas.NewCommitMeta("docudolt", "docudolt@localhost", desc)
     // ...
     newDS, err := doltDB.Commit(ctx, ds, rtvlValue, datas.CommitOptions{Meta: meta})
     // ...

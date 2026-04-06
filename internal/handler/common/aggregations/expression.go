@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dolthub/dongo/internal/handler/commonpath"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/commonpath"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 //go:generate ../../../../bin/stringer -linecomment -type ExpressionErrorCode
@@ -112,7 +112,7 @@ func NewExpression(expression string, opts *commonpath.FindValuesOpts) (*Express
 			return nil, newExpressionError(ErrInvalidExpression, v)
 		}
 
-		// TODO https://github.com/dolthub/dongo/issues/2275
+		// TODO https://github.com/dolthub/docudolt/issues/2275
 		return nil, newExpressionError(ErrUndefinedVariable, v)
 	case strings.HasPrefix(expression, "$"):
 		// dollar sign $ prefixed string indicates Expression accesses field or embedded fields

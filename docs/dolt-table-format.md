@@ -1,4 +1,4 @@
-# Dolt Table Format for Dongo Collections
+# Dolt Table Format for Docudolt Collections
 
 **Issue:** hq-r2cpj
 **Date:** 2026-03-24
@@ -107,7 +107,7 @@ table Index {
 }
 ```
 
-### 1.4 Minimal Valid Table Descriptor for Dongo Collections
+### 1.4 Minimal Valid Table Descriptor for Docudolt Collections
 
 Schema: `_id BIGINT NOT NULL PK, doc LONGBLOB NOT NULL`
 

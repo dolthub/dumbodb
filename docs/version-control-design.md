@@ -1,4 +1,4 @@
-# Dongo Version Control Features: Research & Design Proposal
+# Docudolt Version Control Features: Research & Design Proposal
 
 **Date:** 2026-03-30
 **Bead:** do-m6au
@@ -30,7 +30,7 @@ NBS chunk store (content-addressed by SHA-256)
   
   Table (prolly.Map)
     key:   primary key bytes
-    value: row bytes (BSON for Dongo)
+    value: row bytes (BSON for Docudolt)
 ```
 
 ### Git-Equivalent Operations (CLI + SQL)
@@ -126,20 +126,20 @@ Object store (content-addressed by SHA-1/SHA-256)
 
 ## 3. Core Architectural Principle
 
-**Dongo is a presentation layer. Dolt does the work.**
+**Docudolt is a presentation layer. Dolt does the work.**
 
 This is a hard requirement, not a preference. Every version control feature in
-Dongo must be backed directly by an existing Dolt abstraction. Dongo's job is to
+Docudolt must be backed directly by an existing Dolt abstraction. Docudolt's job is to
 translate MongoDB wire protocol commands into calls to Dolt's Go APIs, then
-translate the results back into BSON responses. Dongo must not reimplement
+translate the results back into BSON responses. Docudolt must not reimplement
 history walking, diff computation, merge logic, or any other algorithm that Dolt
 already provides.
 
 **Dolt exposes its VC capabilities through Go abstraction methods**, not raw SQL
 strings. The SQL engine (and system tables like `dolt_history_$TABLE`,
 `dolt_blame_$TABLE`, `dolt_commits`) may power those abstractions internally, but
-Dongo calls the Go API layer — the same interfaces the Dolt CLI and SQL engine
-themselves use. Do not construct SQL query strings in Dongo VC handlers.
+Docudolt calls the Go API layer — the same interfaces the Dolt CLI and SQL engine
+themselves use. Do not construct SQL query strings in Docudolt VC handlers.
 
 Dolt is purpose-built for this work and is extremely fast at it:
 - Prolly Tree diff is O(changes), not O(data size) — large collections with few
@@ -148,38 +148,38 @@ Dolt is purpose-built for this work and is extremely fast at it:
   of the same subtrees are essentially free.
 - Cell-wise merge is already implemented, tested, and battle-hardened.
 
-When designing a Dongo VC feature, the question is always: **"Which Dolt Go API
+When designing a Docudolt VC feature, the question is always: **"Which Dolt Go API
 already does this?"** — not "How do we implement it?" If no Dolt abstraction
-exists, escalate to the Dolt team rather than building it in Dongo.
+exists, escalate to the Dolt team rather than building it in Docudolt.
 
 ---
 
-## 4. The Dongo Opportunity — What to Expose
+## 4. The Docudolt Opportunity — What to Expose
 
-Dongo sits at a unique intersection: MongoDB wire protocol (document store UX)
+Docudolt sits at a unique intersection: MongoDB wire protocol (document store UX)
 backed by Dolt storage (version-controlled prolly trees). This creates an
 opportunity for a "version-controlled MongoDB" that no existing product offers.
 
-### Current Dongo Versioning State
+### Current Docudolt Versioning State
 
-Dongo already implements these commands (all behind the `dongoXxx` namespace):
+Docudolt already implements these commands (all behind the `docudoltXxx` namespace):
 
 | Command          | What it does                                    | Status      |
 |------------------|-------------------------------------------------|-------------|
-| `dongoCommit`    | Commit working set with message                 | Implemented |
-| `dongoBranch`    | Create branch from current branch               | Implemented |
-| `dongoMerge`     | Merge branch into current                       | Implemented |
-| `dongoLog`       | Commit history (hash, parent, message, ts)      | Implemented |
-| `dongoDiff`      | Document-level diff between two states          | Implemented |
-| `dongoReset`     | Move HEAD (soft or hard)                        | Implemented |
-| `dongoStatus`    | Show uncommitted collection changes             | Implemented |
+| `docudoltCommit`    | Commit working set with message                 | Implemented |
+| `docudoltBranch`    | Create branch from current branch               | Implemented |
+| `docudoltMerge`     | Merge branch into current                       | Implemented |
+| `docudoltLog`       | Commit history (hash, parent, message, ts)      | Implemented |
+| `docudoltDiff`      | Document-level diff between two states          | Implemented |
+| `docudoltReset`     | Move HEAD (soft or hard)                        | Implemented |
+| `docudoltStatus`    | Show uncommitted collection changes             | Implemented |
 
 Branch access is via the `dbname__rootish` naming convention, where the
 rootish resolves to a commit (see Section 6 for the full specification).
 
 ### What's Missing (Gap Analysis)
 
-The following Git/Dolt capabilities don't have Dongo equivalents yet:
+The following Git/Dolt capabilities don't have Docudolt equivalents yet:
 
 1. **Point-in-time reads**: No way to query a collection as of a specific commit
    without doing a hard reset. Users need `db.collection.find()` at a past state.
@@ -193,10 +193,10 @@ The following Git/Dolt capabilities don't have Dongo equivalents yet:
 4. **Document blame**: No "which commit last modified this field?" Dolt has
    `dolt_blame_$TABLE` for this.
 
-5. **Remote push/pull**: No cross-server synchronization. Can't clone a Dongo
+5. **Remote push/pull**: No cross-server synchronization. Can't clone a Docudolt
    instance or publish a database to a hub.
 
-6. **Conflict resolution**: `dongoMerge` exists but no interface for inspecting
+6. **Conflict resolution**: `docudoltMerge` exists but no interface for inspecting
    or resolving merge conflicts when they occur.
 
 7. **List branches**: No command to enumerate existing branches. Users must know
@@ -216,8 +216,8 @@ The following Git/Dolt capabilities don't have Dongo equivalents yet:
 ## 5. Suggested Feature List
 
 Features ranked by **impact/feasibility**. For each: the MongoDB wire protocol
-surface and the **existing Dolt SQL primitive** that backs it. Dongo translates;
-Dolt executes. No VC logic should be reimplemented in Dongo.
+surface and the **existing Dolt SQL primitive** that backs it. Docudolt translates;
+Dolt executes. No VC logic should be reimplemented in Docudolt.
 
 ---
 
@@ -287,13 +287,13 @@ bare branch names.
 
 ---
 
-#### P1-B: List Branches (`dongoListBranches`)
+#### P1-B: List Branches (`docudoltListBranches`)
 
 **What**: Return all branches for a database.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoListBranches: 1})
+db.runCommand({docudoltListBranches: 1})
 // Returns: {branches: [{name: "main", hash: "abc..."}, ...], ok: 1}
 ```
 
@@ -304,15 +304,15 @@ db.runCommand({dongoListBranches: 1})
 
 ---
 
-#### P1-C: Tag Support (`dongoTag`, `dongoListTags`)
+#### P1-C: Tag Support (`docudoltTag`, `docudoltListTags`)
 
 **What**: Create named immutable pointers to commits. Useful for release markers,
 snapshot labels, and as readable aliases for commit hashes.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoTag: 1, name: "v1.0", message: "production release"})
-db.runCommand({dongoListTags: 1})
+db.runCommand({docudoltTag: 1, name: "v1.0", message: "production release"})
+db.runCommand({docudoltListTags: 1})
 // Returns: {tags: [{name: "v1.0", hash: "abc...", message: "..."}], ok: 1}
 ```
 
@@ -330,13 +330,13 @@ db.getSiblingDB("mydb__v1.0").users.find()  // reads at the v1.0 tag
 
 ---
 
-#### P1-D: Delete Branch (`dongoDeleteBranch`)
+#### P1-D: Delete Branch (`docudoltDeleteBranch`)
 
 **What**: Remove a branch from the refsAM after it's been merged.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoDeleteBranch: 1, branch: "feature-x"})
+db.runCommand({docudoltDeleteBranch: 1, branch: "feature-x"})
 ```
 
 **Dolt primitive**: Remove the `refs/heads/<branch>` and
@@ -346,14 +346,14 @@ db.runCommand({dongoDeleteBranch: 1, branch: "feature-x"})
 
 ---
 
-#### P1-E: Document History (`dongoDocHistory`)
+#### P1-E: Document History (`docudoltDocHistory`)
 
 **What**: Return all versions of a single document across all commits on a branch.
 
 **Wire protocol**:
 ```javascript
 db.runCommand({
-  dongoDocHistory: 1,
+  docudoltDocHistory: 1,
   collection: "users",
   _id: ObjectId("abc123"),
   limit: 20
@@ -362,11 +362,11 @@ db.runCommand({
 ```
 
 **Dolt primitive**: Dolt exposes per-row history via Go abstraction methods on
-the database/table interfaces (backed by `dolt_history_$TABLE` internally). Dongo
+the database/table interfaces (backed by `dolt_history_$TABLE` internally). Docudolt
 calls those methods and translates the resulting row iterator to a BSON cursor.
 
 **Performance note**: Dolt's Prolly Tree history walk is O(changes to that row),
-not O(all commits). This is Dolt's core design — Dongo gets it for free.
+not O(all commits). This is Dolt's core design — Docudolt gets it for free.
 
 **Feasibility**: High. Pure translation: Dolt Go API call → BSON cursor response.
 
@@ -374,56 +374,56 @@ not O(all commits). This is Dolt's core design — Dongo gets it for free.
 
 ### Priority 2 (Medium Impact, Moderate Effort)
 
-#### P2-A: Conflict Report (`dongoConflicts`)
+#### P2-A: Conflict Report (`docudoltConflicts`)
 
 **What**: After a merge that produced conflicts, show the conflicting documents.
 
 **Wire protocol**:
 ```javascript
-db.getSiblingDB("mydb__main").runCommand({dongoConflicts: 1, collection: "users"})
+db.getSiblingDB("mydb__main").runCommand({docudoltConflicts: 1, collection: "users"})
 // Returns: {conflicts: [{_id: ..., base: {...}, ours: {...}, theirs: {...}}, ...], ok: 1}
 ```
 
 **Dolt primitive**: During a merge, when two branches have modified the same
 document's same fields to different values, a conflict is generated. The backend
 needs to write conflict entries (base/ours/theirs triples) to a separate map.
-`dongoConflicts` reads that map.
+`docudoltConflicts` reads that map.
 
-**Resolution**: Add `dongoResolveConflict` to accept one side or a custom document.
+**Resolution**: Add `docudoltResolveConflict` to accept one side or a custom document.
 
 **Feasibility**: Medium. Requires conflict state to be stored (new BSON map per
 conflicting collection). The merge logic needs to populate it.
 
 ---
 
-#### P2-B: Collection Blame (`dongoBlame`)
+#### P2-B: Collection Blame (`docudoltBlame`)
 
 **What**: For each document in a collection, show which commit last modified it.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoBlame: 1, collection: "users"})
+db.runCommand({docudoltBlame: 1, collection: "users"})
 // Returns: {blame: [{_id: ..., hash: "...", author: "...", timestamp: ISODate}, ...], ok: 1}
 ```
 
 **Dolt primitive**: Dolt exposes blame via Go abstraction methods (backed by
-`dolt_blame_$TABLE` internally). Dongo calls those methods and translates the
+`dolt_blame_$TABLE` internally). Docudolt calls those methods and translates the
 result iterator to a BSON cursor.
 
 **Feasibility**: High. Pure translation: Dolt Go API call → BSON cursor response.
 
 ---
 
-#### P2-C: Stash (`dongoStash`, `dongoStashPop`)
+#### P2-C: Stash (`docudoltStash`, `docudoltStashPop`)
 
 **What**: Save the current working set without committing, return to the last
 committed state, restore the stashed state later.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoStash: 1, message: "WIP: migrating schema"})
-db.runCommand({dongoStashPop: 1})
-db.runCommand({dongoStashList: 1})
+db.runCommand({docudoltStash: 1, message: "WIP: migrating schema"})
+db.runCommand({docudoltStashPop: 1})
+db.runCommand({docudoltStashList: 1})
 ```
 
 **Dolt primitive**: Save the current WRST.working_root_addr as a separate
@@ -436,20 +436,20 @@ working set to HEAD's RTVL. Pop restores the saved addr and removes the stash en
 
 ### Priority 3 (Lower Impact or Higher Effort)
 
-#### P3-A: Remote Push/Pull (`dongoPush`, `dongoPull`)
+#### P3-A: Remote Push/Pull (`docudoltPush`, `docudoltPull`)
 
-**What**: Synchronize a Dongo database with a remote Dongo or DoltHub instance.
+**What**: Synchronize a Docudolt database with a remote Docudolt or DoltHub instance.
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoPush: 1, remote: "origin", branch: "main"})
-db.runCommand({dongoPull: 1, remote: "origin", branch: "main"})
-db.runCommand({dongoAddRemote: 1, name: "origin", url: "dongo://host:27017/dbname"})
+db.runCommand({docudoltPush: 1, remote: "origin", branch: "main"})
+db.runCommand({docudoltPull: 1, remote: "origin", branch: "main"})
+db.runCommand({docudoltAddRemote: 1, name: "origin", url: "docudolt://host:27017/dbname"})
 ```
 
 **Dolt primitive**: Dolt's NBS implements a chunk sync protocol: serialize all
 chunks reachable from a commit that the remote doesn't have (pack file), send
-over the wire, update remote's refsAM. Dongo can reuse Dolt's existing push/pull
+over the wire, update remote's refsAM. Docudolt can reuse Dolt's existing push/pull
 protocol since both use the same NBS format.
 
 **Why high value**: Enables multi-server workflows. "Branch in dev, push to prod
@@ -460,13 +460,13 @@ format is already Dolt-compatible — the protocol work is the main cost.
 
 ---
 
-#### P3-B: Cherry-Pick (`dongoCherryPick`)
+#### P3-B: Cherry-Pick (`docudoltCherryPick`)
 
 **What**: Apply the changes introduced by a specific commit to the current branch.
 
 **Wire protocol**:
 ```javascript
-db.getSiblingDB("mydb__main").runCommand({dongoCherryPick: 1, commit: "abc123"})
+db.getSiblingDB("mydb__main").runCommand({docudoltCherryPick: 1, commit: "abc123"})
 ```
 
 **Dolt primitive**: Compute the diff between `commit`'s parent and `commit`.
@@ -484,7 +484,7 @@ track these schema migrations in the commit history. Auto-generate migration not
 
 **Wire protocol**:
 ```javascript
-db.runCommand({dongoSchemaHistory: 1, collection: "users"})
+db.runCommand({docudoltSchemaHistory: 1, collection: "users"})
 // Returns a diff of field presence/type across commits
 ```
 
@@ -580,7 +580,7 @@ If no `__` is present, use the default branch working set.
 - `^N` caret parent selection (use `~N` instead for clarity)
 
 **Write-safety rule**: a connection is writable if and only if the rootish is a
-bare branch name (or omitted). Everything else is read-only. Dongo enforces this
+bare branch name (or omitted). Everything else is read-only. Docudolt enforces this
 at the handler layer — write commands (`insert`, `update`, `delete`, `drop`, etc.)
 on a read-only rootish return an explicit `OperationFailed` error.
 
@@ -591,11 +591,11 @@ through to write handlers. The backend RTVL/prolly.Map loading is unchanged.
 
 Dolt already tracks merge conflicts (base/ours/theirs triples per conflicting row)
 and exposes resolution through Go abstraction methods (backed internally by
-`dolt_conflicts_$TABLE` and `DOLT_CONFLICTS_RESOLVE`). Dongo's work is purely
+`dolt_conflicts_$TABLE` and `DOLT_CONFLICTS_RESOLVE`). Docudolt's work is purely
 presentation:
-1. `dongoConflicts` → call Dolt conflicts iterator → BSON response
-2. `dongoResolveConflict` → call Dolt resolve method → ok response
-3. `dongoMerge` already uses Dolt merge — it just needs to detect and surface
+1. `docudoltConflicts` → call Dolt conflicts iterator → BSON response
+2. `docudoltResolveConflict` → call Dolt resolve method → ok response
+3. `docudoltMerge` already uses Dolt merge — it just needs to detect and surface
    conflict state rather than silently failing.
 
 No new storage. No new conflict logic. Dolt owns it all.
@@ -603,8 +603,8 @@ No new storage. No new conflict logic. Dolt owns it all.
 ### DoltHub Integration
 
 If remote push/pull is implemented to be DoltHub-compatible (same chunk protocol
-and ref format), Dongo databases become compatible with DoltHub — the largest public
-database sharing platform. A Dongo user could `dongoPush` to DoltHub and browse
+and ref format), Docudolt databases become compatible with DoltHub — the largest public
+database sharing platform. A Docudolt user could `docudoltPush` to DoltHub and browse
 their MongoDB data with the DoltHub web UI. This is a significant moat.
 
 ---
@@ -618,35 +618,35 @@ A user-facing story for each tier of features:
 > diff to verify my changes, then merge to main. If something goes wrong, I can
 > reset to a known-good tag."
 ```javascript
-db.getSiblingDB("mydb__migration").runCommand({dongoBranch: 1, branch: "migration-v2"})
+db.getSiblingDB("mydb__migration").runCommand({docudoltBranch: 1, branch: "migration-v2"})
 // ... run migration ...
-db.getSiblingDB("mydb__main").runCommand({dongoDiff: 1, from: "abc123"})
-db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, from: "migration-v2"})
-db.runCommand({dongoTag: 1, name: "pre-migration"})  // before the merge
+db.getSiblingDB("mydb__main").runCommand({docudoltDiff: 1, from: "abc123"})
+db.getSiblingDB("mydb__main").runCommand({docudoltMerge: 1, from: "migration-v2"})
+db.runCommand({docudoltTag: 1, name: "pre-migration"})  // before the merge
 ```
 
 **Intermediate (P2 features — mid term)**:
 > "I want an audit trail. Show me every version of customer document _id=42, and
 > which commit introduced the `gdpr_consent: true` field."
 ```javascript
-db.runCommand({dongoDocHistory: 1, collection: "customers", _id: 42})
-db.runCommand({dongoBlame: 1, collection: "customers"})  // who last touched each doc
+db.runCommand({docudoltDocHistory: 1, collection: "customers", _id: 42})
+db.runCommand({docudoltBlame: 1, collection: "customers"})  // who last touched each doc
 ```
 
 **Advanced (P3 features — long term)**:
-> "I have a dev Dongo instance and a prod Dongo instance. I push tested changes
+> "I have a dev Docudolt instance and a prod Docudolt instance. I push tested changes
 > to prod. If prod goes wrong, I pull the last good state from DoltHub."
 ```javascript
-db.runCommand({dongoAddRemote: 1, name: "prod", url: "dongo://prod:27017/app"})
-db.runCommand({dongoPush: 1, remote: "prod", branch: "main"})
-db.runCommand({dongoPull: 1, remote: "backup", branch: "main"})
+db.runCommand({docudoltAddRemote: 1, name: "prod", url: "docudolt://prod:27017/app"})
+db.runCommand({docudoltPush: 1, remote: "prod", branch: "main"})
+db.runCommand({docudoltPull: 1, remote: "backup", branch: "main"})
 ```
 
 ---
 
 ## 8. Conclusion
 
-Dongo's version control foundation is solid. The Dolt storage layer already
+Docudolt's version control foundation is solid. The Dolt storage layer already
 provides the primitives for all features described above. The work is primarily
 in exposing these capabilities through the MongoDB wire protocol.
 
@@ -655,9 +655,9 @@ The highest-leverage near-term features are:
    backend logic, immediate user value.
 2. **List/delete branches + tags** — simple refsAM operations, complete the
    branch management workflow.
-3. **Document history** — turns Dongo into an audit log database without any
+3. **Document history** — turns Docudolt into an audit log database without any
    external tooling.
 
-Together these three make Dongo genuinely useful as "version-controlled MongoDB"
+Together these three make Docudolt genuinely useful as "version-controlled MongoDB"
 for the most common use cases: branched development, audit trails, and snapshot
 reads.

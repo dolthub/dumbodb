@@ -1,7 +1,7 @@
 .beads/
 .claude/
 .runtime/
-dongo
+docudolt
 CLAUDE.md
 .idea/
 
@@ -10,5 +10,5 @@ CLAUDE.md
 __pycache__/
 state.json
 
-# Dongo runtime data directory (default --data-dir)
+# Docudolt runtime data directory (default --data-dir)
 data/

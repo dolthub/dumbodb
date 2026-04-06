@@ -22,13 +22,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dolthub/dongo/internal/handler/common/aggregations"
-	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // ValidateProjection check projection document.
@@ -76,7 +76,7 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			)
 		}
 
-		// TODO https://github.com/dolthub/dongo/issues/3127
+		// TODO https://github.com/dolthub/docudolt/issues/3127
 		path, err := types.NewPathFromString(key)
 		if err != nil {
 			if strings.HasSuffix(key, "$") {
@@ -294,7 +294,7 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 
 	projectedWithoutID, err := projectDocumentWithoutID(doc, projection, inclusion)
 	if err != nil {
-		// TODO https://github.com/dolthub/dongo/issues/2633
+		// TODO https://github.com/dolthub/docudolt/issues/2633
 		return nil, err
 	}
 
@@ -333,7 +333,7 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 			return nil, lazyerrors.Error(err)
 		}
 
-		// TODO https://github.com/dolthub/dongo/issues/3127
+		// TODO https://github.com/dolthub/docudolt/issues/3127
 		path, err := types.NewPathFromString(key)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
@@ -713,7 +713,7 @@ func processOperatorError(err error) error {
 				"$project (stage)",
 			)
 		case aggregations.ErrUndefinedVariable:
-			// TODO https://github.com/dolthub/dongo/issues/2275
+			// TODO https://github.com/dolthub/docudolt/issues/2275
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
 				"Aggregation expression variables are not implemented yet",

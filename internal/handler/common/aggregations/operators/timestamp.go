@@ -17,9 +17,9 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/dongo/internal/handler/common/aggregations"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // tsSecondOp implements $tsSecond — returns the seconds component (high 32 bits) of a Timestamp.

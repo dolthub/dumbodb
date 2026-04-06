@@ -1,10 +1,10 @@
-# Dongo Agent Guide
+# Docudolt Agent Guide
 
 ## HARD RULE: Do Not Read the FerretDB Codebase Without Permission
 
 **You are NOT allowed to read, browse, or reference files under `ferretdb/` without explicit written permission from the mayor in your hooked bead.**
 
-The FerretDB source is included in this repo solely as an integration test suite (scorecard). You have sufficient context from the existing Dongo codebase to implement MongoDB compatibility. Do not use FerretDB's implementation as a guide or reference for new code.
+The FerretDB source is included in this repo solely as an integration test suite (scorecard). You have sufficient context from the existing Docudolt codebase to implement MongoDB compatibility. Do not use FerretDB's implementation as a guide or reference for new code.
 
 If you believe you genuinely need to consult FerretDB source to proceed:
 1. **Stop. Do not open any file under `ferretdb/`.**
@@ -106,7 +106,7 @@ make ferretdb-scorecard
 # Summary line shows pass rate
 ```
 
-The scorecard builds Dongo, starts it, runs the FerretDB integration suite
+The scorecard builds Docudolt, starts it, runs the FerretDB integration suite
 against it, and writes results to `.runtime/ferretdb-scorecard.txt`.
 
 ## Critical: Local Runs ≠ CI — Do Not Remove from Skiplist Without CI Confirmation
@@ -120,7 +120,7 @@ skiplist breaks CI even when local runs look clean.
 **Required process for skiplist removals:**
 1. Fix the underlying issue and run locally — test must pass
 2. Push the fix to main (keep the test in the skiplist for now)
-3. Check the GitHub Actions `Dongo FerretDB Scorecard` run for that push
+3. Check the GitHub Actions `Docudolt FerretDB Scorecard` run for that push
 4. Only if CI shows no unexpected failures for that test → then remove it from the skiplist
 5. Push the skiplist change and confirm CI stays green
 

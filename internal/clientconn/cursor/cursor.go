@@ -28,10 +28,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/resource"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/resource"
 )
 
 //go:generate ../../../bin/stringer -linecomment -type Type

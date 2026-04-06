@@ -20,11 +20,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // SortDocuments sorts given documents in place according to the given sorting conditions.
@@ -47,7 +47,7 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 		switch {
 		case sortKey == "$natural":
 		default:
-			// TODO https://github.com/dolthub/dongo/issues/3127
+			// TODO https://github.com/dolthub/docudolt/issues/3127
 			for _, field := range fields {
 				if strings.HasPrefix(field, "$") {
 					return handlererrors.NewCommandErrorMsgWithArgument(
@@ -181,7 +181,7 @@ func ValidateSortDocument(sortDoc *types.Document) (*types.Document, error) {
 				)
 			}
 		default:
-			// TODO https://github.com/dolthub/dongo/issues/3127
+			// TODO https://github.com/dolthub/docudolt/issues/3127
 			for _, field := range fields {
 				if strings.HasPrefix(field, "$") {
 					return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -315,7 +315,7 @@ func isMetaTextScore(value any) bool {
 // and returns it.
 func getSortValue(key string, value any) (int64, error) {
 	// {$meta: "textScore"} is a valid sort value — sort descending by text score.
-	// Dongo assigns score 0 to all docs so stable order is preserved.
+	// Docudolt assigns score 0 to all docs so stable order is preserved.
 	if isMetaTextScore(value) {
 		return -1, nil
 	}

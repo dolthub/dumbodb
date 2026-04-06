@@ -38,7 +38,7 @@ import (
 
 // branchVerifySetup mirrors the Setup section of docs/verify/branch.md.
 // Returns hash1 (commit 1) and hash2 (commit 2, same as main HEAD).
-func branchVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, hash2 string) {
+func branchVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash1, hash2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -53,7 +53,7 @@ func branchVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, h
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 = dongoCommit(t, env, dbName, "commit one")
+	hash1 = docudoltCommit(t, env, dbName, "commit one")
 
 	// Commit 2: second document added.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -61,13 +61,13 @@ func branchVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, h
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 = dongoCommit(t, env, dbName, "commit two")
+	hash2 = docudoltCommit(t, env, dbName, "commit two")
 
 	return hash1, hash2
 }
 
 func TestBranchVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("branchvrfy%d", rand.Int64N(1_000_000))
@@ -80,10 +80,10 @@ func TestBranchVerify(t *testing.T) {
 	t.Run("Scenario1_CreateBranch_ResponseShape", func(t *testing.T) {
 		var result bson.M
 		err := env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Decode(&result)
-		require.NoError(t, err, "dongoBranch must succeed")
+		require.NoError(t, err, "docudoltBranch must succeed")
 
 		assert.Equal(t, "feature", result["branch"], "branch must echo the provided name")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
@@ -95,14 +95,14 @@ func TestBranchVerify(t *testing.T) {
 	t.Run("Scenario2_NewBranchMatchesSourceCommit", func(t *testing.T) {
 		// Create "snapshot" branch from current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "snapshot"},
-		}).Err(), "dongoBranch to create 'snapshot'")
+		}).Err(), "docudoltBranch to create 'snapshot'")
 
 		// Diff main vs snapshot — identical commits → empty collections.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: "snapshot"},
 			{Key: "to", Value: "main"},
 		}).Decode(&raw))
@@ -124,7 +124,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "gamma"},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName+"__feature", "feature adds gamma")
+		docudoltCommit(t, env, dbName+"__feature", "feature adds gamma")
 
 		// main must still have exactly 2 documents.
 		mainCount, err := env.client.Database(dbName+"__main").Collection("items").CountDocuments(ctx, bson.D{})
@@ -146,10 +146,10 @@ func TestBranchVerify(t *testing.T) {
 		// Create "at-commit-one" from the commit-hash rootish at hash1.
 		var result bson.M
 		err := env.client.Database(dbName+"__"+hash1).RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "at-commit-one"},
 		}).Decode(&result)
-		require.NoError(t, err, "dongoBranch from hash rootish must succeed")
+		require.NoError(t, err, "docudoltBranch from hash rootish must succeed")
 
 		assert.Equal(t, "at-commit-one", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -181,10 +181,10 @@ func TestBranchVerify(t *testing.T) {
 		// main~1 resolves to commit 1 (one document).
 		var result bson.M
 		err := env.client.Database(ancDbName+"__main~1").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "back-one"},
 		}).Decode(&result)
-		require.NoError(t, err, "dongoBranch from ancestor expression rootish must succeed")
+		require.NoError(t, err, "docudoltBranch from ancestor expression rootish must succeed")
 
 		assert.Equal(t, "back-one", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -212,7 +212,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Create "merged-branch" from main HEAD.
 		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "merged-branch"},
 		}).Err(), "creating merged-branch must succeed")
 
@@ -220,7 +220,7 @@ func TestBranchVerify(t *testing.T) {
 		// main — delete must succeed.
 		var result bson.M
 		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "merged-branch"},
 			{Key: "d", Value: true},
 		}).Decode(&result), "safe delete of a merged branch must succeed")
@@ -238,7 +238,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Create "unmerged-branch" from main and advance it with an extra commit.
 		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "unmerged-branch"},
 		}).Err(), "creating unmerged-branch must succeed")
 
@@ -247,11 +247,11 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "extra"},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, delDbName+"__unmerged-branch", "extra commit on unmerged-branch")
+		docudoltCommit(t, env, delDbName+"__unmerged-branch", "extra commit on unmerged-branch")
 
 		// Safe delete must be rejected because unmerged-branch has a commit not in main.
 		err = env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "unmerged-branch"},
 			{Key: "d", Value: true},
 		}).Err()
@@ -267,7 +267,7 @@ func TestBranchVerify(t *testing.T) {
 
 		// Create "force-branch" and advance it with an extra commit.
 		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "force-branch"},
 		}).Err(), "creating force-branch must succeed")
 
@@ -276,12 +276,12 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "gone"},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, delDbName+"__force-branch", "unmerged commit on force-branch")
+		docudoltCommit(t, env, delDbName+"__force-branch", "unmerged commit on force-branch")
 
 		// Force delete must succeed regardless of merge status.
 		var result bson.M
 		require.NoError(t, env.client.Database(delDbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "force-branch"},
 			{Key: "D", Value: true},
 		}).Decode(&result), "force delete must succeed even with unmerged commits")

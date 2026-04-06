@@ -22,10 +22,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dolthub/dongo/internal/handler/common/aggregations/stages"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // noopOutWriter is a writer that captures the call args without doing anything.

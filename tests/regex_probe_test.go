@@ -26,7 +26,7 @@ import (
 
 // TestProbeModNaNDivisor is a regression test for do-10z3 / do-9ni.
 // When $mod is used as a QUERY operator with a NaN divisor (e.g. {x: {$mod: [NaN, 0]}}),
-// dongo must return a BadValue error (code 2) rather than dropping the connection (code 0).
+// docudolt must return a BadValue error (code 2) rather than dropping the connection (code 0).
 //
 // Root cause: wire.CheckNaNs was set to true, causing NaN values to be rejected at the
 // wire layer by dropping the connection instead of returning a proper MongoDB error.
@@ -35,7 +35,7 @@ import (
 func TestProbeModNaNDivisor(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

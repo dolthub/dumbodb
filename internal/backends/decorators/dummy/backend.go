@@ -22,7 +22,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/docudolt/internal/backends"
 )
 
 // backend implements backends.Backend interface by delegating all methods to the wrapped backend.

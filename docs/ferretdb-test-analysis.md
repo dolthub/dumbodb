@@ -61,7 +61,7 @@ server selection error: server selection timeout, current topology:
 ```
 
 The test binary ran on macOS/ARM64 (stack traces show `asm_arm64.s` and path
-`/Users/neil/Documents/dongo/ferretdb/integration/`) — not inside Docker.
+`/Users/neil/Documents/docudolt/ferretdb/integration/`) — not inside Docker.
 macOS defaults to a low per-process file-descriptor limit (256–1024), which a
 concurrent stress test easily exhausts.
 
@@ -124,13 +124,13 @@ matching the projection from the 7.0.31 analysis.
 
 ### 6. No New Issues Filed
 
-This analysis does not surface any dongo-specific bugs or new actionable items
+This analysis does not surface any docudolt-specific bugs or new actionable items
 beyond what was identified in the 7.0.31 run (hq-u4ih8). The auth/SASL
 infrastructure gap remains the only known non-version failure category.
 
 The delta methodology from hq-u4ih8 still applies unchanged: failures present
-in `ferretdb-scorecard` (dongo) but **absent** in a clean 7.0.8 reference run
-are genuine dongo-vs-MongoDB gaps.
+in `ferretdb-scorecard` (docudolt) but **absent** in a clean 7.0.8 reference run
+are genuine docudolt-vs-MongoDB gaps.
 
 ---
 
@@ -153,7 +153,7 @@ The 25 remaining failures fall into two root causes:
 2. **7.0.8 vs 7.0.31 minor-version drift** (15 tests): Error naming, error codes,
    response shapes, and bitwise behaviour changed between patch versions.
 
-**None of the 25 failures are dongo bugs.** The fix is still to use MongoDB 7.0.8
+**None of the 25 failures are docudolt bugs.** The fix is still to use MongoDB 7.0.8
 exactly — pinned via Docker — as FerretDB's own test infrastructure does.
 
 ---
@@ -182,8 +182,8 @@ MongoDB 7.0.31 added new fields to some administrative command responses that
 | `TestServerStatusCommand` | 7.0.31 adds `profiler`, `queues`, and `systemProfile` (inside `catalogStats`) fields to the `serverStatus` response |
 | `TestBuildInfoCommand` | 7.0.31 running on macOS adds a `macOS` key to `buildInfo`; test does not expect it |
 
-**Dongo relevance**: None. These are upstream minor-version additions to MongoDB's
-own responses. Not observable in dongo behaviour.
+**Docudolt relevance**: None. These are upstream minor-version additions to MongoDB's
+own responses. Not observable in docudolt behaviour.
 
 ### Category B: Auth/SASL Tests Requiring User Configuration (10 tests)
 
@@ -215,10 +215,10 @@ running without `--auth` flag allows unauthenticated finds.
 | `TestLogoutCommandAuthenticatedUser` | Expects an error on logout; gets nil (no auth mode) |
 | `TestHelloIsMasterOpQuerySpeculative` | Speculative auth via OP_QUERY: `No SASL session state found` |
 
-**Dongo relevance**: Not directly. These are suite infrastructure failures —
+**Docudolt relevance**: Not directly. These are suite infrastructure failures —
 the tests need a MongoDB with real auth users and `--auth` enabled. The
 scorecard intentionally runs without auth; this category would also fail against
-any no-auth MongoDB. When comparing the dongo ferretdb-scorecard to this
+any no-auth MongoDB. When comparing the docudolt ferretdb-scorecard to this
 reference, these 10 tests are equally broken on both sides and should be
 excluded from the delta.
 
@@ -232,7 +232,7 @@ is stable regardless of major version.
 |------|--------|
 | `TestHostInfoCommand` | 7.0.31 adds `numCoresAvailableToProcess` field to the `system` sub-document of `hostInfo` |
 
-**Dongo relevance**: None. Minor kernel metadata field not present in 7.0.8.
+**Docudolt relevance**: None. Minor kernel metadata field not present in 7.0.8.
 
 ### Category D: Error `Name` Changed — `Location40414` → `IDLFailedToParse` (4 tests)
 
@@ -247,8 +247,8 @@ required" errors. Error code (40414) and message are identical; only the `Name`
 | `TestDropIndexesCommandErrors/MissingIndexField` | `Location40414` | `IDLFailedToParse` |
 | `TestCreateIndexesCommandInvalidSpec/MissingIndexes` | `Location40414` | `IDLFailedToParse` |
 
-**Dongo relevance**: Low. The error code is the same; only the symbolic name
-changed. dongo should target the same code (40414). If dongo uses `Location40414`,
+**Docudolt relevance**: Low. The error code is the same; only the symbolic name
+changed. docudolt should target the same code (40414). If docudolt uses `Location40414`,
 it matches 7.0.8. If it uses `IDLFailedToParse`, it matches 7.0.31+. The
 message is the signal; the name is an internal alias.
 
@@ -265,9 +265,9 @@ Several error conditions changed their message text or error code between
 | `TestDistinctCommandErrors/CollectionTypeObject` | Code 73, `"Failed to parse namespace element"` | Code 73, `"collection name has invalid type object"` | Message changed |
 | `TestCompactCommandNonExistent/NonExistentDB` | Code 26, `"database does not exist"` | Code 26, `"collection does not exist"` | Message changed |
 
-**Dongo relevance**: Medium for the `TestQueryBadFindType` code change. dongo
+**Docudolt relevance**: Medium for the `TestQueryBadFindType` code change. docudolt
 should match 7.0.8 behaviour (code 73, `InvalidNamespace`) for namespace type
-validation. If dongo returns code 2 (`BadValue`) for these cases it would match
+validation. If docudolt returns code 2 (`BadValue`) for these cases it would match
 7.0.31 but deviate from 7.0.8. Worth noting but not blocking — the test suite
 is the authoritative reference here.
 
@@ -286,8 +286,8 @@ but 7.0.31 excludes it.
 in the prior analysis). This confirms the behaviour changed between 7.0.8 and
 7.0.31, and stayed changed in 8.x.
 
-**Dongo relevance**: High if dongo aims to match 7.0.8 bitwise semantics. If
-dongo returns the same results as 7.0.31 (excluding bare decimal128), it would
+**Docudolt relevance**: High if docudolt aims to match 7.0.8 bitwise semantics. If
+docudolt returns the same results as 7.0.31 (excluding bare decimal128), it would
 pass tests against this reference but differ from the 7.0.8 target. This is
 a genuine bitwise decimal128 edge case worth tracking.
 
@@ -295,7 +295,7 @@ a genuine bitwise decimal128 edge case worth tracking.
 
 ## 3. Summary by Root Cause
 
-| Root Cause | Tests | Dongo-relevant? |
+| Root Cause | Tests | Docudolt-relevant? |
 |------------|-------|----------------|
 | Auth infrastructure (no users, no --auth) | 10 | No — suite issue |
 | 7.0.31 response shape additions | 3 | No — minor version additions |
@@ -370,15 +370,15 @@ fi
 
 ---
 
-## 7. Delta Methodology for Dongo Scoring
+## 7. Delta Methodology for Docudolt Scoring
 
-When comparing `ferretdb-scorecard` (dongo) against `mongodb-reference` (7.0.31
+When comparing `ferretdb-scorecard` (docudolt) against `mongodb-reference` (7.0.31
 for now), the meaningful metric is failures present in ferretdb-scorecard **but
 absent** in mongodb-reference. The 25 baseline failures are noise, not bugs.
 
 Once 7.0.8 is in use as the reference, the delta will be much cleaner:
 - Any remaining failures in `ferretdb-scorecard` not in `mongodb-reference`
-  are genuine dongo-vs-MongoDB gaps.
-- The bitwise decimal128 category (F) is worth watching specifically — if dongo
-  passes those tests, it confirms dongo matches 7.0.8 semantics for decimal128
+  are genuine docudolt-vs-MongoDB gaps.
+- The bitwise decimal128 category (F) is worth watching specifically — if docudolt
+  passes those tests, it confirms docudolt matches 7.0.8 semantics for decimal128
   bitwise operations.

@@ -21,16 +21,16 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/handler/users"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
-	"github.com/dolthub/dongo/internal/util/password"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/handler/users"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/password"
 )
 
 // MsgUpdateUser implements `updateUser` command.
@@ -63,7 +63,7 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	// Accept any roles value; dongo doesn't enforce RBAC but must not reject
+	// Accept any roles value; docudolt doesn't enforce RBAC but must not reject
 	// non-empty roles to be compatible with MongoDB clients.
 	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment", "roles")
 

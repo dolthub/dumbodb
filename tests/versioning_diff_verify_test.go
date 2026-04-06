@@ -38,12 +38,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// diffResult holds the decoded top-level response from a dongoDiff command.
+// diffResult holds the decoded top-level response from a docudoltDiff command.
 type diffResult struct {
 	Collections []collDiffResult
 }
 
-// collDiffResult holds the decoded per-collection section of a dongoDiff response.
+// collDiffResult holds the decoded per-collection section of a docudoltDiff response.
 type collDiffResult struct {
 	Name     string
 	Added    []bson.M
@@ -51,7 +51,7 @@ type collDiffResult struct {
 	Modified []modifiedDocResult
 }
 
-// modifiedDocResult holds one entry from the "modified" list in a dongoDiff response.
+// modifiedDocResult holds one entry from the "modified" list in a docudoltDiff response.
 type modifiedDocResult struct {
 	ID   any
 	Diff []fieldDiffResult
@@ -65,16 +65,16 @@ type fieldDiffResult struct {
 	To   any
 }
 
-// decodeDiffResult parses the raw bson.M from a dongoDiff RunCommand into the
+// decodeDiffResult parses the raw bson.M from a docudoltDiff RunCommand into the
 // typed helpers above, failing the test if the shape is unexpected.
 func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 	t.Helper()
 
 	rawColls, ok := raw["collections"]
-	require.True(t, ok, "dongoDiff result missing 'collections' field")
+	require.True(t, ok, "docudoltDiff result missing 'collections' field")
 
 	collsArr, ok := rawColls.(bson.A)
-	require.True(t, ok, "dongoDiff 'collections' is not an array, got %T", rawColls)
+	require.True(t, ok, "docudoltDiff 'collections' is not an array, got %T", rawColls)
 
 	var out diffResult
 
@@ -155,7 +155,7 @@ func findFieldDiffResult(md modifiedDocResult, path string) *fieldDiffResult {
 
 // diffVerifySetup mirrors the Setup section of docs/verify/diff.md.
 // Returns hashBase (the baseline commit hash).
-func diffVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hashBase string) {
+func diffVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hashBase string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -180,7 +180,7 @@ func diffVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hashBase s
 	})
 	require.NoError(t, err)
 
-	hashBase = dongoCommit(t, env, dbName, "baseline")
+	hashBase = docudoltCommit(t, env, dbName, "baseline")
 
 	// Three working-set changes (NOT committed):
 	//   _id:3 added
@@ -206,7 +206,7 @@ func diffVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hashBase s
 }
 
 func TestDiffVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -223,7 +223,7 @@ func TestDiffVerify(t *testing.T) {
 	t.Run("Scenario1_WorkingSetVsHEAD", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -268,12 +268,12 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_DiffTwoHashes", func(t *testing.T) {
 		// Commit the working-set changes.
-		hashNew = dongoCommit(t, env, dbName, "three changes")
+		hashNew = docudoltCommit(t, env, dbName, "three changes")
 		require.NotEmpty(t, hashNew)
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBase},
 			{Key: "to", Value: hashNew},
 		}).Decode(&raw))
@@ -308,7 +308,7 @@ func TestDiffVerify(t *testing.T) {
 		// After committing in Scenario 2, working set matches HEAD.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -329,7 +329,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBase},
 		}).Decode(&raw))
 
@@ -379,7 +379,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "name", Value: "gamma"}, {Key: "v", Value: int32(3)}})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName, "multi baseline")
+		docudoltCommit(t, env, dbName, "multi baseline")
 
 		// Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4.
 		_, err = multi.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
@@ -394,7 +394,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -426,7 +426,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_SingleDocMixedFieldOps", func(t *testing.T) {
 		// Commit the working set from Scenario 5 first so HEAD is clean.
-		dongoCommit(t, env, dbName, "pre-scenario6")
+		docudoltCommit(t, env, dbName, "pre-scenario6")
 
 		mf := env.client.Database(dbName).Collection("mixedfields")
 
@@ -437,7 +437,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "y", Value: "remove-me"},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName, "mixedfields baseline")
+		docudoltCommit(t, env, dbName, "mixedfields baseline")
 
 		// Replace: x modified, y removed, z added.
 		_, err = mf.ReplaceOne(ctx,
@@ -452,7 +452,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -495,7 +495,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FieldTypeChange", func(t *testing.T) {
 		// Commit working set from Scenario 6 for a clean HEAD.
-		dongoCommit(t, env, dbName, "pre-scenario7")
+		docudoltCommit(t, env, dbName, "pre-scenario7")
 
 		tc := env.client.Database(dbName).Collection("typechg")
 
@@ -506,7 +506,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "stable", Value: "unchanged"},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName, "typechg baseline")
+		docudoltCommit(t, env, dbName, "typechg baseline")
 
 		// Replace: val changes from number to string.
 		_, err = tc.ReplaceOne(ctx,
@@ -521,7 +521,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
@@ -552,18 +552,18 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
 		// Commit any pending working set so we start from a clean HEAD.
-		dongoCommit(t, env, dbName, "pre-scenario9")
+		docudoltCommit(t, env, dbName, "pre-scenario9")
 
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "rootishtest"},
-		}).Err(), "dongoBranch to create 'rootishtest'")
+		}).Err(), "docudoltBranch to create 'rootishtest'")
 
 		rootish := env.client.Database(dbName + "__rootishtest")
 
 		// Two commits on main — feature branch stays behind.
-		hashC1 := dongoCommit(t, env, dbName, "scenario9-c1")
+		hashC1 := docudoltCommit(t, env, dbName, "scenario9-c1")
 
 		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
@@ -571,13 +571,13 @@ func TestDiffVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC2 := dongoCommit(t, env, dbName, "scenario9-c2")
+		hashC2 := docudoltCommit(t, env, dbName, "scenario9-c2")
 
 		// 9a: from=HEAD~1, to=HEAD on main connection — HEAD resolves to c2.
 		// Expect _id:1 added (delta between c1 and c2).
 		var raw9a bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: "HEAD~1"},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9a))
@@ -592,7 +592,7 @@ func TestDiffVerify(t *testing.T) {
 		// Same result as 9a.
 		var raw9b bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC1},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9b))
@@ -611,7 +611,7 @@ func TestDiffVerify(t *testing.T) {
 		// So _id:1 should appear as removed.
 		var raw9c bson.M
 		require.NoError(t, rootish.RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC2},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9c))
@@ -626,7 +626,7 @@ func TestDiffVerify(t *testing.T) {
 		// rootishtest HEAD == c1 == hashC1 → identical → empty diff.
 		var raw9d bson.M
 		require.NoError(t, rootish.RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC1},
 			{Key: "to", Value: "HEAD"},
 		}).Decode(&raw9d))
@@ -639,7 +639,7 @@ func TestDiffVerify(t *testing.T) {
 		// rootishtest = c1, main = c2: expect _id:1 added.
 		var raw9e bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: "rootishtest"},
 			{Key: "to", Value: "main"},
 		}).Decode(&raw9e))
@@ -654,7 +654,7 @@ func TestDiffVerify(t *testing.T) {
 		// Inverts 9a: _id:1 was added going forward, so going backward it appears as removed.
 		var raw9f bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: "HEAD"},
 			{Key: "to", Value: "HEAD~1"},
 		}).Decode(&raw9f))
@@ -670,7 +670,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9e showed _id:1 added going rootishtest→main; reversed: _id:1 is removed.
 		var raw9g bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 			{Key: "from", Value: "main"},
 			{Key: "to", Value: "rootishtest"},
 		}).Decode(&raw9g))
@@ -687,7 +687,7 @@ func TestDiffVerify(t *testing.T) {
 
 	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
 		// Commit working set from Scenario 7 for a clean HEAD.
-		dongoCommit(t, env, dbName, "pre-scenario8")
+		docudoltCommit(t, env, dbName, "pre-scenario8")
 
 		nested := env.client.Database(dbName).Collection("nested")
 
@@ -701,7 +701,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "name", Value: "alice"},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName, "nested baseline")
+		docudoltCommit(t, env, dbName, "nested baseline")
 
 		// Update: only address.city changes.
 		_, err = nested.UpdateOne(ctx,
@@ -712,7 +712,7 @@ func TestDiffVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoDiff", Value: int32(1)},
+			{Key: "docudoltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)

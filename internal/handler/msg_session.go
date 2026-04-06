@@ -21,14 +21,14 @@ import (
 	"github.com/FerretDB/wire"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgStartSession implements the `startSession` command.
 //
-// Dongo does not implement multi-document transactions, but the driver
+// Docudolt does not implement multi-document transactions, but the driver
 // requires a valid session ID to annotate operations. We return a
 // well-formed session document so the driver can proceed. Operations
 // tagged with lsid/txnNumber are handled on a per-command basis (the
@@ -56,7 +56,7 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // MsgCommitTransaction implements the `commitTransaction` command.
 //
-// Since Dongo does not support multi-document ACID transactions, this
+// Since Docudolt does not support multi-document ACID transactions, this
 // is a no-op acknowledgement. Individual operations within a
 // "transaction" are applied immediately without isolation.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -69,7 +69,7 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 
 // MsgAbortTransaction implements the `abortTransaction` command.
 //
-// Since Dongo does not support multi-document ACID transactions, this
+// Since Docudolt does not support multi-document ACID transactions, this
 // is a no-op acknowledgement. Operations already applied cannot be
 // rolled back.
 func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {

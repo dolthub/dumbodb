@@ -25,15 +25,15 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/dongo/build/version"
-	"github.com/dolthub/dongo/internal/bson"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/debugbuild"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/logging"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/build/version"
+	"github.com/dolthub/docudolt/internal/bson"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/debugbuild"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgGetLog implements `getLog` command.
@@ -105,7 +105,7 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 		startupWarnings := []string{
 			fmt.Sprintf("Powered by FerretDB %s%s.", info.Version, b),
-			"Please star us on GitHub: https://github.com/dolthub/dongo.",
+			"Please star us on GitHub: https://github.com/dolthub/docudolt.",
 		}
 
 		if debugbuild.Enabled {

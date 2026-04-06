@@ -5,16 +5,16 @@
 
 load helpers
 
-DONGO_PORT=37028
+DOCUDOLT_PORT=37028
 
 setup() {
-    DONGO_DATA_DIR="$(mktemp -d)"
-    start_dongo "$DONGO_DATA_DIR" "$DONGO_PORT"
+    DOCUDOLT_DATA_DIR="$(mktemp -d)"
+    start_docudolt "$DOCUDOLT_DATA_DIR" "$DOCUDOLT_PORT"
 }
 
 teardown() {
-    stop_dongo
-    rm -rf "$DONGO_DATA_DIR"
+    stop_docudolt
+    rm -rf "$DOCUDOLT_DATA_DIR"
 }
 
 # Helper: insert a doc then find it, asserting both succeed and the findOne
@@ -39,7 +39,7 @@ assert_id_roundtrip() {
 
 @test '_id as ObjectId' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_objectid" \
         "ObjectId('aabbccddeeff001122334455')" \
         '._id == "aabbccddeeff001122334455" and .k == 1 and .v == 42'
@@ -47,7 +47,7 @@ assert_id_roundtrip() {
 
 @test '_id as string' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_string" \
         "'hello-world'" \
         '._id == "hello-world" and .k == 1 and .v == 42'
@@ -55,7 +55,7 @@ assert_id_roundtrip() {
 
 @test '_id as int32' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_int32" \
         "NumberInt(42)" \
         '._id == 42 and .k == 1 and .v == 42'
@@ -66,7 +66,7 @@ assert_id_roundtrip() {
     # cannot represent int64 natively.
     # 9007199254740993 = 0x0020000000000001 → low=1, high=2097152
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_int64" \
         "NumberLong('9007199254740993')" \
         '._id.low == 1 and ._id.high == 2097152 and .k == 1 and .v == 42'
@@ -74,7 +74,7 @@ assert_id_roundtrip() {
 
 @test '_id as double' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_double" \
         "3.14" \
         '._id == 3.14 and .k == 1 and .v == 42'
@@ -82,7 +82,7 @@ assert_id_roundtrip() {
 
 @test '_id as bool' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_bool" \
         "true" \
         '._id == true and .k == 1 and .v == 42'
@@ -91,7 +91,7 @@ assert_id_roundtrip() {
 @test '_id as binary (BinData)' {
     # BinData(0, ...) round-trips as the base64 string in JSON.stringify output.
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_binary" \
         "BinData(0, 'aGVsbG8=')" \
         '._id == "aGVsbG8=" and .k == 1 and .v == 42'
@@ -100,14 +100,14 @@ assert_id_roundtrip() {
 @test '_id as UUID' {
     # UUID is BinData subtype 4.  mongosh decodes it back to UUID string form.
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_uuid" \
         "UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')" \
         '._id == "6ba7b810-9dad-11d1-80b4-00c04fd430c8" and .k == 1 and .v == 42'
 }
 
 @test '_id as embedded document' {
-    local uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+    local uri="mongodb://127.0.0.1:${DOCUDOLT_PORT}/test"
 
     # Insert doc1: _id with key order {a, b}
     run mongosh "$uri" --quiet --eval \
@@ -142,7 +142,7 @@ assert_id_roundtrip() {
 
 @test '_id as Date' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_date" \
         "new Date('2024-01-01T00:00:00.000Z')" \
         '.k == 1 and .v == 42'
@@ -150,7 +150,7 @@ assert_id_roundtrip() {
 
 @test '_id as Decimal128' {
     assert_id_roundtrip \
-        "mongodb://127.0.0.1:${DONGO_PORT}/test" \
+        "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" \
         "col_decimal" \
         "NumberDecimal('123.456')" \
         '.k == 1 and .v == 42'

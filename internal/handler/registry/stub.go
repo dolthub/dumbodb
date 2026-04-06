@@ -15,8 +15,8 @@
 package registry
 
 import (
-	"github.com/dolthub/dongo/internal/backends/stub"
-	"github.com/dolthub/dongo/internal/handler"
+	"github.com/dolthub/docudolt/internal/backends/stub"
+	"github.com/dolthub/docudolt/internal/handler"
 )
 
 func init() {

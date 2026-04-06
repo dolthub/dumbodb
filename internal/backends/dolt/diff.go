@@ -31,9 +31,9 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
 )
 
 // rootishIsReadOnly reports whether a rootish is read-only (commit hash or ancestor expression).
@@ -161,7 +161,7 @@ func amFromAncestorExpr(ctx context.Context, state *dbState, rootish string) (pr
 //  3. Branch name — resolved via refs/heads/<rootish>.
 //  4. Tag name — resolved via refs/tags/<rootish>.
 //
-// This is used for branch creation (DongoBranch) which needs the commit hash, not the AM.
+// This is used for branch creation (DocudoltBranch) which needs the commit hash, not the AM.
 func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish string) (hash.Hash, error) {
 	// Case 1: bare commit hash.
 	if h, ok := hash.MaybeParse(rootish); ok && len(rootish) == 32 {

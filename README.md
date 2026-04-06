@@ -1,27 +1,27 @@
-# Dongo
+# Docudolt
 
-Dongo is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
+Docudolt is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
 
 ## Build
 
 ```bash
-git clone --recurse-submodules https://github.com/dolthub/dongo
-cd dongo
+git clone --recurse-submodules https://github.com/dolthub/docudolt
+cd docudolt
 make build
-# Binary: .runtime/bin/dongo
+# Binary: .runtime/bin/docudolt
 ```
 
 Or manually:
 
 ```bash
-go build -o /tmp/dongo ./cmd/dongo/
+go build -o /tmp/docudolt ./cmd/docudolt/
 ```
 
 ## Run
 
 ```bash
-mkdir -p /tmp/dongo-data
-.runtime/bin/dongo --data-dir /tmp/dongo-data
+mkdir -p /tmp/docudolt-data
+.runtime/bin/docudolt --data-dir /tmp/docudolt-data
 ```
 
 The server listens on `127.0.0.1:27017` by default.
@@ -48,28 +48,28 @@ mongosh --eval 'db.test.insertOne({x:1})' mongodb://127.0.0.1:27017/testdb
 
 ## Test suites
 
-### MongoDB parity tests (dolthub/dongo-parity-testing)
+### MongoDB parity tests (dolthub/docudolt-parity-testing)
 
-MongoDB compatibility tests live in a separate repository: **dolthub/dongo-parity-testing**.
+MongoDB compatibility tests live in a separate repository: **dolthub/docudolt-parity-testing**.
 
 That repo uses a dual-client harness (`PairTest`) that runs each operation against
-both a real MongoDB 8 instance and Dongo, then compares the results. Tests are
+both a real MongoDB 8 instance and Docudolt, then compares the results. Tests are
 labelled with three support levels:
 
 | Label | Meaning |
 |-------|---------|
-| `DongoFull` | Both MongoDB and Dongo are exercised; divergences break CI |
-| `DongoXFail` | Both are exercised; Dongo divergence is recorded but not fatal |
-| `DongoMongoOnly` | MongoDB only; Dongo skipped (auth, sharding, GridFS, etc.) |
+| `DocudoltFull` | Both MongoDB and Docudolt are exercised; divergences break CI |
+| `DocudoltXFail` | Both are exercised; Docudolt divergence is recorded but not fatal |
+| `DocudoltMongoOnly` | MongoDB only; Docudolt skipped (auth, sharding, GridFS, etc.) |
 
-**Policy**: `tests/` in this repo is for dongo-specific tests only. MongoDB
-compatibility tests belong in dolthub/dongo-parity-testing.
+**Policy**: `tests/` in this repo is for docudolt-specific tests only. MongoDB
+compatibility tests belong in dolthub/docudolt-parity-testing.
 
-### Dongo-specific regression tests (tests/)
+### Docudolt-specific regression tests (tests/)
 
-The `tests/` package contains regression tests for dongo-internal behaviors
+The `tests/` package contains regression tests for docudolt-internal behaviors
 that have no MongoDB equivalent — things like internal resource management,
-cursor lifecycle, and implementation-specific edge cases. Dongo is built and
+cursor lifecycle, and implementation-specific edge cases. Docudolt is built and
 started automatically by the test harness.
 
 ```bash
@@ -80,24 +80,24 @@ go test -v ./tests/
 go test -v -run TestFind_CursorCleanupOnFilterError ./tests/
 ```
 
-The binary is cached at `.runtime/bin/dongo` after the first build.
+The binary is cached at `.runtime/bin/docudolt` after the first build.
 Pre-build it explicitly with:
 
 ```bash
 make build
-# or: go build -o .runtime/bin/dongo ./cmd/dongo/
+# or: go build -o .runtime/bin/docudolt ./cmd/docudolt/
 ```
 
 ### Repo layout
 
 ```
-tests/                      Dongo-specific regression tests
+tests/                      Docudolt-specific regression tests
   query_test.go             Test harness + regression tests
   bats/                     Bats shell integration tests (owner-managed, do not edit)
-cmd/dongo/                  Dongo server entry point
-internal/                   Dongo implementation
+cmd/docudolt/                  Docudolt server entry point
+internal/                   Docudolt implementation
 .github/workflows/
-  dongo-scorecard.yml       FerretDB scorecard CI
+  docudolt-scorecard.yml       FerretDB scorecard CI
   mongodb-reference.yml     MongoDB reference baseline CI
   bats.yml                  Bats shell test CI
 ```
@@ -117,29 +117,29 @@ git submodule update --init --recursive
 
 | Make target | Target under test | Purpose |
 |---|---|---|
-| `ferretdb-scorecard` | Dongo | Dongo's current pass rate |
-| `ferretdb-compat` | Dongo vs MongoDB | Diff Dongo against MongoDB behavior |
+| `ferretdb-scorecard` | Docudolt | Docudolt's current pass rate |
+| `ferretdb-compat` | Docudolt vs MongoDB | Diff Docudolt against MongoDB behavior |
 | `mongodb-reference` | Real MongoDB | Gold-standard baseline |
 | `ferretdb-reference` | FerretDB itself | FerretDB baseline |
 
-Run the reference targets to determine whether a failure is a **dongo-specific
+Run the reference targets to determine whether a failure is a **docudolt-specific
 regression** or a **known FerretDB/MongoDB limitation**.  If `mongodb-reference`
-also fails a test, it is not a dongo bug.
+also fails a test, it is not a docudolt bug.
 
-### Dongo scorecard
+### Docudolt scorecard
 
 ```bash
 make ferretdb-scorecard
 # Results: .runtime/ferretdb-scorecard.txt
 ```
 
-Builds Dongo, starts it on `127.0.0.1:27017`, runs the full FerretDB integration
-suite with `-target-backend=mongodb` (Dongo speaks the MongoDB wire protocol), and
+Builds Docudolt, starts it on `127.0.0.1:27017`, runs the full FerretDB integration
+suite with `-target-backend=mongodb` (Docudolt speaks the MongoDB wire protocol), and
 writes results to `.runtime/ferretdb-scorecard.txt`.
 
 **Understanding failures:**
 
-- **Real dongo bugs** — features not yet implemented (expected at this stage).
+- **Real docudolt bugs** — features not yet implemented (expected at this stage).
 - **Compat tests** — files named `*_compat_test.go` compare the target against a
   second MongoDB instance.  Without `-compat-url` they are automatically skipped
   (not failed) — a `SKIP` in the output is not a failure.
@@ -154,7 +154,7 @@ go test -count=1 -timeout=60s -tags=ferretdb_dev -v \
   -target-url=mongodb://127.0.0.1:27017/ .
 ```
 
-### Compat suite: Dongo vs MongoDB
+### Compat suite: Docudolt vs MongoDB
 
 ```bash
 # Start MongoDB with auth on port 47017:
@@ -164,9 +164,9 @@ make ferretdb-compat
 # Results: .runtime/ferretdb-compat.txt
 ```
 
-Runs the `*_compat_test.go` files, which send each operation to both Dongo
+Runs the `*_compat_test.go` files, which send each operation to both Docudolt
 (`-target-url`) and MongoDB (`-compat-url`) and assert that the results match.
-Differences indicate dongo behaviour that diverges from MongoDB.
+Differences indicate docudolt behaviour that diverges from MongoDB.
 
 ### MongoDB reference baseline
 
@@ -180,7 +180,7 @@ make mongodb-reference
 
 Runs the full integration suite against real MongoDB.  Use this to find the
 "gold standard" pass rate.  Any test that fails here is a FerretDB test-suite
-issue or a MongoDB limitation, **not** a dongo bug.
+issue or a MongoDB limitation, **not** a docudolt bug.
 
 Override defaults with environment variables:
 

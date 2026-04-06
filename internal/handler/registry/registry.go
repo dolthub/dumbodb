@@ -20,10 +20,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dolthub/dongo/internal/clientconn/connmetrics"
-	"github.com/dolthub/dongo/internal/handler"
-	"github.com/dolthub/dongo/internal/util/password"
-	"github.com/dolthub/dongo/internal/util/state"
+	"github.com/dolthub/docudolt/internal/clientconn/connmetrics"
+	"github.com/dolthub/docudolt/internal/handler"
+	"github.com/dolthub/docudolt/internal/util/password"
+	"github.com/dolthub/docudolt/internal/util/state"
 )
 
 // newHandlerFunc represents a function that constructs a new handler.

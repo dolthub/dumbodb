@@ -18,12 +18,12 @@ import (
 	"context"
 	"errors"
 
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/common/aggregations"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // sort represents $sort stage.
@@ -50,7 +50,7 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	// TODO https://github.com/dolthub/dongo/issues/2090
+	// TODO https://github.com/dolthub/docudolt/issues/2090
 
 	return &sort{
 		fields: fields,
@@ -63,7 +63,7 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 func (s *sort) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	iter, err := common.SortIterator(iter, closer, s.fields)
 	if err != nil {
-		// TODO https://github.com/dolthub/dongo/issues/3125
+		// TODO https://github.com/dolthub/docudolt/issues/3125
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(

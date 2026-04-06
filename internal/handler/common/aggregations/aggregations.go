@@ -18,8 +18,8 @@ package aggregations
 import (
 	"context"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
 )
 
 // Stage is a common interface for all aggregation stages.

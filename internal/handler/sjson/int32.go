@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // int32Type represents BSON 32-bit integer type.

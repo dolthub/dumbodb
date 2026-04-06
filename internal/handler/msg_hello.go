@@ -23,12 +23,12 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgHello implements `hello` command.
@@ -98,7 +98,7 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	if name != "" {
 		// That does not work for TLS-only setups, IPv6 addresses, etc.
 		// The proper solution is to support `replSetInitiate` command.
-		// TODO https://github.com/dolthub/dongo/issues/3936
+		// TODO https://github.com/dolthub/docudolt/issues/3936
 		if strings.HasPrefix(tcpHost, ":") {
 			tcpHost = "localhost" + tcpHost
 		}

@@ -20,7 +20,7 @@ import (
 
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // CommandError represents wire protocol command error.

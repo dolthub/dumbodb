@@ -27,7 +27,7 @@ import (
 )
 
 // aggregate runs a pipeline and decodes the first result into result.
-func aggregate(tb testing.TB, env *dongoTestEnv, coll string, pipeline bson.A) []bson.D {
+func aggregate(tb testing.TB, env *docudoltTestEnv, coll string, pipeline bson.A) []bson.D {
 	tb.Helper()
 
 	ctx := context.Background()
@@ -41,11 +41,11 @@ func aggregate(tb testing.TB, env *dongoTestEnv, coll string, pipeline bson.A) [
 	return results
 }
 
-// TestExpr_abs tests the $abs aggregation expression operator. (DongoFull)
+// TestExpr_abs tests the $abs aggregation expression operator. (DocudoltFull)
 // $abs returns the absolute value of a number.
 func TestExpr_abs(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -70,11 +70,11 @@ func TestExpr_abs(t *testing.T) {
 	assert.Equal(t, 2.5, results[2].Map()["r"])
 }
 
-// TestExpr_exp_ln tests the $exp and $ln aggregation expression operators. (DongoFull)
+// TestExpr_exp_ln tests the $exp and $ln aggregation expression operators. (DocudoltFull)
 // $exp raises e to the given power; $ln computes the natural logarithm.
 func TestExpr_exp_ln(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -103,11 +103,11 @@ func TestExpr_exp_ln(t *testing.T) {
 	assert.InDelta(t, 1.0, lnVal, 1e-9, "$ln(e) should be 1")
 }
 
-// TestExpr_zip tests the $zip aggregation expression operator. (DongoFull)
+// TestExpr_zip tests the $zip aggregation expression operator. (DocudoltFull)
 // $zip transposes an array of arrays.
 func TestExpr_zip(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -135,11 +135,11 @@ func TestExpr_zip(t *testing.T) {
 	assert.Equal(t, "one", first[1])
 }
 
-// TestExpr_dateAdd tests the $dateAdd aggregation expression operator. (DongoFull)
+// TestExpr_dateAdd tests the $dateAdd aggregation expression operator. (DocudoltFull)
 // $dateAdd adds a duration to a date.
 func TestExpr_dateAdd(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -183,11 +183,11 @@ func TestExpr_dateAdd(t *testing.T) {
 	assert.Equal(t, expected.UTC(), gotTime)
 }
 
-// TestExpr_dateDiff tests the $dateDiff aggregation expression operator. (DongoFull)
+// TestExpr_dateDiff tests the $dateDiff aggregation expression operator. (DocudoltFull)
 // $dateDiff returns the difference between two dates in the specified unit.
 func TestExpr_dateDiff(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -217,11 +217,11 @@ func TestExpr_dateDiff(t *testing.T) {
 	assert.Equal(t, int64(3), got, "$dateDiff of 3 months")
 }
 
-// TestExpr_cond_true tests the $cond aggregation expression operator. (DongoFull)
+// TestExpr_cond_true tests the $cond aggregation expression operator. (DocudoltFull)
 // $cond returns one value if the condition is true, another if false.
 func TestExpr_cond_true(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -251,10 +251,10 @@ func TestExpr_cond_true(t *testing.T) {
 	assert.Equal(t, "pass", results[1].Map()["grade"])
 }
 
-// TestExpr_convert_int_to_string tests the $convert operator converting int to string. (DongoFull)
+// TestExpr_convert_int_to_string tests the $convert operator converting int to string. (DocudoltFull)
 func TestExpr_convert_int_to_string(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -280,11 +280,11 @@ func TestExpr_convert_int_to_string(t *testing.T) {
 	assert.Equal(t, "42", results[0].Map()["r"])
 }
 
-// TestExpr_convert_with_onError tests the $convert operator with an onError fallback. (DongoFull)
+// TestExpr_convert_with_onError tests the $convert operator with an onError fallback. (DocudoltFull)
 // When the conversion fails, onError value is returned instead.
 func TestExpr_convert_with_onError(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -311,11 +311,11 @@ func TestExpr_convert_with_onError(t *testing.T) {
 	assert.Equal(t, int32(-1), results[0].Map()["r"])
 }
 
-// TestExpr_cmp_operators tests the $cmp comparison expression operator. (DongoFull)
+// TestExpr_cmp_operators tests the $cmp comparison expression operator. (DocudoltFull)
 // $cmp returns -1, 0, or 1 for less, equal, or greater.
 func TestExpr_cmp_operators(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -342,11 +342,11 @@ func TestExpr_cmp_operators(t *testing.T) {
 	assert.Equal(t, int32(1), results[2].Map()["r"], "5 > 4 should give 1")
 }
 
-// TestAccum_mergeObjects tests $mergeObjects as an accumulator in $group. (DongoFull)
+// TestAccum_mergeObjects tests $mergeObjects as an accumulator in $group. (DocudoltFull)
 // When used in $group, $mergeObjects merges documents within each group.
 func TestAccum_mergeObjects(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -375,11 +375,11 @@ func TestAccum_mergeObjects(t *testing.T) {
 	assert.Equal(t, "large", mergedMap["size"])
 }
 
-// TestExpr_trunc tests the $trunc aggregation expression operator. (DongoFull)
+// TestExpr_trunc tests the $trunc aggregation expression operator. (DocudoltFull)
 // $trunc truncates a number to the specified decimal place.
 func TestExpr_trunc(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -404,11 +404,11 @@ func TestExpr_trunc(t *testing.T) {
 	assert.Equal(t, float64(-2), results[1].Map()["r"])
 }
 
-// TestExpr_objectToArray tests the $objectToArray aggregation expression operator. (DongoFull)
+// TestExpr_objectToArray tests the $objectToArray aggregation expression operator. (DocudoltFull)
 // $objectToArray converts a document into an array of {k, v} pairs.
 func TestExpr_objectToArray(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -438,11 +438,11 @@ func TestExpr_objectToArray(t *testing.T) {
 	assert.Equal(t, int32(1), fm["v"])
 }
 
-// TestExpr_literal tests the $literal aggregation expression operator. (DongoFull)
+// TestExpr_literal tests the $literal aggregation expression operator. (DocudoltFull)
 // $literal returns a value without evaluating it as an expression.
 func TestExpr_literal(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -467,11 +467,11 @@ func TestExpr_literal(t *testing.T) {
 	assert.Equal(t, "$v", results[0].Map()["r"])
 }
 
-// TestExpr_let tests the $let aggregation expression operator. (DongoFull)
+// TestExpr_let tests the $let aggregation expression operator. (DocudoltFull)
 // $let binds variables and evaluates an expression in that context.
 func TestExpr_let(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -500,11 +500,11 @@ func TestExpr_let(t *testing.T) {
 	assert.Equal(t, int32(30), results[0].Map()["total"])
 }
 
-// TestExpr_expr_in_match tests using $expr in a $match stage. (DongoFull)
+// TestExpr_expr_in_match tests using $expr in a $match stage. (DocudoltFull)
 // $expr allows aggregation expressions in $match.
 func TestExpr_expr_in_match(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -531,10 +531,10 @@ func TestExpr_expr_in_match(t *testing.T) {
 	assert.Equal(t, "c", results[1].Map()["_id"])
 }
 
-// TestExpr_project_type_check tests type check operators like $isNumber. (DongoFull)
+// TestExpr_project_type_check tests type check operators like $isNumber. (DocudoltFull)
 func TestExpr_project_type_check(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -571,10 +571,10 @@ func TestExpr_project_type_check(t *testing.T) {
 }
 
 // TestExpr_project_objectToArray_back tests the $objectToArray operator
-// by verifying the returned array has the correct key-value structure. (DongoFull)
+// by verifying the returned array has the correct key-value structure. (DocudoltFull)
 func TestExpr_project_objectToArray_back(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -607,10 +607,10 @@ func TestExpr_project_objectToArray_back(t *testing.T) {
 	assert.Contains(t, keys, "size")
 }
 
-// TestExpr_project_reduce_sum tests $reduce with $sum to sum an array. (DongoFull)
+// TestExpr_project_reduce_sum tests $reduce with $sum to sum an array. (DocudoltFull)
 func TestExpr_project_reduce_sum(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -637,10 +637,10 @@ func TestExpr_project_reduce_sum(t *testing.T) {
 	assert.Equal(t, int32(10), results[0].Map()["sum"])
 }
 
-// TestExpr_project_in_operator tests the $in expression operator (array membership). (DongoFull)
+// TestExpr_project_in_operator tests the $in expression operator (array membership). (DocudoltFull)
 func TestExpr_project_in_operator(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -667,12 +667,12 @@ func TestExpr_project_in_operator(t *testing.T) {
 	assert.Equal(t, true, results[2].Map()["r"], "finance is in the set")
 }
 
-// TestExpr_toDate_objectid tests that $toDate converts an ObjectID to its embedded timestamp. (DongoFull)
+// TestExpr_toDate_objectid tests that $toDate converts an ObjectID to its embedded timestamp. (DocudoltFull)
 // MongoDB ObjectIDs encode a 4-byte Unix timestamp in their first 4 bytes; $toDate must
 // extract that timestamp and return it as a date.
 func TestExpr_toDate_objectid(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -697,11 +697,11 @@ func TestExpr_toDate_objectid(t *testing.T) {
 	assert.Equal(t, ts, got, "$toDate should return the ObjectID's embedded timestamp")
 }
 
-// TestExpr_dateTrunc tests the $dateTrunc aggregation expression operator. (DongoFull)
+// TestExpr_dateTrunc tests the $dateTrunc aggregation expression operator. (DocudoltFull)
 // $dateTrunc truncates a date to the start of a specified time unit.
 func TestExpr_dateTrunc(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -738,10 +738,10 @@ func TestExpr_dateTrunc(t *testing.T) {
 }
 
 // TestExpr_mod_nan_divisor verifies that $mod with a NaN divisor returns NaN
-// rather than an error (matching MongoDB's IEEE 754 behavior). (DongoFull)
+// rather than an error (matching MongoDB's IEEE 754 behavior). (DocudoltFull)
 func TestExpr_mod_nan_divisor(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()

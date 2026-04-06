@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 const (

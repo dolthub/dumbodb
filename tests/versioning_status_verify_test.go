@@ -35,19 +35,19 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// statusResult holds the decoded top-level response from a dongoStatus command.
+// statusResult holds the decoded top-level response from a docudoltStatus command.
 type statusResult struct {
 	Branch string
 	Tables []tableStatusEntry
 }
 
-// tableStatusEntry holds one entry from the "tables" array of a dongoStatus response.
+// tableStatusEntry holds one entry from the "tables" array of a docudoltStatus response.
 type tableStatusEntry struct {
 	Name   string
 	Status string
 }
 
-// decodeStatusResult parses the raw bson.M from a dongoStatus RunCommand into the
+// decodeStatusResult parses the raw bson.M from a docudoltStatus RunCommand into the
 // typed helpers above, failing the test if the shape is unexpected.
 func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 	t.Helper()
@@ -55,10 +55,10 @@ func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 	branch, _ := raw["branch"].(string)
 
 	rawTables, ok := raw["collections"]
-	require.True(t, ok, "dongoStatus result missing 'collections' field")
+	require.True(t, ok, "docudoltStatus result missing 'collections' field")
 
 	tablesArr, ok := rawTables.(bson.A)
-	require.True(t, ok, "dongoStatus 'collections' is not an array, got %T", rawTables)
+	require.True(t, ok, "docudoltStatus 'collections' is not an array, got %T", rawTables)
 
 	var out statusResult
 	out.Branch = branch
@@ -88,7 +88,7 @@ func findTableStatus(sr statusResult, name string) *tableStatusEntry {
 }
 
 func TestStatusVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -102,7 +102,7 @@ func TestStatusVerify(t *testing.T) {
 		{Key: "score", Value: int32(10)},
 	})
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName, "baseline")
+	docudoltCommit(t, env, dbName, "baseline")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Status on clean repo — empty tables
@@ -110,7 +110,7 @@ func TestStatusVerify(t *testing.T) {
 	t.Run("Scenario1_CleanRepo", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoStatus", Value: int32(1)},
+			{Key: "docudoltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -129,7 +129,7 @@ func TestStatusVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoStatus", Value: int32(1)},
+			{Key: "docudoltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -148,7 +148,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_AfterUpdate", func(t *testing.T) {
 		// Commit the "newcoll" addition first.
-		dongoCommit(t, env, dbName, "add newcoll")
+		docudoltCommit(t, env, dbName, "add newcoll")
 
 		// Modify an existing committed collection.
 		_, err := env.client.Database(dbName).Collection("items").UpdateOne(ctx,
@@ -159,7 +159,7 @@ func TestStatusVerify(t *testing.T) {
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoStatus", Value: int32(1)},
+			{Key: "docudoltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -178,14 +178,14 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AfterDelete", func(t *testing.T) {
 		// Commit the items modification first.
-		dongoCommit(t, env, dbName, "modify items")
+		docudoltCommit(t, env, dbName, "modify items")
 
 		// Delete the entire "items" collection.
 		require.NoError(t, env.client.Database(dbName).Collection("items").Drop(ctx))
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoStatus", Value: int32(1)},
+			{Key: "docudoltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)
@@ -204,11 +204,11 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AfterCommit", func(t *testing.T) {
 		// Commit the deletion.
-		dongoCommit(t, env, dbName, "delete items")
+		docudoltCommit(t, env, dbName, "delete items")
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoStatus", Value: int32(1)},
+			{Key: "docudoltStatus", Value: int32(1)},
 		}).Decode(&raw))
 
 		sr := decodeStatusResult(t, raw)

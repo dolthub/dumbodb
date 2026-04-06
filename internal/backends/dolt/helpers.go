@@ -32,8 +32,8 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
-	"github.com/dolthub/dongo/internal/bson"
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/bson"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // keyDesc describes the key tuple: one varbinary field for the encoded MongoDB _id.
@@ -86,7 +86,7 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 }
 
 // buildCollectionTableSchema builds a DSCH (TableSchema) flatbuffer for the
-// dongo collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
+// docudolt collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
 //
 // This schema is shared across all collections within a database; the DSCH
 // chunk is written once to the value store and its hash is stored in every DTBL.

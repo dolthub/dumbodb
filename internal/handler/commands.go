@@ -22,9 +22,9 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/clientconn/conninfo"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/util/logging"
+	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/util/logging"
 )
 
 // command represents a handler for single command.
@@ -118,44 +118,44 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDebugError,
 			Help:    "Returns error for debugging.",
 		},
-		"dongoBranch": {
-			Handler: h.MsgDongoBranch,
-			Help:    "Creates a new Dongo branch from the current branch encoded in the database name.",
+		"docudoltBranch": {
+			Handler: h.MsgDocudoltBranch,
+			Help:    "Creates a new Docudolt branch from the current branch encoded in the database name.",
 		},
-		"dongoConflicts": {
-			Handler: h.MsgDongoConflicts,
+		"docudoltConflicts": {
+			Handler: h.MsgDocudoltConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
 		},
-		"dongoDiff": {
-			Handler: h.MsgDongoDiff,
+		"docudoltDiff": {
+			Handler: h.MsgDocudoltDiff,
 			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
 		},
-		"dongoCommit": {
-			Handler: h.MsgDongoCommit,
+		"docudoltCommit": {
+			Handler: h.MsgDocudoltCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
-		"dongoCurrentBranch": {
-			Handler: h.MsgDongoCurrentBranch,
+		"docudoltCurrentBranch": {
+			Handler: h.MsgDocudoltCurrentBranch,
 			Help:    "Returns the current branch name for the connection encoded in the database name.",
 		},
-		"dongoLog": {
-			Handler: h.MsgDongoLog,
+		"docudoltLog": {
+			Handler: h.MsgDocudoltLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",
 		},
-		"dongoMerge": {
-			Handler: h.MsgDongoMerge,
+		"docudoltMerge": {
+			Handler: h.MsgDocudoltMerge,
 			Help:    "Merges a source branch into the branch encoded in the database name.",
 		},
-		"dongoReset": {
-			Handler: h.MsgDongoReset,
+		"docudoltReset": {
+			Handler: h.MsgDocudoltReset,
 			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
 		},
-		"dongoResolveConflict": {
-			Handler: h.MsgDongoResolveConflict,
+		"docudoltResolveConflict": {
+			Handler: h.MsgDocudoltResolveConflict,
 			Help:    "Resolves a single document conflict in the current in-progress merge.",
 		},
-		"dongoStatus": {
-			Handler: h.MsgDongoStatus,
+		"docudoltStatus": {
+			Handler: h.MsgDocudoltStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
 		},
 		"delete": {

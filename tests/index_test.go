@@ -27,7 +27,7 @@ import (
 
 // TestIndex_TTL_CreateOne verifies that a TTL index (expireAfterSeconds) can be created (do-81xd).
 func TestIndex_TTL_CreateOne(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -43,7 +43,7 @@ func TestIndex_TTL_CreateOne(t *testing.T) {
 
 // TestIndex_TTL_ZeroSeconds verifies TTL index with expireAfterSeconds=0 (do-81xd).
 func TestIndex_TTL_ZeroSeconds(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -59,7 +59,7 @@ func TestIndex_TTL_ZeroSeconds(t *testing.T) {
 
 // TestIndex_TTL_InsertDocs verifies that inserts work on a TTL-indexed collection (do-81xd).
 func TestIndex_TTL_InsertDocs(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -84,7 +84,7 @@ func TestIndex_TTL_InsertDocs(t *testing.T) {
 
 // TestIndex_Partial_CreateOne verifies that a partial index can be created (do-81xd).
 func TestIndex_Partial_CreateOne(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -100,7 +100,7 @@ func TestIndex_Partial_CreateOne(t *testing.T) {
 
 // TestIndex_Partial_WithExistsFilter verifies partial index with $exists filter (do-81xd).
 func TestIndex_Partial_WithExistsFilter(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -116,7 +116,7 @@ func TestIndex_Partial_WithExistsFilter(t *testing.T) {
 
 // TestIndex_Collation_CreateOne verifies that a collation index can be created (do-81xd).
 func TestIndex_Collation_CreateOne(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -132,7 +132,7 @@ func TestIndex_Collation_CreateOne(t *testing.T) {
 
 // TestIndex_WildcardProjection_CreateOne verifies wildcard index with projection (do-81xd).
 func TestIndex_WildcardProjection_CreateOne(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -150,7 +150,7 @@ func TestIndex_WildcardProjection_CreateOne(t *testing.T) {
 
 // TestIndex_Hashed_CreateOne verifies that a hashed index can be created (do-81xd).
 func TestIndex_Hashed_CreateOne(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -162,7 +162,7 @@ func TestIndex_Hashed_CreateOne(t *testing.T) {
 
 // TestIndex_Hashed_EqualityQuery verifies that a hashed index allows equality queries (do-81xd).
 func TestIndex_Hashed_EqualityQuery(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -182,7 +182,7 @@ func TestIndex_Hashed_EqualityQuery(t *testing.T) {
 
 // TestIndex_Hashed_CannotBeUnique verifies that hashed+unique returns an error (do-81xd).
 func TestIndex_Hashed_CannotBeUnique(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -198,7 +198,7 @@ func TestIndex_Hashed_CannotBeUnique(t *testing.T) {
 // TestIndex_Sparse_UniqueWithMissingField verifies sparse+unique allows multiple docs
 // without the indexed field (do-81xd).
 func TestIndex_Sparse_UniqueWithMissingField(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -225,7 +225,7 @@ func TestIndex_Sparse_UniqueWithMissingField(t *testing.T) {
 // TestIndex_ListIndexes_AfterDrop verifies that listIndexes returns 1 after
 // dropping the only secondary index (do-81xd).
 func TestIndex_ListIndexes_AfterDrop(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -246,7 +246,7 @@ func TestIndex_ListIndexes_AfterDrop(t *testing.T) {
 
 // TestIndex_ListIndexes_AfterDropAll verifies that listIndexes returns 1 after DropAll (do-81xd).
 func TestIndex_ListIndexes_AfterDropAll(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -270,7 +270,7 @@ func TestIndex_ListIndexes_AfterDropAll(t *testing.T) {
 
 // TestIndex_IndexStats_Basic verifies that $indexStats returns one doc per index (do-81xd).
 func TestIndex_IndexStats_Basic(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -298,7 +298,7 @@ func TestIndex_IndexStats_Basic(t *testing.T) {
 // TestIndex_IndexStats_NoIndexes verifies $indexStats returns 1 doc (just _id_) for a
 // collection with no secondary indexes (do-81xd).
 func TestIndex_IndexStats_NoIndexes(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -320,7 +320,7 @@ func TestIndex_IndexStats_NoIndexes(t *testing.T) {
 // TestIndex_TTL_InsertAndVerifyNotExpiredYet verifies that a document inserted into a
 // TTL-indexed collection is still present immediately after insertion (do-x0vc).
 func TestIndex_TTL_InsertAndVerifyNotExpiredYet(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -347,7 +347,7 @@ func TestIndex_TTL_InsertAndVerifyNotExpiredYet(t *testing.T) {
 // TestIndex_TTL_OnNestedDateField verifies that a TTL index can be created on a nested
 // date field (do-x0vc).
 func TestIndex_TTL_OnNestedDateField(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -374,7 +374,7 @@ func TestIndex_TTL_OnNestedDateField(t *testing.T) {
 // TestIndex_Partial_OnlyIndexesMatchingDocs verifies that a partial index can be created
 // and queries still work on all docs (do-x0vc).
 func TestIndex_Partial_OnlyIndexesMatchingDocs(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -406,7 +406,7 @@ func TestIndex_Partial_OnlyIndexesMatchingDocs(t *testing.T) {
 // TestIndex_Partial_UniquePartial verifies that a unique partial index can be created and
 // allows duplicate values when the partial filter is not satisfied (do-x0vc).
 func TestIndex_Partial_UniquePartial(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -435,7 +435,7 @@ func TestIndex_Partial_UniquePartial(t *testing.T) {
 // TestIndex_Partial_CompoundKeys verifies that a partial index with compound keys can be
 // created (do-x0vc).
 func TestIndex_Partial_CompoundKeys(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -452,7 +452,7 @@ func TestIndex_Partial_CompoundKeys(t *testing.T) {
 // TestIndex_Wildcard_WithWildcardProjection verifies that a wildcard index with
 // wildcardProjection can be created and basic queries work (do-x0vc).
 func TestIndex_Wildcard_WithWildcardProjection(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -479,7 +479,7 @@ func TestIndex_Wildcard_WithWildcardProjection(t *testing.T) {
 // TestIndex_Collation_CaseInsensitive verifies that a collation index can be created and
 // exact-case queries still work (do-x0vc).
 func TestIndex_Collation_CaseInsensitive(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -505,7 +505,7 @@ func TestIndex_Collation_CaseInsensitive(t *testing.T) {
 // TestIndex_Collation_UniqueWithCollation verifies that a unique collation index can be
 // created and exact-case uniqueness is enforced (do-x0vc).
 func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -527,7 +527,7 @@ func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
 
 // TestIndex_2dsphere_CreateOne verifies that a 2dsphere index can be created (do-x0vc).
 func TestIndex_2dsphere_CreateOne(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -540,7 +540,7 @@ func TestIndex_2dsphere_CreateOne(t *testing.T) {
 // TestIndex_2dsphere_NearQuery verifies that $near queries work on a 2dsphere-indexed
 // collection (do-x0vc).
 func TestIndex_2dsphere_NearQuery(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -580,7 +580,7 @@ func TestIndex_2dsphere_NearQuery(t *testing.T) {
 // TestIndex_2dsphere_GeoWithinQuery verifies that $geoWithin queries work on a
 // 2dsphere-indexed collection (do-x0vc).
 func TestIndex_2dsphere_GeoWithinQuery(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -625,7 +625,7 @@ func TestIndex_2dsphere_GeoWithinQuery(t *testing.T) {
 // TestIndex_2dsphere_Compound verifies that a compound index with a 2dsphere field
 // can be created (do-x0vc).
 func TestIndex_2dsphere_Compound(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -643,7 +643,7 @@ func TestIndex_2dsphere_Compound(t *testing.T) {
 // TestIndex_2dsphere_GeoIntersects verifies that $geoIntersects queries work on a
 // 2dsphere-indexed collection (do-x0vc).
 func TestIndex_2dsphere_GeoIntersects(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -684,7 +684,7 @@ func TestIndex_2dsphere_GeoIntersects(t *testing.T) {
 // TestGeo_GeoIntersects_LineString verifies that $geoIntersects with a LineString query
 // does not match stored Point documents that lie on the line (do-29rp).
 func TestGeo_GeoIntersects_LineString(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -755,7 +755,7 @@ func TestGeo_GeoIntersects_LineString(t *testing.T) {
 // TestGeo_DocType_GeometryCollection verifies that documents with a GeometryCollection
 // geo field are matched by $geoIntersects queries (do-f7x8).
 func TestGeo_DocType_GeometryCollection(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -812,7 +812,7 @@ func TestGeo_DocType_GeometryCollection(t *testing.T) {
 // TestIndex_IndexStats_AfterInsert verifies that $indexStats returns the correct number
 // of index entries after inserting documents (do-x0vc).
 func TestIndex_IndexStats_AfterInsert(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 

@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // ── $literal ─────────────────────────────────────────────────────────────────

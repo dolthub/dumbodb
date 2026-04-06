@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Run FerretDB compat tests: compare Dongo (target) against real MongoDB (compat).
+# Run FerretDB compat tests: compare Docudolt (target) against real MongoDB (compat).
 #
 # Requires MongoDB-secure to be running on MONGO_PORT (default 47017).
-# Starts Dongo on DONGO_PORT (default 27017), runs compat suite, stops Dongo.
+# Starts Docudolt on DOCUDOLT_PORT (default 27017), runs compat suite, stops Docudolt.
 #
 # Usage:
 #   compat-test.sh [results-file]
 #
 # Environment:
-#   DONGO_PORT    Port dongo listens on (default: 27017)
+#   DOCUDOLT_PORT    Port docudolt listens on (default: 27017)
 #   MONGO_PORT    Port of compat MongoDB (default: 47017)
 #   MONGO_USER    MongoDB username (default: username)
 #   MONGO_PASS    MongoDB password (default: password)
@@ -17,14 +17,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DONGO_BINARY="$REPO_ROOT/.runtime/bin/dongo"
+DOCUDOLT_BINARY="$REPO_ROOT/.runtime/bin/docudolt"
 FERRETDB_INTEGRATION="$REPO_ROOT/ferretdb/integration"
-DONGO_HOST="127.0.0.1"
-DONGO_PORT="${DONGO_PORT:-27017}"
-DONGO_ADDR="$DONGO_HOST:$DONGO_PORT"
-DONGO_URL="mongodb://$DONGO_ADDR/"
-DONGO_DATA_DIR="$REPO_ROOT/.runtime/dongo-compat-data"
-DONGO_LOG="$REPO_ROOT/.runtime/dongo-compat.log"
+DOCUDOLT_HOST="127.0.0.1"
+DOCUDOLT_PORT="${DOCUDOLT_PORT:-27017}"
+DOCUDOLT_ADDR="$DOCUDOLT_HOST:$DOCUDOLT_PORT"
+DOCUDOLT_URL="mongodb://$DOCUDOLT_ADDR/"
+DOCUDOLT_DATA_DIR="$REPO_ROOT/.runtime/docudolt-compat-data"
+DOCUDOLT_LOG="$REPO_ROOT/.runtime/docudolt-compat.log"
 
 MONGO_HOST="127.0.0.1"
 MONGO_PORT="${MONGO_PORT:-47017}"
@@ -35,12 +35,12 @@ COMPAT_URL="mongodb://${MONGO_USER}:${MONGO_PASS}@${MONGO_HOST}:${MONGO_PORT}/?r
 RESULTS_FILE="${1:-$REPO_ROOT/.runtime/ferretdb-compat.txt}"
 
 mkdir -p "$(dirname "$RESULTS_FILE")"
-mkdir -p "$DONGO_DATA_DIR"
-mkdir -p "$(dirname "$DONGO_LOG")"
+mkdir -p "$DOCUDOLT_DATA_DIR"
+mkdir -p "$(dirname "$DOCUDOLT_LOG")"
 
-echo "=== Dongo FerretDB Compat Suite ===" | tee "$RESULTS_FILE"
+echo "=== Docudolt FerretDB Compat Suite ===" | tee "$RESULTS_FILE"
 echo "Date:   $(date -u)" | tee -a "$RESULTS_FILE"
-echo "Target: $DONGO_URL (dongo)" | tee -a "$RESULTS_FILE"
+echo "Target: $DOCUDOLT_URL (docudolt)" | tee -a "$RESULTS_FILE"
 echo "Compat: $COMPAT_URL" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
@@ -53,38 +53,38 @@ if ! nc -z "$MONGO_HOST" "$MONGO_PORT" 2>/dev/null; then
     exit 1
 fi
 
-# Start Dongo.
-"$DONGO_BINARY" --addr "$DONGO_ADDR" --data-dir "$DONGO_DATA_DIR" >"$DONGO_LOG" 2>&1 &
-DONGO_PID=$!
+# Start Docudolt.
+"$DOCUDOLT_BINARY" --addr "$DOCUDOLT_ADDR" --data-dir "$DOCUDOLT_DATA_DIR" >"$DOCUDOLT_LOG" 2>&1 &
+DOCUDOLT_PID=$!
 
 cleanup() {
     echo ""
-    echo "Stopping Dongo (PID: $DONGO_PID)..."
-    kill "$DONGO_PID" 2>/dev/null || true
-    wait "$DONGO_PID" 2>/dev/null || true
-    echo "Dongo stopped."
+    echo "Stopping Docudolt (PID: $DOCUDOLT_PID)..."
+    kill "$DOCUDOLT_PID" 2>/dev/null || true
+    wait "$DOCUDOLT_PID" 2>/dev/null || true
+    echo "Docudolt stopped."
 }
 trap cleanup EXIT
 
-echo "Waiting for Dongo on $DONGO_ADDR..." | tee -a "$RESULTS_FILE"
+echo "Waiting for Docudolt on $DOCUDOLT_ADDR..." | tee -a "$RESULTS_FILE"
 READY=0
 for i in $(seq 1 30); do
-    if nc -z "$DONGO_HOST" "$DONGO_PORT" 2>/dev/null; then
-        echo "Dongo ready after ${i}s" | tee -a "$RESULTS_FILE"
+    if nc -z "$DOCUDOLT_HOST" "$DOCUDOLT_PORT" 2>/dev/null; then
+        echo "Docudolt ready after ${i}s" | tee -a "$RESULTS_FILE"
         READY=1
         break
     fi
-    if ! kill -0 "$DONGO_PID" 2>/dev/null; then
-        echo "ERROR: Dongo exited prematurely. Server log:" | tee -a "$RESULTS_FILE"
-        cat "$DONGO_LOG" | tee -a "$RESULTS_FILE"
+    if ! kill -0 "$DOCUDOLT_PID" 2>/dev/null; then
+        echo "ERROR: Docudolt exited prematurely. Server log:" | tee -a "$RESULTS_FILE"
+        cat "$DOCUDOLT_LOG" | tee -a "$RESULTS_FILE"
         exit 1
     fi
     sleep 1
 done
 
 if [ "$READY" -eq 0 ]; then
-    echo "ERROR: Dongo did not start within 30s. Server log:" | tee -a "$RESULTS_FILE"
-    cat "$DONGO_LOG" | tee -a "$RESULTS_FILE"
+    echo "ERROR: Docudolt did not start within 30s. Server log:" | tee -a "$RESULTS_FILE"
+    cat "$DOCUDOLT_LOG" | tee -a "$RESULTS_FILE"
     exit 1
 fi
 
@@ -98,7 +98,7 @@ go test -count=1 -timeout=0 \
     -tags=ferretdb_dev \
     -race=false \
     -target-backend=ferretdb \
-    -target-url="$DONGO_URL" \
+    -target-url="$DOCUDOLT_URL" \
     -compat-url="$COMPAT_URL" \
     ./... 2>&1 | tee -a "$RESULTS_FILE"
 TEST_EXIT=${PIPESTATUS[0]}

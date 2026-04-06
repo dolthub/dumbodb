@@ -17,8 +17,8 @@ package operators
 import (
 	"errors"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
 )
 
 // switchBranch holds a case/then pair for $switch.

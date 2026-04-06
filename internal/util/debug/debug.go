@@ -38,10 +38,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/exp/maps"
 
-	"github.com/dolthub/dongo/internal/util/ctxutil"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/logging"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/ctxutil"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // Parts of Prometheus metric names.
@@ -197,7 +197,7 @@ func Listen(opts *ListenOpts) (*Handler, error) {
 
 	svOpts := []statsviz.Option{
 		statsviz.Root("/debug/graphs"),
-		// TODO https://github.com/dolthub/dongo/issues/3600
+		// TODO https://github.com/dolthub/docudolt/issues/3600
 	}
 	must.NoError(statsviz.Register(http.DefaultServeMux, svOpts...))
 

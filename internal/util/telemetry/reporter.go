@@ -27,12 +27,12 @@ import (
 
 	"github.com/AlekSi/pointer"
 
-	"github.com/dolthub/dongo/build/version"
-	"github.com/dolthub/dongo/internal/clientconn/connmetrics"
-	"github.com/dolthub/dongo/internal/util/ctxutil"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/logging"
-	"github.com/dolthub/dongo/internal/util/state"
+	"github.com/dolthub/docudolt/build/version"
+	"github.com/dolthub/docudolt/internal/clientconn/connmetrics"
+	"github.com/dolthub/docudolt/internal/util/ctxutil"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/docudolt/internal/util/state"
 )
 
 // request represents telemetry request.

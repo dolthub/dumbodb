@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
 )
 
 // LimitIterator returns an iterator that limits a number of documents returned by the underlying iterator.
@@ -36,7 +36,7 @@ func LimitIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, l
 	case limit < 0:
 		// limit parameter range should be handled by GetLimitParam.
 		// aggregation limit stage allows limit of math.MaxInt64.
-		// TODO https://github.com/dolthub/dongo/issues/2255
+		// TODO https://github.com/dolthub/docudolt/issues/2255
 		panic(fmt.Sprintf("invalid limit value: %d", limit))
 	default:
 		res := &limitIterator{

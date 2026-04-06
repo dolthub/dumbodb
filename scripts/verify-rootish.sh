@@ -4,16 +4,16 @@
 # Usage:
 #   bash scripts/verify-rootish.sh [host:port]
 #
-# Default host:port is localhost:27017. Run with a live Dongo instance.
+# Default host:port is localhost:27017. Run with a live Docudolt instance.
 #
 # Tests only what is currently implemented:
-#   - dongoCommit
+#   - docudoltCommit
 #   - commit-hash rootish (reads + write-blocking)
 #   - ancestor-expression rootish (reads + write-blocking)
-#   - dongoCurrentBranch on branch vs read-only connections
+#   - docudoltCurrentBranch on branch vs read-only connections
 #   - parse-time rejection of HEAD, HEAD~N, reflog, and range syntax
 #
-# Does NOT test dongoBranch/dongoMerge/dongoLog/dongoStatus/dongoReset —
+# Does NOT test docudoltBranch/docudoltMerge/docudoltLog/docudoltStatus/docudoltReset —
 # those are not yet implemented.
 
 set -euo pipefail
@@ -66,7 +66,7 @@ try {
     fi
 }
 
-echo "Dongo rootish verification — ${URI}"
+echo "Docudolt rootish verification — ${URI}"
 echo "Database: ${DBNAME}"
 echo
 
@@ -76,11 +76,11 @@ echo "=== Setup: two commits on main ==="
 SETUP_OUT=$(_js "
 const db2 = db.getSiblingDB('${DBNAME}');
 db2.getCollection('${COLL}').insertOne({ _id: 1, v: 'first' });
-const r1 = db2.runCommand({ dongoCommit: 1, message: 'first commit' });
-if (r1.ok !== 1) throw new Error('dongoCommit 1 failed: ' + JSON.stringify(r1));
+const r1 = db2.runCommand({ docudoltCommit: 1, message: 'first commit' });
+if (r1.ok !== 1) throw new Error('docudoltCommit 1 failed: ' + JSON.stringify(r1));
 db2.getCollection('${COLL}').insertOne({ _id: 2, v: 'second' });
-const r2 = db2.runCommand({ dongoCommit: 1, message: 'second commit' });
-if (r2.ok !== 1) throw new Error('dongoCommit 2 failed: ' + JSON.stringify(r2));
+const r2 = db2.runCommand({ docudoltCommit: 1, message: 'second commit' });
+if (r2.ok !== 1) throw new Error('docudoltCommit 2 failed: ' + JSON.stringify(r2));
 print(r1.hash);
 ")
 
@@ -148,25 +148,25 @@ expect_code_96 "insert on main~1 rootish" \
 echo
 
 # ---------------------------------------------------------------------------
-echo "=== Scenario 4: dongoCurrentBranch ==="
+echo "=== Scenario 4: docudoltCurrentBranch ==="
 
-expect_no_error "dongoCurrentBranch on plain db returns 'main'" "
-const r = db.getSiblingDB('${DBNAME}').runCommand({ dongoCurrentBranch: 1 });
+expect_no_error "docudoltCurrentBranch on plain db returns 'main'" "
+const r = db.getSiblingDB('${DBNAME}').runCommand({ docudoltCurrentBranch: 1 });
 if (r.ok !== 1) throw new Error('command failed: ' + JSON.stringify(r));
 if (r.branch !== 'main') throw new Error('expected main, got ' + r.branch);
 "
 
-expect_no_error "dongoCurrentBranch on __main returns 'main'" "
-const r = db.getSiblingDB('${DBNAME}__main').runCommand({ dongoCurrentBranch: 1 });
+expect_no_error "docudoltCurrentBranch on __main returns 'main'" "
+const r = db.getSiblingDB('${DBNAME}__main').runCommand({ docudoltCurrentBranch: 1 });
 if (r.ok !== 1) throw new Error('command failed: ' + JSON.stringify(r));
 if (r.branch !== 'main') throw new Error('expected main, got ' + r.branch);
 "
 
-expect_code_96 "dongoCurrentBranch on hash rootish returns code 96" \
-    "db.getSiblingDB('${DBNAME}__${HASH1}').runCommand({ dongoCurrentBranch: 1 });"
+expect_code_96 "docudoltCurrentBranch on hash rootish returns code 96" \
+    "db.getSiblingDB('${DBNAME}__${HASH1}').runCommand({ docudoltCurrentBranch: 1 });"
 
-expect_code_96 "dongoCurrentBranch on ancestor rootish returns code 96" \
-    "db.getSiblingDB('${DBNAME}__main~1').runCommand({ dongoCurrentBranch: 1 });"
+expect_code_96 "docudoltCurrentBranch on ancestor rootish returns code 96" \
+    "db.getSiblingDB('${DBNAME}__main~1').runCommand({ docudoltCurrentBranch: 1 });"
 
 echo
 

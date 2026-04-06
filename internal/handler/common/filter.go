@@ -29,14 +29,14 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
-	"github.com/dolthub/dongo/internal/handler/commonpath"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/docudolt/internal/handler/commonpath"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // FilterDocument returns true if given document satisfies given filter expression.
@@ -341,7 +341,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 // However, if non-boolean result is returned from processing aggregation expression,
 // it returns false for null or zero value and true for all other values.
 func filterExprOperator(doc, filter *types.Document) (bool, error) {
-	// TODO https://github.com/dolthub/dongo/issues/3170
+	// TODO https://github.com/dolthub/docudolt/issues/3170
 	op, err := operators.NewExpr(filter, "$expr")
 	if err != nil {
 		return false, err
@@ -1136,7 +1136,7 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dongo/issues/508
+		// TODO https://github.com/dolthub/docudolt/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",
@@ -1177,7 +1177,7 @@ func filterFieldExprBitsAllSet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dongo/issues/508
+		// TODO https://github.com/dolthub/docudolt/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",
@@ -1218,7 +1218,7 @@ func filterFieldExprBitsAnyClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dongo/issues/508
+		// TODO https://github.com/dolthub/docudolt/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",
@@ -1259,7 +1259,7 @@ func filterFieldExprBitsAnySet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dongo/issues/508
+		// TODO https://github.com/dolthub/docudolt/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",

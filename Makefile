@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-DONGO_BINARY           := $(CURDIR)/.runtime/bin/dongo
+DOCUDOLT_BINARY           := $(CURDIR)/.runtime/bin/docudolt
 RESULTS_FILE           := $(CURDIR)/.runtime/ferretdb-scorecard.txt
 COMPAT_FILE            := $(CURDIR)/.runtime/ferretdb-compat.txt
 MONGODB_REFERENCE_FILE := $(CURDIR)/.runtime/mongodb-reference.txt
@@ -9,13 +9,13 @@ FERRETDB_REFERENCE_FILE := $(CURDIR)/.runtime/ferretdb-reference.txt
 .PHONY: help build ferretdb-scorecard ferretdb-compat mongodb-reference ferretdb-reference bats
 
 help:
-	@echo "Dongo Makefile"
+	@echo "Docudolt Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build                Build Dongo server binary"
+	@echo "  build                Build Docudolt server binary"
 	@echo "  bats                 Run bats integration tests (tests/bats/)"
-	@echo "  ferretdb-scorecard   Start Dongo, run FerretDB integration tests, report results"
-	@echo "  ferretdb-compat      Run FerretDB compat suite: Dongo (target) vs MongoDB (compat)"
+	@echo "  ferretdb-scorecard   Start Docudolt, run FerretDB integration tests, report results"
+	@echo "  ferretdb-compat      Run FerretDB compat suite: Docudolt (target) vs MongoDB (compat)"
 	@echo "  mongodb-reference    Run FerretDB suite against real MongoDB (baseline)"
 	@echo "  ferretdb-reference   Run FerretDB suite against FerretDB itself (baseline)"
 	@echo ""
@@ -30,9 +30,9 @@ help:
 	@echo "See scripts/ferretdb-reference.sh for setup instructions."
 
 build:
-	@mkdir -p $(dir $(DONGO_BINARY))
-	go build -o $(DONGO_BINARY) ./cmd/dongo/
-	@echo "Built: $(DONGO_BINARY)"
+	@mkdir -p $(dir $(DOCUDOLT_BINARY))
+	go build -o $(DOCUDOLT_BINARY) ./cmd/docudolt/
+	@echo "Built: $(DOCUDOLT_BINARY)"
 
 ferretdb-scorecard: build
 	./scripts/ferretdb-scorecard.sh $(RESULTS_FILE)

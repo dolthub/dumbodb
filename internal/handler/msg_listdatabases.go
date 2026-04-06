@@ -19,12 +19,12 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/logging"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgListDatabases implements `listDatabases` command.
@@ -43,7 +43,7 @@ func (h *Handler) MsgListDatabases(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	common.Ignored(document, h.L, "comment")
 
-	// TODO https://github.com/dolthub/dongo/issues/3769
+	// TODO https://github.com/dolthub/docudolt/issues/3769
 	common.Ignored(document, h.L, "authorizedDatabases")
 
 	var nameOnly bool

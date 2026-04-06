@@ -1,7 +1,7 @@
 //go:build ignore
 
 // create_scorecard_user creates the standard FerretDB integration test user
-// in a running dongo server. Used by ferretdb-scorecard.sh to bootstrap auth
+// in a running docudolt server. Used by ferretdb-scorecard.sh to bootstrap auth
 // before running the integration test suite.
 //
 // Usage: go run scripts/create_scorecard_user.go [mongodb-url]

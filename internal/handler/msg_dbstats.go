@@ -23,13 +23,13 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgDBStats implements `dbStats` command.
@@ -133,7 +133,7 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	pairs := []any{
 		"db", dbName,
 		"collections", int64(len(list.Collections)),
-		// TODO https://github.com/dolthub/dongo/issues/176
+		// TODO https://github.com/dolthub/docudolt/issues/176
 		"views", int64(0),
 		"objects", stats.CountDocuments,
 		"avgObjSize", avgObjSize,

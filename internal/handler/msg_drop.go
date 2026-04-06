@@ -20,12 +20,12 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgDrop implements `drop` command.
@@ -84,7 +84,7 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	case err == nil:
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
-				"nIndexesWas", int32(1), // TODO https://github.com/dolthub/dongo/issues/2337
+				"nIndexesWas", int32(1), // TODO https://github.com/dolthub/docudolt/issues/2337
 				"ns", dbName+"."+collectionName,
 				"ok", float64(1),
 			)),

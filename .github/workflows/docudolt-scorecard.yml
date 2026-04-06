@@ -1,4 +1,4 @@
-name: Dongo FerretDB Scorecard
+name: Docudolt FerretDB Scorecard
 
 on:
   push:
@@ -32,7 +32,7 @@ jobs:
           RESULTS_FILE=".runtime/ferretdb-scorecard.txt"
 
           if [ ! -f "$RESULTS_FILE" ]; then
-            echo "ERROR: Results file not found — dongo may have failed to start or build"
+            echo "ERROR: Results file not found — docudolt may have failed to start or build"
             exit 1
           fi
 
@@ -50,7 +50,7 @@ jobs:
 
           echo ""
           echo "================================================"
-          echo "  DONGO FERRETDB COMPATIBILITY SCORECARD"
+          echo "  DOCUDOLT FERRETDB COMPATIBILITY SCORECARD"
           echo "================================================"
           printf "  Tests run     : %d\n" "$TOTAL"
           printf "  Tests passed  : %d\n" "$PASS"
@@ -76,10 +76,10 @@ jobs:
             exit 1
           fi
 
-          # Fail on Dongo startup/crash errors (these don't produce --- FAIL: lines)
-          if grep -qE "^ERROR: Dongo" "$RESULTS_FILE"; then
-            echo "=== Dongo failed to start or crashed ==="
-            grep -A 30 "^ERROR: Dongo" "$RESULTS_FILE" || true
+          # Fail on Docudolt startup/crash errors (these don't produce --- FAIL: lines)
+          if grep -qE "^ERROR: Docudolt" "$RESULTS_FILE"; then
+            echo "=== Docudolt failed to start or crashed ==="
+            grep -A 30 "^ERROR: Docudolt" "$RESULTS_FILE" || true
             exit 1
           fi
 

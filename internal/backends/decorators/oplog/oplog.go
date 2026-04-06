@@ -18,8 +18,8 @@ package oplog
 import (
 	"time"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // document represents a single OpLog collection record.

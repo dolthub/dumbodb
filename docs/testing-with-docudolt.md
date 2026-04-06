@@ -1,7 +1,7 @@
-# Testing Dongo with the FerretDB Compatibility Suite
+# Testing Docudolt with the FerretDB Compatibility Suite
 
 The FerretDB integration suite supports a *compat mode* that runs identical operations
-against two servers and compares results field-by-field.  By pointing it at Dongo (target)
+against two servers and compares results field-by-field.  By pointing it at Docudolt (target)
 and a real MongoDB instance (compat reference), you can produce a precise diff of every
 behavioral difference.
 
@@ -12,7 +12,7 @@ behavioral difference.
 cd ferretdb
 docker compose up -d mongodb-secure
 
-# 2. Run the compat suite (builds dongo, starts it, runs tests, stops it)
+# 2. Run the compat suite (builds docudolt, starts it, runs tests, stops it)
 cd ..
 make ferretdb-compat
 ```
@@ -24,7 +24,7 @@ Results land in `.runtime/ferretdb-compat.txt`.
 ```
 FerretDB integration suite
         │
-        ├──► Dongo   (target)  mongodb://127.0.0.1:27017/
+        ├──► Docudolt   (target)  mongodb://127.0.0.1:27017/
         │      -target-backend=ferretdb
         │
         └──► MongoDB (compat)  mongodb://username:password@127.0.0.1:47017/?replicaSet=rs0
@@ -52,12 +52,12 @@ cd ferretdb
 docker compose up -d mongodb-secure
 ```
 
-### Dongo (target under test)
+### Docudolt (target under test)
 
 ```bash
 make build
-mkdir -p .runtime/dongo-data
-.runtime/bin/dongo --addr 127.0.0.1:27017 --data-dir .runtime/dongo-data
+mkdir -p .runtime/docudolt-data
+.runtime/bin/docudolt --addr 127.0.0.1:27017 --data-dir .runtime/docudolt-data
 ```
 
 Or let `make ferretdb-compat` start and stop it automatically.
@@ -68,7 +68,7 @@ Or let `make ferretdb-compat` start and stop it automatically.
 
 ```bash
 make ferretdb-compat          # full suite
-DONGO_PORT=27017 make ferretdb-compat   # override port
+DOCUDOLT_PORT=27017 make ferretdb-compat   # override port
 ```
 
 ### Manually
@@ -102,7 +102,7 @@ A compat test failure looks like:
 ```
 --- FAIL: TestQueryCompatSort/SortAscending (0.12s)
     compat_test.go:123: response mismatch
-        target (dongo):  {n: 3, ok: 1}
+        target (docudolt):  {n: 3, ok: 1}
         compat (mongodb): {n: 3, ok: 1.0}
 ```
 
@@ -110,9 +110,9 @@ Common patterns:
 
 | Pattern | Likely cause |
 |---------|-------------|
-| Type mismatch (`int` vs `float`) | Dongo returns a different BSON type |
-| Missing field in target | Command not yet implemented in Dongo |
-| Extra field in compat | MongoDB-specific metadata Dongo omits |
+| Type mismatch (`int` vs `float`) | Docudolt returns a different BSON type |
+| Missing field in target | Command not yet implemented in Docudolt |
+| Extra field in compat | MongoDB-specific metadata Docudolt omits |
 | Value mismatch on cursor | Sort / collation difference |
 | `SKIP` in output | Test requires `-compat-url`; skipped when not set |
 
@@ -124,37 +124,37 @@ go test … -v -debug-setup -run TestQueryCompatSort .
 
 ## FerretDB Taskfile integration (upstream)
 
-To add a first-class `task test-integration-dongo` target in the FerretDB repo,
-apply `patches/ferretdb-taskfile-dongo.patch` to a FerretDB checkout:
+To add a first-class `task test-integration-docudolt` target in the FerretDB repo,
+apply `patches/ferretdb-taskfile-docudolt.patch` to a FerretDB checkout:
 
 ```bash
 cd ferretdb
-git apply ../patches/ferretdb-taskfile-dongo.patch
+git apply ../patches/ferretdb-taskfile-docudolt.patch
 ```
 
 See the patch for the full task definition.  The environment variable
-`DONGO_URL` (default `mongodb://127.0.0.1:27017/`) controls where dongo
+`DOCUDOLT_URL` (default `mongodb://127.0.0.1:27017/`) controls where docudolt
 is expected to listen.
 
-## Docker Compose service for Dongo
+## Docker Compose service for Docudolt
 
-To start Dongo alongside the FerretDB test stack, add the following snippet to
+To start Docudolt alongside the FerretDB test stack, add the following snippet to
 `ferretdb/docker-compose.yml`:
 
 ```yaml
-  dongo:
-    image: ghcr.io/dolthub/dongo:latest   # or build locally
-    container_name: ferretdb_dongo
+  docudolt:
+    image: ghcr.io/dolthub/docudolt:latest   # or build locally
+    container_name: ferretdb_docudolt
     ports:
       - "27017:27017"
-    command: --addr 0.0.0.0:27017 --data-dir /var/dongo-data
+    command: --addr 0.0.0.0:27017 --data-dir /var/docudolt-data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - dongo-data:/var/dongo-data
+      - docudolt-data:/var/docudolt-data
 
 volumes:
-  dongo-data:
+  docudolt-data:
 ```
 
-Then run `docker compose up -d dongo mongodb-secure` before invoking the compat suite.
+Then run `docker compose up -d docudolt mongodb-secure` before invoking the compat suite.

@@ -1,6 +1,6 @@
-# dongoCurrentBranch Verification
+# docudoltCurrentBranch Verification
 
-Manual verification guide for `dongoCurrentBranch` end-to-end behavior. Work through
+Manual verification guide for `docudoltCurrentBranch` end-to-end behavior. Work through
 each scenario top to bottom.
 
 > **Automated equivalent:** `tests/versioning_current_branch_verify_test.go` (`TestCurrentBranchVerify`)
@@ -12,13 +12,13 @@ each scenario top to bottom.
 
 ## Prerequisites
 
-A running Dongo instance and `mongosh` installed. Connect to your instance:
+A running Docudolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Dongo address if different.
+Replace `localhost:27017` with your Docudolt address if different.
 
 ---
 
@@ -32,20 +32,20 @@ db.dropDatabase()
 
 // Insert a document and commit (gives us a non-trivial history)
 db.items.insertOne({ _id: 1, v: "first" })
-const result1 = db.runCommand({ dongoCommit: 1, message: "first commit", author: "alice <alice@dongo>" })
+const result1 = db.runCommand({ docudoltCommit: 1, message: "first commit", author: "alice <alice@docudolt>" })
 printjson(result1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first commit", ok: 1 }
 const hash1 = result1.commitId
 
 // Insert a second document and commit
 db.items.insertOne({ _id: 2, v: "second" })
-const result2 = db.runCommand({ dongoCommit: 1, message: "second commit", author: "alice <alice@dongo>" })
+const result2 = db.runCommand({ docudoltCommit: 1, message: "second commit", author: "alice <alice@docudolt>" })
 printjson(result2)
 // Expected: { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
 const hash2 = result2.commitId
 
 // Create branch "feature" from main HEAD
-db.getSiblingDB("branchdb__main").runCommand({ dongoBranch: 1, branch: "feature" })
+db.getSiblingDB("branchdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 print("hash1 =", hash1)
@@ -64,7 +64,7 @@ After setup, `branchdb` has:
 No `__` suffix; defaults to the main branch.
 
 ```js
-db.getSiblingDB("branchdb").runCommand({ dongoCurrentBranch: 1 })
+db.getSiblingDB("branchdb").runCommand({ docudoltCurrentBranch: 1 })
 // Expected: { branch: "main", ok: 1 }
 ```
 
@@ -75,7 +75,7 @@ db.getSiblingDB("branchdb").runCommand({ dongoCurrentBranch: 1 })
 Explicit main branch rootish.
 
 ```js
-db.getSiblingDB("branchdb__main").runCommand({ dongoCurrentBranch: 1 })
+db.getSiblingDB("branchdb__main").runCommand({ docudoltCurrentBranch: 1 })
 // Expected: { branch: "main", ok: 1 }
 ```
 
@@ -86,7 +86,7 @@ db.getSiblingDB("branchdb__main").runCommand({ dongoCurrentBranch: 1 })
 Non-main branch rootish. Returns the branch name.
 
 ```js
-db.getSiblingDB("branchdb__feature").runCommand({ dongoCurrentBranch: 1 })
+db.getSiblingDB("branchdb__feature").runCommand({ docudoltCurrentBranch: 1 })
 // Expected: { branch: "feature", ok: 1 }
 ```
 
@@ -97,9 +97,9 @@ db.getSiblingDB("branchdb__feature").runCommand({ dongoCurrentBranch: 1 })
 Commit hash rootish is read-only. There is no branch name to return.
 
 ```js
-db.getSiblingDB("branchdb__" + hash1).runCommand({ dongoCurrentBranch: 1 })
+db.getSiblingDB("branchdb__" + hash1).runCommand({ docudoltCurrentBranch: 1 })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: dongoCurrentBranch: no current branch name
+//   MongoServerError[OperationFailed]: docudoltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
 ```
 
@@ -110,9 +110,9 @@ db.getSiblingDB("branchdb__" + hash1).runCommand({ dongoCurrentBranch: 1 })
 Ancestor expression rootish is read-only. There is no branch name to return.
 
 ```js
-db.getSiblingDB("branchdb__main~1").runCommand({ dongoCurrentBranch: 1 })
+db.getSiblingDB("branchdb__main~1").runCommand({ docudoltCurrentBranch: 1 })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: dongoCurrentBranch: no current branch name
+//   MongoServerError[OperationFailed]: docudoltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
 ```
 
@@ -120,7 +120,7 @@ db.getSiblingDB("branchdb__main~1").runCommand({ dongoCurrentBranch: 1 })
 
 ## Quick Reference
 
-| Connection | dongoCurrentBranch result |
+| Connection | docudoltCurrentBranch result |
 |---|---|
 | `mydb` (no suffix) | `{ branch: "main", ok: 1 }` |
 | `mydb__main` | `{ branch: "main", ok: 1 }` |
@@ -132,7 +132,7 @@ db.getSiblingDB("branchdb__main~1").runCommand({ dongoCurrentBranch: 1 })
 
 ```js
 try {
-  db.getSiblingDB("branchdb__" + hash1).runCommand({ dongoCurrentBranch: 1 })
+  db.getSiblingDB("branchdb__" + hash1).runCommand({ docudoltCurrentBranch: 1 })
 } catch (e) {
   print("code:", e.code)      // 96
   print("message:", e.message)

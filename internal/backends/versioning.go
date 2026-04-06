@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
-// CommitParams represents the parameters of VersioningBackend.DongoCommit method.
+// CommitParams represents the parameters of VersioningBackend.DocudoltCommit method.
 type CommitParams struct {
 	DBName    string
 	Branch    string
@@ -31,7 +31,7 @@ type CommitParams struct {
 	Timestamp time.Time // optional: commit timestamp; zero value means use current time
 }
 
-// CommitResult represents the result of VersioningBackend.DongoCommit method.
+// CommitResult represents the result of VersioningBackend.DocudoltCommit method.
 type CommitResult struct {
 	CommitID  string
 	Branch    string
@@ -40,7 +40,7 @@ type CommitResult struct {
 	Timestamp int64  // Unix milliseconds of the commit timestamp
 }
 
-// BranchParams represents the parameters of VersioningBackend.DongoBranch method.
+// BranchParams represents the parameters of VersioningBackend.DocudoltBranch method.
 type BranchParams struct {
 	DBName string
 	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
@@ -49,12 +49,12 @@ type BranchParams struct {
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (-D semantics)
 }
 
-// BranchResult represents the result of VersioningBackend.DongoBranch method.
+// BranchResult represents the result of VersioningBackend.DocudoltBranch method.
 type BranchResult struct {
 	Branch string
 }
 
-// MergeParams represents the parameters of VersioningBackend.DongoMerge method.
+// MergeParams represents the parameters of VersioningBackend.DocudoltMerge method.
 type MergeParams struct {
 	DBName   string
 	Into     string // target branch (the current branch)
@@ -67,7 +67,7 @@ type MergeParams struct {
 	FFOnly   bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
 }
 
-// MergeResult represents the result of VersioningBackend.DongoMerge method.
+// MergeResult represents the result of VersioningBackend.DocudoltMerge method.
 type MergeResult struct {
 	CommitID string
 	Message  string
@@ -79,17 +79,17 @@ type ConflictSummary struct {
 	Count      int
 }
 
-// MergeConflictError is returned by DongoMerge when the merge cannot be completed
+// MergeConflictError is returned by DocudoltMerge when the merge cannot be completed
 // automatically due to conflicting document changes on both branches. The merge is staged
-// but not committed; conflicts must be resolved via DongoResolveConflict before
-// DongoCommit will succeed.
+// but not committed; conflicts must be resolved via DocudoltResolveConflict before
+// DocudoltCommit will succeed.
 type MergeConflictError struct {
 	Conflicts []ConflictSummary
 }
 
 // Error implements the error interface.
 func (e *MergeConflictError) Error() string {
-	return fmt.Sprintf("dongoMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+	return fmt.Sprintf("docudoltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
 // ConflictInfo describes a single document-level conflict in an in-progress merge.
@@ -102,21 +102,21 @@ type ConflictInfo struct {
 	TheirDiffType string          // "added", "modified", "deleted"
 }
 
-// ConflictsParams represents the parameters of VersioningBackend.DongoConflicts method.
+// ConflictsParams represents the parameters of VersioningBackend.DocudoltConflicts method.
 type ConflictsParams struct {
 	DBName     string
 	Branch     string
 	Collection string // optional: if empty, return per-collection summaries; if set, return per-conflict details
 }
 
-// ConflictsResult represents the result of VersioningBackend.DongoConflicts method.
+// ConflictsResult represents the result of VersioningBackend.DocudoltConflicts method.
 // Exactly one of Collections or Conflicts is populated depending on whether ConflictsParams.Collection is empty.
 type ConflictsResult struct {
 	Collections []ConflictSummary // per-collection conflict counts (when Collection is empty)
 	Conflicts   []ConflictInfo    // per-conflict details (when Collection is set)
 }
 
-// ResolveConflictParams represents the parameters of VersioningBackend.DongoResolveConflict method.
+// ResolveConflictParams represents the parameters of VersioningBackend.DocudoltResolveConflict method.
 type ResolveConflictParams struct {
 	DBName     string
 	Branch     string
@@ -126,10 +126,10 @@ type ResolveConflictParams struct {
 	Value      *types.Document // only used when Resolution == "custom"
 }
 
-// ResolveConflictResult represents the result of VersioningBackend.DongoResolveConflict method.
+// ResolveConflictResult represents the result of VersioningBackend.DocudoltResolveConflict method.
 type ResolveConflictResult struct{}
 
-// LogParams represents the parameters of VersioningBackend.DongoLog method.
+// LogParams represents the parameters of VersioningBackend.DocudoltLog method.
 type LogParams struct {
 	DBName     string
 	Branch     string
@@ -138,7 +138,7 @@ type LogParams struct {
 	From       string // optional: start traversal from this commit hash instead of HEAD
 }
 
-// CommitInfo represents a single commit entry returned by DongoLog.
+// CommitInfo represents a single commit entry returned by DocudoltLog.
 type CommitInfo struct {
 	CommitID  string
 	Parent1   string   // empty for root commit (no parent)
@@ -150,12 +150,12 @@ type CommitInfo struct {
 	Refs      []string // branch/tag decorations; empty when commit is not a branch head
 }
 
-// LogResult represents the result of VersioningBackend.DongoLog method.
+// LogResult represents the result of VersioningBackend.DocudoltLog method.
 type LogResult struct {
 	Commits []CommitInfo
 }
 
-// VersioningStatusParams represents the parameters of VersioningBackend.DongoStatus method.
+// VersioningStatusParams represents the parameters of VersioningBackend.DocudoltStatus method.
 type VersioningStatusParams struct {
 	DBName string
 	Branch string
@@ -167,13 +167,13 @@ type TableStatus struct {
 	Status string // "added", "modified", or "deleted"
 }
 
-// VersioningStatusResult represents the result of VersioningBackend.DongoStatus method.
+// VersioningStatusResult represents the result of VersioningBackend.DocudoltStatus method.
 type VersioningStatusResult struct {
 	Branch string
 	Tables []TableStatus
 }
 
-// DiffParams represents the parameters of VersioningBackend.DongoDiff method.
+// DiffParams represents the parameters of VersioningBackend.DocudoltDiff method.
 //
 // From and To accept rootish expressions (commit hashes, branch names, ancestor
 // expressions like "main~2", or "HEAD"/"HEAD~N"). Empty string means the default:
@@ -213,13 +213,13 @@ type CollectionDiff struct {
 	Modified []ModifiedDoc     // documents changed between "a" and "b"
 }
 
-// DiffResult represents the result of VersioningBackend.DongoDiff method.
+// DiffResult represents the result of VersioningBackend.DocudoltDiff method.
 // Only collections with at least one change appear.
 type DiffResult struct {
 	Collections []CollectionDiff
 }
 
-// ResetParams represents the parameters of VersioningBackend.DongoReset method.
+// ResetParams represents the parameters of VersioningBackend.DocudoltReset method.
 type ResetParams struct {
 	DBName   string
 	Branch   string
@@ -227,63 +227,63 @@ type ResetParams struct {
 	Hard     bool
 }
 
-// ResetResult represents the result of VersioningBackend.DongoReset method.
+// ResetResult represents the result of VersioningBackend.DocudoltReset method.
 type ResetResult struct {
 	CommitID string
 }
 
-// CurrentBranchParams represents the parameters of VersioningBackend.DongoCurrentBranch method.
+// CurrentBranchParams represents the parameters of VersioningBackend.DocudoltCurrentBranch method.
 type CurrentBranchParams struct {
 	DBName string
 	Branch string
 }
 
-// CurrentBranchResult represents the result of VersioningBackend.DongoCurrentBranch method.
+// CurrentBranchResult represents the result of VersioningBackend.DocudoltCurrentBranch method.
 type CurrentBranchResult struct {
 	Branch string
 }
 
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
-// will cause the dongo versioning commands to return an unsupported error.
+// will cause the docudolt versioning commands to return an unsupported error.
 type VersioningBackend interface {
-	// DongoCommit commits the current working set on the given branch with the provided message.
-	DongoCommit(context.Context, *CommitParams) (*CommitResult, error)
+	// DocudoltCommit commits the current working set on the given branch with the provided message.
+	DocudoltCommit(context.Context, *CommitParams) (*CommitResult, error)
 
-	// DongoBranch creates a new branch starting from the given source branch.
-	DongoBranch(context.Context, *BranchParams) (*BranchResult, error)
+	// DocudoltBranch creates a new branch starting from the given source branch.
+	DocudoltBranch(context.Context, *BranchParams) (*BranchResult, error)
 
-	// DongoCurrentBranch returns the current branch name for the connection.
-	DongoCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
+	// DocudoltCurrentBranch returns the current branch name for the connection.
+	DocudoltCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
 
-	// DongoMerge merges the source branch (From) into the target branch (Into).
-	DongoMerge(context.Context, *MergeParams) (*MergeResult, error)
+	// DocudoltMerge merges the source branch (From) into the target branch (Into).
+	DocudoltMerge(context.Context, *MergeParams) (*MergeResult, error)
 
-	// DongoLog returns the commit history for the given branch.
-	DongoLog(context.Context, *LogParams) (*LogResult, error)
+	// DocudoltLog returns the commit history for the given branch.
+	DocudoltLog(context.Context, *LogParams) (*LogResult, error)
 
-	// DongoStatus returns the uncommitted changes on the given branch.
-	DongoStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
+	// DocudoltStatus returns the uncommitted changes on the given branch.
+	DocudoltStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
 
-	// DongoDiff returns the document-level diff between two states.
+	// DocudoltDiff returns the document-level diff between two states.
 	// If From is empty, the "a" side is HEAD. If To is empty, the "b" side is the working set.
-	DongoDiff(context.Context, *DiffParams) (*DiffResult, error)
+	DocudoltDiff(context.Context, *DiffParams) (*DiffResult, error)
 
-	// DongoReset moves the branch HEAD to the given commit hash.
+	// DocudoltReset moves the branch HEAD to the given commit hash.
 	// Soft reset (Hard=false): leaves the working tree unchanged; staged root is updated to the target commit.
 	// Hard reset (Hard=true): resets both the working tree and staged root to the target commit,
 	// discarding all uncommitted changes.
-	DongoReset(context.Context, *ResetParams) (*ResetResult, error)
+	DocudoltReset(context.Context, *ResetParams) (*ResetResult, error)
 
-	// DongoConflicts returns conflict information for the current in-progress merge on the given branch.
+	// DocudoltConflicts returns conflict information for the current in-progress merge on the given branch.
 	// If ConflictsParams.Collection is empty, returns a per-collection summary (Collections field).
 	// If ConflictsParams.Collection is set, returns per-conflict details for that collection (Conflicts field).
 	// Returns ErrOperationFailed if no merge is in progress on the branch.
-	DongoConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
+	DocudoltConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
 
-	// DongoResolveConflict resolves a single document conflict in the current in-progress merge.
+	// DocudoltResolveConflict resolves a single document conflict in the current in-progress merge.
 	// Resolution must be "ours", "theirs", or "custom". For "custom", Value provides the document to use.
 	// Returns ErrOperationFailed if no merge is in progress, if the collection or conflict ID is not found,
 	// or if the conflict is already resolved.
-	DongoResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
+	DocudoltResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
 }

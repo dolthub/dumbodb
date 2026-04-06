@@ -23,7 +23,7 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 	"golang.org/x/crypto/pbkdf2"
 
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // SCRAMSHA1VariationHash computes a variation of SCRAM-SHA-1 and returns

@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // Array represents BSON array: an ordered collection of BSON values, accessed by 0-based indexes.

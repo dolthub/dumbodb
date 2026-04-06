@@ -24,17 +24,17 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/clientconn/conninfo"
-	"github.com/dolthub/dongo/internal/clientconn/cursor"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/ctxutil"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
+	"github.com/dolthub/docudolt/internal/clientconn/cursor"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/ctxutil"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgGetMore implements `getMore` command.
@@ -59,7 +59,7 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	// Use ExtractParam.
-	// TODO https://github.com/dolthub/dongo/issues/2859
+	// TODO https://github.com/dolthub/docudolt/issues/2859
 	v, _ := document.Get("collection")
 	if v == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -155,12 +155,12 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	// Handle comment.
-	// TODO https://github.com/dolthub/dongo/issues/2986
+	// TODO https://github.com/dolthub/docudolt/issues/2986
 
 	username := conninfo.Get(connCtx).Username()
 
 	// Use ExtractParam.
-	// TODO https://github.com/dolthub/dongo/issues/2859
+	// TODO https://github.com/dolthub/docudolt/issues/2859
 	c := h.cursors.Get(cursorID)
 	if c == nil || c.Username != username {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -183,7 +183,7 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		// Use 16MB batchSize limit.
 		// Unlimited default batchSize is used for missing batchSize and zero values,
 		// set 250 assuming it is small enough not to crash FerretDB.
-		// TODO https://github.com/dolthub/dongo/issues/2824
+		// TODO https://github.com/dolthub/docudolt/issues/2824
 		v = int32(250)
 	}
 

@@ -17,8 +17,8 @@ package common
 import (
 	"sort"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // SortArray sorts the values of given array.

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package stub provides a stub backend implementation that returns errors for all operations.
-// It is used to scaffold the Dongo server before the Dolt backend is implemented.
+// It is used to scaffold the Docudolt server before the Dolt backend is implemented.
 package stub
 
 import (
@@ -24,7 +24,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/docudolt/internal/backends"
 )
 
 // Backend implements backends.Backend interface with stub (no-op) implementations.
@@ -108,9 +108,9 @@ func (db *database) Stats(_ context.Context, _ *backends.DatabaseStatsParams) (*
 	return &backends.DatabaseStatsResult{}, nil
 }
 
-// DongoCommit implements backends.VersioningBackend interface.
-func (b *Backend) DongoCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
-	b.l.Info("stub: DongoCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DocudoltCommit implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+	b.l.Info("stub: DocudoltCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	ts := params.Timestamp
 	if ts.IsZero() {
@@ -126,25 +126,25 @@ func (b *Backend) DongoCommit(_ context.Context, params *backends.CommitParams) 
 	}, nil
 }
 
-// DongoCurrentBranch implements backends.VersioningBackend interface.
-func (b *Backend) DongoCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
-	b.l.Info("stub: DongoCurrentBranch", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DocudoltCurrentBranch implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+	b.l.Info("stub: DocudoltCurrentBranch", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
 }
 
-// DongoBranch implements backends.VersioningBackend interface.
-func (b *Backend) DongoBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
-	b.l.Info("stub: DongoBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
+// DocudoltBranch implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+	b.l.Info("stub: DocudoltBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
 
 	return &backends.BranchResult{
 		Branch: params.Name,
 	}, nil
 }
 
-// DongoMerge implements backends.VersioningBackend interface.
-func (b *Backend) DongoMerge(_ context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
-	b.l.Info("stub: DongoMerge", slog.String("db", params.DBName), slog.String("into", params.Into), slog.String("from", params.From))
+// DocudoltMerge implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltMerge(_ context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+	b.l.Info("stub: DocudoltMerge", slog.String("db", params.DBName), slog.String("into", params.Into), slog.String("from", params.From))
 
 	return &backends.MergeResult{
 		CommitID: "0000000000000000000000000000000000000000",
@@ -152,16 +152,16 @@ func (b *Backend) DongoMerge(_ context.Context, params *backends.MergeParams) (*
 	}, nil
 }
 
-// DongoLog implements backends.VersioningBackend interface.
-func (b *Backend) DongoLog(_ context.Context, params *backends.LogParams) (*backends.LogResult, error) {
-	b.l.Info("stub: DongoLog", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DocudoltLog implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltLog(_ context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+	b.l.Info("stub: DocudoltLog", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.LogResult{Commits: []backends.CommitInfo{}}, nil
 }
 
-// DongoStatus implements backends.VersioningBackend interface.
-func (b *Backend) DongoStatus(_ context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
-	b.l.Info("stub: DongoStatus", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DocudoltStatus implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltStatus(_ context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+	b.l.Info("stub: DocudoltStatus", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.VersioningStatusResult{
 		Branch: params.Branch,
@@ -169,30 +169,30 @@ func (b *Backend) DongoStatus(_ context.Context, params *backends.VersioningStat
 	}, nil
 }
 
-// DongoDiff implements backends.VersioningBackend interface.
-func (b *Backend) DongoDiff(_ context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
-	b.l.Info("stub: DongoDiff", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("to", params.To))
+// DocudoltDiff implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltDiff(_ context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+	b.l.Info("stub: DocudoltDiff", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("to", params.To))
 
 	return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
 }
 
-// DongoReset implements backends.VersioningBackend interface.
-func (b *Backend) DongoReset(_ context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
-	b.l.Info("stub: DongoReset", slog.String("db", params.DBName), slog.String("commitId", params.CommitID), slog.Bool("hard", params.Hard))
+// DocudoltReset implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltReset(_ context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	b.l.Info("stub: DocudoltReset", slog.String("db", params.DBName), slog.String("commitId", params.CommitID), slog.Bool("hard", params.Hard))
 
 	return &backends.ResetResult{CommitID: params.CommitID}, nil
 }
 
-// DongoConflicts implements backends.VersioningBackend interface.
-func (b *Backend) DongoConflicts(_ context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
-	b.l.Info("stub: DongoConflicts", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DocudoltConflicts implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltConflicts(_ context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+	b.l.Info("stub: DocudoltConflicts", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.ConflictsResult{}, nil
 }
 
-// DongoResolveConflict implements backends.VersioningBackend interface.
-func (b *Backend) DongoResolveConflict(_ context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
-	b.l.Info("stub: DongoResolveConflict", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("conflictId", params.ConflictID))
+// DocudoltResolveConflict implements backends.VersioningBackend interface.
+func (b *Backend) DocudoltResolveConflict(_ context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+	b.l.Info("stub: DocudoltResolveConflict", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("conflictId", params.ConflictID))
 
 	return &backends.ResolveConflictResult{}, nil
 }

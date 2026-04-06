@@ -1,4 +1,4 @@
-Dongo
+Docudolt
 Copyright 2026 Dolthub, Inc.
 
 This product includes software developed by the FerretDB project
@@ -11,7 +11,7 @@ packages were adapted from FerretDB v1.24.2:
   Commit:     cda72d440810406a208c4670aa7047f5bc8d528f
 
 All import paths have been changed from github.com/FerretDB/FerretDB to
-github.com/dolthub/dongo, and the storage backend has been replaced with a
+github.com/dolthub/docudolt, and the storage backend has been replaced with a
 Dolt-native implementation.
 
 A copy of the Apache License, Version 2.0 is included in the LICENSE file.

@@ -24,9 +24,9 @@ import (
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
 
-	"github.com/dolthub/dongo/internal/clientconn/conninfo"
-	"github.com/dolthub/dongo/internal/util/must"
-	"github.com/dolthub/dongo/internal/util/resource"
+	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
+	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/resource"
 )
 
 // Backend is a generic interface for all backends for accessing them.
@@ -208,98 +208,98 @@ func (bc *backendContract) Collect(ch chan<- prometheus.Metric) {
 	bc.b.Collect(ch)
 }
 
-// DongoCommit implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoCommit(ctx context.Context, params *CommitParams) (*CommitResult, error) {
+// DocudoltCommit implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltCommit(ctx context.Context, params *CommitParams) (*CommitResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoCommit(ctx, params)
+		return vb.DocudoltCommit(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoCommit")
+	return nil, newVersioningUnsupportedError("DocudoltCommit")
 }
 
-// DongoBranch implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoBranch(ctx context.Context, params *BranchParams) (*BranchResult, error) {
+// DocudoltBranch implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltBranch(ctx context.Context, params *BranchParams) (*BranchResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoBranch(ctx, params)
+		return vb.DocudoltBranch(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoBranch")
+	return nil, newVersioningUnsupportedError("DocudoltBranch")
 }
 
-// DongoMerge implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoMerge(ctx context.Context, params *MergeParams) (*MergeResult, error) {
+// DocudoltMerge implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltMerge(ctx context.Context, params *MergeParams) (*MergeResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoMerge(ctx, params)
+		return vb.DocudoltMerge(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoMerge")
+	return nil, newVersioningUnsupportedError("DocudoltMerge")
 }
 
-// DongoLog implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoLog(ctx context.Context, params *LogParams) (*LogResult, error) {
+// DocudoltLog implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltLog(ctx context.Context, params *LogParams) (*LogResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoLog(ctx, params)
+		return vb.DocudoltLog(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoLog")
+	return nil, newVersioningUnsupportedError("DocudoltLog")
 }
 
-// DongoStatus implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoStatus(ctx context.Context, params *VersioningStatusParams) (*VersioningStatusResult, error) {
+// DocudoltStatus implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltStatus(ctx context.Context, params *VersioningStatusParams) (*VersioningStatusResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoStatus(ctx, params)
+		return vb.DocudoltStatus(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoStatus")
+	return nil, newVersioningUnsupportedError("DocudoltStatus")
 }
 
-// DongoDiff implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoDiff(ctx context.Context, params *DiffParams) (*DiffResult, error) {
+// DocudoltDiff implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltDiff(ctx context.Context, params *DiffParams) (*DiffResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoDiff(ctx, params)
+		return vb.DocudoltDiff(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoDiff")
+	return nil, newVersioningUnsupportedError("DocudoltDiff")
 }
 
-func (bc *backendContract) DongoCurrentBranch(ctx context.Context, params *CurrentBranchParams) (*CurrentBranchResult, error) {
+func (bc *backendContract) DocudoltCurrentBranch(ctx context.Context, params *CurrentBranchParams) (*CurrentBranchResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoCurrentBranch(ctx, params)
+		return vb.DocudoltCurrentBranch(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoCurrentBranch")
+	return nil, newVersioningUnsupportedError("DocudoltCurrentBranch")
 }
 
-func (bc *backendContract) DongoReset(ctx context.Context, params *ResetParams) (*ResetResult, error) {
+func (bc *backendContract) DocudoltReset(ctx context.Context, params *ResetParams) (*ResetResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoReset(ctx, params)
+		return vb.DocudoltReset(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoReset")
+	return nil, newVersioningUnsupportedError("DocudoltReset")
 }
 
-// DongoConflicts implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoConflicts(ctx context.Context, params *ConflictsParams) (*ConflictsResult, error) {
+// DocudoltConflicts implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltConflicts(ctx context.Context, params *ConflictsParams) (*ConflictsResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoConflicts(ctx, params)
+		return vb.DocudoltConflicts(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoConflicts")
+	return nil, newVersioningUnsupportedError("DocudoltConflicts")
 }
 
-// DongoResolveConflict implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DongoResolveConflict(ctx context.Context, params *ResolveConflictParams) (*ResolveConflictResult, error) {
+// DocudoltResolveConflict implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocudoltResolveConflict(ctx context.Context, params *ResolveConflictParams) (*ResolveConflictResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DongoResolveConflict(ctx, params)
+		return vb.DocudoltResolveConflict(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DongoResolveConflict")
+	return nil, newVersioningUnsupportedError("DocudoltResolveConflict")
 }
 
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {
-	return fmt.Errorf("dongo versioning not supported by this backend: %s", op)
+	return fmt.Errorf("docudolt versioning not supported by this backend: %s", op)
 }
 
 // check interfaces

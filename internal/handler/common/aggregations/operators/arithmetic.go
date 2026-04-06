@@ -17,8 +17,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/dongo/internal/handler/common/aggregations"
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // ── $add ─────────────────────────────────────────────────────────────────────

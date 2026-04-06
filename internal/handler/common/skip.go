@@ -15,8 +15,8 @@
 package common
 
 import (
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // SkipDocuments returns a subslice of given documents according to the given skip value.

@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 //go:generate ../../bin/stringer -linecomment -type PathErrorCode
@@ -103,7 +103,7 @@ func newPath(path ...string) (Path, error) {
 			return res, newPathError(ErrPathElementInvalid, errors.New("path element must not contain spaces"))
 		case strings.Contains(e, "."):
 			return res, newPathError(ErrPathElementInvalid, errors.New("path element must not contain '.'"))
-			// TODO https://github.com/dolthub/dongo/issues/3127
+			// TODO https://github.com/dolthub/docudolt/issues/3127
 			// enable validation of `$` prefix and update Path struct comment
 			// case strings.HasPrefix(e, "$"):
 			//	return res, newPathError(ErrPathElementInvalid, errors.New("path element must not start with '$'"))

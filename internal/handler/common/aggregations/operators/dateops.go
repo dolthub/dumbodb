@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // toTime converts a value to time.Time. Returns false if conversion is not possible.

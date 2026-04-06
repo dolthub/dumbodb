@@ -24,7 +24,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // runGit runs `git` with given arguments and returns stdout.

@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
 )
 
 // SkipIterator returns an iterator that skips a number of documents returned by the underlying iterator.

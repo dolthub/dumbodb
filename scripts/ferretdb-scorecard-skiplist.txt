@@ -1,7 +1,7 @@
 # FerretDB Scorecard — Known-Failing Tests Skip List
 #
 # Tests listed here are expected to fail and are excluded from the "unexpected
-# failures" check in the dongo-scorecard GitHub Actions workflow.
+# failures" check in the docudolt-scorecard GitHub Actions workflow.
 #
 # Format: one test name per line (base test name only, no subtest paths).
 # Lines starting with # and blank lines are ignored.
@@ -16,7 +16,7 @@
 # These tests require a MongoDB-compatible server running with real auth users
 # and SASL support. The CI FerretDB instance does not provide an auth server,
 # so these tests fail before exercising their intended logic. These failures
-# are not dongo bugs — they are a test suite infrastructure limitation.
+# are not docudolt bugs — they are a test suite infrastructure limitation.
 #
 TestHelloIsMasterOpQuerySpeculative
 TestHelloOpQuerySASLSupportedMechs
@@ -46,7 +46,7 @@ TestQueryMaxTimeMSErrors
 # paths (empty keys, positional operators, field path validation) which are not
 # yet implemented in FerretDB-DocumentDB (issue #241). These subtests are
 # individually marked failsForFerretDB but the parent test still shows as
-# FAIL in the scorecard output. Structural incompatibility, not a dongo bug.
+# FAIL in the scorecard output. Structural incompatibility, not a docudolt bug.
 #
 TestQueryProjectionErrors
 # --- Category: showRecordId / FerretDB-DocumentDB compatibility (structural) ---
@@ -55,7 +55,7 @@ TestQueryProjectionErrors
 # validation (null, int, string inputs) which is not yet implemented in
 # FerretDB-DocumentDB (issue #242). Each subtest is individually marked
 # FailsForFerretDB but the parent test still shows as FAIL in the scorecard
-# output. Structural incompatibility, not a dongo bug.
+# output. Structural incompatibility, not a docudolt bug.
 #
 TestQueryShowRecordIDErrors
 
@@ -64,7 +64,7 @@ TestQueryShowRecordIDErrors
 # TestCollStatsCommand and TestCollStatsCommandCount check collStats output
 # fields and document counts. Not yet accurate in FerretDB-DocumentDB (issue #555).
 # Both are marked FailsForFerretDB but the parent tests still show as FAIL in
-# the scorecard output. Structural incompatibility, not a dongo bug.
+# the scorecard output. Structural incompatibility, not a docudolt bug.
 #
 TestCollStatsCommand
 TestCollStatsCommandCount
@@ -74,7 +74,7 @@ TestCollStatsCommandCount
 # TestCollStatsCommandScale and TestCollStatsCommandScaleSize exercise scale
 # factor handling in collStats. Both are marked FailsForFerretDB
 # (FerretDB/FerretDB#4792) but the parent tests still show as FAIL in the
-# scorecard output. Structural incompatibility, not a dongo bug.
+# scorecard output. Structural incompatibility, not a docudolt bug.
 #
 TestCollStatsCommandScale
 TestCollStatsCommandScaleSize
@@ -84,7 +84,7 @@ TestCollStatsCommandScaleSize
 # TestAggregateCommandCollStats and TestAggregateCommandCollStatsIndexSizes
 # exercise the $collStats aggregation stage. Marked FailsForFerretDB
 # (FerretDB-DocumentDB issues #534, #538) but parent tests still show as FAIL
-# in the scorecard output. Structural incompatibility, not a dongo bug.
+# in the scorecard output. Structural incompatibility, not a docudolt bug.
 #
 TestAggregateCommandCollStats
 TestAggregateCommandCollStatsIndexSizes
@@ -94,7 +94,7 @@ TestAggregateCommandCollStatsIndexSizes
 # TestDBStatsCommandScale and TestDBStatsCommandFreeStorage subtests exercise
 # dbStats scale and freeStorage handling. Subtests are marked FailsForFerretDB
 # (FerretDB/FerretDB#4821) but parent tests still show as FAIL in the scorecard
-# output. Structural incompatibility, not a dongo bug.
+# output. Structural incompatibility, not a docudolt bug.
 #
 TestDBStatsCommandScale
 TestDBStatsCommandFreeStorage
@@ -105,6 +105,6 @@ TestDBStatsCommandFreeStorage
 # TestCompactCommandNonExistent exercises compact on non-existent DB/collection.
 # The test has altMessages for FerretDB's different error text ("ns does not exist")
 # but FerretDB returns a response that does not match either the primary or alt
-# message. Structural incompatibility, not a dongo bug.
+# message. Structural incompatibility, not a docudolt bug.
 #
 TestCompactCommandNonExistent

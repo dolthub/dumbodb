@@ -26,15 +26,15 @@ import (
 	"github.com/dolthub/dolt/go/store/datas"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // TestInitialCommitMessage verifies that a brand-new database gets an "Initialize database"
 // root commit with no parents, satisfying the requirement that dolt log shows a clean
 // ancestry for new stores.
 func TestInitialCommitMessage(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-init-commit-test-*")
+	dir, err := os.MkdirTemp("", "docudolt-init-commit-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestInitialCommitMessage(t *testing.T) {
 // TestRTVLFormat verifies that the head commit's rootValue has file ID "RTVL"
 // and that the embedded ADRM in RTVL.tables can be parsed.
 func TestRTVLFormat(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-rtvl-test-*")
+	dir, err := os.MkdirTemp("", "docudolt-rtvl-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRTVLFormat(t *testing.T) {
 // TestWorkingSetRTVL verifies that both working_root_addr and staged_root_addr
 // in the working set point to RTVL chunks (not raw ADRM).
 func TestWorkingSetRTVL(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-ws-rtvl-test-*")
+	dir, err := os.MkdirTemp("", "docudolt-ws-rtvl-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestWorkingSetRTVL(t *testing.T) {
 // This models the git/dolt staging model: `dolt status` should show
 // "Changes not staged for commit" after writes.
 func TestWorkingSetDivergesAfterWrite(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-ws-diverge-test-*")
+	dir, err := os.MkdirTemp("", "docudolt-ws-diverge-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestWorkingSetDivergesAfterWrite(t *testing.T) {
 // TestPersistenceAcrossRestart verifies that documents survive a backend close and reopen.
 // This is the end-to-end persistence test described in do-q040.
 func TestPersistenceAcrossRestart(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-persist-test-*")
+	dir, err := os.MkdirTemp("", "docudolt-persist-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 // (the "Initialize database" commit from init). Writes must update the working set
 // only; they must NOT advance HEAD.
 func TestWritesNoNewCommits(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-writes-no-commits-test-*")
+	dir, err := os.MkdirTemp("", "docudolt-writes-no-commits-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,10 +449,10 @@ func TestWritesNoNewCommits(t *testing.T) {
 	}
 }
 
-// TestDongoCommit verifies that DongoCommit creates a new dolt commit,
+// TestDocudoltCommit verifies that DocudoltCommit creates a new dolt commit,
 // advances HEAD, and returns a non-empty hash string.
-func TestDongoCommit(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-test-*")
+func TestDocudoltCommit(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,19 +494,19 @@ func TestDongoCommit(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	// Run DongoCommit.
-	res, err := b.DongoCommit(ctx, &backends.CommitParams{
+	// Run DocudoltCommit.
+	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "my first commit",
 		Author:  "testuser",
 	})
 	if err != nil {
-		t.Fatalf("DongoCommit: %v", err)
+		t.Fatalf("DocudoltCommit: %v", err)
 	}
 
 	// Hash must be non-empty and not all-zeros.
 	if res.CommitID == "" {
-		t.Error("DongoCommit returned empty hash")
+		t.Error("DocudoltCommit returned empty hash")
 	}
 	allZero := true
 	for _, c := range res.CommitID {
@@ -516,17 +516,17 @@ func TestDongoCommit(t *testing.T) {
 		}
 	}
 	if allZero {
-		t.Errorf("DongoCommit returned all-zero hash: %s", res.CommitID)
+		t.Errorf("DocudoltCommit returned all-zero hash: %s", res.CommitID)
 	}
 
 	// Branch should be "main".
 	if res.Branch != "main" {
-		t.Errorf("DongoCommit branch = %q, want %q", res.Branch, "main")
+		t.Errorf("DocudoltCommit branch = %q, want %q", res.Branch, "main")
 	}
 
 	// Message should match.
 	if res.Message != "my first commit" {
-		t.Errorf("DongoCommit message = %q, want %q", res.Message, "my first commit")
+		t.Errorf("DocudoltCommit message = %q, want %q", res.Message, "my first commit")
 	}
 
 	// HEAD must have advanced past the init commit.
@@ -536,16 +536,16 @@ func TestDongoCommit(t *testing.T) {
 	}
 	headAddr, ok := freshDS.MaybeHeadAddr()
 	if !ok {
-		t.Fatal("no HEAD after DongoCommit")
+		t.Fatal("no HEAD after DocudoltCommit")
 	}
 	if headAddr == initAddr {
-		t.Error("HEAD did not advance after DongoCommit")
+		t.Error("HEAD did not advance after DocudoltCommit")
 	}
 }
 
-// TestDongoCommitDefaultMessage verifies that an empty Message defaults to "dongo commit".
-func TestDongoCommitDefaultMessage(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-default-msg-*")
+// TestDocudoltCommitDefaultMessage verifies that an empty Message defaults to "docudolt commit".
+func TestDocudoltCommitDefaultMessage(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-default-msg-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,18 +563,18 @@ func TestDongoCommitDefaultMessage(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
+	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit: %v", err)
+		t.Fatalf("DocudoltCommit: %v", err)
 	}
-	if res.Message != "dongo commit" {
-		t.Errorf("default message = %q, want %q", res.Message, "dongo commit")
+	if res.Message != "docudolt commit" {
+		t.Errorf("default message = %q, want %q", res.Message, "docudolt commit")
 	}
 }
 
-// TestDongoCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
-func TestDongoCommitTwoDistinctHashes(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-two-hashes-*")
+// TestDocudoltCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
+func TestDocudoltCommitTwoDistinctHashes(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-two-hashes-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,9 +610,9 @@ func TestDongoCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
+	res1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 1: %v", err)
+		t.Fatalf("DocudoltCommit 1: %v", err)
 	}
 
 	// Insert another document, then commit again.
@@ -625,9 +625,9 @@ func TestDongoCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
+	res2, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 2: %v", err)
+		t.Fatalf("DocudoltCommit 2: %v", err)
 	}
 
 	if res1.CommitID == res2.CommitID {
@@ -635,10 +635,10 @@ func TestDongoCommitTwoDistinctHashes(t *testing.T) {
 	}
 }
 
-// TestDongoCommitNoOpSucceeds verifies that committing with no changes since the last
+// TestDocudoltCommitNoOpSucceeds verifies that committing with no changes since the last
 // commit succeeds (a no-op commit is acceptable).
-func TestDongoCommitNoOpSucceeds(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-noop-*")
+func TestDocudoltCommitNoOpSucceeds(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-noop-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,15 +657,15 @@ func TestDongoCommitNoOpSucceeds(t *testing.T) {
 	}
 
 	// First commit (on empty state after init).
-	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
+	res1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 1: %v", err)
+		t.Fatalf("DocudoltCommit 1: %v", err)
 	}
 
 	// Second commit with no intervening writes — must not error.
-	res2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
+	res2, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 2 (no-op): %v", err)
+		t.Fatalf("DocudoltCommit 2 (no-op): %v", err)
 	}
 
 	// Both hashes must be non-empty.
@@ -674,10 +674,10 @@ func TestDongoCommitNoOpSucceeds(t *testing.T) {
 	}
 }
 
-// TestDongoCommitWorkingSetClean verifies that after a commit the working set's
+// TestDocudoltCommitWorkingSetClean verifies that after a commit the working set's
 // staged root address equals the HEAD commit's rootValue address (clean state).
-func TestDongoCommitWorkingSetClean(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-ws-clean-*")
+func TestDocudoltCommitWorkingSetClean(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-ws-clean-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,8 +714,8 @@ func TestDongoCommitWorkingSetClean(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
-		t.Fatalf("DongoCommit: %v", err)
+	if _, err = b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
+		t.Fatalf("DocudoltCommit: %v", err)
 	}
 
 	// Read HEAD rootValue hash.
@@ -750,10 +750,10 @@ func TestDongoCommitWorkingSetClean(t *testing.T) {
 	}
 }
 
-// TestDongoCommitAuthorAndTimestamp verifies that DongoCommit stores the provided
-// author name and timestamp, and that dongoLog reflects them on the resulting commit.
-func TestDongoCommitAuthorAndTimestamp(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-author-*")
+// TestDocudoltCommitAuthorAndTimestamp verifies that DocudoltCommit stores the provided
+// author name and timestamp, and that docudoltLog reflects them on the resulting commit.
+func TestDocudoltCommitAuthorAndTimestamp(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-author-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -773,14 +773,14 @@ func TestDongoCommitAuthorAndTimestamp(t *testing.T) {
 
 	fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	res, err := b.DongoCommit(ctx, &backends.CommitParams{
+	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{
 		DBName:    "testdb",
 		Message:   "authored commit",
 		Author:    "alice",
 		Timestamp: fixedTime,
 	})
 	if err != nil {
-		t.Fatalf("DongoCommit: %v", err)
+		t.Fatalf("DocudoltCommit: %v", err)
 	}
 
 	if res.Author != "alice" {
@@ -790,28 +790,28 @@ func TestDongoCommitAuthorAndTimestamp(t *testing.T) {
 		t.Errorf("CommitResult.Timestamp = %d, want %d", res.Timestamp, fixedTime.UnixMilli())
 	}
 
-	// Verify via dongoLog that author and timestamp were persisted.
-	logRes, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	// Verify via docudoltLog that author and timestamp were persisted.
+	logRes, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
 	if err != nil {
-		t.Fatalf("DongoLog: %v", err)
+		t.Fatalf("DocudoltLog: %v", err)
 	}
 	if len(logRes.Commits) == 0 {
-		t.Fatal("expected at least 1 commit from DongoLog")
+		t.Fatal("expected at least 1 commit from DocudoltLog")
 	}
 	c := logRes.Commits[0]
-	// dongoLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@dongo>".
-	if c.Author != "alice <alice@dongo>" {
-		t.Errorf("log commit Author = %q, want %q", c.Author, "alice <alice@dongo>")
+	// docudoltLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@docudolt>".
+	if c.Author != "alice <alice@docudolt>" {
+		t.Errorf("log commit Author = %q, want %q", c.Author, "alice <alice@docudolt>")
 	}
 	if c.Timestamp != fixedTime.UnixMilli() {
 		t.Errorf("log commit Timestamp = %d, want %d", c.Timestamp, fixedTime.UnixMilli())
 	}
 }
 
-// TestDongoCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
+// TestDocudoltCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
 // the commit timestamp is set to approximately the current time.
-func TestDongoCommitTimestampDefaultsToNow(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dongo-dongo-commit-ts-default-*")
+func TestDocudoltCommitTimestampDefaultsToNow(t *testing.T) {
+	dir, err := os.MkdirTemp("", "docudolt-docudolt-commit-ts-default-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -830,14 +830,14 @@ func TestDongoCommitTimestampDefaultsToNow(t *testing.T) {
 	}
 
 	before := time.Now().UnixMilli()
-	res, err := b.DongoCommit(ctx, &backends.CommitParams{
+	res, err := b.DocudoltCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "no timestamp",
 		Author:  "bob",
 	})
 	after := time.Now().UnixMilli()
 	if err != nil {
-		t.Fatalf("DongoCommit: %v", err)
+		t.Fatalf("DocudoltCommit: %v", err)
 	}
 
 	if res.Timestamp < before || res.Timestamp > after {
@@ -850,7 +850,7 @@ func TestDongoCommitTimestampDefaultsToNow(t *testing.T) {
 func newBackendForTest(t *testing.T) (b *Backend, dir string) {
 	t.Helper()
 	var err error
-	dir, err = os.MkdirTemp("", "dongo-log-test-*")
+	dir, err = os.MkdirTemp("", "docudolt-log-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func newBackendForTest(t *testing.T) (b *Backend, dir string) {
 }
 
 // insertDocForTest inserts a document with the given integer _id into the named collection,
-// so that a subsequent DongoCommit records a real content change.
+// so that a subsequent DocudoltCommit records a real content change.
 func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName string, id int64) {
 	t.Helper()
 	db, err := b.Database(dbName)
@@ -884,9 +884,9 @@ func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName stri
 	}
 }
 
-// TestDongoLogFreshDatabase verifies that DongoLog on a brand-new database returns exactly
+// TestDocudoltLogFreshDatabase verifies that DocudoltLog on a brand-new database returns exactly
 // one commit — the "Initialize database" root commit — and that the root commit has no Parent1.
-func TestDongoLogFreshDatabase(t *testing.T) {
+func TestDocudoltLogFreshDatabase(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -896,9 +896,9 @@ func TestDongoLogFreshDatabase(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DongoLog: %v", err)
+		t.Fatalf("DocudoltLog: %v", err)
 	}
 
 	if len(res.Commits) != 1 {
@@ -921,9 +921,9 @@ func TestDongoLogFreshDatabase(t *testing.T) {
 	}
 }
 
-// TestDongoLogAfterOneCommit verifies that after one DongoCommit the log returns
+// TestDocudoltLogAfterOneCommit verifies that after one DocudoltCommit the log returns
 // 2 commits in newest-first order: the user commit followed by the init commit.
-func TestDongoLogAfterOneCommit(t *testing.T) {
+func TestDocudoltLogAfterOneCommit(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -935,14 +935,14 @@ func TestDongoLogAfterOneCommit(t *testing.T) {
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
 
-	commitRes, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
+	commitRes, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit: %v", err)
+		t.Fatalf("DocudoltCommit: %v", err)
 	}
 
-	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DongoLog: %v", err)
+		t.Fatalf("DocudoltLog: %v", err)
 	}
 
 	if len(res.Commits) != 2 {
@@ -973,9 +973,9 @@ func TestDongoLogAfterOneCommit(t *testing.T) {
 	}
 }
 
-// TestDongoLogLimit verifies that the Limit parameter is respected: limit=1 returns
+// TestDocudoltLogLimit verifies that the Limit parameter is respected: limit=1 returns
 // only the HEAD commit even when more commits exist.
-func TestDongoLogLimit(t *testing.T) {
+func TestDocudoltLogLimit(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -988,18 +988,18 @@ func TestDongoLogLimit(t *testing.T) {
 	// Create 3 user commits so there are 4 total (including init).
 	for i := int64(1); i <= 3; i++ {
 		insertDocForTest(t, ctx, b, "testdb", i)
-		if _, err := b.DongoCommit(ctx, &backends.CommitParams{
+		if _, err := b.DocudoltCommit(ctx, &backends.CommitParams{
 			DBName:  "testdb",
 			Message: fmt.Sprintf("commit %d", i),
 			Author:  "testuser",
 		}); err != nil {
-			t.Fatalf("DongoCommit %d: %v", i, err)
+			t.Fatalf("DocudoltCommit %d: %v", i, err)
 		}
 	}
 
-	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
 	if err != nil {
-		t.Fatalf("DongoLog: %v", err)
+		t.Fatalf("DocudoltLog: %v", err)
 	}
 
 	if len(res.Commits) != 1 {
@@ -1010,9 +1010,9 @@ func TestDongoLogLimit(t *testing.T) {
 	}
 }
 
-// TestDongoLogFromHash verifies that setting From=<hash> starts traversal from
+// TestDocudoltLogFromHash verifies that setting From=<hash> starts traversal from
 // that specific commit rather than HEAD.
-func TestDongoLogFromHash(t *testing.T) {
+func TestDocudoltLogFromHash(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1023,20 +1023,20 @@ func TestDongoLogFromHash(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	res1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
+	res1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 1: %v", err)
+		t.Fatalf("DocudoltCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	if _, err = b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
-		t.Fatalf("DongoCommit 2: %v", err)
+	if _, err = b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
+		t.Fatalf("DocudoltCommit 2: %v", err)
 	}
 
 	// Starting from commit one's hash should return commit one + init commit only.
-	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
+	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
 	if err != nil {
-		t.Fatalf("DongoLog from hash: %v", err)
+		t.Fatalf("DocudoltLog from hash: %v", err)
 	}
 
 	if len(res.Commits) != 2 {
@@ -1050,8 +1050,8 @@ func TestDongoLogFromHash(t *testing.T) {
 	}
 }
 
-// TestDongoLogFromUnknownHash verifies that from=<unknown hash> returns an error.
-func TestDongoLogFromUnknownHash(t *testing.T) {
+// TestDocudoltLogFromUnknownHash verifies that from=<unknown hash> returns an error.
+func TestDocudoltLogFromUnknownHash(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1064,16 +1064,16 @@ func TestDongoLogFromUnknownHash(t *testing.T) {
 	// A syntactically valid but non-existent hash (32 hex bytes = 64 chars).
 	unknownHash := "0000000000000000000000000000000000000000000000000000000000000001"
 
-	_, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
+	_, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
 	if err == nil {
 		t.Error("expected error for unknown from hash, got nil")
 	}
 }
 
-// TestDongoLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
-// verifies that returned hashes match what DongoCommit reported (newest first) and
+// TestDocudoltLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
+// verifies that returned hashes match what DocudoltCommit reported (newest first) and
 // that timestamps are non-zero and non-decreasing from root toward HEAD.
-func TestDongoLogHashOrderAndTimestamps(t *testing.T) {
+func TestDocudoltLogHashOrderAndTimestamps(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1084,20 +1084,20 @@ func TestDongoLogHashOrderAndTimestamps(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	r1, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
+	r1, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 1: %v", err)
+		t.Fatalf("DocudoltCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	r2, err := b.DongoCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
+	r2, err := b.DocudoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DongoCommit 2: %v", err)
+		t.Fatalf("DocudoltCommit 2: %v", err)
 	}
 
-	res, err := b.DongoLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DocudoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DongoLog: %v", err)
+		t.Fatalf("DocudoltLog: %v", err)
 	}
 
 	// Expect 3 commits: beta, alpha, init.
@@ -1132,10 +1132,10 @@ func TestDongoLogHashOrderAndTimestamps(t *testing.T) {
 	}
 }
 
-// TestDongoLogCommitInfoSupportsParent2 is a compile-time structural assertion:
+// TestDocudoltLogCommitInfoSupportsParent2 is a compile-time structural assertion:
 // CommitInfo must have a Parent2 field to support merge commits in the future.
 // This test documents the requirement and ensures the struct is not accidentally changed.
-func TestDongoLogCommitInfoSupportsParent2(t *testing.T) {
+func TestDocudoltLogCommitInfoSupportsParent2(t *testing.T) {
 	var ci backends.CommitInfo
 	ci.Parent2 = "somemergehash"
 	if ci.Parent2 != "somemergehash" {

@@ -24,16 +24,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common/aggregations"
-	"github.com/dolthub/dongo/internal/handler/common/aggregations/operators"
-	stageProjection "github.com/dolthub/dongo/internal/handler/common/aggregations/stages/projection"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations/operators"
+	stageProjection "github.com/dolthub/docudolt/internal/handler/common/aggregations/stages/projection"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // kvOp represents key-value pair and its associated update operator.
@@ -48,7 +48,7 @@ type kvOp struct {
 //
 // In case of updating multiple documents, UpdateDocument returns an error immediately after one of the
 // operation fails. The rest of the documents are not processed.
-// TODO https://github.com/dolthub/dongo/issues/2612
+// TODO https://github.com/dolthub/docudolt/issues/2612
 func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter types.DocumentsIterator, param *Update) (*UpdateResult, error) { //nolint:lll // for readability
 	result := new(UpdateResult)
 
@@ -100,7 +100,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			doc.Set("_id", types.NewObjectID())
 		}
 
-		// TODO https://github.com/dolthub/dongo/issues/3454
+		// TODO https://github.com/dolthub/docudolt/issues/3454
 		if err = doc.ValidateData(); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -509,7 +509,7 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
 // filter is the query filter used to match the document (needed for $ positional operator).
 // arrayFilters is used for $[identifier] positional operator.
-// TODO https://github.com/dolthub/dongo/issues/3044
+// TODO https://github.com/dolthub/docudolt/issues/3044
 func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array) (bool, error) {
 	var docUpdated bool
 	var err error

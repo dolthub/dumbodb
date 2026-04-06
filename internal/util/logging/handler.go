@@ -23,8 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dolthub/dongo/internal/util/debugbuild"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/debugbuild"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // Handler is a [slog.Handler] that wraps another handler with support for:
@@ -54,7 +54,7 @@ type NewHandlerOpts struct {
 	// It must not be set unconditionally because we don't control messages from third-party packages.
 	//
 	// But we can enable it in our tests and when [debugbuild.Enabled] is true.
-	// TODO https://github.com/dolthub/dongo/issues/4511
+	// TODO https://github.com/dolthub/docudolt/issues/4511
 	CheckMessages bool
 }
 

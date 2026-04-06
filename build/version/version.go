@@ -57,9 +57,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/debugbuild"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/debugbuild"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // Each pattern in a //go:embed line must match at least one file or non-empty directory,
@@ -134,8 +134,8 @@ func init() {
 		return
 	}
 
-	// TODO https://github.com/dolthub/dongo/issues/4001
-	if buildInfo.Main.Path != "github.com/dolthub/dongo" {
+	// TODO https://github.com/dolthub/docudolt/issues/4001
+	if buildInfo.Main.Path != "github.com/dolthub/docudolt" {
 		return
 	}
 
@@ -154,7 +154,7 @@ func init() {
 		msg := "Invalid build/version/version.txt file content. Please run `bin/task gen-version`.\n"
 		msg += "Alternatively, create this file manually with a content similar to\n"
 		msg += "the output of `git describe`: `v<major>.<minor>.<patch>`.\n"
-		msg += "See https://pkg.go.dev/github.com/dolthub/dongo/build/version"
+		msg += "See https://pkg.go.dev/github.com/dolthub/docudolt/build/version"
 		panic(msg)
 	}
 

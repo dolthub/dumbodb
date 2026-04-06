@@ -1,6 +1,6 @@
-# dongoCommit Verification
+# docudoltCommit Verification
 
-Manual verification guide for `dongoCommit` end-to-end behavior. Work through each
+Manual verification guide for `docudoltCommit` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
 > **Automated equivalent:** `tests/versioning_commit_verify_test.go` (`TestCommitVerify`)
@@ -20,13 +20,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running Dongo instance and `mongosh` installed. Connect to your instance:
+A running Docudolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Dongo address if different.
+Replace `localhost:27017` with your Docudolt address if different.
 
 ---
 
@@ -41,9 +41,9 @@ db.dropDatabase()
 // Baseline: two documents, committed
 db.items.insertOne({ _id: 1, label: "alpha", v: 1 })
 db.items.insertOne({ _id: 2, label: "beta",  v: 2 })
-const r1 = db.runCommand({ dongoCommit: 1, message: "baseline", author: "alice <alice@dongo>" })
+const r1 = db.runCommand({ docudoltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
 printjson(r1)
-// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@dongo>", timestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@docudolt>", timestamp: ISODate("..."), ok: 1 }
 const hashBase = r1.commitId
 
 print("hashBase =", hashBase)
@@ -55,12 +55,12 @@ After setup, `commitdb` has one commit on `main` with two documents.
 
 ## Scenario 1: Response shape
 
-`dongoCommit` returns `hash`, `branch`, `message`, `author`, `timestamp`, and `ok`.
+`docudoltCommit` returns `hash`, `branch`, `message`, `author`, `timestamp`, and `ok`.
 
 The response from setup already demonstrates the shape. Verify each field:
 
 ```js
-const r = db.runCommand({ dongoCommit: 1, message: "shape check", author: "alice <alice@dongo>" })
+const r = db.runCommand({ docudoltCommit: 1, message: "shape check", author: "alice <alice@docudolt>" })
 printjson(r)
 ```
 
@@ -71,7 +71,7 @@ Expected result structure:
   "commitId":      "<non-empty hex string>",
   "branch":    "main",
   "message":   "shape check",
-  "author":    "alice <alice@dongo>",
+  "author":    "alice <alice@docudolt>",
   "timestamp": ISODate("..."),
   "ok":        1
 }
@@ -94,15 +94,15 @@ data is visible on the branch but not on main (isolation check).
 
 ```js
 // Create branch "feature" from main HEAD
-db.getSiblingDB("commitdb__main").runCommand({ dongoBranch: 1, branch: "feature" })
+db.getSiblingDB("commitdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 var feature = db.getSiblingDB("commitdb__feature")
 feature.items.insertOne({ _id: 3, label: "gamma", v: 3 })
 
-const r2 = feature.runCommand({ dongoCommit: 1, message: "feature commit", author: "alice <alice@dongo>" })
+const r2 = feature.runCommand({ docudoltCommit: 1, message: "feature commit", author: "alice <alice@docudolt>" })
 printjson(r2)
-// Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "alice <alice@dongo>", timestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "alice <alice@docudolt>", timestamp: ISODate("..."), ok: 1 }
 
 // Verify isolation: feature has the new doc, main does not
 feature.items.countDocuments({})
@@ -121,17 +121,17 @@ Key checks:
 
 ## Scenario 3: Successive commits have distinct hashes
 
-Each `dongoCommit` call creates a new, unique commit hash. Two sequential commits
+Each `docudoltCommit` call creates a new, unique commit hash. Two sequential commits
 to the same database must return different hash values.
 
 ```js
 // Make a change and commit
 db.items.insertOne({ _id: 10, label: "ten", v: 10 })
-const r3a = db.runCommand({ dongoCommit: 1, message: "commit A", author: "alice <alice@dongo>" })
+const r3a = db.runCommand({ docudoltCommit: 1, message: "commit A", author: "alice <alice@docudolt>" })
 print("hashA =", r3a.commitId)
 
 db.items.insertOne({ _id: 11, label: "eleven", v: 11 })
-const r3b = db.runCommand({ dongoCommit: 1, message: "commit B", author: "alice <alice@dongo>" })
+const r3b = db.runCommand({ docudoltCommit: 1, message: "commit B", author: "alice <alice@docudolt>" })
 print("hashB =", r3b.commitId)
 
 print("hashes differ:", r3a.commitId !== r3b.commitId)
@@ -144,15 +144,15 @@ Key check: `r3a.commitId !== r3b.commitId`.
 
 ## Scenario 4: Commit on empty working set
 
-When no changes are pending since the last commit, `dongoCommit` still succeeds.
+When no changes are pending since the last commit, `docudoltCommit` still succeeds.
 
 ```js
 // No changes since last commit
-const r4 = db.runCommand({ dongoCommit: 1, message: "empty", author: "alice <alice@dongo>" })
+const r4 = db.runCommand({ docudoltCommit: 1, message: "empty", author: "alice <alice@docudolt>" })
 printjson(r4)
 ```
 
-Expected: `{ hash: "<hash>", branch: "main", message: "empty", author: "alice <alice@dongo>", timestamp: ISODate("..."), ok: 1 }`
+Expected: `{ hash: "<hash>", branch: "main", message: "empty", author: "alice <alice@docudolt>", timestamp: ISODate("..."), ok: 1 }`
 
 Key check: `ok` is `1`; `hash` is non-empty.
 
@@ -160,37 +160,37 @@ Key check: `ok` is `1`; `hash` is non-empty.
 
 ## Scenario 5: Committed hash is a valid diff reference
 
-The hash returned by `dongoCommit` can immediately be used as a `from` or `to`
-argument in `dongoDiff`.
+The hash returned by `docudoltCommit` can immediately be used as a `from` or `to`
+argument in `docudoltDiff`.
 
 ```js
 // Record state before a change
-const hashBefore = db.runCommand({ dongoCommit: 1, message: "pre-change", author: "alice <alice@dongo>" }).commitId
+const hashBefore = db.runCommand({ docudoltCommit: 1, message: "pre-change", author: "alice <alice@docudolt>" }).commitId
 
 // Make a change and commit
 db.items.insertOne({ _id: 99, label: "new", v: 99 })
-const hashAfter = db.runCommand({ dongoCommit: 1, message: "post-change", author: "alice <alice@dongo>" }).commitId
+const hashAfter = db.runCommand({ docudoltCommit: 1, message: "post-change", author: "alice <alice@docudolt>" }).commitId
 
 // Diff between the two commits — must show _id:99 as added
-db.runCommand({ dongoDiff: 1, from: hashBefore, to: hashAfter })
+db.runCommand({ docudoltDiff: 1, from: hashBefore, to: hashAfter })
 ```
 
 Expected: `added` contains exactly `_id:99`; `collections` is non-empty.
 
 ---
 
-## Scenario 6: Author is echoed and visible in dongoLog
+## Scenario 6: Author is echoed and visible in docudoltLog
 
-The `author` provided to `dongoCommit` is echoed in the response and stored in the
-commit — it is visible via `dongoLog`.
+The `author` provided to `docudoltCommit` is echoed in the response and stored in the
+commit — it is visible via `docudoltLog`.
 
 ```js
-const r6 = db.runCommand({ dongoCommit: 1, message: "authored commit", author: "bob" })
+const r6 = db.runCommand({ docudoltCommit: 1, message: "authored commit", author: "bob" })
 printjson(r6)
 // Expected: { hash: "...", branch: "main", message: "authored commit", author: "bob", timestamp: ISODate("..."), ok: 1 }
 
-// Verify author appears in dongoLog
-const log = db.runCommand({ dongoLog: 1, limit: 1 })
+// Verify author appears in docudoltLog
+const log = db.runCommand({ docudoltLog: 1, limit: 1 })
 print("log author:", log.commits[0].author)
 // Expected: "bob"
 ```
@@ -204,12 +204,12 @@ Key checks:
 ## Scenario 7: Custom timestamp is stored and echoed
 
 Pass a BSON Date as `timestamp` to pin the commit to a specific point in time.
-The value is echoed in the response and stored in the commit (visible via `dongoLog`).
+The value is echoed in the response and stored in the commit (visible via `docudoltLog`).
 
 ```js
 const fixedTime = new Date("2020-06-15T12:00:00Z")
 const r7 = db.runCommand({
-  dongoCommit: 1,
+  docudoltCommit: 1,
   message:     "fixed-time commit",
   author:      "carol",
   timestamp:   fixedTime,
@@ -217,8 +217,8 @@ const r7 = db.runCommand({
 printjson(r7)
 // Expected: { ..., author: "carol", timestamp: ISODate("2020-06-15T12:00:00Z"), ok: 1 }
 
-// Verify timestamp appears in dongoLog
-const log7 = db.runCommand({ dongoLog: 1, limit: 1 })
+// Verify timestamp appears in docudoltLog
+const log7 = db.runCommand({ docudoltLog: 1, limit: 1 })
 print("log timestamp:", log7.commits[0].timestamp)
 // Expected: ISODate("2020-06-15T12:00:00Z")
 ```
@@ -233,16 +233,16 @@ Key checks:
 
 | Scenario | Command | Key outcome |
 |---|---|---|
-| Commit on main | `{ dongoCommit: 1, message: "msg", author: "alice <alice@dongo>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
-| Commit on branch | `featureDB.runCommand({ dongoCommit: 1, ..., author: "alice <alice@dongo>" })` | Data committed to branch; isolation verified via count |
+| Commit on main | `{ docudoltCommit: 1, message: "msg", author: "alice <alice@docudolt>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
+| Commit on branch | `featureDB.runCommand({ docudoltCommit: 1, ..., author: "alice <alice@docudolt>" })` | Data committed to branch; isolation verified via count |
 | Two sequential commits | Call twice with same author | Hashes are different |
 | Empty working set | Commit with no pending changes | Succeeds with `ok:1` |
-| Use hash in diff | `{ dongoDiff: 1, from: hash1, to: hash2 }` | Shows changes between commits |
-| Custom author | Pass `author: "bob"` | Response and dongoLog echo `"bob"` |
-| Custom timestamp | Pass `timestamp: new Date("2020-06-15")` | Response and dongoLog echo fixed time |
+| Use hash in diff | `{ docudoltDiff: 1, from: hash1, to: hash2 }` | Shows changes between commits |
+| Custom author | Pass `author: "bob"` | Response and docudoltLog echo `"bob"` |
+| Custom timestamp | Pass `timestamp: new Date("2020-06-15")` | Response and docudoltLog echo fixed time |
 
 - `hash` is a Dolt commit hash (non-empty string).
 - `branch` reflects the connection's branch, not the database base name.
 - `message` is echoed verbatim in the response.
-- `author` is required; it is stored and visible in `dongoLog`.
+- `author` is required; it is stored and visible in `docudoltLog`.
 - `timestamp` is optional; omit it to use the current server time.

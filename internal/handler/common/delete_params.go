@@ -17,8 +17,8 @@ package common
 import (
 	"log/slog"
 
-	"github.com/dolthub/dongo/internal/handler/handlerparams"
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/handler/handlerparams"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // DeleteParams represents parameters for the delete command.

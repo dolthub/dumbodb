@@ -29,7 +29,7 @@ import (
 func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -53,7 +53,7 @@ func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -77,7 +77,7 @@ func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -102,7 +102,7 @@ func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -128,14 +128,14 @@ func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 // with a ~15-degree (~1670 km) radius and must return exactly two of the three
 // documents: London itself and Paris, but not Moscow.
 //
-// Before the do-twgm fix, dongo compared haversine metres directly against the
+// Before the do-twgm fix, docudolt compared haversine metres directly against the
 // raw radian value (≈ 0.26), so only the document at the query point (distance
 // ≈ 0 m) passed the filter; all other documents were incorrectly excluded.
 // Regression for do-twgm / do-pyxs.
 func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// Create a legacy 2d index on the location field.
@@ -156,7 +156,7 @@ func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 	ctx := context.Background()
 
 	// $maxDistance in radians: 15° ≈ 0.2618 rad ≈ 1670 km.
-	// Dongo must convert radians → metres before applying the haversine filter.
+	// Docudolt must convert radians → metres before applying the haversine filter.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(
 			e("$nearSphere", bson.A{float64(-0.12), float64(51.50)}),

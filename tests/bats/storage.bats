@@ -1,30 +1,30 @@
 #!/usr/bin/env bats
 # Dolt storage verification tests.
-# Verifies that data written through dongo is correctly persisted in Dolt format.
+# Verifies that data written through docudolt is correctly persisted in Dolt format.
 
 load helpers
 
-DONGO_PORT=37027
+DOCUDOLT_PORT=37027
 
 setup() {
     # Create a fresh temp dir for each test.
-    DONGO_DATA_DIR="$(mktemp -d)"
+    DOCUDOLT_DATA_DIR="$(mktemp -d)"
 
-    # Start dongo with a fresh data dir.
-    start_dongo "$DONGO_DATA_DIR" "$DONGO_PORT"
+    # Start docudolt with a fresh data dir.
+    start_docudolt "$DOCUDOLT_DATA_DIR" "$DOCUDOLT_PORT"
 }
 
 teardown() {
-    stop_dongo
-    rm -rf "$DONGO_DATA_DIR"
+    stop_docudolt
+    rm -rf "$DOCUDOLT_DATA_DIR"
     # Remove the .dolt dir created by setup_dolt_hack.
     local parent_dir
-    parent_dir="$(dirname "$DONGO_DATA_DIR")"
+    parent_dir="$(dirname "$DOCUDOLT_DATA_DIR")"
     rm -rf "${parent_dir}/.dolt"
 }
 
 @test 'insert two docs, verify dolt storage' {
-    local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+    local mongo_uri="mongodb://127.0.0.1:${DOCUDOLT_PORT}/test"
 
     # Insert alice.
     run mongosh "$mongo_uri" --quiet --eval \
@@ -38,9 +38,9 @@ teardown() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
-    stop_dongo
-    setup_dolt_hack "$DONGO_DATA_DIR"
-    cd "$(dirname "$DONGO_DATA_DIR")"
+    stop_docudolt
+    setup_dolt_hack "$DOCUDOLT_DATA_DIR"
+    cd "$(dirname "$DOCUDOLT_DATA_DIR")"
 
     # Verify dolt storage integrity.
     run dolt fsck
@@ -56,7 +56,7 @@ teardown() {
 }
 
 @test 'inserted docs appear as added rows in dolt diff' {
-    local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+    local mongo_uri="mongodb://127.0.0.1:${DOCUDOLT_PORT}/test"
 
     run mongosh "$mongo_uri" --quiet --eval \
         'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
@@ -68,9 +68,9 @@ teardown() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
-    stop_dongo
-    setup_dolt_hack "$DONGO_DATA_DIR"
-    cd "$(dirname "$DONGO_DATA_DIR")"
+    stop_docudolt
+    setup_dolt_hack "$DOCUDOLT_DATA_DIR"
+    cd "$(dirname "$DOCUDOLT_DATA_DIR")"
 
     run dolt diff --result-format=sql
     [ "$status" -eq 0 ]
@@ -89,14 +89,14 @@ teardown() {
 }
 
 @test 'collection schema has _id and doc columns' {
-    run mongosh "mongodb://127.0.0.1:${DONGO_PORT}/test" --quiet --eval \
+    run mongosh "mongodb://127.0.0.1:${DOCUDOLT_PORT}/test" --quiet --eval \
         'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
-    stop_dongo
-    setup_dolt_hack "$DONGO_DATA_DIR"
-    cd "$(dirname "$DONGO_DATA_DIR")"
+    stop_docudolt
+    setup_dolt_hack "$DOCUDOLT_DATA_DIR"
+    cd "$(dirname "$DOCUDOLT_DATA_DIR")"
 
     run dolt sql -q 'show create table col1'
 
@@ -106,8 +106,8 @@ teardown() {
     [[ "$output" =~ 'PRIMARY KEY (`_id`)' ]] || false
 }
 
-@test 'dongoCommit returns non-empty hash' {
-  local mongo_uri="mongodb://127.0.0.1:${DONGO_PORT}/test"
+@test 'docudoltCommit returns non-empty hash' {
+  local mongo_uri="mongodb://127.0.0.1:${DOCUDOLT_PORT}/test"
 
   # Insert a document so there is something to commit.
   run mongosh "$mongo_uri" --quiet --eval \
@@ -115,9 +115,9 @@ teardown() {
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.acknowledged == true'
 
-  # Run dongoCommit and capture the result.
+  # Run docudoltCommit and capture the result.
   run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({dongoCommit: 1, message: "my first commit"}))'
+    'JSON.stringify(db.runCommand({docudoltCommit: 1, message: "my first commit"}))'
   [ "$status" -eq 0 ]
 
   # Verify ok:1 and a non-empty commitId.
@@ -128,9 +128,9 @@ teardown() {
   [ "$commitId" != "null" ]
   [ "$commitId" != "0000000000000000000000000000000000000000" ]
 
-  stop_dongo
-  setup_dolt_hack "$DONGO_DATA_DIR"
-  cd "$(dirname "$DONGO_DATA_DIR")"
+  stop_docudolt
+  setup_dolt_hack "$DOCUDOLT_DATA_DIR"
+  cd "$(dirname "$DOCUDOLT_DATA_DIR")"
 
   run dolt show
 

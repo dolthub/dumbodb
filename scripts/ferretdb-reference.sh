@@ -2,8 +2,8 @@
 # Run FerretDB integration tests against a FerretDB server as a reference baseline.
 #
 # This shows how the same test suite performs against FerretDB itself, so you can:
-#   - See which failures are FerretDB-level (not dongo-specific)
-#   - Compare dongo's scorecard against the FerretDB baseline
+#   - See which failures are FerretDB-level (not docudolt-specific)
+#   - Compare docudolt's scorecard against the FerretDB baseline
 #
 # Usage:
 #   ferretdb-reference.sh [results-file]
@@ -50,8 +50,8 @@ mkdir -p "$(dirname "$RESULTS_FILE")"
 echo "=== FerretDB Reference Scorecard ===" | tee "$RESULTS_FILE"
 echo "Date: $(date -u)" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
-echo "NOTE: Failures here reflect FerretDB's own baseline, not dongo-specific bugs." | tee -a "$RESULTS_FILE"
-echo "      Compare with ferretdb-scorecard output to isolate dongo regressions." | tee -a "$RESULTS_FILE"
+echo "NOTE: Failures here reflect FerretDB's own baseline, not docudolt-specific bugs." | tee -a "$RESULTS_FILE"
+echo "      Compare with ferretdb-scorecard output to isolate docudolt regressions." | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
 if [ -n "$POSTGRESQL_URL" ]; then

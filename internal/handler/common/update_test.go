@@ -17,8 +17,8 @@ package common
 import (
 	"testing"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // TestPipelineUpdate_replaceWith tests $replaceWith as a stage in an update pipeline.

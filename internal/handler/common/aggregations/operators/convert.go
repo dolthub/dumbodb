@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dolthub/dongo/internal/types"
+	"github.com/dolthub/docudolt/internal/types"
 )
 
 // ── $toInt ────────────────────────────────────────────────────────────────────
@@ -358,7 +358,7 @@ var _ Operator = (*toLongOp)(nil)
 
 // ── $toDecimal ────────────────────────────────────────────────────────────────
 
-// toDecimalOp converts to float64 (Dongo uses float64 for Decimal128 approximation).
+// toDecimalOp converts to float64 (Docudolt uses float64 for Decimal128 approximation).
 type toDecimalOp struct{ arg any }
 
 func newToDecimal(args ...any) (Operator, error) {

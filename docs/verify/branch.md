@@ -1,6 +1,6 @@
-# dongoBranch Verification
+# docudoltBranch Verification
 
-Manual verification guide for `dongoBranch` end-to-end behavior. Work through each
+Manual verification guide for `docudoltBranch` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
 > **Automated equivalent:** `tests/versioning_branch_verify_test.go` (`TestBranchVerify`)
@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running Dongo instance and `mongosh` installed. Connect to your instance:
+A running Docudolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Dongo address if different.
+Replace `localhost:27017` with your Docudolt address if different.
 
 ---
 
@@ -32,14 +32,14 @@ db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ dongoCommit: 1, message: "commit one", author: "alice <alice@dongo>" })
+const r1 = db.runCommand({ docudoltCommit: 1, message: "commit one", author: "alice <alice@docudolt>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
 const hash1 = r1.commitId
 
 // Commit 2: second document added
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ dongoCommit: 1, message: "commit two", author: "alice <alice@dongo>" })
+const r2 = db.runCommand({ docudoltCommit: 1, message: "commit two", author: "alice <alice@docudolt>" })
 printjson(r2)
 // Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
 const hash2 = r2.commitId
@@ -57,11 +57,11 @@ After setup, `branchvdb` has:
 
 ## Scenario 1: Create branch from main HEAD — response shape
 
-`dongoBranch` creates a new branch and returns `{ branch: "<name>", ok: 1 }`.
+`docudoltBranch` creates a new branch and returns `{ branch: "<name>", ok: 1 }`.
 The connection must be a branch rootish (writable or hash — see Scenario 3).
 
 ```js
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "feature" })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
 ```
 
 Expected:
@@ -79,15 +79,15 @@ Key checks:
 ## Scenario 2: New branch points to the same commit as its source
 
 Immediately after branching, the new branch HEAD equals the source branch HEAD.
-`dongoDiff` between the two should show no changes.
+`docudoltDiff` between the two should show no changes.
 
 ```js
 // Create "snapshot" branch from current main HEAD
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "snapshot" })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "snapshot" })
 
 // Diff main vs snapshot — must be empty (identical commits)
 db.getSiblingDB("branchvdb__main").runCommand({
-  dongoDiff: 1,
+  docudoltDiff: 1,
   from: "snapshot",
   to:   "main"
 })
@@ -106,7 +106,7 @@ var feature = db.getSiblingDB("branchvdb__feature")
 
 // Add a document on the feature branch and commit it
 feature.items.insertOne({ _id: 3, label: "gamma" })
-feature.runCommand({ dongoCommit: 1, message: "feature adds gamma", author: "alice <alice@dongo>" })
+feature.runCommand({ docudoltCommit: 1, message: "feature adds gamma", author: "alice <alice@docudolt>" })
 
 // main must not see _id:3
 db.getSiblingDB("branchvdb__main").items.countDocuments({})
@@ -121,13 +121,13 @@ feature.items.countDocuments({})
 
 ## Scenario 4: Create branch from a commit hash rootish
 
-`dongoBranch` works even when the connection is a read-only commit-hash rootish.
+`docudoltBranch` works even when the connection is a read-only commit-hash rootish.
 The new branch starts at that exact commit.
 
 ```js
 // Create branch "at-commit-one" from the commit-hash rootish at hash1
 db.getSiblingDB("branchvdb__" + hash1).runCommand({
-  dongoBranch: 1,
+  docudoltBranch: 1,
   branch: "at-commit-one"
 })
 // Expected: { branch: "at-commit-one", ok: 1 }
@@ -143,7 +143,7 @@ Key check: `branch` is `"at-commit-one"`, `ok` is `1`; the branch has one docume
 
 ## Scenario 5: Create branch from an ancestor expression rootish
 
-`dongoBranch` also works from an ancestor expression rootish (`branch~N`). The new
+`docudoltBranch` also works from an ancestor expression rootish (`branch~N`). The new
 branch starts at the resolved ancestor commit. Use a fresh database to verify the
 correct document count at the ancestor state.
 
@@ -152,13 +152,13 @@ correct document count at the ancestor state.
 var db2 = db.getSiblingDB("branchvdb2")
 db2.dropDatabase()
 db2.items.insertOne({ _id: 1, label: "alpha" })
-db2.runCommand({ dongoCommit: 1, message: "commit one", author: "alice <alice@dongo>" })
+db2.runCommand({ docudoltCommit: 1, message: "commit one", author: "alice <alice@docudolt>" })
 db2.items.insertOne({ _id: 2, label: "beta" })
-db2.runCommand({ dongoCommit: 1, message: "commit two", author: "alice <alice@dongo>" })
+db2.runCommand({ docudoltCommit: 1, message: "commit two", author: "alice <alice@docudolt>" })
 
 // main~1 resolves to commit 1 (one document)
 db2.getSiblingDB("branchvdb2__main~1").runCommand({
-  dongoBranch: 1,
+  docudoltBranch: 1,
   branch: "back-one"
 })
 // Expected: { branch: "back-one", ok: 1 }
@@ -174,14 +174,14 @@ Key check: branch created successfully and sees only commit-1 state.
 
 ## Scenario 6: Safe delete (-d) — branch already merged into main
 
-`dongoBranch` with `d: 1` deletes a branch only if its HEAD is reachable from
+`docudoltBranch` with `d: 1` deletes a branch only if its HEAD is reachable from
 another branch (i.e. no data would be lost).  A branch whose HEAD equals the
 source branch HEAD is always safe to delete.
 
 ```js
 // Create a branch at current main HEAD and immediately safe-delete it.
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "merged-branch" })
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "merged-branch", d: 1 })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "merged-branch" })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "merged-branch", d: 1 })
 // Expected: { "branch": "merged-branch", "ok": 1 }
 ```
 
@@ -196,13 +196,13 @@ safe delete must fail with an error.
 
 ```js
 // Create "unmerged-branch" from main and add an exclusive commit.
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "unmerged-branch" })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "unmerged-branch" })
 var ub = db.getSiblingDB("branchvdb__unmerged-branch")
 ub.items.insertOne({ _id: 99, label: "extra" })
-ub.runCommand({ dongoCommit: 1, message: "extra commit", author: "alice <alice@dongo>" })
+ub.runCommand({ docudoltCommit: 1, message: "extra commit", author: "alice <alice@docudolt>" })
 
 // Safe delete must fail.
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "unmerged-branch", d: 1 })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "unmerged-branch", d: 1 })
 // Expected: error response — ok: 0, errmsg contains "unmerged commits"
 ```
 
@@ -212,18 +212,18 @@ Key check: command returns an error; `unmerged-branch` still exists afterwards.
 
 ## Scenario 8: Force delete (-D) — branch has unmerged commits, succeeds
 
-`dongoBranch` with `D: 1` deletes a branch unconditionally, even if it has
+`docudoltBranch` with `D: 1` deletes a branch unconditionally, even if it has
 commits that are not reachable from any other branch.
 
 ```js
 // Create "force-branch" from main and add an exclusive commit.
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "force-branch" })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "force-branch" })
 var fb = db.getSiblingDB("branchvdb__force-branch")
 fb.items.insertOne({ _id: 77, label: "gone" })
-fb.runCommand({ dongoCommit: 1, message: "unmerged commit", author: "alice <alice@dongo>" })
+fb.runCommand({ docudoltCommit: 1, message: "unmerged commit", author: "alice <alice@docudolt>" })
 
 // Force delete succeeds regardless of merge status.
-db.getSiblingDB("branchvdb__main").runCommand({ dongoBranch: 1, branch: "force-branch", D: 1 })
+db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "force-branch", D: 1 })
 // Expected: { "branch": "force-branch", "ok": 1 }
 ```
 
@@ -235,12 +235,12 @@ Key check: `branch` echoes the name, `ok` is `1`; the branch is gone.
 
 | Command | Connection | Result |
 |---|---|---|
-| `{ dongoBranch: 1, branch: "name" }` | `__main` | `{ branch: "name", ok: 1 }` |
-| `{ dongoBranch: 1, branch: "name" }` | `__feature` | `{ branch: "name", ok: 1 }` |
-| `{ dongoBranch: 1, branch: "name" }` | `__<hash>` | `{ branch: "name", ok: 1 }` |
-| `{ dongoBranch: 1, branch: "name" }` | `__main~1` | `{ branch: "name", ok: 1 }` |
-| `{ dongoBranch: 1, branch: "name", d: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
-| `{ dongoBranch: 1, branch: "name", D: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (always) |
+| `{ docudoltBranch: 1, branch: "name" }` | `__main` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name" }` | `__feature` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name" }` | `__<hash>` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name" }` | `__main~1` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name", d: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
+| `{ docudoltBranch: 1, branch: "name", D: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (always) |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).

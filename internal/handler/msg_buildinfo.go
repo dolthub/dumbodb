@@ -20,9 +20,9 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/build/version"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/build/version"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // MsgBuildInfo implements `buildInfo` command.

@@ -39,7 +39,7 @@ import (
 
 // currentBranchVerifySetup mirrors the Setup section of docs/verify/current-branch.md.
 // Returns hash1 (commit 1) and hash2 (commit 2).
-func currentBranchVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, hash2 string) {
+func currentBranchVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash1, hash2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -54,7 +54,7 @@ func currentBranchVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (h
 		{Key: "v", Value: "first"},
 	})
 	require.NoError(t, err)
-	hash1 = dongoCommit(t, env, dbName, "first commit")
+	hash1 = docudoltCommit(t, env, dbName, "first commit")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -62,22 +62,22 @@ func currentBranchVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (h
 		{Key: "v", Value: "second"},
 	})
 	require.NoError(t, err)
-	hash2 = dongoCommit(t, env, dbName, "second commit")
+	hash2 = docudoltCommit(t, env, dbName, "second commit")
 
 	// Create branch "feature" from main HEAD.
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-		{Key: "dongoBranch", Value: int32(1)},
+		{Key: "docudoltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
-	require.NoError(t, err, "dongoBranch to create 'feature'")
+	require.NoError(t, err, "docudoltBranch to create 'feature'")
 	assert.Equal(t, "feature", branchResult["branch"])
 
 	return hash1, hash2
 }
 
 func TestCurrentBranchVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("cbrvrfy%d", rand.Int64N(1_000_000))
@@ -90,7 +90,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	t.Run("Scenario1_PlainDbName_ReturnsMain", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -102,7 +102,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	t.Run("Scenario2_ExplicitMain_ReturnsMain", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -114,7 +114,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	t.Run("Scenario3_FeatureBranch_ReturnsFeature", func(t *testing.T) {
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName+"__feature").RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "feature", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -125,9 +125,9 @@ func TestCurrentBranchVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_CommitHash_ReturnsError96", func(t *testing.T) {
 		err := env.client.Database(dbName+"__"+hash1).RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on commit hash rootish")
+		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on commit hash rootish")
 	})
 
 	// -------------------------------------------------------------------------
@@ -135,8 +135,8 @@ func TestCurrentBranchVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AncestorExpression_ReturnsError96", func(t *testing.T) {
 		err := env.client.Database(dbName+"__main~1").RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on ancestor expression rootish")
+		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor expression rootish")
 	})
 }

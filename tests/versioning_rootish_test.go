@@ -46,7 +46,7 @@ func assertRootishRejected(tb testing.TB, db *mongo.Database, op string) {
 func TestRootish_ParseRejection(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	dbName := fmt.Sprintf("prtest%d", rand.Int64N(1_000_000))
 
 	cases := []struct {
@@ -74,12 +74,12 @@ func TestRootish_ParseRejection(t *testing.T) {
 	}
 }
 
-// TestRootish_DongoCurrentBranch_EndToEnd verifies that dongoCurrentBranch
+// TestRootish_DocudoltCurrentBranch_EndToEnd verifies that docudoltCurrentBranch
 // returns the correct branch on branch connections and code 96 on read-only ones.
-func TestRootish_DongoCurrentBranch_EndToEnd(t *testing.T) {
+func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("dcbtest%d", rand.Int64N(1_000_000))
 	collName := "col"
@@ -92,7 +92,7 @@ func TestRootish_DongoCurrentBranch_EndToEnd(t *testing.T) {
 
 		var result bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err)
 		assert.Equal(t, "main", result["branch"])
@@ -104,7 +104,7 @@ func TestRootish_DongoCurrentBranch_EndToEnd(t *testing.T) {
 
 		var result bson.M
 		err := env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err)
 		assert.Equal(t, "main", result["branch"])
@@ -114,18 +114,18 @@ func TestRootish_DongoCurrentBranch_EndToEnd(t *testing.T) {
 		t.Parallel()
 
 		err := env.client.Database(dbName+"__"+hash1).RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on hash rootish")
+		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on hash rootish")
 	})
 
 	t.Run("ancestor_expr_returns_code96", func(t *testing.T) {
 		t.Parallel()
 
 		err := env.client.Database(dbName+"__main~1").RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on ancestor rootish")
+		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor rootish")
 	})
 }
 
@@ -135,7 +135,7 @@ func TestRootish_DongoCurrentBranch_EndToEnd(t *testing.T) {
 func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("diso%d", rand.Int64N(1_000_000))
 	collName := "col"

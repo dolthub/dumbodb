@@ -4,14 +4,14 @@
    test-integration:
      desc: "Run integration tests in parallel"
 -    deps: [test-integration-postgresql, test-integration-mongodb]
-+    deps: [test-integration-postgresql, test-integration-mongodb, test-integration-dongo]
++    deps: [test-integration-postgresql, test-integration-mongodb, test-integration-docudolt]
 +
-+  test-integration-dongo:
-+    desc: "Run integration tests against Dongo (Dolt-backed MongoDB-compatible server)"
++  test-integration-docudolt:
++    desc: "Run integration tests against Docudolt (Dolt-backed MongoDB-compatible server)"
 +    deps: [gen-version, test-integration-build]
 +    dir: integration
 +    vars:
-+      DONGO_URL: '{{.DONGO_URL | default "mongodb://127.0.0.1:27017/"}}'
++      DOCUDOLT_URL: '{{.DOCUDOLT_URL | default "mongodb://127.0.0.1:27017/"}}'
 +    cmds:
 +      - >
 +        ../bin/envtool{{exeExt}} tests run
@@ -19,7 +19,7 @@
 +        --shard-total={{.SHARD_TOTAL}}
 +        --run='{{.TEST_RUN}}'
 +        --skip='{{.TEST_SKIP}}'
-+        --raw-prefix=dongo-{{.SHARD_INDEX}}-{{.SHARD_TOTAL}}
++        --raw-prefix=docudolt-{{.SHARD_INDEX}}-{{.SHARD_TOTAL}}
 +        --
 +        -count=1
 +        -timeout={{.TEST_TIMEOUT}}
@@ -27,9 +27,9 @@
 +        -tags={{.BUILD_TAGS}}
 +        -shuffle=on
 +        -coverpkg=../...
-+        -coverprofile=integration-dongo.txt
++        -coverprofile=integration-docudolt.txt
 +        ./...
 +        -target-backend=ferretdb
-+        -target-url='{{.DONGO_URL}}'
++        -target-url='{{.DOCUDOLT_URL}}'
 +        -compat-url='mongodb://username:password@127.0.0.1:47017/?replicaSet=rs0'
 +        -no-xfail={{.NO_XFAIL}}

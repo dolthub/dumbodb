@@ -18,15 +18,15 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/docudolt/internal/backends"
 )
 
-// TestDongoCurrentBranch_ReturnsBranchName verifies that the dolt backend's
-// DongoCurrentBranch echoes the branch name from CurrentBranchParams.
+// TestDocudoltCurrentBranch_ReturnsBranchName verifies that the dolt backend's
+// DocudoltCurrentBranch echoes the branch name from CurrentBranchParams.
 //
 // The handler layer enforces read-only restrictions before calling the backend,
 // so the backend always receives a clean branch name and simply returns it.
-func TestDongoCurrentBranch_ReturnsBranchName(t *testing.T) {
+func TestDocudoltCurrentBranch_ReturnsBranchName(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBackend(t)
@@ -48,15 +48,15 @@ func TestDongoCurrentBranch_ReturnsBranchName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			res, err := b.DongoCurrentBranch(ctx, &backends.CurrentBranchParams{
+			res, err := b.DocudoltCurrentBranch(ctx, &backends.CurrentBranchParams{
 				DBName: "testdb",
 				Branch: tc.branch,
 			})
 			if err != nil {
-				t.Fatalf("DongoCurrentBranch(%q): unexpected error: %v", tc.branch, err)
+				t.Fatalf("DocudoltCurrentBranch(%q): unexpected error: %v", tc.branch, err)
 			}
 			if res.Branch != tc.branch {
-				t.Errorf("DongoCurrentBranch(%q): got %q, want %q", tc.branch, res.Branch, tc.branch)
+				t.Errorf("DocudoltCurrentBranch(%q): got %q, want %q", tc.branch, res.Branch, tc.branch)
 			}
 		})
 	}

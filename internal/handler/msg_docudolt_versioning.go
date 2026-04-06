@@ -24,25 +24,25 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
-// MsgDongoDiff implements the `dongoDiff` command.
+// MsgDocudoltDiff implements the `docudoltDiff` command.
 //
 // Returns the document-level diff between two states for the branch encoded in $db.
 // Usage:
 //
-//	db.adminCommand({dongoDiff: 1})                          // working set vs HEAD
-//	db.adminCommand({dongoDiff: 1, from: "<hash>"})          // commit hash to working set
-//	db.adminCommand({dongoDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
+//	db.adminCommand({docudoltDiff: 1})                          // working set vs HEAD
+//	db.adminCommand({docudoltDiff: 1, from: "<hash>"})          // commit hash to working set
+//	db.adminCommand({docudoltDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -72,11 +72,11 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoDiff: versioning is not supported by the current backend",
+			"docudoltDiff: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoDiff(connCtx, &backends.DiffParams{
+	res, err := vb.DocudoltDiff(connCtx, &backends.DiffParams{
 		DBName:      dbName,
 		ConnRootish: connRootish,
 		From:        from,
@@ -139,7 +139,7 @@ func (h *Handler) MsgDongoDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 // branchFromDBName parses the real database name and rootish from an encoded db name.
 //
-// Dongo encodes version information in the database name using a double-underscore separator:
+// Docudolt encodes version information in the database name using a double-underscore separator:
 //
 //	"mydb__branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
 //	"mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
@@ -318,15 +318,15 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 	return vb
 }
 
-// MsgDongoCurrentBranch implements the `dongoCurrentBranch` command.
+// MsgDocudoltCurrentBranch implements the `docudoltCurrentBranch` command.
 //
 // It returns the branch name for the connection encoded in $db.
-// Usage: db.getSiblingDB("mydb__feature").runCommand({dongoCurrentBranch: 1})
+// Usage: db.getSiblingDB("mydb__feature").runCommand({docudoltCurrentBranch: 1})
 //
 // Returns an OperationFailed error if the connection is read-only (commit hash or ancestor expression).
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoCurrentBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltCurrentBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -345,7 +345,7 @@ func (h *Handler) MsgDongoCurrentBranch(connCtx context.Context, msg *wire.OpMsg
 	if readOnly {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)",
+			"docudoltCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)",
 		)
 	}
 
@@ -353,11 +353,11 @@ func (h *Handler) MsgDongoCurrentBranch(connCtx context.Context, msg *wire.OpMsg
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoCurrentBranch: versioning is not supported by the current backend",
+			"docudoltCurrentBranch: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoCurrentBranch(connCtx, &backends.CurrentBranchParams{
+	res, err := vb.DocudoltCurrentBranch(connCtx, &backends.CurrentBranchParams{
 		DBName: dbName,
 		Branch: branch,
 	})
@@ -373,13 +373,13 @@ func (h *Handler) MsgDongoCurrentBranch(connCtx context.Context, msg *wire.OpMsg
 	)
 }
 
-// MsgDongoCommit implements the `dongoCommit` command.
+// MsgDocudoltCommit implements the `docudoltCommit` command.
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__feature").runCommand({dongoCommit: 1, message: "my commit"})
+// Usage: db.getSiblingDB("mydb__feature").runCommand({docudoltCommit: 1, message: "my commit"})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -414,11 +414,11 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoCommit: versioning is not supported by the current backend",
+			"docudoltCommit: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoCommit(connCtx, &backends.CommitParams{
+	res, err := vb.DocudoltCommit(connCtx, &backends.CommitParams{
 		DBName:    dbName,
 		Branch:    branch,
 		Message:   message,
@@ -441,13 +441,13 @@ func (h *Handler) MsgDongoCommit(connCtx context.Context, msg *wire.OpMsg) (*wir
 	)
 }
 
-// MsgDongoBranch implements the `dongoBranch` command.
+// MsgDocudoltBranch implements the `docudoltBranch` command.
 //
 // It creates a new branch from the current branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__main").runCommand({dongoBranch: 1, branch: "feature"})
+// Usage: db.getSiblingDB("mydb__main").runCommand({docudoltBranch: 1, branch: "feature"})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -471,7 +471,7 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if newBranch == "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"dongoBranch: branch name must not be empty",
+			"docudoltBranch: branch name must not be empty",
 			"branch",
 		)
 	}
@@ -489,7 +489,7 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if safeDelete && forceDelete {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"dongoBranch: d and D are mutually exclusive",
+			"docudoltBranch: d and D are mutually exclusive",
 			"d",
 		)
 	}
@@ -498,11 +498,11 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoBranch: versioning is not supported by the current backend",
+			"docudoltBranch: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoBranch(connCtx, &backends.BranchParams{
+	res, err := vb.DocudoltBranch(connCtx, &backends.BranchParams{
 		DBName: dbName,
 		From:   fromBranch,
 		Name:   newBranch,
@@ -521,16 +521,16 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 	)
 }
 
-// MsgDongoMerge implements the `dongoMerge` command.
+// MsgDocudoltMerge implements the `docudoltMerge` command.
 //
 // Merges a source branch into the current branch encoded in $db (format: "dbname__branch").
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature", noFF: true})
-//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, merge_in: "feature", ffOnly: true})
-//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, continue: true})
-//	db.getSiblingDB("mydb__main").runCommand({dongoMerge: 1, abort: true})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltMerge: 1, merge_in: "feature"})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltMerge: 1, merge_in: "feature", noFF: true})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltMerge: 1, continue: true})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltMerge: 1, abort: true})
 //
 // Optional parameters for merge initiation:
 //   - message (string): custom merge commit message (ignored on fast-forward / already-up-to-date)
@@ -541,11 +541,11 @@ func (h *Handler) MsgDongoBranch(connCtx context.Context, msg *wire.OpMsg) (*wir
 // When a merge produces document-level conflicts, the response includes ok:0 with a
 // conflicts array describing which collections have unresolved conflicts. The branch
 // HEAD is unchanged; the staged working set reflects the partial merge with "ours"
-// values for conflicting documents. Use dongoResolveConflict to resolve conflicts, then
-// dongoMerge continue:true to complete the merge.
+// values for conflicting documents. Use docudoltResolveConflict to resolve conflicts, then
+// docudoltMerge continue:true to complete the merge.
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -575,12 +575,12 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoMerge: versioning is not supported by the current backend",
+			"docudoltMerge: versioning is not supported by the current backend",
 		)
 	}
 
 	if abort {
-		res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
+		res, mergeErr := vb.DocudoltMerge(connCtx, &backends.MergeParams{
 			DBName: dbName,
 			Into:   intoBranch,
 			Abort:  true,
@@ -605,7 +605,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		if err != nil {
 			return nil, err
 		}
-		res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
+		res, mergeErr := vb.DocudoltMerge(connCtx, &backends.MergeParams{
 			DBName:   dbName,
 			Into:     intoBranch,
 			Continue: true,
@@ -637,7 +637,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if noFF && ffOnly {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"dongoMerge: noFF and ffOnly are mutually exclusive",
+			"docudoltMerge: noFF and ffOnly are mutually exclusive",
 			"noFF",
 		)
 	}
@@ -650,7 +650,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if fromBranch == "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"dongoMerge: from branch name must not be empty",
+			"docudoltMerge: from branch name must not be empty",
 			"merge_in",
 		)
 	}
@@ -665,7 +665,7 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	res, mergeErr := vb.DongoMerge(connCtx, &backends.MergeParams{
+	res, mergeErr := vb.DocudoltMerge(connCtx, &backends.MergeParams{
 		DBName:  dbName,
 		Into:    intoBranch,
 		From:    fromBranch,
@@ -708,16 +708,16 @@ func (h *Handler) MsgDongoMerge(connCtx context.Context, msg *wire.OpMsg) (*wire
 	)
 }
 
-// MsgDongoConflicts implements the `dongoConflicts` command.
+// MsgDocudoltConflicts implements the `docudoltConflicts` command.
 //
 // Returns conflict information for the current in-progress merge on the branch encoded in $db.
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({dongoConflicts: 1})
-//	db.getSiblingDB("mydb__main").runCommand({dongoConflicts: 1, collection: "items"})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltConflicts: 1})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltConflicts: 1, collection: "items"})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -742,11 +742,11 @@ func (h *Handler) MsgDongoConflicts(connCtx context.Context, msg *wire.OpMsg) (*
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoConflicts: versioning is not supported by the current backend",
+			"docudoltConflicts: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoConflicts(connCtx, &backends.ConflictsParams{
+	res, err := vb.DocudoltConflicts(connCtx, &backends.ConflictsParams{
 		DBName:     dbName,
 		Branch:     branch,
 		Collection: collection,
@@ -813,17 +813,17 @@ func (h *Handler) MsgDongoConflicts(connCtx context.Context, msg *wire.OpMsg) (*
 	)
 }
 
-// MsgDongoResolveConflict implements the `dongoResolveConflict` command.
+// MsgDocudoltResolveConflict implements the `docudoltResolveConflict` command.
 //
 // Resolves a single document conflict in the current in-progress merge.
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({dongoResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
-//	db.getSiblingDB("mydb__main").runCommand({dongoResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
-//	db.getSiblingDB("mydb__main").runCommand({dongoResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
+//	db.getSiblingDB("mydb__main").runCommand({docudoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -863,7 +863,7 @@ func (h *Handler) MsgDongoResolveConflict(connCtx context.Context, msg *wire.OpM
 		if rawValue == nil {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				"dongoResolveConflict: resolution 'custom' requires a 'value' document",
+				"docudoltResolveConflict: resolution 'custom' requires a 'value' document",
 				"value",
 			)
 		}
@@ -874,11 +874,11 @@ func (h *Handler) MsgDongoResolveConflict(connCtx context.Context, msg *wire.OpM
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoResolveConflict: versioning is not supported by the current backend",
+			"docudoltResolveConflict: versioning is not supported by the current backend",
 		)
 	}
 
-	_, err = vb.DongoResolveConflict(connCtx, &backends.ResolveConflictParams{
+	_, err = vb.DocudoltResolveConflict(connCtx, &backends.ResolveConflictParams{
 		DBName:     dbName,
 		Branch:     branch,
 		Collection: collection,
@@ -897,13 +897,13 @@ func (h *Handler) MsgDongoResolveConflict(connCtx context.Context, msg *wire.OpM
 	)
 }
 
-// MsgDongoLog implements the `dongoLog` command.
+// MsgDocudoltLog implements the `docudoltLog` command.
 //
 // It returns the commit history for the branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__feature").runCommand({dongoLog: 1, limit: 10})
+// Usage: db.getSiblingDB("mydb__feature").runCommand({docudoltLog: 1, limit: 10})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -933,11 +933,11 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoLog: versioning is not supported by the current backend",
+			"docudoltLog: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoLog(connCtx, &backends.LogParams{
+	res, err := vb.DocudoltLog(connCtx, &backends.LogParams{
 		DBName:     dbName,
 		Branch:     branch,
 		ConnBranch: branch,
@@ -985,7 +985,7 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	)
 }
 
-// MsgDongoReset implements the `dongoReset` command.
+// MsgDocudoltReset implements the `docudoltReset` command.
 //
 // It moves the branch HEAD to the specified commit hash. Two modes:
 //
@@ -994,12 +994,12 @@ func (h *Handler) MsgDongoLog(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 //
 // Usage:
 //
-//	db.runCommand({dongoReset: 1})                       // reset to HEAD (discard uncommitted changes if hard)
-//	db.runCommand({dongoReset: 1, to: "<hash>"})
-//	db.runCommand({dongoReset: 1, to: "<hash>", hard: true})
+//	db.runCommand({docudoltReset: 1})                       // reset to HEAD (discard uncommitted changes if hard)
+//	db.runCommand({docudoltReset: 1, to: "<hash>"})
+//	db.runCommand({docudoltReset: 1, to: "<hash>", hard: true})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1029,11 +1029,11 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoReset: versioning is not supported by the current backend",
+			"docudoltReset: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoReset(connCtx, &backends.ResetParams{
+	res, err := vb.DocudoltReset(connCtx, &backends.ResetParams{
 		DBName:   dbName,
 		Branch:   branch,
 		CommitID: to,
@@ -1051,13 +1051,13 @@ func (h *Handler) MsgDongoReset(connCtx context.Context, msg *wire.OpMsg) (*wire
 	)
 }
 
-// MsgDongoStatus implements the `dongoStatus` command.
+// MsgDocudoltStatus implements the `docudoltStatus` command.
 //
 // It returns the uncommitted changes on the branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__feature").runCommand({dongoStatus: 1})
+// Usage: db.getSiblingDB("mydb__feature").runCommand({docudoltStatus: 1})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDongoStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDocudoltStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1077,11 +1077,11 @@ func (h *Handler) MsgDongoStatus(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dongoStatus: versioning is not supported by the current backend",
+			"docudoltStatus: versioning is not supported by the current backend",
 		)
 	}
 
-	res, err := vb.DongoStatus(connCtx, &backends.VersioningStatusParams{
+	res, err := vb.DocudoltStatus(connCtx, &backends.VersioningStatusParams{
 		DBName: dbName,
 		Branch: branch,
 	})

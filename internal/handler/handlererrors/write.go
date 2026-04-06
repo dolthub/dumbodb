@@ -19,7 +19,7 @@ import (
 
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // writeError represents a single write error details.
@@ -34,14 +34,14 @@ type writeError struct {
 // WriteErrors represents a list of write errors.
 // It could be returned for Update, Insert, Delete, and Replace operations.
 //
-// Deprecated: https://github.com/dolthub/dongo/issues/3263.
+// Deprecated: https://github.com/dolthub/docudolt/issues/3263.
 type WriteErrors struct {
 	errs []writeError
 }
 
 // NewWriteErrorMsg creates a new protocol write error with given ErrorCode and message.
 //
-// Deprecated: https://github.com/dolthub/dongo/issues/3263.
+// Deprecated: https://github.com/dolthub/docudolt/issues/3263.
 func NewWriteErrorMsg(code ErrorCode, msg string) error {
 	return &WriteErrors{
 		errs: []writeError{{

@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // regexType represents BSON Regular expression type.

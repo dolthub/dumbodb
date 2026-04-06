@@ -22,7 +22,7 @@ package tests
 //   - Commit C1 on main: items = [ {_id:1, v:1} ]
 //   - Branch "feature" pointing at C1 (same as main HEAD)
 //
-// Note: dongoCommit always commits to the main branch. The merge test therefore
+// Note: docudoltCommit always commits to the main branch. The merge test therefore
 // demonstrates merging main (which advances) into feature (which stays at C1),
 // not the other way around.
 //
@@ -64,7 +64,7 @@ func runCommandRaw(t *testing.T, db *mongo.Database, cmd interface{}) bson.M {
 
 // mergeVerifySetup mirrors the Setup section of docs/verify/merge.md.
 // Returns hashC1 (the initial commit hash on main).
-func mergeVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hashC1 string) {
+func mergeVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hashC1 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -78,22 +78,22 @@ func mergeVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hashC1 st
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = dongoCommit(t, env, dbName, "initial")
+	hashC1 = docudoltCommit(t, env, dbName, "initial")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-		{Key: "dongoBranch", Value: int32(1)},
+		{Key: "docudoltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
-	require.NoError(t, err, "dongoBranch to create 'feature'")
+	require.NoError(t, err, "docudoltBranch to create 'feature'")
 	assert.Equal(t, "feature", branchResult["branch"])
 
 	return hashC1
 }
 
 func TestMergeVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -114,12 +114,12 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		hashC2 = dongoCommit(t, env, dbName, "add-two")
+		hashC2 = docudoltCommit(t, env, dbName, "add-two")
 
 		// Merge feature (at C1, behind) into main (at C2).
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 		}).Decode(&raw))
 
@@ -139,7 +139,7 @@ func TestMergeVerify(t *testing.T) {
 		// Merge main into feature — feature fast-forwards to C2.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__feature").RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "main"},
 		}).Decode(&raw))
 
@@ -163,7 +163,7 @@ func TestMergeVerify(t *testing.T) {
 		// After Scenario 2: feature and main both point to C2.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__feature").RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "main"},
 		}).Decode(&raw))
 
@@ -187,7 +187,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		hashC3 := dongoCommit(t, env, dbName, "add-three")
+		hashC3 := docudoltCommit(t, env, dbName, "add-three")
 
 		// Commit _id:4 on feature independently → C4.
 		_, err = env.client.Database(dbName + "__feature").Collection("items").InsertOne(ctx, bson.D{
@@ -195,12 +195,12 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(4)},
 		})
 		require.NoError(t, err)
-		hashC4 := dongoCommit(t, env, dbName+"__feature", "add-four")
+		hashC4 := docudoltCommit(t, env, dbName+"__feature", "add-four")
 
 		// Merge feature (at C4) into main (at C3) — true three-way merge.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 		}).Decode(&raw))
 
@@ -212,14 +212,14 @@ func TestMergeVerify(t *testing.T) {
 		assert.Equal(t, "Merge branch 'feature' into 'main'", raw["message"])
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// dongoLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
+		// docudoltLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
 		var logRaw bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logRaw))
 		lr := decodeLogResult(t, logRaw)
-		require.Len(t, lr.Commits, 1, "dongoLog with limit=1 must return exactly 1 commit")
+		require.Len(t, lr.Commits, 1, "docudoltLog with limit=1 must return exactly 1 commit")
 		head := lr.Commits[0]
 		assert.Equal(t, mergeCommitID, head.CommitID, "HEAD must be the merge commit")
 		assert.Equal(t, hashC3, head.Parent1, "merge commit parent1 must be main's pre-merge HEAD (C3)")
@@ -236,7 +236,7 @@ func TestMergeVerify(t *testing.T) {
 // recorded in the merge commit for both clean three-way merges (Scenario 4)
 // and conflict-resolution continues (Scenario 11 in docs/verify/merge.md).
 func TestMergeCustomMessageAuthor(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// -------------------------------------------------------------------------
@@ -255,19 +255,19 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName+"__main", "add-two")
+		docudoltCommit(t, env, dbName+"__main", "add-two")
 
 		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		dongoCommit(t, env, dbName+"__feature", "add-three")
+		docudoltCommit(t, env, dbName+"__feature", "add-three")
 
 		// Three-way merge with custom message and author.
 		var raw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 			{Key: "message", Value: "custom msg"},
 			{Key: "author", Value: "bob <bob@x>"},
@@ -279,18 +279,18 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		require.True(t, ok, "commitId must be a string")
 		require.NotEmpty(t, mergeCommitID)
 
-		// dongoLog HEAD must show message="custom msg" and author="bob <bob@x>".
+		// docudoltLog HEAD must show message="custom msg" and author="bob <bob@x>".
 		var logRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logRaw))
 		lr := decodeLogResult(t, logRaw)
 		require.Len(t, lr.Commits, 1)
 		head := lr.Commits[0]
 		assert.Equal(t, mergeCommitID, head.CommitID)
-		assert.Equal(t, "custom msg", head.Message, "dongoLog must show the custom message")
-		assert.Equal(t, "bob <bob@x>", head.Author, "dongoLog must show the custom author")
+		assert.Equal(t, "custom msg", head.Message, "docudoltLog must show the custom message")
+		assert.Equal(t, "bob <bob@x>", head.Author, "docudoltLog must show the custom author")
 	})
 
 	// -------------------------------------------------------------------------
@@ -309,18 +309,18 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 		)
 		require.NoError(t, err)
-		hashMain := dongoCommit(t, env, dbName+"__main", "main-v10")
+		hashMain := docudoltCommit(t, env, dbName+"__main", "main-v10")
 
 		_, err = featDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 		)
 		require.NoError(t, err)
-		hashFeat := dongoCommit(t, env, dbName+"__feature", "feature-v20")
+		hashFeat := docudoltCommit(t, env, dbName+"__feature", "feature-v20")
 
 		// Trigger the conflicting merge.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 		})
 		require.EqualValues(t, 0, raw["ok"], "conflicting merge must return ok:0")
@@ -328,7 +328,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		// Get conflict ID and resolve with "ours".
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoConflicts", Value: int32(1)},
+			{Key: "docudoltConflicts", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 		}).Decode(&detailRaw))
 		conflicts := detailRaw["conflicts"].(bson.A)
@@ -337,7 +337,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 
 		var resolveRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoResolveConflict", Value: int32(1)},
+			{Key: "docudoltResolveConflict", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 			{Key: "conflictId", Value: conflictID},
 			{Key: "resolution", Value: "ours"},
@@ -347,7 +347,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		// Continue with custom message and author.
 		var continueRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 			{Key: "message", Value: "custom resolve msg"},
 			{Key: "author", Value: "carol <carol@x>"},
@@ -361,10 +361,10 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.NotEqual(t, hashMain, mergeCommitID)
 		assert.NotEqual(t, hashFeat, mergeCommitID)
 
-		// dongoLog HEAD must show message="custom resolve msg" and author="carol <carol@x>".
+		// docudoltLog HEAD must show message="custom resolve msg" and author="carol <carol@x>".
 		var logRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logRaw))
 		lr := decodeLogResult(t, logRaw)
@@ -373,8 +373,8 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.Equal(t, mergeCommitID, head.CommitID)
 		assert.Equal(t, hashMain, head.Parent1, "parent1 must be main's pre-merge HEAD")
 		assert.Equal(t, hashFeat, head.Parent2, "parent2 must be feature's HEAD")
-		assert.Equal(t, "custom resolve msg", head.Message, "dongoLog must show the custom message")
-		assert.Equal(t, "carol <carol@x>", head.Author, "dongoLog must show the custom author")
+		assert.Equal(t, "custom resolve msg", head.Message, "docudoltLog must show the custom message")
+		assert.Equal(t, "carol <carol@x>", head.Author, "docudoltLog must show the custom author")
 	})
 }
 
@@ -383,17 +383,17 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 //
 // Scenarios:
 //   5. Conflicting merge returns ok:0 with conflicts array
-//   6. dongoConflicts lists the conflict
-//   7. dongoResolveConflict with "ours" preserves our version
-//   8. dongoCommit after resolution creates a merge commit
+//   6. docudoltConflicts lists the conflict
+//   7. docudoltResolveConflict with "ours" preserves our version
+//   8. docudoltCommit after resolution creates a merge commit
 //
 // Additionally tests:
-//   - dongoCommit is blocked while conflicts remain
-//   - dongoMerge abort discards the in-progress merge
-//   - dongoResolveConflict with "theirs" and "custom"
-//   - dongoMerge rejects a new initiation while one is in progress
+//   - docudoltCommit is blocked while conflicts remain
+//   - docudoltMerge abort discards the in-progress merge
+//   - docudoltResolveConflict with "theirs" and "custom"
+//   - docudoltMerge rejects a new initiation while one is in progress
 func TestMergeConflictWorkflow(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("conftest%d", rand.Int64N(1_000_000))
@@ -410,19 +410,19 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 	)
 	require.NoError(t, err)
-	hashMain := dongoCommit(t, env, dbName+"__main", "main-modifies-one")
+	hashMain := docudoltCommit(t, env, dbName+"__main", "main-modifies-one")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 	)
 	require.NoError(t, err)
-	hashFeat := dongoCommit(t, env, dbName+"__feature", "feature-modifies-one")
+	hashFeat := docudoltCommit(t, env, dbName+"__feature", "feature-modifies-one")
 
 	// Scenario 5: Conflicting merge returns ok:0 with conflicts array
 	t.Run("Scenario5_ConflictingMerge_ReturnsConflicts", func(t *testing.T) {
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 		})
 
@@ -441,12 +441,12 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.EqualValues(t, 1, entry["count"], "one conflict in 'items'")
 	})
 
-	// Scenario 6: dongoConflicts lists the conflict
-	t.Run("Scenario6_DongoConflicts_ListsConflict", func(t *testing.T) {
+	// Scenario 6: docudoltConflicts lists the conflict
+	t.Run("Scenario6_DocudoltConflicts_ListsConflict", func(t *testing.T) {
 		// Summary (no collection filter)
 		var summaryRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoConflicts", Value: int32(1)},
+			{Key: "docudoltConflicts", Value: int32(1)},
 		}).Decode(&summaryRaw))
 		assert.EqualValues(t, 1, summaryRaw["ok"])
 
@@ -459,7 +459,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		// Per-collection detail
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoConflicts", Value: int32(1)},
+			{Key: "docudoltConflicts", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 		}).Decode(&detailRaw))
 		assert.EqualValues(t, 1, detailRaw["ok"])
@@ -483,32 +483,32 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.EqualValues(t, 20, theirsDoc["v"], "theirs doc must have v:20 (feature's version)")
 	})
 
-	// Scenario 7: dongoCommit blocked while conflicts remain
+	// Scenario 7: docudoltCommit blocked while conflicts remain
 	t.Run("Scenario7_CommitBlockedWithConflicts", func(t *testing.T) {
 		err := mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoCommit", Value: int32(1)},
+			{Key: "docudoltCommit", Value: int32(1)},
 			{Key: "message", Value: "should fail"},
 			{Key: "author", Value: "tester"},
 		}).Err()
-		require.Error(t, err, "dongoCommit must fail while conflicts remain")
+		require.Error(t, err, "docudoltCommit must fail while conflicts remain")
 		assert.Contains(t, err.Error(), "unresolved merge conflicts", "error must mention unresolved conflicts")
 	})
 
-	// Scenario 8: dongoMerge rejects new merge while one is in progress
+	// Scenario 8: docudoltMerge rejects new merge while one is in progress
 	t.Run("Scenario8_MergeInProgress_Rejected", func(t *testing.T) {
 		err := mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 		}).Err()
-		require.Error(t, err, "new dongoMerge while merge in progress must fail")
+		require.Error(t, err, "new docudoltMerge while merge in progress must fail")
 	})
 
-	// Scenario 9: Resolve with "ours" and then dongoMerge continue creates a merge commit
+	// Scenario 9: Resolve with "ours" and then docudoltMerge continue creates a merge commit
 	t.Run("Scenario9_ResolveOurs_ThenContinue", func(t *testing.T) {
 		// Get the conflict ID
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoConflicts", Value: int32(1)},
+			{Key: "docudoltConflicts", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 		}).Decode(&detailRaw))
 		conflicts := detailRaw["conflicts"].(bson.A)
@@ -518,7 +518,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		// Resolve with "ours"
 		var resolveRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoResolveConflict", Value: int32(1)},
+			{Key: "docudoltResolveConflict", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 			{Key: "conflictId", Value: conflictID},
 			{Key: "resolution", Value: "ours"},
@@ -528,24 +528,24 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		// No more conflicts
 		var summaryRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoConflicts", Value: int32(1)},
+			{Key: "docudoltConflicts", Value: int32(1)},
 		}).Decode(&summaryRaw))
 		colls := summaryRaw["collections"].(bson.A)
 		assert.Len(t, colls, 0, "no more conflicts after resolution")
 
-		// dongoCommit is blocked even when all conflicts are resolved — merge in progress
+		// docudoltCommit is blocked even when all conflicts are resolved — merge in progress
 		err := mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoCommit", Value: int32(1)},
+			{Key: "docudoltCommit", Value: int32(1)},
 			{Key: "message", Value: "should fail: merge in progress"},
 			{Key: "author", Value: "tester"},
 		}).Err()
-		require.Error(t, err, "dongoCommit must fail while merge is in progress (even with no conflicts)")
+		require.Error(t, err, "docudoltCommit must fail while merge is in progress (even with no conflicts)")
 		assert.Contains(t, err.Error(), "merge in progress", "error must mention merge in progress")
 
-		// dongoMerge continue creates a merge commit
+		// docudoltMerge continue creates a merge commit
 		var commitRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoMerge", Value: int32(1)},
+			{Key: "docudoltMerge", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 		}).Decode(&commitRaw))
 		assert.EqualValues(t, 1, commitRaw["ok"])
@@ -556,10 +556,10 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.NotEqual(t, hashMain, mergeCommitID)
 		assert.NotEqual(t, hashFeat, mergeCommitID)
 
-		// dongoLog HEAD must show a merge commit with two parents
+		// docudoltLog HEAD must show a merge commit with two parents
 		var logRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logRaw))
 		lr := decodeLogResult(t, logRaw)
@@ -576,9 +576,9 @@ func TestMergeConflictWorkflow(t *testing.T) {
 	})
 }
 
-// TestMergeConflictAbort tests that dongoMerge abort restores the pre-merge state.
+// TestMergeConflictAbort tests that docudoltMerge abort restores the pre-merge state.
 func TestMergeConflictAbort(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("confabort%d", rand.Int64N(1_000_000))
@@ -592,18 +592,18 @@ func TestMergeConflictAbort(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 	)
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName+"__main", "main-100")
+	docudoltCommit(t, env, dbName+"__main", "main-100")
 
 	_, err = env.client.Database(dbName + "__feature").Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 	)
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName+"__feature", "feature-200")
+	docudoltCommit(t, env, dbName+"__feature", "feature-200")
 
 	// Trigger a conflicting merge.
 	raw := runCommandRaw(t, mainDB, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feature"},
 	})
 	okVal, _ := raw["ok"]
@@ -612,16 +612,16 @@ func TestMergeConflictAbort(t *testing.T) {
 	// Abort the merge.
 	var abortRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "abort", Value: int32(1)},
 	}).Decode(&abortRaw))
 	assert.EqualValues(t, 1, abortRaw["ok"])
 	assert.Equal(t, "merge aborted", abortRaw["message"])
 
-	// After abort, dongoCommit must succeed (no more conflicts).
+	// After abort, docudoltCommit must succeed (no more conflicts).
 	var commitRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoCommit", Value: int32(1)},
+		{Key: "docudoltCommit", Value: int32(1)},
 		{Key: "message", Value: "after abort"},
 		{Key: "author", Value: "tester"},
 	}).Decode(&commitRaw))
@@ -635,7 +635,7 @@ func TestMergeConflictAbort(t *testing.T) {
 
 // TestMergeConflictResolveTheirs tests the "theirs" resolution strategy.
 func TestMergeConflictResolveTheirs(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("conftheirs%d", rand.Int64N(1_000_000))
@@ -650,18 +650,18 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(11)}}}},
 	)
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName+"__main", "main-11")
+	docudoltCommit(t, env, dbName+"__main", "main-11")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(22)}}}},
 	)
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName+"__feature", "feature-22")
+	docudoltCommit(t, env, dbName+"__feature", "feature-22")
 
 	// Trigger conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
@@ -669,7 +669,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	// Get conflict ID.
 	var detailRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoConflicts", Value: int32(1)},
+		{Key: "docudoltConflicts", Value: int32(1)},
 		{Key: "collection", Value: "items"},
 	}).Decode(&detailRaw))
 	conflicts := detailRaw["conflicts"].(bson.A)
@@ -679,17 +679,17 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	// Resolve with "theirs".
 	var resolveRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoResolveConflict", Value: int32(1)},
+		{Key: "docudoltResolveConflict", Value: int32(1)},
 		{Key: "collection", Value: "items"},
 		{Key: "conflictId", Value: conflictID},
 		{Key: "resolution", Value: "theirs"},
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
-	// Complete the merge with dongoMerge continue.
+	// Complete the merge with docudoltMerge continue.
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "continue", Value: int32(1)},
 	}).Decode(&continueRaw))
 	assert.EqualValues(t, 1, continueRaw["ok"])
@@ -702,7 +702,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 
 // TestMergeConflictResolveCustom tests the "custom" resolution strategy.
 func TestMergeConflictResolveCustom(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("confcustom%d", rand.Int64N(1_000_000))
@@ -717,18 +717,18 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(55)}}}},
 	)
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName+"__main", "main-55")
+	docudoltCommit(t, env, dbName+"__main", "main-55")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(66)}}}},
 	)
 	require.NoError(t, err)
-	dongoCommit(t, env, dbName+"__feature", "feature-66")
+	docudoltCommit(t, env, dbName+"__feature", "feature-66")
 
 	// Trigger conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
@@ -736,7 +736,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	// Get conflict ID.
 	var detailRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoConflicts", Value: int32(1)},
+		{Key: "docudoltConflicts", Value: int32(1)},
 		{Key: "collection", Value: "items"},
 	}).Decode(&detailRaw))
 	conflicts := detailRaw["conflicts"].(bson.A)
@@ -746,7 +746,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	// Resolve with "custom" value v:99.
 	var resolveRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoResolveConflict", Value: int32(1)},
+		{Key: "docudoltResolveConflict", Value: int32(1)},
 		{Key: "collection", Value: "items"},
 		{Key: "conflictId", Value: conflictID},
 		{Key: "resolution", Value: "custom"},
@@ -757,10 +757,10 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
-	// Complete the merge with dongoMerge continue.
+	// Complete the merge with docudoltMerge continue.
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "continue", Value: int32(1)},
 	}).Decode(&continueRaw))
 	assert.EqualValues(t, 1, continueRaw["ok"])

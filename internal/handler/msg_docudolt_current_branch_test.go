@@ -24,15 +24,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // versioningBackendMock is a minimal Backend + VersioningBackend implementation
-// for handler unit tests. DongoCurrentBranch echoes params.Branch; all other
+// for handler unit tests. DocudoltCurrentBranch echoes params.Branch; all other
 // methods are no-ops that satisfy the interface.
 type versioningBackendMock struct{}
 
@@ -54,47 +54,47 @@ func (m *versioningBackendMock) DropDatabase(_ context.Context, _ *backends.Drop
 
 // backends.VersioningBackend methods.
 
-func (m *versioningBackendMock) DongoCurrentBranch(_ context.Context, p *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+func (m *versioningBackendMock) DocudoltCurrentBranch(_ context.Context, p *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
 	return &backends.CurrentBranchResult{Branch: p.Branch}, nil
 }
-func (m *versioningBackendMock) DongoCommit(_ context.Context, _ *backends.CommitParams) (*backends.CommitResult, error) {
+func (m *versioningBackendMock) DocudoltCommit(_ context.Context, _ *backends.CommitParams) (*backends.CommitResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
+func (m *versioningBackendMock) DocudoltBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
+func (m *versioningBackendMock) DocudoltMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
+func (m *versioningBackendMock) DocudoltLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+func (m *versioningBackendMock) DocudoltStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoDiff(_ context.Context, _ *backends.DiffParams) (*backends.DiffResult, error) {
+func (m *versioningBackendMock) DocudoltDiff(_ context.Context, _ *backends.DiffParams) (*backends.DiffResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
+func (m *versioningBackendMock) DocudoltReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+func (m *versioningBackendMock) DocudoltConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DongoResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (m *versioningBackendMock) DocudoltResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	return nil, nil
 }
 
-// makeCurrentBranchMsg creates a wire.OpMsg for dongoCurrentBranch with the given encoded $db.
+// makeCurrentBranchMsg creates a wire.OpMsg for docudoltCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {
-	doc := must.NotFail(types.NewDocument("dongoCurrentBranch", int32(1), "$db", encodedDB))
+	doc := must.NotFail(types.NewDocument("docudoltCurrentBranch", int32(1), "$db", encodedDB))
 	return must.NotFail(documentOpMsg(doc))
 }
 
-// TestMsgDongoCurrentBranch_ReadOnly verifies that dongoCurrentBranch returns
+// TestMsgDocudoltCurrentBranch_ReadOnly verifies that docudoltCurrentBranch returns
 // ErrOperationFailed for read-only rootishes (commit hashes and ancestor expressions).
 // The error message must mention "no current branch name" to be actionable.
-func TestMsgDongoCurrentBranch_ReadOnly(t *testing.T) {
+func TestMsgDocudoltCurrentBranch_ReadOnly(t *testing.T) {
 	t.Parallel()
 
 	// No backend needed: the handler rejects read-only rootishes before ever
@@ -119,7 +119,7 @@ func TestMsgDongoCurrentBranch_ReadOnly(t *testing.T) {
 			t.Parallel()
 
 			msg := makeCurrentBranchMsg(tc.encodedDB)
-			_, err := h.MsgDongoCurrentBranch(context.Background(), msg)
+			_, err := h.MsgDocudoltCurrentBranch(context.Background(), msg)
 
 			require.Error(t, err)
 
@@ -133,12 +133,12 @@ func TestMsgDongoCurrentBranch_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestMsgDongoCurrentBranch_Branch verifies that dongoCurrentBranch returns the
+// TestMsgDocudoltCurrentBranch_Branch verifies that docudoltCurrentBranch returns the
 // correct branch name for writable connections (branch names and tag-like strings).
 //
 // Tags are syntactically indistinguishable from branch names at parse time, so
 // they are treated as writable and the tag name is returned as the branch identifier.
-func TestMsgDongoCurrentBranch_Branch(t *testing.T) {
+func TestMsgDocudoltCurrentBranch_Branch(t *testing.T) {
 	t.Parallel()
 
 	h := &Handler{b: &versioningBackendMock{}}
@@ -152,7 +152,7 @@ func TestMsgDongoCurrentBranch_Branch(t *testing.T) {
 		{"explicit_main", "mydb__main", "main"},
 		{"feature_branch", "mydb__feature-x", "feature-x"},
 		// Tag-like names (e.g. "v1.0") are indistinguishable from branch names at
-		// parse time; dongoCurrentBranch returns the tag name as the branch.
+		// parse time; docudoltCurrentBranch returns the tag name as the branch.
 		{"tag_like_v1_0", "mydb__v1.0", "v1.0"},
 	}
 
@@ -162,7 +162,7 @@ func TestMsgDongoCurrentBranch_Branch(t *testing.T) {
 			t.Parallel()
 
 			msg := makeCurrentBranchMsg(tc.encodedDB)
-			resp, err := h.MsgDongoCurrentBranch(context.Background(), msg)
+			resp, err := h.MsgDocudoltCurrentBranch(context.Background(), msg)
 			require.NoError(t, err)
 
 			doc, err := opMsgDocument(resp)

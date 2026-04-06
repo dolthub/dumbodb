@@ -18,7 +18,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/dolthub/dongo/internal/backends"
+	"github.com/dolthub/docudolt/internal/backends"
 )
 
 // database implements backends.Database interface by delegating all methods to the wrapped database.

@@ -23,7 +23,7 @@ import (
 
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
 )
 
 // RecentEntries implements log records interception

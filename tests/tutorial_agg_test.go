@@ -26,7 +26,7 @@ import (
 )
 
 // TestMongoDB_GroupAndTotalTutorial verifies the $match → $sort → $group ($first, $sum, $push)
-// → $sort → $set → $unset pipeline from the MongoDB group-and-total tutorial. (DongoFull)
+// → $sort → $set → $unset pipeline from the MongoDB group-and-total tutorial. (DocudoltFull)
 //
 // https://www.mongodb.com/docs/manual/tutorial/aggregation-examples/group-and-total/
 //
@@ -37,7 +37,7 @@ import (
 //   - $first "$ord_date" preserves datetime values
 func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	t.Parallel()
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 	ctx := context.Background()
 

@@ -22,7 +22,7 @@ package tests
 // The setup block then creates three commits on the same database.
 // Scenarios 2–4 use that shared three-commit history.
 //
-// Note: every Dongo database begins with an auto-created "Initialize database"
+// Note: every Docudolt database begins with an auto-created "Initialize database"
 // root commit. Counts below include that initial commit.
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single
@@ -39,13 +39,13 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// logResult holds the decoded top-level response from a dongoLog command.
+// logResult holds the decoded top-level response from a docudoltLog command.
 type logResult struct {
 	Branch  string
 	Commits []commitEntry
 }
 
-// commitEntry holds one entry from the "commits" array of a dongoLog response.
+// commitEntry holds one entry from the "commits" array of a docudoltLog response.
 type commitEntry struct {
 	CommitID string
 	Parent1  string
@@ -55,7 +55,7 @@ type commitEntry struct {
 	Refs     []string
 }
 
-// decodeLogResult parses the raw bson.M from a dongoLog RunCommand into the
+// decodeLogResult parses the raw bson.M from a docudoltLog RunCommand into the
 // typed helpers above, failing the test if the shape is unexpected.
 func decodeLogResult(t *testing.T, raw bson.M) logResult {
 	t.Helper()
@@ -63,10 +63,10 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 	branch, _ := raw["branch"].(string)
 
 	rawCommits, ok := raw["commits"]
-	require.True(t, ok, "dongoLog result missing 'commits' field")
+	require.True(t, ok, "docudoltLog result missing 'commits' field")
 
 	commitsArr, ok := rawCommits.(bson.A)
-	require.True(t, ok, "dongoLog 'commits' is not an array, got %T", rawCommits)
+	require.True(t, ok, "docudoltLog 'commits' is not an array, got %T", rawCommits)
 
 	var out logResult
 	out.Branch = branch
@@ -100,7 +100,7 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 }
 
 func TestLogVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("logvrfy%d", rand.Int64N(1_000_000))
@@ -118,7 +118,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario1_NoUserCommits", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
@@ -133,21 +133,21 @@ func TestLogVerify(t *testing.T) {
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 := dongoCommit(t, env, dbName, "first")
+	hash1 := docudoltCommit(t, env, dbName, "first")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 := dongoCommit(t, env, dbName, "second")
+	hash2 := docudoltCommit(t, env, dbName, "second")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "label", Value: "gamma"},
 	})
 	require.NoError(t, err)
-	hash3 := dongoCommit(t, env, dbName, "third")
+	hash3 := docudoltCommit(t, env, dbName, "third")
 
 	// -------------------------------------------------------------------------
 	// Scenario 2: Log after multiple commits — parent chain, newest-first
@@ -155,7 +155,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario2_MultipleCommits", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
@@ -184,7 +184,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario3_WithLimit", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))
 
@@ -204,7 +204,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario4_FromHash", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "from", Value: hash2},
 		}).Decode(&raw))
 
@@ -229,20 +229,20 @@ func TestLogVerify(t *testing.T) {
 		// Create a second branch "logvrfy-refs" pointing at the current main HEAD
 		// (hash3), so two branches share the same tip commit.
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "logvrfy-refs"},
 		}).Err(), "creating logvrfy-refs branch must succeed")
 
-		// Query dongoLog on main.  hash3 is the tip of both "main" and
+		// Query docudoltLog on main.  hash3 is the tip of both "main" and
 		// "logvrfy-refs", so its refs field must contain "HEAD", "main", and
 		// "logvrfy-refs".  Non-head commits must have no refs field.
 		var rawMain bson.M
 		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 		}).Decode(&rawMain))
 
 		lrMain := decodeLogResult(t, rawMain)
-		require.NotEmpty(t, lrMain.Commits, "dongoLog on main must return commits")
+		require.NotEmpty(t, lrMain.Commits, "docudoltLog on main must return commits")
 
 		head := lrMain.Commits[0]
 		assert.Equal(t, hash3, head.CommitID, "HEAD commit must be hash3")
@@ -255,15 +255,15 @@ func TestLogVerify(t *testing.T) {
 			assert.Empty(t, c.Refs, "non-head commit %s must have no refs", c.CommitID)
 		}
 
-		// Query dongoLog on logvrfy-refs.  hash3 is still the tip but now the
+		// Query docudoltLog on logvrfy-refs.  hash3 is still the tip but now the
 		// connection branch is "logvrfy-refs", so the decoration is reversed.
 		var rawFeature bson.M
 		require.NoError(t, env.client.Database(dbName+"__logvrfy-refs").RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 		}).Decode(&rawFeature))
 
 		lrFeature := decodeLogResult(t, rawFeature)
-		require.NotEmpty(t, lrFeature.Commits, "dongoLog on logvrfy-refs must return commits")
+		require.NotEmpty(t, lrFeature.Commits, "docudoltLog on logvrfy-refs must return commits")
 
 		headF := lrFeature.Commits[0]
 		assert.Equal(t, hash3, headF.CommitID, "HEAD commit on logvrfy-refs must be hash3")
@@ -281,7 +281,7 @@ func TestLogVerify(t *testing.T) {
 	//                ↖
 	//                 hashC (feat)  →  hashM (merge, parent1=hashB, parent2=hashC)
 	//
-	// DongoLog follows parent1 linearly, so the walk from main is:
+	// DocudoltLog follows parent1 linearly, so the walk from main is:
 	//   hashM → hashB → hashA → init
 	// The walk from hashC (feat tip) is:
 	//   hashC → hashA → init  (hashB and hashM are unreachable)
@@ -293,11 +293,11 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashA := dongoCommit(t, env, mergeDBName, "add-one")
+	hashA := docudoltCommit(t, env, mergeDBName, "add-one")
 
 	// Create "feat" branch from main HEAD (hashA).
 	require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
-		{Key: "dongoBranch", Value: int32(1)},
+		{Key: "docudoltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feat"},
 	}).Err())
 
@@ -307,7 +307,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashB := dongoCommit(t, env, mergeDBName, "add-two")
+	hashB := docudoltCommit(t, env, mergeDBName, "add-two")
 
 	// Advance feat independently: _id:3 → hashC (diverges from hashA).
 	_, err = env.client.Database(mergeDBName+"__feat").Collection("items").InsertOne(ctx, bson.D{
@@ -315,12 +315,12 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(3)},
 	})
 	require.NoError(t, err)
-	hashC := dongoCommit(t, env, mergeDBName+"__feat", "add-three-feat")
+	hashC := docudoltCommit(t, env, mergeDBName+"__feat", "add-three-feat")
 
 	// Merge feat into main → three-way merge commit hashM.
 	var mergeRaw bson.M
 	require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
-		{Key: "dongoMerge", Value: int32(1)},
+		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feat"},
 	}).Decode(&mergeRaw))
 	hashM, ok := mergeRaw["commitId"].(string)
@@ -328,12 +328,12 @@ func TestLogVerify(t *testing.T) {
 	require.NotEmpty(t, hashM, "three-way merge must produce a new commit hash")
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Merge commit appears in dongoLog with parent1 and parent2
+	// Scenario 6: Merge commit appears in docudoltLog with parent1 and parent2
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_MergeCommitParents", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -348,7 +348,7 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: dongoLog from feature tip shows only feature branch history
+	// Scenario 7: docudoltLog from feature tip shows only feature branch history
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FromFeatureTip", func(t *testing.T) {
 		// Starting at hashC (feat tip) the walk follows parent1 only:
@@ -356,7 +356,7 @@ func TestLogVerify(t *testing.T) {
 		// hashB (main-only) and hashM (merge) must not appear.
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "from", Value: hashC},
 		}).Decode(&raw))
 
@@ -382,7 +382,7 @@ func TestLogVerify(t *testing.T) {
 		// limit=2 from main HEAD follows parent1: hashM → hashB.  hashA must not appear.
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
-			{Key: "dongoLog", Value: int32(1)},
+			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))
 

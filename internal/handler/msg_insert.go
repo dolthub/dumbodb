@@ -25,19 +25,19 @@ import (
 	"github.com/FerretDB/wire"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/handler/common"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/handler/common"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // WriteErrorDocument returns a document representation of the write error.
 //
 // Find a better place for this function.
-// TODO https://github.com/dolthub/dongo/issues/3263
+// TODO https://github.com/dolthub/docudolt/issues/3263
 func WriteErrorDocument(we *mongo.WriteError) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"index", int32(we.Index),
@@ -140,7 +140,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				doc.Set("_id", types.NewObjectID())
 			}
 
-			// TODO https://github.com/dolthub/dongo/issues/3454
+			// TODO https://github.com/dolthub/docudolt/issues/3454
 			if err = doc.ValidateData(); err != nil {
 				var ve *types.ValidationError
 				if !errors.As(err, &ve) {

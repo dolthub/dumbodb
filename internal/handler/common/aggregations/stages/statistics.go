@@ -14,7 +14,7 @@
 
 package stages
 
-import "github.com/dolthub/dongo/internal/handler/common/aggregations"
+import "github.com/dolthub/docudolt/internal/handler/common/aggregations"
 
 // Statistic represents a statistic that can be fetched from the DB.
 type Statistic int32

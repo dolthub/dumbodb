@@ -19,10 +19,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dolthub/dongo/internal/backends"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/logging"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // fixed OpLog database and collection names.

@@ -1,6 +1,6 @@
-# dongoLog Verification
+# docudoltLog Verification
 
-Manual verification guide for `dongoLog` end-to-end behavior. Work through each
+Manual verification guide for `docudoltLog` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
 > **Automated equivalent:** `tests/versioning_log_verify_test.go` (`TestLogVerify`)
@@ -12,20 +12,20 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running Dongo instance and `mongosh` installed. Connect to your instance:
+A running Docudolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Dongo address if different.
+Replace `localhost:27017` with your Docudolt address if different.
 
 ---
 
 ## Scenario 1: Log with no user commits — only the "Initialize database" root
 
-Every Dongo database is created with an automatic `"Initialize database"` root
-commit. Before any user commits, `dongoLog` returns exactly that one commit.
+Every Docudolt database is created with an automatic `"Initialize database"` root
+commit. Before any user commits, `docudoltLog` returns exactly that one commit.
 
 ```js
 var db = db.getSiblingDB("logdb")
@@ -33,7 +33,7 @@ db.dropDatabase()
 
 db.items.insertOne({ _id: 0 })
 
-db.runCommand({ dongoLog: 1 })
+db.runCommand({ docudoltLog: 1 })
 ```
 
 Expected:
@@ -58,18 +58,18 @@ Key checks:
 
 ```js
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ dongoCommit: 1, message: "first", author: "alice <alice@dongo>" })
+const r1 = db.runCommand({ docudoltCommit: 1, message: "first", author: "alice <alice@docudolt>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first", ok: 1 }
 const hash1 = r1.commitId
 
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ dongoCommit: 1, message: "second", author: "alice <alice@dongo>" })
+const r2 = db.runCommand({ docudoltCommit: 1, message: "second", author: "alice <alice@docudolt>" })
 printjson(r2)
 const hash2 = r2.commitId
 
 db.items.insertOne({ _id: 3, label: "gamma" })
-const r3 = db.runCommand({ dongoCommit: 1, message: "third", author: "alice <alice@dongo>" })
+const r3 = db.runCommand({ docudoltCommit: 1, message: "third", author: "alice <alice@docudolt>" })
 printjson(r3)
 const hash3 = r3.commitId
 
@@ -82,11 +82,11 @@ After setup, the branch has four commits: `"Initialize database"` ← `first` �
 
 ## Scenario 2: Log after multiple commits — parent chain, newest-first
 
-`dongoLog` returns all commits newest-first. Including the `"Initialize database"`
+`docudoltLog` returns all commits newest-first. Including the `"Initialize database"`
 root, four entries appear in total.
 
 ```js
-db.runCommand({ dongoLog: 1 })
+db.runCommand({ docudoltLog: 1 })
 ```
 
 Expected:
@@ -115,10 +115,10 @@ Key checks:
 
 ## Scenario 3: Log with limit — truncates at the specified count
 
-`dongoLog` with `limit: 2` returns at most 2 entries starting from HEAD.
+`docudoltLog` with `limit: 2` returns at most 2 entries starting from HEAD.
 
 ```js
-db.runCommand({ dongoLog: 1, limit: 2 })
+db.runCommand({ docudoltLog: 1, limit: 2 })
 ```
 
 Expected:
@@ -143,12 +143,12 @@ Key checks:
 
 ## Scenario 4: Log from a specific hash — start traversal at that commit
 
-`dongoLog` with `from: hash2` starts at `hash2` and walks backwards, skipping
+`docudoltLog` with `from: hash2` starts at `hash2` and walks backwards, skipping
 the HEAD commit (`hash3`). The walk continues through `hash1` down to the
 `"Initialize database"` root — three entries in total.
 
 ```js
-db.runCommand({ dongoLog: 1, from: hash2 })
+db.runCommand({ docudoltLog: 1, from: hash2 })
 ```
 
 Expected:
@@ -181,10 +181,10 @@ no `refs` field.
 
 ```js
 // Create a second branch pointing at the current main HEAD.
-db.getSiblingDB("logdb__main").runCommand({ dongoBranch: 1, branch: "feature" })
+db.getSiblingDB("logdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
 
 // Query from main — hash3 is tip of both "main" and "feature".
-db.runCommand({ dongoLog: 1, limit: 2 })
+db.runCommand({ docudoltLog: 1, limit: 2 })
 ```
 
 Expected:
@@ -233,25 +233,25 @@ var mdb = db.getSiblingDB("logmerge")
 mdb.dropDatabase()
 
 mdb.items.insertOne({ _id: 1, v: 1 })
-const rA = mdb.runCommand({ dongoCommit: 1, message: "add-one", author: "alice <alice@dongo>" })
+const rA = mdb.runCommand({ docudoltCommit: 1, message: "add-one", author: "alice <alice@docudolt>" })
 const hashA = rA.commitId
 
 // Create "feat" branch from main HEAD (hashA).
-mdb.getSiblingDB("logmerge__main").runCommand({ dongoBranch: 1, branch: "feat" })
+mdb.getSiblingDB("logmerge__main").runCommand({ docudoltBranch: 1, branch: "feat" })
 
 // Advance main: _id:2 → hashB.
 mdb.items.insertOne({ _id: 2, v: 2 })
-const rB = mdb.runCommand({ dongoCommit: 1, message: "add-two", author: "alice <alice@dongo>" })
+const rB = mdb.runCommand({ docudoltCommit: 1, message: "add-two", author: "alice <alice@docudolt>" })
 const hashB = rB.commitId
 
 // Advance feat independently: _id:3 → hashC.
 const featdb = db.getSiblingDB("logmerge__feat")
 featdb.items.insertOne({ _id: 3, v: 3 })
-const rC = featdb.runCommand({ dongoCommit: 1, message: "add-three-feat", author: "alice <alice@dongo>" })
+const rC = featdb.runCommand({ docudoltCommit: 1, message: "add-three-feat", author: "alice <alice@docudolt>" })
 const hashC = rC.commitId
 
 // Merge feat into main → hashM.
-const rM = mdb.getSiblingDB("logmerge__main").runCommand({ dongoMerge: 1, merge_in: "feat" })
+const rM = mdb.getSiblingDB("logmerge__main").runCommand({ docudoltMerge: 1, merge_in: "feat" })
 const hashM = rM.commitId
 
 print("hashA =", hashA, "hashB =", hashB, "hashC =", hashC, "hashM =", hashM)
@@ -265,15 +265,15 @@ init ← hashA ← hashB (main)
               hashC (feat)  →  hashM (HEAD on main, parent1=hashB, parent2=hashC)
 ```
 
-`dongoLog` follows `parent1` linearly, so the walk from main HEAD is:
+`docudoltLog` follows `parent1` linearly, so the walk from main HEAD is:
 `hashM → hashB → hashA → init`.
 
 ---
 
-## Scenario 6: Merge commit appears in dongoLog with parent1 and parent2
+## Scenario 6: Merge commit appears in docudoltLog with parent1 and parent2
 
 ```js
-mdb.getSiblingDB("logmerge__main").runCommand({ dongoLog: 1, limit: 1 })
+mdb.getSiblingDB("logmerge__main").runCommand({ docudoltLog: 1, limit: 1 })
 ```
 
 Expected:
@@ -304,13 +304,13 @@ Key checks:
 
 ---
 
-## Scenario 7: dongoLog from feature tip shows only feature branch history
+## Scenario 7: docudoltLog from feature tip shows only feature branch history
 
 Starting traversal at `hashC` follows `parent1` only: `hashC → hashA → init`.
 `hashB` (reachable only via main) and `hashM` (the merge commit) must **not** appear.
 
 ```js
-mdb.getSiblingDB("logmerge__main").runCommand({ dongoLog: 1, from: hashC })
+mdb.getSiblingDB("logmerge__main").runCommand({ docudoltLog: 1, from: hashC })
 ```
 
 Expected:
@@ -341,7 +341,7 @@ Key checks:
 (`hashA`, init) must **not** appear.
 
 ```js
-mdb.getSiblingDB("logmerge__main").runCommand({ dongoLog: 1, limit: 2 })
+mdb.getSiblingDB("logmerge__main").runCommand({ docudoltLog: 1, limit: 2 })
 ```
 
 Expected:
@@ -369,10 +369,10 @@ Key checks:
 
 | Command | Behaviour |
 |---|---|
-| `{ dongoLog: 1 }` | All commits from HEAD, up to default limit (20) |
-| `{ dongoLog: 1, limit: N }` | At most N commits from HEAD |
-| `{ dongoLog: 1, from: "<hash>" }` | All commits from `<hash>` backwards |
-| `{ dongoLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` |
+| `{ docudoltLog: 1 }` | All commits from HEAD, up to default limit (20) |
+| `{ docudoltLog: 1, limit: N }` | At most N commits from HEAD |
+| `{ docudoltLog: 1, from: "<hash>" }` | All commits from `<hash>` backwards |
+| `{ docudoltLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` |
 
 - Commits are returned newest-first.
 - Each entry contains `hash`, `message`, `timestamp`, and `author`.

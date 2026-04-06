@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tests contains dongo-specific regression and integration tests.
+// Package tests contains docudolt-specific regression and integration tests.
 //
-// MongoDB parity tests (compatibility between MongoDB and Dongo) live in the
-// dolthub/dongo-parity-testing repository. This package retains only tests for
-// dongo-internal behaviors that have no MongoDB equivalent, such as internal
+// MongoDB parity tests (compatibility between MongoDB and Docudolt) live in the
+// dolthub/docudolt-parity-testing repository. This package retains only tests for
+// docudolt-internal behaviors that have no MongoDB equivalent, such as internal
 // resource management and implementation-specific edge cases.
 //
 // Run with:
@@ -44,11 +44,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// buildOnce ensures the dongo binary is built exactly once per test run.
+// buildOnce ensures the docudolt binary is built exactly once per test run.
 var buildOnce sync.Once
 
-// dongoTestEnv holds a running dongo process and a connected MongoDB client.
-type dongoTestEnv struct {
+// docudoltTestEnv holds a running docudolt process and a connected MongoDB client.
+type docudoltTestEnv struct {
 	cmd     *exec.Cmd
 	client  *mongo.Client
 	dataDir string
@@ -61,8 +61,8 @@ func repoRoot() string {
 	return filepath.Join(filepath.Dir(filename), "..")
 }
 
-// startDongo launches a fresh dongo instance on a random free port.
-func startDongo(tb testing.TB) *dongoTestEnv {
+// startDocudolt launches a fresh docudolt instance on a random free port.
+func startDocudolt(tb testing.TB) *docudoltTestEnv {
 	tb.Helper()
 
 	// Find a free port.
@@ -72,7 +72,7 @@ func startDongo(tb testing.TB) *dongoTestEnv {
 	listener.Close()
 
 	dataDir := tb.TempDir()
-	binary := filepath.Join(repoRoot(), ".runtime", "bin", "dongo")
+	binary := filepath.Join(repoRoot(), ".runtime", "bin", "docudolt")
 
 	// Build once per test run to ensure the binary is up-to-date with current source.
 	var buildErr error
@@ -81,14 +81,14 @@ func startDongo(tb testing.TB) *dongoTestEnv {
 			buildErr = mkErr
 			return
 		}
-		build := exec.Command("go", "build", "-o", binary, "./cmd/dongo/")
+		build := exec.Command("go", "build", "-o", binary, "./cmd/docudolt/")
 		build.Dir = repoRoot()
 		if out, err := build.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("failed to build dongo: %w\n%s", err, out)
+			buildErr = fmt.Errorf("failed to build docudolt: %w\n%s", err, out)
 		}
 	})
 	if buildErr != nil {
-		tb.Fatalf("failed to build dongo: %v", buildErr)
+		tb.Fatalf("failed to build docudolt: %v", buildErr)
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -97,7 +97,7 @@ func startDongo(tb testing.TB) *dongoTestEnv {
 	cmd.Stderr = nil
 	require.NoError(tb, cmd.Start())
 
-	env := &dongoTestEnv{
+	env := &docudoltTestEnv{
 		cmd:     cmd,
 		dataDir: dataDir,
 		port:    port,
@@ -111,7 +111,7 @@ func startDongo(tb testing.TB) *dongoTestEnv {
 		cmd.Wait()         //nolint:errcheck
 	})
 
-	// Wait for dongo to be ready.
+	// Wait for docudolt to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -132,7 +132,7 @@ func startDongo(tb testing.TB) *dongoTestEnv {
 }
 
 // collection returns a fresh collection for each test.
-func (env *dongoTestEnv) collection(tb testing.TB) *mongo.Collection {
+func (env *docudoltTestEnv) collection(tb testing.TB) *mongo.Collection {
 	tb.Helper()
 
 	name := fmt.Sprintf("col_%d", rand.Int64())
@@ -169,10 +169,10 @@ func d(elems ...primitive.E) bson.D {
 }
 
 // TestBSON_array_nested is a regression test for nested array support (do-dor).
-// MongoDB supports arrays containing arrays; dongo must store and retrieve them
+// MongoDB supports arrays containing arrays; docudolt must store and retrieve them
 // without error.
 func TestBSON_array_nested(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -209,7 +209,7 @@ func TestBSON_array_nested(t *testing.T) {
 // This test does NOT run in parallel so that forcing GC here does not interact
 // with other goroutines' resource tracking.
 func TestFind_CursorCleanupOnFilterError(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -238,7 +238,7 @@ func TestFind_CursorCleanupOnFilterError(t *testing.T) {
 func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// flags: 0b0100 (4) — bits 0 and 1 are clear, bit 2 is set.
@@ -274,7 +274,7 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 func TestQuery_bitsAnySet_positions(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// flags: 0b0001 (1) — bit 0 set.
@@ -317,7 +317,7 @@ func TestQuery_bitsAnySet_positions(t *testing.T) {
 func TestQuery_geo_within_box(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// Store coordinates as legacy [lon, lat] arrays.
@@ -357,7 +357,7 @@ func TestQuery_geo_within_box(t *testing.T) {
 func TestQuery_proj_slice_first_n(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -390,7 +390,7 @@ func TestQuery_proj_slice_first_n(t *testing.T) {
 func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -412,7 +412,7 @@ func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 func TestQuery_type_decimal(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	decVal, decErr := primitive.ParseDecimal128("3.14")
@@ -449,7 +449,7 @@ func TestQuery_type_decimal(t *testing.T) {
 func TestQuery_geo_within_polygon(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -486,7 +486,7 @@ func TestQuery_geo_within_polygon(t *testing.T) {
 func TestQuery_geo_within_centerSphere(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// New York (approx): lon=-74, lat=40.7
@@ -525,7 +525,7 @@ func TestQuery_geo_within_centerSphere(t *testing.T) {
 func TestQuery_geo_near(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// Place two points: one near [0,0], one far away.
@@ -561,7 +561,7 @@ func TestQuery_geo_near(t *testing.T) {
 func TestQuery_geo_nearSphere(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -593,12 +593,12 @@ func TestQuery_geo_nearSphere(t *testing.T) {
 }
 
 // TestQuery_geo_nearSphere_legacy2d verifies {field: {$nearSphere: [lon, lat], $maxDistance: radians}}
-// on a plain 2d index (legacy coordinates). $maxDistance is in radians; dongo must convert to metres
+// on a plain 2d index (legacy coordinates). $maxDistance is in radians; docudolt must convert to metres
 // before applying the haversine filter. Regression for do-twgm.
 func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	// Two points near the origin.  In radians the great-circle radius of ~111 km is ~0.0175.
@@ -632,7 +632,7 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 func TestQuery_geo_intersects_point(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -668,7 +668,7 @@ func TestQuery_geo_intersects_point(t *testing.T) {
 func TestQuery_geo_intersects_polygon(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -711,7 +711,7 @@ func TestQuery_geo_intersects_polygon(t *testing.T) {
 func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -749,7 +749,7 @@ func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -791,7 +791,7 @@ func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 func TestQuery_proj_slice_last_n(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -823,7 +823,7 @@ func TestQuery_proj_slice_last_n(t *testing.T) {
 func TestQuery_proj_slice_skip_limit(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -856,7 +856,7 @@ func TestQuery_proj_slice_skip_limit(t *testing.T) {
 func TestQuery_type_number_alias_decimal(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	decVal, decErr := primitive.ParseDecimal128("9.99")
@@ -898,7 +898,7 @@ func TestQuery_type_number_alias_decimal(t *testing.T) {
 func TestQuery_type_objectid(t *testing.T) {
 	t.Parallel()
 
-	env := startDongo(t)
+	env := startDocudolt(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

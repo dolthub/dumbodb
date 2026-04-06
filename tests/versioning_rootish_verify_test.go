@@ -40,7 +40,7 @@ import (
 
 // rootishVerifySetup mirrors the Setup section of docs/verify/rootish.md.
 // Returns hash1 (commit 1) and hash2 (commit 2).
-func rootishVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, hash2 string) {
+func rootishVerifySetup(t *testing.T, env *docudoltTestEnv, dbName string) (hash1, hash2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -57,7 +57,7 @@ func rootishVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, 
 		{Key: "version", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hash1 = dongoCommit(t, env, dbName, "first commit")
+	hash1 = docudoltCommit(t, env, dbName, "first commit")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -66,23 +66,23 @@ func rootishVerifySetup(t *testing.T, env *dongoTestEnv, dbName string) (hash1, 
 		{Key: "version", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hash2 = dongoCommit(t, env, dbName, "second commit")
+	hash2 = docudoltCommit(t, env, dbName, "second commit")
 
 	// Create branch "v1.0" from main HEAD.
 	// The branch name contains a dot; access it via dbname__v1%2E0.
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
-		{Key: "dongoBranch", Value: int32(1)},
+		{Key: "docudoltBranch", Value: int32(1)},
 		{Key: "branch", Value: "v1.0"},
 	}).Decode(&branchResult)
-	require.NoError(t, err, "dongoBranch to create v1.0")
+	require.NoError(t, err, "docudoltBranch to create v1.0")
 	assert.Equal(t, "v1.0", branchResult["branch"])
 
 	return hash1, hash2
 }
 
 func TestRootishVerify(t *testing.T) {
-	env := startDongo(t)
+	env := startDocudolt(t)
 	ctx := context.Background()
 
 	// Use a randomised db name so parallel test runs don't collide.
@@ -119,10 +119,10 @@ func TestRootishVerify(t *testing.T) {
 		_, err = items.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
 		require.NoError(t, err, "delete from main must succeed")
 
-		// dongoCurrentBranch returns "main".
+		// docudoltCurrentBranch returns "main".
 		var result bson.M
 		require.NoError(t, main.RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
@@ -161,10 +161,10 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), nMain, "main items: must still be 2 (v1.0 write must not leak)")
 
-		// dongoCurrentBranch on v1.0 returns the decoded branch name "v1.0".
+		// docudoltCurrentBranch on v1.0 returns the decoded branch name "v1.0".
 		var result bson.M
 		require.NoError(t, v1DB.RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "v1.0", result["branch"])
 
@@ -202,16 +202,16 @@ func TestRootishVerify(t *testing.T) {
 		_, err = snap1Items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on hash1 snapshot")
 
-		// dongoCurrentBranch: no branch name to return (code 96).
+		// docudoltCurrentBranch: no branch name to return (code 96).
 		err = snap1DB.RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on hash rootish")
+		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on hash rootish")
 
-		// dongoBranch: works — branch creation needs only a resolved commit address.
+		// docudoltBranch: works — branch creation needs only a resolved commit address.
 		var branchResult bson.M
 		require.NoError(t, snap1DB.RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "from-hash1"},
 		}).Decode(&branchResult))
 		assert.Equal(t, "from-hash1", branchResult["branch"])
@@ -250,16 +250,16 @@ func TestRootishVerify(t *testing.T) {
 		_, err = parentItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on main~1")
 
-		// dongoCurrentBranch: no branch name to return (code 96).
+		// docudoltCurrentBranch: no branch name to return (code 96).
 		err = parentDB.RunCommand(ctx, bson.D{
-			{Key: "dongoCurrentBranch", Value: int32(1)},
+			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "dongoCurrentBranch on ancestor rootish")
+		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor rootish")
 
-		// dongoBranch: works — ancestor expression resolves to a commit.
+		// docudoltBranch: works — ancestor expression resolves to a commit.
 		var branchResult bson.M
 		require.NoError(t, parentDB.RunCommand(ctx, bson.D{
-			{Key: "dongoBranch", Value: int32(1)},
+			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "back-one"},
 		}).Decode(&branchResult))
 		assert.Equal(t, "back-one", branchResult["branch"])

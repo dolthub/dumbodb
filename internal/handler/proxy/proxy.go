@@ -23,8 +23,8 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/tlsutil"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/tlsutil"
 )
 
 // Router "handles" messages by sending them to another wire protocol compatible service.

@@ -18,12 +18,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dolthub/dongo/internal/handler/common/aggregations"
-	"github.com/dolthub/dongo/internal/handler/handlererrors"
-	"github.com/dolthub/dongo/internal/types"
-	"github.com/dolthub/dongo/internal/util/iterator"
-	"github.com/dolthub/dongo/internal/util/lazyerrors"
-	"github.com/dolthub/dongo/internal/util/must"
+	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/docudolt/internal/util/iterator"
+	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/docudolt/internal/util/must"
 )
 
 // expr represents $expr operator.
@@ -71,7 +71,7 @@ func (e *expr) validateExpr(exprValue any) error {
 
 			_, err = op.Process(nil)
 			if err != nil {
-				// TODO https://github.com/dolthub/dongo/issues/3129
+				// TODO https://github.com/dolthub/docudolt/issues/3129
 				return processExprOperatorErrors(err, e.errArgument)
 			}
 
@@ -285,7 +285,7 @@ func processExprOperatorErrors(err error, argument string) error {
 				argument,
 			)
 		case aggregations.ErrUndefinedVariable:
-			// TODO https://github.com/dolthub/dongo/issues/2275
+			// TODO https://github.com/dolthub/docudolt/issues/2275
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
 				"Aggregation expression variables are not implemented yet",
