@@ -104,7 +104,7 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		startupWarnings := []string{
-			fmt.Sprintf("Powered by FerretDB %s%s.", info.Version, b),
+			fmt.Sprintf("Powered by Docudolt %s%s.", info.Version, b),
 			"Please star us on GitHub: https://github.com/dolthub/docudolt.",
 		}
 
@@ -121,7 +121,7 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			startupWarnings = append(
 				startupWarnings,
 				"The telemetry state is undecided.",
-				"Read more about FerretDB telemetry and how to opt out at https://beacon.ferretdb.com.",
+				"Read more about Docudolt telemetry and how to opt out at https://github.com/dolthub/docudolt.",
 			)
 
 		case state.UpdateInfo != "", state.UpdateAvailable:
