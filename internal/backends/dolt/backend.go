@@ -30,7 +30,7 @@
 // write; WRST.staged_root_addr stays equal to HEAD's rootValue until an explicit
 // stage operation. `dolt status` shows "Changes not staged for commit" after writes.
 //
-// Branch parsing: the database name may contain a __ separator (e.g. mydb__main)
+// Branch parsing: the database name may contain a __d_ separator (e.g. mydb__d_main)
 // to specify the branch, but currently all data lives in a single NBS store per
 // logical database name.
 package dolt
@@ -214,7 +214,7 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 
 // Database implements backends.Backend.
 //
-// name may be an encoded database name of the form "dbname__rootish" where
+// name may be an encoded database name of the form "dbname__d_rootish" where
 // rootish is a branch name, commit hash, tag name, or ancestor expression.
 // The base db name and rootish are parsed here; collection reads use the
 // rootish to load the historical RTVL when it is a commit hash or tag.

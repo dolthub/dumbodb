@@ -24,7 +24,7 @@ import (
 )
 
 // TestRTVLLoad_CommitHash_Query verifies that connecting with a commit-hash rootish
-// (mydb__<hash>) reads the collection as it existed at that commit, not the current
+// (mydb__d_<hash>) reads the collection as it existed at that commit, not the current
 // working set.
 func TestRTVLLoad_CommitHash_Query(t *testing.T) {
 	b := newTestBackend(t)
@@ -40,16 +40,16 @@ func TestRTVLLoad_CommitHash_Query(t *testing.T) {
 	// Insert doc3 into working set (not committed).
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "v", int64(30)))
 
-	// Reading from hash1 (encoded: "testdb__<hash1>") should see only doc1.
+	// Reading from hash1 (encoded: "testdb__d_<hash1>") should see only doc1.
 	n1 := countDocs(t, b, "testdb__d_"+hash1, "col")
 	if n1 != 1 {
-		t.Errorf("mydb__%s: want 1 doc (only doc1), got %d", hash1, n1)
+		t.Errorf("mydb__d_%s: want 1 doc (only doc1), got %d", hash1, n1)
 	}
 
 	// Reading from hash2 should see doc1 + doc2.
 	n2 := countDocs(t, b, "testdb__d_"+hash2, "col")
 	if n2 != 2 {
-		t.Errorf("mydb__%s: want 2 docs (doc1+doc2), got %d", hash2, n2)
+		t.Errorf("mydb__d_%s: want 2 docs (doc1+doc2), got %d", hash2, n2)
 	}
 
 	// Reading from plain "testdb" (working set) should see all 3 docs.
@@ -141,7 +141,7 @@ func TestRTVLLoad_CommitHash_UnknownHash(t *testing.T) {
 }
 
 // TestRTVLLoad_CommitHash_MainBranchUnchanged verifies that the plain "main" rootish
-// (no __suffix) continues to read from the current working set, not affected by the
+// (no __d_ suffix) continues to read from the current working set, not affected by the
 // encoded-name changes.
 func TestRTVLLoad_CommitHash_MainBranchUnchanged(t *testing.T) {
 	b := newTestBackend(t)
@@ -201,7 +201,7 @@ func TestSplitEncodedDBName(t *testing.T) {
 	}
 }
 
-// TestRTVLLoad_AncestorExpr_Query verifies that mydb__main~N returns the correct
+// TestRTVLLoad_AncestorExpr_Query verifies that mydb__d_main~N returns the correct
 // historical document set for each ancestor depth.
 //
 // Setup: 3 commits, each adding one document.
@@ -424,7 +424,7 @@ func TestRTVLLoad_DocuDoltBranch_FromAncestor(t *testing.T) {
 }
 
 // TestRTVLLoad_BranchWrite_Isolation verifies that writes via a non-main branch
-// rootish (mydb__feature) go to that branch's working set and are isolated from main.
+// rootish (mydb__d_feature) go to that branch's working set and are isolated from main.
 //
 // Setup:
 //   - Commit one doc on main → main has 1 doc committed.
@@ -433,8 +433,8 @@ func TestRTVLLoad_DocuDoltBranch_FromAncestor(t *testing.T) {
 //   - Write a third doc via "testdb" / "testdb__d_main" (into main's working set).
 //
 // Expected:
-//   - testdb__feature sees 2 docs (inherited committed doc + feature working-set write).
-//   - testdb / testdb__main sees 2 docs (committed doc + main working-set write).
+//   - testdb__d_feature sees 2 docs (inherited committed doc + feature working-set write).
+//   - testdb / testdb__d_main sees 2 docs (committed doc + main working-set write).
 //   - The two branches see different second documents (isolated writes).
 func TestRTVLLoad_BranchWrite_Isolation(t *testing.T) {
 	ctx := context.Background()

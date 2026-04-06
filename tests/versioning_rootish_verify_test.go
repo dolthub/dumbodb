@@ -21,7 +21,7 @@ package tests
 //
 //   - Commit 1 (hash1): items = [ { _id:1, label:"first",  version:1 } ]
 //   - Commit 2 (hash2): items = [ { _id:1, ... }, { _id:2, label:"second", version:2 } ]
-//   - Branch "v1.0" at commit 2 (same as main HEAD); accessed via dbname__v1%2E0
+//   - Branch "v1.0" at commit 2 (same as main HEAD); accessed via dbname__d_v1%2E0
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single database
 // and the side effects of one scenario (e.g. branch creation) carry into the next.
@@ -69,7 +69,7 @@ func rootishVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hash
 	hash2 = docuDoltCommit(t, env, dbName, "second commit")
 
 	// Create branch "v1.0" from main HEAD.
-	// The branch name contains a dot; access it via dbname__v1%2E0.
+	// The branch name contains a dot; access it via dbname__d_v1%2E0.
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
@@ -91,7 +91,7 @@ func TestRootishVerify(t *testing.T) {
 	hash1, hash2 := rootishVerifySetup(t, env, dbName)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: verifydb__main — reads and writes work
+	// Scenario 1: verifydb__d_main — reads and writes work
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_MainBranch_ReadsAndWritesWork", func(t *testing.T) {
 		main := env.client.Database(dbName + "__d_main")
@@ -129,7 +129,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: verifydb__v1%2E0 — reads and writes work, isolated from main
+	// Scenario 2: verifydb__d_v1%2E0 — reads and writes work, isolated from main
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_BranchV1_ReadsWritesIsolated", func(t *testing.T) {
 		// Access the v1.0 branch via its percent-encoded name.
@@ -174,7 +174,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: verifydb__<hash> — correct snapshot, writes blocked, branch OK
+	// Scenario 3: verifydb__d_<hash> — correct snapshot, writes blocked, branch OK
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_CommitHash", func(t *testing.T) {
 		snap1DB := env.client.Database(dbName + "__d_" + hash1)
@@ -223,7 +223,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: verifydb__main~1 — ancestor data, writes blocked, branch OK
+	// Scenario 4: verifydb__d_main~1 — ancestor data, writes blocked, branch OK
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AncestorExpression", func(t *testing.T) {
 		parentDB := env.client.Database(dbName + "__d_main~1")
@@ -271,7 +271,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: verifydb__HEAD — any command returns code 96
+	// Scenario 5: verifydb__d_HEAD — any command returns code 96
 	// (getSiblingDB / client.Database is client-side only; error fires on first command)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HEAD_AnyCommandFails", func(t *testing.T) {
@@ -286,7 +286,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: verifydb__main@{yesterday} — reflog rejected on first command
+	// Scenario 6: verifydb__d_main@{yesterday} — reflog rejected on first command
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_Reflog_AnyCommandFails", func(t *testing.T) {
 		assertRootishRejected(t, env.client.Database(dbName+"__d_main@{yesterday}"), "reflog_yesterday")
@@ -295,7 +295,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: verifydb__main..feature — range rejected on first command
+	// Scenario 7: verifydb__d_main..feature — range rejected on first command
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_Range_AnyCommandFails", func(t *testing.T) {
 		assertRootishRejected(t, env.client.Database(dbName+"__d_main..feature"), "range_two_dot")

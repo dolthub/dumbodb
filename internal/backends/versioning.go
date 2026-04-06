@@ -211,7 +211,7 @@ type VersioningStatusResult struct {
 //   - To="": use the working set (uncommitted state) as the "b" side
 //
 // ConnRootish is the rootish from the connection's encoded database name (e.g.
-// "feature" from "mydb__feature"). It is used to resolve "HEAD" and "HEAD~N" in
+// "feature" from "mydb__d_feature"). It is used to resolve "HEAD" and "HEAD~N" in
 // From/To: HEAD means the committed tip of ConnRootish, not necessarily main.
 type DiffParams struct {
 	DBName      string

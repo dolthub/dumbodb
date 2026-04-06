@@ -354,7 +354,7 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 // MsgDocuDoltCurrentBranch implements the `docuDoltCurrentBranch` command.
 //
 // It returns the branch name for the connection encoded in $db.
-// Usage: db.getSiblingDB("mydb__feature").runCommand({docuDoltCurrentBranch: 1})
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltCurrentBranch: 1})
 //
 // Returns an OperationFailed error if the connection is read-only (commit hash or ancestor expression).
 //
@@ -408,8 +408,8 @@ func (h *Handler) MsgDocuDoltCurrentBranch(connCtx context.Context, msg *wire.Op
 
 // MsgDocuDoltCommit implements the `docuDoltCommit` command.
 //
-// It commits the current working set on the branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__feature").runCommand({docuDoltCommit: 1, message: "my commit"})
+// It commits the current working set on the branch encoded in $db (format: "dbname__d_branch").
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltCommit: 1, message: "my commit"})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDocuDoltCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -476,8 +476,8 @@ func (h *Handler) MsgDocuDoltCommit(connCtx context.Context, msg *wire.OpMsg) (*
 
 // MsgDocuDoltBranch implements the `docuDoltBranch` command.
 //
-// It creates a new branch from the current branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__main").runCommand({docuDoltBranch: 1, branch: "feature"})
+// It creates a new branch from the current branch encoded in $db (format: "dbname__d_branch").
+// Usage: db.getSiblingDB("mydb__d_main").runCommand({docuDoltBranch: 1, branch: "feature"})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -556,14 +556,14 @@ func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 
 // MsgDocuDoltMerge implements the `docuDoltMerge` command.
 //
-// Merges a source branch into the current branch encoded in $db (format: "dbname__branch").
+// Merges a source branch into the current branch encoded in $db (format: "dbname__d_branch").
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltMerge: 1, merge_in: "feature", noFF: true})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltMerge: 1, merge_in: "feature", ffOnly: true})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltMerge: 1, continue: true})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltMerge: 1, abort: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, merge_in: "feature"})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, merge_in: "feature", noFF: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, continue: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, abort: true})
 //
 // Optional parameters for merge initiation:
 //   - message (string): custom merge commit message (ignored on fast-forward / already-up-to-date)
@@ -746,8 +746,8 @@ func (h *Handler) MsgDocuDoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 // Returns conflict information for the current in-progress merge on the branch encoded in $db.
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltConflicts: 1})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltConflicts: 1, collection: "items"})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltConflicts: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltConflicts: 1, collection: "items"})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDocuDoltConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -851,9 +851,9 @@ func (h *Handler) MsgDocuDoltConflicts(connCtx context.Context, msg *wire.OpMsg)
 // Resolves a single document conflict in the current in-progress merge.
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDocuDoltResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -932,8 +932,8 @@ func (h *Handler) MsgDocuDoltResolveConflict(connCtx context.Context, msg *wire.
 
 // MsgDocuDoltLog implements the `docuDoltLog` command.
 //
-// It returns the commit history for the branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__feature").runCommand({docuDoltLog: 1, limit: 10})
+// It returns the commit history for the branch encoded in $db (format: "dbname__d_branch").
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltLog: 1, limit: 10})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDocuDoltLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -1086,8 +1086,8 @@ func (h *Handler) MsgDocuDoltReset(connCtx context.Context, msg *wire.OpMsg) (*w
 
 // MsgDocuDoltStatus implements the `docuDoltStatus` command.
 //
-// It returns the uncommitted changes on the branch encoded in $db (format: "dbname__branch").
-// Usage: db.getSiblingDB("mydb__feature").runCommand({docuDoltStatus: 1})
+// It returns the uncommitted changes on the branch encoded in $db (format: "dbname__d_branch").
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltStatus: 1})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDocuDoltStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -1150,9 +1150,9 @@ func (h *Handler) MsgDocuDoltStatus(connCtx context.Context, msg *wire.OpMsg) (*
 //
 // Usage:
 //
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltCherryPick: 1, commit: "<hash>"})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltCherryPick: 1, abort: 1})
-//	db.getSiblingDB("mydb__main").runCommand({docuDoltCherryPick: 1, continue: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltCherryPick: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltCherryPick: 1, abort: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltCherryPick: 1, continue: 1})
 //
 // Optional parameters for cherry-pick initiation:
 //   - message (string): custom commit message (default: original message + annotation)

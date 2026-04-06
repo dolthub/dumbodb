@@ -130,20 +130,17 @@ func TestRootish_DocuDoltCurrentBranch_EndToEnd(t *testing.T) {
 }
 
 // TestRootish_AllDigitSuffix_TreatedAsPlainDB verifies that a database name whose
-// __ suffix is an all-digit string (e.g. a UnixNano timestamp from test harnesses)
+// __d_ suffix is an all-digit string (e.g. a UnixNano timestamp from test harnesses)
 // is treated as a plain database name rather than failing with "not found as branch
-// or tag". This is a regression test for the parity CI failure where names like
-// "parity_AdvancedQuery_Regex_CaseInsensitive__1775505756999075683" caused an
-// InternalError on insert/find.
+// or tag". This guards against clients accidentally producing database names like
+// "prefix__d_1775505756999075683" that would otherwise be misinterpreted as a branch.
 func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	t.Parallel()
 
 	env := startDocuDolt(t)
 	ctx := context.Background()
 
-	// Simulate a parity-harness-style database name: a prefix ending in _ joined to
-	// a UnixNano timestamp, producing a __ separator by accident.
-	// The format "prefix_%s_%d" with a sanitized name ending in _ yields prefix__timestamp.
+	// Simulate a database name containing __d_ followed by an all-digit timestamp.
 	dbName := "parityreg_sometest__d_1775505756999075683"
 	coll := env.client.Database(dbName).Collection("col")
 
