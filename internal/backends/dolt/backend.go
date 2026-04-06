@@ -75,6 +75,12 @@ const (
 	// Dolt derives this from WorkingSetRefForHead: "workingSets/" + "heads/main".
 	// Required for `dolt status` to work without panicking.
 	workingSetDataset = "workingSets/heads/main"
+
+	// dbBranchSep is the separator between the database name and rootish in an
+	// encoded database name (e.g. "mydb__d_main", "mydb__d_feature/foo").
+	// The __d_ prefix distinguishes branch-encoded names from plain database names
+	// that happen to contain double underscores.
+	dbBranchSep = "__d_"
 )
 
 // collectionValidator holds schema validation options for a single collection (in-memory only).
@@ -221,8 +227,8 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 	}), nil
 }
 
-// splitEncodedDBName splits an encoded database name "dbname__rootish" into
-// the base database name and rootish. If no __ separator is present, the
+// splitEncodedDBName splits an encoded database name "dbname__d_rootish" into
+// the base database name and rootish. If no __d_ separator is present, the
 // rootish defaults to "main" (the default branch).
 //
 // The rootish component is percent-decoded (RFC 3986 path encoding) so that
@@ -231,13 +237,13 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // "feature%2Ffoo". The handler has already validated the encoding before the
 // backend is reached, so decode errors here fall back to the raw value.
 //
-// All-digit strings after __ (e.g. Unix nanosecond timestamps) are not valid
+// All-digit strings after __d_ (e.g. Unix nanosecond timestamps) are not valid
 // rootish expressions and cause the whole encoded name to be treated as a plain
 // database name. This prevents spurious "not found as branch or tag" errors when
-// client code accidentally produces database names like "prefix__1775505756999075683".
+// client code accidentally produces database names like "prefix__d_1775505756999075683".
 func splitEncodedDBName(encoded string) (dbName, rootish string) {
-	if idx := strings.Index(encoded, "__"); idx > 0 {
-		raw := encoded[idx+2:]
+	if idx := strings.Index(encoded, dbBranchSep); idx > 0 {
+		raw := encoded[idx+len(dbBranchSep):]
 		candidate := raw
 		if decoded, err := url.PathUnescape(raw); err == nil {
 			candidate = decoded

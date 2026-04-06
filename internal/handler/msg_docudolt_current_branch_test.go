@@ -109,11 +109,11 @@ func TestMsgDocudoltCurrentBranch_ReadOnly(t *testing.T) {
 		encodedDB string
 	}{
 		// Exactly 32 lowercase base32 chars → Dolt commit hash → read-only.
-		{"commit_hash", "mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61"},
-		{"all_zeros_hash", "mydb__00000000000000000000000000000000"},
+		{"commit_hash", "mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61"},
+		{"all_zeros_hash", "mydb__d_00000000000000000000000000000000"},
 		// <branch>~<N> ancestor expression → read-only.
-		{"ancestor_tilde1", "mydb__main~1"},
-		{"ancestor_tilde3", "mydb__feature~3"},
+		{"ancestor_tilde1", "mydb__d_main~1"},
+		{"ancestor_tilde3", "mydb__d_feature~3"},
 	}
 
 	for _, tc := range cases {
@@ -152,11 +152,11 @@ func TestMsgDocudoltCurrentBranch_Branch(t *testing.T) {
 		wantBranch string
 	}{
 		{"plain_db_name_defaults_to_main", "mydb", "main"},
-		{"explicit_main", "mydb__main", "main"},
-		{"feature_branch", "mydb__feature-x", "feature-x"},
+		{"explicit_main", "mydb__d_main", "main"},
+		{"feature_branch", "mydb__d_feature-x", "feature-x"},
 		// Tag-like names (e.g. "v1.0") are indistinguishable from branch names at
 		// parse time; docudoltCurrentBranch returns the tag name as the branch.
-		{"tag_like_v1_0", "mydb__v1.0", "v1.0"},
+		{"tag_like_v1_0", "mydb__d_v1.0", "v1.0"},
 	}
 
 	for _, tc := range cases {

@@ -53,7 +53,7 @@ const hash2 = result2.commitId
 // The rootish in the db name must be percent-encoded because '.' is a
 // MongoDB namespace separator. Encode client-side: "v1.0" → "v1%2E0".
 // Docudolt decodes it server-side before resolving the branch.
-const tagResult = db.getSiblingDB("verifydb__main").runCommand({ docudoltBranch: 1, branch: "v1.0" })
+const tagResult = db.getSiblingDB("verifydb__d_main").runCommand({ docudoltBranch: 1, branch: "v1.0" })
 printjson(tagResult)
 // Expected: { branch: "v1.0", ok: 1 }
 
@@ -65,16 +65,16 @@ After running setup, `verifydb` has:
 - **main** (HEAD = commit 2): two documents (`_id: 1` and `_id: 2`)
 - **hash1**: snapshot with one document (`_id: 1` only)
 - **hash2**: snapshot identical to current main
-- **v1.0**: branch pointing to commit 2 (same as main HEAD); access via `verifydb__v1%2E0`
+- **v1.0**: branch pointing to commit 2 (same as main HEAD); access via `verifydb__d_v1%2E0`
 
 ---
 
-## Scenario 1: `verifydb__main` — reads and writes work
+## Scenario 1: `verifydb__d_main` — reads and writes work
 
 Branch rootish. Full read/write access.
 
 ```js
-const main = db.getSiblingDB("verifydb__main")
+const main = db.getSiblingDB("verifydb__d_main")
 
 // Read: should return both documents
 main.items.find({}).toArray()
@@ -97,7 +97,7 @@ main.runCommand({ docudoltCurrentBranch: 1 })
 
 ---
 
-## Scenario 2: `verifydb__v1%2E0` — reads and writes work, isolated from main
+## Scenario 2: `verifydb__d_v1%2E0` — reads and writes work, isolated from main
 
 Non-main branch rootish. Full read/write access; writes go to that branch's working
 set and are isolated from main's working set.
@@ -109,7 +109,7 @@ set and are isolated from main's working set.
 > Common encodings: `.` → `%2E`, `/` → `%2F`, `$` → `%24`
 
 ```js
-const v1 = db.getSiblingDB("verifydb__v1%2E0")
+const v1 = db.getSiblingDB("verifydb__d_v1%2E0")
 
 // Read: should succeed and return both documents (same as main HEAD at setup time)
 v1.items.find({}).toArray()
@@ -124,7 +124,7 @@ v1.items.find({}).toArray()
 // Expected: [ { _id: 1, ... }, { _id: 2, ... }, { _id: 10, label: "v1-only" } ]
 
 // main is unchanged — the v1.0 write is isolated
-const main = db.getSiblingDB("verifydb__main")
+const main = db.getSiblingDB("verifydb__d_main")
 main.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
 // (_id:10 does NOT appear here)
@@ -140,7 +140,7 @@ v1.items.deleteOne({ _id: 10 })
 
 ---
 
-## Scenario 3: `verifydb__<hash>` — connects to correct snapshot, reads correct historical data
+## Scenario 3: `verifydb__d_<hash>` — connects to correct snapshot, reads correct historical data
 
 Commit hash rootish. Read-only view of the exact snapshot at that commit. Writes to
 the collection are blocked, but branch creation works — creating a branch from a commit
@@ -148,7 +148,7 @@ hash is always valid because the hash is a fully resolved commit address.
 
 ```js
 // Connect to the snapshot at hash1 (one document only)
-const snap1 = db.getSiblingDB("verifydb__" + hash1)
+const snap1 = db.getSiblingDB("verifydb__d_" + hash1)
 
 snap1.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
@@ -158,7 +158,7 @@ snap1.items.countDocuments({})
 // Expected: 1
 
 // Connect to the snapshot at hash2 (two documents)
-const snap2 = db.getSiblingDB("verifydb__" + hash2)
+const snap2 = db.getSiblingDB("verifydb__d_" + hash2)
 
 snap2.items.find({}).toArray()
 // Expected: [ { _id: 1, ... }, { _id: 2, ... } ]
@@ -180,19 +180,19 @@ snap1.runCommand({ docudoltBranch: 1, branch: "from-hash1" })
 // Expected: { branch: "from-hash1", ok: 1 }
 
 // Verify the new branch sees the one-document state at hash1.
-db.getSiblingDB("verifydb__from-hash1").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_from-hash1").items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
 ```
 
 ---
 
-## Scenario 4: `verifydb__main~1` — returns data as of parent commit, not current HEAD
+## Scenario 4: `verifydb__d_main~1` — returns data as of parent commit, not current HEAD
 
 Ancestor expression rootish. Read-only; resolves to the parent of the named branch's HEAD.
 As with commit hashes, writes to the collection are blocked but branch creation works.
 
 ```js
-const parent = db.getSiblingDB("verifydb__main~1")
+const parent = db.getSiblingDB("verifydb__d_main~1")
 
 // main~1 is the parent of main HEAD (commit 1: one document)
 parent.items.find({}).toArray()
@@ -203,7 +203,7 @@ parent.items.countDocuments({})
 // Expected: 1
 
 // main~0 is main itself (same as current HEAD)
-const same = db.getSiblingDB("verifydb__main~0")
+const same = db.getSiblingDB("verifydb__d_main~0")
 same.items.countDocuments({})
 // Expected: 2
 
@@ -224,13 +224,13 @@ parent.runCommand({ docudoltBranch: 1, branch: "back-one" })
 // Expected: { branch: "back-one", ok: 1 }
 
 // Verify back-one is at the one-document state (main~1).
-db.getSiblingDB("verifydb__back-one").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_back-one").items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
 ```
 
 ---
 
-## Scenario 5: `verifydb__HEAD` — returns a clear 'not supported' error
+## Scenario 5: `verifydb__d_HEAD` — returns a clear 'not supported' error
 
 HEAD is not a valid rootish. The parse error is returned on the **first command** sent to
 the server for that database name.
@@ -243,7 +243,7 @@ the server for that database name.
 
 ```js
 // getSiblingDB is client-side only — no server contact, no error yet.
-const head = db.getSiblingDB("verifydb__HEAD")
+const head = db.getSiblingDB("verifydb__d_HEAD")
 
 // The parse error fires on the first command sent to the server:
 head.items.find({}).toArray()
@@ -258,7 +258,7 @@ head.runCommand({ ping: 1 })
 //   supported; use a branch name, tag, commit hash, or <branch>~<N>
 
 // HEAD-relative forms are also rejected on first command:
-db.getSiblingDB("verifydb__HEAD~1").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_HEAD~1").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "HEAD~1": HEAD and HEAD-relative forms are not
 //   supported; use a branch name, tag, commit hash, or <branch>~<N>
@@ -266,39 +266,39 @@ db.getSiblingDB("verifydb__HEAD~1").items.find({}).toArray()
 
 ---
 
-## Scenario 6: `verifydb__main@{yesterday}` — returns a clear 'not supported' error
+## Scenario 6: `verifydb__d_main@{yesterday}` — returns a clear 'not supported' error
 
 Reflog syntax is not supported. The error fires on the first command (same reason as
 Scenario 5 — `getSiblingDB` is client-side only).
 
 ```js
-db.getSiblingDB("verifydb__main@{yesterday}").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_main@{yesterday}").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main@{yesterday}": reflog syntax is not supported
 
 // Other reflog forms also rejected
-db.getSiblingDB("verifydb__main@{5 minutes ago}").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_main@{5 minutes ago}").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main@{5 minutes ago}": reflog syntax is not supported
 
-db.getSiblingDB("verifydb__@{1}").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_@{1}").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "@{1}": reflog syntax is not supported
 ```
 
 ---
 
-## Scenario 7: `verifydb__main..feature` — returns a clear 'not supported' error
+## Scenario 7: `verifydb__d_main..feature` — returns a clear 'not supported' error
 
 Range syntax is not supported. The error fires on the first command.
 
 ```js
-db.getSiblingDB("verifydb__main..feature").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_main..feature").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main..feature": range syntax is not supported
 
 // Three-dot range also rejected
-db.getSiblingDB("verifydb__main...feature").items.find({}).toArray()
+db.getSiblingDB("verifydb__d_main...feature").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main...feature": range syntax is not supported
 ```
@@ -309,14 +309,14 @@ db.getSiblingDB("verifydb__main...feature").items.find({}).toArray()
 
 | Rootish form | Example | Read | Write¹ | Branch creation² | Notes |
 |---|---|---|---|---|---|
-| Branch name (main) | `mydb__main` | ✅ | ✅ | ✅ | Writes go to main's working set |
-| Branch name (other) | `mydb__v1%2E0` (encodes `v1.0`) | ✅ | ✅ | ✅ | Writes go to that branch's working set, isolated from main |
-| Tag name | `mydb__v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | ✅ | Collection writes blocked; branch creation resolves the tag's commit |
-| Commit hash (32 chars) | `mydb__<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
-| Ancestor expression | `mydb__main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
-| HEAD | `mydb__HEAD` | ❌ | ❌ | ❌ | Rejected on first command (code 96); `getSiblingDB` is client-side only |
-| Reflog | `mydb__main@{yesterday}` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
-| Range | `mydb__main..feature` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
+| Branch name (main) | `mydb__d_main` | ✅ | ✅ | ✅ | Writes go to main's working set |
+| Branch name (other) | `mydb__d_v1%2E0` (encodes `v1.0`) | ✅ | ✅ | ✅ | Writes go to that branch's working set, isolated from main |
+| Tag name | `mydb__d_v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | ✅ | Collection writes blocked; branch creation resolves the tag's commit |
+| Commit hash (32 chars) | `mydb__d_<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
+| Ancestor expression | `mydb__d_main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
+| HEAD | `mydb__d_HEAD` | ❌ | ❌ | ❌ | Rejected on first command (code 96); `getSiblingDB` is client-side only |
+| Reflog | `mydb__d_main@{yesterday}` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
+| Range | `mydb__d_main..feature` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
 
 ¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
 ² **Branch creation** = `db.runCommand({ docudoltBranch: 1, branch: "newname" })`. Works whenever
@@ -328,7 +328,7 @@ All errors use MongoDB error code **96** (`OperationFailed`).
 
 ```js
 try {
-  db.getSiblingDB("verifydb__HEAD").items.find({}).toArray()
+  db.getSiblingDB("verifydb__d_HEAD").items.find({}).toArray()
 } catch (e) {
   print("code:", e.code)      // 96
   print("message:", e.message)

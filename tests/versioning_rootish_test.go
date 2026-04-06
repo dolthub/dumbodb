@@ -68,7 +68,7 @@ func TestRootish_ParseRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			encoded := dbName + "__" + tc.rootish
+			encoded := dbName + "__d_" + tc.rootish
 			assertRootishRejected(t, env.client.Database(encoded), tc.rootish)
 		})
 	}
@@ -103,7 +103,7 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 		t.Parallel()
 
 		var result bson.M
-		err := env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 	t.Run("commit_hash_returns_code96", func(t *testing.T) {
 		t.Parallel()
 
-		err := env.client.Database(dbName+"__"+hash1).RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"__d_"+hash1).RunCommand(ctx, bson.D{
 			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on hash rootish")
@@ -122,7 +122,7 @@ func TestRootish_DocudoltCurrentBranch_EndToEnd(t *testing.T) {
 	t.Run("ancestor_expr_returns_code96", func(t *testing.T) {
 		t.Parallel()
 
-		err := env.client.Database(dbName+"__main~1").RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"__d_main~1").RunCommand(ctx, bson.D{
 			{Key: "docudoltCurrentBranch", Value: int32(1)},
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "docudoltCurrentBranch on ancestor rootish")
@@ -144,7 +144,7 @@ func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	// Simulate a parity-harness-style database name: a prefix ending in _ joined to
 	// a UnixNano timestamp, producing a __ separator by accident.
 	// The format "prefix_%s_%d" with a sanitized name ending in _ yields prefix__timestamp.
-	dbName := "parityreg_sometest__1775505756999075683"
+	dbName := "parityreg_sometest__d_1775505756999075683"
 	coll := env.client.Database(dbName).Collection("col")
 
 	// Insert must succeed — the numeric suffix must NOT be misinterpreted as a branch.
@@ -174,7 +174,7 @@ func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	// hash1 has 1 doc; HEAD (after setup) has 2 docs.
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
-	snapColl := env.client.Database(dbName+"__"+hash1).Collection(collName)
+	snapColl := env.client.Database(dbName+"__d_"+hash1).Collection(collName)
 	mainColl := env.client.Database(dbName).Collection(collName)
 
 	// Main has 2 docs.

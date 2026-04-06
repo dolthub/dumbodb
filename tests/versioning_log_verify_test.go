@@ -228,7 +228,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario5_RefsAnnotation", func(t *testing.T) {
 		// Create a second branch "logvrfy-refs" pointing at the current main HEAD
 		// (hash3), so two branches share the same tip commit.
-		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "logvrfy-refs"},
 		}).Err(), "creating logvrfy-refs branch must succeed")
@@ -237,7 +237,7 @@ func TestLogVerify(t *testing.T) {
 		// "logvrfy-refs", so its refs field must contain "HEAD", "main", and
 		// "logvrfy-refs".  Non-head commits must have no refs field.
 		var rawMain bson.M
-		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltLog", Value: int32(1)},
 		}).Decode(&rawMain))
 
@@ -258,7 +258,7 @@ func TestLogVerify(t *testing.T) {
 		// Query docudoltLog on logvrfy-refs.  hash3 is still the tip but now the
 		// connection branch is "logvrfy-refs", so the decoration is reversed.
 		var rawFeature bson.M
-		require.NoError(t, env.client.Database(dbName+"__logvrfy-refs").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"__d_logvrfy-refs").RunCommand(ctx, bson.D{
 			{Key: "docudoltLog", Value: int32(1)},
 		}).Decode(&rawFeature))
 
@@ -296,7 +296,7 @@ func TestLogVerify(t *testing.T) {
 	hashA := docudoltCommit(t, env, mergeDBName, "add-one")
 
 	// Create "feat" branch from main HEAD (hashA).
-	require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+	require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 		{Key: "docudoltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feat"},
 	}).Err())
@@ -310,16 +310,16 @@ func TestLogVerify(t *testing.T) {
 	hashB := docudoltCommit(t, env, mergeDBName, "add-two")
 
 	// Advance feat independently: _id:3 → hashC (diverges from hashA).
-	_, err = env.client.Database(mergeDBName+"__feat").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(mergeDBName+"__d_feat").Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "v", Value: int32(3)},
 	})
 	require.NoError(t, err)
-	hashC := docudoltCommit(t, env, mergeDBName+"__feat", "add-three-feat")
+	hashC := docudoltCommit(t, env, mergeDBName+"__d_feat", "add-three-feat")
 
 	// Merge feat into main → three-way merge commit hashM.
 	var mergeRaw bson.M
-	require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+	require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 		{Key: "docudoltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feat"},
 	}).Decode(&mergeRaw))
@@ -332,7 +332,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_MergeCommitParents", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&raw))
@@ -355,7 +355,7 @@ func TestLogVerify(t *testing.T) {
 		// hashC → hashA → "Initialize database".
 		// hashB (main-only) and hashM (merge) must not appear.
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "from", Value: hashC},
 		}).Decode(&raw))
@@ -381,7 +381,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario8_LimitOnNonLinearHistory", func(t *testing.T) {
 		// limit=2 from main HEAD follows parent1: hashM → hashB.  hashA must not appear.
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"__main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))

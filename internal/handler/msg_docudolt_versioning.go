@@ -32,6 +32,11 @@ import (
 	"github.com/dolthub/docudolt/internal/util/must"
 )
 
+// dbBranchSep is the separator between the database name and rootish in an
+// encoded database name (e.g. "mydb__d_main", "mydb__d_feature/foo").
+// Must match the value in internal/backends/dolt/backend.go.
+const dbBranchSep = "__d_"
+
 // MsgDocudoltDiff implements the `docudoltDiff` command.
 //
 // Returns the document-level diff between two states for the branch encoded in $db.
@@ -139,11 +144,11 @@ func (h *Handler) MsgDocudoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // branchFromDBName parses the real database name and rootish from an encoded db name.
 //
-// Docudolt encodes version information in the database name using a double-underscore separator:
+// Docudolt encodes version information in the database name using the __d_ separator:
 //
-//	"mydb__branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
-//	"mydb__na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
-//	"mydb__main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
+//	"mydb__d_branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
+//	"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
+//	"mydb__d_main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
 //
 // If no separator is present the rootish defaults to "main" and readOnly is false.
 //
@@ -153,12 +158,12 @@ func (h *Handler) MsgDocudoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wi
 //
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
 //
-// All-digit strings after __ (e.g. Unix nanosecond timestamps used as database name suffixes)
+// All-digit strings after __d_ (e.g. Unix nanosecond timestamps used as database name suffixes)
 // are not valid rootish expressions and cause the whole encoded name to be treated as a plain
 // database name rather than returning an error or misinterpreting the suffix as a branch name.
 func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, err error) {
-	if idx := strings.Index(encoded, "__"); idx > 0 {
-		raw := encoded[idx+2:]
+	if idx := strings.Index(encoded, dbBranchSep); idx > 0 {
+		raw := encoded[idx+len(dbBranchSep):]
 		candidate, decErr := url.PathUnescape(raw)
 		if decErr != nil {
 			return "", "", false, handlererrors.NewCommandErrorMsg(

@@ -555,12 +555,12 @@ func TestDiffVerify(t *testing.T) {
 		docudoltCommit(t, env, dbName, "pre-scenario9")
 
 		// Create a feature branch that starts at current main HEAD.
-		require.NoError(t, env.client.Database(dbName+"__main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "docudoltBranch", Value: int32(1)},
 			{Key: "branch", Value: "rootishtest"},
 		}).Err(), "docudoltBranch to create 'rootishtest'")
 
-		rootish := env.client.Database(dbName + "__rootishtest")
+		rootish := env.client.Database(dbName + "__d_rootishtest")
 
 		// Two commits on main — feature branch stays behind.
 		hashC1 := docudoltCommit(t, env, dbName, "scenario9-c1")

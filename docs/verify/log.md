@@ -181,7 +181,7 @@ no `refs` field.
 
 ```js
 // Create a second branch pointing at the current main HEAD.
-db.getSiblingDB("logdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
+db.getSiblingDB("logdb__d_main").runCommand({ docudoltBranch: 1, branch: "feature" })
 
 // Query from main — hash3 is tip of both "main" and "feature".
 db.runCommand({ docudoltLog: 1, limit: 2 })
@@ -217,7 +217,7 @@ Key checks:
 - `commits[0].refs` contains `"HEAD"` and `"main"` (connection branch gets HEAD + bare name)
 - `commits[0].refs` also contains `"feature"` (bare name for the other branch)
 - `commits[1]` has no `refs` field (non-head commit)
-- When the same command runs against `logdb__feature`, `commits[0].refs` becomes
+- When the same command runs against `logdb__d_feature`, `commits[0].refs` becomes
   `["HEAD", "feature", "main"]`
 
 ---
@@ -237,7 +237,7 @@ const rA = mdb.runCommand({ docudoltCommit: 1, message: "add-one", author: "alic
 const hashA = rA.commitId
 
 // Create "feat" branch from main HEAD (hashA).
-mdb.getSiblingDB("logmerge__main").runCommand({ docudoltBranch: 1, branch: "feat" })
+mdb.getSiblingDB("logmerge__d_main").runCommand({ docudoltBranch: 1, branch: "feat" })
 
 // Advance main: _id:2 → hashB.
 mdb.items.insertOne({ _id: 2, v: 2 })
@@ -245,13 +245,13 @@ const rB = mdb.runCommand({ docudoltCommit: 1, message: "add-two", author: "alic
 const hashB = rB.commitId
 
 // Advance feat independently: _id:3 → hashC.
-const featdb = db.getSiblingDB("logmerge__feat")
+const featdb = db.getSiblingDB("logmerge__d_feat")
 featdb.items.insertOne({ _id: 3, v: 3 })
 const rC = featdb.runCommand({ docudoltCommit: 1, message: "add-three-feat", author: "alice <alice@docudolt>" })
 const hashC = rC.commitId
 
 // Merge feat into main → hashM.
-const rM = mdb.getSiblingDB("logmerge__main").runCommand({ docudoltMerge: 1, merge_in: "feat" })
+const rM = mdb.getSiblingDB("logmerge__d_main").runCommand({ docudoltMerge: 1, merge_in: "feat" })
 const hashM = rM.commitId
 
 print("hashA =", hashA, "hashB =", hashB, "hashC =", hashC, "hashM =", hashM)
@@ -273,7 +273,7 @@ init ← hashA ← hashB (main)
 ## Scenario 6: Merge commit appears in docudoltLog with parent1 and parent2
 
 ```js
-mdb.getSiblingDB("logmerge__main").runCommand({ docudoltLog: 1, limit: 1 })
+mdb.getSiblingDB("logmerge__d_main").runCommand({ docudoltLog: 1, limit: 1 })
 ```
 
 Expected:
@@ -310,7 +310,7 @@ Starting traversal at `hashC` follows `parent1` only: `hashC → hashA → init`
 `hashB` (reachable only via main) and `hashM` (the merge commit) must **not** appear.
 
 ```js
-mdb.getSiblingDB("logmerge__main").runCommand({ docudoltLog: 1, from: hashC })
+mdb.getSiblingDB("logmerge__d_main").runCommand({ docudoltLog: 1, from: hashC })
 ```
 
 Expected:
@@ -341,7 +341,7 @@ Key checks:
 (`hashA`, init) must **not** appear.
 
 ```js
-mdb.getSiblingDB("logmerge__main").runCommand({ docudoltLog: 1, limit: 2 })
+mdb.getSiblingDB("logmerge__d_main").runCommand({ docudoltLog: 1, limit: 2 })
 ```
 
 Expected:

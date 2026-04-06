@@ -45,7 +45,7 @@ printjson(result2)
 const hash2 = result2.commitId
 
 // Create branch "feature" from main HEAD
-db.getSiblingDB("branchdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
+db.getSiblingDB("branchdb__d_main").runCommand({ docudoltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 print("hash1 =", hash1)
@@ -61,7 +61,7 @@ After setup, `branchdb` has:
 
 ## Scenario 1: Plain db name — returns "main"
 
-No `__` suffix; defaults to the main branch.
+No `__d_` suffix; defaults to the main branch.
 
 ```js
 db.getSiblingDB("branchdb").runCommand({ docudoltCurrentBranch: 1 })
@@ -70,34 +70,34 @@ db.getSiblingDB("branchdb").runCommand({ docudoltCurrentBranch: 1 })
 
 ---
 
-## Scenario 2: `branchdb__main` — returns "main"
+## Scenario 2: `branchdb__d_main` — returns "main"
 
 Explicit main branch rootish.
 
 ```js
-db.getSiblingDB("branchdb__main").runCommand({ docudoltCurrentBranch: 1 })
+db.getSiblingDB("branchdb__d_main").runCommand({ docudoltCurrentBranch: 1 })
 // Expected: { branch: "main", ok: 1 }
 ```
 
 ---
 
-## Scenario 3: `branchdb__feature` — returns "feature"
+## Scenario 3: `branchdb__d_feature` — returns "feature"
 
 Non-main branch rootish. Returns the branch name.
 
 ```js
-db.getSiblingDB("branchdb__feature").runCommand({ docudoltCurrentBranch: 1 })
+db.getSiblingDB("branchdb__d_feature").runCommand({ docudoltCurrentBranch: 1 })
 // Expected: { branch: "feature", ok: 1 }
 ```
 
 ---
 
-## Scenario 4: `branchdb__<hash>` — returns error (no branch name at a commit)
+## Scenario 4: `branchdb__d_<hash>` — returns error (no branch name at a commit)
 
 Commit hash rootish is read-only. There is no branch name to return.
 
 ```js
-db.getSiblingDB("branchdb__" + hash1).runCommand({ docudoltCurrentBranch: 1 })
+db.getSiblingDB("branchdb__d_" + hash1).runCommand({ docudoltCurrentBranch: 1 })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: docudoltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
@@ -105,12 +105,12 @@ db.getSiblingDB("branchdb__" + hash1).runCommand({ docudoltCurrentBranch: 1 })
 
 ---
 
-## Scenario 5: `branchdb__main~1` — returns error (no branch name at an ancestor)
+## Scenario 5: `branchdb__d_main~1` — returns error (no branch name at an ancestor)
 
 Ancestor expression rootish is read-only. There is no branch name to return.
 
 ```js
-db.getSiblingDB("branchdb__main~1").runCommand({ docudoltCurrentBranch: 1 })
+db.getSiblingDB("branchdb__d_main~1").runCommand({ docudoltCurrentBranch: 1 })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: docudoltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
@@ -123,16 +123,16 @@ db.getSiblingDB("branchdb__main~1").runCommand({ docudoltCurrentBranch: 1 })
 | Connection | docudoltCurrentBranch result |
 |---|---|
 | `mydb` (no suffix) | `{ branch: "main", ok: 1 }` |
-| `mydb__main` | `{ branch: "main", ok: 1 }` |
-| `mydb__feature` | `{ branch: "feature", ok: 1 }` |
-| `mydb__<hash>` | OperationFailed (code 96) |
-| `mydb__main~1` | OperationFailed (code 96) |
+| `mydb__d_main` | `{ branch: "main", ok: 1 }` |
+| `mydb__d_feature` | `{ branch: "feature", ok: 1 }` |
+| `mydb__d_<hash>` | OperationFailed (code 96) |
+| `mydb__d_main~1` | OperationFailed (code 96) |
 
 ### Checking the error code in mongosh
 
 ```js
 try {
-  db.getSiblingDB("branchdb__" + hash1).runCommand({ docudoltCurrentBranch: 1 })
+  db.getSiblingDB("branchdb__d_" + hash1).runCommand({ docudoltCurrentBranch: 1 })
 } catch (e) {
   print("code:", e.code)      // 96
   print("message:", e.message)

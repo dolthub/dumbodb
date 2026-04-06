@@ -259,8 +259,8 @@ above that commit. Bare branch names are also accepted.
 
 ```js
 // Create a feature branch from main, then connect to it.
-db.getSiblingDB("diffdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
-var featureDB = db.getSiblingDB("diffdb__feature")
+db.getSiblingDB("diffdb__d_main").runCommand({ docudoltBranch: 1, branch: "feature" })
+var featureDB = db.getSiblingDB("diffdb__d_feature")
 
 // Make two commits on main.
 var r3 = db.runCommand({ docudoltCommit: 1, message: "c3", author: "alice <alice@docudolt>" })

@@ -61,7 +61,7 @@ After setup, `branchvdb` has:
 The connection must be a branch rootish (writable or hash — see Scenario 3).
 
 ```js
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "feature" })
 ```
 
 Expected:
@@ -83,10 +83,10 @@ Immediately after branching, the new branch HEAD equals the source branch HEAD.
 
 ```js
 // Create "snapshot" branch from current main HEAD
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "snapshot" })
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "snapshot" })
 
 // Diff main vs snapshot — must be empty (identical commits)
-db.getSiblingDB("branchvdb__main").runCommand({
+db.getSiblingDB("branchvdb__d_main").runCommand({
   docudoltDiff: 1,
   from: "snapshot",
   to:   "main"
@@ -102,14 +102,14 @@ After branching, writes committed to the new branch are invisible from main, and
 vice versa.
 
 ```js
-var feature = db.getSiblingDB("branchvdb__feature")
+var feature = db.getSiblingDB("branchvdb__d_feature")
 
 // Add a document on the feature branch and commit it
 feature.items.insertOne({ _id: 3, label: "gamma" })
 feature.runCommand({ docudoltCommit: 1, message: "feature adds gamma", author: "alice <alice@docudolt>" })
 
 // main must not see _id:3
-db.getSiblingDB("branchvdb__main").items.countDocuments({})
+db.getSiblingDB("branchvdb__d_main").items.countDocuments({})
 // Expected: 2   (_id:3 is on feature only)
 
 // feature must see all three documents
@@ -126,14 +126,14 @@ The new branch starts at that exact commit.
 
 ```js
 // Create branch "at-commit-one" from the commit-hash rootish at hash1
-db.getSiblingDB("branchvdb__" + hash1).runCommand({
+db.getSiblingDB("branchvdb__d_" + hash1).runCommand({
   docudoltBranch: 1,
   branch: "at-commit-one"
 })
 // Expected: { branch: "at-commit-one", ok: 1 }
 
 // The new branch should see only the one document from commit 1
-db.getSiblingDB("branchvdb__at-commit-one").items.find({}).toArray()
+db.getSiblingDB("branchvdb__d_at-commit-one").items.find({}).toArray()
 // Expected: [ { _id: 1, label: "alpha" } ]
 ```
 
@@ -157,14 +157,14 @@ db2.items.insertOne({ _id: 2, label: "beta" })
 db2.runCommand({ docudoltCommit: 1, message: "commit two", author: "alice <alice@docudolt>" })
 
 // main~1 resolves to commit 1 (one document)
-db2.getSiblingDB("branchvdb2__main~1").runCommand({
+db2.getSiblingDB("branchvdb2__d_main~1").runCommand({
   docudoltBranch: 1,
   branch: "back-one"
 })
 // Expected: { branch: "back-one", ok: 1 }
 
 // back-one should see only one document (the state at main~1)
-db2.getSiblingDB("branchvdb2__back-one").items.find({}).toArray()
+db2.getSiblingDB("branchvdb2__d_back-one").items.find({}).toArray()
 // Expected: [ { _id: 1, label: "alpha" } ]
 ```
 
@@ -180,8 +180,8 @@ source branch HEAD is always safe to delete.
 
 ```js
 // Create a branch at current main HEAD and immediately safe-delete it.
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "merged-branch" })
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "merged-branch", d: 1 })
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "merged-branch" })
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "merged-branch", d: 1 })
 // Expected: { "branch": "merged-branch", "ok": 1 }
 ```
 
@@ -196,13 +196,13 @@ safe delete must fail with an error.
 
 ```js
 // Create "unmerged-branch" from main and add an exclusive commit.
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "unmerged-branch" })
-var ub = db.getSiblingDB("branchvdb__unmerged-branch")
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "unmerged-branch" })
+var ub = db.getSiblingDB("branchvdb__d_unmerged-branch")
 ub.items.insertOne({ _id: 99, label: "extra" })
 ub.runCommand({ docudoltCommit: 1, message: "extra commit", author: "alice <alice@docudolt>" })
 
 // Safe delete must fail.
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "unmerged-branch", d: 1 })
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "unmerged-branch", d: 1 })
 // Expected: error response — ok: 0, errmsg contains "unmerged commits"
 ```
 
@@ -217,13 +217,13 @@ commits that are not reachable from any other branch.
 
 ```js
 // Create "force-branch" from main and add an exclusive commit.
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "force-branch" })
-var fb = db.getSiblingDB("branchvdb__force-branch")
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "force-branch" })
+var fb = db.getSiblingDB("branchvdb__d_force-branch")
 fb.items.insertOne({ _id: 77, label: "gone" })
 fb.runCommand({ docudoltCommit: 1, message: "unmerged commit", author: "alice <alice@docudolt>" })
 
 // Force delete succeeds regardless of merge status.
-db.getSiblingDB("branchvdb__main").runCommand({ docudoltBranch: 1, branch: "force-branch", D: 1 })
+db.getSiblingDB("branchvdb__d_main").runCommand({ docudoltBranch: 1, branch: "force-branch", D: 1 })
 // Expected: { "branch": "force-branch", "ok": 1 }
 ```
 
@@ -235,12 +235,12 @@ Key check: `branch` echoes the name, `ok` is `1`; the branch is gone.
 
 | Command | Connection | Result |
 |---|---|---|
-| `{ docudoltBranch: 1, branch: "name" }` | `__main` | `{ branch: "name", ok: 1 }` |
-| `{ docudoltBranch: 1, branch: "name" }` | `__feature` | `{ branch: "name", ok: 1 }` |
-| `{ docudoltBranch: 1, branch: "name" }` | `__<hash>` | `{ branch: "name", ok: 1 }` |
-| `{ docudoltBranch: 1, branch: "name" }` | `__main~1` | `{ branch: "name", ok: 1 }` |
-| `{ docudoltBranch: 1, branch: "name", d: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
-| `{ docudoltBranch: 1, branch: "name", D: 1 }` | `__main` | `{ branch: "name", ok: 1 }` (always) |
+| `{ docudoltBranch: 1, branch: "name" }` | `__d_main` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name" }` | `__d_feature` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name" }` | `__d_<hash>` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name" }` | `__d_main~1` | `{ branch: "name", ok: 1 }` |
+| `{ docudoltBranch: 1, branch: "name", d: 1 }` | `__d_main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
+| `{ docudoltBranch: 1, branch: "name", D: 1 }` | `__d_main` | `{ branch: "name", ok: 1 }` (always) |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).

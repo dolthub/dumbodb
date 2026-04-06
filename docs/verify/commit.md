@@ -94,10 +94,10 @@ data is visible on the branch but not on main (isolation check).
 
 ```js
 // Create branch "feature" from main HEAD
-db.getSiblingDB("commitdb__main").runCommand({ docudoltBranch: 1, branch: "feature" })
+db.getSiblingDB("commitdb__d_main").runCommand({ docudoltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
-var feature = db.getSiblingDB("commitdb__feature")
+var feature = db.getSiblingDB("commitdb__d_feature")
 feature.items.insertOne({ _id: 3, label: "gamma", v: 3 })
 
 const r2 = feature.runCommand({ docudoltCommit: 1, message: "feature commit", author: "alice <alice@docudolt>" })
@@ -108,7 +108,7 @@ printjson(r2)
 feature.items.countDocuments({})
 // Expected: 3 (two from setup + _id:3)
 
-db.getSiblingDB("commitdb__main").items.countDocuments({})
+db.getSiblingDB("commitdb__d_main").items.countDocuments({})
 // Expected: 2 (feature commit must not affect main)
 ```
 

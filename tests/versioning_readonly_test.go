@@ -99,21 +99,21 @@ func setupVersioningDB(tb testing.TB, env *docudoltTestEnv, dbName, collName str
 
 // TestReadOnlyRootish_CommitHash_WritesBlocked verifies that all write
 // operations return OperationFailed (code 96) when issued against a
-// commit-hash rootish ("dbname__<32-char-hash>").
+// commit-hash rootish ("dbname__d_<32-char-hash>").
 func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 	t.Parallel()
 
 	env := startDocudolt(t)
 	ctx := context.Background()
 
-	// Base name must be ≤ 29 chars so that "dbname__<32-char-hash>" fits within the 63-char limit.
+	// Base name must be ≤ 29 chars so that "dbname__d_<32-char-hash>" fits within the 63-char limit.
 	dbName := fmt.Sprintf("roh%d", rand.Int64N(1_000_000))
 	collName := "col"
 
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
-	// Connect via the commit-hash rootish: "dbname__<hash>".
-	snapshotDBName := dbName + "__" + hash1
+	// Connect via the commit-hash rootish: "dbname__d_<hash>".
+	snapshotDBName := dbName + "__d_" + hash1
 	snapshotDB := env.client.Database(snapshotDBName)
 	snapshotColl := snapshotDB.Collection(collName)
 
@@ -165,14 +165,14 @@ func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 	env := startDocudolt(t)
 	ctx := context.Background()
 
-	// Base name must be ≤ 29 chars so that "dbname__<32-char-hash>" fits within the 63-char limit.
+	// Base name must be ≤ 29 chars so that "dbname__d_<32-char-hash>" fits within the 63-char limit.
 	dbName := fmt.Sprintf("rhr%d", rand.Int64N(1_000_000))
 	collName := "col"
 
 	// After setup: hash1 has 1 doc; HEAD (commit 2) has 2 docs.
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
-	snapshotDBName := dbName + "__" + hash1
+	snapshotDBName := dbName + "__d_" + hash1
 	snapshotColl := env.client.Database(snapshotDBName).Collection(collName)
 
 	t.Run("find", func(t *testing.T) {
@@ -212,7 +212,7 @@ func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 
 // TestReadOnlyRootish_AncestorExpr_WritesBlocked verifies that all write
 // operations return OperationFailed (code 96) when issued against a
-// relative-ancestor rootish ("dbname__branch~N").
+// relative-ancestor rootish ("dbname__d_branch~N").
 func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 	t.Parallel()
 
@@ -225,8 +225,8 @@ func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 	// Create two commits so main~1 (HEAD-1) exists.
 	setupVersioningDB(t, env, dbName, collName)
 
-	// Connect via ancestor expression: "dbname__main~1".
-	ancestorDBName := dbName + "__main~1"
+	// Connect via ancestor expression: "dbname__d_main~1".
+	ancestorDBName := dbName + "__d_main~1"
 	ancestorDB := env.client.Database(ancestorDBName)
 	ancestorColl := ancestorDB.Collection(collName)
 
@@ -285,7 +285,7 @@ func TestReadOnlyRootish_AncestorExpr_ReadsSucceed(t *testing.T) {
 	setupVersioningDB(t, env, dbName, collName)
 
 	// main~1 = one commit back from HEAD = first commit.
-	ancestorColl := env.client.Database(dbName+"__main~1").Collection(collName)
+	ancestorColl := env.client.Database(dbName+"__d_main~1").Collection(collName)
 
 	t.Run("find", func(t *testing.T) {
 		t.Parallel()
