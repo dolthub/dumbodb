@@ -36,7 +36,7 @@ import (
 // $sortByCount groups documents by expression and counts the number of documents in each group,
 // then sorts by count descending. It is equivalent to:
 //
-//	[{$group: {_id: <expression>, count: {$sum: 1}}}, {$sort: {count: -1, _id: -1}}]
+//	[{$group: {_id: <expression>, count: {$sum: 1}}}, {$sort: {count: -1, _id: 1}}]
 type sortByCount struct {
 	groupExpression any
 }
@@ -95,11 +95,11 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 			return ci > cj
 		}
 
-		// Break ties by _id descending to match MongoDB empirical behavior.
+		// Break ties by _id ascending per spec: $sortByCount ≡ $group + $sort{count:-1, _id:1}.
 		idi := must.NotFail(res[i].Get("_id"))
 		idj := must.NotFail(res[j].Get("_id"))
 
-		return types.CompareForAggregation(idi, idj) == types.Greater
+		return types.CompareForAggregation(idi, idj) == types.Less
 	})
 
 	result := iterator.Values(iterator.ForSlice(res))

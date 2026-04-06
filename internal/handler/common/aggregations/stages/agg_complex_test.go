@@ -1761,7 +1761,7 @@ func TestAggComplex_graphLookup_bfsOrder(t *testing.T) {
 
 // TestAgg_sortByCount_after_unwind verifies that $unwind followed by $sortByCount
 // correctly counts unwound array elements and sorts the results by count descending,
-// with _id descending as the tiebreaker (matching MongoDB empirical behavior).
+// with _id ascending as the tiebreaker per spec: $sortByCount ≡ $group + $sort{count:-1, _id:1}.
 func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	t.Parallel()
 
@@ -1814,14 +1814,14 @@ func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	results := collectResults(t, out, closer)
 
 	// "x" count=2, "y" count=2, "z" count=1.
-	// Tie at count=2: sorted by _id descending → "y" > "x".
-	// Expected: [{_id:"y",count:2}, {_id:"x",count:2}, {_id:"z",count:1}]
+	// Tie at count=2: sorted by _id ascending → "x" < "y".
+	// Expected: [{_id:"x",count:2}, {_id:"y",count:2}, {_id:"z",count:1}]
 	if len(results) != 3 {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
 	type entry struct{ id string; count int32 }
-	want := []entry{{"y", 2}, {"x", 2}, {"z", 1}}
+	want := []entry{{"x", 2}, {"y", 2}, {"z", 1}}
 
 	for i, w := range want {
 		idVal, err := results[i].Get("_id")
@@ -1924,11 +1924,11 @@ func TestAggComplex_matchUnwindGroupSort_SameTotalQty(t *testing.T) {
 }
 
 // TestAggComplex_sortByCount verifies the full $sortByCount behavior:
-// primary sort by count descending, tiebreaker by _id descending.
+// primary sort by count descending, tiebreaker by _id ascending per spec.
 //
 // Input: 5 docs with tags a(×3), b(×2), c(×2), d(×1).
-// Expected: [{_id:"a",count:3}, {_id:"c",count:2}, {_id:"b",count:2}, {_id:"d",count:1}]
-// b and c have the same count=2; descending _id → "c" before "b".
+// Expected: [{_id:"a",count:3}, {_id:"b",count:2}, {_id:"c",count:2}, {_id:"d",count:1}]
+// b and c have the same count=2; ascending _id → "b" before "c".
 func TestAggComplex_sortByCount(t *testing.T) {
 	t.Parallel()
 
@@ -1968,7 +1968,7 @@ func TestAggComplex_sortByCount(t *testing.T) {
 		count int32
 	}
 
-	want := []entry{{"a", 3}, {"c", 2}, {"b", 2}, {"d", 1}}
+	want := []entry{{"a", 3}, {"b", 2}, {"c", 2}, {"d", 1}}
 
 	for i, w := range want {
 		idVal, err := results[i].Get("_id")
@@ -1999,12 +1999,12 @@ func TestAggComplex_sortByCount(t *testing.T) {
 	}
 }
 
-// TestAggComplex_sortByCount_TieBreaking verifies that $sortByCount uses _id descending
-// as a tiebreaker when multiple groups share the same count. This test has all groups
-// with the same count=1 so the tiebreaker fully determines the output order.
+// TestAggComplex_sortByCount_TieBreaking verifies that $sortByCount uses _id ascending
+// as a tiebreaker when multiple groups share the same count, per spec:
+// $sortByCount ≡ $group + $sort{count:-1, _id:1}.
 //
 // Input: 3 docs each with a unique tag: "z", "m", "a".
-// Expected: [{_id:"z",count:1}, {_id:"m",count:1}, {_id:"a",count:1}] — descending _id.
+// Expected: [{_id:"a",count:1}, {_id:"m",count:1}, {_id:"z",count:1}] — ascending _id.
 func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
 	t.Parallel()
 
@@ -2034,8 +2034,8 @@ func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
-	// All counts are 1 — tiebreaker: _id descending → z, m, a.
-	wantIDs := []string{"z", "m", "a"}
+	// All counts are 1 — tiebreaker: _id ascending → a, m, z.
+	wantIDs := []string{"a", "m", "z"}
 
 	for i, wantID := range wantIDs {
 		idVal, err := results[i].Get("_id")
@@ -2045,7 +2045,7 @@ func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
 		}
 
 		if idVal != wantID {
-			t.Errorf("results[%d]._id = %v, want %q (descending _id tiebreaker)", i, idVal, wantID)
+			t.Errorf("results[%d]._id = %v, want %q (ascending _id tiebreaker)", i, idVal, wantID)
 		}
 
 		countVal, err := results[i].Get("count")

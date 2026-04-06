@@ -243,11 +243,11 @@ func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
 }
 
 // TestAggStage_sortByCount_TieBreakingOrder verifies that $sortByCount applies an
-// implicit secondary sort by _id descending when counts are equal, matching MongoDB's
-// empirical tiebreaking behavior.
+// implicit secondary sort by _id ascending when counts are equal, per spec:
+// $sortByCount ≡ $group + $sort{count:-1, _id:1}.
 //
 // Six documents produce three groups with counts 2, 2, 2 (all tied).
-// Descending _id tiebreaker must produce: r, q, p.
+// Ascending _id tiebreaker must produce: p, q, r.
 func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
 	t.Parallel()
 
@@ -280,8 +280,8 @@ func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
-	// All counts are equal (2). Tiebreaker: _id descending → r, q, p.
-	wantIDs := []string{"r", "q", "p"}
+	// All counts are equal (2). Tiebreaker: _id ascending → p, q, r.
+	wantIDs := []string{"p", "q", "r"}
 
 	for i, wantID := range wantIDs {
 		idVal, err := results[i].Get("_id")
@@ -291,7 +291,7 @@ func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
 		}
 
 		if idVal != wantID {
-			t.Errorf("results[%d]._id = %v, want %q (descending _id tiebreaker)", i, idVal, wantID)
+			t.Errorf("results[%d]._id = %v, want %q (ascending _id tiebreaker)", i, idVal, wantID)
 		}
 
 		countVal, err := results[i].Get("count")
