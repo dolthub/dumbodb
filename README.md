@@ -1,6 +1,6 @@
-# Docudolt
+# DocuDolt
 
-Docudolt is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
+DocuDolt is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
 
 ## Build
 
@@ -53,23 +53,23 @@ mongosh --eval 'db.test.insertOne({x:1})' mongodb://127.0.0.1:27017/testdb
 MongoDB compatibility tests live in a separate repository: **dolthub/docudolt-parity-testing**.
 
 That repo uses a dual-client harness (`PairTest`) that runs each operation against
-both a real MongoDB 8 instance and Docudolt, then compares the results. Tests are
+both a real MongoDB 8 instance and DocuDolt, then compares the results. Tests are
 labelled with three support levels:
 
 | Label | Meaning |
 |-------|---------|
-| `DocudoltFull` | Both MongoDB and Docudolt are exercised; divergences break CI |
-| `DocudoltXFail` | Both are exercised; Docudolt divergence is recorded but not fatal |
-| `DocudoltMongoOnly` | MongoDB only; Docudolt skipped (auth, sharding, GridFS, etc.) |
+| `DocuDoltFull` | Both MongoDB and DocuDolt are exercised; divergences break CI |
+| `DocuDoltXFail` | Both are exercised; DocuDolt divergence is recorded but not fatal |
+| `DocuDoltMongoOnly` | MongoDB only; DocuDolt skipped (auth, sharding, GridFS, etc.) |
 
 **Policy**: `tests/` in this repo is for docudolt-specific tests only. MongoDB
 compatibility tests belong in dolthub/docudolt-parity-testing.
 
-### Docudolt-specific regression tests (tests/)
+### DocuDolt-specific regression tests (tests/)
 
 The `tests/` package contains regression tests for docudolt-internal behaviors
 that have no MongoDB equivalent — things like internal resource management,
-cursor lifecycle, and implementation-specific edge cases. Docudolt is built and
+cursor lifecycle, and implementation-specific edge cases. DocuDolt is built and
 started automatically by the test harness.
 
 ```bash
@@ -91,11 +91,11 @@ make build
 ### Repo layout
 
 ```
-tests/                      Docudolt-specific regression tests
+tests/                      DocuDolt-specific regression tests
   query_test.go             Test harness + regression tests
   bats/                     Bats shell integration tests (owner-managed, do not edit)
-cmd/docudolt/                  Docudolt server entry point
-internal/                   Docudolt implementation
+cmd/docudolt/                  DocuDolt server entry point
+internal/                   DocuDolt implementation
 .github/workflows/
   docudolt-scorecard.yml       FerretDB scorecard CI
   mongodb-reference.yml     MongoDB reference baseline CI
@@ -117,8 +117,8 @@ git submodule update --init --recursive
 
 | Make target | Target under test | Purpose |
 |---|---|---|
-| `ferretdb-scorecard` | Docudolt | Docudolt's current pass rate |
-| `ferretdb-compat` | Docudolt vs MongoDB | Diff Docudolt against MongoDB behavior |
+| `ferretdb-scorecard` | DocuDolt | DocuDolt's current pass rate |
+| `ferretdb-compat` | DocuDolt vs MongoDB | Diff DocuDolt against MongoDB behavior |
 | `mongodb-reference` | Real MongoDB | Gold-standard baseline |
 | `ferretdb-reference` | FerretDB itself | FerretDB baseline |
 
@@ -126,15 +126,15 @@ Run the reference targets to determine whether a failure is a **docudolt-specifi
 regression** or a **known FerretDB/MongoDB limitation**.  If `mongodb-reference`
 also fails a test, it is not a docudolt bug.
 
-### Docudolt scorecard
+### DocuDolt scorecard
 
 ```bash
 make ferretdb-scorecard
 # Results: .runtime/ferretdb-scorecard.txt
 ```
 
-Builds Docudolt, starts it on `127.0.0.1:27017`, runs the full FerretDB integration
-suite with `-target-backend=mongodb` (Docudolt speaks the MongoDB wire protocol), and
+Builds DocuDolt, starts it on `127.0.0.1:27017`, runs the full FerretDB integration
+suite with `-target-backend=mongodb` (DocuDolt speaks the MongoDB wire protocol), and
 writes results to `.runtime/ferretdb-scorecard.txt`.
 
 **Understanding failures:**
@@ -154,7 +154,7 @@ go test -count=1 -timeout=60s -tags=ferretdb_dev -v \
   -target-url=mongodb://127.0.0.1:27017/ .
 ```
 
-### Compat suite: Docudolt vs MongoDB
+### Compat suite: DocuDolt vs MongoDB
 
 ```bash
 # Start MongoDB with auth on port 47017:
@@ -164,7 +164,7 @@ make ferretdb-compat
 # Results: .runtime/ferretdb-compat.txt
 ```
 
-Runs the `*_compat_test.go` files, which send each operation to both Docudolt
+Runs the `*_compat_test.go` files, which send each operation to both DocuDolt
 (`-target-url`) and MongoDB (`-compat-url`) and assert that the results match.
 Differences indicate docudolt behaviour that diverges from MongoDB.
 

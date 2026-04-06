@@ -104,7 +104,7 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		startupWarnings := []string{
-			fmt.Sprintf("Powered by Docudolt %s%s.", info.Version, b),
+			fmt.Sprintf("Powered by DocuDolt %s%s.", info.Version, b),
 			"Please star us on GitHub: https://github.com/dolthub/docudolt.",
 		}
 

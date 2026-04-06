@@ -1,7 +1,7 @@
-# Testing Docudolt with the FerretDB Compatibility Suite
+# Testing DocuDolt with the FerretDB Compatibility Suite
 
 The FerretDB integration suite supports a *compat mode* that runs identical operations
-against two servers and compares results field-by-field.  By pointing it at Docudolt (target)
+against two servers and compares results field-by-field.  By pointing it at DocuDolt (target)
 and a real MongoDB instance (compat reference), you can produce a precise diff of every
 behavioral difference.
 
@@ -24,7 +24,7 @@ Results land in `.runtime/ferretdb-compat.txt`.
 ```
 FerretDB integration suite
         │
-        ├──► Docudolt   (target)  mongodb://127.0.0.1:27017/
+        ├──► DocuDolt   (target)  mongodb://127.0.0.1:27017/
         │      -target-backend=ferretdb
         │
         └──► MongoDB (compat)  mongodb://username:password@127.0.0.1:47017/?replicaSet=rs0
@@ -52,7 +52,7 @@ cd ferretdb
 docker compose up -d mongodb-secure
 ```
 
-### Docudolt (target under test)
+### DocuDolt (target under test)
 
 ```bash
 make build
@@ -110,9 +110,9 @@ Common patterns:
 
 | Pattern | Likely cause |
 |---------|-------------|
-| Type mismatch (`int` vs `float`) | Docudolt returns a different BSON type |
-| Missing field in target | Command not yet implemented in Docudolt |
-| Extra field in compat | MongoDB-specific metadata Docudolt omits |
+| Type mismatch (`int` vs `float`) | DocuDolt returns a different BSON type |
+| Missing field in target | Command not yet implemented in DocuDolt |
+| Extra field in compat | MongoDB-specific metadata DocuDolt omits |
 | Value mismatch on cursor | Sort / collation difference |
 | `SKIP` in output | Test requires `-compat-url`; skipped when not set |
 
@@ -136,9 +136,9 @@ See the patch for the full task definition.  The environment variable
 `DOCUDOLT_URL` (default `mongodb://127.0.0.1:27017/`) controls where docudolt
 is expected to listen.
 
-## Docker Compose service for Docudolt
+## Docker Compose service for DocuDolt
 
-To start Docudolt alongside the FerretDB test stack, add the following snippet to
+To start DocuDolt alongside the FerretDB test stack, add the following snippet to
 `ferretdb/docker-compose.yml`:
 
 ```yaml

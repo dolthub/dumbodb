@@ -1,4 +1,4 @@
-# Dolt-Compatible Storage Layout for Docudolt
+# Dolt-Compatible Storage Layout for DocuDolt
 
 **Issue:** hq-ao0wx
 **Date:** 2026-03-24
@@ -8,7 +8,7 @@
 
 ## 1. Current State
 
-Docudolt uses Dolt's NBS (Noms Block Store) as its storage engine, structured as a
+DocuDolt uses Dolt's NBS (Noms Block Store) as its storage engine, structured as a
 Dolt-compatible repository layout. As of this writing, the layout is:
 
 ```

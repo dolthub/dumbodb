@@ -1,6 +1,6 @@
 # Rootish Connection String Verification
 
-Manual verification guide for Docudolt rootish connection string behavior. Work through each
+Manual verification guide for DocuDolt rootish connection string behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup, so run them in order.
 
 > **Automated equivalent:** `tests/versioning_rootish_verify_test.go` (`TestRootishVerify`)
@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup, so run them i
 
 ## Prerequisites
 
-A running Docudolt instance and `mongosh` installed. Connect to your instance:
+A running DocuDolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Docudolt address if different.
+Replace `localhost:27017` with your DocuDolt address if different.
 
 ---
 
@@ -52,7 +52,7 @@ const hash2 = result2.commitId
 // Create a branch named "v1.0" pointing at commit 2.
 // The rootish in the db name must be percent-encoded because '.' is a
 // MongoDB namespace separator. Encode client-side: "v1.0" → "v1%2E0".
-// Docudolt decodes it server-side before resolving the branch.
+// DocuDolt decodes it server-side before resolving the branch.
 const tagResult = db.getSiblingDB("verifydb__d_main").runCommand({ doltBranch: 1, branch: "v1.0" })
 printjson(tagResult)
 // Expected: { branch: "v1.0", ok: 1 }
@@ -103,7 +103,7 @@ Non-main branch rootish. Full read/write access; writes go to that branch's work
 set and are isolated from main's working set.
 
 > **Percent-encoding:** Characters invalid in MongoDB database names (`.`, `/`, `$`, space)
-> must be percent-encoded in the rootish part of the db name. Docudolt decodes them
+> must be percent-encoded in the rootish part of the db name. DocuDolt decodes them
 > server-side before resolving the branch. One pass only — `%` itself encodes as `%25`.
 >
 > Common encodings: `.` → `%2E`, `/` → `%2F`, `$` → `%24`

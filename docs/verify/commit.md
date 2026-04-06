@@ -20,13 +20,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running Docudolt instance and `mongosh` installed. Connect to your instance:
+A running DocuDolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Docudolt address if different.
+Replace `localhost:27017` with your DocuDolt address if different.
 
 ---
 

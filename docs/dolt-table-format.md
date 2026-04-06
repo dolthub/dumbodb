@@ -1,4 +1,4 @@
-# Dolt Table Format for Docudolt Collections
+# Dolt Table Format for DocuDolt Collections
 
 **Issue:** hq-r2cpj
 **Date:** 2026-03-24
@@ -107,7 +107,7 @@ table Index {
 }
 ```
 
-### 1.4 Minimal Valid Table Descriptor for Docudolt Collections
+### 1.4 Minimal Valid Table Descriptor for DocuDolt Collections
 
 Schema: `_id BIGINT NOT NULL PK, doc LONGBLOB NOT NULL`
 

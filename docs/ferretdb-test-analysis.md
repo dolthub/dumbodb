@@ -182,7 +182,7 @@ MongoDB 7.0.31 added new fields to some administrative command responses that
 | `TestServerStatusCommand` | 7.0.31 adds `profiler`, `queues`, and `systemProfile` (inside `catalogStats`) fields to the `serverStatus` response |
 | `TestBuildInfoCommand` | 7.0.31 running on macOS adds a `macOS` key to `buildInfo`; test does not expect it |
 
-**Docudolt relevance**: None. These are upstream minor-version additions to MongoDB's
+**DocuDolt relevance**: None. These are upstream minor-version additions to MongoDB's
 own responses. Not observable in docudolt behaviour.
 
 ### Category B: Auth/SASL Tests Requiring User Configuration (10 tests)
@@ -215,7 +215,7 @@ running without `--auth` flag allows unauthenticated finds.
 | `TestLogoutCommandAuthenticatedUser` | Expects an error on logout; gets nil (no auth mode) |
 | `TestHelloIsMasterOpQuerySpeculative` | Speculative auth via OP_QUERY: `No SASL session state found` |
 
-**Docudolt relevance**: Not directly. These are suite infrastructure failures —
+**DocuDolt relevance**: Not directly. These are suite infrastructure failures —
 the tests need a MongoDB with real auth users and `--auth` enabled. The
 scorecard intentionally runs without auth; this category would also fail against
 any no-auth MongoDB. When comparing the docudolt ferretdb-scorecard to this
@@ -232,7 +232,7 @@ is stable regardless of major version.
 |------|--------|
 | `TestHostInfoCommand` | 7.0.31 adds `numCoresAvailableToProcess` field to the `system` sub-document of `hostInfo` |
 
-**Docudolt relevance**: None. Minor kernel metadata field not present in 7.0.8.
+**DocuDolt relevance**: None. Minor kernel metadata field not present in 7.0.8.
 
 ### Category D: Error `Name` Changed — `Location40414` → `IDLFailedToParse` (4 tests)
 
@@ -247,7 +247,7 @@ required" errors. Error code (40414) and message are identical; only the `Name`
 | `TestDropIndexesCommandErrors/MissingIndexField` | `Location40414` | `IDLFailedToParse` |
 | `TestCreateIndexesCommandInvalidSpec/MissingIndexes` | `Location40414` | `IDLFailedToParse` |
 
-**Docudolt relevance**: Low. The error code is the same; only the symbolic name
+**DocuDolt relevance**: Low. The error code is the same; only the symbolic name
 changed. docudolt should target the same code (40414). If docudolt uses `Location40414`,
 it matches 7.0.8. If it uses `IDLFailedToParse`, it matches 7.0.31+. The
 message is the signal; the name is an internal alias.
@@ -265,7 +265,7 @@ Several error conditions changed their message text or error code between
 | `TestDistinctCommandErrors/CollectionTypeObject` | Code 73, `"Failed to parse namespace element"` | Code 73, `"collection name has invalid type object"` | Message changed |
 | `TestCompactCommandNonExistent/NonExistentDB` | Code 26, `"database does not exist"` | Code 26, `"collection does not exist"` | Message changed |
 
-**Docudolt relevance**: Medium for the `TestQueryBadFindType` code change. docudolt
+**DocuDolt relevance**: Medium for the `TestQueryBadFindType` code change. docudolt
 should match 7.0.8 behaviour (code 73, `InvalidNamespace`) for namespace type
 validation. If docudolt returns code 2 (`BadValue`) for these cases it would match
 7.0.31 but deviate from 7.0.8. Worth noting but not blocking — the test suite
@@ -286,7 +286,7 @@ but 7.0.31 excludes it.
 in the prior analysis). This confirms the behaviour changed between 7.0.8 and
 7.0.31, and stayed changed in 8.x.
 
-**Docudolt relevance**: High if docudolt aims to match 7.0.8 bitwise semantics. If
+**DocuDolt relevance**: High if docudolt aims to match 7.0.8 bitwise semantics. If
 docudolt returns the same results as 7.0.31 (excluding bare decimal128), it would
 pass tests against this reference but differ from the 7.0.8 target. This is
 a genuine bitwise decimal128 edge case worth tracking.
@@ -295,7 +295,7 @@ a genuine bitwise decimal128 edge case worth tracking.
 
 ## 3. Summary by Root Cause
 
-| Root Cause | Tests | Docudolt-relevant? |
+| Root Cause | Tests | DocuDolt-relevant? |
 |------------|-------|----------------|
 | Auth infrastructure (no users, no --auth) | 10 | No — suite issue |
 | 7.0.31 response shape additions | 3 | No — minor version additions |
@@ -370,7 +370,7 @@ fi
 
 ---
 
-## 7. Delta Methodology for Docudolt Scoring
+## 7. Delta Methodology for DocuDolt Scoring
 
 When comparing `ferretdb-scorecard` (docudolt) against `mongodb-reference` (7.0.31
 for now), the meaningful metric is failures present in ferretdb-scorecard **but

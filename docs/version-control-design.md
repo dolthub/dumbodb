@@ -1,4 +1,4 @@
-# Docudolt Version Control Features: Research & Design Proposal
+# DocuDolt Version Control Features: Research & Design Proposal
 
 **Date:** 2026-03-30
 **Bead:** do-m6au
@@ -30,7 +30,7 @@ NBS chunk store (content-addressed by SHA-256)
   
   Table (prolly.Map)
     key:   primary key bytes
-    value: row bytes (BSON for Docudolt)
+    value: row bytes (BSON for DocuDolt)
 ```
 
 ### Git-Equivalent Operations (CLI + SQL)
@@ -126,20 +126,20 @@ Object store (content-addressed by SHA-1/SHA-256)
 
 ## 3. Core Architectural Principle
 
-**Docudolt is a presentation layer. Dolt does the work.**
+**DocuDolt is a presentation layer. Dolt does the work.**
 
 This is a hard requirement, not a preference. Every version control feature in
-Docudolt must be backed directly by an existing Dolt abstraction. Docudolt's job is to
+DocuDolt must be backed directly by an existing Dolt abstraction. DocuDolt's job is to
 translate MongoDB wire protocol commands into calls to Dolt's Go APIs, then
-translate the results back into BSON responses. Docudolt must not reimplement
+translate the results back into BSON responses. DocuDolt must not reimplement
 history walking, diff computation, merge logic, or any other algorithm that Dolt
 already provides.
 
 **Dolt exposes its VC capabilities through Go abstraction methods**, not raw SQL
 strings. The SQL engine (and system tables like `dolt_history_$TABLE`,
 `dolt_blame_$TABLE`, `dolt_commits`) may power those abstractions internally, but
-Docudolt calls the Go API layer — the same interfaces the Dolt CLI and SQL engine
-themselves use. Do not construct SQL query strings in Docudolt VC handlers.
+DocuDolt calls the Go API layer — the same interfaces the Dolt CLI and SQL engine
+themselves use. Do not construct SQL query strings in DocuDolt VC handlers.
 
 Dolt is purpose-built for this work and is extremely fast at it:
 - Prolly Tree diff is O(changes), not O(data size) — large collections with few
@@ -148,21 +148,21 @@ Dolt is purpose-built for this work and is extremely fast at it:
   of the same subtrees are essentially free.
 - Cell-wise merge is already implemented, tested, and battle-hardened.
 
-When designing a Docudolt VC feature, the question is always: **"Which Dolt Go API
+When designing a DocuDolt VC feature, the question is always: **"Which Dolt Go API
 already does this?"** — not "How do we implement it?" If no Dolt abstraction
-exists, escalate to the Dolt team rather than building it in Docudolt.
+exists, escalate to the Dolt team rather than building it in DocuDolt.
 
 ---
 
-## 4. The Docudolt Opportunity — What to Expose
+## 4. The DocuDolt Opportunity — What to Expose
 
-Docudolt sits at a unique intersection: MongoDB wire protocol (document store UX)
+DocuDolt sits at a unique intersection: MongoDB wire protocol (document store UX)
 backed by Dolt storage (version-controlled prolly trees). This creates an
 opportunity for a "version-controlled MongoDB" that no existing product offers.
 
-### Current Docudolt Versioning State
+### Current DocuDolt Versioning State
 
-Docudolt already implements these commands (all behind the `doltXxx` namespace):
+DocuDolt already implements these commands (all behind the `doltXxx` namespace):
 
 | Command          | What it does                                    | Status      |
 |------------------|-------------------------------------------------|-------------|
@@ -179,7 +179,7 @@ rootish resolves to a commit (see Section 6 for the full specification).
 
 ### What's Missing (Gap Analysis)
 
-The following Git/Dolt capabilities don't have Docudolt equivalents yet:
+The following Git/Dolt capabilities don't have DocuDolt equivalents yet:
 
 1. **Point-in-time reads**: No way to query a collection as of a specific commit
    without doing a hard reset. Users need `db.collection.find()` at a past state.
@@ -193,7 +193,7 @@ The following Git/Dolt capabilities don't have Docudolt equivalents yet:
 4. **Document blame**: No "which commit last modified this field?" Dolt has
    `dolt_blame_$TABLE` for this.
 
-5. **Remote push/pull**: No cross-server synchronization. Can't clone a Docudolt
+5. **Remote push/pull**: No cross-server synchronization. Can't clone a DocuDolt
    instance or publish a database to a hub.
 
 6. **Conflict resolution**: `doltMerge` exists but no interface for inspecting
@@ -216,8 +216,8 @@ The following Git/Dolt capabilities don't have Docudolt equivalents yet:
 ## 5. Suggested Feature List
 
 Features ranked by **impact/feasibility**. For each: the MongoDB wire protocol
-surface and the **existing Dolt SQL primitive** that backs it. Docudolt translates;
-Dolt executes. No VC logic should be reimplemented in Docudolt.
+surface and the **existing Dolt SQL primitive** that backs it. DocuDolt translates;
+Dolt executes. No VC logic should be reimplemented in DocuDolt.
 
 ---
 
@@ -362,11 +362,11 @@ db.runCommand({
 ```
 
 **Dolt primitive**: Dolt exposes per-row history via Go abstraction methods on
-the database/table interfaces (backed by `dolt_history_$TABLE` internally). Docudolt
+the database/table interfaces (backed by `dolt_history_$TABLE` internally). DocuDolt
 calls those methods and translates the resulting row iterator to a BSON cursor.
 
 **Performance note**: Dolt's Prolly Tree history walk is O(changes to that row),
-not O(all commits). This is Dolt's core design — Docudolt gets it for free.
+not O(all commits). This is Dolt's core design — DocuDolt gets it for free.
 
 **Feasibility**: High. Pure translation: Dolt Go API call → BSON cursor response.
 
@@ -407,7 +407,7 @@ db.runCommand({doltBlame: 1, collection: "users"})
 ```
 
 **Dolt primitive**: Dolt exposes blame via Go abstraction methods (backed by
-`dolt_blame_$TABLE` internally). Docudolt calls those methods and translates the
+`dolt_blame_$TABLE` internally). DocuDolt calls those methods and translates the
 result iterator to a BSON cursor.
 
 **Feasibility**: High. Pure translation: Dolt Go API call → BSON cursor response.
@@ -438,7 +438,7 @@ working set to HEAD's RTVL. Pop restores the saved addr and removes the stash en
 
 #### P3-A: Remote Push/Pull (`doltPush`, `doltPull`)
 
-**What**: Synchronize a Docudolt database with a remote Docudolt or DoltHub instance.
+**What**: Synchronize a DocuDolt database with a remote DocuDolt or DoltHub instance.
 
 **Wire protocol**:
 ```javascript
@@ -449,7 +449,7 @@ db.runCommand({doltAddRemote: 1, name: "origin", url: "dolt://host:27017/dbname"
 
 **Dolt primitive**: Dolt's NBS implements a chunk sync protocol: serialize all
 chunks reachable from a commit that the remote doesn't have (pack file), send
-over the wire, update remote's refsAM. Docudolt can reuse Dolt's existing push/pull
+over the wire, update remote's refsAM. DocuDolt can reuse Dolt's existing push/pull
 protocol since both use the same NBS format.
 
 **Why high value**: Enables multi-server workflows. "Branch in dev, push to prod
@@ -580,7 +580,7 @@ If no `__d_` is present, use the default branch working set.
 - `^N` caret parent selection (use `~N` instead for clarity)
 
 **Write-safety rule**: a connection is writable if and only if the rootish is a
-bare branch name (or omitted). Everything else is read-only. Docudolt enforces this
+bare branch name (or omitted). Everything else is read-only. DocuDolt enforces this
 at the handler layer — write commands (`insert`, `update`, `delete`, `drop`, etc.)
 on a read-only rootish return an explicit `OperationFailed` error.
 
@@ -591,7 +591,7 @@ through to write handlers. The backend RTVL/prolly.Map loading is unchanged.
 
 Dolt already tracks merge conflicts (base/ours/theirs triples per conflicting row)
 and exposes resolution through Go abstraction methods (backed internally by
-`dolt_conflicts_$TABLE` and `DOLT_CONFLICTS_RESOLVE`). Docudolt's work is purely
+`dolt_conflicts_$TABLE` and `DOLT_CONFLICTS_RESOLVE`). DocuDolt's work is purely
 presentation:
 1. `doltConflicts` → call Dolt conflicts iterator → BSON response
 2. `doltResolveConflict` → call Dolt resolve method → ok response
@@ -603,8 +603,8 @@ No new storage. No new conflict logic. Dolt owns it all.
 ### DoltHub Integration
 
 If remote push/pull is implemented to be DoltHub-compatible (same chunk protocol
-and ref format), Docudolt databases become compatible with DoltHub — the largest public
-database sharing platform. A Docudolt user could `doltPush` to DoltHub and browse
+and ref format), DocuDolt databases become compatible with DoltHub — the largest public
+database sharing platform. A DocuDolt user could `doltPush` to DoltHub and browse
 their MongoDB data with the DoltHub web UI. This is a significant moat.
 
 ---
@@ -634,7 +634,7 @@ db.runCommand({doltBlame: 1, collection: "customers"})  // who last touched each
 ```
 
 **Advanced (P3 features — long term)**:
-> "I have a dev Docudolt instance and a prod Docudolt instance. I push tested changes
+> "I have a dev DocuDolt instance and a prod DocuDolt instance. I push tested changes
 > to prod. If prod goes wrong, I pull the last good state from DoltHub."
 ```javascript
 db.runCommand({doltAddRemote: 1, name: "prod", url: "dolt://prod:27017/app"})
@@ -646,7 +646,7 @@ db.runCommand({doltPull: 1, remote: "backup", branch: "main"})
 
 ## 8. Conclusion
 
-Docudolt's version control foundation is solid. The Dolt storage layer already
+DocuDolt's version control foundation is solid. The Dolt storage layer already
 provides the primitives for all features described above. The work is primarily
 in exposing these capabilities through the MongoDB wire protocol.
 
@@ -655,9 +655,9 @@ The highest-leverage near-term features are:
    backend logic, immediate user value.
 2. **List/delete branches + tags** — simple refsAM operations, complete the
    branch management workflow.
-3. **Document history** — turns Docudolt into an audit log database without any
+3. **Document history** — turns DocuDolt into an audit log database without any
    external tooling.
 
-Together these three make Docudolt genuinely useful as "version-controlled MongoDB"
+Together these three make DocuDolt genuinely useful as "version-controlled MongoDB"
 for the most common use cases: branched development, audit trails, and snapshot
 reads.

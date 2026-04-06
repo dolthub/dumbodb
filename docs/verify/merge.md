@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running Docudolt instance and `mongosh` installed. Connect to your instance:
+A running DocuDolt instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your Docudolt address if different.
+Replace `localhost:27017` with your DocuDolt address if different.
 
 ---
 
@@ -301,7 +301,7 @@ db.getSiblingDB("mergedb__d_main").runCommand({
 
 Once all conflicts are resolved, `doltMerge: 1, continue: 1` creates the merge
 commit with both branch HEADs as parents. `message` and `author` are optional;
-if omitted, Docudolt generates the standard merge message and uses the default author.
+if omitted, DocuDolt generates the standard merge message and uses the default author.
 
 `doltCommit` is rejected throughout an in-progress merge (whether conflicts
 remain or not) — always use `continue` to finalize.
