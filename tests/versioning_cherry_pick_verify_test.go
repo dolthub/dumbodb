@@ -212,22 +212,57 @@ func TestCherryPickVerify(t *testing.T) {
 	// Scenario 4: Inspect conflicts, resolve, and continue
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_ResolveAndContinue", func(t *testing.T) {
-		// Inspect per-collection conflict list.
-		var conflictsRes bson.M
+		// doltConflicts and doltResolveConflict are the same interface used for merge
+		// conflicts. The cherry-pick state is stored in the same mergeState struct
+		// (with isCherryPick=true), so both commands work identically for cherry-picks.
+
+		// Step 1: Summary — list which collections have unresolved conflicts.
+		var summaryRes bson.M
 		err := mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltConflicts", Value: int32(1)},
+		}).Decode(&summaryRes)
+		require.NoError(t, err, "doltConflicts summary must succeed while cherry-pick in progress")
+		assert.EqualValues(t, 1, summaryRes["ok"])
+
+		colls, ok := summaryRes["collections"].(bson.A)
+		require.True(t, ok, "collections must be an array, got %T", summaryRes["collections"])
+		require.Len(t, colls, 1, "one collection must have conflicts")
+		collEntry := colls[0].(bson.M)
+		assert.Equal(t, "items", collEntry["name"])
+		assert.EqualValues(t, 1, collEntry["count"])
+
+		// Step 2: Per-collection detail — list individual document conflicts.
+		var conflictsRes bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 		}).Decode(&conflictsRes)
-		require.NoError(t, err, "doltConflicts must succeed while cherry-pick in progress")
+		require.NoError(t, err, "doltConflicts detail must succeed while cherry-pick in progress")
+		assert.EqualValues(t, 1, conflictsRes["ok"])
 
 		conflicts, ok := conflictsRes["conflicts"].(bson.A)
 		require.True(t, ok, "conflicts must be an array")
-		require.NotEmpty(t, conflicts, "must have at least one conflict")
+		require.Len(t, conflicts, 1, "must have exactly one conflict in 'items'")
 
-		conflictID := conflicts[0].(bson.M)["conflictId"].(string)
+		cf := conflicts[0].(bson.M)
+		conflictID, ok := cf["conflictId"].(string)
+		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
-		// Resolve: accept "theirs" (the cherry-picked value v:99).
+		// ourDiffType / theirDiffType must both be "modified" (both branches changed _id:1).
+		assert.Equal(t, "modified", cf["ourDiffType"])
+		assert.Equal(t, "modified", cf["theirDiffType"])
+
+		// ours = main's version (v:100), theirs = cherry-picked version (v:99).
+		oursDoc, ok := cf["ours"].(bson.M)
+		require.True(t, ok, "ours must be a document")
+		assert.EqualValues(t, 100, oursDoc["v"], "ours doc must have v:100 (main's version)")
+
+		theirsDoc, ok := cf["theirs"].(bson.M)
+		require.True(t, ok, "theirs must be a document")
+		assert.EqualValues(t, 99, theirsDoc["v"], "theirs doc must have v:99 (cherry-picked version)")
+
+		// Step 3: Resolve — accept "theirs" (the cherry-picked value v:99).
 		var resolveRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
@@ -238,7 +273,17 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, resolveRes["ok"])
 
-		// Continue the cherry-pick.
+		// Step 4: After resolution, doltConflicts summary must return an empty collections array.
+		var postResolveRes bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltConflicts", Value: int32(1)},
+		}).Decode(&postResolveRes)
+		require.NoError(t, err)
+		postColls, ok := postResolveRes["collections"].(bson.A)
+		require.True(t, ok, "collections must be an array after resolution")
+		assert.Len(t, postColls, 0, "no more conflicts after resolution")
+
+		// Step 5: Continue the cherry-pick — same as doltMerge continue:1 for merge.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltCherryPick", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
@@ -249,7 +294,7 @@ func TestCherryPickVerify(t *testing.T) {
 		require.True(t, ok, "commitId must be a string")
 		assert.NotEmpty(t, commitID, "commitId must not be empty")
 
-		// Verify the resolved value is visible.
+		// Verify the resolved value is visible on main.
 		var doc bson.M
 		err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc)
 		require.NoError(t, err)

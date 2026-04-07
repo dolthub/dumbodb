@@ -151,15 +151,29 @@ Key checks:
 
 Continuing from Scenario 3 (cherry-pick with conflicts in progress).
 
+> **Same interface as merge.** Cherry-pick conflicts are stored in the same
+> `mergeState` struct as merge conflicts (with an internal `isCherryPick` flag).
+> `doltConflicts` and `doltResolveConflict` work identically for both operations —
+> only the final continuation command differs (`doltCherryPick continue:1` vs
+> `doltMerge continue:1`).
+
 ```js
-// Inspect conflicts.
+// Step 1: Summary — list which collections have unresolved conflicts.
+const rSummary = db.getSiblingDB("pickdb__d_main").runCommand({ doltConflicts: 1 })
+printjson(rSummary)
+// Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
+
+// Step 2: Per-collection detail — list individual document conflicts.
 const rConflicts = db.getSiblingDB("pickdb__d_main").runCommand({ doltConflicts: 1, collection: "items" })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", base: {...}, ours: { _id: 1, v: 100 }, theirs: { _id: 1, v: 99 }, ... } ], ok: 1 }
+// Expected: { conflicts: [ { conflictId: "c0", base: {...},
+//             ours: { _id: 1, v: 100 }, theirs: { _id: 1, v: 99 },
+//             ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
+// ours = main's version (v:100), theirs = cherry-picked version (v:99)
 
 const conflictId = rConflicts.conflicts[0].conflictId
 
-// Resolve: accept "theirs" (the cherry-picked value).
+// Step 3: Resolve — accept "theirs" (the cherry-picked value v:99).
 const rResolve = db.getSiblingDB("pickdb__d_main").runCommand({
   doltResolveConflict: 1,
   collection: "items",
@@ -169,16 +183,23 @@ const rResolve = db.getSiblingDB("pickdb__d_main").runCommand({
 printjson(rResolve)
 // Expected: { ok: 1 }
 
-// Continue the cherry-pick.
+// Step 4: After resolution, doltConflicts summary returns an empty collections array.
+const rAfter = db.getSiblingDB("pickdb__d_main").runCommand({ doltConflicts: 1 })
+printjson(rAfter)
+// Expected: { collections: [], ok: 1 }
+
+// Step 5: Continue the cherry-pick (equivalent to doltMerge continue:1 for merges).
 const rContinue = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, continue: 1 })
 printjson(rContinue)
 // Expected: { commitId: "<hash>", message: "conflict-source\n\n(cherry picked from commit <hashC4feat>)", ok: 1 }
 ```
 
 Key checks:
-- After resolve, `doltConflicts` returns empty conflicts
-- After continue, `ok` equals `1` and `commitId` is present
-- main HEAD has the resolved document state
+- `doltConflicts` (no filter) returns `collections` array — same shape as for merge
+- `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
+- After `doltCherryPick continue:1`, `ok` equals `1` and `commitId` is present
+- main HEAD reflects the resolved document state
 
 ---
 
