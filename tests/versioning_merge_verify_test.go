@@ -78,7 +78,7 @@ func mergeVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = docuDoltCommit(t, env, dbName, "initial")
+	hashC1 = docuDoltCommit(t, env, dbName, "initial", "alice <alice@docudolt>")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
@@ -114,7 +114,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		hashC2 = docuDoltCommit(t, env, dbName, "add-two")
+		hashC2 = docuDoltCommit(t, env, dbName, "add-two", "alice <alice@docudolt>")
 
 		// Merge feature (at C1, behind) into main (at C2).
 		var raw bson.M
@@ -187,7 +187,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		hashC3 := docuDoltCommit(t, env, dbName, "add-three")
+		hashC3 := docuDoltCommit(t, env, dbName, "add-three", "alice <alice@docudolt>")
 
 		// Commit _id:4 on feature independently → C4.
 		_, err = env.client.Database(dbName + "__d_feature").Collection("items").InsertOne(ctx, bson.D{
@@ -195,13 +195,15 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(4)},
 		})
 		require.NoError(t, err)
-		hashC4 := docuDoltCommit(t, env, dbName+"__d_feature", "add-four")
+		hashC4 := docuDoltCommit(t, env, dbName+"__d_feature", "add-four", "alice <alice@docudolt>")
 
-		// Merge feature (at C4) into main (at C3) — true three-way merge.
+		// Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
+			{Key: "message", Value: "custom merge msg"},
+			{Key: "author", Value: "bob <bob@x>"},
 		}).Decode(&raw))
 
 		mergeCommitID, ok := raw["commitId"].(string)
@@ -209,7 +211,7 @@ func TestMergeVerify(t *testing.T) {
 		assert.NotEmpty(t, mergeCommitID, "three-way merge must produce a new commit")
 		assert.NotEqual(t, hashC3, mergeCommitID, "merge commitId must differ from main pre-merge HEAD (C3)")
 		assert.NotEqual(t, hashC4, mergeCommitID, "merge commitId must differ from feature HEAD (C4)")
-		assert.Equal(t, "Merge branch 'feature' into 'main'", raw["message"])
+		assert.Equal(t, "custom merge msg", raw["message"])
 		assert.EqualValues(t, 1, raw["ok"])
 
 		// docuDoltLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
@@ -224,6 +226,8 @@ func TestMergeVerify(t *testing.T) {
 		assert.Equal(t, mergeCommitID, head.CommitID, "HEAD must be the merge commit")
 		assert.Equal(t, hashC3, head.Parent1, "merge commit parent1 must be main's pre-merge HEAD (C3)")
 		assert.Equal(t, hashC4, head.Parent2, "merge commit parent2 must be feature's HEAD (C4)")
+		assert.Equal(t, "custom merge msg", head.Message, "merge commit message must be the custom message")
+		assert.Equal(t, "bob <bob@x>", head.Author, "merge commit author must be bob <bob@x>")
 
 		// All four documents must be visible on main after the merge.
 		n, err := env.client.Database(dbName + "__d_main").Collection("items").CountDocuments(ctx, bson.D{})
@@ -255,14 +259,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName+"__d_main", "add-two")
+		docuDoltCommit(t, env, dbName+"__d_main", "add-two", "alice <alice@docudolt>")
 
 		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName+"__d_feature", "add-three")
+		docuDoltCommit(t, env, dbName+"__d_feature", "add-three", "alice <alice@docudolt>")
 
 		// Three-way merge with custom message and author.
 		var raw bson.M
@@ -309,14 +313,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 		)
 		require.NoError(t, err)
-		hashMain := docuDoltCommit(t, env, dbName+"__d_main", "main-v10")
+		hashMain := docuDoltCommit(t, env, dbName+"__d_main", "main-v10", "alice")
 
 		_, err = featDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 		)
 		require.NoError(t, err)
-		hashFeat := docuDoltCommit(t, env, dbName+"__d_feature", "feature-v20")
+		hashFeat := docuDoltCommit(t, env, dbName+"__d_feature", "feature-v20", "bob")
 
 		// Trigger the conflicting merge.
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -349,11 +353,11 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
-			{Key: "message", Value: "custom resolve msg"},
-			{Key: "author", Value: "carol <carol@x>"},
+			{Key: "message", Value: "Resolve merge conflicts"},
+			{Key: "author", Value: "alice <alice@docudolt>"},
 		}).Decode(&continueRaw))
 		assert.EqualValues(t, 1, continueRaw["ok"])
-		assert.Equal(t, "custom resolve msg", continueRaw["message"], "continue response message must match custom message")
+		assert.Equal(t, "Resolve merge conflicts", continueRaw["message"], "continue response message must match custom message")
 
 		mergeCommitID, ok := continueRaw["commitId"].(string)
 		require.True(t, ok, "commitId must be a string")
@@ -373,8 +377,8 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.Equal(t, mergeCommitID, head.CommitID)
 		assert.Equal(t, hashMain, head.Parent1, "parent1 must be main's pre-merge HEAD")
 		assert.Equal(t, hashFeat, head.Parent2, "parent2 must be feature's HEAD")
-		assert.Equal(t, "custom resolve msg", head.Message, "doltLog must show the custom message")
-		assert.Equal(t, "carol <carol@x>", head.Author, "doltLog must show the custom author")
+		assert.Equal(t, "Resolve merge conflicts", head.Message, "doltLog must show the custom message")
+		assert.Equal(t, "alice <alice@docudolt>", head.Author, "doltLog must show the custom author")
 	})
 }
 
@@ -410,14 +414,14 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 	)
 	require.NoError(t, err)
-	hashMain := docuDoltCommit(t, env, dbName+"__d_main", "main-modifies-one")
+	hashMain := docuDoltCommit(t, env, dbName+"__d_main", "main-v10", "alice")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 	)
 	require.NoError(t, err)
-	hashFeat := docuDoltCommit(t, env, dbName+"__d_feature", "feature-modifies-one")
+	hashFeat := docuDoltCommit(t, env, dbName+"__d_feature", "feature-v20", "bob")
 
 	// Scenario 5: Conflicting merge returns ok:0 with conflicts array
 	t.Run("Scenario5_ConflictingMerge_ReturnsConflicts", func(t *testing.T) {
@@ -592,14 +596,14 @@ func TestMergeConflictAbort(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_main", "main-100")
+	docuDoltCommit(t, env, dbName+"__d_main", "main-100", "alice")
 
 	_, err = env.client.Database(dbName + "__d_feature").Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_feature", "feature-200")
+	docuDoltCommit(t, env, dbName+"__d_feature", "feature-200", "bob")
 
 	// Trigger a conflicting merge.
 	raw := runCommandRaw(t, mainDB, bson.D{
@@ -650,14 +654,14 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(11)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_main", "main-11")
+	docuDoltCommit(t, env, dbName+"__d_main", "main-11", "alice")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(22)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_feature", "feature-22")
+	docuDoltCommit(t, env, dbName+"__d_feature", "feature-22", "bob")
 
 	// Trigger conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{
@@ -717,14 +721,14 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(55)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_main", "main-55")
+	docuDoltCommit(t, env, dbName+"__d_main", "main-55", "alice")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(66)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_feature", "feature-66")
+	docuDoltCommit(t, env, dbName+"__d_feature", "feature-66", "bob")
 
 	// Trigger conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{

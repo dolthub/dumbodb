@@ -126,12 +126,12 @@ Create conflicting changes on both branches so cherry-pick cannot apply cleanly.
 ```js
 // Modify _id:1 on feature (conflicting with main's version).
 db.getSiblingDB("pickdb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 99 } })
-const r4 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "conflict-source" })
+const r4 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "alice <alice@docudolt>" })
 const hashC4feat = r4.commitId
 
 // Modify _id:1 on main too (independently).
 db.items.updateOne({ _id: 1 }, { $set: { v: 100 } })
-db.runCommand({ doltCommit: 1, message: "conflict-target" })
+db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@docudolt>" })
 
 // Cherry-pick the conflicting feature commit onto main.
 const rConflict = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
@@ -210,12 +210,12 @@ Start another conflicting cherry-pick and then abort it.
 ```js
 // Create another conflicting commit on feature.
 db.getSiblingDB("pickdb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 200 } })
-const r5 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "another-conflict" })
+const r5 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "alice <alice@docudolt>" })
 const hashConflict2 = r5.commitId
 
 // Modify _id:1 on main to create conflict.
 db.items.updateOne({ _id: 1 }, { $set: { v: 201 } })
-db.runCommand({ doltCommit: 1, message: "another-conflict-target" })
+db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@docudolt>" })
 
 // Cherry-pick — expect conflict.
 const rConflict2 = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })

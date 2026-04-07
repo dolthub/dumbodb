@@ -133,21 +133,21 @@ func TestLogVerify(t *testing.T) {
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 := docuDoltCommit(t, env, dbName, "first")
+	hash1 := docuDoltCommit(t, env, dbName, "first", "alice <alice@docudolt>")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 := docuDoltCommit(t, env, dbName, "second")
+	hash2 := docuDoltCommit(t, env, dbName, "second", "alice <alice@docudolt>")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "label", Value: "gamma"},
 	})
 	require.NoError(t, err)
-	hash3 := docuDoltCommit(t, env, dbName, "third")
+	hash3 := docuDoltCommit(t, env, dbName, "third", "alice <alice@docudolt>")
 
 	// -------------------------------------------------------------------------
 	// Scenario 2: Log after multiple commits — parent chain, newest-first
@@ -293,7 +293,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashA := docuDoltCommit(t, env, mergeDBName, "add-one")
+	hashA := docuDoltCommit(t, env, mergeDBName, "add-one", "alice <alice@docudolt>")
 
 	// Create "feat" branch from main HEAD (hashA).
 	require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
@@ -307,7 +307,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashB := docuDoltCommit(t, env, mergeDBName, "add-two")
+	hashB := docuDoltCommit(t, env, mergeDBName, "add-two", "alice <alice@docudolt>")
 
 	// Advance feat independently: _id:3 → hashC (diverges from hashA).
 	_, err = env.client.Database(mergeDBName+"__d_feat").Collection("items").InsertOne(ctx, bson.D{
@@ -315,7 +315,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(3)},
 	})
 	require.NoError(t, err)
-	hashC := docuDoltCommit(t, env, mergeDBName+"__d_feat", "add-three-feat")
+	hashC := docuDoltCommit(t, env, mergeDBName+"__d_feat", "add-three-feat", "alice <alice@docudolt>")
 
 	// Merge feat into main → three-way merge commit hashM.
 	var mergeRaw bson.M

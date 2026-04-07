@@ -102,7 +102,7 @@ func TestStatusVerify(t *testing.T) {
 		{Key: "score", Value: int32(10)},
 	})
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName, "baseline")
+	docuDoltCommit(t, env, dbName, "baseline", "alice <alice@docudolt>")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Status on clean repo — empty tables
@@ -148,7 +148,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_AfterUpdate", func(t *testing.T) {
 		// Commit the "newcoll" addition first.
-		docuDoltCommit(t, env, dbName, "add newcoll")
+		docuDoltCommit(t, env, dbName, "add newcoll", "alice <alice@docudolt>")
 
 		// Modify an existing committed collection.
 		_, err := env.client.Database(dbName).Collection("items").UpdateOne(ctx,
@@ -178,7 +178,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AfterDelete", func(t *testing.T) {
 		// Commit the items modification first.
-		docuDoltCommit(t, env, dbName, "modify items")
+		docuDoltCommit(t, env, dbName, "modify items", "alice <alice@docudolt>")
 
 		// Delete the entire "items" collection.
 		require.NoError(t, env.client.Database(dbName).Collection("items").Drop(ctx))
@@ -204,7 +204,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AfterCommit", func(t *testing.T) {
 		// Commit the deletion.
-		docuDoltCommit(t, env, dbName, "delete items")
+		docuDoltCommit(t, env, dbName, "delete items", "alice <alice@docudolt>")
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
