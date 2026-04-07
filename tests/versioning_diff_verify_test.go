@@ -180,7 +180,7 @@ func diffVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashBas
 	})
 	require.NoError(t, err)
 
-	hashBase = docuDoltCommit(t, env, dbName, "baseline")
+	hashBase = docuDoltCommit(t, env, dbName, "baseline", "alice <alice@docudolt>")
 
 	// Three working-set changes (NOT committed):
 	//   _id:3 added
@@ -268,7 +268,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_DiffTwoHashes", func(t *testing.T) {
 		// Commit the working-set changes.
-		hashNew = docuDoltCommit(t, env, dbName, "three changes")
+		hashNew = docuDoltCommit(t, env, dbName, "three changes", "alice <alice@docudolt>")
 		require.NotEmpty(t, hashNew)
 
 		var raw bson.M
@@ -379,7 +379,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "name", Value: "gamma"}, {Key: "v", Value: int32(3)}})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "multi baseline")
+		docuDoltCommit(t, env, dbName, "multi baseline", "alice <alice@docudolt>")
 
 		// Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4.
 		_, err = multi.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
@@ -426,7 +426,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_SingleDocMixedFieldOps", func(t *testing.T) {
 		// Commit the working set from Scenario 5 first so HEAD is clean.
-		docuDoltCommit(t, env, dbName, "pre-scenario6")
+		docuDoltCommit(t, env, dbName, "pre-scenario6", "alice <alice@docudolt>")
 
 		mf := env.client.Database(dbName).Collection("mixedfields")
 
@@ -437,7 +437,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "y", Value: "remove-me"},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "mixedfields baseline")
+		docuDoltCommit(t, env, dbName, "mixedfields baseline", "alice <alice@docudolt>")
 
 		// Replace: x modified, y removed, z added.
 		_, err = mf.ReplaceOne(ctx,
@@ -495,7 +495,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FieldTypeChange", func(t *testing.T) {
 		// Commit working set from Scenario 6 for a clean HEAD.
-		docuDoltCommit(t, env, dbName, "pre-scenario7")
+		docuDoltCommit(t, env, dbName, "pre-scenario7", "alice <alice@docudolt>")
 
 		tc := env.client.Database(dbName).Collection("typechg")
 
@@ -506,7 +506,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "stable", Value: "unchanged"},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "typechg baseline")
+		docuDoltCommit(t, env, dbName, "typechg baseline", "alice <alice@docudolt>")
 
 		// Replace: val changes from number to string.
 		_, err = tc.ReplaceOne(ctx,
@@ -552,7 +552,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
 		// Commit any pending working set so we start from a clean HEAD.
-		docuDoltCommit(t, env, dbName, "pre-scenario9")
+		docuDoltCommit(t, env, dbName, "pre-scenario9", "alice <alice@docudolt>")
 
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
@@ -563,7 +563,7 @@ func TestDiffVerify(t *testing.T) {
 		rootish := env.client.Database(dbName + "__d_rootishtest")
 
 		// Two commits on main — feature branch stays behind.
-		hashC1 := docuDoltCommit(t, env, dbName, "scenario9-c1")
+		hashC1 := docuDoltCommit(t, env, dbName, "scenario9-c1", "alice <alice@docudolt>")
 
 		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
@@ -571,7 +571,7 @@ func TestDiffVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC2 := docuDoltCommit(t, env, dbName, "scenario9-c2")
+		hashC2 := docuDoltCommit(t, env, dbName, "scenario9-c2", "alice <alice@docudolt>")
 
 		// 9a: from=HEAD~1, to=HEAD on main connection — HEAD resolves to c2.
 		// Expect _id:1 added (delta between c1 and c2).
@@ -687,7 +687,7 @@ func TestDiffVerify(t *testing.T) {
 
 	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
 		// Commit working set from Scenario 7 for a clean HEAD.
-		docuDoltCommit(t, env, dbName, "pre-scenario8")
+		docuDoltCommit(t, env, dbName, "pre-scenario8", "alice <alice@docudolt>")
 
 		nested := env.client.Database(dbName).Collection("nested")
 
@@ -701,7 +701,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "name", Value: "alice"},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "nested baseline")
+		docuDoltCommit(t, env, dbName, "nested baseline", "alice <alice@docudolt>")
 
 		// Update: only address.city changes.
 		_, err = nested.UpdateOne(ctx,

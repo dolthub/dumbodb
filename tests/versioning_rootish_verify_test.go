@@ -57,7 +57,7 @@ func rootishVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hash
 		{Key: "version", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hash1 = docuDoltCommit(t, env, dbName, "first commit")
+	hash1 = docuDoltCommit(t, env, dbName, "first commit", "alice <alice@docudolt>")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -66,7 +66,7 @@ func rootishVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hash
 		{Key: "version", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hash2 = docuDoltCommit(t, env, dbName, "second commit")
+	hash2 = docuDoltCommit(t, env, dbName, "second commit", "alice <alice@docudolt>")
 
 	// Create branch "v1.0" from main HEAD.
 	// The branch name contains a dot; access it via dbname__d_v1%2E0.

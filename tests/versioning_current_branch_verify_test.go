@@ -54,7 +54,7 @@ func currentBranchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string)
 		{Key: "v", Value: "first"},
 	})
 	require.NoError(t, err)
-	hash1 = docuDoltCommit(t, env, dbName, "first commit")
+	hash1 = docuDoltCommit(t, env, dbName, "first commit", "alice <alice@docudolt>")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -62,7 +62,7 @@ func currentBranchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string)
 		{Key: "v", Value: "second"},
 	})
 	require.NoError(t, err)
-	hash2 = docuDoltCommit(t, env, dbName, "second commit")
+	hash2 = docuDoltCommit(t, env, dbName, "second commit", "alice <alice@docudolt>")
 
 	// Create branch "feature" from main HEAD.
 	var branchResult bson.M

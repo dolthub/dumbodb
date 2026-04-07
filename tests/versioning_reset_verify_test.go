@@ -52,14 +52,14 @@ func resetVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = docuDoltCommit(t, env, dbName, "initial")
+	hashC1 = docuDoltCommit(t, env, dbName, "initial", "alice <alice@docudolt>")
 
 	_, err = items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashC2 = docuDoltCommit(t, env, dbName, "add-two")
+	hashC2 = docuDoltCommit(t, env, dbName, "add-two", "alice <alice@docudolt>")
 
 	return hashC1, hashC2
 }
@@ -126,7 +126,7 @@ func TestResetVerify(t *testing.T) {
 		items := env.client.Database(dbName).Collection("items")
 
 		// Commit the working set from Scenario 1 to create a new snapshot (C3).
-		docuDoltCommit(t, env, dbName, "snapshot")
+		docuDoltCommit(t, env, dbName, "snapshot", "alice <alice@docudolt>")
 
 		// Add _id:4 to the working set (uncommitted).
 		_, err := items.InsertOne(ctx, bson.D{
@@ -177,7 +177,7 @@ func TestResetVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "re-add-two")
+		docuDoltCommit(t, env, dbName, "re-add-two", "alice <alice@docudolt>")
 
 		// Soft reset to hashC1 — "undoes" the re-add-two commit.
 		var raw bson.M

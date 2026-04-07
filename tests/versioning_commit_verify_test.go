@@ -63,7 +63,7 @@ func commitVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashB
 	})
 	require.NoError(t, err)
 
-	hashBase = docuDoltCommit(t, env, dbName, "baseline")
+	hashBase = docuDoltCommit(t, env, dbName, "baseline", "alice <alice@docudolt>")
 	return hashBase
 }
 
@@ -125,7 +125,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "feature commit"},
-			{Key: "author", Value: "testuser"},
+			{Key: "author", Value: "alice <alice@docudolt>"},
 		}).Decode(&commitResult))
 
 		hash, ok := commitResult["commitId"].(string)
@@ -160,7 +160,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit A"},
-			{Key: "author", Value: "testuser"},
+			{Key: "author", Value: "alice <alice@docudolt>"},
 		}).Decode(&resultA))
 		hashA, _ := resultA["commitId"].(string)
 		require.NotEmpty(t, hashA)
@@ -177,7 +177,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit B"},
-			{Key: "author", Value: "testuser"},
+			{Key: "author", Value: "alice <alice@docudolt>"},
 		}).Decode(&resultB))
 		hashB, _ := resultB["commitId"].(string)
 		require.NotEmpty(t, hashB)
@@ -194,7 +194,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
-			{Key: "author", Value: "testuser"},
+			{Key: "author", Value: "alice <alice@docudolt>"},
 		}).Decode(&result))
 
 		hash, ok := result["commitId"].(string)
@@ -208,7 +208,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HashIsValidDiffReference", func(t *testing.T) {
 		// Commit current state and save hashBefore.
-		hashBefore := docuDoltCommit(t, env, dbName, "pre-change")
+		hashBefore := docuDoltCommit(t, env, dbName, "pre-change", "alice <alice@docudolt>")
 
 		// Insert _id:99 and commit — save hashAfter.
 		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
@@ -218,7 +218,7 @@ func TestCommitVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashAfter := docuDoltCommit(t, env, dbName, "post-change")
+		hashAfter := docuDoltCommit(t, env, dbName, "post-change", "alice <alice@docudolt>")
 
 		// Diff from hashBefore to hashAfter must show _id:99 as added.
 		var raw bson.M
@@ -245,10 +245,10 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "authored commit"},
-			{Key: "author", Value: "bob <bob@docudolt>"},
+			{Key: "author", Value: "bob"},
 		}).Decode(&result))
 
-		assert.Equal(t, "bob <bob@docudolt>", result["author"], "author must be echoed in response")
+		assert.Equal(t, "bob", result["author"], "author must be echoed in response")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present in response")
 		assert.EqualValues(t, 1, result["ok"])
 
@@ -265,7 +265,7 @@ func TestCommitVerify(t *testing.T) {
 
 		entry, ok := commits[0].(bson.M)
 		require.True(t, ok)
-		assert.Equal(t, "bob <bob@docudolt>", entry["author"], "doltLog must reflect the commit author")
+		assert.Equal(t, "bob", entry["author"], "doltLog must reflect the commit author")
 	})
 
 	// -------------------------------------------------------------------------
@@ -278,11 +278,11 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "fixed-time commit"},
-			{Key: "author", Value: "carol <carol@docudolt>"},
+			{Key: "author", Value: "carol"},
 			{Key: "timestamp", Value: fixedTime},
 		}).Decode(&result))
 
-		assert.Equal(t, "carol <carol@docudolt>", result["author"], "author must be echoed")
+		assert.Equal(t, "carol", result["author"], "author must be echoed")
 		assert.EqualValues(t, 1, result["ok"])
 
 		// The echoed timestamp must equal the provided value (within millisecond precision).
