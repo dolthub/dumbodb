@@ -36,6 +36,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -100,6 +101,18 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		return &backends.QueryResult{
 			Iter: newEmptyIter(),
 		}, nil
+	}
+
+	// spike/index-poc: attempt secondary index lookup for simple equality queries.
+	if params != nil && params.Filter != nil && params.Sort.Len() == 0 {
+		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter); used {
+			if err != nil {
+				return nil, err
+			}
+			return &backends.QueryResult{
+				Iter: newSliceIter(docs),
+			}, nil
+		}
 	}
 
 	// Determine direction based on sort.
@@ -399,6 +412,86 @@ func (it *singleDocIter) Next() (struct{}, *types.Document, error) {
 
 func (it *singleDocIter) Close() {}
 
+// tryIndexLookup checks whether the filter is a simple single-field equality
+// query and an index exists for that field. If so it uses the secondary index
+// to fetch matching documents and returns (docs, true, err).
+// Returns (nil, false, nil) if no suitable index was found (caller should fall back).
+func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document) ([]*types.Document, bool, error) {
+	// Only handle single-field equality: { field: value } with no operators.
+	if filter.Len() != 1 {
+		return nil, false, nil
+	}
+
+	var field string
+	var filterVal any
+	for _, k := range filter.Keys() {
+		field = k
+		v, _ := filter.Get(k)
+		// Reject operator documents.
+		if _, isDoc := v.(*types.Document); isDoc {
+			return nil, false, nil
+		}
+		filterVal = v
+	}
+
+	// Check if there is a secondary index on this field.
+	state.mu.RLock()
+	secMaps := state.secIndexMaps[c.name]
+	idxInfos := state.indexes[c.name]
+	state.mu.RUnlock()
+
+	var matchingIdxName string
+	for _, idx := range idxInfos {
+		if len(idx.Key) == 1 && idx.Key[0].Field == field {
+			matchingIdxName = idx.Name
+			break
+		}
+	}
+	if matchingIdxName == "" {
+		return nil, false, nil
+	}
+
+	idxMap, ok := secMaps[matchingIdxName]
+	if !ok {
+		return nil, false, nil
+	}
+
+	// Look up matching primary key bytes in the secondary index.
+	primaryIDBytesList, err := idxpkg.EqualityLookup(ctx, idxMap, filterVal)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Fetch the actual documents from the primary map.
+	docs := make([]*types.Document, 0, len(primaryIDBytesList))
+	for _, idBytes := range primaryIDBytesList {
+		key, err := buildKey(idBytes)
+		if err != nil {
+			continue
+		}
+		var doc *types.Document
+		if err := primary.Get(ctx, key, func(k, v val.Tuple) error {
+			if v == nil {
+				return nil
+			}
+			jsonHash, ok := valDesc.GetJSONAddr(0, v)
+			if !ok {
+				return nil
+			}
+			var decErr error
+			doc, decErr = readDocJSON(ctx, state.ns, jsonHash)
+			return decErr
+		}); err != nil {
+			continue
+		}
+		if doc != nil {
+			docs = append(docs, doc)
+		}
+	}
+
+	return docs, true, nil
+}
+
 // Explain implements backends.Collection.
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
 	qp := must.NotFail(types.NewDocument(
@@ -649,6 +742,11 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
+	// Maintain secondary indexes for any documents we just inserted.
+	if err := c.updateSecondaryIndexesOnInsert(ctx, state, params.Docs); err != nil {
+		return nil, fmt.Errorf("dolt: updating secondary indexes: %w", err)
+	}
+
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
 		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "dumbodb <dumbodb@localhost>", time.Now())
@@ -659,6 +757,54 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	return &backends.InsertAllResult{}, nil
+}
+
+// updateSecondaryIndexesOnInsert adds entries for the inserted documents to all secondary indexes.
+// Must be called with state.mu held (write lock).
+func (c *collection) updateSecondaryIndexesOnInsert(ctx context.Context, state *dbState, docs []*types.Document) error {
+	secMaps := state.secIndexMaps[c.name]
+	if len(secMaps) == 0 {
+		return nil
+	}
+
+	idxInfos := state.indexes[c.name]
+
+	for idxName, idxMap := range secMaps {
+		// Find the matching IndexInfo.
+		var idxInfo *backends.IndexInfo
+		for i := range idxInfos {
+			if idxInfos[i].Name == idxName {
+				idxInfo = &idxInfos[i]
+				break
+			}
+		}
+		if idxInfo == nil {
+			continue
+		}
+
+		mut := idxMap.Mutate()
+		for _, doc := range docs {
+			docID, err := doc.Get("_id")
+			if err != nil {
+				continue
+			}
+			h, err := hashID(docID)
+			if err != nil {
+				continue
+			}
+			idBytes := h[:]
+			fieldVals := extractIndexFieldValues(doc, *idxInfo)
+			if err := idxpkg.InsertEntry(ctx, mut, fieldVals, idBytes); err != nil {
+				return err
+			}
+		}
+		updated, err := mut.Map(ctx)
+		if err != nil {
+			return err
+		}
+		secMaps[idxName] = updated
+	}
+	return nil
 }
 
 // evictCappedDocs removes oldest documents from a capped collection to enforce size and count limits.
@@ -1178,7 +1324,113 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 
 	state.indexes[c.name] = existing
 
+	// Build prolly.Map secondary indexes for newly added indexes.
+	// spike/index-poc: build by scanning primary map.
+	for _, idx := range params.Indexes {
+		if idx.Name == backends.DefaultIndexName {
+			continue
+		}
+		// Skip if index map already exists.
+		if _, exists := state.secIndexMaps[c.name][idx.Name]; exists {
+			continue
+		}
+		idxMap, err := c.buildSecondaryIndex(ctx, state, idx)
+		if err != nil {
+			// Non-fatal for spike: log and continue.
+			_ = err
+			continue
+		}
+		if state.secIndexMaps[c.name] == nil {
+			state.secIndexMaps[c.name] = make(map[string]prolly.Map)
+		}
+		state.secIndexMaps[c.name][idx.Name] = idxMap
+	}
+
 	return &backends.CreateIndexesResult{}, nil
+}
+
+// buildSecondaryIndex scans the primary map and builds a secondary index prolly.Map.
+// Must be called with state.mu held (write lock).
+func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (prolly.Map, error) {
+	idxMap, err := idxpkg.NewEmptyMap(ctx, state.ns)
+	if err != nil {
+		return prolly.Map{}, fmt.Errorf("index: creating empty map: %w", err)
+	}
+
+	// Try to open the primary map; if collection doesn't exist yet, return empty index.
+	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
+	if err != nil {
+		return idxMap, nil
+	}
+	rootHash, err := am.Get(ctx, c.name)
+	if err != nil || rootHash.IsEmpty() {
+		return idxMap, nil
+	}
+	primaryMap, err := openCollection(ctx, state.cs, state.ns, rootHash)
+	if err != nil {
+		return idxMap, nil
+	}
+
+	mut := idxMap.Mutate()
+	iter, err := primaryMap.IterAll(ctx)
+	if err != nil {
+		return prolly.Map{}, fmt.Errorf("index: iterating primary: %w", err)
+	}
+
+	for {
+		k, v, err := iter.Next(ctx)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return prolly.Map{}, err
+		}
+		if v == nil {
+			break
+		}
+
+		// Get the _id bytes from the primary key.
+		idBytes, ok := keyDesc.GetBytes(0, k)
+		if !ok {
+			continue
+		}
+
+		// Decode the document to extract the indexed field value(s).
+		jsonHash, ok := valDesc.GetJSONAddr(0, v)
+		if !ok {
+			continue
+		}
+		doc, err := readDocJSON(ctx, state.ns, jsonHash)
+		if err != nil {
+			continue
+		}
+
+		fieldVals := extractIndexFieldValues(doc, idx)
+		if err := idxpkg.InsertEntry(ctx, mut, fieldVals, idBytes); err != nil {
+			return prolly.Map{}, fmt.Errorf("index: inserting entry: %w", err)
+		}
+	}
+
+	built, err := mut.Map(ctx)
+	if err != nil {
+		return prolly.Map{}, fmt.Errorf("index: flushing map: %w", err)
+	}
+	return built, nil
+}
+
+// extractIndexFieldValues returns the field values for the given index, in key order.
+// Missing fields are returned as types.Null.
+func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any {
+	vals := make([]any, len(idx.Key))
+	for i, kp := range idx.Key {
+		v, err := doc.Get(kp.Field)
+		if err != nil {
+			vals[i] = types.Null
+		} else {
+			vals[i] = v
+		}
+	}
+	return vals
 }
 
 // DropIndexes implements backends.Collection.
@@ -1636,3 +1888,25 @@ func (it *errorIter) Next() (struct{}, *types.Document, error) {
 }
 
 func (it *errorIter) Close() {}
+
+// sliceIter iterates over a pre-fetched slice of documents.
+// Used by the secondary index lookup path to return results without a full scan.
+type sliceIter struct {
+	docs []*types.Document
+	pos  int
+}
+
+func newSliceIter(docs []*types.Document) types.DocumentsIterator {
+	return &sliceIter{docs: docs}
+}
+
+func (it *sliceIter) Next() (struct{}, *types.Document, error) {
+	if it.pos >= len(it.docs) {
+		return struct{}{}, nil, iterator.ErrIteratorDone
+	}
+	doc := it.docs[it.pos]
+	it.pos++
+	return struct{}{}, doc, nil
+}
+
+func (it *sliceIter) Close() {}
