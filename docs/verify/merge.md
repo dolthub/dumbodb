@@ -192,9 +192,14 @@ db.getSiblingDB("mergedb__d_main").runCommand({ doltCommit: 1, message: "main-v1
 db.getSiblingDB("mergedb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 20 } })
 db.getSiblingDB("mergedb__d_feature").runCommand({ doltCommit: 1, message: "feature-v20", author: "bob" })
 
-const rConflict = db.getSiblingDB("mergedb__d_main").runCommand({ doltMerge: 1, merge_in: "feature" })
-printjson(rConflict)
-// Expected: { conflicts: [ { collection: "items", count: 1 } ], ok: 0, code: 96, errmsg: "..." }
+// In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
+try {
+  db.getSiblingDB("mergedb__d_main").runCommand({ doltMerge: 1, merge_in: "feature" })
+} catch (e) {
+  print(e)
+  // MongoServerError: doltMerge: unresolved conflicts in 1 collection(s)
+}
+// The merge is now staged with conflicts. Continue to Scenario 6 to inspect and resolve.
 ```
 
 ---

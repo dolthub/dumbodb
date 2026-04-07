@@ -187,7 +187,10 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err)
 		docuDoltCommit(t, env, dbName+"__d_main", "conflict-target", "alice <alice@docudolt>")
 
-		// Cherry-pick — expect conflict error.
+		// Cherry-pick — expect conflict.
+		// In mongosh this throws a MongoServerError (ok:0 surfaces as an exception).
+		// runCommandRaw bypasses that and returns the raw wire document so we can
+		// assert the structured error fields the server actually sends.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashConflictFeat},

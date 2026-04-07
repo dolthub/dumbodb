@@ -134,16 +134,20 @@ db.items.updateOne({ _id: 1 }, { $set: { v: 100 } })
 db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@docudolt>" })
 
 // Cherry-pick the conflicting feature commit onto main.
-const rConflict = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
-printjson(rConflict)
-// Expected: { conflicts: [ { collection: "items", count: 1 } ], ok: 0, code: <N>, errmsg: "doltCherryPick: unresolved conflicts in 1 collection(s)" }
+// In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
+try {
+  db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
+} catch (e) {
+  print(e)
+  // MongoServerError: doltCherryPick: unresolved conflicts in 1 collection(s)
+}
+// The cherry-pick is now staged with conflicts. Continue to Scenario 4 to inspect and resolve.
 ```
 
 Key checks:
-- `ok` equals `0`
-- `conflicts` is an array with at least one entry
-- Each entry has `collection` (string) and `count` (int > 0)
-- `errmsg` contains `"doltCherryPick"`
+- `runCommand` throws a `MongoServerError` (mongosh surfaces `ok:0` as an exception)
+- The error message contains `"doltCherryPick: unresolved conflicts in 1 collection(s)"`
+- The cherry-pick state is preserved — use `doltConflicts` to inspect (Scenario 4)
 
 ---
 
@@ -217,9 +221,12 @@ const hashConflict2 = r5.commitId
 db.items.updateOne({ _id: 1 }, { $set: { v: 201 } })
 db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@docudolt>" })
 
-// Cherry-pick — expect conflict.
-const rConflict2 = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })
-// Expected: ok: 0, conflicts array non-empty
+// Cherry-pick — expect conflict (throws in mongosh).
+try {
+  db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })
+} catch (e) {
+  // MongoServerError: doltCherryPick: unresolved conflicts in 1 collection(s)
+}
 
 // Abort: restore pre-cherry-pick state.
 const rAbort = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, abort: 1 })

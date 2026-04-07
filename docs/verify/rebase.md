@@ -148,15 +148,20 @@ cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "
 cdb.getSiblingDB("rebaseconflict__d_feature").items.updateOne({_id: 1}, {$set: {v: 200}})
 cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltCommit: 1, message: "feature-changes-1", author: "test <test@example.com>"})
 
-// Rebase — expect conflict.
-var result = cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltRebase: 1, onto: "main"})
+// Rebase — expect conflict (throws in mongosh).
+try {
+  cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltRebase: 1, onto: "main"})
+} catch (e) {
+  print(e)
+  // MongoServerError: doltRebase: unresolved conflicts in 1 collection(s)
+}
 ```
 
 **Expected:**
-- `ok: 0`
-- `conflicts` is a non-empty array, each entry has `collection: "items"` and `count > 0`
-- `conflictCommit` is a non-empty string (hash of the commit being replayed)
-- `errmsg` contains "doltRebase"
+- `runCommand` throws a `MongoServerError` (ok:0 surfaces as an exception in mongosh)
+- Error message contains `"doltRebase"` and mentions conflicts
+- `conflictCommit` is accessible via the error's raw response (hash of the commit being replayed)
+- The rebase is now staged — use `doltConflicts` to inspect
 
 ```js
 // Abort the conflicted rebase.
@@ -192,9 +197,12 @@ rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "m
 rdb.getSiblingDB("rebaseresolve__d_feature").items.updateOne({_id: 1}, {$set: {v: 200}})
 rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltCommit: 1, message: "feature-modifies-1", author: "test <test@example.com>"})
 
-// Start rebase — expect conflict.
-var rebaseResult = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltRebase: 1, onto: "main"})
-// rebaseResult.ok === 0, rebaseResult.conflicts is non-empty.
+// Start rebase — expect conflict (throws in mongosh).
+try {
+  rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltRebase: 1, onto: "main"})
+} catch (e) {
+  // MongoServerError: doltRebase: unresolved conflicts in 1 collection(s)
+}
 
 // Inspect conflicts.
 var conflictsResult = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
