@@ -173,7 +173,7 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 		}
 		// All-digit strings (e.g. UnixNano timestamps) are not valid rootish
 		// expressions. Fall through to plain-DB treatment so that database names
-		// like "parity_test__1775505756999075683" work without error.
+		// like "parity_test__d_1775505756999075683" work without error.
 		if !rootishAllDigits(candidate) {
 			if err = parseRootish(candidate); err != nil {
 				return "", "", false, err

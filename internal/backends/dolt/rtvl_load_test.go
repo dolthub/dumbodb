@@ -76,7 +76,7 @@ func TestRTVLLoad_CommitHash_ListCollections(t *testing.T) {
 	// ListCollections at hash1 should list only col1.
 	db1, err := b.Database("testdb__d_" + hash1)
 	if err != nil {
-		t.Fatalf("Database(testdb__%s): %v", hash1, err)
+		t.Fatalf("Database(testdb__d_%s): %v", hash1, err)
 	}
 
 	res1, err := db1.ListCollections(ctx, nil)
