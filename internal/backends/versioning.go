@@ -46,7 +46,7 @@ type BranchParams struct {
 	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
 	Name   string // name of the new branch (or branch to delete when Delete is true)
 	Delete bool   // if true, delete the named branch instead of creating it
-	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (-D semantics)
+	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
 }
 
 // BranchResult represents the result of VersioningBackend.DocuDoltBranch method.

@@ -979,9 +979,9 @@ func (b *Backend) DocuDoltCommit(ctx context.Context, params *backends.CommitPar
 // params.Name, starting from the HEAD commit of the source branch params.From.
 //
 // When params.Delete is true, it deletes the branch named params.Name:
-//   - Safe delete (Force=false, -d semantics): refuses if the branch HEAD is not
+//   - Safe delete (Force=false, delete semantics): refuses if the branch HEAD is not
 //     reachable from any other branch (i.e. data would be lost).
-//   - Force delete (Force=true, -D semantics): deletes unconditionally.
+//   - Force delete (Force=true, forceDelete semantics): deletes unconditionally.
 //
 // Both branch names map to dataset IDs of the form "refs/heads/<name>".
 func (b *Backend) DocuDoltBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
@@ -1095,7 +1095,7 @@ func docuDoltBranchDelete(ctx context.Context, db *dbState, params *backends.Bra
 
 		if !reachable {
 			return nil, fmt.Errorf(
-				"dolt: DocuDoltBranch: branch %q has unmerged commits; use -D to force delete",
+				"dolt: DocuDoltBranch: branch %q has unmerged commits; use forceDelete to force delete",
 				params.Name,
 			)
 		}
