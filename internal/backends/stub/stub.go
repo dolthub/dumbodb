@@ -204,6 +204,13 @@ func (b *Backend) DocuDoltCherryPick(_ context.Context, params *backends.CherryP
 	return &backends.CherryPickResult{CommitID: "stub", Message: "stub cherry-pick"}, nil
 }
 
+// DocuDoltRebase implements backends.VersioningBackend interface.
+func (b *Backend) DocuDoltRebase(_ context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
+	b.l.Info("stub: DocuDoltRebase", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("onto", params.Onto))
+
+	return &backends.RebaseResult{CommitsReplayed: 0, NewTip: "stub"}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

@@ -126,6 +126,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDocuDoltCherryPick,
 			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
 		},
+		"doltRebase": {
+			Handler: h.MsgDocuDoltRebase,
+			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
+		},
 		"doltConflicts": {
 			Handler: h.MsgDocuDoltConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",

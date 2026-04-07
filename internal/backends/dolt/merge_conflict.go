@@ -56,6 +56,14 @@ type mergeInProgress struct {
 	isCherryPick bool
 	pickHash     hash.Hash // the cherry-picked commit hash
 	originalMsg  string    // original commit message for the cherry-pick default annotation
+
+	// Rebase-specific fields (set when isRebase is true).
+	// intoHash (above) tracks the current rebased tip hash and is updated as commits are replayed.
+	isRebase              bool
+	rebaseBranchHash      hash.Hash   // branch HEAD before rebase started (used to reset branch on abort)
+	rebaseRemainingHashes []hash.Hash // commits yet to replay (oldest-first), not including the current paused one
+	rebaseCurrentPick     hash.Hash   // commit currently being replayed (paused on conflict)
+	rebaseCommitsReplayed int         // number of commits successfully replayed so far
 }
 
 // hasUnresolvedConflicts reports whether any conflict entry in the merge state is unresolved.

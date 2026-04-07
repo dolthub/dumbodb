@@ -179,6 +179,15 @@ func (b *backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 	return nil, fmt.Errorf("oplog: DocuDoltCherryPick: versioning not supported by wrapped backend")
 }
 
+// DocuDoltRebase implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DocuDoltRebase(ctx context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DocuDoltRebase(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DocuDoltRebase: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
 	_ backends.Backend          = (*backend)(nil)
