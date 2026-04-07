@@ -354,16 +354,6 @@ func readDocFromEntry(ctx context.Context, ns tree.NodeStore, k, v val.Tuple) (*
 	return readDocJSON(ctx, ns, jsonHash)
 }
 
-// idFromKeyTuple decodes the _id value from a prolly.Map key tuple.
-func idFromKeyTuple(k val.Tuple) (any, error) {
-	keyBytes, ok := keyDesc.GetBytes(0, k)
-	if !ok {
-		return nil, fmt.Errorf("extracting key bytes from tuple")
-	}
-
-	return decodeID(keyBytes)
-}
-
 // diffDocumentPaths computes path-based field diffs between two documents,
 // producing a []backends.FieldDiff where each entry carries a JSON Path string
 // (e.g. "$.field", "$.nested.field", "$.array[2]"), a type tag ("added",
@@ -634,7 +624,7 @@ func diffCollectionMaps(
 						return nil, nil, nil, readErr
 					}
 
-					id, idErr := idFromKeyTuple(kA)
+					id, idErr := docA.Get("_id")
 					if idErr != nil {
 						return nil, nil, nil, idErr
 					}

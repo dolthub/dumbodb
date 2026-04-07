@@ -16,11 +16,11 @@ package dolt
 
 import (
 	"context"
-	"encoding/binary"
+	"crypto/sha512"
 	"fmt"
-	"math"
 	"time"
 
+	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
@@ -212,118 +212,60 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, emptyIndexAM p
 	return serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
 }
 
-// encodeID serializes a MongoDB _id value to varbinary bytes.
-// Format: 1-byte BSON type tag + canonical value bytes.
-// Returns an error for unsupported types or if total length exceeds 255 bytes.
-func encodeID(id any) ([]byte, error) {
+// hashID returns a stable 20-byte primary key for a MongoDB _id value.
+// It serialises id to canonical BSON bytes using wirebson, then returns SHA-512(bytes)[:20].
+func hashID(id any) ([20]byte, error) {
+	doc := wirebson.MakeDocument(1)
+
+	var wval any
 	switch v := id.(type) {
 	case int32:
-		b := make([]byte, 5)
-		b[0] = 0x10 // BSON Int32 tag
-		binary.BigEndian.PutUint32(b[1:], uint32(v))
-		return b, nil
-
+		wval = v
 	case int64:
-		b := make([]byte, 9)
-		b[0] = 0x12 // BSON Int64 tag
-		binary.BigEndian.PutUint64(b[1:], uint64(v))
-		return b, nil
-
+		wval = v
 	case float64:
-		// IEEE 754 sign-magnitude encoding so memcmp sorts correctly:
-		// positive values have MSB set; negative have MSB clear.
-		b := make([]byte, 9)
-		b[0] = 0x01 // BSON Double tag
-		u := math.Float64bits(v)
-		if math.Signbit(v) {
-			u = ^u // flip all bits for negative / negative zero
-		} else {
-			u |= 1 << 63 // set sign bit for positive / positive zero
-		}
-		binary.BigEndian.PutUint64(b[1:], u)
-		return b, nil
-
+		wval = v
 	case types.ObjectID:
-		b := make([]byte, 13)
-		b[0] = 0x07 // BSON ObjectId tag
-		copy(b[1:], v[:])
-		return b, nil
-
+		wval = wirebson.ObjectID(v)
 	case string:
-		out := make([]byte, 1+len(v))
-		out[0] = 0x02 // BSON String tag
-		copy(out[1:], []byte(v))
-		if len(out) > 255 {
-			return nil, fmt.Errorf("dolt: _id string too long: %d bytes total (max 255)", len(out))
-		}
-		return out, nil
-
+		wval = v
 	case types.Binary:
-		out := make([]byte, 2+len(v.B))
-		out[0] = 0x05 // BSON BinData tag
-		out[1] = byte(v.Subtype)
-		copy(out[2:], v.B)
-		if len(out) > 255 {
-			return nil, fmt.Errorf("dolt: _id BinData too long: %d bytes total (max 255)", len(out))
-		}
-		return out, nil
-
+		wval = wirebson.Binary{B: v.B, Subtype: wirebson.BinarySubtype(v.Subtype)}
 	case bool:
-		b := []byte{0x08, 0x00} // BSON Bool tag + false
-		if v {
-			b[1] = 0x01
-		}
-		return b, nil
-
+		wval = v
 	case time.Time:
-		b := make([]byte, 9)
-		b[0] = 0x09 // BSON Date tag
-		binary.BigEndian.PutUint64(b[1:], uint64(v.UnixMilli()))
-		return b, nil
-
+		wval = v
 	case types.Decimal128:
-		b := make([]byte, 17)
-		b[0] = 0x13 // BSON Decimal128 tag
-		binary.LittleEndian.PutUint64(b[1:], v.L)
-		binary.LittleEndian.PutUint64(b[9:], v.H)
-		return b, nil
-
+		wval = wirebson.Decimal128{L: v.L, H: v.H}
 	case *types.Document:
-		// Encode preserving field insertion order so that {a:1,b:'x'} and {b:'x',a:1}
-		// produce different keys. bson.FromDocument is order-preserving (unlike
-		// encodeDocumentCanonical which sorts fields lexicographically).
 		wdoc, err := bson.FromDocument(v)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding _id document: %w", err)
+			return [20]byte{}, fmt.Errorf("dolt: encoding _id document for hash: %w", err)
 		}
-		raw, err := wdoc.Encode()
-		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding _id document: %w", err)
-		}
-		out := make([]byte, 1+len(raw))
-		out[0] = 0x03 // BSON Document tag
-		copy(out[1:], raw)
-		if len(out) > 255 {
-			return nil, fmt.Errorf("dolt: _id document too long: %d bytes total (max 255)", len(out))
-		}
-		return out, nil
-
+		wval = wdoc
 	case *types.Array:
-		bsonBytes, err := encodeArrayOrdered(v)
+		warr, err := bson.FromArray(v)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding _id array: %w", err)
+			return [20]byte{}, fmt.Errorf("dolt: encoding _id array for hash: %w", err)
 		}
-		out := make([]byte, 1+len(bsonBytes))
-		out[0] = 0x04 // BSON Array tag
-		copy(out[1:], bsonBytes)
-		if len(out) > 255 {
-			return nil, fmt.Errorf("dolt: _id array too long: %d bytes total (max 255)", len(out))
-		}
-		return out, nil
-
+		wval = warr
 	default:
-		return nil, fmt.Errorf("dolt: unsupported _id type %T", id)
+		return [20]byte{}, fmt.Errorf("dolt: unsupported _id type %T", id)
 	}
+
+	if err := doc.Add("_id", wval); err != nil {
+		return [20]byte{}, fmt.Errorf("dolt: building _id doc for hash: %w", err)
+	}
+
+	raw, err := doc.Encode()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("dolt: encoding _id for hash: %w", err)
+	}
+
+	sum := sha512.Sum512(raw)
+	var h [20]byte
+	copy(h[:], sum[:20])
+	return h, nil
 }
 
 // buildKey creates a key tuple for the encoded MongoDB _id bytes.
@@ -494,15 +436,3 @@ func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error)
 	return prolly.NewAddressMap(amNode, state.ns)
 }
 
-// encodeArrayOrdered converts a types.Array to BSON bytes preserving element order.
-func encodeArrayOrdered(arr *types.Array) ([]byte, error) {
-	warr, err := bson.FromArray(arr)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := warr.Encode()
-	if err != nil {
-		return nil, err
-	}
-	return []byte(raw), nil
-}

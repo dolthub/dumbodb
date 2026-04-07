@@ -20,9 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 	"slices"
-	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
@@ -186,12 +184,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	// Collect all existing _id values from the map for duplicate detection.
-	existingIDs, err := collectExistingIDs(ctx, m)
-	if err != nil {
-		return nil, err
-	}
-
 	// Collect unique secondary indexes for this collection.
 	var uniqueIndexes []backends.IndexInfo
 	for _, idx := range state.indexes[c.name] {
@@ -242,8 +234,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	mut := m.Mutate()
 
-	// Track _id values inserted in this batch to detect in-batch duplicates.
+	// batchIDs tracks docIDs inserted in this batch for capped-collection ordering.
 	batchIDs := make([]any, 0, len(params.Docs))
+	// batchHashSet detects in-batch duplicate _id hashes in O(1).
+	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
 	// batchUniqueKeys[i] holds composite keys for unique index i from docs in this batch.
 	batchUniqueKeys := make([][][]any, len(uniqueIndexes))
 
@@ -254,24 +248,30 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, fmt.Errorf("dolt: document missing _id: %w", err)
 		}
 
-		// Check against existing IDs in the collection.
-		for _, existingID := range existingIDs {
-			if types.Compare(existingID, docID) == types.Equal {
-				return nil, backends.NewError(
-					backends.ErrorCodeInsertDuplicateID,
-					fmt.Errorf("dolt: duplicate _id in collection"),
-				)
-			}
+		// Hash _id to get the fixed-size primary key.
+		h, err := hashID(docID)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: hashing _id: %w", err)
+		}
+
+		// Check against existing IDs in the collection (point lookup).
+		exists, err := existsID(ctx, m, h)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: checking existing _id: %w", err)
+		}
+		if exists {
+			return nil, backends.NewError(
+				backends.ErrorCodeInsertDuplicateID,
+				fmt.Errorf("dolt: duplicate _id in collection"),
+			)
 		}
 
 		// Check against IDs already inserted in this batch.
-		for _, batchID := range batchIDs {
-			if types.Compare(batchID, docID) == types.Equal {
-				return nil, backends.NewError(
-					backends.ErrorCodeInsertDuplicateID,
-					fmt.Errorf("dolt: duplicate _id in batch"),
-				)
-			}
+		if _, dup := batchHashSet[h]; dup {
+			return nil, backends.NewError(
+				backends.ErrorCodeInsertDuplicateID,
+				fmt.Errorf("dolt: duplicate _id in batch"),
+			)
 		}
 
 		// Check unique secondary index constraints.
@@ -312,13 +312,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			batchUniqueKeys[i] = append(batchUniqueKeys[i], newKey)
 		}
 
-		// Encode the _id to varbinary key bytes.
-		idBytes, err := encodeID(docID)
-		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding _id: %w", err)
-		}
-
-		key, err := buildKey(idBytes)
+		key, err := buildKey(h[:])
 		if err != nil {
 			return nil, err
 		}
@@ -338,6 +332,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
+		batchHashSet[h] = struct{}{}
 		batchIDs = append(batchIDs, docID)
 	}
 
@@ -415,12 +410,12 @@ func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *p
 
 	for i := int64(0); i < toEvict; i++ {
 		oldID := insertionOrder[i]
-		idBytes, err := encodeID(oldID)
+		h, err := hashID(oldID)
 		if err != nil {
-			return fmt.Errorf("dolt: capped evict encoding _id: %w", err)
+			return fmt.Errorf("dolt: capped evict hashing _id: %w", err)
 		}
 
-		key, err := buildKey(idBytes)
+		key, err := buildKey(h[:])
 		if err != nil {
 			return fmt.Errorf("dolt: capped evict building key: %w", err)
 		}
@@ -434,44 +429,19 @@ func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *p
 	return nil
 }
 
-// collectExistingIDs scans the prolly.Map and returns all _id values stored in the collection.
-// _id values are decoded from the key tuple directly.
-func collectExistingIDs(ctx context.Context, m prolly.Map) ([]any, error) {
-	iter, err := m.IterAll(ctx)
+// existsID reports whether a document with the given _id hash is already in the map.
+func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
+	key, err := buildKey(h[:])
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
-	var ids []any
-
-	for {
-		k, v, err := iter.Next(ctx)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-
-			return nil, err
-		}
-
-		if v == nil {
-			break
-		}
-
-		keyBytes, ok := keyDesc.GetBytes(0, k)
-		if !ok {
-			continue
-		}
-
-		id, err := decodeID(keyBytes)
-		if err != nil {
-			continue
-		}
-
-		ids = append(ids, id)
-	}
-
-	return ids, nil
+	var found bool
+	err = m.Get(ctx, key, func(k, v val.Tuple) error {
+		found = v != nil
+		return nil
+	})
+	return found, err
 }
 
 // UpdateAll implements backends.Collection.
@@ -508,12 +478,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, fmt.Errorf("dolt: document missing _id: %w", err)
 		}
 
-		idBytes, err := encodeID(docID)
+		h, err := hashID(docID)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding _id: %w", err)
+			return nil, fmt.Errorf("dolt: hashing _id: %w", err)
 		}
 
-		key, err := buildKey(idBytes)
+		key, err := buildKey(h[:])
 		if err != nil {
 			return nil, err
 		}
@@ -645,12 +615,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	} else {
 		// Delete by _id: build key from each _id and do direct lookup.
 		for _, id := range params.IDs {
-			idBytes, err := encodeID(id)
+			h, err := hashID(id)
 			if err != nil {
 				continue
 			}
 
-			key, err := buildKey(idBytes)
+			key, err := buildKey(h[:])
 			if err != nil {
 				continue
 			}
@@ -1046,102 +1016,14 @@ func decodeDocument(data []byte) (*types.Document, error) {
 	return doc, nil
 }
 
-// decodeID decodes varbinary key bytes back to a MongoDB _id value.
-// The format is: 1-byte BSON type tag + canonical value bytes.
-func decodeID(b []byte) (any, error) {
-	if len(b) < 1 {
-		return nil, fmt.Errorf("dolt: empty _id key bytes")
-	}
 
-	tag := b[0]
-	data := b[1:]
-
-	switch tag {
-	case 0x10: // Int32
-		if len(data) != 4 {
-			return nil, fmt.Errorf("dolt: Int32 _id: expected 4 bytes, got %d", len(data))
-		}
-		return int32(binary.BigEndian.Uint32(data)), nil
-
-	case 0x12: // Int64
-		if len(data) != 8 {
-			return nil, fmt.Errorf("dolt: Int64 _id: expected 8 bytes, got %d", len(data))
-		}
-		return int64(binary.BigEndian.Uint64(data)), nil
-
-	case 0x01: // Double (sign-magnitude encoded)
-		if len(data) != 8 {
-			return nil, fmt.Errorf("dolt: Double _id: expected 8 bytes, got %d", len(data))
-		}
-		u := binary.BigEndian.Uint64(data)
-		if u&(1<<63) != 0 {
-			// Positive: clear the sign bit we set.
-			u &^= 1 << 63
-		} else {
-			// Negative: flip all bits back.
-			u = ^u
-		}
-		return math.Float64frombits(u), nil
-
-	case 0x07: // ObjectId
-		if len(data) != 12 {
-			return nil, fmt.Errorf("dolt: ObjectId _id: expected 12 bytes, got %d", len(data))
-		}
-		var oid types.ObjectID
-		copy(oid[:], data)
-		return oid, nil
-
-	case 0x02: // String
-		return string(data), nil
-
-	case 0x05: // BinData
-		if len(data) < 1 {
-			return nil, fmt.Errorf("dolt: BinData _id: missing subtype byte")
-		}
-		return types.Binary{
-			Subtype: types.BinarySubtype(data[0]),
-			B:       data[1:],
-		}, nil
-
-	case 0x08: // Bool
-		if len(data) != 1 {
-			return nil, fmt.Errorf("dolt: Bool _id: expected 1 byte, got %d", len(data))
-		}
-		return data[0] != 0x00, nil
-
-	case 0x09: // Date
-		if len(data) != 8 {
-			return nil, fmt.Errorf("dolt: Date _id: expected 8 bytes, got %d", len(data))
-		}
-		ms := int64(binary.BigEndian.Uint64(data))
-		return time.UnixMilli(ms).UTC(), nil
-
-	case 0x13: // Decimal128
-		if len(data) != 16 {
-			return nil, fmt.Errorf("dolt: Decimal128 _id: expected 16 bytes, got %d", len(data))
-		}
-		return types.Decimal128{
-			L: binary.LittleEndian.Uint64(data[0:8]),
-			H: binary.LittleEndian.Uint64(data[8:16]),
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("dolt: unsupported _id tag 0x%02x", tag)
-	}
-}
-
-// keyBytesToRecordID derives a stable int64 RecordID from varbinary key bytes.
-// For Int64-tagged keys (0x12), the embedded int64 is returned directly.
-// For other types, the first 8 bytes (zero-padded) are interpreted as a big-endian int64.
+// keyBytesToRecordID derives a stable int64 RecordID from the fixed 20-byte hash key.
+// The first 8 bytes are interpreted as a big-endian int64.
 func keyBytesToRecordID(keyBytes []byte) int64 {
-	if len(keyBytes) >= 9 && keyBytes[0] == 0x12 {
-		return int64(binary.BigEndian.Uint64(keyBytes[1:9]))
+	if len(keyBytes) < 8 {
+		return 0
 	}
-	// Fallback: use first 8 bytes, zero-padded.
-	var buf [8]byte
-	n := copy(buf[:], keyBytes)
-	_ = n
-	return int64(binary.BigEndian.Uint64(buf[:]))
+	return int64(binary.BigEndian.Uint64(keyBytes[:8]))
 }
 
 // mapIter implements types.DocumentsIterator over a prolly.Map.
