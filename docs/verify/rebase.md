@@ -30,34 +30,59 @@ Run this once before the scenarios below.
 var db = db.getSiblingDB("rebasedb")
 db.dropDatabase()
 
-// C1: initial commit on main
+// C1: initial commit on main.
 db.items.insertOne({_id: 1, v: 1})
-db.getSiblingDB("rebasedb__d_main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
+const r1 = db.getSiblingDB("rebasedb__d_main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
+printjson(r1)
+// Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
+const hashC1 = r1.commitId
 
-// Create "feature" branch at C1
-db.getSiblingDB("rebasedb__d_main").runCommand({doltBranch: 1, branch: "feature"})
+// Create "feature" branch at C1.
+const rBranch = db.getSiblingDB("rebasedb__d_main").runCommand({doltBranch: 1, branch: "feature"})
+printjson(rBranch)
+// Expected: { branch: "feature", ok: 1 }
 
-// C2: feature adds _id:2
+// C2: feature adds _id:2.
 db.getSiblingDB("rebasedb__d_feature").items.insertOne({_id: 2, v: 2})
-db.getSiblingDB("rebasedb__d_feature").runCommand({doltCommit: 1, message: "feature-adds-2", author: "test <test@example.com>"})
+const r2 = db.getSiblingDB("rebasedb__d_feature").runCommand({doltCommit: 1, message: "feature-adds-2", author: "test <test@example.com>"})
+printjson(r2)
+// Expected: { commitId: "<hashC2>", branch: "feature", message: "feature-adds-2", ok: 1 }
+const hashC2 = r2.commitId
 
-// C3: main advances (feature diverges from main)
+// C3: main advances (feature diverges from main).
 db.items.insertOne({_id: 3, v: 3})
-db.getSiblingDB("rebasedb__d_main").runCommand({doltCommit: 1, message: "main-adds-3", author: "test <test@example.com>"})
+const r3 = db.getSiblingDB("rebasedb__d_main").runCommand({doltCommit: 1, message: "main-adds-3", author: "test <test@example.com>"})
+printjson(r3)
+// Expected: { commitId: "<hashC3>", branch: "main", message: "main-adds-3", ok: 1 }
+const hashC3 = r3.commitId
+
+print("hashC1 =", hashC1)
+print("hashC2 =", hashC2)
+print("hashC3 =", hashC3)
 ```
+
+After setup:
+- **main** (HEAD = C3): `items` = `[ {_id:1,v:1}, {_id:3,v:3} ]`
+- **feature** (HEAD = C2): `items` = `[ {_id:1,v:1}, {_id:2,v:2} ]`
+- feature diverges from main at C1
 
 ---
 
 ## Scenario 1: Clean rebase — response shape
 
+Rebase feature onto main. C2 is replayed on top of C3.
+
 ```js
-var result = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, onto: "main"})
+const rRebase = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, onto: "main"})
+printjson(rRebase)
+// Expected: { commitsReplayed: 1, newTip: "<hash>", ok: 1 }
 ```
 
-**Expected:**
-- `ok: 1`
-- `commitsReplayed: 1` (C2 replayed onto C3)
-- `newTip` is a non-empty string, distinct from C2's original hash
+Key checks:
+- `ok` equals `1`
+- `commitsReplayed` equals `1` (C2 replayed onto C3)
+- `newTip` is a non-empty string, distinct from `hashC2`
+- `newTip` is not `hashC3` (it's the rebased copy of C2, not main's tip)
 
 ---
 
@@ -68,10 +93,10 @@ db.getSiblingDB("rebasedb__d_feature").items.countDocuments({})
 // Expected: 3
 
 db.getSiblingDB("rebasedb__d_feature").items.findOne({_id: 3})
-// Expected: {_id: 3, v: 3}  (_id:3 from main is now visible)
+// Expected: { _id: 3, v: 3 }  (_id:3 from main is now visible on feature)
 
 db.getSiblingDB("rebasedb__d_feature").items.findOne({_id: 2})
-// Expected: {_id: 2, v: 2}  (original feature commit still present)
+// Expected: { _id: 2, v: 2 }  (original feature commit still present)
 ```
 
 ---
@@ -79,47 +104,69 @@ db.getSiblingDB("rebasedb__d_feature").items.findOne({_id: 2})
 ## Scenario 3: Rebased commit is single-parent (parent = main's C3)
 
 ```js
-var logResult = db.getSiblingDB("rebasedb__d_feature").runCommand({doltLog: 1, limit: 1})
-var head = logResult.commits[0]
+const rLog = db.getSiblingDB("rebasedb__d_feature").runCommand({doltLog: 1, limit: 1})
+printjson(rLog)
+// Expected: { commits: [ { commitId: "<newTip>", parent1: "<hashC3>", message: "feature-adds-2", ... } ], ok: 1 }
+
+const head = rLog.commits[0]
+print("head.parent1 =", head.parent1)
+print("head.parent2 =", head.parent2)  // should be undefined
 ```
 
-**Expected:**
-- `head.parent2` is absent (rebased commit is single-parent)
-- `head.parent1` equals C3's hash (main's tip before rebase)
+Key checks:
+- `head.parent2` is absent (rebased commit is single-parent, not a merge commit)
+- `head.parent1` equals `hashC3` (main's tip before the rebase)
 
 ---
 
 ## Scenario 4: Already up-to-date (no commits to replay)
 
+Feature is already rebased onto main, so a second rebase replays nothing.
+
 ```js
-var result = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, onto: "main"})
+const rRebase2 = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, onto: "main"})
+printjson(rRebase2)
+// Expected: { commitsReplayed: 0, newTip: "<hash>", ok: 1 }
 ```
 
-**Expected:**
-- `ok: 1`
-- `commitsReplayed: 0`
+Key checks:
+- `ok` equals `1`
+- `commitsReplayed` equals `0`
 
 ---
 
 ## Scenario 5: Abort rebase
 
-Advance main and feature with a non-conflicting commit, then start a rebase and abort.
+Advance main and feature with a non-conflicting commit, then start a clean rebase and
+attempt to abort it (no rebase in progress → error).
 
 ```js
+// Advance main.
 db.getSiblingDB("rebasedb__d_main").items.insertOne({_id: 4, v: 4})
-db.getSiblingDB("rebasedb__d_main").runCommand({doltCommit: 1, message: "main-adds-4", author: "test <test@example.com>"})
+const r4main = db.getSiblingDB("rebasedb__d_main").runCommand({doltCommit: 1, message: "main-adds-4", author: "test <test@example.com>"})
+printjson(r4main)
+// Expected: { commitId: "<hash>", branch: "main", message: "main-adds-4", ok: 1 }
 
+// Advance feature.
 db.getSiblingDB("rebasedb__d_feature").items.insertOne({_id: 5, v: 5})
-db.getSiblingDB("rebasedb__d_feature").runCommand({doltCommit: 1, message: "feature-adds-5", author: "test <test@example.com>"})
+const r5feat = db.getSiblingDB("rebasedb__d_feature").runCommand({doltCommit: 1, message: "feature-adds-5", author: "test <test@example.com>"})
+printjson(r5feat)
+// Expected: { commitId: "<hash>", branch: "feature", message: "feature-adds-5", ok: 1 }
 
-// This clean rebase succeeds; try aborting a non-in-progress rebase.
-db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, onto: "main"})
-var abortResult = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, abort: 1})
+// Clean rebase succeeds immediately.
+const rClean = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, onto: "main"})
+printjson(rClean)
+// Expected: { commitsReplayed: 1, newTip: "<hash>", ok: 1 }
+
+// Attempting abort when no rebase is in progress returns an error.
+const rAbort = db.getSiblingDB("rebasedb__d_feature").runCommand({doltRebase: 1, abort: 1})
+printjson(rAbort)
+// Expected: { ok: 0, errmsg: "..." }  (no rebase in progress to abort)
 ```
 
-**Expected:**
+Key checks:
 - The clean rebase returns `ok: 1`
-- The abort attempt (when no rebase is in progress) returns an error
+- The abort attempt returns `ok: 0` with an error message
 
 ---
 
@@ -132,21 +179,34 @@ var cdb = db.getSiblingDB("rebaseconflict")
 cdb.dropDatabase()
 
 cdb.items.insertOne({_id: 1, v: 1})
-cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
-cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltBranch: 1, branch: "feature"})
+const rc1 = cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
+printjson(rc1)
+// Expected: { commitId: "<hash>", branch: "main", message: "initial", ok: 1 }
+
+const rBranchC = cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltBranch: 1, branch: "feature"})
+printjson(rBranchC)
+// Expected: { branch: "feature", ok: 1 }
 
 cdb.getSiblingDB("rebaseconflict__d_feature").items.insertOne({_id: 2, v: 2})
-cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltCommit: 1, message: "feature-adds-2", author: "test <test@example.com>"})
+const rc2 = cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltCommit: 1, message: "feature-adds-2", author: "test <test@example.com>"})
+printjson(rc2)
+// Expected: { commitId: "<hash>", branch: "feature", message: "feature-adds-2", ok: 1 }
 
 cdb.items.insertOne({_id: 3, v: 3})
-cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "main-adds-3", author: "test <test@example.com>"})
+const rc3 = cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "main-adds-3", author: "test <test@example.com>"})
+printjson(rc3)
+// Expected: { commitId: "<hash>", branch: "main", message: "main-adds-3", ok: 1 }
 
 // Create conflict: both branches modify _id:1.
 cdb.getSiblingDB("rebaseconflict__d_main").items.updateOne({_id: 1}, {$set: {v: 100}})
-cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "main-changes-1", author: "test <test@example.com>"})
+const rc4main = cdb.getSiblingDB("rebaseconflict__d_main").runCommand({doltCommit: 1, message: "main-changes-1", author: "test <test@example.com>"})
+printjson(rc4main)
+// Expected: { commitId: "<hash>", branch: "main", message: "main-changes-1", ok: 1 }
 
 cdb.getSiblingDB("rebaseconflict__d_feature").items.updateOne({_id: 1}, {$set: {v: 200}})
-cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltCommit: 1, message: "feature-changes-1", author: "test <test@example.com>"})
+const rc4feat = cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltCommit: 1, message: "feature-changes-1", author: "test <test@example.com>"})
+printjson(rc4feat)
+// Expected: { commitId: "<hash>", branch: "feature", message: "feature-changes-1", ok: 1 }
 
 // Rebase — expect conflict (throws in mongosh).
 try {
@@ -155,20 +215,24 @@ try {
   print(e)
   // MongoServerError: doltRebase: unresolved conflicts in 1 collection(s)
 }
+// The rebase is now staged with conflicts. Use doltConflicts to inspect (or abort below).
 ```
 
-**Expected:**
+Key checks:
 - `runCommand` throws a `MongoServerError` (ok:0 surfaces as an exception in mongosh)
 - Error message contains `"doltRebase"` and mentions conflicts
-- `conflictCommit` is accessible via the error's raw response (hash of the commit being replayed)
-- The rebase is now staged — use `doltConflicts` to inspect
+- The rebase is staged — `doltConflicts` can inspect it
 
 ```js
 // Abort the conflicted rebase.
-var abortResult = cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltRebase: 1, abort: 1})
+const rAbortC = cdb.getSiblingDB("rebaseconflict__d_feature").runCommand({doltRebase: 1, abort: 1})
+printjson(rAbortC)
+// Expected: { newTip: "<pre-rebase-hash>", ok: 1 }
 ```
 
-**Expected:** `ok: 1`, `newTip` is present (the pre-rebase branch HEAD)
+Key checks:
+- `ok` equals `1`
+- `newTip` is present (the pre-rebase branch HEAD)
 
 ---
 
@@ -181,21 +245,34 @@ var rdb = db.getSiblingDB("rebaseresolve")
 rdb.dropDatabase()
 
 rdb.items.insertOne({_id: 1, v: 1})
-rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
-rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltBranch: 1, branch: "feature"})
+const rr1 = rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
+printjson(rr1)
+// Expected: { commitId: "<hash>", branch: "main", message: "initial", ok: 1 }
+
+const rBranchR = rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltBranch: 1, branch: "feature"})
+printjson(rBranchR)
+// Expected: { branch: "feature", ok: 1 }
 
 rdb.getSiblingDB("rebaseresolve__d_feature").items.insertOne({_id: 2, v: 2})
-rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltCommit: 1, message: "feature-adds-2", author: "test <test@example.com>"})
+const rr2 = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltCommit: 1, message: "feature-adds-2", author: "test <test@example.com>"})
+printjson(rr2)
+// Expected: { commitId: "<hash>", branch: "feature", message: "feature-adds-2", ok: 1 }
 
 rdb.items.insertOne({_id: 3, v: 3})
-rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "main-adds-3", author: "test <test@example.com>"})
+const rr3 = rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "main-adds-3", author: "test <test@example.com>"})
+printjson(rr3)
+// Expected: { commitId: "<hash>", branch: "main", message: "main-adds-3", ok: 1 }
 
-// Create conflict.
+// Create conflict: both branches modify _id:1.
 rdb.getSiblingDB("rebaseresolve__d_main").items.updateOne({_id: 1}, {$set: {v: 100}})
-rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "main-modifies-1", author: "test <test@example.com>"})
+const rr4main = rdb.getSiblingDB("rebaseresolve__d_main").runCommand({doltCommit: 1, message: "main-modifies-1", author: "test <test@example.com>"})
+printjson(rr4main)
+// Expected: { commitId: "<hash>", branch: "main", message: "main-modifies-1", ok: 1 }
 
 rdb.getSiblingDB("rebaseresolve__d_feature").items.updateOne({_id: 1}, {$set: {v: 200}})
-rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltCommit: 1, message: "feature-modifies-1", author: "test <test@example.com>"})
+const rr4feat = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({doltCommit: 1, message: "feature-modifies-1", author: "test <test@example.com>"})
+printjson(rr4feat)
+// Expected: { commitId: "<hash>", branch: "feature", message: "feature-modifies-1", ok: 1 }
 
 // Start rebase — expect conflict (throws in mongosh).
 try {
@@ -205,23 +282,33 @@ try {
 }
 
 // Inspect conflicts.
-var conflictsResult = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
+const rConflicts = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
     doltConflicts: 1, collection: "items"
 })
-var conflictId = conflictsResult.conflicts[0].conflictId
+printjson(rConflicts)
+// Expected: { conflicts: [ { conflictId: "c0", base: { _id: 1, v: 1 },
+//             ours: { _id: 1, v: 200 }, theirs: { _id: 1, v: 100 },
+//             ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
+// ours = feature's version (v:200), theirs = main's version (v:100)
+const conflictId = rConflicts.conflicts[0].conflictId
+print("conflictId =", conflictId)
 
-// Resolve using "ours".
-rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
+// Resolve using "ours" (keep feature's value v:200).
+const rResolve = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
     doltResolveConflict: 1, collection: "items", conflictId: conflictId, resolution: "ours"
 })
+printjson(rResolve)
+// Expected: { ok: 1 }
 
 // Continue the rebase.
-var continueResult = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
+const rContinue = rdb.getSiblingDB("rebaseresolve__d_feature").runCommand({
     doltRebase: 1, continue: 1
 })
+printjson(rContinue)
+// Expected: { commitsReplayed: 1, newTip: "<hash>", ok: 1 }
 ```
 
-**Expected:**
-- `continueResult.ok: 1`
-- `continueResult.commitsReplayed: 1`
-- `continueResult.newTip` is a non-empty string
+Key checks:
+- `doltConflicts` returns per-document conflict detail with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- After `doltResolveConflict`, `ok` equals `1`
+- After `doltRebase continue:1`, `ok` equals `1`, `commitsReplayed` equals `1`, `newTip` is present
