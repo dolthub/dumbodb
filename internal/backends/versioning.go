@@ -273,6 +273,35 @@ type CurrentBranchResult struct {
 	Branch string
 }
 
+// RebaseParams represents the parameters of VersioningBackend.DocuDoltRebase method.
+type RebaseParams struct {
+	DBName   string
+	Branch   string // current branch (the branch to rebase)
+	Onto     string // branch name or rootish to rebase onto (required unless Abort/Continue)
+	Abort    bool   // if true, abandon the in-progress rebase and restore the pre-rebase state
+	Continue bool   // if true, after conflict resolution, complete the current commit and proceed
+}
+
+// RebaseResult represents the result of VersioningBackend.DocuDoltRebase method.
+type RebaseResult struct {
+	CommitsReplayed int
+	NewTip          string // hash of the new branch tip after rebase
+}
+
+// DocuDoltRebaseConflictError is returned by DocuDoltRebase when a commit replay
+// cannot be completed automatically due to conflicting document changes. The rebase
+// is paused; conflicts must be resolved via DocuDoltResolveConflict before
+// DocuDoltRebase continue will succeed.
+type DocuDoltRebaseConflictError struct {
+	Conflicts      []ConflictSummary
+	ConflictCommit string // hash of the commit being replayed when the conflict occurred
+}
+
+// Error implements the error interface.
+func (e *DocuDoltRebaseConflictError) Error() string {
+	return fmt.Sprintf("doltRebase: unresolved conflicts in %d collection(s) replaying commit %s", len(e.Conflicts), e.ConflictCommit)
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the docudolt versioning commands to return an unsupported error.
@@ -324,4 +353,11 @@ type VersioningBackend interface {
 	// DocuDoltResolveConflict/DocuDoltConflicts. After resolution, use Continue=true to complete
 	// the cherry-pick. Use Abort=true to abandon an in-progress cherry-pick.
 	DocuDoltCherryPick(context.Context, *CherryPickParams) (*CherryPickResult, error)
+
+	// DocuDoltRebase reapplies all commits on the current branch not reachable from Onto onto the
+	// tip of Onto, rewriting branch history. On conflict during a commit replay, the rebase is paused
+	// and a *DocuDoltRebaseConflictError is returned. Conflicts are resolved via
+	// DocuDoltResolveConflict/DocuDoltConflicts. After resolution, use Continue=true to complete
+	// the current commit and proceed. Use Abort=true to restore the pre-rebase state.
+	DocuDoltRebase(context.Context, *RebaseParams) (*RebaseResult, error)
 }

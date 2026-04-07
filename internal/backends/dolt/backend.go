@@ -884,13 +884,19 @@ func (b *Backend) DocuDoltCommit(ctx context.Context, params *backends.CommitPar
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Guard: reject docuDoltCommit during any in-progress merge or cherry-pick.
+	// Guard: reject docuDoltCommit during any in-progress merge, cherry-pick, or rebase.
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
+			if db.mergeState.isRebase {
+				return nil, fmt.Errorf("doltCommit: unresolved rebase conflicts remain")
+			}
 			if db.mergeState.isCherryPick {
 				return nil, fmt.Errorf("doltCommit: unresolved cherry-pick conflicts remain")
 			}
 			return nil, fmt.Errorf("doltCommit: unresolved merge conflicts remain")
+		}
+		if db.mergeState.isRebase {
+			return nil, fmt.Errorf("doltCommit: rebase in progress: use doltRebase continue")
 		}
 		if db.mergeState.isCherryPick {
 			return nil, fmt.Errorf("doltCommit: cherry-pick in progress: use docuDoltCherryPick continue")
@@ -1203,10 +1209,14 @@ func (b *Backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParam
 
 	// Guard: reject new merge initiation if a merge or cherry-pick is already in progress.
 	if db.mergeState != nil {
-		if db.mergeState.isCherryPick {
+		switch {
+		case db.mergeState.isRebase:
+			return nil, fmt.Errorf("dolt: DocuDoltMerge: rebase in progress on branch %q; resolve conflicts or abort first", params.Into)
+		case db.mergeState.isCherryPick:
 			return nil, fmt.Errorf("dolt: DocuDoltMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
+		default:
+			return nil, fmt.Errorf("dolt: DocuDoltMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 		}
-		return nil, fmt.Errorf("dolt: DocuDoltMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 	}
 
 	// Resolve the Into branch dataset.
@@ -1476,12 +1486,16 @@ func (b *Backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 		return pickRes, nil
 	}
 
-	// Guard: reject new cherry-pick if a merge or cherry-pick is already in progress.
+	// Guard: reject new cherry-pick if a merge, cherry-pick, or rebase is already in progress.
 	if db.mergeState != nil {
-		if db.mergeState.isCherryPick {
+		switch {
+		case db.mergeState.isRebase:
+			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: rebase in progress on branch %q; resolve conflicts or abort first", branch)
+		case db.mergeState.isCherryPick:
 			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
+		default:
+			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
-		return nil, fmt.Errorf("dolt: DocuDoltCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
 	}
 
 	if params.Commit == "" {
@@ -2187,4 +2201,399 @@ func readAMFromWorkingSet(ctx context.Context, doltDB datas.Database, cs *nbs.Ge
 		return prolly.AddressMap{}, fmt.Errorf("parsing collections AM from working set: %w", err)
 	}
 	return prolly.NewAddressMap(amNode, ns)
+}
+
+// DocuDoltRebase implements backends.VersioningBackend.
+//
+// Reapplies all commits on the current branch not reachable from Onto onto the tip
+// of Onto, rewriting the branch history. Three cases:
+//
+//   - Abort (Abort=true): discard the in-progress rebase and restore the pre-rebase state.
+//   - Continue (Continue=true): after conflict resolution, complete the current commit
+//     and proceed with remaining replays.
+//   - Normal rebase: find commits to replay, replay each as a 3-way merge, commit
+//     each one. On conflict, pause and return *backends.DocuDoltRebaseConflictError.
+func (b *Backend) DocuDoltRebase(ctx context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DocuDoltRebase: database %q does not exist", params.DBName))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	branch := params.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Handle abort: discard in-progress rebase and restore pre-rebase state.
+	if params.Abort {
+		if db.mergeState == nil || !db.mergeState.isRebase {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: no rebase in progress to abort")
+		}
+		ms := db.mergeState
+		db.mergeState = nil
+
+		// Restore the branch HEAD in doltDB to the pre-rebase commit.
+		branchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: abort: resolving branch %q: %w", ms.intoBranch, dsErr)
+		}
+		newDS, setErr := db.doltDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, "")
+		if setErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
+		}
+		if ms.intoBranch == "main" {
+			db.ds = newDS
+			db.am = ms.premergeAM
+		} else {
+			db.branchAMs[ms.intoBranch] = ms.premergeAM
+		}
+
+		return &backends.RebaseResult{
+			CommitsReplayed: 0,
+			NewTip:          ms.rebaseBranchHash.String(),
+		}, nil
+	}
+
+	// Handle continue: resume after conflict resolution.
+	if params.Continue {
+		if db.mergeState == nil || !db.mergeState.isRebase || db.mergeState.intoBranch != branch {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: no rebase in progress on branch %q", branch)
+		}
+		if db.mergeState.hasUnresolvedConflicts() {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: unresolved rebase conflicts remain")
+		}
+		ms := db.mergeState
+
+		// Commit the paused commit using the resolved AM.
+		pickCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, ms.rebaseCurrentPick)
+		if loadErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: continue: loading paused commit %q: %w", ms.rebaseCurrentPick, loadErr)
+		}
+		pickMeta, metaErr := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
+		if metaErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: continue: reading meta for paused commit: %w", metaErr)
+		}
+
+		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, ms.resolvedAM, pickMeta)
+		if commitErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: continue: committing paused commit: %w", commitErr)
+		}
+		ms.intoHash = newTipHash
+		ms.rebaseCommitsReplayed++
+
+		// Continue replaying remaining commits.
+		result, rebaseErr := b.replayRemainingCommits(ctx, db, ms)
+		if rebaseErr != nil {
+			return nil, rebaseErr
+		}
+		if result != nil {
+			// All commits replayed successfully.
+			db.mergeState = nil
+			return result, nil
+		}
+		// Another conflict was encountered; mergeState updated by replayRemainingCommits.
+		summaries := db.mergeState.summaries()
+		return nil, &backends.DocuDoltRebaseConflictError{
+			Conflicts:      summaries,
+			ConflictCommit: db.mergeState.rebaseCurrentPick.String(),
+		}
+	}
+
+	// Guard: reject new rebase if a merge, cherry-pick, or rebase is already in progress.
+	if db.mergeState != nil {
+		switch {
+		case db.mergeState.isRebase:
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: rebase already in progress on branch %q; resolve conflicts or abort first", branch)
+		case db.mergeState.isCherryPick:
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+		default:
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: merge in progress on branch %q; resolve conflicts or abort first", branch)
+		}
+	}
+
+	if params.Onto == "" {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: onto parameter is required")
+	}
+
+	// Resolve the current branch HEAD.
+	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: resolving branch %q: %w", branch, err)
+	}
+	if !branchDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: branch %q has no commits", branch)
+	}
+	branchHead, ok := branchDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: branch %q has no head address", branch)
+	}
+
+	// Resolve the onto branch/rootish to a commit hash.
+	ontoHead, err := resolveRootishToCommitHash(ctx, db, params.Onto)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: resolving onto %q: %w", params.Onto, err)
+	}
+
+	// Find all commits on branch not reachable from ontoHead (oldest-first).
+	toReplay, err := findCommitsToReplay(ctx, db, branchHead, ontoHead)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: finding commits to replay: %w", err)
+	}
+
+	// If nothing to replay, the branch is already up-to-date.
+	if len(toReplay) == 0 {
+		return &backends.RebaseResult{
+			CommitsReplayed: 0,
+			NewTip:          branchHead.String(),
+		}, nil
+	}
+
+	// Capture pre-rebase AM for abort support.
+	var preRebaseAM prolly.AddressMap
+	if branch == "main" {
+		preRebaseAM = db.am
+	} else {
+		preRebaseAM, err = db.getOrInitBranchAM(ctx, branch)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: loading pre-rebase AM for branch %q: %w", branch, err)
+		}
+	}
+
+	// Move the branch HEAD to ontoHead so that subsequent Commit() calls (which require
+	// the parent to be the current branch HEAD) will succeed when replaying commits.
+	branchDS, err = db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: re-resolving branch %q before SetHead: %w", branch, err)
+	}
+	if _, setErr := db.doltDB.SetHead(ctx, branchDS, ontoHead, ""); setErr != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltRebase: moving branch %q to onto tip: %w", branch, setErr)
+	}
+	if branch == "main" {
+		// Refresh db.ds so future operations use the updated dataset.
+		if db.ds, err = db.doltDB.GetDataset(ctx, mainDataset); err != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: refreshing main dataset: %w", err)
+		}
+	}
+
+	// Initialize rebase state: start with onto as the current tip.
+	ms := &mergeInProgress{
+		intoBranch:            branch,
+		premergeAM:            preRebaseAM,
+		intoHash:              ontoHead,
+		isRebase:              true,
+		rebaseBranchHash:      branchHead,
+		rebaseRemainingHashes: toReplay,
+		rebaseCommitsReplayed: 0,
+	}
+	db.mergeState = ms
+
+	// Replay all commits. replayRemainingCommits consumes from ms.rebaseRemainingHashes.
+	result, rebaseErr := b.replayRemainingCommits(ctx, db, ms)
+	if rebaseErr != nil {
+		return nil, rebaseErr
+	}
+	if result != nil {
+		db.mergeState = nil
+		return result, nil
+	}
+
+	// A conflict was encountered; mergeState is set.
+	summaries := db.mergeState.summaries()
+	return nil, &backends.DocuDoltRebaseConflictError{
+		Conflicts:      summaries,
+		ConflictCommit: db.mergeState.rebaseCurrentPick.String(),
+	}
+}
+
+// replayRemainingCommits replays commits from ms.rebaseRemainingHashes onto ms.intoHash.
+// On success (all replayed), updates the branch and returns a non-nil *RebaseResult.
+// On conflict, updates ms with conflict state and returns (nil, nil) — caller reads ms.
+// On hard error, returns (nil, error).
+func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *mergeInProgress) (*backends.RebaseResult, error) {
+	for len(ms.rebaseRemainingHashes) > 0 {
+		pickHash := ms.rebaseRemainingHashes[0]
+		ms.rebaseRemainingHashes = ms.rebaseRemainingHashes[1:]
+
+		// Load pick commit metadata.
+		pickCommit, err := datas.LoadCommitAddr(ctx, db.vs, pickHash)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading commit %q: %w", pickHash, err)
+		}
+
+		// Get pick's parent (the base for 3-way merge).
+		parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, pickCommit.NomsValue().(dolttypes.SerialMessage))
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: reading parents for commit %q: %w", pickHash, err)
+		}
+
+		// baseAM = parent of pick (or empty for root commit).
+		var baseAM prolly.AddressMap
+		if len(parentAddrs) == 0 {
+			baseAM, err = prolly.NewEmptyAddressMap(db.ns)
+			if err != nil {
+				return nil, fmt.Errorf("dolt: replayRemainingCommits: creating empty base AM: %w", err)
+			}
+		} else {
+			baseAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
+			if err != nil {
+				return nil, fmt.Errorf("dolt: replayRemainingCommits: loading base AM for commit %q: %w", pickHash, err)
+			}
+		}
+
+		// fromAM = the pick commit's state.
+		fromAM, err := amFromCommitHash(ctx, db, pickHash.String())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading pick AM for commit %q: %w", pickHash, err)
+		}
+
+		// intoAM = the current rebased tip's state.
+		intoAM, err := amFromCommitHash(ctx, db, ms.intoHash.String())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading into AM for tip %q: %w", ms.intoHash, err)
+		}
+
+		// 3-way merge: apply pick's diff (base→from) onto the current rebased tip (into).
+		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: merging commit %q: %w", pickHash, err)
+		}
+
+		if len(conflicts) > 0 {
+			// Pause on this commit's conflict.
+			ms.rebaseCurrentPick = pickHash
+			ms.conflicts = conflicts
+			ms.resolvedAM = mergedAM
+			// Signal conflict to caller via (nil, nil).
+			return nil, nil
+		}
+
+		// No conflict — commit it.
+		pickMeta, err := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: reading meta for commit %q: %w", pickHash, err)
+		}
+
+		newTipHash, err := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, pickHash, mergedAM, pickMeta)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: replayRemainingCommits: committing replayed commit %q: %w", pickHash, err)
+		}
+
+		ms.intoHash = newTipHash
+		ms.rebaseCommitsReplayed++
+	}
+
+	// All commits replayed. Update in-memory AM to reflect the final state.
+	finalAM, err := amFromCommitHash(ctx, db, ms.intoHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: replayRemainingCommits: loading final AM: %w", err)
+	}
+	if ms.intoBranch == "main" {
+		db.am = finalAM
+	} else {
+		db.branchAMs[ms.intoBranch] = finalAM
+	}
+
+	return &backends.RebaseResult{
+		CommitsReplayed: ms.rebaseCommitsReplayed,
+		NewTip:          ms.intoHash.String(),
+	}, nil
+}
+
+// commitRebasedPick creates a single-parent commit on the branch for a replayed rebase commit.
+// The new commit has parent = currentTipHash and uses the original pick commit's metadata.
+// Returns the new commit hash.
+func (b *Backend) commitRebasedPick(
+	ctx context.Context,
+	db *dbState,
+	branch string,
+	currentTipHash hash.Hash,
+	pickHash hash.Hash,
+	pickedAM prolly.AddressMap,
+	pickMeta *datas.CommitMeta,
+) (hash.Hash, error) {
+	meta, err := datas.NewCommitMeta(pickMeta.Name, pickMeta.Email, pickMeta.Description)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: building commit meta: %w", err)
+	}
+
+	rtvlMsg := buildRootValueFlatbuffer(pickedAM)
+	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: resolving branch %q: %w", branch, err)
+	}
+	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+		Meta:    meta,
+		Parents: []hash.Hash{currentTipHash},
+	})
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: committing: %w", err)
+	}
+
+	newHash, ok := newDS.MaybeHeadAddr()
+	if !ok {
+		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: no head after commit")
+	}
+
+	// Note: in-memory AM (db.am / db.branchAMs) is updated by the caller after all commits are done.
+	_ = pickHash // retained for context; not needed in commit but useful for error messages
+
+	return newHash, nil
+}
+
+// findCommitsToReplay returns the commits on branchHead that are NOT reachable from ontoHead,
+// in oldest-first (replay) order.
+func findCommitsToReplay(ctx context.Context, state *dbState, branchHead, ontoHead hash.Hash) ([]hash.Hash, error) {
+	// Collect all ancestors of ontoHead (inclusive) into a set.
+	ontoAncestors := make(map[hash.Hash]struct{})
+	queue := []hash.Hash{ontoHead}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		if _, seen := ontoAncestors[h]; seen {
+			continue
+		}
+		ontoAncestors[h] = struct{}{}
+		commit, err := datas.LoadCommitAddr(ctx, state.vs, h)
+		if err != nil {
+			return nil, fmt.Errorf("findCommitsToReplay: loading onto ancestor %q: %w", h, err)
+		}
+		parents, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if err != nil {
+			return nil, fmt.Errorf("findCommitsToReplay: reading parents of onto ancestor %q: %w", h, err)
+		}
+		queue = append(queue, parents...)
+	}
+
+	// Walk from branchHead, collecting commits not in ontoAncestors (newest-first).
+	var toReplay []hash.Hash
+	current := branchHead
+	for {
+		if _, inOnto := ontoAncestors[current]; inOnto {
+			break
+		}
+		toReplay = append(toReplay, current)
+		commit, err := datas.LoadCommitAddr(ctx, state.vs, current)
+		if err != nil {
+			return nil, fmt.Errorf("findCommitsToReplay: loading branch commit %q: %w", current, err)
+		}
+		parents, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if err != nil {
+			return nil, fmt.Errorf("findCommitsToReplay: reading parents of branch commit %q: %w", current, err)
+		}
+		if len(parents) == 0 {
+			break // root commit — nothing left to walk
+		}
+		current = parents[0]
+	}
+
+	// Reverse to oldest-first order.
+	slices.Reverse(toReplay)
+	return toReplay, nil
 }

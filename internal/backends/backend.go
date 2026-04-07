@@ -305,6 +305,15 @@ func (bc *backendContract) DocuDoltCherryPick(ctx context.Context, params *Cherr
 	return nil, newVersioningUnsupportedError("DocuDoltCherryPick")
 }
 
+// DocuDoltRebase implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DocuDoltRebase(ctx context.Context, params *RebaseParams) (*RebaseResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DocuDoltRebase(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DocuDoltRebase")
+}
+
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {

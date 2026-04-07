@@ -1301,3 +1301,158 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 		)),
 	)
 }
+
+// MsgDocuDoltRebase implements the `doltRebase` command.
+//
+// Reapplies all commits on the current branch (encoded in $db) not reachable from Onto
+// onto the tip of Onto, rewriting branch history. On conflict, the rebase is paused;
+// use doltConflicts / doltResolveConflict to inspect and resolve conflicts, then
+// doltRebase continue:true to proceed.
+//
+// Usage:
+//
+//	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, onto: "main"})
+//	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, abort: 1})
+//	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, continue: 1})
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDocuDoltRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	abort, err := common.GetOptionalBoolOrIntParam(document, "abort", false)
+	if err != nil {
+		return nil, err
+	}
+
+	continueParam, err := common.GetOptionalBoolOrIntParam(document, "continue", false)
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"doltRebase: versioning is not supported by the current backend",
+		)
+	}
+
+	if abort {
+		res, rebaseErr := vb.DocuDoltRebase(connCtx, &backends.RebaseParams{
+			DBName: dbName,
+			Branch: branch,
+			Abort:  true,
+		})
+		if rebaseErr != nil {
+			return nil, lazyerrors.Error(rebaseErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"newTip", res.NewTip,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	if continueParam {
+		res, rebaseErr := vb.DocuDoltRebase(connCtx, &backends.RebaseParams{
+			DBName:   dbName,
+			Branch:   branch,
+			Continue: true,
+		})
+		if rebaseErr != nil {
+			var conflictErr *backends.DocuDoltRebaseConflictError
+			if errors.As(rebaseErr, &conflictErr) {
+				conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+				for _, c := range conflictErr.Conflicts {
+					entry := must.NotFail(types.NewDocument(
+						"collection", c.Collection,
+						"count", int32(c.Count),
+					))
+					conflictsArr.Append(entry)
+				}
+				return documentOpMsg(
+					must.NotFail(types.NewDocument(
+						"conflicts", conflictsArr,
+						"conflictCommit", conflictErr.ConflictCommit,
+						"ok", float64(0),
+						"code", int32(handlererrors.ErrOperationFailed),
+						"errmsg", conflictErr.Error(),
+					)),
+				)
+			}
+			return nil, lazyerrors.Error(rebaseErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"commitsReplayed", int32(res.CommitsReplayed),
+				"newTip", res.NewTip,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	onto, err := common.GetRequiredParam[string](document, "onto")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := parseRootish(onto); err != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"doltRebase: "+err.Error(),
+			"onto",
+		)
+	}
+
+	res, rebaseErr := vb.DocuDoltRebase(connCtx, &backends.RebaseParams{
+		DBName: dbName,
+		Branch: branch,
+		Onto:   onto,
+	})
+
+	if rebaseErr != nil {
+		var conflictErr *backends.DocuDoltRebaseConflictError
+		if errors.As(rebaseErr, &conflictErr) {
+			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+			for _, c := range conflictErr.Conflicts {
+				entry := must.NotFail(types.NewDocument(
+					"collection", c.Collection,
+					"count", int32(c.Count),
+				))
+				conflictsArr.Append(entry)
+			}
+			return documentOpMsg(
+				must.NotFail(types.NewDocument(
+					"conflicts", conflictsArr,
+					"conflictCommit", conflictErr.ConflictCommit,
+					"ok", float64(0),
+					"code", int32(handlererrors.ErrOperationFailed),
+					"errmsg", conflictErr.Error(),
+				)),
+			)
+		}
+		return nil, lazyerrors.Error(rebaseErr)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"commitsReplayed", int32(res.CommitsReplayed),
+			"newTip", res.NewTip,
+			"ok", float64(1),
+		)),
+	)
+}
