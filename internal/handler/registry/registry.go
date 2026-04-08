@@ -55,6 +55,12 @@ type NewHandlerOpts struct {
 	// Used only by the "dolt" handler.
 	DoltDataDir string
 
+	// AutoCommit, when true, automatically creates a Dolt commit after every
+	// document write (insert/update/delete). Useful for legacy applications that
+	// want detailed write-level history without explicit doltCommit calls.
+	// Used only by the "dolt" handler.
+	AutoCommit bool
+
 	TestOpts
 
 	_ struct{} // prevent unkeyed literals

@@ -51,6 +51,7 @@ func run(logger *slog.Logger) error {
 	addr := flag.String("addr", "127.0.0.1:27017", "listen address")
 	port := flag.Int("port", 0, "listen port (overrides port in --addr if set)")
 	logLevel := flag.String("log-level", "info", "log level (debug, info, warn, error)")
+	autoCommit := flag.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
 	flag.Parse()
 
 	var level slog.Level
@@ -93,6 +94,7 @@ func run(logger *slog.Logger) error {
 		TCPHost:       *addr,
 		ReplSetName:   "",
 		DoltDataDir:   *dataDir,
+		AutoCommit:    *autoCommit,
 	})
 	if err != nil {
 		return err

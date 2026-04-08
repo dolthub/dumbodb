@@ -141,23 +141,27 @@ type dbState struct {
 
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
-	dataDir string
-	l       *slog.Logger
+	dataDir    string
+	l          *slog.Logger
+	autoCommit bool // when true, each write auto-creates a Dolt commit
 
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
 }
 
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
-func NewBackend(dataDir string, l *slog.Logger) (backends.Backend, error) {
+// When autoCommit is true, every document write (insert/update/delete) is
+// automatically committed to Dolt history without an explicit doltCommit call.
+func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("dolt: creating data directory: %w", err)
 	}
 
 	b := &Backend{
-		dataDir: dataDir,
-		l:       l,
-		dbs:     make(map[string]*dbState),
+		dataDir:    dataDir,
+		l:          l,
+		autoCommit: autoCommit,
+		dbs:        make(map[string]*dbState),
 	}
 
 	// Initialize the admin database so it always exists on disk, matching

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
@@ -363,6 +364,15 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
+	if c.db.backend.autoCommit {
+		msg := fmt.Sprintf("auto: insert into %s", c.name)
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "docudolt <docudolt@localhost>", time.Now())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: auto-commit after insert: %w", err)
+		}
+		state.ds = newDS
+	}
+
 	return &backends.InsertAllResult{}, nil
 }
 
@@ -539,6 +549,15 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
+	if c.db.backend.autoCommit {
+		msg := fmt.Sprintf("auto: update %s", c.name)
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "docudolt <docudolt@localhost>", time.Now())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: auto-commit after update: %w", err)
+		}
+		state.ds = newDS
+	}
+
 	return &backends.UpdateAllResult{Updated: updated}, nil
 }
 
@@ -662,6 +681,15 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return ed.Update(ctx, c.name, dtblHash)
 	}); err != nil {
 		return nil, err
+	}
+
+	if c.db.backend.autoCommit {
+		msg := fmt.Sprintf("auto: delete from %s", c.name)
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "docudolt <docudolt@localhost>", time.Now())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: auto-commit after delete: %w", err)
+		}
+		state.ds = newDS
 	}
 
 	return &backends.DeleteAllResult{Deleted: deleted}, nil

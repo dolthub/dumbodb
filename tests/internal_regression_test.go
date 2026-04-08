@@ -62,7 +62,8 @@ func repoRoot() string {
 }
 
 // startDocuDolt launches a fresh docudolt instance on a random free port.
-func startDocuDolt(tb testing.TB) *docuDoltTestEnv {
+// Optional extraArgs are appended to the docudolt command line (e.g. "--auto-commit").
+func startDocuDolt(tb testing.TB, extraArgs ...string) *docuDoltTestEnv {
 	tb.Helper()
 
 	// Find a free port.
@@ -92,7 +93,8 @@ func startDocuDolt(tb testing.TB) *docuDoltTestEnv {
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	cmd := exec.Command(binary, "--addr", addr, "--data-dir", dataDir)
+	args := append([]string{"--addr", addr, "--data-dir", dataDir}, extraArgs...)
+	cmd := exec.Command(binary, args...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	require.NoError(tb, cmd.Start())
