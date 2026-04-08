@@ -101,7 +101,7 @@ teardown() {
     run dolt sql -q 'show create table col1'
 
     [ "$status" -eq 0 ]
-    [[ "$output" =~ '`_id` varbinary(1024) NOT NULL,' ]] || false
+    [[ "$output" =~ '`_id` binary(20) NOT NULL,' ]] || false
     [[ "$output" =~ '`doc` json NOT NULL' ]] || false
     [[ "$output" =~ 'PRIMARY KEY (`_id`)' ]] || false
 }

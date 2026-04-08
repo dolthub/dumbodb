@@ -36,7 +36,7 @@ import (
 	"github.com/dolthub/docudolt/internal/types"
 )
 
-// keyDesc describes the key tuple: one varbinary field for the encoded MongoDB _id.
+// keyDesc describes the key tuple: one binary(20) field for the SHA-512[:20] encoded MongoDB _id.
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
 // valDesc describes the value tuple: one JSONAddr field for the JSON document hash.
@@ -99,11 +99,11 @@ func buildCollectionTableSchema() serial.Message {
 
 	// Pre-build all strings before starting any object.
 	idName := b.CreateString("_id")
-	idSqlType := b.CreateString("varbinary(1024)")
+	idSqlType := b.CreateString("binary(20)")
 	docName := b.CreateString("doc")
 	docSqlType := b.CreateString("json")
 
-	// Column 0: _id VARBINARY NOT NULL PK
+	// Column 0: _id BINARY(20) NOT NULL PK
 	serial.ColumnStart(b)
 	serial.ColumnAddName(b, idName)
 	serial.ColumnAddSqlType(b, idSqlType)
