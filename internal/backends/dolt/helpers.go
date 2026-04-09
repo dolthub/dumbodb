@@ -172,7 +172,9 @@ func buildCollectionTableSchema() serial.Message {
 // as a proper dolt SQL table. The schema field stores a 20-byte hash referencing
 // the separately-written DSCH chunk; the primary_index field inlines the prolly.Map
 // root node bytes (TUPM). The secondary_indexes field inlines an empty ADRM.
-func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, emptyIndexAM prolly.AddressMap) serial.Message {
+// artifactsHash is the 20-byte noms hash of the ArtifactMap node in the value store;
+// pass hash.Hash{} (all zeros) when there are no conflict artifacts.
+func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, emptyIndexAM prolly.AddressMap, artifactsHash hash.Hash) serial.Message {
 	b := fb.NewBuilder(1024)
 
 	// Primary index: inline TUPM bytes (prolly.Map root node).
@@ -181,7 +183,7 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, emptyIndexAM p
 	// Secondary indexes: empty ADRM.
 	idxBytes := []byte(tree.ValueFromNode(emptyIndexAM.Node()).(dolttypes.SerialMessage))
 
-	// All conflict/violation/artifact fields are zero hashes.
+	// Conflict struct fields (legacy format) and violations are always zero hashes.
 	var emptyHashBytes [hash.ByteLen]byte
 
 	schOff := b.CreateByteVector(schemaHash[:])
@@ -200,7 +202,8 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, emptyIndexAM p
 	conflictsOff := serial.ConflictsEnd(b)
 
 	violationsOff := b.CreateByteVector(emptyHashBytes[:])
-	artifactsOff := b.CreateByteVector(emptyHashBytes[:])
+	// artifacts stores the 20-byte hash of the ArtifactMap node; zeros = no artifacts.
+	artifactsOff := b.CreateByteVector(artifactsHash[:])
 
 	serial.TableStart(b)
 	serial.TableAddSchema(b, schOff)
@@ -294,11 +297,18 @@ func buildValue(jsonHash hash.Hash) (val.Tuple, error) {
 	return tup, nil
 }
 
-// dtblHashForMap builds a DTBL from a prolly.Map, writes it to the value store,
-// and returns the hash of the DTBL chunk. The DTBL becomes the new ADRM entry
-// for the collection.
+// dtblHashForMap builds a DTBL from a prolly.Map with no artifacts, writes it to
+// the value store, and returns the hash of the DTBL chunk.
 func (state *dbState) dtblHashForMap(ctx context.Context, m prolly.Map) (hash.Hash, error) {
-	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, state.emptyIndexAM)
+	return state.dtblHashForMapWithArtifacts(ctx, m, hash.Hash{})
+}
+
+// dtblHashForMapWithArtifacts builds a DTBL from a prolly.Map with the given
+// artifactsHash (the noms hash of a written ArtifactMap node; pass hash.Hash{}
+// for no artifacts), writes the DTBL to the value store, and returns its hash.
+// The DTBL becomes the new ADRM entry for the collection.
+func (state *dbState) dtblHashForMapWithArtifacts(ctx context.Context, m prolly.Map, artifactsHash hash.Hash) (hash.Hash, error) {
+	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, state.emptyIndexAM, artifactsHash)
 	ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(dtblMsg))
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("writing DTBL: %w", err)

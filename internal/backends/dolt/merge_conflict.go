@@ -16,11 +16,14 @@ package dolt
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
+	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/docudolt/internal/backends"
@@ -76,6 +79,18 @@ func (m *mergeInProgress) hasUnresolvedConflicts() bool {
 		}
 	}
 	return false
+}
+
+// theirHash returns the "their" commit hash for artifact storage, depending on the
+// operation type.
+func (m *mergeInProgress) theirHash() hash.Hash {
+	if m.isRebase {
+		return m.rebaseCurrentPick
+	}
+	if m.isCherryPick {
+		return m.pickHash
+	}
+	return m.fromHash
 }
 
 // summaries builds a per-collection list of unresolved conflict counts.
@@ -302,38 +317,205 @@ func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.
 		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: flushing collection map for %q: %w", params.Collection, err)
 	}
 
-	// Update the resolvedAM to point to the new collection map.
-	newCollHash, err := db.dtblHashForMap(ctx, newCollMap)
+	// Remove the resolved conflict from the ArtifactMap for this collection.
+	updatedAM, err := removeConflictArtifact(ctx, db, ms.resolvedAM, params.Collection, target.rawKey, ms.theirHash())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: getting DTBL hash for %q: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating artifact map for %q: %w", params.Collection, err)
 	}
 
-	amEditor := ms.resolvedAM.Editor()
+	// Now rebuild the DTBL for the collection with the updated document map and artifact hash.
+	// The removeConflictArtifact call above already updated the AM's DTBL hash for the artifacts.
+	// We need to further update it with the new collection map (document changes).
+	newArtHash := hash.Hash{}
+	{
+		// Re-read the artifacts hash from the updated AM's DTBL (after removeConflictArtifact).
+		h, getErr := updatedAM.Get(ctx, params.Collection)
+		if getErr == nil && !h.IsEmpty() {
+			chunk, chunkErr := db.cs.Get(ctx, h)
+			if chunkErr == nil {
+				fileID := serial.GetFileID(chunk.Data())
+				if fileID == serial.TableFileID {
+					tbl, tblErr := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+					if tblErr == nil {
+						newArtHash = hash.New(tbl.ArtifactsBytes())
+					}
+				}
+			}
+		}
+	}
 
 	newCollCount, countErr := newCollMap.Count()
 	if countErr != nil {
 		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: counting new collection map for %q: %w", params.Collection, countErr)
 	}
 
+	amEditor := updatedAM.Editor()
 	if newCollCount == 0 {
 		if err := amEditor.Delete(ctx, params.Collection); err != nil {
 			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
+		newCollHash, hashErr := db.dtblHashForMapWithArtifacts(ctx, newCollMap, newArtHash)
+		if hashErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
+		}
 		if err := amEditor.Update(ctx, params.Collection, newCollHash); err != nil {
 			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating AM for collection %q: %w", params.Collection, err)
 		}
 	}
 
-	newAM, err := amEditor.Flush(ctx)
+	finalAM, err := amEditor.Flush(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: flushing AM editor: %w", err)
 	}
 
-	ms.resolvedAM = newAM
+	ms.resolvedAM = finalAM
 	target.resolved = true
 
+	// Update the working set so that dolt_conflicts SQL tables immediately reflect
+	// the resolved state.
+	stagedAM, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
+	if stageErr != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: reading staged AM: %w", stageErr)
+	}
+	workingRtvl := buildRootValueFlatbuffer(finalAM)
+	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: writing working RTVL: %w", writeErr)
+	}
+	if wsErr := updateWorkingSet(ctx, db.doltDB, finalAM, stagedAM, ms.intoBranch); wsErr != nil {
+		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating working set: %w", wsErr)
+	}
+
 	return &backends.ResolveConflictResult{}, nil
+}
+
+// buildConflictArtifactHash creates an ArtifactMap for the given conflict entries,
+// writes the node to the value store, and returns its hash.
+// theirHash is the "theirs" commit hash; baseHash is the common ancestor commit hash.
+func buildConflictArtifactHash(ctx context.Context, state *dbState, entries []*conflictEntry, theirHash, baseHash hash.Hash) (hash.Hash, error) {
+	am, err := prolly.NewArtifactMapFromTuples(ctx, state.ns, keyDesc)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("creating artifact map: %w", err)
+	}
+	edt := am.Editor()
+
+	metaBytes, err := json.Marshal(prolly.ConflictMetadata{BaseRootIsh: baseHash})
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("encoding conflict metadata: %w", err)
+	}
+
+	for _, e := range entries {
+		if err := edt.Add(ctx, e.rawKey, theirHash, prolly.ArtifactTypeConflict, metaBytes, nil); err != nil {
+			return hash.Hash{}, fmt.Errorf("adding conflict artifact for key %q: %w", e.id, err)
+		}
+	}
+
+	newAM, err := edt.Flush(ctx)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("flushing artifact map: %w", err)
+	}
+
+	ref, err := state.vs.WriteValue(ctx, tree.ValueFromNode(newAM.Node()))
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("writing artifact map: %w", err)
+	}
+	return ref.TargetHash(), nil
+}
+
+// openCollectionArtifacts reads the ArtifactMap for a collection from the DTBL
+// artifacts field in the given AddressMap. Returns an empty ArtifactMap if the
+// collection is not present or has no artifacts hash.
+func openCollectionArtifacts(ctx context.Context, state *dbState, am prolly.AddressMap, collName string) (prolly.ArtifactMap, error) {
+	h, err := am.Get(ctx, collName)
+	if err != nil || h.IsEmpty() {
+		return prolly.NewArtifactMapFromTuples(ctx, state.ns, keyDesc)
+	}
+
+	chunk, err := state.cs.Get(ctx, h)
+	if err != nil {
+		return prolly.ArtifactMap{}, fmt.Errorf("reading DTBL chunk for %q: %w", collName, err)
+	}
+
+	fileID := serial.GetFileID(chunk.Data())
+	if fileID != serial.TableFileID {
+		// Not a DTBL; no artifact support.
+		return prolly.NewArtifactMapFromTuples(ctx, state.ns, keyDesc)
+	}
+
+	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+	if err != nil {
+		return prolly.ArtifactMap{}, fmt.Errorf("parsing DTBL for %q: %w", collName, err)
+	}
+
+	artHash := hash.New(tbl.ArtifactsBytes())
+	if artHash.IsEmpty() {
+		return prolly.NewArtifactMapFromTuples(ctx, state.ns, keyDesc)
+	}
+
+	v, err := state.vs.ReadValue(ctx, artHash)
+	if err != nil {
+		return prolly.ArtifactMap{}, fmt.Errorf("reading artifact map for %q: %w", collName, err)
+	}
+
+	node, _, err := tree.NodeFromBytes(v.(dolttypes.SerialMessage))
+	if err != nil {
+		return prolly.ArtifactMap{}, fmt.Errorf("parsing artifact map node for %q: %w", collName, err)
+	}
+
+	return prolly.NewArtifactMap(node, state.ns, keyDesc), nil
+}
+
+// removeConflictArtifact removes the conflict artifact for the given rawKey from
+// the collection's ArtifactMap in the AM. The DTBL is updated in-place via the
+// AM editor; if the ArtifactMap becomes empty the DTBL reverts to zero artifacts.
+// Returns the updated AM.
+func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.AddressMap, collName string, rawKey val.Tuple, theirHash hash.Hash) (prolly.AddressMap, error) {
+	artMap, err := openCollectionArtifacts(ctx, state, am, collName)
+	if err != nil {
+		return am, fmt.Errorf("opening artifacts for %q: %w", collName, err)
+	}
+
+	edt := artMap.Editor()
+	artKey, err := edt.BuildArtifactKey(ctx, rawKey, theirHash, prolly.ArtifactTypeConflict, nil)
+	if err != nil {
+		return am, fmt.Errorf("building artifact key for conflict in %q: %w", collName, err)
+	}
+
+	if err := edt.Delete(ctx, artKey); err != nil {
+		return am, fmt.Errorf("deleting artifact for conflict in %q: %w", collName, err)
+	}
+
+	newArtMap, err := edt.Flush(ctx)
+	if err != nil {
+		return am, fmt.Errorf("flushing artifact map for %q: %w", collName, err)
+	}
+
+	// Determine the new artifacts hash (zero if empty).
+	newArtHash := hash.Hash{}
+	if cnt, countErr := newArtMap.Count(); countErr == nil && cnt > 0 {
+		ref, writeErr := state.vs.WriteValue(ctx, tree.ValueFromNode(newArtMap.Node()))
+		if writeErr != nil {
+			return am, fmt.Errorf("writing updated artifact map for %q: %w", collName, writeErr)
+		}
+		newArtHash = ref.TargetHash()
+	}
+
+	// Get the current collection map to rebuild the DTBL.
+	collMap, err := collectionMapFromAM(ctx, state, am, collName)
+	if err != nil {
+		return am, fmt.Errorf("opening collection map for %q: %w", collName, err)
+	}
+
+	newDTBLHash, err := state.dtblHashForMapWithArtifacts(ctx, collMap, newArtHash)
+	if err != nil {
+		return am, fmt.Errorf("building DTBL for %q: %w", collName, err)
+	}
+
+	amEdt := am.Editor()
+	if err := amEdt.Update(ctx, collName, newDTBLHash); err != nil {
+		return am, fmt.Errorf("updating AM for %q: %w", collName, err)
+	}
+	return amEdt.Flush(ctx)
 }
 
 // captureConflictsForCollection merges two collection maps at document level,
@@ -392,9 +574,13 @@ func captureConflictsForCollection(
 // Collection-level conflicts (entire collection deleted on one branch while modified on the other)
 // are still returned as hard errors.
 //
+// theirHash is the "theirs" commit hash (merge source / cherry-pick / rebase pick).
+// baseHash is the common ancestor commit hash. Both are stored in the ArtifactMap for
+// each conflicting collection so that dolt_conflicts SQL tables can read the artifacts.
+//
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
-func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap) (prolly.AddressMap, map[string][]*conflictEntry, error) {
+func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash) (prolly.AddressMap, map[string][]*conflictEntry, error) {
 	allNames := make(map[string]struct{})
 	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
 		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
@@ -480,11 +666,18 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		}
 		globalIdx += len(collConflicts)
 
+		var artHash hash.Hash // zero = no artifacts
 		if len(collConflicts) > 0 {
 			allConflicts[name] = collConflicts
+
+			// Build and write ArtifactMap so dolt_conflicts SQL tables can read conflicts.
+			artHash, err = buildConflictArtifactHash(ctx, state, collConflicts, theirHash, baseHash)
+			if err != nil {
+				return prolly.AddressMap{}, nil, fmt.Errorf("building conflict artifacts for %q: %w", name, err)
+			}
 		}
 
-		mergedH, err := state.dtblHashForMap(ctx, mergedMap)
+		mergedH, err := state.dtblHashForMapWithArtifacts(ctx, mergedMap, artHash)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
 		}

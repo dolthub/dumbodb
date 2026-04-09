@@ -112,6 +112,7 @@ type timeSeriesMeta struct {
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	mu     sync.RWMutex
+	dbDir  string                // filesystem path to this database's data directory
 	cs     *nbs.GenerationalNBS
 	ns     tree.NodeStore
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
@@ -594,6 +595,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
+		dbDir:          dbDir,
 		cs:             cs,
 		ns:             ns,
 		vs:             vs,
@@ -626,6 +628,16 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	b.dbs[dbName] = db
+
+	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
+	// previous server session. Errors are non-fatal: if the state file is corrupted
+	// or the referenced chunks are gone, we log and proceed without merge state.
+	if ms, loadErr := loadMergeState(ctx, db); loadErr != nil {
+		b.l.Warn("dolt: could not restore merge state on open (treating as no merge in progress)",
+			"db", dbName, "err", loadErr)
+	} else if ms != nil {
+		db.mergeState = ms
+	}
 
 	return db, nil
 }
@@ -1180,6 +1192,7 @@ func (b *Backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParam
 		} else {
 			db.branchAMs[ms.intoBranch] = ms.premergeAM
 		}
+		_ = clearMergeState(db) // best-effort: ignore error on abort
 
 		return &backends.MergeResult{Message: "merge aborted"}, nil
 	}
@@ -1202,12 +1215,18 @@ func (b *Backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParam
 			return nil, fmt.Errorf("dolt: DocuDoltMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
 		}
 
+		// Clear artifact maps from all conflicting collections before committing.
+		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltMerge: continue: clearing artifacts: %w", clearErr)
+		}
+
 		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DocuDoltMerge: continue: %w", err)
 		}
 
 		db.mergeState = nil
+		_ = clearMergeState(db) // best-effort
 		return mergeRes, nil
 	}
 
@@ -1317,7 +1336,7 @@ func (b *Backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParam
 		return nil, fmt.Errorf("dolt: DocuDoltMerge: loading base AM: %w", err)
 	}
 
-	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM)
+	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DocuDoltMerge: %w", err)
 	}
@@ -1342,6 +1361,12 @@ func (b *Backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParam
 			intoHash:   intoHash,
 			conflicts:  conflicts,
 			resolvedAM: mergedAM,
+		}
+
+		// Persist conflict state: write working set and save merge state to disk.
+		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
+			db.mergeState = nil
+			return nil, fmt.Errorf("dolt: DocuDoltMerge: persisting conflict state: %w", wsErr)
 		}
 
 		// Build the conflict summary for the error response.
@@ -1462,6 +1487,7 @@ func (b *Backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 		} else {
 			db.branchAMs[ms.intoBranch] = ms.premergeAM
 		}
+		_ = clearMergeState(db)
 
 		return &backends.CherryPickResult{Message: "cherry-pick aborted"}, nil
 	}
@@ -1481,12 +1507,17 @@ func (b *Backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
 
+		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: continue: clearing artifacts: %w", clearErr)
+		}
+
 		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
 		if pickErr != nil {
 			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: continue: %w", pickErr)
 		}
 
 		db.mergeState = nil
+		_ = clearMergeState(db)
 		return pickRes, nil
 	}
 
@@ -1533,12 +1564,14 @@ func (b *Backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 	// Load the base AM (parent of the cherry-picked commit).
 	// For a root commit with no parent, use an empty AM as the base.
 	var baseAM prolly.AddressMap
+	var pickBaseHash hash.Hash // parent commit hash; zero-value if pick has no parent
 	if len(parentAddrs) == 0 {
 		baseAM, err = prolly.NewEmptyAddressMap(db.ns)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: creating empty base AM: %w", err)
 		}
 	} else {
+		pickBaseHash = parentAddrs[0]
 		baseAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: loading parent AM for commit %q: %w", pickHash, err)
@@ -1571,7 +1604,7 @@ func (b *Backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 	}
 
 	// Perform the 3-way merge: apply cherry-pick diff (base→from) onto current HEAD (into).
-	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM)
+	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DocuDoltCherryPick: %w", err)
 	}
@@ -1597,6 +1630,11 @@ func (b *Backend) DocuDoltCherryPick(ctx context.Context, params *backends.Cherr
 			isCherryPick: true,
 			pickHash:     pickHash,
 			originalMsg:  originalMsg,
+		}
+
+		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
+			db.mergeState = nil
+			return nil, fmt.Errorf("dolt: DocuDoltCherryPick: persisting conflict state: %w", wsErr)
 		}
 
 		summaries := db.mergeState.summaries()
@@ -2258,6 +2296,7 @@ func (b *Backend) DocuDoltRebase(ctx context.Context, params *backends.RebasePar
 		} else {
 			db.branchAMs[ms.intoBranch] = ms.premergeAM
 		}
+		_ = clearMergeState(db)
 
 		return &backends.RebaseResult{
 			CommitsReplayed: 0,
@@ -2274,6 +2313,11 @@ func (b *Backend) DocuDoltRebase(ctx context.Context, params *backends.RebasePar
 			return nil, fmt.Errorf("dolt: DocuDoltRebase: unresolved rebase conflicts remain")
 		}
 		ms := db.mergeState
+
+		// Clear artifact maps for the paused conflict before committing.
+		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
+			return nil, fmt.Errorf("dolt: DocuDoltRebase: continue: clearing artifacts: %w", clearErr)
+		}
 
 		// Commit the paused commit using the resolved AM.
 		pickCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, ms.rebaseCurrentPick)
@@ -2300,6 +2344,7 @@ func (b *Backend) DocuDoltRebase(ctx context.Context, params *backends.RebasePar
 		if result != nil {
 			// All commits replayed successfully.
 			db.mergeState = nil
+			_ = clearMergeState(db)
 			return result, nil
 		}
 		// Another conflict was encountered; mergeState updated by replayRemainingCommits.
@@ -2439,12 +2484,14 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 
 		// baseAM = parent of pick (or empty for root commit).
 		var baseAM prolly.AddressMap
+		var pickBaseHash hash.Hash // parent commit hash; zero-value if pick has no parent
 		if len(parentAddrs) == 0 {
 			baseAM, err = prolly.NewEmptyAddressMap(db.ns)
 			if err != nil {
 				return nil, fmt.Errorf("dolt: replayRemainingCommits: creating empty base AM: %w", err)
 			}
 		} else {
+			pickBaseHash = parentAddrs[0]
 			baseAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
 			if err != nil {
 				return nil, fmt.Errorf("dolt: replayRemainingCommits: loading base AM for commit %q: %w", pickHash, err)
@@ -2464,7 +2511,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		}
 
 		// 3-way merge: apply pick's diff (base→from) onto the current rebased tip (into).
-		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM)
+		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: replayRemainingCommits: merging commit %q: %w", pickHash, err)
 		}
@@ -2474,6 +2521,10 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			ms.rebaseCurrentPick = pickHash
 			ms.conflicts = conflicts
 			ms.resolvedAM = mergedAM
+			// Persist conflict state: write working set and save merge state to disk.
+			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
+				return nil, fmt.Errorf("dolt: replayRemainingCommits: persisting conflict state: %w", wsErr)
+			}
 			// Signal conflict to caller via (nil, nil).
 			return nil, nil
 		}
