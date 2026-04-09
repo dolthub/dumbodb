@@ -36,6 +36,9 @@ import (
 	"github.com/dolthub/docudolt/internal/types"
 )
 
+// emptyArtifactMapSentinel is a zero hash indicating no artifact map is set.
+var emptyArtifactMapSentinel [hash.ByteLen]byte
+
 // keyDesc describes the key tuple: one binary(20) field for the SHA-512[:20] encoded MongoDB _id.
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
