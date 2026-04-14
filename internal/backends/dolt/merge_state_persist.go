@@ -269,7 +269,6 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 	}
 
 	var entries []*conflictEntry
-	idx := 0
 	for {
 		ca, iterErr := iter.Next(ctx)
 		if iterErr == io.EOF {
@@ -324,7 +323,7 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 		theirDiffType := computeDiffType(baseVal, theirsVal)
 
 		entries = append(entries, &conflictEntry{
-			id:            fmt.Sprintf("c%d", idx),
+			id:            conflictIDFromKey(rawKey),
 			rawKey:        rawKey,
 			baseRawVal:    baseVal,
 			oursRawVal:    oursVal,
@@ -332,7 +331,6 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 			ourDiffType:   ourDiffType,
 			theirDiffType: theirDiffType,
 		})
-		idx++
 	}
 
 	return entries, nil

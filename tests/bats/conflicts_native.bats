@@ -90,6 +90,16 @@ mongosh_eval() {
     wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflictCount] | add // 0')"
     [ "$wire_count" -eq 1 ]
 
+    # Get the conflictId from the per-collection detail response (server still up).
+    run mongosh_eval "$main_db" '
+        JSON.stringify(db.runCommand({doltConflicts: 1, collection: "items"}))
+    '
+    [ "$status" -eq 0 ]
+    local wire_id
+    wire_id="$(echo "$output" | jq -r '.conflicts[0].conflictId')"
+    [ -n "$wire_id" ]
+    [ "$wire_id" != "null" ]
+
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
@@ -100,6 +110,13 @@ mongosh_eval() {
     local sql_count
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
+
+    # Assert the wire conflictId matches the _id column in the SQL table (ID alignment).
+    run dolt sql -q 'SELECT LOWER(HEX(_id)) FROM dolt_conflicts_items' --result-format csv
+    [ "$status" -eq 0 ]
+    local sql_id
+    sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
+    [ "$sql_id" = "$wire_id" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -155,6 +172,16 @@ mongosh_eval() {
     wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflictCount] | add // 0')"
     [ "$wire_count" -eq 1 ]
 
+    # Get the conflictId from the per-collection detail response (server still up).
+    run mongosh_eval "$main_db" '
+        JSON.stringify(db.runCommand({doltConflicts: 1, collection: "items"}))
+    '
+    [ "$status" -eq 0 ]
+    local wire_id
+    wire_id="$(echo "$output" | jq -r '.conflicts[0].conflictId')"
+    [ -n "$wire_id" ]
+    [ "$wire_id" != "null" ]
+
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
@@ -165,6 +192,13 @@ mongosh_eval() {
     local sql_count
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
+
+    # Assert the wire conflictId matches the _id column in the SQL table (ID alignment).
+    run dolt sql -q 'SELECT LOWER(HEX(_id)) FROM dolt_conflicts_items' --result-format csv
+    [ "$status" -eq 0 ]
+    local sql_id
+    sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
+    [ "$sql_id" = "$wire_id" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -218,6 +252,16 @@ mongosh_eval() {
     wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflictCount] | add // 0')"
     [ "$wire_count" -eq 1 ]
 
+    # Get the conflictId from the per-collection detail response (server still up).
+    run mongosh_eval "test__d_feature" '
+        JSON.stringify(db.runCommand({doltConflicts: 1, collection: "items"}))
+    '
+    [ "$status" -eq 0 ]
+    local wire_id
+    wire_id="$(echo "$output" | jq -r '.conflicts[0].conflictId')"
+    [ -n "$wire_id" ]
+    [ "$wire_id" != "null" ]
+
     # ---- SQL: stop server, query dolt_conflicts_items on feature branch ------
     stop_dumbodb
     setup_dolt_hack "$DUMBODB_DATA_DIR"
@@ -232,4 +276,11 @@ mongosh_eval() {
     local sql_count
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
+
+    # Assert the wire conflictId matches the _id column in the SQL table (ID alignment).
+    run dolt sql -q 'SELECT LOWER(HEX(_id)) FROM dolt_conflicts_items' --result-format csv
+    [ "$status" -eq 0 ]
+    local sql_id
+    sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
+    [ "$sql_id" = "$wire_id" ]
 }

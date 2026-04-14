@@ -518,24 +518,33 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 	return amEdt.Flush(ctx)
 }
 
+// conflictIDFromKey derives a stable conflict ID from a raw key tuple.
+// It extracts the ByteString field at index 0 (the SHA-512[:20] hash of the
+// MongoDB _id) and returns its hex encoding. This is the same value that
+// appears as the _id column in dolt_conflicts_{collection} SQL tables.
+func conflictIDFromKey(rawKey val.Tuple) string {
+	keyBytes, ok := keyDesc.GetBytes(0, rawKey)
+	if !ok || len(keyBytes) == 0 {
+		return fmt.Sprintf("%x", []byte(rawKey)) // fallback: hex of entire tuple
+	}
+	return fmt.Sprintf("%x", keyBytes)
+}
+
 // captureConflictsForCollection merges two collection maps at document level,
 // capturing conflicts instead of erroring. Returns the partial merged map (keeping
 // "ours" for conflicting documents) and the list of captured conflict entries.
 func captureConflictsForCollection(
 	ctx context.Context,
 	intoMap, fromMap, baseMap prolly.Map,
-	baseConflictIdx int,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
-	idx := baseConflictIdx
-
 	collisionFn := func(left, right tree.Diff) (tree.Diff, bool) {
+		rawKey := val.Tuple(left.Key)
 		entry := &conflictEntry{
-			id:            fmt.Sprintf("c%d", idx),
-			rawKey:        val.Tuple(left.Key),
+			id:            conflictIDFromKey(rawKey),
+			rawKey:        rawKey,
 			ourDiffType:   diffTypeString(left.Type),
 			theirDiffType: diffTypeString(right.Type),
 		}
-		idx++
 
 		// base value: From is the same for both left and right (common ancestor).
 		if left.From != nil {
@@ -593,7 +602,6 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 
 	editor := intoAM.Editor()
 	allConflicts := make(map[string][]*conflictEntry)
-	globalIdx := 0
 
 	for name := range allNames {
 		intoH, err := intoAM.Get(ctx, name)
@@ -660,11 +668,10 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening base collection %q: %w", name, err)
 		}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, globalIdx)
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
-		globalIdx += len(collConflicts)
 
 		var artHash hash.Hash // zero = no artifacts
 		if len(collConflicts) > 0 {
