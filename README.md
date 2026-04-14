@@ -61,25 +61,6 @@ db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })
 }
 ```
 
-## Build & Run
-
-```bash
-git clone --recurse-submodules https://github.com/dolthub/dumbodb
-cd dumbodb
-make build
-# Binary: .runtime/bin/dumbodb
-
-mkdir -p /tmp/dumbodb-data
-.runtime/bin/dumbodb --data-dir /tmp/dumbodb-data
-# Listens on 127.0.0.1:27017
-```
-
-Or build manually:
-
-```bash
-go build -o /tmp/dumbodb ./cmd/dumbodb/
-```
-
 ## dolt* commands
 
 Connect via an encoded database name `<db>__d_<branch>` to target a specific branch.
@@ -103,6 +84,25 @@ Connect via an encoded database name `<db>__d_<branch>` to target a specific bra
 All commands have a `dumbo*` alias (e.g. `dumboCommit`, `dumboMerge`) for environments that filter unknown MongoDB commands.
 
 Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md)
+
+## Build & Run
+
+```bash
+git clone --recurse-submodules https://github.com/dolthub/dumbodb
+cd dumbodb
+make build
+# Binary: .runtime/bin/dumbodb
+
+mkdir -p /tmp/dumbodb-data
+.runtime/bin/dumbodb --data-dir /tmp/dumbodb-data
+# Listens on 127.0.0.1:27017
+```
+
+Or build manually:
+
+```bash
+go build -o /tmp/dumbodb ./cmd/dumbodb/
+```
 
 ## Testing
 
