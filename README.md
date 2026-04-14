@@ -67,19 +67,19 @@ Connect via an encoded database name `<db>__d_<branch>` to target a specific bra
 
 | Command | Description |
 |---------|-------------|
-| `doltCommit` | Commit the current working set with a message and author |
-| `doltBranch` | Create or delete a branch |
-| `doltMerge` | Merge a source branch into the current branch; supports abort/continue |
-| `doltCherryPick` | Apply one commit's diff onto the current branch; supports abort/continue |
-| `doltRebase` | Reapply branch commits onto another branch tip, rewriting history |
-| `doltLog` | Return commit history for the current branch |
-| `doltStatus` | Show uncommitted changes on the current branch |
-| `doltDiff` | Document-level diff between two states |
-| `doltReset` | Move branch HEAD to a target commit (soft or hard) |
-| `doltRevert` | Revert one or more commits, creating a new inverse commit |
-| `doltCurrentBranch` | Return the current branch name for this connection |
-| `doltConflicts` | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
-| `doltResolveConflict` | Resolve a single document conflict (ours / theirs / custom) |
+| [`doltCommit`](docs/COMMANDS.md#doltcommit) | Commit the current working set with a message and author |
+| [`doltBranch`](docs/COMMANDS.md#doltbranch) | Create or delete a branch |
+| [`doltMerge`](docs/COMMANDS.md#doltmerge) | Merge a source branch into the current branch; supports abort/continue |
+| [`doltCherryPick`](docs/COMMANDS.md#doltcherrypick) | Apply one commit's diff onto the current branch; supports abort/continue |
+| [`doltRebase`](docs/COMMANDS.md#doltrebase) | Reapply branch commits onto another branch tip, rewriting history |
+| [`doltLog`](docs/COMMANDS.md#doltlog) | Return commit history for the current branch |
+| [`doltStatus`](docs/COMMANDS.md#doltstatus) | Show uncommitted changes on the current branch |
+| [`doltDiff`](docs/COMMANDS.md#doltdiff) | Document-level diff between two states |
+| [`doltReset`](docs/COMMANDS.md#doltreset) | Move branch HEAD to a target commit (soft or hard) |
+| [`doltRevert`](docs/COMMANDS.md#doltrevert) | Revert one or more commits, creating a new inverse commit |
+| [`doltCurrentBranch`](docs/COMMANDS.md#doltcurrentbranch) | Return the current branch name for this connection |
+| [`doltConflicts`](docs/COMMANDS.md#doltconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
+| [`doltResolveConflict`](docs/COMMANDS.md#doltresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
 
 All commands have a `dumbo*` alias (e.g. `dumboCommit`, `dumboMerge`) for environments that filter unknown MongoDB commands.
 
