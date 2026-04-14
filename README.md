@@ -2,9 +2,11 @@
 
 MongoDB-compatible document store backed by [Dolt](https://github.com/dolthub/dolt) — with version control built in.
 
-## What makes it different
+Document Databases need revision control, just like your source code.
 
-Connect with any MongoDB client and you get a full version history for your data:
+## Use the Document Model of MongoDB
+
+DumboDB tries to be a lot like the MongoDB you know and love. You connect to it like you would any open Mongo-community instance. Then it adds a group of commands on top which provides the version control features you expect.
 
 ```js
 db.runCommand({ doltLog: 1, limit: 3 })
