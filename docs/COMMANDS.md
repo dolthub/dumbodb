@@ -19,7 +19,7 @@ All versioning commands target a specific branch by encoding the branch name in 
 
 Use `db.getSiblingDB("mydb__d_feature")` in mongosh to connect to a branch.
 
-## Alias convention
+## Available Commands
 
 Every `dolt*` command has an identical `dumbo*` alias for environments that filter unrecognized MongoDB commands:
 
