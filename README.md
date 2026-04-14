@@ -61,20 +61,6 @@ db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })
 }
 ```
 
-Those commits came from this:
-
-```js
-use mydb
-db.orders.insertOne({ customer: "alice", amount: 100 })
-db.orders.insertOne({ customer: "bob",   amount: 200 })
-db.runCommand({ doltCommit: 1, message: "initial data", author: "bob <bob@acme.com>" })
-
-db.orders.updateOne({ customer: "alice" }, { $set: { amount: 150 } })
-db.runCommand({ doltCommit: 1, message: "alice order updated", author: "alice <alice@acme.com>" })
-```
-
-Branch, merge, diff, cherry-pick, revert — all over the standard MongoDB wire protocol. No schema changes. No migration tools.
-
 ## Build & Run
 
 ```bash
@@ -109,13 +95,14 @@ Connect via an encoded database name `<db>__d_<branch>` to target a specific bra
 | `doltStatus` | Show uncommitted changes on the current branch |
 | `doltDiff` | Document-level diff between two states |
 | `doltReset` | Move branch HEAD to a target commit (soft or hard) |
+| `doltRevert` | Revert one or more commits, creating a new inverse commit |
 | `doltCurrentBranch` | Return the current branch name for this connection |
 | `doltConflicts` | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
 | `doltResolveConflict` | Resolve a single document conflict (ours / theirs / custom) |
 
 All commands have a `dumbo*` alias (e.g. `dumboCommit`, `dumboMerge`) for environments that filter unknown MongoDB commands.
 
-Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md) *(coming soon — see [do-rnjg])*
+Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md)
 
 ## Testing
 
