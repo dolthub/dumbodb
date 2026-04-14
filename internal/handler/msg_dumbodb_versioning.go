@@ -1456,3 +1456,160 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		)),
 	)
 }
+
+// MsgDumboDBRevert implements the `doltRevert` command.
+//
+// Applies the inverse diff introduced by the named commit onto the current branch,
+// creating a new commit that undoes those changes. On conflict, the revert is staged
+// but not committed; use doltConflicts / doltResolveConflict to inspect and resolve
+// conflicts, then doltRevert continue:true to complete. Use abort:true to abandon.
+//
+// Usage:
+//
+//	db.getSiblingDB("mydb__d_main").runCommand({doltRevert: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb__d_main").runCommand({doltRevert: 1, abort: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({doltRevert: 1, continue: 1})
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	abort, err := common.GetOptionalBoolOrIntParam(document, "abort", false)
+	if err != nil {
+		return nil, err
+	}
+
+	continueParam, err := common.GetOptionalBoolOrIntParam(document, "continue", false)
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"doltRevert: versioning is not supported by the current backend",
+		)
+	}
+
+	if abort {
+		res, revertErr := vb.DumboDBRevert(connCtx, &backends.RevertParams{
+			DBName: dbName,
+			Branch: branch,
+			Abort:  true,
+		})
+		if revertErr != nil {
+			return nil, lazyerrors.Error(revertErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"message", res.Message,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	if continueParam {
+		message, err := common.GetOptionalParam[string](document, "message", "")
+		if err != nil {
+			return nil, err
+		}
+		author, err := common.GetOptionalParam[string](document, "author", "")
+		if err != nil {
+			return nil, err
+		}
+		res, revertErr := vb.DumboDBRevert(connCtx, &backends.RevertParams{
+			DBName:   dbName,
+			Branch:   branch,
+			Continue: true,
+			Message:  message,
+			Author:   author,
+		})
+		if revertErr != nil {
+			return nil, lazyerrors.Error(revertErr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"commitId", res.CommitID,
+				"message", res.Message,
+				"ok", float64(1),
+			)),
+		)
+	}
+
+	commit, err := common.GetRequiredParam[string](document, "commit")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := parseRootish(commit); err != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"doltRevert: "+err.Error(),
+			"commit",
+		)
+	}
+
+	message, err := common.GetOptionalParam[string](document, "message", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
+	res, revertErr := vb.DumboDBRevert(connCtx, &backends.RevertParams{
+		DBName:  dbName,
+		Branch:  branch,
+		Commit:  commit,
+		Message: message,
+		Author:  author,
+	})
+
+	if revertErr != nil {
+		var conflictErr *backends.DumboDBRevertConflictError
+		if errors.As(revertErr, &conflictErr) {
+			// Return a structured ok:0 response with per-collection conflict counts.
+			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+			for _, c := range conflictErr.Conflicts {
+				entry := must.NotFail(types.NewDocument(
+					"collection", c.Collection,
+					"count", int32(c.Count),
+				))
+				conflictsArr.Append(entry)
+			}
+			return documentOpMsg(
+				must.NotFail(types.NewDocument(
+					"conflicts", conflictsArr,
+					"ok", float64(0),
+					"code", int32(handlererrors.ErrOperationFailed),
+					"errmsg", conflictErr.Error(),
+				)),
+			)
+		}
+		return nil, lazyerrors.Error(revertErr)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"commitId", res.CommitID,
+			"message", res.Message,
+			"ok", float64(1),
+		)),
+	)
+}

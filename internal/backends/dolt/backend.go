@@ -909,6 +909,9 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			if db.mergeState.isCherryPick {
 				return nil, fmt.Errorf("doltCommit: unresolved cherry-pick conflicts remain")
 			}
+			if db.mergeState.isRevert {
+				return nil, fmt.Errorf("doltCommit: unresolved revert conflicts remain")
+			}
 			return nil, fmt.Errorf("doltCommit: unresolved merge conflicts remain")
 		}
 		if db.mergeState.isRebase {
@@ -916,6 +919,9 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		}
 		if db.mergeState.isCherryPick {
 			return nil, fmt.Errorf("doltCommit: cherry-pick in progress: use dumboDBCherryPick continue")
+		}
+		if db.mergeState.isRevert {
+			return nil, fmt.Errorf("doltCommit: revert in progress: use doltRevert continue")
 		}
 		return nil, fmt.Errorf("doltCommit: merge in progress: use dumboDBMerge continue")
 	}
@@ -1237,6 +1243,8 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("dolt: DumboDBMerge: rebase in progress on branch %q; resolve conflicts or abort first", params.Into)
 		case db.mergeState.isCherryPick:
 			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
+		case db.mergeState.isRevert:
+			return nil, fmt.Errorf("dolt: DumboDBMerge: revert in progress on branch %q; resolve conflicts or abort first", params.Into)
 		default:
 			return nil, fmt.Errorf("dolt: DumboDBMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 		}
@@ -1521,13 +1529,15 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		return pickRes, nil
 	}
 
-	// Guard: reject new cherry-pick if a merge, cherry-pick, or rebase is already in progress.
+	// Guard: reject new cherry-pick if a merge, cherry-pick, rebase, or revert is already in progress.
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: rebase in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
+		case db.mergeState.isRevert:
+			return nil, fmt.Errorf("dolt: DumboDBCherryPick: revert in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
@@ -2362,6 +2372,8 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("dolt: DumboDBRebase: rebase already in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
 			return nil, fmt.Errorf("dolt: DumboDBRebase: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+		case db.mergeState.isRevert:
+			return nil, fmt.Errorf("dolt: DumboDBRebase: revert in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
 			return nil, fmt.Errorf("dolt: DumboDBRebase: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
@@ -2651,4 +2663,276 @@ func findCommitsToReplay(ctx context.Context, state *dbState, branchHead, ontoHe
 	// Reverse to oldest-first order.
 	slices.Reverse(toReplay)
 	return toReplay, nil
+}
+
+// DumboDBRevert applies the inverse diff introduced by the named commit onto the current
+// branch's working set and creates a new commit that undoes those changes.
+//
+// The 3-way merge for revert uses the commit being reverted as the "base" and its parent
+// as the "from" side, so the diff applied is (commit → parent), i.e. the inverse.
+func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertParams) (*backends.RevertResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("dolt: DumboDBRevert: database %q does not exist", params.DBName))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	branch := params.Branch
+	if branch == "" {
+		branch = "main"
+	}
+
+	// Handle abort: discard in-progress revert and restore pre-revert state.
+	if params.Abort {
+		if db.mergeState == nil || !db.mergeState.isRevert {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: no revert in progress to abort")
+		}
+		ms := db.mergeState
+		db.mergeState = nil
+
+		// Restore the working set to the pre-revert AM.
+		if ms.intoBranch == "main" {
+			db.am = ms.premergeAM
+		} else {
+			db.branchAMs[ms.intoBranch] = ms.premergeAM
+		}
+		_ = clearMergeState(db)
+
+		return &backends.RevertResult{Message: "revert aborted"}, nil
+	}
+
+	// Handle continue: resume after conflict resolution and create the revert commit.
+	if params.Continue {
+		if db.mergeState == nil || !db.mergeState.isRevert || db.mergeState.intoBranch != branch {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: no revert in progress on branch %q", branch)
+		}
+		if db.mergeState.hasUnresolvedConflicts() {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: unresolved revert conflicts remain")
+		}
+		ms := db.mergeState
+
+		intoBranchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
+		}
+
+		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: continue: clearing artifacts: %w", clearErr)
+		}
+
+		// pickHash is the commit being reverted; fromHash is the parent hash.
+		revertRes, revertErr := b.commitRevert(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
+		if revertErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: continue: %w", revertErr)
+		}
+
+		db.mergeState = nil
+		_ = clearMergeState(db)
+		return revertRes, nil
+	}
+
+	// Guard: reject new revert if any other operation is already in progress.
+	if db.mergeState != nil {
+		switch {
+		case db.mergeState.isRebase:
+			return nil, fmt.Errorf("dolt: DumboDBRevert: rebase in progress on branch %q; resolve conflicts or abort first", branch)
+		case db.mergeState.isCherryPick:
+			return nil, fmt.Errorf("dolt: DumboDBRevert: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+		case db.mergeState.isRevert:
+			return nil, fmt.Errorf("dolt: DumboDBRevert: revert already in progress on branch %q; resolve conflicts or abort first", branch)
+		default:
+			return nil, fmt.Errorf("dolt: DumboDBRevert: merge in progress on branch %q; resolve conflicts or abort first", branch)
+		}
+	}
+
+	if params.Commit == "" {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: commit parameter is required")
+	}
+
+	// Resolve the commit to revert.
+	revertHash, err := resolveRootishToCommitHash(ctx, db, params.Commit)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: resolving commit %q: %w", params.Commit, err)
+	}
+
+	// Load the commit to revert to read its message and find its parent.
+	revertCommit, err := datas.LoadCommitAddr(ctx, db.vs, revertHash)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: loading commit %q: %w", revertHash, err)
+	}
+
+	revertMeta, err := datas.GetCommitMeta(ctx, revertCommit.NomsValue())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: reading meta for commit %q: %w", revertHash, err)
+	}
+	originalMsg := revertMeta.Description
+
+	// Get the parent hash of the commit to use as the "from" (what we're reverting to).
+	parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, revertCommit.NomsValue().(dolttypes.SerialMessage))
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: reading parents for commit %q: %w", revertHash, err)
+	}
+
+	// Load the commit being reverted's AM (used as the "base" in 3-way merge).
+	revertAM, err := amFromCommitHash(ctx, db, revertHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: loading revert AM for commit %q: %w", revertHash, err)
+	}
+
+	// Load the parent AM (used as the "from" side — the state to revert to).
+	// For a root commit with no parent, use an empty AM as the parent.
+	var parentAM prolly.AddressMap
+	var parentHash hash.Hash // parent commit hash; zero-value if revert target has no parent
+	if len(parentAddrs) == 0 {
+		parentAM, err = prolly.NewEmptyAddressMap(db.ns)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: creating empty parent AM: %w", err)
+		}
+	} else {
+		parentHash = parentAddrs[0]
+		parentAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: loading parent AM for commit %q: %w", revertHash, err)
+		}
+	}
+
+	// Resolve the current branch dataset.
+	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: resolving into branch %q: %w", branch, err)
+	}
+	if !intoBranchDS.HasHead() {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: into branch %q has no commits", branch)
+	}
+	intoHash, ok := intoBranchDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: into branch %q has no head address", branch)
+	}
+
+	// Load the current branch's HEAD AM (the "into" side).
+	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: loading into AM for branch %q: %w", branch, err)
+	}
+
+	// Perform the 3-way merge to undo the commit:
+	//   base = revertAM  (the commit being undone — what both sides had in common)
+	//   from = parentAM  (the state before the commit — what we want "theirs" to be)
+	//   into = intoAM    (current branch HEAD — "ours")
+	// theirHash = parentHash (the "from" side commit hash)
+	// baseHash  = revertHash (the "base" side commit hash)
+	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRevert: %w", err)
+	}
+
+	if len(conflicts) > 0 {
+		// Capture the pre-revert AM for abort support.
+		var preRevertAM prolly.AddressMap
+		if branch == "main" {
+			preRevertAM = db.am
+		} else {
+			preRevertAM, err = db.getOrInitBranchAM(ctx, branch)
+			if err != nil {
+				return nil, fmt.Errorf("dolt: DumboDBRevert: loading pre-revert AM for branch %q: %w", branch, err)
+			}
+		}
+
+		db.mergeState = &mergeInProgress{
+			intoBranch:  branch,
+			premergeAM:  preRevertAM,
+			intoHash:    intoHash,
+			conflicts:   conflicts,
+			resolvedAM:  mergedAM,
+			isRevert:    true,
+			pickHash:    revertHash,   // the commit being reverted
+			fromHash:    parentHash,   // parent hash — used as "their" hash in artifacts
+			originalMsg: originalMsg,
+		}
+
+		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
+			db.mergeState = nil
+			return nil, fmt.Errorf("dolt: DumboDBRevert: persisting conflict state: %w", wsErr)
+		}
+
+		summaries := db.mergeState.summaries()
+		return nil, &backends.DumboDBRevertConflictError{Conflicts: summaries}
+	}
+
+	// Clean revert — commit immediately.
+	return b.commitRevert(ctx, db, branch, intoBranchDS, intoHash, revertHash, mergedAM, originalMsg, params.Message, params.Author)
+}
+
+// commitRevert creates a single-parent commit on the branch applying the reverted AM.
+// originalMsg is the reverted commit's message; message (if non-empty) overrides it.
+// author is optional.
+func (b *Backend) commitRevert(
+	ctx context.Context,
+	db *dbState,
+	branch string,
+	branchDS datas.Dataset,
+	intoHash, revertHash hash.Hash,
+	revertedAM prolly.AddressMap,
+	originalMsg, message, author string,
+) (*backends.RevertResult, error) {
+	commitMsg := message
+	if commitMsg == "" {
+		if originalMsg != "" {
+			commitMsg = "Revert \"" + originalMsg + "\"\n\nThis reverts commit " + revertHash.String() + "."
+		} else {
+			commitMsg = "Revert commit " + revertHash.String()
+		}
+	}
+
+	commitName := "dolt"
+	commitEmail := "dolt@localhost"
+	if author != "" {
+		if idx := strings.Index(author, " <"); idx >= 0 {
+			commitName = author[:idx]
+			commitEmail = strings.TrimSuffix(author[idx+2:], ">")
+		} else {
+			commitName = author
+			commitEmail = author + "@dumbodb"
+		}
+	}
+
+	meta, err := datas.NewCommitMeta(commitName, commitEmail, commitMsg)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: commitRevert: building commit meta: %w", err)
+	}
+
+	rtvlMsg := buildRootValueFlatbuffer(revertedAM)
+	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+		Meta:    meta,
+		Parents: []hash.Hash{intoHash},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dolt: commitRevert: committing: %w", err)
+	}
+
+	newHash, ok := newDS.MaybeHeadAddr()
+	if !ok {
+		return nil, fmt.Errorf("dolt: commitRevert: no head after revert commit")
+	}
+
+	if branch == "main" {
+		db.ds = newDS
+		db.am = revertedAM
+		if err := updateWorkingSet(ctx, db.doltDB, revertedAM, revertedAM, "main"); err != nil {
+			return nil, fmt.Errorf("dolt: commitRevert: updating working set: %w", err)
+		}
+	} else {
+		db.branchAMs[branch] = revertedAM
+	}
+
+	return &backends.RevertResult{
+		CommitID: newHash.String(),
+		Message:  commitMsg,
+	}, nil
 }

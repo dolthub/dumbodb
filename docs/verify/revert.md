@@ -1,0 +1,262 @@
+# doltRevert Verification
+
+Manual verification guide for `doltRevert` end-to-end behavior. Work through each
+scenario top to bottom. Each section builds on the previous setup.
+
+> **Automated equivalent:** `tests/versioning_revert_verify_test.go` (`TestRevertVerify`)
+> covers every scenario in this document as sequential subtests using the same setup.
+> Run it with:
+> ```
+> go test ./tests/... -run TestRevertVerify -v
+> ```
+
+## Prerequisites
+
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
+
+```js
+mongosh mongodb://localhost:27017
+```
+
+Replace `localhost:27017` with your DumboDB address if different.
+
+---
+
+## Setup: Create a database with two commits on main
+
+Run this once before the scenarios below.
+
+```js
+var db = db.getSiblingDB("revertdb")
+db.dropDatabase()
+
+// C1: insert {_id:1, v:1} on main.
+db.items.insertOne({ _id: 1, v: 1 })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@dumbodb>" })
+printjson(r1)
+// Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
+const hashC1 = r1.commitId
+
+// C2: add {_id:2, v:2} — this is the commit we will revert.
+db.items.insertOne({ _id: 2, v: 2 })
+const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@dumbodb>" })
+printjson(r2)
+// Expected: { commitId: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
+const hashC2 = r2.commitId
+
+print("hashC1 =", hashC1)
+print("hashC2 =", hashC2)
+```
+
+After setup:
+- **main** (HEAD = C2): `items` = `[ { _id: 1, v: 1 }, { _id: 2, v: 2 } ]`
+
+---
+
+## Scenario 1: Clean revert — response shape
+
+Revert C2 (which added `_id:2`) onto main. Since C2's parent is C1 (current base),
+this applies cleanly by removing `_id:2`.
+
+```js
+const rRevert1 = db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, commit: hashC2 })
+printjson(rRevert1)
+// Expected: {
+//   commitId: "<hashC3>",
+//   message: "Revert \"add-two\"\n\nThis reverts commit <hashC2>.",
+//   ok: 1
+// }
+```
+
+Key checks:
+- `ok` equals `1`
+- `commitId` is a non-empty string (different from `hashC2`)
+- `message` contains the original message (`"add-two"`) and the revert annotation
+- `message` contains the reverted commit hash
+
+Verify main now has only `_id:1` (the revert undid the addition of `_id:2`):
+
+```js
+db.items.find({}).toArray()
+// Expected: [ { _id: 1, v: 1 } ]
+```
+
+Verify the revert commit is a single-parent commit (not a merge commit):
+
+```js
+const log = db.getSiblingDB("revertdb__d_main").runCommand({ doltLog: 1, limit: 1 })
+printjson(log.commits[0])
+// Expected: no "parent2" field (single parent commit)
+```
+
+---
+
+## Scenario 2: Custom message and author
+
+Revert another commit with a custom message and author override.
+
+```js
+// Add another commit to revert.
+db.items.insertOne({ _id: 3, v: 3 })
+const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
+const hashC3 = r3.commitId
+
+// Revert with custom message and author.
+const rRevert2 = db.getSiblingDB("revertdb__d_main").runCommand({
+  doltRevert: 1,
+  commit: hashC3,
+  message: "undo: add item three",
+  author: "alice <alice@dumbodb>"
+})
+printjson(rRevert2)
+// Expected: { commitId: "<hash>", message: "undo: add item three", ok: 1 }
+```
+
+Key checks:
+- `message` equals the custom override (`"undo: add item three"`) — no annotation appended
+- `commitId` is a fresh hash
+
+---
+
+## Scenario 3: Conflict during revert — structured error response
+
+Create a scenario where reverting a commit causes a conflict: the commit added a document
+that was subsequently modified on the current branch, so revert (which would delete it)
+conflicts with the modification.
+
+```js
+// Add a document that will be the conflict target.
+db.items.insertOne({ _id: 10, v: 10 })
+const rAdd = db.runCommand({ doltCommit: 1, message: "add-ten", author: "alice <alice@dumbodb>" })
+const hashAddTen = rAdd.commitId
+
+// Now modify _id:10 on main — this creates a conflict if we revert hashAddTen
+// (revert would delete _id:10, but main has since modified it).
+db.items.updateOne({ _id: 10 }, { $set: { v: 99 } })
+db.runCommand({ doltCommit: 1, message: "modify-ten", author: "alice <alice@dumbodb>" })
+
+// Revert hashAddTen — expect conflict.
+// In mongosh, runCommand throws a MongoServerError when ok:0.
+try {
+  db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, commit: hashAddTen })
+} catch (e) {
+  print(e)
+  // MongoServerError: doltRevert: unresolved conflicts in 1 collection(s)
+}
+// The revert is now staged with conflicts. Continue to Scenario 4 to inspect and resolve.
+```
+
+Key checks:
+- `runCommand` throws a `MongoServerError` (mongosh surfaces `ok:0` as an exception)
+- The error message contains `"doltRevert: unresolved conflicts in 1 collection(s)"`
+- The revert state is preserved — use `doltConflicts` to inspect (Scenario 4)
+
+---
+
+## Scenario 4: Inspect and resolve conflicts, then continue
+
+Continuing from Scenario 3 (revert with conflicts in progress).
+
+> **Same interface as merge.** Revert conflicts are stored in the same `mergeState`
+> struct as merge/cherry-pick conflicts (with an internal `isRevert` flag).
+> `doltConflicts` and `doltResolveConflict` work identically for all operations —
+> only the final continuation command differs (`doltRevert continue:1`).
+
+```js
+// Step 1: Summary — list which collections have unresolved conflicts.
+const rSummary = db.getSiblingDB("revertdb__d_main").runCommand({ doltConflicts: 1 })
+printjson(rSummary)
+// Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
+
+// Step 2: Per-collection detail — list individual document conflicts.
+const rConflicts = db.getSiblingDB("revertdb__d_main").runCommand({ doltConflicts: 1, collection: "items" })
+printjson(rConflicts)
+// Expected: { conflicts: [ { conflictId: "c0", base: {...},
+//             ours: { _id: 10, v: 99 }, theirs: null (or deleted),
+//             ourDiffType: "modified", theirDiffType: "deleted" } ], ok: 1 }
+// ours = main's current version (v:99), theirs = revert target (deleted in parent)
+
+const conflictId = rConflicts.conflicts[0].conflictId
+
+// Step 3: Resolve — accept "ours" (keep main's modified version of _id:10).
+const rResolve = db.getSiblingDB("revertdb__d_main").runCommand({
+  doltResolveConflict: 1,
+  collection: "items",
+  conflictId: conflictId,
+  resolution: "ours"
+})
+printjson(rResolve)
+// Expected: { ok: 1 }
+
+// Step 4: After resolution, doltConflicts summary returns an empty collections array.
+const rAfter = db.getSiblingDB("revertdb__d_main").runCommand({ doltConflicts: 1 })
+printjson(rAfter)
+// Expected: { collections: [], ok: 1 }
+
+// Step 5: Continue the revert.
+const rContinue = db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, continue: 1 })
+printjson(rContinue)
+// Expected: { commitId: "<hash>", message: "Revert \"add-ten\"\n\nThis reverts commit <hashAddTen>.", ok: 1 }
+```
+
+Key checks:
+- `doltConflicts` (no filter) returns `collections` array — same shape as for merge
+- `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
+- After `doltRevert continue:1`, `ok` equals `1` and `commitId` is present
+
+---
+
+## Scenario 5: Abort revert in progress
+
+Start another conflicting revert and then abort it.
+
+```js
+// Add a document and then modify it to set up a conflict.
+db.items.insertOne({ _id: 20, v: 20 })
+const rAdd20 = db.runCommand({ doltCommit: 1, message: "add-twenty", author: "alice <alice@dumbodb>" })
+const hashAdd20 = rAdd20.commitId
+
+db.items.updateOne({ _id: 20 }, { $set: { v: 201 } })
+db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "alice <alice@dumbodb>" })
+
+// Revert — expect conflict (throws in mongosh).
+try {
+  db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, commit: hashAdd20 })
+} catch (e) {
+  // MongoServerError: doltRevert: unresolved conflicts in 1 collection(s)
+}
+
+// Abort: restore pre-revert state.
+const rAbort = db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, abort: 1 })
+printjson(rAbort)
+// Expected: { message: "revert aborted", ok: 1 }
+```
+
+Key checks:
+- `ok` equals `1`
+- `message` equals `"revert aborted"`
+- `doltConflicts` after abort returns an error (no operation in progress)
+- main HEAD is unchanged from before the aborted revert
+
+---
+
+## Scenario 6: Error cases
+
+**Missing commit parameter:**
+```js
+db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1 })
+// Expected: ok: 0, errmsg mentions "commit" or "required"
+```
+
+**Abort when no revert in progress:**
+```js
+db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, abort: 1 })
+// Expected: ok: 0, errmsg: "no revert in progress to abort"
+```
+
+**Continue when no revert in progress:**
+```js
+db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, continue: 1 })
+// Expected: ok: 0, errmsg mentions "no revert in progress"
+```

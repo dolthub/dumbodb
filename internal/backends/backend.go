@@ -314,6 +314,15 @@ func (bc *backendContract) DumboDBRebase(ctx context.Context, params *RebasePara
 	return nil, newVersioningUnsupportedError("DumboDBRebase")
 }
 
+// DumboDBRevert implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBRevert(ctx context.Context, params *RevertParams) (*RevertResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBRevert(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBRevert")
+}
+
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {

@@ -130,6 +130,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDumboDBRebase,
 			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
 		},
+		"doltRevert": {
+			Handler: h.MsgDumboDBRevert,
+			Help:    "Reverts the changes introduced by the named commit, creating a new inverse commit.",
+		},
 		"doltConflicts": {
 			Handler: h.MsgDumboDBConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
@@ -177,6 +181,10 @@ func (h *Handler) initCommands() {
 		"dumboRebase": {
 			Handler: h.MsgDumboDBRebase,
 			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
+		},
+		"dumboRevert": {
+			Handler: h.MsgDumboDBRevert,
+			Help:    "Reverts the changes introduced by the named commit, creating a new inverse commit.",
 		},
 		"dumboConflicts": {
 			Handler: h.MsgDumboDBConflicts,

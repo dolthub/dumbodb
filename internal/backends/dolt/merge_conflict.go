@@ -57,8 +57,8 @@ type mergeInProgress struct {
 
 	// Cherry-pick specific fields (set when isCherryPick is true).
 	isCherryPick bool
-	pickHash     hash.Hash // the cherry-picked commit hash
-	originalMsg  string    // original commit message for the cherry-pick default annotation
+	pickHash     hash.Hash // the cherry-picked commit hash (or the reverted commit hash when isRevert)
+	originalMsg  string    // original commit message for the cherry-pick/revert default annotation
 
 	// Rebase-specific fields (set when isRebase is true).
 	// intoHash (above) tracks the current rebased tip hash and is updated as commits are replayed.
@@ -67,6 +67,12 @@ type mergeInProgress struct {
 	rebaseRemainingHashes []hash.Hash // commits yet to replay (oldest-first), not including the current paused one
 	rebaseCurrentPick     hash.Hash   // commit currently being replayed (paused on conflict)
 	rebaseCommitsReplayed int         // number of commits successfully replayed so far
+
+	// Revert-specific fields (set when isRevert is true).
+	// pickHash (above) stores the hash of the commit being reverted.
+	// fromHash (above) stores the parent hash of the reverted commit (the "theirs" side in artifacts).
+	// originalMsg (above) stores the reverted commit's message for the default annotation.
+	isRevert bool
 }
 
 // hasUnresolvedConflicts reports whether any conflict entry in the merge state is unresolved.
@@ -89,6 +95,11 @@ func (m *mergeInProgress) theirHash() hash.Hash {
 	}
 	if m.isCherryPick {
 		return m.pickHash
+	}
+	if m.isRevert {
+		// For revert: "theirs" is the parent of the reverted commit (the state we're
+		// reverting to). The parent hash is stored in fromHash for revert operations.
+		return m.fromHash
 	}
 	return m.fromHash
 }

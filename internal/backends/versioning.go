@@ -302,6 +302,36 @@ func (e *DumboDBRebaseConflictError) Error() string {
 	return fmt.Sprintf("doltRebase: unresolved conflicts in %d collection(s) replaying commit %s", len(e.Conflicts), e.ConflictCommit)
 }
 
+// RevertParams represents the parameters of VersioningBackend.DumboDBRevert method.
+type RevertParams struct {
+	DBName   string
+	Branch   string // current branch (the branch to apply the revert onto)
+	Commit   string // rootish of the commit to revert (required unless Abort/Continue)
+	Abort    bool   // if true, abandon the in-progress revert and restore working set
+	Continue bool   // if true, after conflict resolution, complete the revert and create the commit
+	Message  string // optional: custom commit message override
+	Author   string // optional: 'Name <email>'
+}
+
+// RevertResult represents the result of VersioningBackend.DumboDBRevert method.
+type RevertResult struct {
+	CommitID string
+	Message  string
+}
+
+// DumboDBRevertConflictError is returned by DumboDBRevert when the revert
+// cannot be completed automatically due to conflicting document changes. The revert
+// is staged but not committed; conflicts must be resolved via DumboDBResolveConflict
+// before DumboDBRevert continue will succeed.
+type DumboDBRevertConflictError struct {
+	Conflicts []ConflictSummary
+}
+
+// Error implements the error interface.
+func (e *DumboDBRevertConflictError) Error() string {
+	return fmt.Sprintf("doltRevert: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dumbodb versioning commands to return an unsupported error.
@@ -360,4 +390,12 @@ type VersioningBackend interface {
 	// DumboDBResolveConflict/DumboDBConflicts. After resolution, use Continue=true to complete
 	// the current commit and proceed. Use Abort=true to restore the pre-rebase state.
 	DumboDBRebase(context.Context, *RebaseParams) (*RebaseResult, error)
+
+	// DumboDBRevert applies the inverse diff introduced by the named commit onto the current
+	// branch's working set and creates a new commit that undoes those changes. The commit
+	// parameter is a rootish (commit hash or ancestor expression). On conflict, the revert is
+	// staged but not committed and a *DumboDBRevertConflictError is returned. Conflicts are
+	// resolved via DumboDBResolveConflict/DumboDBConflicts. After resolution, use Continue=true
+	// to complete the revert. Use Abort=true to abandon an in-progress revert.
+	DumboDBRevert(context.Context, *RevertParams) (*RevertResult, error)
 }

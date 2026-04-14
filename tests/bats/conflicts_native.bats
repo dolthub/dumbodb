@@ -284,3 +284,62 @@ mongosh_eval() {
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_id" = "$wire_id" ]
 }
+
+# ---------------------------------------------------------------------------
+# Test 4: doltRevert conflict → doltConflicts wire == dolt_conflicts SQL
+# ---------------------------------------------------------------------------
+@test 'revert conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
+    local main_db="test__d_main"
+
+    # ---- Setup ---------------------------------------------------------------
+    # C1: insert {_id:1, v:1} on main.
+    run mongosh_eval "$main_db" '
+        db.items.insertOne({_id: 1, v: 1});
+        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
+    '
+    [ "$status" -eq 0 ]
+
+    # C2: add {_id:2, v:2} — this is the commit we will revert.
+    run mongosh_eval "$main_db" '
+        db.items.insertOne({_id: 2, v: 2});
+        JSON.stringify(db.runCommand({dumbodbCommit: 1, message: "C2-add-two", author: "bob <b@t>"}))
+    '
+    [ "$status" -eq 0 ]
+    local hash_c2
+    hash_c2="$(echo "$output" | jq -r '.commitId')"
+    [ -n "$hash_c2" ] && [ "$hash_c2" != "null" ]
+
+    # C3: modify {_id:2, v:99} on main — creates conflict when we revert C2
+    # (revert would delete _id:2, but main has since modified it, so conflict).
+    run mongosh_eval "$main_db" '
+        db.items.updateOne({_id: 2}, {$set: {v: 99}});
+        db.runCommand({dumbodbCommit: 1, message: "C3-modify-two", author: "alice <a@t>"});
+    '
+    [ "$status" -eq 0 ]
+
+    # ---- Trigger conflict: revert C2 on main ---------------------------------
+    run mongosh_eval "$main_db" \
+        "JSON.stringify(db.runCommand({doltRevert: 1, commit: '${hash_c2}'}))"
+    # ok:0 expected on conflict.
+    echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
+
+    # ---- Wire: doltConflicts must report 1 conflict in "items" ---------------
+    run mongosh_eval "$main_db" '
+        JSON.stringify(db.runCommand({doltConflicts: 1}))
+    '
+    [ "$status" -eq 0 ]
+    local wire_count
+    wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflictCount] | add // 0')"
+    [ "$wire_count" -eq 1 ]
+
+    # ---- SQL: stop server, query dolt_conflicts_items ------------------------
+    stop_dumbodb
+    setup_dolt_hack "$DUMBODB_DATA_DIR"
+    cd "$(dirname "$DUMBODB_DATA_DIR")"
+
+    run dolt sql -q 'select count(*) from dolt_conflicts_items' --result-format csv
+    [ "$status" -eq 0 ]
+    local sql_count
+    sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
+    [ "$sql_count" -eq "$wire_count" ]
+}

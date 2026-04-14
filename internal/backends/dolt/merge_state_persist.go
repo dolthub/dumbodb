@@ -71,6 +71,8 @@ func saveMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) er
 		op = "rebase"
 	case ms.isCherryPick:
 		op = "cherry-pick"
+	case ms.isRevert:
+		op = "revert"
 	default:
 		op = "merge"
 	}
@@ -168,6 +170,7 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 		resolvedAM:   resolvedAM,
 		isCherryPick: disk.Operation == "cherry-pick",
 		isRebase:     disk.Operation == "rebase",
+		isRevert:     disk.Operation == "revert",
 		originalMsg:  disk.OriginalMsg,
 		rebaseCommitsReplayed: disk.RebaseCommitsReplayed,
 	}

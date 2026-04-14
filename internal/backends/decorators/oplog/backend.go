@@ -188,6 +188,15 @@ func (b *backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	return nil, fmt.Errorf("oplog: DumboDBRebase: versioning not supported by wrapped backend")
 }
 
+// DumboDBRevert implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBRevert(ctx context.Context, params *backends.RevertParams) (*backends.RevertResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBRevert(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBRevert: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
 	_ backends.Backend          = (*backend)(nil)
