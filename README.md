@@ -2,7 +2,7 @@
 
 MongoDB-compatible document store backed by [Dolt](https://github.com/dolthub/dolt) — with version control built in.
 
-Connect from any MongoDB client. Every write is version-controlled:
+Connect from any MongoDB client. Commit changes when ready, then query your history:
 
 ```js
 db.runCommand({ doltLog: 1, limit: 3 })
