@@ -1,6 +1,6 @@
 # DumboDB
 
-DumboDB is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
+DumboDB is a MongoDB-community server implementation backed by [Dolt](https://github.com/dolthub/dolt).
 
 ## Build
 
