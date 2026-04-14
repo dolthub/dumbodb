@@ -4,30 +4,52 @@ MongoDB-compatible document store backed by [Dolt](https://github.com/dolthub/do
 
 ## What makes it different
 
-Connect with any MongoDB client. Then do this:
+Connect with any MongoDB client and you get a full version history for your data:
+
+```js
+db.runCommand({ doltLog: 1, limit: 3 })
+{
+  branch: 'main',
+  commits: [
+    {
+      commitId: 'v9ra3pmi0f6kotj5k3fganpmb3oi9t1k',
+      parent1:  'tqq1tn5qs0pns2j2uk5k1b2ufhqt9q3b',
+      refs:     [ 'HEAD', 'main' ],
+      message:  'alice order updated',
+      timestamp: ISODate('2026-04-14T17:22:31.000Z'),
+      author:   'alice <alice@acme.com>'
+    },
+    {
+      commitId: 'tqq1tn5qs0pns2j2uk5k1b2ufhqt9q3b',
+      parent1:  '5vi6e5t3riqpgh6fq0j1pf0r0imuqhsn',
+      message:  'initial data',
+      timestamp: ISODate('2026-04-14T09:00:00.000Z'),
+      author:   'bob <bob@acme.com>'
+    },
+    {
+      commitId: '5vi6e5t3riqpgh6fq0j1pf0r0imuqhsn',
+      message:  'Initialize database',
+      timestamp: ISODate('2026-04-14T08:55:12.000Z'),
+      author:   'DumboDB'
+    }
+  ],
+  ok: 1
+}
+```
+
+Those commits came from this:
 
 ```js
 use mydb
-
 db.orders.insertOne({ customer: "alice", amount: 100 })
 db.orders.insertOne({ customer: "bob",   amount: 200 })
-db.runCommand({ doltCommit: 1, message: "initial data", author: "alice <alice@example.com>" })
+db.runCommand({ doltCommit: 1, message: "initial data", author: "bob <bob@acme.com>" })
 
 db.orders.updateOne({ customer: "alice" }, { $set: { amount: 150 } })
-db.runCommand({ doltCommit: 1, message: "alice order updated", author: "alice <alice@example.com>" })
-
-db.runCommand({ doltLog: 1, limit: 3 })
-// { commits: [ { commitId: "abc123...", message: "alice order updated", ... },
-//              { commitId: "def456...", message: "initial data", ... } ], ok: 1 }
-
-db.runCommand({ doltBranch: 1, branch: "experiment" })
-// Work on a branch, merge it in when ready:
-db.getSiblingDB("mydb__d_experiment").orders.insertOne({ customer: "carol", amount: 300 })
-db.getSiblingDB("mydb__d_experiment").runCommand({ doltCommit: 1, message: "add carol", author: "bob <bob@example.com>" })
-db.getSiblingDB("mydb__d_main").runCommand({ doltMerge: 1, merge_in: "experiment", message: "merge experiment" })
+db.runCommand({ doltCommit: 1, message: "alice order updated", author: "alice <alice@acme.com>" })
 ```
 
-Every commit is a point-in-time snapshot of your data. Branch, merge, diff, cherry-pick — all in the MongoDB wire protocol.
+Branch, merge, diff, cherry-pick, revert — all over the standard MongoDB wire protocol. No schema changes. No migration tools.
 
 ## Build & Run
 
