@@ -37,6 +37,30 @@ db.runCommand({ doltLog: 1, limit: 3 })
 }
 ```
 
+Or diff any two commits to see exactly what changed:
+
+```js
+db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })
+{
+  collections: [
+    {
+      name: 'orders',
+      added:    [],
+      removed:  [],
+      modified: [
+        {
+          _id: ObjectId('507f1f77bcf86cd799439011'),
+          diff: [
+            { type: 'modified', path: 'amount', from: 100, to: 150 }
+          ]
+        }
+      ]
+    }
+  ],
+  ok: 1
+}
+```
+
 Those commits came from this:
 
 ```js
