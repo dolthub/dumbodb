@@ -18,11 +18,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // indexStatsStage implements the $indexStats aggregation stage.

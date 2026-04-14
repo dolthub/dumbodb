@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document, committed on main.
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@dumbodb>" })
 printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
@@ -59,7 +59,7 @@ nothing to merge — the result is "already up-to-date".
 ```js
 // Commit _id:2 on main (feature stays at C1, behind main).
 db.items.insertOne({ _id: 2, v: 2 })
-const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "alice <alice@docudolt>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "alice <alice@dumbodb>" })
 const hashC2 = r2.commitId
 
 // Merge feature (at C1) into main (at C2).
@@ -129,13 +129,13 @@ parents.
 ```js
 // Commit _id:3 on main → C3.
 db.items.insertOne({ _id: 3, v: 3 })
-const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "alice <alice@docudolt>" })
+const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "alice <alice@dumbodb>" })
 const hashC3 = r3.commitId
 
 // Commit _id:4 on feature independently → C4.
 // (feature is still at C2; _id:4 is only on feature's side)
 db.getSiblingDB("mergedb__d_feature").items.insertOne({ _id: 4, v: 4 })
-const r4 = db.getSiblingDB("mergedb__d_feature").runCommand({ doltCommit: 1, message: "add-four", author: "alice <alice@docudolt>" })
+const r4 = db.getSiblingDB("mergedb__d_feature").runCommand({ doltCommit: 1, message: "add-four", author: "alice <alice@dumbodb>" })
 const hashC4 = r4.commitId
 
 // Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
@@ -239,7 +239,7 @@ conflicts are resolved. Use `doltMerge: 1, continue: 1` to finalize.
 const rBlockedCommit = db.getSiblingDB("mergedb__d_main").runCommand({
     doltCommit: 1,
     message: "should not work",
-    author: "alice <alice@docudolt>"
+    author: "alice <alice@dumbodb>"
 })
 printjson(rBlockedCommit)
 // Expected: { ok: 0, code: 96, errmsg: "unresolved merge conflicts remain" }
@@ -306,7 +306,7 @@ db.getSiblingDB("mergedb__d_main").runCommand({
 
 Once all conflicts are resolved, `doltMerge: 1, continue: 1` creates the merge
 commit with both branch HEADs as parents. `message` and `author` are optional;
-if omitted, DocuDolt generates the standard merge message and uses the default author.
+if omitted, DumboDB generates the standard merge message and uses the default author.
 
 `doltCommit` is rejected throughout an in-progress merge (whether conflicts
 remain or not) — always use `continue` to finalize.
@@ -317,7 +317,7 @@ const rContinue = db.getSiblingDB("mergedb__d_main").runCommand({
     doltMerge: 1,
     continue: 1,
     message: "Resolve merge conflicts",   // optional
-    author: "alice <alice@docudolt>"          // optional
+    author: "alice <alice@dumbodb>"          // optional
 })
 printjson(rContinue)
 // Expected: { commitId: "<hashM>", branch: "main", message: "Resolve merge conflicts", ok: 1 }
@@ -331,7 +331,7 @@ printjson(log)
 // Expected: commits[0].parent1  === <main pre-merge HEAD>,
 //           commits[0].parent2  === <feature HEAD>,
 //           commits[0].message  === "Resolve merge conflicts",
-//           commits[0].author   === "alice <alice@docudolt>"
+//           commits[0].author   === "alice <alice@dumbodb>"
 ```
 
 ---

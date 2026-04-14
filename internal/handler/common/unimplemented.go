@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // Unimplemented returns handlererrors.ErrNotImplemented if doc has any of the given fields.

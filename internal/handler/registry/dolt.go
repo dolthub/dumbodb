@@ -15,8 +15,8 @@
 package registry
 
 import (
-	"github.com/dolthub/docudolt/internal/backends/dolt"
-	"github.com/dolthub/docudolt/internal/handler"
+	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/handler"
 )
 
 func init() {

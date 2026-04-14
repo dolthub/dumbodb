@@ -22,7 +22,7 @@ import (
 
 	"golang.org/x/exp/constraints"
 
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 //go:generate ../../bin/stringer -linecomment -type CompareResult

@@ -16,7 +16,7 @@
 # These tests require MongoDB to be running with real auth users and --auth
 # enabled. The CI service container uses the default mongo:7.0.8 image without
 # pre-created users, so the SASL handshake fails before the test can exercise
-# its intended error path. These failures are not docudolt bugs — they are a test
+# its intended error path. These failures are not dumbodb bugs — they are a test
 # suite infrastructure limitation.
 #
 # Reference: docs/ferretdb-test-analysis.md, Category B

@@ -19,8 +19,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // objectIDType represents BSON ObjectId type.

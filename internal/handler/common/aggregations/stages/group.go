@@ -20,15 +20,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations/operators"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations/operators/accumulators"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators/accumulators"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // group represents $group stage.
@@ -173,7 +173,7 @@ func validateGroupKey(groupKey any) error {
 
 		_, err = op.Process(nil)
 		if err != nil {
-			// TODO https://github.com/dolthub/docudolt/issues/3129
+			// TODO https://github.com/dolthub/dumbodb/issues/3129
 			return processGroupStageError(err)
 		}
 	}
@@ -447,7 +447,7 @@ func processGroupStageError(err error) error {
 				"$group (stage)",
 			)
 		case aggregations.ErrUndefinedVariable:
-			// TODO https://github.com/dolthub/docudolt/issues/2275
+			// TODO https://github.com/dolthub/dumbodb/issues/2275
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
 				"Aggregation expression variables are not implemented yet",

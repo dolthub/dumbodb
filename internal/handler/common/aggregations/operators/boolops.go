@@ -17,7 +17,7 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // isBoolFalsy returns true when v is falsy in MongoDB aggregation boolean context:

@@ -46,7 +46,7 @@ func assertRootishRejected(tb testing.TB, db *mongo.Database, op string) {
 func TestRootish_ParseRejection(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	dbName := fmt.Sprintf("prtest%d", rand.Int64N(1_000_000))
 
 	cases := []struct {
@@ -74,12 +74,12 @@ func TestRootish_ParseRejection(t *testing.T) {
 	}
 }
 
-// TestRootish_DocuDoltCurrentBranch_EndToEnd verifies that docuDoltCurrentBranch
+// TestRootish_DumboDBCurrentBranch_EndToEnd verifies that dumboDBCurrentBranch
 // returns the correct branch on branch connections and code 96 on read-only ones.
-func TestRootish_DocuDoltCurrentBranch_EndToEnd(t *testing.T) {
+func TestRootish_DumboDBCurrentBranch_EndToEnd(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("dcbtest%d", rand.Int64N(1_000_000))
 	collName := "col"
@@ -137,7 +137,7 @@ func TestRootish_DocuDoltCurrentBranch_EndToEnd(t *testing.T) {
 func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	// Simulate a database name containing __d_ followed by an all-digit timestamp.
@@ -163,7 +163,7 @@ func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("diso%d", rand.Int64N(1_000_000))
 	collName := "col"

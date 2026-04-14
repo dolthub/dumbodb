@@ -22,7 +22,7 @@ import (
 
 	"github.com/dlclark/regexp2"
 
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 var (

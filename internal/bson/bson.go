@@ -23,10 +23,10 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/debugbuild"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/debugbuild"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 func init() {
@@ -218,7 +218,7 @@ func convertToTypes(v any) (any, error) {
 		return v, nil
 	case wirebson.Binary:
 		// Special case to prevent it from being stored as null in sjson.
-		// TODO https://github.com/dolthub/docudolt/issues/260
+		// TODO https://github.com/dolthub/dumbodb/issues/260
 		if v.B == nil {
 			v.B = []byte{}
 		}

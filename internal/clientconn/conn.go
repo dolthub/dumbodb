@@ -38,18 +38,18 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/dolthub/docudolt/internal/bson"
-	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
-	"github.com/dolthub/docudolt/internal/clientconn/connmetrics"
-	"github.com/dolthub/docudolt/internal/handler"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/proxy"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/logging"
-	"github.com/dolthub/docudolt/internal/util/must"
-	"github.com/dolthub/docudolt/internal/util/observability"
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
+	"github.com/dolthub/dumbodb/internal/handler"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/proxy"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/observability"
 )
 
 // Mode represents FerretDB mode of operation.
@@ -255,7 +255,7 @@ func (c *conn) run(ctx context.Context) (err error) {
 		var resHeader *wire.MsgHeader
 		var resBody wire.MsgBody
 
-		// TODO https://github.com/dolthub/docudolt/issues/2412
+		// TODO https://github.com/dolthub/dumbodb/issues/2412
 		reqHeader, reqBody, err = wire.ReadMessage(bufr)
 		if err != nil {
 			return
@@ -560,7 +560,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	}
 
 	// Don't call MarshalBinary there. Fix header in the caller?
-	// TODO https://github.com/dolthub/docudolt/issues/273
+	// TODO https://github.com/dolthub/dumbodb/issues/273
 	b, err := resBody.MarshalBinary()
 	if err != nil {
 		result = ""

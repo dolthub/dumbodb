@@ -5,8 +5,8 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 )
 
 func TestDecimal128Sum(t *testing.T) {

@@ -20,12 +20,12 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
-	"github.com/dolthub/docudolt/internal/util/state"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/state"
 )
 
 // MsgSetFreeMonitoring implements `setFreeMonitoring` command.

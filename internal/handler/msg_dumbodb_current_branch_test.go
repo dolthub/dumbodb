@@ -24,15 +24,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // versioningBackendMock is a minimal Backend + VersioningBackend implementation
-// for handler unit tests. DocuDoltCurrentBranch echoes params.Branch; all other
+// for handler unit tests. DumboDBCurrentBranch echoes params.Branch; all other
 // methods are no-ops that satisfy the interface.
 type versioningBackendMock struct{}
 
@@ -54,53 +54,53 @@ func (m *versioningBackendMock) DropDatabase(_ context.Context, _ *backends.Drop
 
 // backends.VersioningBackend methods.
 
-func (m *versioningBackendMock) DocuDoltCurrentBranch(_ context.Context, p *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+func (m *versioningBackendMock) DumboDBCurrentBranch(_ context.Context, p *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
 	return &backends.CurrentBranchResult{Branch: p.Branch}, nil
 }
-func (m *versioningBackendMock) DocuDoltCommit(_ context.Context, _ *backends.CommitParams) (*backends.CommitResult, error) {
+func (m *versioningBackendMock) DumboDBCommit(_ context.Context, _ *backends.CommitParams) (*backends.CommitResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
+func (m *versioningBackendMock) DumboDBBranch(_ context.Context, _ *backends.BranchParams) (*backends.BranchResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
+func (m *versioningBackendMock) DumboDBMerge(_ context.Context, _ *backends.MergeParams) (*backends.MergeResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
+func (m *versioningBackendMock) DumboDBLog(_ context.Context, _ *backends.LogParams) (*backends.LogResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+func (m *versioningBackendMock) DumboDBStatus(_ context.Context, _ *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltDiff(_ context.Context, _ *backends.DiffParams) (*backends.DiffResult, error) {
+func (m *versioningBackendMock) DumboDBDiff(_ context.Context, _ *backends.DiffParams) (*backends.DiffResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
+func (m *versioningBackendMock) DumboDBReset(_ context.Context, _ *backends.ResetParams) (*backends.ResetResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+func (m *versioningBackendMock) DumboDBConflicts(_ context.Context, _ *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (m *versioningBackendMock) DumboDBResolveConflict(_ context.Context, _ *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltCherryPick(_ context.Context, _ *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+func (m *versioningBackendMock) DumboDBCherryPick(_ context.Context, _ *backends.CherryPickParams) (*backends.CherryPickResult, error) {
 	return nil, nil
 }
-func (m *versioningBackendMock) DocuDoltRebase(_ context.Context, _ *backends.RebaseParams) (*backends.RebaseResult, error) {
+func (m *versioningBackendMock) DumboDBRebase(_ context.Context, _ *backends.RebaseParams) (*backends.RebaseResult, error) {
 	return nil, nil
 }
 
-// makeCurrentBranchMsg creates a wire.OpMsg for docuDoltCurrentBranch with the given encoded $db.
+// makeCurrentBranchMsg creates a wire.OpMsg for dumboDBCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {
 	doc := must.NotFail(types.NewDocument("doltCurrentBranch", int32(1), "$db", encodedDB))
 	return must.NotFail(documentOpMsg(doc))
 }
 
-// TestMsgDocuDoltCurrentBranch_ReadOnly verifies that docuDoltCurrentBranch returns
+// TestMsgDumboDBCurrentBranch_ReadOnly verifies that dumboDBCurrentBranch returns
 // ErrOperationFailed for read-only rootishes (commit hashes and ancestor expressions).
 // The error message must mention "no current branch name" to be actionable.
-func TestMsgDocuDoltCurrentBranch_ReadOnly(t *testing.T) {
+func TestMsgDumboDBCurrentBranch_ReadOnly(t *testing.T) {
 	t.Parallel()
 
 	// No backend needed: the handler rejects read-only rootishes before ever
@@ -125,7 +125,7 @@ func TestMsgDocuDoltCurrentBranch_ReadOnly(t *testing.T) {
 			t.Parallel()
 
 			msg := makeCurrentBranchMsg(tc.encodedDB)
-			_, err := h.MsgDocuDoltCurrentBranch(context.Background(), msg)
+			_, err := h.MsgDumboDBCurrentBranch(context.Background(), msg)
 
 			require.Error(t, err)
 
@@ -139,12 +139,12 @@ func TestMsgDocuDoltCurrentBranch_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestMsgDocuDoltCurrentBranch_Branch verifies that docuDoltCurrentBranch returns the
+// TestMsgDumboDBCurrentBranch_Branch verifies that dumboDBCurrentBranch returns the
 // correct branch name for writable connections (branch names and tag-like strings).
 //
 // Tags are syntactically indistinguishable from branch names at parse time, so
 // they are treated as writable and the tag name is returned as the branch identifier.
-func TestMsgDocuDoltCurrentBranch_Branch(t *testing.T) {
+func TestMsgDumboDBCurrentBranch_Branch(t *testing.T) {
 	t.Parallel()
 
 	h := &Handler{b: &versioningBackendMock{}}
@@ -158,7 +158,7 @@ func TestMsgDocuDoltCurrentBranch_Branch(t *testing.T) {
 		{"explicit_main", "mydb__d_main", "main"},
 		{"feature_branch", "mydb__d_feature-x", "feature-x"},
 		// Tag-like names (e.g. "v1.0") are indistinguishable from branch names at
-		// parse time; docuDoltCurrentBranch returns the tag name as the branch.
+		// parse time; dumboDBCurrentBranch returns the tag name as the branch.
 		{"tag_like_v1_0", "mydb__d_v1.0", "v1.0"},
 	}
 
@@ -168,7 +168,7 @@ func TestMsgDocuDoltCurrentBranch_Branch(t *testing.T) {
 			t.Parallel()
 
 			msg := makeCurrentBranchMsg(tc.encodedDB)
-			resp, err := h.MsgDocuDoltCurrentBranch(context.Background(), msg)
+			resp, err := h.MsgDumboDBCurrentBranch(context.Background(), msg)
 			require.NoError(t, err)
 
 			doc, err := opMsgDocument(resp)

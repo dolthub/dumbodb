@@ -22,16 +22,16 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/handler/users"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
-	"github.com/dolthub/docudolt/internal/util/password"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/handler/users"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/password"
 )
 
 // MsgCreateUser implements `createUser` command.
@@ -90,7 +90,7 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Accept any roles array; docudolt doesn't enforce RBAC but must not reject
+	// Accept any roles array; dumbodb doesn't enforce RBAC but must not reject
 	// non-empty roles to be compatible with MongoDB clients.
 	common.Ignored(document, h.L, "roles")
 

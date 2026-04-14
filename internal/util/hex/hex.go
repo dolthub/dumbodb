@@ -20,7 +20,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // Dump makes a hex dump of byte array.

@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // TestDropIndexes_AfterDropAll verifies that after dropIndexes("*"), ListIndexes

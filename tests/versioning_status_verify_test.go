@@ -35,19 +35,19 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// statusResult holds the decoded top-level response from a docuDoltStatus command.
+// statusResult holds the decoded top-level response from a dumboDBStatus command.
 type statusResult struct {
 	Branch string
 	Tables []tableStatusEntry
 }
 
-// tableStatusEntry holds one entry from the "tables" array of a docuDoltStatus response.
+// tableStatusEntry holds one entry from the "tables" array of a dumboDBStatus response.
 type tableStatusEntry struct {
 	Name   string
 	Status string
 }
 
-// decodeStatusResult parses the raw bson.M from a docuDoltStatus RunCommand into the
+// decodeStatusResult parses the raw bson.M from a dumboDBStatus RunCommand into the
 // typed helpers above, failing the test if the shape is unexpected.
 func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 	t.Helper()
@@ -88,7 +88,7 @@ func findTableStatus(sr statusResult, name string) *tableStatusEntry {
 }
 
 func TestStatusVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -102,7 +102,7 @@ func TestStatusVerify(t *testing.T) {
 		{Key: "score", Value: int32(10)},
 	})
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName, "baseline", "alice <alice@docudolt>")
+	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@dumbodb>")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Status on clean repo — empty tables
@@ -148,7 +148,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_AfterUpdate", func(t *testing.T) {
 		// Commit the "newcoll" addition first.
-		docuDoltCommit(t, env, dbName, "add newcoll", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "add newcoll", "alice <alice@dumbodb>")
 
 		// Modify an existing committed collection.
 		_, err := env.client.Database(dbName).Collection("items").UpdateOne(ctx,
@@ -178,7 +178,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AfterDelete", func(t *testing.T) {
 		// Commit the items modification first.
-		docuDoltCommit(t, env, dbName, "modify items", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "modify items", "alice <alice@dumbodb>")
 
 		// Delete the entire "items" collection.
 		require.NoError(t, env.client.Database(dbName).Collection("items").Drop(ctx))
@@ -204,7 +204,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AfterCommit", func(t *testing.T) {
 		// Commit the deletion.
-		docuDoltCommit(t, env, dbName, "delete items", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "delete items", "alice <alice@dumbodb>")
 
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{

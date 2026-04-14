@@ -30,7 +30,7 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 )
 
-const mergeStateFileName = ".docudolt_merge_state.json"
+const mergeStateFileName = ".dumbodb_merge_state.json"
 
 // mergeStateDisk is the JSON-serializable form of mergeInProgress.
 // Only operation metadata is stored; conflict entries are reconstructed

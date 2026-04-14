@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tests contains docudolt-specific regression and integration tests.
+// Package tests contains dumbodb-specific regression and integration tests.
 //
-// MongoDB parity tests (compatibility between MongoDB and DocuDolt) live in the
-// dolthub/docudolt-parity-testing repository. This package retains only tests for
-// docudolt-internal behaviors that have no MongoDB equivalent, such as internal
+// MongoDB parity tests (compatibility between MongoDB and DumboDB) live in the
+// dolthub/dumbodb-parity-testing repository. This package retains only tests for
+// dumbodb-internal behaviors that have no MongoDB equivalent, such as internal
 // resource management and implementation-specific edge cases.
 //
 // Run with:
@@ -44,11 +44,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// buildOnce ensures the docudolt binary is built exactly once per test run.
+// buildOnce ensures the dumbodb binary is built exactly once per test run.
 var buildOnce sync.Once
 
-// docuDoltTestEnv holds a running docudolt process and a connected MongoDB client.
-type docuDoltTestEnv struct {
+// dumboDBTestEnv holds a running dumbodb process and a connected MongoDB client.
+type dumboDBTestEnv struct {
 	cmd     *exec.Cmd
 	client  *mongo.Client
 	dataDir string
@@ -61,9 +61,9 @@ func repoRoot() string {
 	return filepath.Join(filepath.Dir(filename), "..")
 }
 
-// startDocuDolt launches a fresh docudolt instance on a random free port.
-// Optional extraArgs are appended to the docudolt command line (e.g. "--auto-commit").
-func startDocuDolt(tb testing.TB, extraArgs ...string) *docuDoltTestEnv {
+// startDumboDB launches a fresh dumbodb instance on a random free port.
+// Optional extraArgs are appended to the dumbodb command line (e.g. "--auto-commit").
+func startDumboDB(tb testing.TB, extraArgs ...string) *dumboDBTestEnv {
 	tb.Helper()
 
 	// Find a free port.
@@ -82,14 +82,14 @@ func startDocuDolt(tb testing.TB, extraArgs ...string) *docuDoltTestEnv {
 			buildErr = mkErr
 			return
 		}
-		build := exec.Command("go", "build", "-o", binary, "./cmd/docudolt/")
+		build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
 		build.Dir = repoRoot()
 		if out, err := build.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("failed to build docudolt: %w\n%s", err, out)
+			buildErr = fmt.Errorf("failed to build dumbodb: %w\n%s", err, out)
 		}
 	})
 	if buildErr != nil {
-		tb.Fatalf("failed to build docudolt: %v", buildErr)
+		tb.Fatalf("failed to build dumbodb: %v", buildErr)
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -99,7 +99,7 @@ func startDocuDolt(tb testing.TB, extraArgs ...string) *docuDoltTestEnv {
 	cmd.Stderr = nil
 	require.NoError(tb, cmd.Start())
 
-	env := &docuDoltTestEnv{
+	env := &dumboDBTestEnv{
 		cmd:     cmd,
 		dataDir: dataDir,
 		port:    port,
@@ -113,7 +113,7 @@ func startDocuDolt(tb testing.TB, extraArgs ...string) *docuDoltTestEnv {
 		cmd.Wait()         //nolint:errcheck
 	})
 
-	// Wait for docudolt to be ready.
+	// Wait for dumbodb to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -134,7 +134,7 @@ func startDocuDolt(tb testing.TB, extraArgs ...string) *docuDoltTestEnv {
 }
 
 // collection returns a fresh collection for each test.
-func (env *docuDoltTestEnv) collection(tb testing.TB) *mongo.Collection {
+func (env *dumboDBTestEnv) collection(tb testing.TB) *mongo.Collection {
 	tb.Helper()
 
 	name := fmt.Sprintf("col_%d", rand.Int64())
@@ -171,10 +171,10 @@ func d(elems ...primitive.E) bson.D {
 }
 
 // TestBSON_array_nested is a regression test for nested array support (do-dor).
-// MongoDB supports arrays containing arrays; docudolt must store and retrieve them
+// MongoDB supports arrays containing arrays; dumbodb must store and retrieve them
 // without error.
 func TestBSON_array_nested(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -211,7 +211,7 @@ func TestBSON_array_nested(t *testing.T) {
 // This test does NOT run in parallel so that forcing GC here does not interact
 // with other goroutines' resource tracking.
 func TestFind_CursorCleanupOnFilterError(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -240,7 +240,7 @@ func TestFind_CursorCleanupOnFilterError(t *testing.T) {
 func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	// flags: 0b0100 (4) — bits 0 and 1 are clear, bit 2 is set.
@@ -276,7 +276,7 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 func TestQuery_bitsAnySet_positions(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	// flags: 0b0001 (1) — bit 0 set.
@@ -319,7 +319,7 @@ func TestQuery_bitsAnySet_positions(t *testing.T) {
 func TestQuery_geo_within_box(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	// Store coordinates as legacy [lon, lat] arrays.
@@ -359,7 +359,7 @@ func TestQuery_geo_within_box(t *testing.T) {
 func TestQuery_proj_slice_first_n(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -392,7 +392,7 @@ func TestQuery_proj_slice_first_n(t *testing.T) {
 func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -414,7 +414,7 @@ func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 func TestQuery_type_decimal(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	decVal, decErr := primitive.ParseDecimal128("3.14")
@@ -451,7 +451,7 @@ func TestQuery_type_decimal(t *testing.T) {
 func TestQuery_geo_within_polygon(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -488,7 +488,7 @@ func TestQuery_geo_within_polygon(t *testing.T) {
 func TestQuery_geo_within_centerSphere(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	// New York (approx): lon=-74, lat=40.7
@@ -527,7 +527,7 @@ func TestQuery_geo_within_centerSphere(t *testing.T) {
 func TestQuery_geo_near(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	// Place two points: one near [0,0], one far away.
@@ -563,7 +563,7 @@ func TestQuery_geo_near(t *testing.T) {
 func TestQuery_geo_nearSphere(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -595,12 +595,12 @@ func TestQuery_geo_nearSphere(t *testing.T) {
 }
 
 // TestQuery_geo_nearSphere_legacy2d verifies {field: {$nearSphere: [lon, lat], $maxDistance: radians}}
-// on a plain 2d index (legacy coordinates). $maxDistance is in radians; docudolt must convert to metres
+// on a plain 2d index (legacy coordinates). $maxDistance is in radians; dumbodb must convert to metres
 // before applying the haversine filter. Regression for do-twgm.
 func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	// Two points near the origin.  In radians the great-circle radius of ~111 km is ~0.0175.
@@ -634,7 +634,7 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 func TestQuery_geo_intersects_point(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -670,7 +670,7 @@ func TestQuery_geo_intersects_point(t *testing.T) {
 func TestQuery_geo_intersects_polygon(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -713,7 +713,7 @@ func TestQuery_geo_intersects_polygon(t *testing.T) {
 func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -751,7 +751,7 @@ func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -793,7 +793,7 @@ func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 func TestQuery_proj_slice_last_n(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -825,7 +825,7 @@ func TestQuery_proj_slice_last_n(t *testing.T) {
 func TestQuery_proj_slice_skip_limit(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -858,7 +858,7 @@ func TestQuery_proj_slice_skip_limit(t *testing.T) {
 func TestQuery_type_number_alias_decimal(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	decVal, decErr := primitive.ParseDecimal128("9.99")
@@ -900,7 +900,7 @@ func TestQuery_type_number_alias_decimal(t *testing.T) {
 func TestQuery_type_objectid(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,

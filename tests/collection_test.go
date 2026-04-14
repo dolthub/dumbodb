@@ -48,9 +48,9 @@ func assertExplainResponse(t *testing.T, res bson.D, verbosity string) {
 	}
 }
 
-// TestExplain_Find_QueryPlanner tests explain for find with queryPlanner verbosity. (DocuDoltFull)
+// TestExplain_Find_QueryPlanner tests explain for find with queryPlanner verbosity. (DumboDBFull)
 func TestExplain_Find_QueryPlanner(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -67,9 +67,9 @@ func TestExplain_Find_QueryPlanner(t *testing.T) {
 	assertExplainResponse(t, res, "queryPlanner")
 }
 
-// TestExplain_Find_ExecutionStats tests explain for find with executionStats verbosity. (DocuDoltFull)
+// TestExplain_Find_ExecutionStats tests explain for find with executionStats verbosity. (DumboDBFull)
 func TestExplain_Find_ExecutionStats(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -86,9 +86,9 @@ func TestExplain_Find_ExecutionStats(t *testing.T) {
 	assertExplainResponse(t, res, "executionStats")
 }
 
-// TestExplain_Find_AllPlansExecution tests explain for find with allPlansExecution verbosity. (DocuDoltFull)
+// TestExplain_Find_AllPlansExecution tests explain for find with allPlansExecution verbosity. (DumboDBFull)
 func TestExplain_Find_AllPlansExecution(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -105,9 +105,9 @@ func TestExplain_Find_AllPlansExecution(t *testing.T) {
 	assertExplainResponse(t, res, "allPlansExecution")
 }
 
-// TestExplain_Aggregate tests explain for aggregate command. (DocuDoltFull)
+// TestExplain_Aggregate tests explain for aggregate command. (DumboDBFull)
 func TestExplain_Aggregate(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -127,9 +127,9 @@ func TestExplain_Aggregate(t *testing.T) {
 	assertExplainResponse(t, res, "queryPlanner")
 }
 
-// TestExplain_Count tests explain for count command. (DocuDoltFull)
+// TestExplain_Count tests explain for count command. (DumboDBFull)
 func TestExplain_Count(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -145,9 +145,9 @@ func TestExplain_Count(t *testing.T) {
 	assertExplainResponse(t, res, "queryPlanner")
 }
 
-// TestExplain_Update tests explain for update command. (DocuDoltFull)
+// TestExplain_Update tests explain for update command. (DumboDBFull)
 func TestExplain_Update(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -171,9 +171,9 @@ func TestExplain_Update(t *testing.T) {
 	assertExplainResponse(t, res, "queryPlanner")
 }
 
-// TestExplain_Delete tests explain for delete command. (DocuDoltFull)
+// TestExplain_Delete tests explain for delete command. (DumboDBFull)
 func TestExplain_Delete(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -197,9 +197,9 @@ func TestExplain_Delete(t *testing.T) {
 	assertExplainResponse(t, res, "queryPlanner")
 }
 
-// TestExplain_Distinct tests explain for distinct command. (DocuDoltFull)
+// TestExplain_Distinct tests explain for distinct command. (DumboDBFull)
 func TestExplain_Distinct(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -222,11 +222,11 @@ func TestExplain_Distinct(t *testing.T) {
 // returns a response document structurally compatible with MongoDB, including the
 // expected field names and types (int32 for collection/index counts, float64 for sizes).
 //
-// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DocuDoltFull)
+// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DumboDBFull)
 func TestDB_RunCommand_DbStats(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -296,11 +296,11 @@ func TestDB_RunCommand_DbStats(t *testing.T) {
 // required fields with correct types, and that storageSize >= size (storage allocation
 // is always at least as large as logical data size).
 //
-// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DocuDoltFull)
+// Parity test for do-3bws: dbStats scale option and storage metric responses diverge. (DumboDBFull)
 func TestDB_RunCommand_CollStats(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -391,9 +391,9 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 //	{cursor: {id: 0, ns: "<db>.$cmd.listCollections", firstBatch: [...]}, ok: 1}
 //
 // Regression for do-3n5p: the cursor wrapper and/or the ns field were missing
-// or incorrectly formatted when listCollections was invoked via RunCommand. (DocuDoltFull)
+// or incorrectly formatted when listCollections was invoked via RunCommand. (DumboDBFull)
 func TestDB_RunCommand_ListCollections(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -453,9 +453,9 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 // version strings and fields structurally compatible with MongoDB, including
 // allocator, javascriptEngine, openssl, and storageEngines fields.
 //
-// Regression for do-87bd: missing fields and wrong version (DocuDoltFull)
+// Regression for do-87bd: missing fields and wrong version (DumboDBFull)
 func TestDB_RunCommand_BuildInfo(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -530,9 +530,9 @@ func TestDB_RunCommand_BuildInfo(t *testing.T) {
 // returns a collection integrity report matching MongoDB's response format:
 // valid, nrecords, nIndexes, keysPerIndex, repaired, and related arrays.
 //
-// Parity test for do-h7a9: validate command options and RunCommand response. (DocuDoltFull)
+// Parity test for do-h7a9: validate command options and RunCommand response. (DumboDBFull)
 func TestDB_RunCommand_Validate(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -594,10 +594,10 @@ func TestDB_RunCommand_Validate(t *testing.T) {
 // response structure compatible with MongoDB, including the admin system
 // database and correct field types for each database entry.
 //
-// Regression for do-27zw: listDatabases result structure diverges from MongoDB (DocuDoltFull)
-// Regression for do-ma7c: listDatabases crashes docudolt connection with EOF
+// Regression for do-27zw: listDatabases result structure diverges from MongoDB (DumboDBFull)
+// Regression for do-ma7c: listDatabases crashes dumbodb connection with EOF
 func TestDB_ListDatabases(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -674,9 +674,9 @@ func TestDB_ListDatabases(t *testing.T) {
 // TestDB_RunCommand_Hello verifies that the hello command returns the expected
 // topology and capability fields matching MongoDB's response format.
 // Parity test: hello command via RunCommand must include isWritablePrimary,
-// wire version bounds, session timeout, and ok=1. (DocuDoltFull)
+// wire version bounds, session timeout, and ok=1. (DumboDBFull)
 func TestDB_RunCommand_Hello(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -727,9 +727,9 @@ func TestDB_RunCommand_Hello(t *testing.T) {
 // TestDB_RunCommand_IsMaster verifies that the deprecated isMaster command
 // returns the expected topology fields matching MongoDB's response format.
 // Parity test: isMaster command via RunCommand must include ismaster=true,
-// wire version bounds, session timeout, and ok=1. (DocuDoltFull)
+// wire version bounds, session timeout, and ok=1. (DumboDBFull)
 func TestDB_RunCommand_IsMaster(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -780,9 +780,9 @@ func TestDB_RunCommand_IsMaster(t *testing.T) {
 // TestDB_RunCommand_ServerStatus verifies that the serverStatus command returns
 // process identity fields and timing metrics matching MongoDB's response format.
 // Parity test: serverStatus must include host, version, process, pid, uptime
-// variants, localTime, and ok=1. (DocuDoltFull)
+// variants, localTime, and ok=1. (DumboDBFull)
 func TestDB_RunCommand_ServerStatus(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 

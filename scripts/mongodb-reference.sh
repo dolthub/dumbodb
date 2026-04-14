@@ -3,8 +3,8 @@
 #
 # This establishes a "gold standard" scorecard showing which tests pass against
 # MongoDB itself, so you can distinguish:
-#   - docudolt regressions (passes here, fails in ferretdb-scorecard)
-#   - expected failures (fails here too, not a docudolt-specific problem)
+#   - dumbodb regressions (passes here, fails in ferretdb-scorecard)
+#   - expected failures (fails here too, not a dumbodb-specific problem)
 #
 # Requires MongoDB running on MONGO_HOST:MONGO_PORT (no auth).
 #
@@ -36,8 +36,8 @@ echo "=== MongoDB Reference Scorecard ===" | tee "$RESULTS_FILE"
 echo "Date:   $(date -u)" | tee -a "$RESULTS_FILE"
 echo "Target: $MONGO_URL (real MongoDB — no auth)" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
-echo "NOTE: Failures here are genuine MongoDB baseline results, not docudolt bugs." | tee -a "$RESULTS_FILE"
-echo "      Compare with ferretdb-scorecard output to isolate docudolt regressions." | tee -a "$RESULTS_FILE"
+echo "NOTE: Failures here are genuine MongoDB baseline results, not dumbodb bugs." | tee -a "$RESULTS_FILE"
+echo "      Compare with ferretdb-scorecard output to isolate dumbodb regressions." | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
 # Verify MongoDB is reachable.

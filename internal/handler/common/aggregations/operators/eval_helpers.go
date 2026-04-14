@@ -18,9 +18,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // evalArgValue resolves an operator argument to its concrete value against the document.

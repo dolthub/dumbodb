@@ -21,13 +21,13 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/google/uuid"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/bson"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
-	"github.com/dolthub/docudolt/internal/util/password"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/password"
 )
 
 // CreateUserParams represents the parameters of CreateUser function.

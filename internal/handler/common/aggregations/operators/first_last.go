@@ -17,7 +17,7 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // ── $first (expression operator) ─────────────────────────────────────────────

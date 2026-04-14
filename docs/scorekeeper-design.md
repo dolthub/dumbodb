@@ -7,7 +7,7 @@
 ## Overview
 
 The Scorekeeper is a Gas Town dog plugin that monitors FerretDB integration test
-results from the `docudolt-scorecard` GitHub Actions workflow. After each push to
+results from the `dumbodb-scorecard` GitHub Actions workflow. After each push to
 `main`, it fetches test results, compares against the previous run, tracks
 progress via bd issues, and flags regressions.
 
@@ -58,7 +58,7 @@ processes only runs newer than the last processed run.
 
 ### 3. Fetching GH Actions Results: `gh` CLI Polling
 
-**Decision**: Poll `gh api repos/dolthub/docudolt/actions/workflows/<id>/runs` to
+**Decision**: Poll `gh api repos/dolthub/dumbodb/actions/workflows/<id>/runs` to
 find the latest completed scorecard run, then download the artifact.
 
 **Flow:**
@@ -72,12 +72,12 @@ The `gh` CLI can download it directly without needing webhook infrastructure.
 
 ### 4. Issue Management: One bd Issue Per Failing Test
 
-**Decision**: One bd issue per failing test, in the docudolt rig, with label
+**Decision**: One bd issue per failing test, in the dumbodb rig, with label
 `scorekeeper`.
 
 **Title format**: `test-fail: TestFoo`
 **Labels**: `scorekeeper,category:test-failure`
-**Prefix**: `do-` (docudolt rig)
+**Prefix**: `do-` (dumbodb rig)
 
 When a test transitions **failing → passing**: close the bd issue with reason
 `test now passing as of <sha>`.
@@ -98,7 +98,7 @@ last 3 commits to `main` and identify the most likely culprit commit.
 **Method:**
 ```bash
 # Get recent commits with author info
-git -C <docudolt-repo-path> log --oneline -5 --format="%H %ae %s" origin/main
+git -C <dumbodb-repo-path> log --oneline -5 --format="%H %ae %s" origin/main
 ```
 
 Match commit author email against known polecats. Polecats use their name
@@ -107,14 +107,14 @@ the bead ID in parentheses — use that to identify which polecat was working.
 
 **Nudge** the polecat session if it still exists:
 ```bash
-gt nudge docudolt/polecats/<name> "Regression: TestFoo started failing. Likely from your commit <sha>: '<msg>'. Please investigate."
+gt nudge dumbodb/polecats/<name> "Regression: TestFoo started failing. Likely from your commit <sha>: '<msg>'. Please investigate."
 ```
 
 If polecat session is gone, create a bd issue flagging the suspected commit.
 
 ## Implementation
 
-The plugin is at `/home/ubuntu/docudolt/plugins/scorekeeper-dog/plugin.md`.
+The plugin is at `/home/ubuntu/dumbodb/plugins/scorekeeper-dog/plugin.md`.
 
 It runs as a Dog agent (Claude with AI judgment) on a 30-minute cooldown.
 Steps:
@@ -129,7 +129,7 @@ Steps:
 
 On first run (no prior state), the plugin creates bd issues for all currently
 failing tests in the most recent completed scorecard run. This provides an
-initial baseline for the docudolt rig's failing tests.
+initial baseline for the dumbodb rig's failing tests.
 
 The bead description notes seeding depends on `hq-dwzhz` (the GH Action that
 uploads scorecard artifacts) landing on `main` — that bead is now closed, so

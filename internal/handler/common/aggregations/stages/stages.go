@@ -18,9 +18,9 @@ package stages
 import (
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // newStageFunc is a type for a function that creates a new aggregation stage.

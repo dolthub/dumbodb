@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // doubleType represents BSON 64-bit binary floating point type.

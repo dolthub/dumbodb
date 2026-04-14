@@ -17,7 +17,7 @@ package iterator
 import (
 	"errors"
 
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // ConsumeValues consumes all values from iterator until it is done.

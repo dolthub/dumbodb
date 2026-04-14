@@ -17,8 +17,8 @@ package common
 import (
 	"log/slog"
 
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // CountParams represents parameters for the count command.

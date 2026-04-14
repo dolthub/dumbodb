@@ -21,10 +21,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // typeOp represents `$type` operator.

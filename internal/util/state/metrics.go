@@ -19,7 +19,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/docudolt/build/version"
+	"github.com/dolthub/dumbodb/build/version"
 )
 
 // Parts of Prometheus metric names.

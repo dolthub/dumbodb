@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package stub provides a stub backend implementation that returns errors for all operations.
-// It is used to scaffold the DocuDolt server before the Dolt backend is implemented.
+// It is used to scaffold the DumboDB server before the Dolt backend is implemented.
 package stub
 
 import (
@@ -24,7 +24,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // Backend implements backends.Backend interface with stub (no-op) implementations.
@@ -108,9 +108,9 @@ func (db *database) Stats(_ context.Context, _ *backends.DatabaseStatsParams) (*
 	return &backends.DatabaseStatsResult{}, nil
 }
 
-// DocuDoltCommit implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
-	b.l.Info("stub: DocuDoltCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DumboDBCommit implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBCommit(_ context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+	b.l.Info("stub: DumboDBCommit", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	ts := params.Timestamp
 	if ts.IsZero() {
@@ -126,25 +126,25 @@ func (b *Backend) DocuDoltCommit(_ context.Context, params *backends.CommitParam
 	}, nil
 }
 
-// DocuDoltCurrentBranch implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
-	b.l.Info("stub: DocuDoltCurrentBranch", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DumboDBCurrentBranch implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+	b.l.Info("stub: DumboDBCurrentBranch", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
 }
 
-// DocuDoltBranch implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
-	b.l.Info("stub: DocuDoltBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
+// DumboDBBranch implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+	b.l.Info("stub: DumboDBBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
 
 	return &backends.BranchResult{
 		Branch: params.Name,
 	}, nil
 }
 
-// DocuDoltMerge implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltMerge(_ context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
-	b.l.Info("stub: DocuDoltMerge", slog.String("db", params.DBName), slog.String("into", params.Into), slog.String("from", params.From))
+// DumboDBMerge implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBMerge(_ context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+	b.l.Info("stub: DumboDBMerge", slog.String("db", params.DBName), slog.String("into", params.Into), slog.String("from", params.From))
 
 	return &backends.MergeResult{
 		CommitID: "0000000000000000000000000000000000000000",
@@ -152,16 +152,16 @@ func (b *Backend) DocuDoltMerge(_ context.Context, params *backends.MergeParams)
 	}, nil
 }
 
-// DocuDoltLog implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltLog(_ context.Context, params *backends.LogParams) (*backends.LogResult, error) {
-	b.l.Info("stub: DocuDoltLog", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DumboDBLog implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBLog(_ context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+	b.l.Info("stub: DumboDBLog", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.LogResult{Commits: []backends.CommitInfo{}}, nil
 }
 
-// DocuDoltStatus implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltStatus(_ context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
-	b.l.Info("stub: DocuDoltStatus", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DumboDBStatus implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBStatus(_ context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+	b.l.Info("stub: DumboDBStatus", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.VersioningStatusResult{
 		Branch: params.Branch,
@@ -169,44 +169,44 @@ func (b *Backend) DocuDoltStatus(_ context.Context, params *backends.VersioningS
 	}, nil
 }
 
-// DocuDoltDiff implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltDiff(_ context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
-	b.l.Info("stub: DocuDoltDiff", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("to", params.To))
+// DumboDBDiff implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBDiff(_ context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+	b.l.Info("stub: DumboDBDiff", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("to", params.To))
 
 	return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
 }
 
-// DocuDoltReset implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltReset(_ context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
-	b.l.Info("stub: DocuDoltReset", slog.String("db", params.DBName), slog.String("commitId", params.CommitID), slog.Bool("hard", params.Hard))
+// DumboDBReset implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBReset(_ context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+	b.l.Info("stub: DumboDBReset", slog.String("db", params.DBName), slog.String("commitId", params.CommitID), slog.Bool("hard", params.Hard))
 
 	return &backends.ResetResult{CommitID: params.CommitID}, nil
 }
 
-// DocuDoltConflicts implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltConflicts(_ context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
-	b.l.Info("stub: DocuDoltConflicts", slog.String("db", params.DBName), slog.String("branch", params.Branch))
+// DumboDBConflicts implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBConflicts(_ context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+	b.l.Info("stub: DumboDBConflicts", slog.String("db", params.DBName), slog.String("branch", params.Branch))
 
 	return &backends.ConflictsResult{}, nil
 }
 
-// DocuDoltResolveConflict implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltResolveConflict(_ context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
-	b.l.Info("stub: DocuDoltResolveConflict", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("conflictId", params.ConflictID))
+// DumboDBResolveConflict implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBResolveConflict(_ context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+	b.l.Info("stub: DumboDBResolveConflict", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("conflictId", params.ConflictID))
 
 	return &backends.ResolveConflictResult{}, nil
 }
 
-// DocuDoltCherryPick implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltCherryPick(_ context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
-	b.l.Info("stub: DocuDoltCherryPick", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("commit", params.Commit))
+// DumboDBCherryPick implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBCherryPick(_ context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+	b.l.Info("stub: DumboDBCherryPick", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("commit", params.Commit))
 
 	return &backends.CherryPickResult{CommitID: "stub", Message: "stub cherry-pick"}, nil
 }
 
-// DocuDoltRebase implements backends.VersioningBackend interface.
-func (b *Backend) DocuDoltRebase(_ context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
-	b.l.Info("stub: DocuDoltRebase", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("onto", params.Onto))
+// DumboDBRebase implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBRebase(_ context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
+	b.l.Info("stub: DumboDBRebase", slog.String("db", params.DBName), slog.String("branch", params.Branch), slog.String("onto", params.Onto))
 
 	return &backends.RebaseResult{CommitsReplayed: 0, NewTip: "stub"}, nil
 }

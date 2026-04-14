@@ -24,9 +24,9 @@ import (
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
 
-	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
-	"github.com/dolthub/docudolt/internal/util/must"
-	"github.com/dolthub/docudolt/internal/util/resource"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/resource"
 )
 
 // Backend is a generic interface for all backends for accessing them.
@@ -208,110 +208,110 @@ func (bc *backendContract) Collect(ch chan<- prometheus.Metric) {
 	bc.b.Collect(ch)
 }
 
-// DocuDoltCommit implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltCommit(ctx context.Context, params *CommitParams) (*CommitResult, error) {
+// DumboDBCommit implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBCommit(ctx context.Context, params *CommitParams) (*CommitResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltCommit(ctx, params)
+		return vb.DumboDBCommit(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltCommit")
+	return nil, newVersioningUnsupportedError("DumboDBCommit")
 }
 
-// DocuDoltBranch implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltBranch(ctx context.Context, params *BranchParams) (*BranchResult, error) {
+// DumboDBBranch implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBBranch(ctx context.Context, params *BranchParams) (*BranchResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltBranch(ctx, params)
+		return vb.DumboDBBranch(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltBranch")
+	return nil, newVersioningUnsupportedError("DumboDBBranch")
 }
 
-// DocuDoltMerge implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltMerge(ctx context.Context, params *MergeParams) (*MergeResult, error) {
+// DumboDBMerge implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBMerge(ctx context.Context, params *MergeParams) (*MergeResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltMerge(ctx, params)
+		return vb.DumboDBMerge(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltMerge")
+	return nil, newVersioningUnsupportedError("DumboDBMerge")
 }
 
-// DocuDoltLog implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltLog(ctx context.Context, params *LogParams) (*LogResult, error) {
+// DumboDBLog implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBLog(ctx context.Context, params *LogParams) (*LogResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltLog(ctx, params)
+		return vb.DumboDBLog(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltLog")
+	return nil, newVersioningUnsupportedError("DumboDBLog")
 }
 
-// DocuDoltStatus implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltStatus(ctx context.Context, params *VersioningStatusParams) (*VersioningStatusResult, error) {
+// DumboDBStatus implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBStatus(ctx context.Context, params *VersioningStatusParams) (*VersioningStatusResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltStatus(ctx, params)
+		return vb.DumboDBStatus(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltStatus")
+	return nil, newVersioningUnsupportedError("DumboDBStatus")
 }
 
-// DocuDoltDiff implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltDiff(ctx context.Context, params *DiffParams) (*DiffResult, error) {
+// DumboDBDiff implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBDiff(ctx context.Context, params *DiffParams) (*DiffResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltDiff(ctx, params)
+		return vb.DumboDBDiff(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltDiff")
+	return nil, newVersioningUnsupportedError("DumboDBDiff")
 }
 
-func (bc *backendContract) DocuDoltCurrentBranch(ctx context.Context, params *CurrentBranchParams) (*CurrentBranchResult, error) {
+func (bc *backendContract) DumboDBCurrentBranch(ctx context.Context, params *CurrentBranchParams) (*CurrentBranchResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltCurrentBranch(ctx, params)
+		return vb.DumboDBCurrentBranch(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltCurrentBranch")
+	return nil, newVersioningUnsupportedError("DumboDBCurrentBranch")
 }
 
-func (bc *backendContract) DocuDoltReset(ctx context.Context, params *ResetParams) (*ResetResult, error) {
+func (bc *backendContract) DumboDBReset(ctx context.Context, params *ResetParams) (*ResetResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltReset(ctx, params)
+		return vb.DumboDBReset(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltReset")
+	return nil, newVersioningUnsupportedError("DumboDBReset")
 }
 
-// DocuDoltConflicts implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltConflicts(ctx context.Context, params *ConflictsParams) (*ConflictsResult, error) {
+// DumboDBConflicts implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBConflicts(ctx context.Context, params *ConflictsParams) (*ConflictsResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltConflicts(ctx, params)
+		return vb.DumboDBConflicts(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltConflicts")
+	return nil, newVersioningUnsupportedError("DumboDBConflicts")
 }
 
-// DocuDoltResolveConflict implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltResolveConflict(ctx context.Context, params *ResolveConflictParams) (*ResolveConflictResult, error) {
+// DumboDBResolveConflict implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBResolveConflict(ctx context.Context, params *ResolveConflictParams) (*ResolveConflictResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltResolveConflict(ctx, params)
+		return vb.DumboDBResolveConflict(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltResolveConflict")
+	return nil, newVersioningUnsupportedError("DumboDBResolveConflict")
 }
 
-// DocuDoltCherryPick implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltCherryPick(ctx context.Context, params *CherryPickParams) (*CherryPickResult, error) {
+// DumboDBCherryPick implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBCherryPick(ctx context.Context, params *CherryPickParams) (*CherryPickResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltCherryPick(ctx, params)
+		return vb.DumboDBCherryPick(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltCherryPick")
+	return nil, newVersioningUnsupportedError("DumboDBCherryPick")
 }
 
-// DocuDoltRebase implements VersioningBackend if the wrapped backend supports it.
-func (bc *backendContract) DocuDoltRebase(ctx context.Context, params *RebaseParams) (*RebaseResult, error) {
+// DumboDBRebase implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBRebase(ctx context.Context, params *RebaseParams) (*RebaseResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DocuDoltRebase(ctx, params)
+		return vb.DumboDBRebase(ctx, params)
 	}
 
-	return nil, newVersioningUnsupportedError("DocuDoltRebase")
+	return nil, newVersioningUnsupportedError("DumboDBRebase")
 }
 
 // newVersioningUnsupportedError returns a standard error for when a versioning operation

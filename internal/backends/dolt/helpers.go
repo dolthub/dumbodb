@@ -32,8 +32,8 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
-	"github.com/dolthub/docudolt/internal/bson"
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // emptyArtifactMapSentinel is a zero hash indicating no artifact map is set.
@@ -89,7 +89,7 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 }
 
 // buildCollectionTableSchema builds a DSCH (TableSchema) flatbuffer for the
-// docudolt collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
+// dumbodb collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
 //
 // This schema is shared across all collections within a database; the DSCH
 // chunk is written once to the value store and its hash is stored in every DTBL.

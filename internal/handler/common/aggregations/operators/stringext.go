@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // ── $strcasecmp ───────────────────────────────────────────────────────────────

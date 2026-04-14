@@ -1,7 +1,7 @@
-# Testing DocuDolt with the FerretDB Compatibility Suite
+# Testing DumboDB with the FerretDB Compatibility Suite
 
 The FerretDB integration suite supports a *compat mode* that runs identical operations
-against two servers and compares results field-by-field.  By pointing it at DocuDolt (target)
+against two servers and compares results field-by-field.  By pointing it at DumboDB (target)
 and a real MongoDB instance (compat reference), you can produce a precise diff of every
 behavioral difference.
 
@@ -12,7 +12,7 @@ behavioral difference.
 cd ferretdb
 docker compose up -d mongodb-secure
 
-# 2. Run the compat suite (builds docudolt, starts it, runs tests, stops it)
+# 2. Run the compat suite (builds dumbodb, starts it, runs tests, stops it)
 cd ..
 make ferretdb-compat
 ```
@@ -24,7 +24,7 @@ Results land in `.runtime/ferretdb-compat.txt`.
 ```
 FerretDB integration suite
         │
-        ├──► DocuDolt   (target)  mongodb://127.0.0.1:27017/
+        ├──► DumboDB   (target)  mongodb://127.0.0.1:27017/
         │      -target-backend=ferretdb
         │
         └──► MongoDB (compat)  mongodb://username:password@127.0.0.1:47017/?replicaSet=rs0
@@ -52,12 +52,12 @@ cd ferretdb
 docker compose up -d mongodb-secure
 ```
 
-### DocuDolt (target under test)
+### DumboDB (target under test)
 
 ```bash
 make build
-mkdir -p .runtime/docudolt-data
-.runtime/bin/docudolt --addr 127.0.0.1:27017 --data-dir .runtime/docudolt-data
+mkdir -p .runtime/dumbodb-data
+.runtime/bin/dumbodb --addr 127.0.0.1:27017 --data-dir .runtime/dumbodb-data
 ```
 
 Or let `make ferretdb-compat` start and stop it automatically.
@@ -68,7 +68,7 @@ Or let `make ferretdb-compat` start and stop it automatically.
 
 ```bash
 make ferretdb-compat          # full suite
-DOCUDOLT_PORT=27017 make ferretdb-compat   # override port
+DUMBODB_PORT=27017 make ferretdb-compat   # override port
 ```
 
 ### Manually
@@ -102,7 +102,7 @@ A compat test failure looks like:
 ```
 --- FAIL: TestQueryCompatSort/SortAscending (0.12s)
     compat_test.go:123: response mismatch
-        target (docudolt):  {n: 3, ok: 1}
+        target (dumbodb):  {n: 3, ok: 1}
         compat (mongodb): {n: 3, ok: 1.0}
 ```
 
@@ -110,9 +110,9 @@ Common patterns:
 
 | Pattern | Likely cause |
 |---------|-------------|
-| Type mismatch (`int` vs `float`) | DocuDolt returns a different BSON type |
-| Missing field in target | Command not yet implemented in DocuDolt |
-| Extra field in compat | MongoDB-specific metadata DocuDolt omits |
+| Type mismatch (`int` vs `float`) | DumboDB returns a different BSON type |
+| Missing field in target | Command not yet implemented in DumboDB |
+| Extra field in compat | MongoDB-specific metadata DumboDB omits |
 | Value mismatch on cursor | Sort / collation difference |
 | `SKIP` in output | Test requires `-compat-url`; skipped when not set |
 
@@ -124,37 +124,37 @@ go test … -v -debug-setup -run TestQueryCompatSort .
 
 ## FerretDB Taskfile integration (upstream)
 
-To add a first-class `task test-integration-docudolt` target in the FerretDB repo,
-apply `patches/ferretdb-taskfile-docudolt.patch` to a FerretDB checkout:
+To add a first-class `task test-integration-dumbodb` target in the FerretDB repo,
+apply `patches/ferretdb-taskfile-dumbodb.patch` to a FerretDB checkout:
 
 ```bash
 cd ferretdb
-git apply ../patches/ferretdb-taskfile-docudolt.patch
+git apply ../patches/ferretdb-taskfile-dumbodb.patch
 ```
 
 See the patch for the full task definition.  The environment variable
-`DOCUDOLT_URL` (default `mongodb://127.0.0.1:27017/`) controls where docudolt
+`DUMBODB_URL` (default `mongodb://127.0.0.1:27017/`) controls where dumbodb
 is expected to listen.
 
-## Docker Compose service for DocuDolt
+## Docker Compose service for DumboDB
 
-To start DocuDolt alongside the FerretDB test stack, add the following snippet to
+To start DumboDB alongside the FerretDB test stack, add the following snippet to
 `ferretdb/docker-compose.yml`:
 
 ```yaml
-  docudolt:
-    image: ghcr.io/dolthub/docudolt:latest   # or build locally
-    container_name: ferretdb_docudolt
+  dumbodb:
+    image: ghcr.io/dolthub/dumbodb:latest   # or build locally
+    container_name: ferretdb_dumbodb
     ports:
       - "27017:27017"
-    command: --addr 0.0.0.0:27017 --data-dir /var/docudolt-data
+    command: --addr 0.0.0.0:27017 --data-dir /var/dumbodb-data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - docudolt-data:/var/docudolt-data
+      - dumbodb-data:/var/dumbodb-data
 
 volumes:
-  docudolt-data:
+  dumbodb-data:
 ```
 
-Then run `docker compose up -d docudolt mongodb-secure` before invoking the compat suite.
+Then run `docker compose up -d dumbodb mongodb-secure` before invoking the compat suite.

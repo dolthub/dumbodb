@@ -25,15 +25,15 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/docudolt/build/version"
-	"github.com/dolthub/docudolt/internal/bson"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/debugbuild"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/logging"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/build/version"
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/debugbuild"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgGetLog implements `getLog` command.
@@ -104,8 +104,8 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		startupWarnings := []string{
-			fmt.Sprintf("Powered by DocuDolt %s%s.", info.Version, b),
-			"Please star us on GitHub: https://github.com/dolthub/docudolt.",
+			fmt.Sprintf("Powered by DumboDB %s%s.", info.Version, b),
+			"Please star us on GitHub: https://github.com/dolthub/dumbodb.",
 		}
 
 		if debugbuild.Enabled {

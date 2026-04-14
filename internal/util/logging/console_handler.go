@@ -28,7 +28,7 @@ import (
 
 	"golang.org/x/exp/maps"
 
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // timeLayout is the format of date time used by the console handler.
@@ -40,7 +40,7 @@ const timeLayout = "2006-01-02T15:04:05.000Z0700"
 //
 // See https://golang.org/s/slog-handler-guide.
 //
-// TODO https://github.com/dolthub/docudolt/issues/4438
+// TODO https://github.com/dolthub/dumbodb/issues/4438
 //
 //nolint:vet // for readability
 type consoleHandler struct {

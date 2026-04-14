@@ -40,7 +40,7 @@ import (
 
 // cherryPickVerifySetup mirrors the Setup section of docs/verify/cherry-pick.md.
 // Returns hashC1 (main HEAD, initial commit) and hashC2 (feature HEAD, adds _id:2).
-func cherryPickVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1, hashC2 string) {
+func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1, hashC2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -54,7 +54,7 @@ func cherryPickVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (h
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = docuDoltCommit(t, env, dbName, "initial", "alice <alice@docudolt>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
@@ -72,14 +72,14 @@ func cherryPickVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (h
 	})
 	require.NoError(t, err)
 
-	hashC2 = docuDoltCommit(t, env, dbName+"__d_feature", "add-two", "bob <bob@docudolt>")
+	hashC2 = dumboDBCommit(t, env, dbName+"__d_feature", "add-two", "bob <bob@dumbodb>")
 	require.NotEmpty(t, hashC2, "feature commit hash must not be empty")
 
 	return hashC1, hashC2
 }
 
 func TestCherryPickVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("pickvrfy%d", rand.Int64N(1_000_000))
@@ -148,14 +148,14 @@ func TestCherryPickVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC3feat := docuDoltCommit(t, env, dbName+"__d_feature", "add-three", "carol <carol@docudolt>")
+		hashC3feat := dumboDBCommit(t, env, dbName+"__d_feature", "add-three", "carol <carol@dumbodb>")
 
 		// Cherry-pick with custom message and author.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashC3feat},
 			{Key: "message", Value: "port: add item three"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1")
@@ -177,7 +177,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
 		require.NoError(t, err)
-		hashConflictFeat = docuDoltCommit(t, env, dbName+"__d_feature", "conflict-source", "alice <alice@docudolt>")
+		hashConflictFeat = dumboDBCommit(t, env, dbName+"__d_feature", "conflict-source", "alice <alice@dumbodb>")
 
 		// Modify _id:1 on main too (independent change to create conflict).
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -185,7 +185,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 		)
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName+"__d_main", "conflict-target", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName+"__d_main", "conflict-target", "alice <alice@dumbodb>")
 
 		// Cherry-pick — expect conflict.
 		// In mongosh this throws a MongoServerError (ok:0 surfaces as an exception).
@@ -314,7 +314,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		hashConflict2 := docuDoltCommit(t, env, dbName+"__d_feature", "another-conflict", "alice <alice@docudolt>")
+		hashConflict2 := dumboDBCommit(t, env, dbName+"__d_feature", "another-conflict", "alice <alice@dumbodb>")
 
 		// Create conflicting change on main.
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -322,7 +322,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
 		)
 		require.NoError(t, err)
-		mainHeadBeforeAbort := docuDoltCommit(t, env, dbName+"__d_main", "another-conflict-target", "alice <alice@docudolt>")
+		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"__d_main", "another-conflict-target", "alice <alice@dumbodb>")
 
 		// Start cherry-pick — expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{

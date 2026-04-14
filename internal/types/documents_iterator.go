@@ -14,7 +14,7 @@
 
 package types
 
-import "github.com/dolthub/docudolt/internal/util/iterator"
+import "github.com/dolthub/dumbodb/internal/util/iterator"
 
 // DocumentsIterator represents an iterator over documents (slice, query results, etc).
 //

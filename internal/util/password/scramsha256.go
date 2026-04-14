@@ -23,7 +23,7 @@ import (
 	"github.com/xdg-go/stringprep"
 	"golang.org/x/crypto/pbkdf2"
 
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // SCRAMSHA256Hash computes SCRAM-SHA-256 credentials and returns

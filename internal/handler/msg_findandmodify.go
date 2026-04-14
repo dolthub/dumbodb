@@ -22,13 +22,13 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // findAndModifyResult represents information about modification made.
@@ -117,7 +117,7 @@ func (h *Handler) MsgFindAndModify(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.FindAndModifyParams) (*findAndModifyResult, error) {
 	db, err := h.b.Database(params.DB)
 	if err != nil {
-		// TODO https://github.com/dolthub/docudolt/issues/2168
+		// TODO https://github.com/dolthub/dumbodb/issues/2168
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
 			msg := fmt.Sprintf("Invalid namespace specified '%s.%s'", params.DB, params.Collection)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "findAndModify")
@@ -128,7 +128,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	c, err := db.Collection(params.Collection)
 	if err != nil {
-		// TODO https://github.com/dolthub/docudolt/issues/2168
+		// TODO https://github.com/dolthub/dumbodb/issues/2168
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
 			msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "findAndModify")
@@ -139,7 +139,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	cancel := func() {}
 	if params.MaxTimeMS != 0 {
-		// TODO https://github.com/dolthub/docudolt/issues/2168
+		// TODO https://github.com/dolthub/dumbodb/issues/2168
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(params.MaxTimeMS)*time.Millisecond)
 	}
 
@@ -211,7 +211,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		ArrayFilters:       params.ArrayFilters,
 	}
 
-	// TODO https://github.com/dolthub/docudolt/issues/2168
+	// TODO https://github.com/dolthub/dumbodb/issues/2168
 	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update)
 	if err != nil {
 		return nil, lazyerrors.Error(err)

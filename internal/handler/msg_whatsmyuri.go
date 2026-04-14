@@ -19,9 +19,9 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgWhatsMyURI implements `whatsMyURI` command.

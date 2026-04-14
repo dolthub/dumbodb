@@ -27,15 +27,15 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/xdg-go/scram"
 
-	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/logging"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgSASLStart implements `saslStart` command.
@@ -182,7 +182,7 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 		return nil, lazyerrors.Error(err)
 	}
 
-	// TODO https://github.com/dolthub/docudolt/issues/174
+	// TODO https://github.com/dolthub/dumbodb/issues/174
 	filter := must.NotFail(types.NewDocument("_id", dbName+"."+username))
 
 	// Filter isn't being passed to the query as we are filtering after retrieving all data

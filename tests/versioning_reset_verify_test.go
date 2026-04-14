@@ -39,7 +39,7 @@ import (
 
 // resetVerifySetup mirrors the Setup section of docs/verify/reset.md.
 // Returns hashC1 and hashC2.
-func resetVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1, hashC2 string) {
+func resetVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1, hashC2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -52,20 +52,20 @@ func resetVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = docuDoltCommit(t, env, dbName, "initial", "alice <alice@docudolt>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
 
 	_, err = items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashC2 = docuDoltCommit(t, env, dbName, "add-two", "alice <alice@docudolt>")
+	hashC2 = dumboDBCommit(t, env, dbName, "add-two", "alice <alice@dumbodb>")
 
 	return hashC1, hashC2
 }
 
 func TestResetVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -126,7 +126,7 @@ func TestResetVerify(t *testing.T) {
 		items := env.client.Database(dbName).Collection("items")
 
 		// Commit the working set from Scenario 1 to create a new snapshot (C3).
-		docuDoltCommit(t, env, dbName, "snapshot", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "snapshot", "alice <alice@dumbodb>")
 
 		// Add _id:4 to the working set (uncommitted).
 		_, err := items.InsertOne(ctx, bson.D{
@@ -177,7 +177,7 @@ func TestResetVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "re-add-two", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "re-add-two", "alice <alice@dumbodb>")
 
 		// Soft reset to hashC1 — "undoes" the re-add-two commit.
 		var raw bson.M
@@ -189,7 +189,7 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashC1, raw["commitId"], "soft undo-commit response hash must equal hashC1")
 
 		// _id:2 was in the last commit but the working tree was not changed.
-		// docuDoltDiff must show _id:2 as added (HEAD=C1 doesn't have it).
+		// dumboDBDiff must show _id:2 as added (HEAD=C1 doesn't have it).
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},

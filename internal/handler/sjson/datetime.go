@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // dateTimeType represents BSON UTC datetime type.
@@ -53,7 +53,7 @@ func (dt *dateTimeType) UnmarshalJSON(data []byte) error {
 	}
 
 	// Use .UTC().
-	// TODO https://github.com/dolthub/docudolt/issues/43
+	// TODO https://github.com/dolthub/dumbodb/issues/43
 	*dt = dateTimeType(time.UnixMilli(o))
 
 	return nil

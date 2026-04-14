@@ -17,8 +17,8 @@ package types
 import (
 	"sync/atomic"
 
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/resource"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/resource"
 )
 
 // documentIterator represents an iterator over the document fields.

@@ -15,8 +15,8 @@
 package operators
 
 import (
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // mergeObjects implements the $mergeObjects expression operator.

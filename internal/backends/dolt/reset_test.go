@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // countDocs returns the number of documents in a collection.
@@ -56,13 +56,13 @@ func countDocs(t *testing.T, b *Backend, dbName, collName string) int {
 	return n
 }
 
-// logHashes returns all commit hashes from DocuDoltLog (most recent first).
+// logHashes returns all commit hashes from DumboDBLog (most recent first).
 func logHashes(t *testing.T, b *Backend, dbName string) []string {
 	t.Helper()
 
-	res, err := b.DocuDoltLog(context.Background(), &backends.LogParams{DBName: dbName})
+	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{DBName: dbName})
 	if err != nil {
-		t.Fatalf("logHashes: DocuDoltLog: %v", err)
+		t.Fatalf("logHashes: DumboDBLog: %v", err)
 	}
 
 	hashes := make([]string, len(res.Commits))
@@ -86,9 +86,9 @@ func contains(slice []string, elem string) bool {
 
 // ── Soft reset tests ──────────────────────────────────────────────────────────
 
-// TestDocuDoltReset_Soft_HeadMovesToTarget verifies that after a soft reset, HEAD is
+// TestDumboDBReset_Soft_HeadMovesToTarget verifies that after a soft reset, HEAD is
 // the target commit and the working tree still contains both docs.
-func TestDocuDoltReset_Soft_HeadMovesToTarget(t *testing.T) {
+func TestDumboDBReset_Soft_HeadMovesToTarget(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -100,17 +100,17 @@ func TestDocuDoltReset_Soft_HeadMovesToTarget(t *testing.T) {
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
 
 	// Soft reset to hash1.
-	res, err := b.DocuDoltReset(ctx, &backends.ResetParams{
+	res, err := b.DumboDBReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: hash1,
 		Hard:   false,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltReset: %v", err)
+		t.Fatalf("DumboDBReset: %v", err)
 	}
 
 	if res.CommitID != hash1 {
-		t.Errorf("DocuDoltReset returned hash %q, want %q", res.CommitID, hash1)
+		t.Errorf("DumboDBReset returned hash %q, want %q", res.CommitID, hash1)
 	}
 
 	// After soft reset: working tree should still have both docs.
@@ -120,9 +120,9 @@ func TestDocuDoltReset_Soft_HeadMovesToTarget(t *testing.T) {
 	}
 }
 
-// TestDocuDoltReset_Soft_LogShowsTargetAsHead verifies that DocuDoltLog after soft reset
+// TestDumboDBReset_Soft_LogShowsTargetAsHead verifies that DumboDBLog after soft reset
 // reports the target commit as the HEAD.
-func TestDocuDoltReset_Soft_LogShowsTargetAsHead(t *testing.T) {
+func TestDumboDBReset_Soft_LogShowsTargetAsHead(t *testing.T) {
 	b := newTestBackend(t)
 
 	// Build two commits.
@@ -133,13 +133,13 @@ func TestDocuDoltReset_Soft_LogShowsTargetAsHead(t *testing.T) {
 	hash2 := commitDB(t, b, "testdb", "second")
 
 	// Soft reset to hash1.
-	_, err := b.DocuDoltReset(context.Background(), &backends.ResetParams{
+	_, err := b.DumboDBReset(context.Background(), &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: hash1,
 		Hard:   false,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltReset: %v", err)
+		t.Fatalf("DumboDBReset: %v", err)
 	}
 
 	hashes := logHashes(t, b, "testdb")
@@ -155,9 +155,9 @@ func TestDocuDoltReset_Soft_LogShowsTargetAsHead(t *testing.T) {
 	}
 }
 
-// TestDocuDoltReset_Soft_DiffShowsUncommittedChange verifies that after soft reset the
-// working-set doc is visible as uncommitted (i.e. DocuDoltDiff shows it as added).
-func TestDocuDoltReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
+// TestDumboDBReset_Soft_DiffShowsUncommittedChange verifies that after soft reset the
+// working-set doc is visible as uncommitted (i.e. DumboDBDiff shows it as added).
+func TestDumboDBReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -169,19 +169,19 @@ func TestDocuDoltReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
 
 	// Soft reset to hash1.
-	_, err := b.DocuDoltReset(ctx, &backends.ResetParams{
+	_, err := b.DumboDBReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: hash1,
 		Hard:   false,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltReset: %v", err)
+		t.Fatalf("DumboDBReset: %v", err)
 	}
 
-	// DocuDoltDiff (HEAD=hash1 vs working set) should show doc2 as added.
-	diffRes, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	// DumboDBDiff (HEAD=hash1 vs working set) should show doc2 as added.
+	diffRes, err := b.DumboDBDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocuDoltDiff after soft reset: %v", err)
+		t.Fatalf("DumboDBDiff after soft reset: %v", err)
 	}
 
 	if len(diffRes.Collections) != 1 {
@@ -201,9 +201,9 @@ func TestDocuDoltReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
 
 // ── Hard reset tests ──────────────────────────────────────────────────────────
 
-// TestDocuDoltReset_Hard_WorkingTreeMatchesTarget verifies that after a hard reset,
+// TestDumboDBReset_Hard_WorkingTreeMatchesTarget verifies that after a hard reset,
 // the working tree contains only the documents present at the target commit.
-func TestDocuDoltReset_Hard_WorkingTreeMatchesTarget(t *testing.T) {
+func TestDumboDBReset_Hard_WorkingTreeMatchesTarget(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -215,17 +215,17 @@ func TestDocuDoltReset_Hard_WorkingTreeMatchesTarget(t *testing.T) {
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
 
 	// Hard reset to hash1.
-	res, err := b.DocuDoltReset(ctx, &backends.ResetParams{
+	res, err := b.DumboDBReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: hash1,
 		Hard:   true,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltReset(hard): %v", err)
+		t.Fatalf("DumboDBReset(hard): %v", err)
 	}
 
 	if res.CommitID != hash1 {
-		t.Errorf("DocuDoltReset returned hash %q, want %q", res.CommitID, hash1)
+		t.Errorf("DumboDBReset returned hash %q, want %q", res.CommitID, hash1)
 	}
 
 	// After hard reset: working tree should have only doc1.
@@ -235,9 +235,9 @@ func TestDocuDoltReset_Hard_WorkingTreeMatchesTarget(t *testing.T) {
 	}
 }
 
-// TestDocuDoltReset_Hard_LogShowsTargetAsHead verifies that DocuDoltLog after a hard reset
+// TestDumboDBReset_Hard_LogShowsTargetAsHead verifies that DumboDBLog after a hard reset
 // shows the target commit as HEAD.
-func TestDocuDoltReset_Hard_LogShowsTargetAsHead(t *testing.T) {
+func TestDumboDBReset_Hard_LogShowsTargetAsHead(t *testing.T) {
 	b := newTestBackend(t)
 
 	// Two commits.
@@ -248,13 +248,13 @@ func TestDocuDoltReset_Hard_LogShowsTargetAsHead(t *testing.T) {
 	hash2 := commitDB(t, b, "testdb", "second")
 
 	// Hard reset to hash1.
-	_, err := b.DocuDoltReset(context.Background(), &backends.ResetParams{
+	_, err := b.DumboDBReset(context.Background(), &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: hash1,
 		Hard:   true,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltReset(hard): %v", err)
+		t.Fatalf("DumboDBReset(hard): %v", err)
 	}
 
 	hashes := logHashes(t, b, "testdb")
@@ -268,9 +268,9 @@ func TestDocuDoltReset_Hard_LogShowsTargetAsHead(t *testing.T) {
 	}
 }
 
-// TestDocuDoltReset_Hard_DiffIsClean verifies that after a hard reset, the working
-// tree matches HEAD exactly (DocuDoltDiff returns no changes).
-func TestDocuDoltReset_Hard_DiffIsClean(t *testing.T) {
+// TestDumboDBReset_Hard_DiffIsClean verifies that after a hard reset, the working
+// tree matches HEAD exactly (DumboDBDiff returns no changes).
+func TestDumboDBReset_Hard_DiffIsClean(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -282,19 +282,19 @@ func TestDocuDoltReset_Hard_DiffIsClean(t *testing.T) {
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
 
 	// Hard reset to hash1.
-	_, err := b.DocuDoltReset(ctx, &backends.ResetParams{
+	_, err := b.DumboDBReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: hash1,
 		Hard:   true,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltReset(hard): %v", err)
+		t.Fatalf("DumboDBReset(hard): %v", err)
 	}
 
-	// DocuDoltDiff should show no changes.
-	diffRes, err := b.DocuDoltDiff(ctx, &backends.DiffParams{DBName: "testdb"})
+	// DumboDBDiff should show no changes.
+	diffRes, err := b.DumboDBDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
-		t.Fatalf("DocuDoltDiff after hard reset: %v", err)
+		t.Fatalf("DumboDBDiff after hard reset: %v", err)
 	}
 
 	if len(diffRes.Collections) != 0 {
@@ -304,8 +304,8 @@ func TestDocuDoltReset_Hard_DiffIsClean(t *testing.T) {
 
 // ── Error case tests ──────────────────────────────────────────────────────────
 
-// TestDocuDoltReset_InvalidHash verifies that resetting to a nonexistent hash returns an error.
-func TestDocuDoltReset_InvalidHash(t *testing.T) {
+// TestDumboDBReset_InvalidHash verifies that resetting to a nonexistent hash returns an error.
+func TestDumboDBReset_InvalidHash(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -315,7 +315,7 @@ func TestDocuDoltReset_InvalidHash(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	_, err = b.DocuDoltReset(ctx, &backends.ResetParams{
+	_, err = b.DumboDBReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: "notavalidhash",
 	})
@@ -324,8 +324,8 @@ func TestDocuDoltReset_InvalidHash(t *testing.T) {
 	}
 }
 
-// TestDocuDoltReset_UnknownButValidHash verifies that a well-formed but unknown hash returns an error.
-func TestDocuDoltReset_UnknownButValidHash(t *testing.T) {
+// TestDumboDBReset_UnknownButValidHash verifies that a well-formed but unknown hash returns an error.
+func TestDumboDBReset_UnknownButValidHash(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
@@ -338,7 +338,7 @@ func TestDocuDoltReset_UnknownButValidHash(t *testing.T) {
 	// A hash that is syntactically valid (32 hex chars) but not present in the store.
 	unknownHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	_, err = b.DocuDoltReset(ctx, &backends.ResetParams{
+	_, err = b.DumboDBReset(ctx, &backends.ResetParams{
 		DBName: "testdb",
 		CommitID: unknownHash,
 	})

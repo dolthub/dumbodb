@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 //go:generate ../../bin/stringer -linecomment -type ValidationErrorCode

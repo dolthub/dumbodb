@@ -18,13 +18,13 @@ import (
 	"math"
 	"testing"
 
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/must"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // TestProbeModNaNDivisor is a regression test for do-9ni / do-sl4f.
-// When $mod is used with a NaN divisor, docudolt must return NaN (matching MongoDB),
+// When $mod is used with a NaN divisor, dumbodb must return NaN (matching MongoDB),
 // not crash or return an error.
 func TestProbeModNaNDivisor(t *testing.T) {
 	t.Parallel()

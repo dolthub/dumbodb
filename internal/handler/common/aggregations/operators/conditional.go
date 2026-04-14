@@ -17,8 +17,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // ── $cond ────────────────────────────────────────────────────────────────────

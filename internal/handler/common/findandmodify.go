@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // FindAndModifyParams represent parameters for the findAndModify command.

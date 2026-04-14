@@ -32,11 +32,11 @@ import (
 	"github.com/google/uuid"
 	mongobson "go.mongodb.org/mongo-driver/bson"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/bson"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // collection implements backends.Collection.
@@ -366,7 +366,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "docudolt <docudolt@localhost>", time.Now())
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "dumbodb <dumbodb@localhost>", time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after insert: %w", err)
 		}
@@ -551,7 +551,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: update %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "docudolt <docudolt@localhost>", time.Now())
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "dumbodb <dumbodb@localhost>", time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after update: %w", err)
 		}
@@ -685,7 +685,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: delete from %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "docudolt <docudolt@localhost>", time.Now())
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.am, msg, "dumbodb <dumbodb@localhost>", time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after delete: %w", err)
 		}

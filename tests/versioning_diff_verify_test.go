@@ -38,12 +38,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// diffResult holds the decoded top-level response from a docuDoltDiff command.
+// diffResult holds the decoded top-level response from a dumboDBDiff command.
 type diffResult struct {
 	Collections []collDiffResult
 }
 
-// collDiffResult holds the decoded per-collection section of a docuDoltDiff response.
+// collDiffResult holds the decoded per-collection section of a dumboDBDiff response.
 type collDiffResult struct {
 	Name     string
 	Added    []bson.M
@@ -51,7 +51,7 @@ type collDiffResult struct {
 	Modified []modifiedDocResult
 }
 
-// modifiedDocResult holds one entry from the "modified" list in a docuDoltDiff response.
+// modifiedDocResult holds one entry from the "modified" list in a dumboDBDiff response.
 type modifiedDocResult struct {
 	ID   any
 	Diff []fieldDiffResult
@@ -65,7 +65,7 @@ type fieldDiffResult struct {
 	To   any
 }
 
-// decodeDiffResult parses the raw bson.M from a docuDoltDiff RunCommand into the
+// decodeDiffResult parses the raw bson.M from a dumboDBDiff RunCommand into the
 // typed helpers above, failing the test if the shape is unexpected.
 func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 	t.Helper()
@@ -155,7 +155,7 @@ func findFieldDiffResult(md modifiedDocResult, path string) *fieldDiffResult {
 
 // diffVerifySetup mirrors the Setup section of docs/verify/diff.md.
 // Returns hashBase (the baseline commit hash).
-func diffVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashBase string) {
+func diffVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBase string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -180,7 +180,7 @@ func diffVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashBas
 	})
 	require.NoError(t, err)
 
-	hashBase = docuDoltCommit(t, env, dbName, "baseline", "alice <alice@docudolt>")
+	hashBase = dumboDBCommit(t, env, dbName, "baseline", "alice <alice@dumbodb>")
 
 	// Three working-set changes (NOT committed):
 	//   _id:3 added
@@ -206,7 +206,7 @@ func diffVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashBas
 }
 
 func TestDiffVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -268,7 +268,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_DiffTwoHashes", func(t *testing.T) {
 		// Commit the working-set changes.
-		hashNew = docuDoltCommit(t, env, dbName, "three changes", "alice <alice@docudolt>")
+		hashNew = dumboDBCommit(t, env, dbName, "three changes", "alice <alice@dumbodb>")
 		require.NotEmpty(t, hashNew)
 
 		var raw bson.M
@@ -379,7 +379,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "name", Value: "gamma"}, {Key: "v", Value: int32(3)}})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "multi baseline", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "multi baseline", "alice <alice@dumbodb>")
 
 		// Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4.
 		_, err = multi.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
@@ -426,7 +426,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_SingleDocMixedFieldOps", func(t *testing.T) {
 		// Commit the working set from Scenario 5 first so HEAD is clean.
-		docuDoltCommit(t, env, dbName, "pre-scenario6", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "pre-scenario6", "alice <alice@dumbodb>")
 
 		mf := env.client.Database(dbName).Collection("mixedfields")
 
@@ -437,7 +437,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "y", Value: "remove-me"},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "mixedfields baseline", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "mixedfields baseline", "alice <alice@dumbodb>")
 
 		// Replace: x modified, y removed, z added.
 		_, err = mf.ReplaceOne(ctx,
@@ -495,7 +495,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FieldTypeChange", func(t *testing.T) {
 		// Commit working set from Scenario 6 for a clean HEAD.
-		docuDoltCommit(t, env, dbName, "pre-scenario7", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "pre-scenario7", "alice <alice@dumbodb>")
 
 		tc := env.client.Database(dbName).Collection("typechg")
 
@@ -506,7 +506,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "stable", Value: "unchanged"},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "typechg baseline", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "typechg baseline", "alice <alice@dumbodb>")
 
 		// Replace: val changes from number to string.
 		_, err = tc.ReplaceOne(ctx,
@@ -552,7 +552,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
 		// Commit any pending working set so we start from a clean HEAD.
-		docuDoltCommit(t, env, dbName, "pre-scenario9", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "pre-scenario9", "alice <alice@dumbodb>")
 
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
@@ -563,7 +563,7 @@ func TestDiffVerify(t *testing.T) {
 		rootish := env.client.Database(dbName + "__d_rootishtest")
 
 		// Two commits on main — feature branch stays behind.
-		hashC1 := docuDoltCommit(t, env, dbName, "scenario9-c1", "alice <alice@docudolt>")
+		hashC1 := dumboDBCommit(t, env, dbName, "scenario9-c1", "alice <alice@dumbodb>")
 
 		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
@@ -571,7 +571,7 @@ func TestDiffVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC2 := docuDoltCommit(t, env, dbName, "scenario9-c2", "alice <alice@docudolt>")
+		hashC2 := dumboDBCommit(t, env, dbName, "scenario9-c2", "alice <alice@dumbodb>")
 
 		// 9a: from=HEAD~1, to=HEAD on main connection — HEAD resolves to c2.
 		// Expect _id:1 added (delta between c1 and c2).
@@ -687,7 +687,7 @@ func TestDiffVerify(t *testing.T) {
 
 	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
 		// Commit working set from Scenario 7 for a clean HEAD.
-		docuDoltCommit(t, env, dbName, "pre-scenario8", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "pre-scenario8", "alice <alice@dumbodb>")
 
 		nested := env.client.Database(dbName).Collection("nested")
 
@@ -701,7 +701,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "name", Value: "alice"},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName, "nested baseline", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName, "nested baseline", "alice <alice@dumbodb>")
 
 		// Update: only address.city changes.
 		_, err = nested.UpdateOne(ctx,

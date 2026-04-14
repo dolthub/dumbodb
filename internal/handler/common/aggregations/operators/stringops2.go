@@ -20,7 +20,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // ── $strLenBytes ─────────────────────────────────────────────────────────────

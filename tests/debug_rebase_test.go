@@ -12,7 +12,7 @@ import (
 )
 
 func TestRebaseDebug(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("dbg%d", rand.Int64N(1_000_000))
 
@@ -21,7 +21,7 @@ func TestRebaseDebug(t *testing.T) {
 
 	_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
 	require.NoError(t, err)
-	hashC1 := docuDoltCommit(t, env, dbName, "initial")
+	hashC1 := dumboDBCommit(t, env, dbName, "initial")
 
 	var branchResult bson.M
 	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
@@ -32,11 +32,11 @@ func TestRebaseDebug(t *testing.T) {
 
 	_, err = env.client.Database(dbName+"__d_feature").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: int32(2)}})
 	require.NoError(t, err)
-	hashC2 := docuDoltCommit(t, env, dbName+"__d_feature", "feature-adds-2")
+	hashC2 := dumboDBCommit(t, env, dbName+"__d_feature", "feature-adds-2")
 
 	_, err = db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "v", Value: int32(3)}})
 	require.NoError(t, err)
-	hashC3 := docuDoltCommit(t, env, dbName, "main-adds-3")
+	hashC3 := dumboDBCommit(t, env, dbName, "main-adds-3")
 
 	t.Logf("C1=%s C2=%s C3=%s", hashC1, hashC2, hashC3)
 

@@ -22,11 +22,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations/stages"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // TestAggPipeline_sort_TieBreakingAfterGroup verifies that $sort with multiple keys

@@ -15,8 +15,8 @@
 package common
 
 import (
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // LimitDocuments returns a subslice of given documents according to the given limit value.

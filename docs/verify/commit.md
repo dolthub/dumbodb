@@ -20,13 +20,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -41,9 +41,9 @@ db.dropDatabase()
 // Baseline: two documents, committed
 db.items.insertOne({ _id: 1, label: "alpha", v: 1 })
 db.items.insertOne({ _id: 2, label: "beta",  v: 2 })
-const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
 printjson(r1)
-// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@docudolt>", timestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), ok: 1 }
 const hashBase = r1.commitId
 
 print("hashBase =", hashBase)
@@ -60,7 +60,7 @@ After setup, `commitdb` has one commit on `main` with two documents.
 The response from setup already demonstrates the shape. Verify each field:
 
 ```js
-const r = db.runCommand({ doltCommit: 1, message: "shape check", author: "alice <alice@docudolt>" })
+const r = db.runCommand({ doltCommit: 1, message: "shape check", author: "alice <alice@dumbodb>" })
 printjson(r)
 ```
 
@@ -71,7 +71,7 @@ Expected result structure:
   "commitId":      "<non-empty hex string>",
   "branch":    "main",
   "message":   "shape check",
-  "author":    "alice <alice@docudolt>",
+  "author":    "alice <alice@dumbodb>",
   "timestamp": ISODate("..."),
   "ok":        1
 }
@@ -100,9 +100,9 @@ db.getSiblingDB("commitdb__d_main").runCommand({ doltBranch: 1, branch: "feature
 var feature = db.getSiblingDB("commitdb__d_feature")
 feature.items.insertOne({ _id: 3, label: "gamma", v: 3 })
 
-const r2 = feature.runCommand({ doltCommit: 1, message: "feature commit", author: "alice <alice@docudolt>" })
+const r2 = feature.runCommand({ doltCommit: 1, message: "feature commit", author: "alice <alice@dumbodb>" })
 printjson(r2)
-// Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "alice <alice@docudolt>", timestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), ok: 1 }
 
 // Verify isolation: feature has the new doc, main does not
 feature.items.countDocuments({})
@@ -127,11 +127,11 @@ to the same database must return different hash values.
 ```js
 // Make a change and commit
 db.items.insertOne({ _id: 10, label: "ten", v: 10 })
-const r3a = db.runCommand({ doltCommit: 1, message: "commit A", author: "alice <alice@docudolt>" })
+const r3a = db.runCommand({ doltCommit: 1, message: "commit A", author: "alice <alice@dumbodb>" })
 print("hashA =", r3a.commitId)
 
 db.items.insertOne({ _id: 11, label: "eleven", v: 11 })
-const r3b = db.runCommand({ doltCommit: 1, message: "commit B", author: "alice <alice@docudolt>" })
+const r3b = db.runCommand({ doltCommit: 1, message: "commit B", author: "alice <alice@dumbodb>" })
 print("hashB =", r3b.commitId)
 
 print("hashes differ:", r3a.commitId !== r3b.commitId)
@@ -148,11 +148,11 @@ When no changes are pending since the last commit, `doltCommit` still succeeds.
 
 ```js
 // No changes since last commit
-const r4 = db.runCommand({ doltCommit: 1, message: "empty", author: "alice <alice@docudolt>" })
+const r4 = db.runCommand({ doltCommit: 1, message: "empty", author: "alice <alice@dumbodb>" })
 printjson(r4)
 ```
 
-Expected: `{ hash: "<hash>", branch: "main", message: "empty", author: "alice <alice@docudolt>", timestamp: ISODate("..."), ok: 1 }`
+Expected: `{ hash: "<hash>", branch: "main", message: "empty", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), ok: 1 }`
 
 Key check: `ok` is `1`; `hash` is non-empty.
 
@@ -165,11 +165,11 @@ argument in `doltDiff`.
 
 ```js
 // Record state before a change
-const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author: "alice <alice@docudolt>" }).commitId
+const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author: "alice <alice@dumbodb>" }).commitId
 
 // Make a change and commit
 db.items.insertOne({ _id: 99, label: "new", v: 99 })
-const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "alice <alice@docudolt>" }).commitId
+const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "alice <alice@dumbodb>" }).commitId
 
 // Diff between the two commits — must show _id:99 as added
 db.runCommand({ doltDiff: 1, from: hashBefore, to: hashAfter })
@@ -233,8 +233,8 @@ Key checks:
 
 | Scenario | Command | Key outcome |
 |---|---|---|
-| Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@docudolt>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
-| Commit on branch | `featureDB.runCommand({ doltCommit: 1, ..., author: "alice <alice@docudolt>" })` | Data committed to branch; isolation verified via count |
+| Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@dumbodb>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
+| Commit on branch | `featureDB.runCommand({ doltCommit: 1, ..., author: "alice <alice@dumbodb>" })` | Data committed to branch; isolation verified via count |
 | Two sequential commits | Call twice with same author | Hashes are different |
 | Empty working set | Commit with no pending changes | Succeeds with `ok:1` |
 | Use hash in diff | `{ doltDiff: 1, from: hash1, to: hash2 }` | Shows changes between commits |

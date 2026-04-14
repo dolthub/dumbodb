@@ -21,14 +21,14 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // Common interface with bson.Document.
 //
 // Remove this type.
-// TODO https://github.com/dolthub/docudolt/issues/260
+// TODO https://github.com/dolthub/dumbodb/issues/260
 type document interface {
 	Keys() []string
 	Values() []any
@@ -60,7 +60,7 @@ type field struct {
 // It references the same data without copying it.
 //
 // Remove this function.
-// TODO https://github.com/dolthub/docudolt/issues/260
+// TODO https://github.com/dolthub/dumbodb/issues/260
 func ConvertDocument(d document) (*Document, error) {
 	if d == nil {
 		panic("types.ConvertDocument: d is nil")

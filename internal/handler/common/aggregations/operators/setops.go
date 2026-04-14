@@ -17,7 +17,7 @@ package operators
 import (
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // toSet converts an array to a deduplicated slice.

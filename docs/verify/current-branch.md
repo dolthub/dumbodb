@@ -12,13 +12,13 @@ each scenario top to bottom.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -32,14 +32,14 @@ db.dropDatabase()
 
 // Insert a document and commit (gives us a non-trivial history)
 db.items.insertOne({ _id: 1, v: "first" })
-const result1 = db.runCommand({ doltCommit: 1, message: "first commit", author: "alice <alice@docudolt>" })
+const result1 = db.runCommand({ doltCommit: 1, message: "first commit", author: "alice <alice@dumbodb>" })
 printjson(result1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first commit", ok: 1 }
 const hash1 = result1.commitId
 
 // Insert a second document and commit
 db.items.insertOne({ _id: 2, v: "second" })
-const result2 = db.runCommand({ doltCommit: 1, message: "second commit", author: "alice <alice@docudolt>" })
+const result2 = db.runCommand({ doltCommit: 1, message: "second commit", author: "alice <alice@dumbodb>" })
 printjson(result2)
 // Expected: { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
 const hash2 = result2.commitId

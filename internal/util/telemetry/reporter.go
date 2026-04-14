@@ -27,12 +27,12 @@ import (
 
 	"github.com/AlekSi/pointer"
 
-	"github.com/dolthub/docudolt/build/version"
-	"github.com/dolthub/docudolt/internal/clientconn/connmetrics"
-	"github.com/dolthub/docudolt/internal/util/ctxutil"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/logging"
-	"github.com/dolthub/docudolt/internal/util/state"
+	"github.com/dolthub/dumbodb/build/version"
+	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
+	"github.com/dolthub/dumbodb/internal/util/ctxutil"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/util/state"
 )
 
 // request represents telemetry request.

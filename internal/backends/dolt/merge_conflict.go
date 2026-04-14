@@ -26,7 +26,7 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
-	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // mergeInProgress holds the state of a merge or cherry-pick that could not be
@@ -137,18 +137,18 @@ func diffTypeString(dt tree.DiffType) string {
 	}
 }
 
-// DocuDoltConflicts implements backends.VersioningBackend.
+// DumboDBConflicts implements backends.VersioningBackend.
 //
 // When ConflictsParams.Collection is empty it returns per-collection conflict counts.
 // When ConflictsParams.Collection is set it returns per-conflict details for that collection.
-func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltConflicts: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DumboDBConflicts: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DocuDoltConflicts: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DumboDBConflicts: database %q does not exist", params.DBName))
 	}
 
 	db.mu.RLock()
@@ -156,7 +156,7 @@ func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.Confli
 	db.mu.RUnlock()
 
 	if ms == nil {
-		return nil, fmt.Errorf("dolt: DocuDoltConflicts: no merge or cherry-pick in progress on branch %q", params.Branch)
+		return nil, fmt.Errorf("dolt: DumboDBConflicts: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
 	if params.Collection == "" {
@@ -187,7 +187,7 @@ func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.Confli
 		if e.baseRawVal != nil {
 			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.baseRawVal)
 			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DocuDoltConflicts: reading base doc for conflict %q: %w", e.id, docErr)
+				return nil, fmt.Errorf("dolt: DumboDBConflicts: reading base doc for conflict %q: %w", e.id, docErr)
 			}
 			info.Base = doc
 		}
@@ -195,7 +195,7 @@ func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.Confli
 		if e.oursRawVal != nil {
 			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.oursRawVal)
 			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DocuDoltConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
+				return nil, fmt.Errorf("dolt: DumboDBConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
 			}
 			info.Ours = doc
 		}
@@ -203,7 +203,7 @@ func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.Confli
 		if e.theirsRawVal != nil {
 			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.theirsRawVal)
 			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DocuDoltConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
+				return nil, fmt.Errorf("dolt: DumboDBConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
 			}
 			info.Theirs = doc
 		}
@@ -218,19 +218,19 @@ func (b *Backend) DocuDoltConflicts(ctx context.Context, params *backends.Confli
 	return &backends.ConflictsResult{Conflicts: infos}, nil
 }
 
-// DocuDoltResolveConflict implements backends.VersioningBackend.
+// DumboDBResolveConflict implements backends.VersioningBackend.
 //
 // Resolves a single document conflict in the current in-progress merge.
 // After resolution the conflict entry is marked resolved and the resolvedAM is
 // updated to reflect the chosen document state.
-func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DocuDoltResolveConflict: database %q does not exist", params.DBName))
+			fmt.Errorf("dolt: DumboDBResolveConflict: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -238,12 +238,12 @@ func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.
 
 	ms := db.mergeState
 	if ms == nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
 	entries, ok := ms.conflicts[params.Collection]
 	if !ok {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: collection %q has no conflicts", params.Collection)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: collection %q has no conflicts", params.Collection)
 	}
 
 	var target *conflictEntry
@@ -255,10 +255,10 @@ func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.
 	}
 
 	if target == nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: conflict %q not found in collection %q", params.ConflictID, params.Collection)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: conflict %q not found in collection %q", params.ConflictID, params.Collection)
 	}
 	if target.resolved {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: conflict %q is already resolved", params.ConflictID)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: conflict %q is already resolved", params.ConflictID)
 	}
 
 	// For "ours", the resolvedAM already has our value — just mark resolved, no AM update needed.
@@ -278,49 +278,49 @@ func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.
 
 	case "custom":
 		if params.Value == nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: resolution %q requires a value document", params.Resolution)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
 		}
 		jsonHash, writeErr := writeDocJSON(ctx, db.ns, params.Value)
 		if writeErr != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: writing custom document: %w", writeErr)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: writing custom document: %w", writeErr)
 		}
 		v, buildErr := buildValue(jsonHash)
 		if buildErr != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: building value tuple: %w", buildErr)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: building value tuple: %w", buildErr)
 		}
 		chosenVal = v
 
 	default:
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
 	}
 
 	// Update the collection map in resolvedAM to reflect the chosen resolution.
 	collMap, err := collectionMapFromAM(ctx, db, ms.resolvedAM, params.Collection)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: opening collection %q from resolvedAM: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: opening collection %q from resolvedAM: %w", params.Collection, err)
 	}
 
 	mut := collMap.Mutate()
 
 	if deleteDoc {
 		if err := mut.Delete(ctx, target.rawKey); err != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: deleting document from collection %q: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: deleting document from collection %q: %w", params.Collection, err)
 		}
 	} else {
 		if err := mut.Put(ctx, target.rawKey, chosenVal); err != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating document in collection %q: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: updating document in collection %q: %w", params.Collection, err)
 		}
 	}
 
 	newCollMap, err := mut.Map(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: flushing collection map for %q: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: flushing collection map for %q: %w", params.Collection, err)
 	}
 
 	// Remove the resolved conflict from the ArtifactMap for this collection.
 	updatedAM, err := removeConflictArtifact(ctx, db, ms.resolvedAM, params.Collection, target.rawKey, ms.theirHash())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating artifact map for %q: %w", params.Collection, err)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: updating artifact map for %q: %w", params.Collection, err)
 	}
 
 	// Now rebuild the DTBL for the collection with the updated document map and artifact hash.
@@ -346,27 +346,27 @@ func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.
 
 	newCollCount, countErr := newCollMap.Count()
 	if countErr != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: counting new collection map for %q: %w", params.Collection, countErr)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: counting new collection map for %q: %w", params.Collection, countErr)
 	}
 
 	amEditor := updatedAM.Editor()
 	if newCollCount == 0 {
 		if err := amEditor.Delete(ctx, params.Collection); err != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
 		newCollHash, hashErr := db.dtblHashForMapWithArtifacts(ctx, newCollMap, newArtHash)
 		if hashErr != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
 		}
 		if err := amEditor.Update(ctx, params.Collection, newCollHash); err != nil {
-			return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating AM for collection %q: %w", params.Collection, err)
+			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: updating AM for collection %q: %w", params.Collection, err)
 		}
 	}
 
 	finalAM, err := amEditor.Flush(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: flushing AM editor: %w", err)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: flushing AM editor: %w", err)
 	}
 
 	ms.resolvedAM = finalAM
@@ -376,14 +376,14 @@ func (b *Backend) DocuDoltResolveConflict(ctx context.Context, params *backends.
 	// the resolved state.
 	stagedAM, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
 	if stageErr != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: reading staged AM: %w", stageErr)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: reading staged AM: %w", stageErr)
 	}
 	workingRtvl := buildRootValueFlatbuffer(finalAM)
 	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: writing working RTVL: %w", writeErr)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: writing working RTVL: %w", writeErr)
 	}
 	if wsErr := updateWorkingSet(ctx, db.doltDB, finalAM, stagedAM, ms.intoBranch); wsErr != nil {
-		return nil, fmt.Errorf("dolt: DocuDoltResolveConflict: updating working set: %w", wsErr)
+		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: updating working set: %w", wsErr)
 	}
 
 	return &backends.ResolveConflictResult{}, nil

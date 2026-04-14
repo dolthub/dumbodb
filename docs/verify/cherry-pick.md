@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document on main.
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@dumbodb>" })
 printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
@@ -43,7 +43,7 @@ db.getSiblingDB("pickdb__d_main").runCommand({ doltBranch: 1, branch: "feature" 
 
 // Advance feature with a commit we will cherry-pick onto main.
 db.getSiblingDB("pickdb__d_feature").items.insertOne({ _id: 2, v: 2 })
-const r2 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@docudolt>" })
+const r2 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@dumbodb>" })
 printjson(r2)
 // Expected: { commitId: "<hashC2>", branch: "feature", message: "add-two", ok: 1 }
 const hashC2 = r2.commitId
@@ -99,7 +99,7 @@ To re-test from a clean state without re-running setup, advance feature with ano
 ```js
 // Add a third document on feature for this scenario.
 db.getSiblingDB("pickdb__d_feature").items.insertOne({ _id: 3, v: 3 })
-const r3 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@docudolt>" })
+const r3 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
 const hashC3feat = r3.commitId
 
 // Cherry-pick C3 onto main with a custom message and author.
@@ -107,7 +107,7 @@ const rPick2 = db.getSiblingDB("pickdb__d_main").runCommand({
   doltCherryPick: 1,
   commit: hashC3feat,
   message: "port: add item three",
-  author: "alice <alice@docudolt>"
+  author: "alice <alice@dumbodb>"
 })
 printjson(rPick2)
 // Expected: { commitId: "<hashC4>", message: "port: add item three", ok: 1 }
@@ -126,12 +126,12 @@ Create conflicting changes on both branches so cherry-pick cannot apply cleanly.
 ```js
 // Modify _id:1 on feature (conflicting with main's version).
 db.getSiblingDB("pickdb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 99 } })
-const r4 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "alice <alice@docudolt>" })
+const r4 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "alice <alice@dumbodb>" })
 const hashC4feat = r4.commitId
 
 // Modify _id:1 on main too (independently).
 db.items.updateOne({ _id: 1 }, { $set: { v: 100 } })
-db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@dumbodb>" })
 
 // Cherry-pick the conflicting feature commit onto main.
 // In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
@@ -214,12 +214,12 @@ Start another conflicting cherry-pick and then abort it.
 ```js
 // Create another conflicting commit on feature.
 db.getSiblingDB("pickdb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 200 } })
-const r5 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "alice <alice@docudolt>" })
+const r5 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "alice <alice@dumbodb>" })
 const hashConflict2 = r5.commitId
 
 // Modify _id:1 on main to create conflict.
 db.items.updateOne({ _id: 1 }, { $set: { v: 201 } })
-db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@dumbodb>" })
 
 // Cherry-pick — expect conflict (throws in mongosh).
 try {

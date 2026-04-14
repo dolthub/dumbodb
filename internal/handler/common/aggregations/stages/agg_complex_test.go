@@ -26,11 +26,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations/stages"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // makeFetcher builds a CollectionFetcher that returns docs for a named collection.
@@ -1067,7 +1067,7 @@ func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 
 // TestAggComplex_replaceRoot_mergeObjects verifies that $replaceRoot with a
 // $mergeObjects newRoot expression correctly merges $$ROOT with a literal
-// document. Previously, docudolt treated {$mergeObjects: ...} as a literal
+// document. Previously, dumbodb treated {$mergeObjects: ...} as a literal
 // template and returned it verbatim, causing wrong results (and a server crash
 // in some configurations).
 //
@@ -1200,7 +1200,7 @@ func TestAggComplex_matchUnwindGroupSort(t *testing.T) {
 
 	// Three orders across two customers. After $unwind+$group by category,
 	// groups B and A both have totalQty=2. MongoDB preserves insertion order
-	// for ties; DocuDolt must do the same (stable sort).
+	// for ties; DumboDB must do the same (stable sort).
 	docs := []*types.Document{
 		must.NotFail(types.NewDocument("_id", int32(1), "category", "C", "qty", int32(8))),
 		must.NotFail(types.NewDocument("_id", int32(2), "category", "B", "qty", int32(2))),
@@ -1462,7 +1462,7 @@ func TestAggStage_bucketAuto_MissingBucketsError(t *testing.T) {
 // in the same BFS pass. Their order must be by _id ascending regardless of the
 // collection scan order returned by the storage backend.
 //
-// This is a regression test for the intermittent failure where DocuDolt returned
+// This is a regression test for the intermittent failure where DumboDB returned
 // [{mgr,...},{vp,...}] instead of [{vp,...},{mgr,...}] depending on the run.
 func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
 	t.Parallel()

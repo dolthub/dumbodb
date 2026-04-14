@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/dolthub/docudolt/internal/util/debugbuild"
+	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 )
 
 //go:generate ../../bin/stringer -linecomment -type ErrorCode

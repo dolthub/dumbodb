@@ -39,7 +39,7 @@ import (
 
 // currentBranchVerifySetup mirrors the Setup section of docs/verify/current-branch.md.
 // Returns hash1 (commit 1) and hash2 (commit 2).
-func currentBranchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hash1, hash2 string) {
+func currentBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1, hash2 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -54,7 +54,7 @@ func currentBranchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string)
 		{Key: "v", Value: "first"},
 	})
 	require.NoError(t, err)
-	hash1 = docuDoltCommit(t, env, dbName, "first commit", "alice <alice@docudolt>")
+	hash1 = dumboDBCommit(t, env, dbName, "first commit", "alice <alice@dumbodb>")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -62,7 +62,7 @@ func currentBranchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string)
 		{Key: "v", Value: "second"},
 	})
 	require.NoError(t, err)
-	hash2 = docuDoltCommit(t, env, dbName, "second commit", "alice <alice@docudolt>")
+	hash2 = dumboDBCommit(t, env, dbName, "second commit", "alice <alice@dumbodb>")
 
 	// Create branch "feature" from main HEAD.
 	var branchResult bson.M
@@ -77,7 +77,7 @@ func currentBranchVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string)
 }
 
 func TestCurrentBranchVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("cbrvrfy%d", rand.Int64N(1_000_000))

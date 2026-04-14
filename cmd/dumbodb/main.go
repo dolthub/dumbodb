@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package main is the entry point for the DocuDolt server.
+// Package main is the entry point for the DumboDB server.
 package main
 
 import (
@@ -27,11 +27,11 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/dolthub/docudolt/internal/clientconn"
-	"github.com/dolthub/docudolt/internal/clientconn/connmetrics"
-	"github.com/dolthub/docudolt/internal/handler/registry"
-	"github.com/dolthub/docudolt/internal/util/logging"
-	"github.com/dolthub/docudolt/internal/util/state"
+	"github.com/dolthub/dumbodb/internal/clientconn"
+	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
+	"github.com/dolthub/dumbodb/internal/handler/registry"
+	"github.com/dolthub/dumbodb/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/util/state"
 )
 
 func main() {
@@ -112,7 +112,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	logger.Info("DocuDolt server started", "addr", *addr, "data-dir", *dataDir)
+	logger.Info("DumboDB server started", "addr", *addr, "data-dir", *dataDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

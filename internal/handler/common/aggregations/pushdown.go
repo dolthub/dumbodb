@@ -15,8 +15,8 @@
 package aggregations
 
 import (
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // GetPushdownQuery gets pushdown query ($match and $sort) for aggregation.

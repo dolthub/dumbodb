@@ -27,18 +27,18 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
-	"github.com/dolthub/docudolt/internal/clientconn/cursor"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations/stages"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgAggregate implements `aggregate` command.
@@ -73,7 +73,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	// handle collection-agnostic pipelines ({aggregate: 1})
-	// TODO https://github.com/dolthub/docudolt/issues/1890
+	// TODO https://github.com/dolthub/dumbodb/issues/1890
 	var ok bool
 	var cName string
 
@@ -313,7 +313,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	ctx := connCtx
 	cancel := func() {}
 
-	// TODO https://github.com/dolthub/docudolt/issues/2983
+	// TODO https://github.com/dolthub/dumbodb/issues/2983
 	if maxTimeMS != 0 {
 		findDone := make(chan struct{})
 		defer close(findDone)
@@ -469,7 +469,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{c, qp, stagesDocuments})
 	} else {
-		// TODO https://github.com/dolthub/docudolt/issues/2423
+		// TODO https://github.com/dolthub/dumbodb/issues/2423
 		statistics := stages.GetStatistics(collStatsDocuments)
 
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
@@ -574,7 +574,7 @@ type stagesStatsParams struct {
 // processStagesStats retrieves the statistics from the database and then processes them through the stages.
 //
 // Move $collStats specific logic to its stage.
-// TODO https://github.com/dolthub/docudolt/issues/2423
+// TODO https://github.com/dolthub/dumbodb/issues/2423
 func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *stagesStatsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Clarify what needs to be retrieved from the database and retrieve it.
 	_, hasCount := p.statistics[stages.StatisticCount]

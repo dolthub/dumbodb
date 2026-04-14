@@ -21,7 +21,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // backend implements backends.Backend interface by delegating all methods to the wrapped backend.
@@ -80,112 +80,112 @@ func (b *backend) Collect(ch chan<- prometheus.Metric) {
 	b.origB.Collect(ch)
 }
 
-// DocuDoltCommit implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
+// DumboDBCommit implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltCommit(ctx, params)
+		return vb.DumboDBCommit(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltCommit: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBCommit: versioning not supported by wrapped backend")
 }
 
-// DocuDoltBranch implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
+// DumboDBBranch implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltBranch(ctx, params)
+		return vb.DumboDBBranch(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltBranch: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBBranch: versioning not supported by wrapped backend")
 }
 
-// DocuDoltMerge implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
+// DumboDBMerge implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltMerge(ctx, params)
+		return vb.DumboDBMerge(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltMerge: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBMerge: versioning not supported by wrapped backend")
 }
 
-// DocuDoltLog implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
+// DumboDBLog implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltLog(ctx, params)
+		return vb.DumboDBLog(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltLog: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBLog: versioning not supported by wrapped backend")
 }
 
-// DocuDoltStatus implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
+// DumboDBStatus implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltStatus(ctx, params)
+		return vb.DumboDBStatus(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltStatus: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBStatus: versioning not supported by wrapped backend")
 }
 
-// DocuDoltDiff implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
+// DumboDBDiff implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltDiff(ctx, params)
+		return vb.DumboDBDiff(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltDiff: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBDiff: versioning not supported by wrapped backend")
 }
 
-// DocuDoltCurrentBranch implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltCurrentBranch(ctx context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
+// DumboDBCurrentBranch implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBCurrentBranch(ctx context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltCurrentBranch(ctx, params)
+		return vb.DumboDBCurrentBranch(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltCurrentBranch: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBCurrentBranch: versioning not supported by wrapped backend")
 }
 
-// DocuDoltReset implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
+// DumboDBReset implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltReset(ctx, params)
+		return vb.DumboDBReset(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltReset: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBReset: versioning not supported by wrapped backend")
 }
 
-// DocuDoltConflicts implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
+// DumboDBConflicts implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBConflicts(ctx context.Context, params *backends.ConflictsParams) (*backends.ConflictsResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltConflicts(ctx, params)
+		return vb.DumboDBConflicts(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltConflicts: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBConflicts: versioning not supported by wrapped backend")
 }
 
-// DocuDoltResolveConflict implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+// DumboDBResolveConflict implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltResolveConflict(ctx, params)
+		return vb.DumboDBResolveConflict(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltResolveConflict: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBResolveConflict: versioning not supported by wrapped backend")
 }
 
-// DocuDoltCherryPick implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
+// DumboDBCherryPick implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltCherryPick(ctx, params)
+		return vb.DumboDBCherryPick(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltCherryPick: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBCherryPick: versioning not supported by wrapped backend")
 }
 
-// DocuDoltRebase implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DocuDoltRebase(ctx context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
+// DumboDBRebase implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBRebase(ctx context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DocuDoltRebase(ctx, params)
+		return vb.DumboDBRebase(ctx, params)
 	}
 
-	return nil, fmt.Errorf("oplog: DocuDoltRebase: versioning not supported by wrapped backend")
+	return nil, fmt.Errorf("oplog: DumboDBRebase: versioning not supported by wrapped backend")
 }
 
 // check interfaces

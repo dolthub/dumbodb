@@ -21,11 +21,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // ValidateProjection check projection document.
@@ -80,7 +80,7 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 		positionalProjection := strings.HasSuffix(key, "$")
 
-		// TODO https://github.com/dolthub/docudolt/issues/3127
+		// TODO https://github.com/dolthub/dumbodb/issues/3127
 		path, err := types.NewPathFromString(key)
 		if err != nil {
 			if positionalProjection {

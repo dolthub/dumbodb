@@ -21,8 +21,8 @@ import (
 	"github.com/FerretDB/wire"
 	"golang.org/x/exp/maps"
 
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgListCommands implements `listCommands` command.

@@ -17,11 +17,11 @@ package common
 import (
 	"errors"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // getPositionalProjection checks validity of the positional operator
@@ -57,7 +57,7 @@ func getPositionalProjection(arr *types.Array, filter *types.Document, positiona
 	for {
 		_, elem, err := iter.Next()
 		if errors.Is(err, iterator.ErrIteratorDone) {
-			// TODO https://github.com/dolthub/docudolt/issues/2522
+			// TODO https://github.com/dolthub/dumbodb/issues/2522
 			// when none of element satisfies all filter condition, positional
 			// operator returns an arbitrary value not empty array.
 			return new(types.Array), nil

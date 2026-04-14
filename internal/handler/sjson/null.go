@@ -17,7 +17,7 @@ package sjson
 import (
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // nullType represents BSON Null type.

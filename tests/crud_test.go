@@ -26,9 +26,9 @@ import (
 )
 
 // TestCRUD_FindOneAndUpdate_Basic verifies findOneAndUpdate returns the OLD document
-// by default and applies the update. (DocuDoltFull)
+// by default and applies the update. (DumboDBFull)
 func TestCRUD_FindOneAndUpdate_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -55,9 +55,9 @@ func TestCRUD_FindOneAndUpdate_Basic(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndUpdate_ReturnAfter verifies findOneAndUpdate with
-// ReturnDocument=After returns the UPDATED document. (DocuDoltFull)
+// ReturnDocument=After returns the UPDATED document. (DumboDBFull)
 func TestCRUD_FindOneAndUpdate_ReturnAfter(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -78,9 +78,9 @@ func TestCRUD_FindOneAndUpdate_ReturnAfter(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndUpdate_Upsert verifies that findOneAndUpdate with Upsert=true
-// inserts a document when no match is found. (DocuDoltFull)
+// inserts a document when no match is found. (DumboDBFull)
 func TestCRUD_FindOneAndUpdate_Upsert(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -107,9 +107,9 @@ func TestCRUD_FindOneAndUpdate_Upsert(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndUpdate_NoMatch verifies that findOneAndUpdate returns
-// ErrNoDocuments when the filter matches nothing and Upsert is false. (DocuDoltFull)
+// ErrNoDocuments when the filter matches nothing and Upsert is false. (DumboDBFull)
 func TestCRUD_FindOneAndUpdate_NoMatch(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -121,9 +121,9 @@ func TestCRUD_FindOneAndUpdate_NoMatch(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndUpdate_Projection verifies that findOneAndUpdate with a
-// projection returns only specified fields. (DocuDoltFull)
+// projection returns only specified fields. (DumboDBFull)
 func TestCRUD_FindOneAndUpdate_Projection(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -153,9 +153,9 @@ func TestCRUD_FindOneAndUpdate_Projection(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndDelete_Basic verifies findOneAndDelete removes a matching
-// document and returns it. (DocuDoltFull)
+// document and returns it. (DumboDBFull)
 func TestCRUD_FindOneAndDelete_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -183,9 +183,9 @@ func TestCRUD_FindOneAndDelete_Basic(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndDelete_NoMatch verifies that findOneAndDelete returns
-// ErrNoDocuments when the filter matches nothing. (DocuDoltFull)
+// ErrNoDocuments when the filter matches nothing. (DumboDBFull)
 func TestCRUD_FindOneAndDelete_NoMatch(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -196,9 +196,9 @@ func TestCRUD_FindOneAndDelete_NoMatch(t *testing.T) {
 }
 
 // TestCRUD_FindOneAndDelete_Sort verifies that findOneAndDelete with a sort option
-// deletes the document selected by the sort. (DocuDoltFull)
+// deletes the document selected by the sort. (DumboDBFull)
 func TestCRUD_FindOneAndDelete_Sort(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -221,9 +221,9 @@ func TestCRUD_FindOneAndDelete_Sort(t *testing.T) {
 }
 
 // TestCRUD_UpdateMany_Basic verifies that UpdateMany applies the update to all
-// matching documents. (DocuDoltFull)
+// matching documents. (DumboDBFull)
 func TestCRUD_UpdateMany_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -253,9 +253,9 @@ func TestCRUD_UpdateMany_Basic(t *testing.T) {
 }
 
 // TestCRUD_UpdateMany_Upsert verifies UpdateMany with Upsert inserts when no
-// document matches the filter. (DocuDoltFull)
+// document matches the filter. (DumboDBFull)
 func TestCRUD_UpdateMany_Upsert(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -274,9 +274,9 @@ func TestCRUD_UpdateMany_Upsert(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-// TestCRUD_DeleteMany_Basic verifies DeleteMany removes all matching documents. (DocuDoltFull)
+// TestCRUD_DeleteMany_Basic verifies DeleteMany removes all matching documents. (DumboDBFull)
 func TestCRUD_DeleteMany_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -297,9 +297,9 @@ func TestCRUD_DeleteMany_Basic(t *testing.T) {
 }
 
 // TestCRUD_DeleteMany_EmptyFilter verifies DeleteMany with an empty filter
-// removes all documents in the collection. (DocuDoltFull)
+// removes all documents in the collection. (DumboDBFull)
 func TestCRUD_DeleteMany_EmptyFilter(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -319,9 +319,9 @@ func TestCRUD_DeleteMany_EmptyFilter(t *testing.T) {
 }
 
 // TestCRUD_DeleteMany_NoMatch verifies DeleteMany returns 0 deleted when no
-// documents match. (DocuDoltFull)
+// documents match. (DumboDBFull)
 func TestCRUD_DeleteMany_NoMatch(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -333,9 +333,9 @@ func TestCRUD_DeleteMany_NoMatch(t *testing.T) {
 }
 
 // TestCRUD_BulkWrite_InsertUpdateDelete verifies that BulkWrite correctly
-// mixes InsertOne, UpdateOne, and DeleteOne operations. (DocuDoltFull)
+// mixes InsertOne, UpdateOne, and DeleteOne operations. (DumboDBFull)
 func TestCRUD_BulkWrite_InsertUpdateDelete(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -372,9 +372,9 @@ func TestCRUD_BulkWrite_InsertUpdateDelete(t *testing.T) {
 	assert.ErrorIs(t, err, mongo.ErrNoDocuments, "deleted document must be gone")
 }
 
-// TestCRUD_BulkWrite_Ordered verifies that ordered BulkWrite stops on first error. (DocuDoltFull)
+// TestCRUD_BulkWrite_Ordered verifies that ordered BulkWrite stops on first error. (DumboDBFull)
 func TestCRUD_BulkWrite_Ordered(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -407,9 +407,9 @@ func TestCRUD_BulkWrite_Ordered(t *testing.T) {
 }
 
 // TestCRUD_BulkWrite_Unordered verifies that unordered BulkWrite continues after
-// errors and reports them in the result. (DocuDoltFull)
+// errors and reports them in the result. (DumboDBFull)
 func TestCRUD_BulkWrite_Unordered(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -438,9 +438,9 @@ func TestCRUD_BulkWrite_Unordered(t *testing.T) {
 }
 
 // TestCRUD_BulkWrite_ReplaceOne verifies that ReplaceOne in a BulkWrite
-// fully replaces a document (not a partial update). (DocuDoltFull)
+// fully replaces a document (not a partial update). (DumboDBFull)
 func TestCRUD_BulkWrite_ReplaceOne(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -466,9 +466,9 @@ func TestCRUD_BulkWrite_ReplaceOne(t *testing.T) {
 }
 
 // TestCRUD_UpdateOne_SetOnInsert verifies $setOnInsert only sets fields during
-// an upsert insert (not when a document is found). (DocuDoltFull)
+// an upsert insert (not when a document is found). (DumboDBFull)
 func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -507,9 +507,9 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 }
 
 // TestCRUD_InsertMany_DuplicateKey verifies InsertMany returns a BulkWriteException
-// when a duplicate _id is inserted (ordered=true). (DocuDoltFull)
+// when a duplicate _id is inserted (ordered=true). (DumboDBFull)
 func TestCRUD_InsertMany_DuplicateKey(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -527,9 +527,9 @@ func TestCRUD_InsertMany_DuplicateKey(t *testing.T) {
 }
 
 // TestCRUD_InsertMany_Unordered verifies InsertMany with ordered=false
-// continues inserting non-conflicting documents after a duplicate key error. (DocuDoltFull)
+// continues inserting non-conflicting documents after a duplicate key error. (DumboDBFull)
 func TestCRUD_InsertMany_Unordered(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -549,9 +549,9 @@ func TestCRUD_InsertMany_Unordered(t *testing.T) {
 	assert.Equal(t, int64(2), count, "unordered InsertMany must insert non-conflicting docs")
 }
 
-// TestCRUD_ReplaceOne_Basic verifies ReplaceOne fully replaces a document. (DocuDoltFull)
+// TestCRUD_ReplaceOne_Basic verifies ReplaceOne fully replaces a document. (DumboDBFull)
 func TestCRUD_ReplaceOne_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -573,9 +573,9 @@ func TestCRUD_ReplaceOne_Basic(t *testing.T) {
 }
 
 // TestCRUD_CountDocuments_WithFilter verifies CountDocuments returns the correct
-// count for a filtered query. (DocuDoltFull)
+// count for a filtered query. (DumboDBFull)
 func TestCRUD_CountDocuments_WithFilter(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -594,9 +594,9 @@ func TestCRUD_CountDocuments_WithFilter(t *testing.T) {
 	assert.Equal(t, int64(3), totalCount)
 }
 
-// TestCRUD_Distinct_Basic verifies Distinct returns unique values for a field. (DocuDoltFull)
+// TestCRUD_Distinct_Basic verifies Distinct returns unique values for a field. (DumboDBFull)
 func TestCRUD_Distinct_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -617,9 +617,9 @@ func TestCRUD_Distinct_Basic(t *testing.T) {
 	assert.True(t, found["A"] && found["B"])
 }
 
-// TestCRUD_Distinct_WithFilter verifies Distinct respects a filter. (DocuDoltFull)
+// TestCRUD_Distinct_WithFilter verifies Distinct respects a filter. (DumboDBFull)
 func TestCRUD_Distinct_WithFilter(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -636,7 +636,7 @@ func TestCRUD_Distinct_WithFilter(t *testing.T) {
 func TestUpdateMany_upsert(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -658,11 +658,11 @@ func TestUpdateMany_upsert(t *testing.T) {
 }
 
 // TestFindOneAndUpdate_returnAfter verifies that FindOneAndUpdate with
-// ReturnDocument(After) returns the document as it looks after the update. (DocuDoltFull)
+// ReturnDocument(After) returns the document as it looks after the update. (DumboDBFull)
 func TestFindOneAndUpdate_returnAfter(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -690,11 +690,11 @@ func TestFindOneAndUpdate_returnAfter(t *testing.T) {
 }
 
 // TestFindOneAndReplace_no_match verifies that FindOneAndReplace returns
-// ErrNoDocuments when the filter does not match any document. (DocuDoltFull)
+// ErrNoDocuments when the filter does not match any document. (DumboDBFull)
 func TestFindOneAndReplace_no_match(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()
@@ -709,11 +709,11 @@ func TestFindOneAndReplace_no_match(t *testing.T) {
 }
 
 // TestCountDocuments_nested_filter verifies that CountDocuments correctly filters
-// documents using dot-notation for nested fields. (DocuDoltFull)
+// documents using dot-notation for nested fields. (DumboDBFull)
 func TestCountDocuments_nested_filter(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
@@ -730,11 +730,11 @@ func TestCountDocuments_nested_filter(t *testing.T) {
 }
 
 // TestEstimatedDocumentCount_empty verifies that EstimatedDocumentCount returns
-// 0 for an empty collection. (DocuDoltFull)
+// 0 for an empty collection. (DumboDBFull)
 func TestEstimatedDocumentCount_empty(t *testing.T) {
 	t.Parallel()
 
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 
 	ctx := context.Background()

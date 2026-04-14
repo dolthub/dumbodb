@@ -1,27 +1,27 @@
-# DocuDolt
+# DumboDB
 
-DocuDolt is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
+DumboDB is a MongoDB-compatible server backed by [Dolt](https://github.com/dolthub/dolt).
 
 ## Build
 
 ```bash
-git clone --recurse-submodules https://github.com/dolthub/docudolt
-cd docudolt
+git clone --recurse-submodules https://github.com/dolthub/dumbodb
+cd dumbodb
 make build
-# Binary: .runtime/bin/docudolt
+# Binary: .runtime/bin/dumbodb
 ```
 
 Or manually:
 
 ```bash
-go build -o /tmp/docudolt ./cmd/docudolt/
+go build -o /tmp/dumbodb ./cmd/dumbodb/
 ```
 
 ## Run
 
 ```bash
-mkdir -p /tmp/docudolt-data
-.runtime/bin/docudolt --data-dir /tmp/docudolt-data
+mkdir -p /tmp/dumbodb-data
+.runtime/bin/dumbodb --data-dir /tmp/dumbodb-data
 ```
 
 The server listens on `127.0.0.1:27017` by default.
@@ -48,28 +48,28 @@ mongosh --eval 'db.test.insertOne({x:1})' mongodb://127.0.0.1:27017/testdb
 
 ## Test suites
 
-### MongoDB parity tests (dolthub/docudolt-parity-testing)
+### MongoDB parity tests (dolthub/dumbodb-parity-testing)
 
-MongoDB compatibility tests live in a separate repository: **dolthub/docudolt-parity-testing**.
+MongoDB compatibility tests live in a separate repository: **dolthub/dumbodb-parity-testing**.
 
 That repo uses a dual-client harness (`PairTest`) that runs each operation against
-both a real MongoDB 8 instance and DocuDolt, then compares the results. Tests are
+both a real MongoDB 8 instance and DumboDB, then compares the results. Tests are
 labelled with three support levels:
 
 | Label | Meaning |
 |-------|---------|
-| `DocuDoltFull` | Both MongoDB and DocuDolt are exercised; divergences break CI |
-| `DocuDoltXFail` | Both are exercised; DocuDolt divergence is recorded but not fatal |
-| `DocuDoltMongoOnly` | MongoDB only; DocuDolt skipped (auth, sharding, GridFS, etc.) |
+| `DumboDBFull` | Both MongoDB and DumboDB are exercised; divergences break CI |
+| `DumboDBXFail` | Both are exercised; DumboDB divergence is recorded but not fatal |
+| `DumboDBMongoOnly` | MongoDB only; DumboDB skipped (auth, sharding, GridFS, etc.) |
 
-**Policy**: `tests/` in this repo is for docudolt-specific tests only. MongoDB
-compatibility tests belong in dolthub/docudolt-parity-testing.
+**Policy**: `tests/` in this repo is for dumbodb-specific tests only. MongoDB
+compatibility tests belong in dolthub/dumbodb-parity-testing.
 
-### DocuDolt-specific regression tests (tests/)
+### DumboDB-specific regression tests (tests/)
 
-The `tests/` package contains regression tests for docudolt-internal behaviors
+The `tests/` package contains regression tests for dumbodb-internal behaviors
 that have no MongoDB equivalent — things like internal resource management,
-cursor lifecycle, and implementation-specific edge cases. DocuDolt is built and
+cursor lifecycle, and implementation-specific edge cases. DumboDB is built and
 started automatically by the test harness.
 
 ```bash
@@ -80,24 +80,24 @@ go test -v ./tests/
 go test -v -run TestFind_CursorCleanupOnFilterError ./tests/
 ```
 
-The binary is cached at `.runtime/bin/docudolt` after the first build.
+The binary is cached at `.runtime/bin/dumbodb` after the first build.
 Pre-build it explicitly with:
 
 ```bash
 make build
-# or: go build -o .runtime/bin/docudolt ./cmd/docudolt/
+# or: go build -o .runtime/bin/dumbodb ./cmd/dumbodb/
 ```
 
 ### Repo layout
 
 ```
-tests/                      DocuDolt-specific regression tests
+tests/                      DumboDB-specific regression tests
   query_test.go             Test harness + regression tests
   bats/                     Bats shell integration tests (owner-managed, do not edit)
-cmd/docudolt/                  DocuDolt server entry point
-internal/                   DocuDolt implementation
+cmd/dumbodb/                  DumboDB server entry point
+internal/                   DumboDB implementation
 .github/workflows/
-  docudolt-scorecard.yml       FerretDB scorecard CI
+  dumbodb-scorecard.yml       FerretDB scorecard CI
   mongodb-reference.yml     MongoDB reference baseline CI
   bats.yml                  Bats shell test CI
 ```
@@ -117,29 +117,29 @@ git submodule update --init --recursive
 
 | Make target | Target under test | Purpose |
 |---|---|---|
-| `ferretdb-scorecard` | DocuDolt | DocuDolt's current pass rate |
-| `ferretdb-compat` | DocuDolt vs MongoDB | Diff DocuDolt against MongoDB behavior |
+| `ferretdb-scorecard` | DumboDB | DumboDB's current pass rate |
+| `ferretdb-compat` | DumboDB vs MongoDB | Diff DumboDB against MongoDB behavior |
 | `mongodb-reference` | Real MongoDB | Gold-standard baseline |
 | `ferretdb-reference` | FerretDB itself | FerretDB baseline |
 
-Run the reference targets to determine whether a failure is a **docudolt-specific
+Run the reference targets to determine whether a failure is a **dumbodb-specific
 regression** or a **known FerretDB/MongoDB limitation**.  If `mongodb-reference`
-also fails a test, it is not a docudolt bug.
+also fails a test, it is not a dumbodb bug.
 
-### DocuDolt scorecard
+### DumboDB scorecard
 
 ```bash
 make ferretdb-scorecard
 # Results: .runtime/ferretdb-scorecard.txt
 ```
 
-Builds DocuDolt, starts it on `127.0.0.1:27017`, runs the full FerretDB integration
-suite with `-target-backend=mongodb` (DocuDolt speaks the MongoDB wire protocol), and
+Builds DumboDB, starts it on `127.0.0.1:27017`, runs the full FerretDB integration
+suite with `-target-backend=mongodb` (DumboDB speaks the MongoDB wire protocol), and
 writes results to `.runtime/ferretdb-scorecard.txt`.
 
 **Understanding failures:**
 
-- **Real docudolt bugs** — features not yet implemented (expected at this stage).
+- **Real dumbodb bugs** — features not yet implemented (expected at this stage).
 - **Compat tests** — files named `*_compat_test.go` compare the target against a
   second MongoDB instance.  Without `-compat-url` they are automatically skipped
   (not failed) — a `SKIP` in the output is not a failure.
@@ -154,7 +154,7 @@ go test -count=1 -timeout=60s -tags=ferretdb_dev -v \
   -target-url=mongodb://127.0.0.1:27017/ .
 ```
 
-### Compat suite: DocuDolt vs MongoDB
+### Compat suite: DumboDB vs MongoDB
 
 ```bash
 # Start MongoDB with auth on port 47017:
@@ -164,9 +164,9 @@ make ferretdb-compat
 # Results: .runtime/ferretdb-compat.txt
 ```
 
-Runs the `*_compat_test.go` files, which send each operation to both DocuDolt
+Runs the `*_compat_test.go` files, which send each operation to both DumboDB
 (`-target-url`) and MongoDB (`-compat-url`) and assert that the results match.
-Differences indicate docudolt behaviour that diverges from MongoDB.
+Differences indicate dumbodb behaviour that diverges from MongoDB.
 
 ### MongoDB reference baseline
 
@@ -180,7 +180,7 @@ make mongodb-reference
 
 Runs the full integration suite against real MongoDB.  Use this to find the
 "gold standard" pass rate.  Any test that fails here is a FerretDB test-suite
-issue or a MongoDB limitation, **not** a docudolt bug.
+issue or a MongoDB limitation, **not** a dumbodb bug.
 
 Override defaults with environment variables:
 

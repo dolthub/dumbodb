@@ -19,16 +19,16 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgAutoCompact implements the `autoCompact` command (MongoDB 8.0+).
 //
 // autoCompact must be run against the admin database. When run against any other
-// database, MongoDB returns Unauthorized (code 13). DocuDolt mirrors this behavior.
+// database, MongoDB returns Unauthorized (code 13). DumboDB mirrors this behavior.
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgAutoCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -46,7 +46,7 @@ func (h *Handler) MsgAutoCompact(connCtx context.Context, msg *wire.OpMsg) (*wir
 		)
 	}
 
-	// When run against admin, return success (background compaction is a no-op in DocuDolt).
+	// When run against admin, return success (background compaction is a no-op in DumboDB).
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),

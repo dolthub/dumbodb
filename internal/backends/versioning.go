@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// CommitParams represents the parameters of VersioningBackend.DocuDoltCommit method.
+// CommitParams represents the parameters of VersioningBackend.DumboDBCommit method.
 type CommitParams struct {
 	DBName    string
 	Branch    string
@@ -31,7 +31,7 @@ type CommitParams struct {
 	Timestamp time.Time // optional: commit timestamp; zero value means use current time
 }
 
-// CommitResult represents the result of VersioningBackend.DocuDoltCommit method.
+// CommitResult represents the result of VersioningBackend.DumboDBCommit method.
 type CommitResult struct {
 	CommitID  string
 	Branch    string
@@ -40,7 +40,7 @@ type CommitResult struct {
 	Timestamp int64  // Unix milliseconds of the commit timestamp
 }
 
-// BranchParams represents the parameters of VersioningBackend.DocuDoltBranch method.
+// BranchParams represents the parameters of VersioningBackend.DumboDBBranch method.
 type BranchParams struct {
 	DBName string
 	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
@@ -49,12 +49,12 @@ type BranchParams struct {
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
 }
 
-// BranchResult represents the result of VersioningBackend.DocuDoltBranch method.
+// BranchResult represents the result of VersioningBackend.DumboDBBranch method.
 type BranchResult struct {
 	Branch string
 }
 
-// MergeParams represents the parameters of VersioningBackend.DocuDoltMerge method.
+// MergeParams represents the parameters of VersioningBackend.DumboDBMerge method.
 type MergeParams struct {
 	DBName   string
 	Into     string // target branch (the current branch)
@@ -67,7 +67,7 @@ type MergeParams struct {
 	FFOnly   bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
 }
 
-// MergeResult represents the result of VersioningBackend.DocuDoltMerge method.
+// MergeResult represents the result of VersioningBackend.DumboDBMerge method.
 type MergeResult struct {
 	CommitID string
 	Message  string
@@ -79,10 +79,10 @@ type ConflictSummary struct {
 	Count      int
 }
 
-// MergeConflictError is returned by DocuDoltMerge when the merge cannot be completed
+// MergeConflictError is returned by DumboDBMerge when the merge cannot be completed
 // automatically due to conflicting document changes on both branches. The merge is staged
-// but not committed; conflicts must be resolved via DocuDoltResolveConflict before
-// DocuDoltCommit will succeed.
+// but not committed; conflicts must be resolved via DumboDBResolveConflict before
+// DumboDBCommit will succeed.
 type MergeConflictError struct {
 	Conflicts []ConflictSummary
 }
@@ -92,7 +92,7 @@ func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("doltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
-// CherryPickParams represents the parameters of VersioningBackend.DocuDoltCherryPick method.
+// CherryPickParams represents the parameters of VersioningBackend.DumboDBCherryPick method.
 type CherryPickParams struct {
 	DBName   string
 	Branch   string // current branch (the target branch to apply the cherry-pick onto)
@@ -103,22 +103,22 @@ type CherryPickParams struct {
 	Author   string // optional: 'Name <email>'
 }
 
-// CherryPickResult represents the result of VersioningBackend.DocuDoltCherryPick method.
+// CherryPickResult represents the result of VersioningBackend.DumboDBCherryPick method.
 type CherryPickResult struct {
 	CommitID string
 	Message  string
 }
 
-// DocuDoltCherryPickConflictError is returned by DocuDoltCherryPick when the cherry-pick
+// DumboDBCherryPickConflictError is returned by DumboDBCherryPick when the cherry-pick
 // cannot be completed automatically due to conflicting document changes. The cherry-pick
-// is staged but not committed; conflicts must be resolved via DocuDoltResolveConflict
-// before DocuDoltCherryPick continue will succeed.
-type DocuDoltCherryPickConflictError struct {
+// is staged but not committed; conflicts must be resolved via DumboDBResolveConflict
+// before DumboDBCherryPick continue will succeed.
+type DumboDBCherryPickConflictError struct {
 	Conflicts []ConflictSummary
 }
 
 // Error implements the error interface.
-func (e *DocuDoltCherryPickConflictError) Error() string {
+func (e *DumboDBCherryPickConflictError) Error() string {
 	return fmt.Sprintf("doltCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
@@ -132,21 +132,21 @@ type ConflictInfo struct {
 	TheirDiffType string          // "added", "modified", "deleted"
 }
 
-// ConflictsParams represents the parameters of VersioningBackend.DocuDoltConflicts method.
+// ConflictsParams represents the parameters of VersioningBackend.DumboDBConflicts method.
 type ConflictsParams struct {
 	DBName     string
 	Branch     string
 	Collection string // optional: if empty, return per-collection summaries; if set, return per-conflict details
 }
 
-// ConflictsResult represents the result of VersioningBackend.DocuDoltConflicts method.
+// ConflictsResult represents the result of VersioningBackend.DumboDBConflicts method.
 // Exactly one of Collections or Conflicts is populated depending on whether ConflictsParams.Collection is empty.
 type ConflictsResult struct {
 	Collections []ConflictSummary // per-collection conflict counts (when Collection is empty)
 	Conflicts   []ConflictInfo    // per-conflict details (when Collection is set)
 }
 
-// ResolveConflictParams represents the parameters of VersioningBackend.DocuDoltResolveConflict method.
+// ResolveConflictParams represents the parameters of VersioningBackend.DumboDBResolveConflict method.
 type ResolveConflictParams struct {
 	DBName     string
 	Branch     string
@@ -156,10 +156,10 @@ type ResolveConflictParams struct {
 	Value      *types.Document // only used when Resolution == "custom"
 }
 
-// ResolveConflictResult represents the result of VersioningBackend.DocuDoltResolveConflict method.
+// ResolveConflictResult represents the result of VersioningBackend.DumboDBResolveConflict method.
 type ResolveConflictResult struct{}
 
-// LogParams represents the parameters of VersioningBackend.DocuDoltLog method.
+// LogParams represents the parameters of VersioningBackend.DumboDBLog method.
 type LogParams struct {
 	DBName     string
 	Branch     string
@@ -168,7 +168,7 @@ type LogParams struct {
 	From       string // optional: start traversal from this commit hash instead of HEAD
 }
 
-// CommitInfo represents a single commit entry returned by DocuDoltLog.
+// CommitInfo represents a single commit entry returned by DumboDBLog.
 type CommitInfo struct {
 	CommitID  string
 	Parent1   string   // empty for root commit (no parent)
@@ -180,12 +180,12 @@ type CommitInfo struct {
 	Refs      []string // branch/tag decorations; empty when commit is not a branch head
 }
 
-// LogResult represents the result of VersioningBackend.DocuDoltLog method.
+// LogResult represents the result of VersioningBackend.DumboDBLog method.
 type LogResult struct {
 	Commits []CommitInfo
 }
 
-// VersioningStatusParams represents the parameters of VersioningBackend.DocuDoltStatus method.
+// VersioningStatusParams represents the parameters of VersioningBackend.DumboDBStatus method.
 type VersioningStatusParams struct {
 	DBName string
 	Branch string
@@ -197,13 +197,13 @@ type TableStatus struct {
 	Status string // "added", "modified", or "deleted"
 }
 
-// VersioningStatusResult represents the result of VersioningBackend.DocuDoltStatus method.
+// VersioningStatusResult represents the result of VersioningBackend.DumboDBStatus method.
 type VersioningStatusResult struct {
 	Branch string
 	Tables []TableStatus
 }
 
-// DiffParams represents the parameters of VersioningBackend.DocuDoltDiff method.
+// DiffParams represents the parameters of VersioningBackend.DumboDBDiff method.
 //
 // From and To accept rootish expressions (commit hashes, branch names, ancestor
 // expressions like "main~2", or "HEAD"/"HEAD~N"). Empty string means the default:
@@ -243,13 +243,13 @@ type CollectionDiff struct {
 	Modified []ModifiedDoc     // documents changed between "a" and "b"
 }
 
-// DiffResult represents the result of VersioningBackend.DocuDoltDiff method.
+// DiffResult represents the result of VersioningBackend.DumboDBDiff method.
 // Only collections with at least one change appear.
 type DiffResult struct {
 	Collections []CollectionDiff
 }
 
-// ResetParams represents the parameters of VersioningBackend.DocuDoltReset method.
+// ResetParams represents the parameters of VersioningBackend.DumboDBReset method.
 type ResetParams struct {
 	DBName   string
 	Branch   string
@@ -257,23 +257,23 @@ type ResetParams struct {
 	Hard     bool
 }
 
-// ResetResult represents the result of VersioningBackend.DocuDoltReset method.
+// ResetResult represents the result of VersioningBackend.DumboDBReset method.
 type ResetResult struct {
 	CommitID string
 }
 
-// CurrentBranchParams represents the parameters of VersioningBackend.DocuDoltCurrentBranch method.
+// CurrentBranchParams represents the parameters of VersioningBackend.DumboDBCurrentBranch method.
 type CurrentBranchParams struct {
 	DBName string
 	Branch string
 }
 
-// CurrentBranchResult represents the result of VersioningBackend.DocuDoltCurrentBranch method.
+// CurrentBranchResult represents the result of VersioningBackend.DumboDBCurrentBranch method.
 type CurrentBranchResult struct {
 	Branch string
 }
 
-// RebaseParams represents the parameters of VersioningBackend.DocuDoltRebase method.
+// RebaseParams represents the parameters of VersioningBackend.DumboDBRebase method.
 type RebaseParams struct {
 	DBName   string
 	Branch   string // current branch (the branch to rebase)
@@ -282,82 +282,82 @@ type RebaseParams struct {
 	Continue bool   // if true, after conflict resolution, complete the current commit and proceed
 }
 
-// RebaseResult represents the result of VersioningBackend.DocuDoltRebase method.
+// RebaseResult represents the result of VersioningBackend.DumboDBRebase method.
 type RebaseResult struct {
 	CommitsReplayed int
 	NewTip          string // hash of the new branch tip after rebase
 }
 
-// DocuDoltRebaseConflictError is returned by DocuDoltRebase when a commit replay
+// DumboDBRebaseConflictError is returned by DumboDBRebase when a commit replay
 // cannot be completed automatically due to conflicting document changes. The rebase
-// is paused; conflicts must be resolved via DocuDoltResolveConflict before
-// DocuDoltRebase continue will succeed.
-type DocuDoltRebaseConflictError struct {
+// is paused; conflicts must be resolved via DumboDBResolveConflict before
+// DumboDBRebase continue will succeed.
+type DumboDBRebaseConflictError struct {
 	Conflicts      []ConflictSummary
 	ConflictCommit string // hash of the commit being replayed when the conflict occurred
 }
 
 // Error implements the error interface.
-func (e *DocuDoltRebaseConflictError) Error() string {
+func (e *DumboDBRebaseConflictError) Error() string {
 	return fmt.Sprintf("doltRebase: unresolved conflicts in %d collection(s) replaying commit %s", len(e.Conflicts), e.ConflictCommit)
 }
 
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
-// will cause the docudolt versioning commands to return an unsupported error.
+// will cause the dumbodb versioning commands to return an unsupported error.
 type VersioningBackend interface {
-	// DocuDoltCommit commits the current working set on the given branch with the provided message.
-	DocuDoltCommit(context.Context, *CommitParams) (*CommitResult, error)
+	// DumboDBCommit commits the current working set on the given branch with the provided message.
+	DumboDBCommit(context.Context, *CommitParams) (*CommitResult, error)
 
-	// DocuDoltBranch creates a new branch starting from the given source branch.
-	DocuDoltBranch(context.Context, *BranchParams) (*BranchResult, error)
+	// DumboDBBranch creates a new branch starting from the given source branch.
+	DumboDBBranch(context.Context, *BranchParams) (*BranchResult, error)
 
-	// DocuDoltCurrentBranch returns the current branch name for the connection.
-	DocuDoltCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
+	// DumboDBCurrentBranch returns the current branch name for the connection.
+	DumboDBCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
 
-	// DocuDoltMerge merges the source branch (From) into the target branch (Into).
-	DocuDoltMerge(context.Context, *MergeParams) (*MergeResult, error)
+	// DumboDBMerge merges the source branch (From) into the target branch (Into).
+	DumboDBMerge(context.Context, *MergeParams) (*MergeResult, error)
 
-	// DocuDoltLog returns the commit history for the given branch.
-	DocuDoltLog(context.Context, *LogParams) (*LogResult, error)
+	// DumboDBLog returns the commit history for the given branch.
+	DumboDBLog(context.Context, *LogParams) (*LogResult, error)
 
-	// DocuDoltStatus returns the uncommitted changes on the given branch.
-	DocuDoltStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
+	// DumboDBStatus returns the uncommitted changes on the given branch.
+	DumboDBStatus(context.Context, *VersioningStatusParams) (*VersioningStatusResult, error)
 
-	// DocuDoltDiff returns the document-level diff between two states.
+	// DumboDBDiff returns the document-level diff between two states.
 	// If From is empty, the "a" side is HEAD. If To is empty, the "b" side is the working set.
-	DocuDoltDiff(context.Context, *DiffParams) (*DiffResult, error)
+	DumboDBDiff(context.Context, *DiffParams) (*DiffResult, error)
 
-	// DocuDoltReset moves the branch HEAD to the given commit hash.
+	// DumboDBReset moves the branch HEAD to the given commit hash.
 	// Soft reset (Hard=false): leaves the working tree unchanged; staged root is updated to the target commit.
 	// Hard reset (Hard=true): resets both the working tree and staged root to the target commit,
 	// discarding all uncommitted changes.
-	DocuDoltReset(context.Context, *ResetParams) (*ResetResult, error)
+	DumboDBReset(context.Context, *ResetParams) (*ResetResult, error)
 
-	// DocuDoltConflicts returns conflict information for the current in-progress merge on the given branch.
+	// DumboDBConflicts returns conflict information for the current in-progress merge on the given branch.
 	// If ConflictsParams.Collection is empty, returns a per-collection summary (Collections field).
 	// If ConflictsParams.Collection is set, returns per-conflict details for that collection (Conflicts field).
 	// Returns ErrOperationFailed if no merge is in progress on the branch.
-	DocuDoltConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
+	DumboDBConflicts(context.Context, *ConflictsParams) (*ConflictsResult, error)
 
-	// DocuDoltResolveConflict resolves a single document conflict in the current in-progress merge.
+	// DumboDBResolveConflict resolves a single document conflict in the current in-progress merge.
 	// Resolution must be "ours", "theirs", or "custom". For "custom", Value provides the document to use.
 	// Returns ErrOperationFailed if no merge is in progress, if the collection or conflict ID is not found,
 	// or if the conflict is already resolved.
-	DocuDoltResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
+	DumboDBResolveConflict(context.Context, *ResolveConflictParams) (*ResolveConflictResult, error)
 
-	// DocuDoltCherryPick applies the diff introduced by the named commit onto the current branch's
+	// DumboDBCherryPick applies the diff introduced by the named commit onto the current branch's
 	// working set and creates a new commit. The commit parameter is a rootish (commit hash or
 	// ancestor expression). On conflict, the cherry-pick is staged but not committed and a
-	// *DocuDoltCherryPickConflictError is returned. Conflicts are resolved via
-	// DocuDoltResolveConflict/DocuDoltConflicts. After resolution, use Continue=true to complete
+	// *DumboDBCherryPickConflictError is returned. Conflicts are resolved via
+	// DumboDBResolveConflict/DumboDBConflicts. After resolution, use Continue=true to complete
 	// the cherry-pick. Use Abort=true to abandon an in-progress cherry-pick.
-	DocuDoltCherryPick(context.Context, *CherryPickParams) (*CherryPickResult, error)
+	DumboDBCherryPick(context.Context, *CherryPickParams) (*CherryPickResult, error)
 
-	// DocuDoltRebase reapplies all commits on the current branch not reachable from Onto onto the
+	// DumboDBRebase reapplies all commits on the current branch not reachable from Onto onto the
 	// tip of Onto, rewriting branch history. On conflict during a commit replay, the rebase is paused
-	// and a *DocuDoltRebaseConflictError is returned. Conflicts are resolved via
-	// DocuDoltResolveConflict/DocuDoltConflicts. After resolution, use Continue=true to complete
+	// and a *DumboDBRebaseConflictError is returned. Conflicts are resolved via
+	// DumboDBResolveConflict/DumboDBConflicts. After resolution, use Continue=true to complete
 	// the current commit and proceed. Use Abort=true to restore the pre-rebase state.
-	DocuDoltRebase(context.Context, *RebaseParams) (*RebaseResult, error)
+	DumboDBRebase(context.Context, *RebaseParams) (*RebaseResult, error)
 }

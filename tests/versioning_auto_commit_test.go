@@ -29,7 +29,7 @@ import (
 // (insert, update, delete) to produce its own Dolt commit automatically,
 // without any explicit doltCommit call.
 func TestAutoCommit(t *testing.T) {
-	env := startDocuDolt(t, "--auto-commit")
+	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("autocommit%d", rand.Int64N(1_000_000))

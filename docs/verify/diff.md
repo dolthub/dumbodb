@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -33,7 +33,7 @@ db.dropDatabase()
 // Baseline: two documents, committed
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
 db.items.insertOne({ _id: 2, label: "beta",  score: 20 })
-const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
 printjson(r1)
 // Expected: { hash: "<hashBase>", branch: "main", message: "baseline", ok: 1 }
 const hashBase = r1.commitId
@@ -104,7 +104,7 @@ Key checks:
 Commit the changes from the setup, then diff the two commits directly.
 
 ```js
-const r2 = db.runCommand({ doltCommit: 1, message: "three changes", author: "alice <alice@docudolt>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "three changes", author: "alice <alice@dumbodb>" })
 printjson(r2)
 // Expected: { hash: "<hashNew>", branch: "main", message: "three changes", ok: 1 }
 const hashNew = r2.commitId
@@ -159,7 +159,7 @@ changed documents appear in the diff.
 db.multi.insertOne({ _id: 1, name: "alpha", v: 1 })
 db.multi.insertOne({ _id: 2, name: "beta",  v: 2 })
 db.multi.insertOne({ _id: 3, name: "gamma", v: 3 })
-db.runCommand({ doltCommit: 1, message: "multi baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "multi baseline", author: "alice <alice@dumbodb>" })
 
 // Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4
 db.multi.deleteOne({ _id: 1 })
@@ -185,7 +185,7 @@ single operation. The diff must report all three as separate entries.
 ```js
 // Fresh collection: commit a doc with fields x and y
 db.mixedfields.insertOne({ _id: 1, x: 10, y: "remove-me" })
-db.runCommand({ doltCommit: 1, message: "mixedfields baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "mixedfields baseline", author: "alice <alice@dumbodb>" })
 
 // Replace: x changed, y gone, z added
 db.mixedfields.replaceOne({ _id: 1 }, { _id: 1, x: 99, z: "new-field" })
@@ -209,7 +209,7 @@ with the old typed value in `a` and the new typed value in `b`.
 ```js
 // Fresh collection: commit a doc where "val" is a number
 db.typechg.insertOne({ _id: 1, val: 42, stable: "unchanged" })
-db.runCommand({ doltCommit: 1, message: "typechg baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "typechg baseline", author: "alice <alice@dumbodb>" })
 
 // Replace: val changes from number to string
 db.typechg.replaceOne({ _id: 1 }, { _id: 1, val: "forty-two", stable: "unchanged" })
@@ -235,7 +235,7 @@ db.nested.insertOne({
   address: { city: "Seattle", zip: "98101" },
   name: "alice"
 })
-db.runCommand({ doltCommit: 1, message: "nested baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "nested baseline", author: "alice <alice@dumbodb>" })
 
 // Only address.city changes; address.zip and name are unchanged
 db.nested.updateOne({ _id: 1 }, { $set: { "address.city": "Portland" } })
@@ -263,10 +263,10 @@ db.getSiblingDB("diffdb__d_main").runCommand({ doltBranch: 1, branch: "feature" 
 var featureDB = db.getSiblingDB("diffdb__d_feature")
 
 // Make two commits on main.
-var r3 = db.runCommand({ doltCommit: 1, message: "c3", author: "alice <alice@docudolt>" })
+var r3 = db.runCommand({ doltCommit: 1, message: "c3", author: "alice <alice@dumbodb>" })
 const hash3 = r3.commitId
 db.items.insertOne({ _id: 5, label: "epsilon", score: 50 })
-const hash4 = db.runCommand({ doltCommit: 1, message: "c4", author: "alice <alice@docudolt>" }).commitId
+const hash4 = db.runCommand({ doltCommit: 1, message: "c4", author: "alice <alice@dumbodb>" }).commitId
 
 // 1. from=HEAD~1, to=HEAD on a main connection — HEAD resolves to main tip (c4)
 db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })

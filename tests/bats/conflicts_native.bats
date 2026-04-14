@@ -6,23 +6,23 @@
 # layer.  For each operation (merge, cherry-pick, rebase) the test:
 #   1. Creates a conflict scenario via the MongoDB wire protocol.
 #   2. Asserts the doltConflicts command returns the expected count.
-#   3. Stops docudolt and queries the dolt_conflicts SQL table directly.
+#   3. Stops dumbodb and queries the dolt_conflicts SQL table directly.
 #   4. Asserts the SQL row count matches the wire-protocol count.
 
 load helpers
 
-DOCUDOLT_PORT=37029
+DUMBODB_PORT=37029
 
 setup() {
-    DOCUDOLT_DATA_DIR="$(mktemp -d)"
-    start_docudolt "$DOCUDOLT_DATA_DIR" "$DOCUDOLT_PORT"
+    DUMBODB_DATA_DIR="$(mktemp -d)"
+    start_dumbodb "$DUMBODB_DATA_DIR" "$DUMBODB_PORT"
 }
 
 teardown() {
-    stop_docudolt
-    rm -rf "$DOCUDOLT_DATA_DIR"
+    stop_dumbodb
+    rm -rf "$DUMBODB_DATA_DIR"
     local parent_dir
-    parent_dir="$(dirname "$DOCUDOLT_DATA_DIR")"
+    parent_dir="$(dirname "$DUMBODB_DATA_DIR")"
     rm -rf "${parent_dir}/.dolt"
 }
 
@@ -35,7 +35,7 @@ teardown() {
 mongosh_eval() {
     local db_name="$1"
     local js="$2"
-    mongosh "mongodb://127.0.0.1:${DOCUDOLT_PORT}/${db_name}" \
+    mongosh "mongodb://127.0.0.1:${DUMBODB_PORT}/${db_name}" \
         --quiet --eval "$js" 2>/dev/null || true
 }
 
@@ -49,7 +49,7 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main branch.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({docudoltCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -63,14 +63,14 @@ mongosh_eval() {
     # C2: advance main — update _id:1 to v:10.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 10}});
-        db.runCommand({docudoltCommit: 1, message: "C2-main", author: "alice <a@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C2-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
     # C3: advance feature — update _id:1 to v:20.
     run mongosh_eval "test__d_feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 20}});
-        db.runCommand({docudoltCommit: 1, message: "C3-feat", author: "bob <b@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C3-feat", author: "bob <b@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -91,9 +91,9 @@ mongosh_eval() {
     [ "$wire_count" -eq 1 ]
 
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
-    stop_docudolt
-    setup_dolt_hack "$DOCUDOLT_DATA_DIR"
-    cd "$(dirname "$DOCUDOLT_DATA_DIR")"
+    stop_dumbodb
+    setup_dolt_hack "$DUMBODB_DATA_DIR"
+    cd "$(dirname "$DUMBODB_DATA_DIR")"
 
     run dolt sql -q 'select count(*) from dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
@@ -112,7 +112,7 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({docudoltCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -126,7 +126,7 @@ mongosh_eval() {
     # C2 on feature: update _id:1 to v:feature.
     run mongosh_eval "test__d_feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 99}});
-        JSON.stringify(db.runCommand({docudoltCommit: 1, message: "C2-feat", author: "bob <b@t>"}))
+        JSON.stringify(db.runCommand({dumbodbCommit: 1, message: "C2-feat", author: "bob <b@t>"}))
     '
     [ "$status" -eq 0 ]
     local hash_c2
@@ -136,7 +136,7 @@ mongosh_eval() {
     # C3 on main: update _id:1 to v:main — creates divergence.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 42}});
-        db.runCommand({docudoltCommit: 1, message: "C3-main", author: "alice <a@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C3-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -156,9 +156,9 @@ mongosh_eval() {
     [ "$wire_count" -eq 1 ]
 
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------
-    stop_docudolt
-    setup_dolt_hack "$DOCUDOLT_DATA_DIR"
-    cd "$(dirname "$DOCUDOLT_DATA_DIR")"
+    stop_dumbodb
+    setup_dolt_hack "$DUMBODB_DATA_DIR"
+    cd "$(dirname "$DUMBODB_DATA_DIR")"
 
     run dolt sql -q 'select count(*) from dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
@@ -177,7 +177,7 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({docudoltCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -191,14 +191,14 @@ mongosh_eval() {
     # C2 on feature: update _id:1 to v:feature — the commit to be replayed.
     run mongosh_eval "test__d_feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 55}});
-        db.runCommand({docudoltCommit: 1, message: "C2-feat", author: "bob <b@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C2-feat", author: "bob <b@t>"});
     '
     [ "$status" -eq 0 ]
 
     # C3 on main: update _id:1 to v:main — creates conflict when C2 is replayed.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 77}});
-        db.runCommand({docudoltCommit: 1, message: "C3-main", author: "alice <a@t>"});
+        db.runCommand({dumbodbCommit: 1, message: "C3-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -219,9 +219,9 @@ mongosh_eval() {
     [ "$wire_count" -eq 1 ]
 
     # ---- SQL: stop server, query dolt_conflicts_items on feature branch ------
-    stop_docudolt
-    setup_dolt_hack "$DOCUDOLT_DATA_DIR"
-    cd "$(dirname "$DOCUDOLT_DATA_DIR")"
+    stop_dumbodb
+    setup_dolt_hack "$DUMBODB_DATA_DIR"
+    cd "$(dirname "$DUMBODB_DATA_DIR")"
 
     # Switch to "feature" branch whose working set has the conflict artifacts.
     run dolt checkout feature

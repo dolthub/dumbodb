@@ -7,7 +7,7 @@
 ## Overview
 
 The Parity Scorekeeper is a Gas Town dog plugin that monitors the `parity.yml`
-GitHub Actions workflow in `dolthub/docudolt-parity-tesing`. After each completed
+GitHub Actions workflow in `dolthub/dumbodb-parity-tesing`. After each completed
 workflow run, it checks the conclusion, files a bd bead on failure, and closes
 the bead on recovery.
 
@@ -24,7 +24,7 @@ calls, and runs on a cooldown gate (every 30 minutes).
 
 **Decision**: Monitor at the workflow run level (pass/fail), not individual test cases.
 
-The parity workflow tests docudolt against a reference Dolt implementation. Unlike
+The parity workflow tests dumbodb against a reference Dolt implementation. Unlike
 the FerretDB scorecard (which produces a per-test artifact), parity.yml reports
 overall pass/fail. There's no artifact to parse — just the workflow conclusion.
 
@@ -41,16 +41,16 @@ Only tracks the last processed run ID and any open failure bead:
   "last_run_id": "12345678",
   "last_run_conclusion": "failure",
   "last_run_at": "2026-03-26T20:00:00Z",
-  "last_run_url": "https://github.com/dolthub/docudolt-parity-tesing/actions/runs/...",
+  "last_run_url": "https://github.com/dolthub/dumbodb-parity-tesing/actions/runs/...",
   "open_failure_bead": "do-abc"
 }
 ```
 
 ### 4. Token: Dedicated Verify Token
 
-**Decision**: Uses `GH_TOKEN` from `/home/ubuntu/.gh_gt_token_docudolt_vefify`.
+**Decision**: Uses `GH_TOKEN` from `/home/ubuntu/.gh_gt_token_dumbodb_vefify`.
 
-The `dolthub/docudolt-parity-tesing` repo requires a separate token with access to
+The `dolthub/dumbodb-parity-tesing` repo requires a separate token with access to
 workflow run data. This token is explicitly configured rather than relying on the
 default `gh` auth.
 
@@ -58,7 +58,7 @@ default `gh` auth.
 
 **Decision**: Failure beads are filed at P1.
 
-Parity failures indicate docudolt behavior diverges from the reference Dolt
+Parity failures indicate dumbodb behavior diverges from the reference Dolt
 implementation — this is a correctness issue, not a flaky test. P1 ensures it
 surfaces quickly.
 
@@ -73,20 +73,20 @@ right team member sees it promptly.
 
 **Decision**: Check workflow logs for "did not start in time" pattern.
 
-If docudolt fails to start during the parity run, that's a distinct failure mode
+If dumbodb fails to start during the parity run, that's a distinct failure mode
 from a test failure. The bead description notes this when detected, aiding
 diagnosis.
 
 ## Implementation
 
-The plugin is at `/home/ubuntu/docudolt/plugins/parity-scorekeeper-dog/plugin.md`.
+The plugin is at `/home/ubuntu/dumbodb/plugins/parity-scorekeeper-dog/plugin.md`.
 
 It runs as a Dog agent (Claude with AI judgment) on a 30-minute cooldown.
 Steps:
 1. Load GH token and verify authentication
 2. Load state from `parity-state.json`
 3. Fetch latest completed parity workflow run
-4. Check for docudolt startup failure in logs
+4. Check for dumbodb startup failure in logs
 5. On failure: file bead (or update existing) + escalate to mayor
 6. On success: close open failure bead if present
 7. Persist updated state
@@ -95,8 +95,8 @@ Steps:
 
 | Feature | scorekeeper-dog | parity-scorekeeper-dog |
 |---------|----------------|------------------------|
-| Repo | dolthub/docudolt | dolthub/docudolt-parity-tesing |
-| Workflow | docudolt-scorecard.yml | parity.yml |
+| Repo | dolthub/dumbodb | dolthub/dumbodb-parity-tesing |
+| Workflow | dumbodb-scorecard.yml | parity.yml |
 | Granularity | Per-test tracking | Per-run tracking |
 | Skiplist | Yes | No |
 | Regression attribution | Yes | No |

@@ -20,7 +20,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // SumNumbers accumulate numbers and returns the result of summation.
@@ -44,7 +44,7 @@ func SumNumbers(vs ...any) any {
 	intSum := big.NewInt(0)
 
 	// handle accumulation of doubles close to max precision.
-	// TODO https://github.com/dolthub/docudolt/issues/2300
+	// TODO https://github.com/dolthub/dumbodb/issues/2300
 	var floatSum float64
 
 	var hasFloat64, hasInt64 bool

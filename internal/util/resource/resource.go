@@ -24,7 +24,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/dolthub/docudolt/internal/util/debugbuild"
+	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 )
 
 // Token should be a field of a tracked object.

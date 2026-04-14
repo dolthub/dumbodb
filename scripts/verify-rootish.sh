@@ -4,16 +4,16 @@
 # Usage:
 #   bash scripts/verify-rootish.sh [host:port]
 #
-# Default host:port is localhost:27017. Run with a live Docudolt instance.
+# Default host:port is localhost:27017. Run with a live DumboDB instance.
 #
 # Tests only what is currently implemented:
-#   - docudoltCommit
+#   - dumbodbCommit
 #   - commit-hash rootish (reads + write-blocking)
 #   - ancestor-expression rootish (reads + write-blocking)
-#   - docudoltCurrentBranch on branch vs read-only connections
+#   - dumbodbCurrentBranch on branch vs read-only connections
 #   - parse-time rejection of HEAD, HEAD~N, reflog, and range syntax
 #
-# Does NOT test docudoltBranch/docudoltMerge/docudoltLog/docudoltStatus/docudoltReset —
+# Does NOT test dumbodbBranch/dumbodbMerge/dumbodbLog/dumbodbStatus/dumbodbReset —
 # those are not yet implemented.
 
 set -euo pipefail
@@ -66,7 +66,7 @@ try {
     fi
 }
 
-echo "Docudolt rootish verification — ${URI}"
+echo "DumboDB rootish verification — ${URI}"
 echo "Database: ${DBNAME}"
 echo
 
@@ -76,11 +76,11 @@ echo "=== Setup: two commits on main ==="
 SETUP_OUT=$(_js "
 const db2 = db.getSiblingDB('${DBNAME}');
 db2.getCollection('${COLL}').insertOne({ _id: 1, v: 'first' });
-const r1 = db2.runCommand({ docudoltCommit: 1, message: 'first commit' });
-if (r1.ok !== 1) throw new Error('docudoltCommit 1 failed: ' + JSON.stringify(r1));
+const r1 = db2.runCommand({ dumbodbCommit: 1, message: 'first commit' });
+if (r1.ok !== 1) throw new Error('dumbodbCommit 1 failed: ' + JSON.stringify(r1));
 db2.getCollection('${COLL}').insertOne({ _id: 2, v: 'second' });
-const r2 = db2.runCommand({ docudoltCommit: 1, message: 'second commit' });
-if (r2.ok !== 1) throw new Error('docudoltCommit 2 failed: ' + JSON.stringify(r2));
+const r2 = db2.runCommand({ dumbodbCommit: 1, message: 'second commit' });
+if (r2.ok !== 1) throw new Error('dumbodbCommit 2 failed: ' + JSON.stringify(r2));
 print(r1.hash);
 ")
 
@@ -148,25 +148,25 @@ expect_code_96 "insert on main~1 rootish" \
 echo
 
 # ---------------------------------------------------------------------------
-echo "=== Scenario 4: docudoltCurrentBranch ==="
+echo "=== Scenario 4: dumbodbCurrentBranch ==="
 
-expect_no_error "docudoltCurrentBranch on plain db returns 'main'" "
-const r = db.getSiblingDB('${DBNAME}').runCommand({ docudoltCurrentBranch: 1 });
+expect_no_error "dumbodbCurrentBranch on plain db returns 'main'" "
+const r = db.getSiblingDB('${DBNAME}').runCommand({ dumbodbCurrentBranch: 1 });
 if (r.ok !== 1) throw new Error('command failed: ' + JSON.stringify(r));
 if (r.branch !== 'main') throw new Error('expected main, got ' + r.branch);
 "
 
-expect_no_error "docudoltCurrentBranch on __main returns 'main'" "
-const r = db.getSiblingDB('${DBNAME}__main').runCommand({ docudoltCurrentBranch: 1 });
+expect_no_error "dumbodbCurrentBranch on __main returns 'main'" "
+const r = db.getSiblingDB('${DBNAME}__main').runCommand({ dumbodbCurrentBranch: 1 });
 if (r.ok !== 1) throw new Error('command failed: ' + JSON.stringify(r));
 if (r.branch !== 'main') throw new Error('expected main, got ' + r.branch);
 "
 
-expect_code_96 "docudoltCurrentBranch on hash rootish returns code 96" \
-    "db.getSiblingDB('${DBNAME}__${HASH1}').runCommand({ docudoltCurrentBranch: 1 });"
+expect_code_96 "dumbodbCurrentBranch on hash rootish returns code 96" \
+    "db.getSiblingDB('${DBNAME}__${HASH1}').runCommand({ dumbodbCurrentBranch: 1 });"
 
-expect_code_96 "docudoltCurrentBranch on ancestor rootish returns code 96" \
-    "db.getSiblingDB('${DBNAME}__main~1').runCommand({ docudoltCurrentBranch: 1 });"
+expect_code_96 "dumbodbCurrentBranch on ancestor rootish returns code 96" \
+    "db.getSiblingDB('${DBNAME}__main~1').runCommand({ dumbodbCurrentBranch: 1 });"
 
 echo
 

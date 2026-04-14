@@ -22,9 +22,9 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/clientconn/conninfo"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/util/logging"
 )
 
 // command represents a handler for single command.
@@ -119,51 +119,99 @@ func (h *Handler) initCommands() {
 			Help:    "Returns error for debugging.",
 		},
 		"doltBranch": {
-			Handler: h.MsgDocuDoltBranch,
-			Help:    "Creates a new DocuDolt branch from the current branch encoded in the database name.",
+			Handler: h.MsgDumboDBBranch,
+			Help:    "Creates a new DumboDB branch from the current branch encoded in the database name.",
 		},
 		"doltCherryPick": {
-			Handler: h.MsgDocuDoltCherryPick,
+			Handler: h.MsgDumboDBCherryPick,
 			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
 		},
 		"doltRebase": {
-			Handler: h.MsgDocuDoltRebase,
+			Handler: h.MsgDumboDBRebase,
 			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
 		},
 		"doltConflicts": {
-			Handler: h.MsgDocuDoltConflicts,
+			Handler: h.MsgDumboDBConflicts,
 			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
 		},
 		"doltDiff": {
-			Handler: h.MsgDocuDoltDiff,
+			Handler: h.MsgDumboDBDiff,
 			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
 		},
 		"doltCommit": {
-			Handler: h.MsgDocuDoltCommit,
+			Handler: h.MsgDumboDBCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
 		"doltCurrentBranch": {
-			Handler: h.MsgDocuDoltCurrentBranch,
+			Handler: h.MsgDumboDBCurrentBranch,
 			Help:    "Returns the current branch name for the connection encoded in the database name.",
 		},
 		"doltLog": {
-			Handler: h.MsgDocuDoltLog,
+			Handler: h.MsgDumboDBLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",
 		},
 		"doltMerge": {
-			Handler: h.MsgDocuDoltMerge,
+			Handler: h.MsgDumboDBMerge,
 			Help:    "Merges a source branch into the branch encoded in the database name.",
 		},
 		"doltReset": {
-			Handler: h.MsgDocuDoltReset,
+			Handler: h.MsgDumboDBReset,
 			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
 		},
 		"doltResolveConflict": {
-			Handler: h.MsgDocuDoltResolveConflict,
+			Handler: h.MsgDumboDBResolveConflict,
 			Help:    "Resolves a single document conflict in the current in-progress merge.",
 		},
 		"doltStatus": {
-			Handler: h.MsgDocuDoltStatus,
+			Handler: h.MsgDumboDBStatus,
+			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
+		},
+		"dumboBranch": {
+			Handler: h.MsgDumboDBBranch,
+			Help:    "Creates a new DumboDB branch from the current branch encoded in the database name.",
+		},
+		"dumboCherryPick": {
+			Handler: h.MsgDumboDBCherryPick,
+			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
+		},
+		"dumboRebase": {
+			Handler: h.MsgDumboDBRebase,
+			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
+		},
+		"dumboConflicts": {
+			Handler: h.MsgDumboDBConflicts,
+			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
+		},
+		"dumboDiff": {
+			Handler: h.MsgDumboDBDiff,
+			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
+		},
+		"dumboCommit": {
+			Handler: h.MsgDumboDBCommit,
+			Help:    "Commits the current working set on the branch encoded in the database name.",
+		},
+		"dumboCurrentBranch": {
+			Handler: h.MsgDumboDBCurrentBranch,
+			Help:    "Returns the current branch name for the connection encoded in the database name.",
+		},
+		"dumboLog": {
+			Handler: h.MsgDumboDBLog,
+			Help:    "Returns commit history for the branch encoded in the database name.",
+		},
+		"dumboMerge": {
+			Handler: h.MsgDumboDBMerge,
+			Help:    "Merges a source branch into the branch encoded in the database name.",
+		},
+		"dumboReset": {
+			Handler: h.MsgDumboDBReset,
+			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
+		},
+		"dumboResolveConflict": {
+			Handler: h.MsgDumboDBResolveConflict,
+			Help:    "Resolves a single document conflict in the current in-progress merge.",
+		},
+		"dumboStatus": {
+			Handler: h.MsgDumboDBStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
 		},
 		"delete": {

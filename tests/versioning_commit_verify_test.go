@@ -40,7 +40,7 @@ import (
 
 // commitVerifySetup mirrors the Setup section of docs/verify/commit.md.
 // Returns hashBase (the baseline commit hash).
-func commitVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashBase string) {
+func commitVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBase string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -63,12 +63,12 @@ func commitVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashB
 	})
 	require.NoError(t, err)
 
-	hashBase = docuDoltCommit(t, env, dbName, "baseline", "alice <alice@docudolt>")
+	hashBase = dumboDBCommit(t, env, dbName, "baseline", "alice <alice@dumbodb>")
 	return hashBase
 }
 
 func TestCommitVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("commitvrfy%d", rand.Int64N(1_000_000))
@@ -84,7 +84,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "shape check"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		}).Decode(&result))
 
 		hash, ok := result["commitId"].(string)
@@ -93,7 +93,7 @@ func TestCommitVerify(t *testing.T) {
 
 		assert.Equal(t, "main", result["branch"], "branch must be 'main' for plain db name")
 		assert.Equal(t, "shape check", result["message"], "message must echo the provided string")
-		assert.Equal(t, "alice <alice@docudolt>", result["author"], "author must echo the provided value")
+		assert.Equal(t, "alice <alice@dumbodb>", result["author"], "author must echo the provided value")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
 	})
@@ -125,7 +125,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "feature commit"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		}).Decode(&commitResult))
 
 		hash, ok := commitResult["commitId"].(string)
@@ -160,7 +160,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit A"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		}).Decode(&resultA))
 		hashA, _ := resultA["commitId"].(string)
 		require.NotEmpty(t, hashA)
@@ -177,7 +177,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit B"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		}).Decode(&resultB))
 		hashB, _ := resultB["commitId"].(string)
 		require.NotEmpty(t, hashB)
@@ -194,7 +194,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		}).Decode(&result))
 
 		hash, ok := result["commitId"].(string)
@@ -204,11 +204,11 @@ func TestCommitVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Committed hash is a valid docuDoltDiff reference
+	// Scenario 5: Committed hash is a valid dumboDBDiff reference
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HashIsValidDiffReference", func(t *testing.T) {
 		// Commit current state and save hashBefore.
-		hashBefore := docuDoltCommit(t, env, dbName, "pre-change", "alice <alice@docudolt>")
+		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@dumbodb>")
 
 		// Insert _id:99 and commit — save hashAfter.
 		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
@@ -218,7 +218,7 @@ func TestCommitVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashAfter := docuDoltCommit(t, env, dbName, "post-change", "alice <alice@docudolt>")
+		hashAfter := dumboDBCommit(t, env, dbName, "post-change", "alice <alice@dumbodb>")
 
 		// Diff from hashBefore to hashAfter must show _id:99 as added.
 		var raw bson.M
@@ -238,7 +238,7 @@ func TestCommitVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Author is echoed in the response and visible in docuDoltLog
+	// Scenario 6: Author is echoed in the response and visible in dumboDBLog
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
 		var result bson.M
@@ -252,7 +252,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.NotNil(t, result["timestamp"], "timestamp must be present in response")
 		assert.EqualValues(t, 1, result["ok"])
 
-		// Verify the author is stored and visible via docuDoltLog.
+		// Verify the author is stored and visible via dumboDBLog.
 		var logResult bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -291,7 +291,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, fixedTime.UnixMilli(), int64(echoedTS),
 			"echoed timestamp must match the provided fixed time")
 
-		// Verify via docuDoltLog that the stored timestamp matches.
+		// Verify via dumboDBLog that the stored timestamp matches.
 		var logResult bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},

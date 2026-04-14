@@ -22,7 +22,7 @@ package tests
 //   - Commit C1 on main: items = [ {_id:1, v:1} ]
 //   - Branch "feature" pointing at C1 (same as main HEAD)
 //
-// Note: docuDoltCommit always commits to the main branch. The merge test therefore
+// Note: dumboDBCommit always commits to the main branch. The merge test therefore
 // demonstrates merging main (which advances) into feature (which stays at C1),
 // not the other way around.
 //
@@ -64,7 +64,7 @@ func runCommandRaw(t *testing.T, db *mongo.Database, cmd interface{}) bson.M {
 
 // mergeVerifySetup mirrors the Setup section of docs/verify/merge.md.
 // Returns hashC1 (the initial commit hash on main).
-func mergeVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1 string) {
+func mergeVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1 string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -78,7 +78,7 @@ func mergeVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = docuDoltCommit(t, env, dbName, "initial", "alice <alice@docudolt>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
@@ -93,7 +93,7 @@ func mergeVerifySetup(t *testing.T, env *docuDoltTestEnv, dbName string) (hashC1
 }
 
 func TestMergeVerify(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	// Randomised db name so parallel test runs don't collide.
@@ -114,7 +114,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		hashC2 = docuDoltCommit(t, env, dbName, "add-two", "alice <alice@docudolt>")
+		hashC2 = dumboDBCommit(t, env, dbName, "add-two", "alice <alice@dumbodb>")
 
 		// Merge feature (at C1, behind) into main (at C2).
 		var raw bson.M
@@ -187,7 +187,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		hashC3 := docuDoltCommit(t, env, dbName, "add-three", "alice <alice@docudolt>")
+		hashC3 := dumboDBCommit(t, env, dbName, "add-three", "alice <alice@dumbodb>")
 
 		// Commit _id:4 on feature independently → C4.
 		_, err = env.client.Database(dbName + "__d_feature").Collection("items").InsertOne(ctx, bson.D{
@@ -195,7 +195,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(4)},
 		})
 		require.NoError(t, err)
-		hashC4 := docuDoltCommit(t, env, dbName+"__d_feature", "add-four", "alice <alice@docudolt>")
+		hashC4 := dumboDBCommit(t, env, dbName+"__d_feature", "add-four", "alice <alice@dumbodb>")
 
 		// Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
 		var raw bson.M
@@ -214,7 +214,7 @@ func TestMergeVerify(t *testing.T) {
 		assert.Equal(t, "custom merge msg", raw["message"])
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// docuDoltLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
+		// dumboDBLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
 		var logRaw bson.M
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -240,7 +240,7 @@ func TestMergeVerify(t *testing.T) {
 // recorded in the merge commit for both clean three-way merges (Scenario 4)
 // and conflict-resolution continues (Scenario 11 in docs/verify/merge.md).
 func TestMergeCustomMessageAuthor(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	// -------------------------------------------------------------------------
@@ -259,14 +259,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName+"__d_main", "add-two", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName+"__d_main", "add-two", "alice <alice@dumbodb>")
 
 		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		docuDoltCommit(t, env, dbName+"__d_feature", "add-three", "alice <alice@docudolt>")
+		dumboDBCommit(t, env, dbName+"__d_feature", "add-three", "alice <alice@dumbodb>")
 
 		// Three-way merge with custom message and author.
 		var raw bson.M
@@ -283,7 +283,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		require.True(t, ok, "commitId must be a string")
 		require.NotEmpty(t, mergeCommitID)
 
-		// docuDoltLog HEAD must show message="custom msg" and author="bob <bob@x>".
+		// dumboDBLog HEAD must show message="custom msg" and author="bob <bob@x>".
 		var logRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -313,14 +313,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 		)
 		require.NoError(t, err)
-		hashMain := docuDoltCommit(t, env, dbName+"__d_main", "main-v10", "alice")
+		hashMain := dumboDBCommit(t, env, dbName+"__d_main", "main-v10", "alice")
 
 		_, err = featDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 		)
 		require.NoError(t, err)
-		hashFeat := docuDoltCommit(t, env, dbName+"__d_feature", "feature-v20", "bob")
+		hashFeat := dumboDBCommit(t, env, dbName+"__d_feature", "feature-v20", "bob")
 
 		// Trigger the conflicting merge.
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -354,7 +354,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			{Key: "doltMerge", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 			{Key: "message", Value: "Resolve merge conflicts"},
-			{Key: "author", Value: "alice <alice@docudolt>"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
 		}).Decode(&continueRaw))
 		assert.EqualValues(t, 1, continueRaw["ok"])
 		assert.Equal(t, "Resolve merge conflicts", continueRaw["message"], "continue response message must match custom message")
@@ -365,7 +365,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.NotEqual(t, hashMain, mergeCommitID)
 		assert.NotEqual(t, hashFeat, mergeCommitID)
 
-		// docuDoltLog HEAD must show message="custom resolve msg" and author="carol <carol@x>".
+		// dumboDBLog HEAD must show message="custom resolve msg" and author="carol <carol@x>".
 		var logRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -378,7 +378,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.Equal(t, hashMain, head.Parent1, "parent1 must be main's pre-merge HEAD")
 		assert.Equal(t, hashFeat, head.Parent2, "parent2 must be feature's HEAD")
 		assert.Equal(t, "Resolve merge conflicts", head.Message, "doltLog must show the custom message")
-		assert.Equal(t, "alice <alice@docudolt>", head.Author, "doltLog must show the custom author")
+		assert.Equal(t, "alice <alice@dumbodb>", head.Author, "doltLog must show the custom author")
 	})
 }
 
@@ -387,17 +387,17 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 //
 // Scenarios:
 //   5. Conflicting merge returns ok:0 with conflicts array
-//   6. docuDoltConflicts lists the conflict
-//   7. docuDoltResolveConflict with "ours" preserves our version
-//   8. docuDoltCommit after resolution creates a merge commit
+//   6. dumboDBConflicts lists the conflict
+//   7. dumboDBResolveConflict with "ours" preserves our version
+//   8. dumboDBCommit after resolution creates a merge commit
 //
 // Additionally tests:
-//   - docuDoltCommit is blocked while conflicts remain
-//   - docuDoltMerge abort discards the in-progress merge
-//   - docuDoltResolveConflict with "theirs" and "custom"
-//   - docuDoltMerge rejects a new initiation while one is in progress
+//   - dumboDBCommit is blocked while conflicts remain
+//   - dumboDBMerge abort discards the in-progress merge
+//   - dumboDBResolveConflict with "theirs" and "custom"
+//   - dumboDBMerge rejects a new initiation while one is in progress
 func TestMergeConflictWorkflow(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("conftest%d", rand.Int64N(1_000_000))
@@ -414,14 +414,14 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 	)
 	require.NoError(t, err)
-	hashMain := docuDoltCommit(t, env, dbName+"__d_main", "main-v10", "alice")
+	hashMain := dumboDBCommit(t, env, dbName+"__d_main", "main-v10", "alice")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 	)
 	require.NoError(t, err)
-	hashFeat := docuDoltCommit(t, env, dbName+"__d_feature", "feature-v20", "bob")
+	hashFeat := dumboDBCommit(t, env, dbName+"__d_feature", "feature-v20", "bob")
 
 	// Scenario 5: Conflicting merge returns ok:0 with conflicts array
 	t.Run("Scenario5_ConflictingMerge_ReturnsConflicts", func(t *testing.T) {
@@ -445,8 +445,8 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.EqualValues(t, 1, entry["count"], "one conflict in 'items'")
 	})
 
-	// Scenario 6: docuDoltConflicts lists the conflict
-	t.Run("Scenario6_DocuDoltConflicts_ListsConflict", func(t *testing.T) {
+	// Scenario 6: dumboDBConflicts lists the conflict
+	t.Run("Scenario6_DumboDBConflicts_ListsConflict", func(t *testing.T) {
 		// Summary (no collection filter)
 		var summaryRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
@@ -487,7 +487,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.EqualValues(t, 20, theirsDoc["v"], "theirs doc must have v:20 (feature's version)")
 	})
 
-	// Scenario 7: docuDoltCommit blocked while conflicts remain
+	// Scenario 7: dumboDBCommit blocked while conflicts remain
 	t.Run("Scenario7_CommitBlockedWithConflicts", func(t *testing.T) {
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
@@ -498,16 +498,16 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.Contains(t, err.Error(), "unresolved merge conflicts", "error must mention unresolved conflicts")
 	})
 
-	// Scenario 8: docuDoltMerge rejects new merge while one is in progress
+	// Scenario 8: dumboDBMerge rejects new merge while one is in progress
 	t.Run("Scenario8_MergeInProgress_Rejected", func(t *testing.T) {
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "feature"},
 		}).Err()
-		require.Error(t, err, "new docuDoltMerge while merge in progress must fail")
+		require.Error(t, err, "new dumboDBMerge while merge in progress must fail")
 	})
 
-	// Scenario 9: Resolve with "ours" and then docuDoltMerge continue creates a merge commit
+	// Scenario 9: Resolve with "ours" and then dumboDBMerge continue creates a merge commit
 	t.Run("Scenario9_ResolveOurs_ThenContinue", func(t *testing.T) {
 		// Get the conflict ID
 		var detailRaw bson.M
@@ -537,7 +537,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		colls := summaryRaw["collections"].(bson.A)
 		assert.Len(t, colls, 0, "no more conflicts after resolution")
 
-		// docuDoltCommit is blocked even when all conflicts are resolved — merge in progress
+		// dumboDBCommit is blocked even when all conflicts are resolved — merge in progress
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "should fail: merge in progress"},
@@ -546,7 +546,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.Error(t, err, "doltCommit must fail while merge is in progress (even with no conflicts)")
 		assert.Contains(t, err.Error(), "merge in progress", "error must mention merge in progress")
 
-		// docuDoltMerge continue creates a merge commit
+		// dumboDBMerge continue creates a merge commit
 		var commitRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
@@ -560,7 +560,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.NotEqual(t, hashMain, mergeCommitID)
 		assert.NotEqual(t, hashFeat, mergeCommitID)
 
-		// docuDoltLog HEAD must show a merge commit with two parents
+		// dumboDBLog HEAD must show a merge commit with two parents
 		var logRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -580,9 +580,9 @@ func TestMergeConflictWorkflow(t *testing.T) {
 	})
 }
 
-// TestMergeConflictAbort tests that docuDoltMerge abort restores the pre-merge state.
+// TestMergeConflictAbort tests that dumboDBMerge abort restores the pre-merge state.
 func TestMergeConflictAbort(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("confabort%d", rand.Int64N(1_000_000))
@@ -596,14 +596,14 @@ func TestMergeConflictAbort(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_main", "main-100", "alice")
+	dumboDBCommit(t, env, dbName+"__d_main", "main-100", "alice")
 
 	_, err = env.client.Database(dbName + "__d_feature").Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_feature", "feature-200", "bob")
+	dumboDBCommit(t, env, dbName+"__d_feature", "feature-200", "bob")
 
 	// Trigger a conflicting merge.
 	raw := runCommandRaw(t, mainDB, bson.D{
@@ -622,7 +622,7 @@ func TestMergeConflictAbort(t *testing.T) {
 	assert.EqualValues(t, 1, abortRaw["ok"])
 	assert.Equal(t, "merge aborted", abortRaw["message"])
 
-	// After abort, docuDoltCommit must succeed (no more conflicts).
+	// After abort, dumboDBCommit must succeed (no more conflicts).
 	var commitRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltCommit", Value: int32(1)},
@@ -639,7 +639,7 @@ func TestMergeConflictAbort(t *testing.T) {
 
 // TestMergeConflictResolveTheirs tests the "theirs" resolution strategy.
 func TestMergeConflictResolveTheirs(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("conftheirs%d", rand.Int64N(1_000_000))
@@ -654,14 +654,14 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(11)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_main", "main-11", "alice")
+	dumboDBCommit(t, env, dbName+"__d_main", "main-11", "alice")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(22)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_feature", "feature-22", "bob")
+	dumboDBCommit(t, env, dbName+"__d_feature", "feature-22", "bob")
 
 	// Trigger conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{
@@ -690,7 +690,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
-	// Complete the merge with docuDoltMerge continue.
+	// Complete the merge with dumboDBMerge continue.
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
@@ -706,7 +706,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 
 // TestMergeConflictResolveCustom tests the "custom" resolution strategy.
 func TestMergeConflictResolveCustom(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("confcustom%d", rand.Int64N(1_000_000))
@@ -721,14 +721,14 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(55)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_main", "main-55", "alice")
+	dumboDBCommit(t, env, dbName+"__d_main", "main-55", "alice")
 
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(66)}}}},
 	)
 	require.NoError(t, err)
-	docuDoltCommit(t, env, dbName+"__d_feature", "feature-66", "bob")
+	dumboDBCommit(t, env, dbName+"__d_feature", "feature-66", "bob")
 
 	// Trigger conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{
@@ -761,7 +761,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
-	// Complete the merge with docuDoltMerge continue.
+	// Complete the merge with dumboDBMerge continue.
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},

@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // timestampType represents BSON Timestamp type.

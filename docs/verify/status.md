@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document in "items", committed.
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
-db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
 ```
 
 After setup, the working set matches HEAD — no uncommitted changes.
@@ -95,7 +95,7 @@ marks it as `"modified"`.
 
 ```js
 // Commit the "newcoll" addition first.
-db.runCommand({ doltCommit: 1, message: "add newcoll", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "add newcoll", author: "alice <alice@dumbodb>" })
 
 // Now modify an existing committed collection.
 db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
@@ -128,7 +128,7 @@ working set) marks it as `"deleted"`.
 
 ```js
 // Commit the items modification first.
-db.runCommand({ doltCommit: 1, message: "modify items", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "modify items", author: "alice <alice@dumbodb>" })
 
 // Delete the entire "items" collection.
 db.items.drop()
@@ -160,7 +160,7 @@ After committing the deletion, the working set matches HEAD and `doltStatus`
 reports no changes.
 
 ```js
-db.runCommand({ doltCommit: 1, message: "delete items", author: "alice <alice@docudolt>" })
+db.runCommand({ doltCommit: 1, message: "delete items", author: "alice <alice@dumbodb>" })
 
 db.runCommand({ doltStatus: 1 })
 ```

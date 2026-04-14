@@ -24,7 +24,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/google/uuid"
 
-	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // database implements backends.Database.

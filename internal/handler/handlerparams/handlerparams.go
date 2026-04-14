@@ -21,9 +21,9 @@ import (
 	"math"
 	"strings"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 var (
@@ -50,7 +50,7 @@ var (
 func GetWholeNumberParam(value any) (int64, error) {
 	switch value := value.(type) {
 	// add string support
-	// TODO https://github.com/dolthub/docudolt/issues/1089
+	// TODO https://github.com/dolthub/dumbodb/issues/1089
 	case float64:
 		switch {
 		case math.IsInf(value, 1):

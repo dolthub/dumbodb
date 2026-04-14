@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 )
 
 func TestParseRootish(t *testing.T) {

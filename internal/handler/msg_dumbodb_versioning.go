@@ -24,12 +24,12 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // dbBranchSep is the separator between the database name and rootish in an
@@ -37,17 +37,17 @@ import (
 // Must match the value in internal/backends/dolt/backend.go.
 const dbBranchSep = "__d_"
 
-// MsgDocuDoltDiff implements the `docuDoltDiff` command.
+// MsgDumboDBDiff implements the `dumboDBDiff` command.
 //
 // Returns the document-level diff between two states for the branch encoded in $db.
 // Usage:
 //
-//	db.adminCommand({docuDoltDiff: 1})                          // working set vs HEAD
-//	db.adminCommand({docuDoltDiff: 1, from: "<hash>"})          // commit hash to working set
-//	db.adminCommand({docuDoltDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
+//	db.adminCommand({dumboDBDiff: 1})                          // working set vs HEAD
+//	db.adminCommand({dumboDBDiff: 1, from: "<hash>"})          // commit hash to working set
+//	db.adminCommand({dumboDBDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -81,7 +81,7 @@ func (h *Handler) MsgDocuDoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wi
 		)
 	}
 
-	res, err := vb.DocuDoltDiff(connCtx, &backends.DiffParams{
+	res, err := vb.DumboDBDiff(connCtx, &backends.DiffParams{
 		DBName:      dbName,
 		ConnRootish: connRootish,
 		From:        from,
@@ -144,7 +144,7 @@ func (h *Handler) MsgDocuDoltDiff(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // branchFromDBName parses the real database name and rootish from an encoded db name.
 //
-// DocuDolt encodes version information in the database name using the __d_ separator:
+// DumboDB encodes version information in the database name using the __d_ separator:
 //
 //	"mydb__d_branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
 //	"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
@@ -351,15 +351,15 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 	return vb
 }
 
-// MsgDocuDoltCurrentBranch implements the `docuDoltCurrentBranch` command.
+// MsgDumboDBCurrentBranch implements the `dumboDBCurrentBranch` command.
 //
 // It returns the branch name for the connection encoded in $db.
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltCurrentBranch: 1})
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBCurrentBranch: 1})
 //
 // Returns an OperationFailed error if the connection is read-only (commit hash or ancestor expression).
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltCurrentBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBCurrentBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -390,7 +390,7 @@ func (h *Handler) MsgDocuDoltCurrentBranch(connCtx context.Context, msg *wire.Op
 		)
 	}
 
-	res, err := vb.DocuDoltCurrentBranch(connCtx, &backends.CurrentBranchParams{
+	res, err := vb.DumboDBCurrentBranch(connCtx, &backends.CurrentBranchParams{
 		DBName: dbName,
 		Branch: branch,
 	})
@@ -406,13 +406,13 @@ func (h *Handler) MsgDocuDoltCurrentBranch(connCtx context.Context, msg *wire.Op
 	)
 }
 
-// MsgDocuDoltCommit implements the `docuDoltCommit` command.
+// MsgDumboDBCommit implements the `dumboDBCommit` command.
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltCommit: 1, message: "my commit"})
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBCommit: 1, message: "my commit"})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -451,7 +451,7 @@ func (h *Handler) MsgDocuDoltCommit(connCtx context.Context, msg *wire.OpMsg) (*
 		)
 	}
 
-	res, err := vb.DocuDoltCommit(connCtx, &backends.CommitParams{
+	res, err := vb.DumboDBCommit(connCtx, &backends.CommitParams{
 		DBName:    dbName,
 		Branch:    branch,
 		Message:   message,
@@ -474,13 +474,13 @@ func (h *Handler) MsgDocuDoltCommit(connCtx context.Context, msg *wire.OpMsg) (*
 	)
 }
 
-// MsgDocuDoltBranch implements the `docuDoltBranch` command.
+// MsgDumboDBBranch implements the `dumboDBBranch` command.
 //
 // It creates a new branch from the current branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_main").runCommand({docuDoltBranch: 1, branch: "feature"})
+// Usage: db.getSiblingDB("mydb__d_main").runCommand({dumboDBBranch: 1, branch: "feature"})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -535,7 +535,7 @@ func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 		)
 	}
 
-	res, err := vb.DocuDoltBranch(connCtx, &backends.BranchParams{
+	res, err := vb.DumboDBBranch(connCtx, &backends.BranchParams{
 		DBName: dbName,
 		From:   fromBranch,
 		Name:   newBranch,
@@ -554,16 +554,16 @@ func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 	)
 }
 
-// MsgDocuDoltMerge implements the `docuDoltMerge` command.
+// MsgDumboDBMerge implements the `dumboDBMerge` command.
 //
 // Merges a source branch into the current branch encoded in $db (format: "dbname__d_branch").
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, merge_in: "feature", noFF: true})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, merge_in: "feature", ffOnly: true})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, continue: true})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltMerge: 1, abort: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, merge_in: "feature"})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, merge_in: "feature", noFF: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, continue: true})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, abort: true})
 //
 // Optional parameters for merge initiation:
 //   - message (string): custom merge commit message (ignored on fast-forward / already-up-to-date)
@@ -574,11 +574,11 @@ func (h *Handler) MsgDocuDoltBranch(connCtx context.Context, msg *wire.OpMsg) (*
 // When a merge produces document-level conflicts, the response includes ok:0 with a
 // conflicts array describing which collections have unresolved conflicts. The branch
 // HEAD is unchanged; the staged working set reflects the partial merge with "ours"
-// values for conflicting documents. Use docuDoltResolveConflict to resolve conflicts, then
-// docuDoltMerge continue:true to complete the merge.
+// values for conflicting documents. Use dumboDBResolveConflict to resolve conflicts, then
+// dumboDBMerge continue:true to complete the merge.
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -613,7 +613,7 @@ func (h *Handler) MsgDocuDoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	if abort {
-		res, mergeErr := vb.DocuDoltMerge(connCtx, &backends.MergeParams{
+		res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
 			DBName: dbName,
 			Into:   intoBranch,
 			Abort:  true,
@@ -638,7 +638,7 @@ func (h *Handler) MsgDocuDoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 		if err != nil {
 			return nil, err
 		}
-		res, mergeErr := vb.DocuDoltMerge(connCtx, &backends.MergeParams{
+		res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
 			DBName:   dbName,
 			Into:     intoBranch,
 			Continue: true,
@@ -698,7 +698,7 @@ func (h *Handler) MsgDocuDoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	res, mergeErr := vb.DocuDoltMerge(connCtx, &backends.MergeParams{
+	res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
 		DBName:  dbName,
 		Into:    intoBranch,
 		From:    fromBranch,
@@ -741,16 +741,16 @@ func (h *Handler) MsgDocuDoltMerge(connCtx context.Context, msg *wire.OpMsg) (*w
 	)
 }
 
-// MsgDocuDoltConflicts implements the `docuDoltConflicts` command.
+// MsgDumboDBConflicts implements the `dumboDBConflicts` command.
 //
 // Returns conflict information for the current in-progress merge on the branch encoded in $db.
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltConflicts: 1})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltConflicts: 1, collection: "items"})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBConflicts: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBConflicts: 1, collection: "items"})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -779,7 +779,7 @@ func (h *Handler) MsgDocuDoltConflicts(connCtx context.Context, msg *wire.OpMsg)
 		)
 	}
 
-	res, err := vb.DocuDoltConflicts(connCtx, &backends.ConflictsParams{
+	res, err := vb.DumboDBConflicts(connCtx, &backends.ConflictsParams{
 		DBName:     dbName,
 		Branch:     branch,
 		Collection: collection,
@@ -846,17 +846,17 @@ func (h *Handler) MsgDocuDoltConflicts(connCtx context.Context, msg *wire.OpMsg)
 	)
 }
 
-// MsgDocuDoltResolveConflict implements the `docuDoltResolveConflict` command.
+// MsgDumboDBResolveConflict implements the `dumboDBResolveConflict` command.
 //
 // Resolves a single document conflict in the current in-progress merge.
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -911,7 +911,7 @@ func (h *Handler) MsgDocuDoltResolveConflict(connCtx context.Context, msg *wire.
 		)
 	}
 
-	_, err = vb.DocuDoltResolveConflict(connCtx, &backends.ResolveConflictParams{
+	_, err = vb.DumboDBResolveConflict(connCtx, &backends.ResolveConflictParams{
 		DBName:     dbName,
 		Branch:     branch,
 		Collection: collection,
@@ -930,13 +930,13 @@ func (h *Handler) MsgDocuDoltResolveConflict(connCtx context.Context, msg *wire.
 	)
 }
 
-// MsgDocuDoltLog implements the `docuDoltLog` command.
+// MsgDumboDBLog implements the `dumboDBLog` command.
 //
 // It returns the commit history for the branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltLog: 1, limit: 10})
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBLog: 1, limit: 10})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -970,7 +970,7 @@ func (h *Handler) MsgDocuDoltLog(connCtx context.Context, msg *wire.OpMsg) (*wir
 		)
 	}
 
-	res, err := vb.DocuDoltLog(connCtx, &backends.LogParams{
+	res, err := vb.DumboDBLog(connCtx, &backends.LogParams{
 		DBName:     dbName,
 		Branch:     branch,
 		ConnBranch: branch,
@@ -1018,7 +1018,7 @@ func (h *Handler) MsgDocuDoltLog(connCtx context.Context, msg *wire.OpMsg) (*wir
 	)
 }
 
-// MsgDocuDoltReset implements the `docuDoltReset` command.
+// MsgDumboDBReset implements the `dumboDBReset` command.
 //
 // It moves the branch HEAD to the specified commit hash. Two modes:
 //
@@ -1027,12 +1027,12 @@ func (h *Handler) MsgDocuDoltLog(connCtx context.Context, msg *wire.OpMsg) (*wir
 //
 // Usage:
 //
-//	db.runCommand({docuDoltReset: 1})                       // reset to HEAD (discard uncommitted changes if hard)
-//	db.runCommand({docuDoltReset: 1, to: "<hash>"})
-//	db.runCommand({docuDoltReset: 1, to: "<hash>", hard: true})
+//	db.runCommand({dumboDBReset: 1})                       // reset to HEAD (discard uncommitted changes if hard)
+//	db.runCommand({dumboDBReset: 1, to: "<hash>"})
+//	db.runCommand({dumboDBReset: 1, to: "<hash>", hard: true})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1066,7 +1066,7 @@ func (h *Handler) MsgDocuDoltReset(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
-	res, err := vb.DocuDoltReset(connCtx, &backends.ResetParams{
+	res, err := vb.DumboDBReset(connCtx, &backends.ResetParams{
 		DBName:   dbName,
 		Branch:   branch,
 		CommitID: to,
@@ -1084,13 +1084,13 @@ func (h *Handler) MsgDocuDoltReset(connCtx context.Context, msg *wire.OpMsg) (*w
 	)
 }
 
-// MsgDocuDoltStatus implements the `docuDoltStatus` command.
+// MsgDumboDBStatus implements the `dumboDBStatus` command.
 //
 // It returns the uncommitted changes on the branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({docuDoltStatus: 1})
+// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBStatus: 1})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1114,7 +1114,7 @@ func (h *Handler) MsgDocuDoltStatus(connCtx context.Context, msg *wire.OpMsg) (*
 		)
 	}
 
-	res, err := vb.DocuDoltStatus(connCtx, &backends.VersioningStatusParams{
+	res, err := vb.DumboDBStatus(connCtx, &backends.VersioningStatusParams{
 		DBName: dbName,
 		Branch: branch,
 	})
@@ -1141,25 +1141,25 @@ func (h *Handler) MsgDocuDoltStatus(connCtx context.Context, msg *wire.OpMsg) (*
 	)
 }
 
-// MsgDocuDoltCherryPick implements the `docuDoltCherryPick` command.
+// MsgDumboDBCherryPick implements the `dumboDBCherryPick` command.
 //
 // Applies the diff introduced by the named commit onto the current branch encoded
 // in $db and creates a new commit. On conflict, the cherry-pick is staged but not
-// committed; use docuDoltConflicts / docuDoltResolveConflict to inspect and resolve
-// conflicts, then docuDoltCherryPick continue:true to complete.
+// committed; use dumboDBConflicts / dumboDBResolveConflict to inspect and resolve
+// conflicts, then dumboDBCherryPick continue:true to complete.
 //
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltCherryPick: 1, commit: "<hash>"})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltCherryPick: 1, abort: 1})
-//	db.getSiblingDB("mydb__d_main").runCommand({docuDoltCherryPick: 1, continue: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBCherryPick: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBCherryPick: 1, abort: 1})
+//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBCherryPick: 1, continue: 1})
 //
 // Optional parameters for cherry-pick initiation:
 //   - message (string): custom commit message (default: original message + annotation)
 //   - author (string): 'Name <email>' for the commit author
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1194,7 +1194,7 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 	}
 
 	if abort {
-		res, pickErr := vb.DocuDoltCherryPick(connCtx, &backends.CherryPickParams{
+		res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
 			DBName: dbName,
 			Branch: branch,
 			Abort:  true,
@@ -1219,7 +1219,7 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 		if err != nil {
 			return nil, err
 		}
-		res, pickErr := vb.DocuDoltCherryPick(connCtx, &backends.CherryPickParams{
+		res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
 			DBName:   dbName,
 			Branch:   branch,
 			Continue: true,
@@ -1261,7 +1261,7 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 		return nil, err
 	}
 
-	res, pickErr := vb.DocuDoltCherryPick(connCtx, &backends.CherryPickParams{
+	res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
 		DBName:  dbName,
 		Branch:  branch,
 		Commit:  commit,
@@ -1270,7 +1270,7 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 	})
 
 	if pickErr != nil {
-		var conflictErr *backends.DocuDoltCherryPickConflictError
+		var conflictErr *backends.DumboDBCherryPickConflictError
 		if errors.As(pickErr, &conflictErr) {
 			// Return a structured ok:0 response with per-collection conflict counts.
 			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
@@ -1302,7 +1302,7 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 	)
 }
 
-// MsgDocuDoltRebase implements the `doltRebase` command.
+// MsgDumboDBRebase implements the `doltRebase` command.
 //
 // Reapplies all commits on the current branch (encoded in $db) not reachable from Onto
 // onto the tip of Onto, rewriting branch history. On conflict, the rebase is paused;
@@ -1316,7 +1316,7 @@ func (h *Handler) MsgDocuDoltCherryPick(connCtx context.Context, msg *wire.OpMsg
 //	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, continue: 1})
 //
 // The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDocuDoltRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1351,7 +1351,7 @@ func (h *Handler) MsgDocuDoltRebase(connCtx context.Context, msg *wire.OpMsg) (*
 	}
 
 	if abort {
-		res, rebaseErr := vb.DocuDoltRebase(connCtx, &backends.RebaseParams{
+		res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
 			DBName: dbName,
 			Branch: branch,
 			Abort:  true,
@@ -1368,13 +1368,13 @@ func (h *Handler) MsgDocuDoltRebase(connCtx context.Context, msg *wire.OpMsg) (*
 	}
 
 	if continueParam {
-		res, rebaseErr := vb.DocuDoltRebase(connCtx, &backends.RebaseParams{
+		res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
 			DBName:   dbName,
 			Branch:   branch,
 			Continue: true,
 		})
 		if rebaseErr != nil {
-			var conflictErr *backends.DocuDoltRebaseConflictError
+			var conflictErr *backends.DumboDBRebaseConflictError
 			if errors.As(rebaseErr, &conflictErr) {
 				conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
 				for _, c := range conflictErr.Conflicts {
@@ -1418,14 +1418,14 @@ func (h *Handler) MsgDocuDoltRebase(connCtx context.Context, msg *wire.OpMsg) (*
 		)
 	}
 
-	res, rebaseErr := vb.DocuDoltRebase(connCtx, &backends.RebaseParams{
+	res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
 		DBName: dbName,
 		Branch: branch,
 		Onto:   onto,
 	})
 
 	if rebaseErr != nil {
-		var conflictErr *backends.DocuDoltRebaseConflictError
+		var conflictErr *backends.DumboDBRebaseConflictError
 		if errors.As(rebaseErr, &conflictErr) {
 			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
 			for _, c := range conflictErr.Conflicts {

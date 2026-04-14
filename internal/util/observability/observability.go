@@ -14,7 +14,7 @@
 
 // Package observability provides abstractions for tracing, metrics, etc.
 //
-// TODO https://github.com/dolthub/docudolt/issues/3244
+// TODO https://github.com/dolthub/dumbodb/issues/3244
 package observability
 
 import (
@@ -30,8 +30,8 @@ import (
 	otelsdktrace "go.opentelemetry.io/otel/sdk/trace"
 	otelsemconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
-	"github.com/dolthub/docudolt/internal/util/ctxutil"
-	"github.com/dolthub/docudolt/internal/util/logging"
+	"github.com/dolthub/dumbodb/internal/util/ctxutil"
+	"github.com/dolthub/dumbodb/internal/util/logging"
 )
 
 // setup ensures that global tracer provider is set up only once.

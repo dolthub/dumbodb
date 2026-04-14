@@ -1,4 +1,4 @@
-module github.com/dolthub/docudolt
+module github.com/dolthub/dumbodb
 
 go 1.25.6
 

@@ -19,14 +19,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dolthub/docudolt/internal/handler/common"
-	"github.com/dolthub/docudolt/internal/handler/common/aggregations"
-	"github.com/dolthub/docudolt/internal/handler/handlererrors"
-	"github.com/dolthub/docudolt/internal/handler/handlerparams"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/iterator"
-	"github.com/dolthub/docudolt/internal/util/lazyerrors"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // collStats represents $collStats stage.
@@ -58,13 +58,13 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	var cs collStats
 
 	// Return error on invalid type of count.
-	// TODO https://github.com/dolthub/docudolt/issues/2336
+	// TODO https://github.com/dolthub/dumbodb/issues/2336
 	cs.count = fields.Has("count")
 
-	// TODO https://github.com/dolthub/docudolt/issues/2341
+	// TODO https://github.com/dolthub/dumbodb/issues/2341
 	cs.latencyStats = fields.Has("latencyStats")
 
-	// TODO https://github.com/dolthub/docudolt/issues/2341
+	// TODO https://github.com/dolthub/dumbodb/issues/2341
 	cs.queryExecStats = fields.Has("queryExecStats")
 
 	if fields.Has("storageStats") {

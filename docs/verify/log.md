@@ -12,19 +12,19 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
 ## Scenario 1: Log with no user commits — only the "Initialize database" root
 
-Every DocuDolt database is created with an automatic `"Initialize database"` root
+Every DumboDB database is created with an automatic `"Initialize database"` root
 commit. Before any user commits, `doltLog` returns exactly that one commit.
 
 ```js
@@ -58,18 +58,18 @@ Key checks:
 
 ```js
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ doltCommit: 1, message: "first", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "first", author: "alice <alice@dumbodb>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "first", ok: 1 }
 const hash1 = r1.commitId
 
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ doltCommit: 1, message: "second", author: "alice <alice@docudolt>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "second", author: "alice <alice@dumbodb>" })
 printjson(r2)
 const hash2 = r2.commitId
 
 db.items.insertOne({ _id: 3, label: "gamma" })
-const r3 = db.runCommand({ doltCommit: 1, message: "third", author: "alice <alice@docudolt>" })
+const r3 = db.runCommand({ doltCommit: 1, message: "third", author: "alice <alice@dumbodb>" })
 printjson(r3)
 const hash3 = r3.commitId
 
@@ -233,7 +233,7 @@ var mdb = db.getSiblingDB("logmerge")
 mdb.dropDatabase()
 
 mdb.items.insertOne({ _id: 1, v: 1 })
-const rA = mdb.runCommand({ doltCommit: 1, message: "add-one", author: "alice <alice@docudolt>" })
+const rA = mdb.runCommand({ doltCommit: 1, message: "add-one", author: "alice <alice@dumbodb>" })
 const hashA = rA.commitId
 
 // Create "feat" branch from main HEAD (hashA).
@@ -241,13 +241,13 @@ mdb.getSiblingDB("logmerge__d_main").runCommand({ doltBranch: 1, branch: "feat" 
 
 // Advance main: _id:2 → hashB.
 mdb.items.insertOne({ _id: 2, v: 2 })
-const rB = mdb.runCommand({ doltCommit: 1, message: "add-two", author: "alice <alice@docudolt>" })
+const rB = mdb.runCommand({ doltCommit: 1, message: "add-two", author: "alice <alice@dumbodb>" })
 const hashB = rB.commitId
 
 // Advance feat independently: _id:3 → hashC.
 const featdb = db.getSiblingDB("logmerge__d_feat")
 featdb.items.insertOne({ _id: 3, v: 3 })
-const rC = featdb.runCommand({ doltCommit: 1, message: "add-three-feat", author: "alice <alice@docudolt>" })
+const rC = featdb.runCommand({ doltCommit: 1, message: "add-three-feat", author: "alice <alice@dumbodb>" })
 const hashC = rC.commitId
 
 // Merge feat into main → hashM.

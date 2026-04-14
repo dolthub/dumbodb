@@ -26,9 +26,9 @@ import (
 )
 
 // TestAgg_Lookup_Basic verifies $lookup joins two collections by matching
-// a local field to a foreign field. (DocuDoltFull)
+// a local field to a foreign field. (DumboDBFull)
 func TestAgg_Lookup_Basic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_lookup_%d", rand.Int64())
@@ -80,9 +80,9 @@ func TestAgg_Lookup_Basic(t *testing.T) {
 	assert.Len(t, noMatch, 0, "order with no match must have empty item_details array")
 }
 
-// TestAgg_Lookup_Pipeline verifies $lookup with a sub-pipeline (correlated lookup). (DocuDoltFull)
+// TestAgg_Lookup_Pipeline verifies $lookup with a sub-pipeline (correlated lookup). (DumboDBFull)
 func TestAgg_Lookup_Pipeline(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_lookup_pipe_%d", rand.Int64())
@@ -134,9 +134,9 @@ func TestAgg_Lookup_Pipeline(t *testing.T) {
 	assert.Equal(t, int32(150), bigOrders[0].(bson.D).Map()["amount"])
 }
 
-// TestAgg_ReplaceRoot verifies $replaceRoot promotes a nested document to top-level. (DocuDoltFull)
+// TestAgg_ReplaceRoot verifies $replaceRoot promotes a nested document to top-level. (DumboDBFull)
 func TestAgg_ReplaceRoot(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -167,9 +167,9 @@ func TestAgg_ReplaceRoot(t *testing.T) {
 	assert.Nil(t, m["outer"], "$replaceRoot must not include outer fields")
 }
 
-// TestAgg_ReplaceWith verifies $replaceWith (alias for $replaceRoot) works. (DocuDoltFull)
+// TestAgg_ReplaceWith verifies $replaceWith (alias for $replaceRoot) works. (DumboDBFull)
 func TestAgg_ReplaceWith(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -193,9 +193,9 @@ func TestAgg_ReplaceWith(t *testing.T) {
 	assert.Equal(t, int32(42), results[0].Map()["value"])
 }
 
-// TestAgg_UnwindBasic verifies $unwind deconstructs an array field. (DocuDoltFull)
+// TestAgg_UnwindBasic verifies $unwind deconstructs an array field. (DumboDBFull)
 func TestAgg_UnwindBasic(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -223,9 +223,9 @@ func TestAgg_UnwindBasic(t *testing.T) {
 }
 
 // TestAgg_UnwindPreserveNullAndEmpty verifies $unwind with preserveNullAndEmptyArrays
-// includes documents with null or missing array fields. (DocuDoltFull)
+// includes documents with null or missing array fields. (DumboDBFull)
 func TestAgg_UnwindPreserveNullAndEmpty(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -253,9 +253,9 @@ func TestAgg_UnwindPreserveNullAndEmpty(t *testing.T) {
 }
 
 // TestAgg_UnwindIncludeArrayIndex verifies $unwind with includeArrayIndex adds
-// the array position as a new field. (DocuDoltFull)
+// the array position as a new field. (DumboDBFull)
 func TestAgg_UnwindIncludeArrayIndex(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -282,9 +282,9 @@ func TestAgg_UnwindIncludeArrayIndex(t *testing.T) {
 	assert.Equal(t, int64(2), results[2].Map()["idx"])
 }
 
-// TestAgg_Bucket verifies $bucket groups documents into ranges. (DocuDoltFull)
+// TestAgg_Bucket verifies $bucket groups documents into ranges. (DumboDBFull)
 func TestAgg_Bucket(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -329,9 +329,9 @@ func TestAgg_Bucket(t *testing.T) {
 }
 
 // TestAgg_BucketAuto verifies $bucketAuto distributes documents into N evenly-sized
-// buckets based on value distribution. (DocuDoltFull)
+// buckets based on value distribution. (DumboDBFull)
 func TestAgg_BucketAuto(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -364,9 +364,9 @@ func TestAgg_BucketAuto(t *testing.T) {
 }
 
 // TestAgg_Facet verifies $facet runs multiple aggregation pipelines simultaneously
-// within a single stage. (DocuDoltFull)
+// within a single stage. (DumboDBFull)
 func TestAgg_Facet(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -416,9 +416,9 @@ func TestAgg_Facet(t *testing.T) {
 }
 
 // TestAgg_AddFields verifies $addFields appends new computed fields without
-// removing existing ones. (DocuDoltFull)
+// removing existing ones. (DumboDBFull)
 func TestAgg_AddFields(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -446,9 +446,9 @@ func TestAgg_AddFields(t *testing.T) {
 	assert.Equal(t, "computed", m["label"])
 }
 
-// TestAgg_Count verifies $count returns the total number of documents as a field. (DocuDoltFull)
+// TestAgg_Count verifies $count returns the total number of documents as a field. (DumboDBFull)
 func TestAgg_Count(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -472,9 +472,9 @@ func TestAgg_Count(t *testing.T) {
 }
 
 // TestAgg_SortByCount verifies $sortByCount groups by a field and sorts by count
-// descending. (DocuDoltFull)
+// descending. (DumboDBFull)
 func TestAgg_SortByCount(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -507,9 +507,9 @@ func TestAgg_SortByCount(t *testing.T) {
 	assert.Equal(t, int32(1), results[2].Map()["count"])
 }
 
-// TestAgg_Limit_Skip verifies $limit and $skip work in combination. (DocuDoltFull)
+// TestAgg_Limit_Skip verifies $limit and $skip work in combination. (DumboDBFull)
 func TestAgg_Limit_Skip(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -535,9 +535,9 @@ func TestAgg_Limit_Skip(t *testing.T) {
 }
 
 // TestAgg_Group_MultipleAccumulators verifies $group with multiple accumulator
-// operators produces correct results. (DocuDoltFull)
+// operators produces correct results. (DumboDBFull)
 func TestAgg_Group_MultipleAccumulators(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -573,9 +573,9 @@ func TestAgg_Group_MultipleAccumulators(t *testing.T) {
 	assert.Equal(t, int32(3), m["cnt"])
 }
 
-// TestAgg_Group_Push verifies $push accumulator collects all values into an array. (DocuDoltFull)
+// TestAgg_Group_Push verifies $push accumulator collects all values into an array. (DumboDBFull)
 func TestAgg_Group_Push(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -603,9 +603,9 @@ func TestAgg_Group_Push(t *testing.T) {
 	assert.Len(t, members, 3, "$push must collect all names")
 }
 
-// TestAgg_Group_AddToSet verifies $addToSet accumulator returns unique values. (DocuDoltFull)
+// TestAgg_Group_AddToSet verifies $addToSet accumulator returns unique values. (DumboDBFull)
 func TestAgg_Group_AddToSet(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -636,9 +636,9 @@ func TestAgg_Group_AddToSet(t *testing.T) {
 }
 
 // TestAgg_SetWindowFields_Sum verifies $setWindowFields computes a running sum
-// (cumulative window). (DocuDoltFull)
+// (cumulative window). (DumboDBFull)
 func TestAgg_SetWindowFields_Sum(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -676,9 +676,9 @@ func TestAgg_SetWindowFields_Sum(t *testing.T) {
 }
 
 // TestAgg_SetWindowFields_Rank verifies $rank window function assigns ranks to
-// documents within a partition. (DocuDoltFull)
+// documents within a partition. (DumboDBFull)
 func TestAgg_SetWindowFields_Rank(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -720,9 +720,9 @@ func TestAgg_SetWindowFields_Rank(t *testing.T) {
 }
 
 // TestAgg_SetWindowFields_DenseRank verifies $denseRank assigns consecutive ranks
-// without gaps for ties. (DocuDoltFull)
+// without gaps for ties. (DumboDBFull)
 func TestAgg_SetWindowFields_DenseRank(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -756,9 +756,9 @@ func TestAgg_SetWindowFields_DenseRank(t *testing.T) {
 }
 
 // TestAgg_SetWindowFields_DocumentNumber verifies $documentNumber assigns a
-// sequential position (1-based) to each document in the window. (DocuDoltFull)
+// sequential position (1-based) to each document in the window. (DumboDBFull)
 func TestAgg_SetWindowFields_DocumentNumber(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -791,9 +791,9 @@ func TestAgg_SetWindowFields_DocumentNumber(t *testing.T) {
 }
 
 // TestAgg_SetWindowFields_Partition verifies $setWindowFields with a partitionBy
-// clause applies windows separately per partition. (DocuDoltFull)
+// clause applies windows separately per partition. (DumboDBFull)
 func TestAgg_SetWindowFields_Partition(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -841,9 +841,9 @@ func TestAgg_SetWindowFields_Partition(t *testing.T) {
 	}
 }
 
-// TestAgg_SetWindowFields_Avg verifies $avg window function over a sliding range. (DocuDoltFull)
+// TestAgg_SetWindowFields_Avg verifies $avg window function over a sliding range. (DumboDBFull)
 func TestAgg_SetWindowFields_Avg(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
@@ -888,9 +888,9 @@ func TestAgg_SetWindowFields_Avg(t *testing.T) {
 }
 
 // TestAgg_SetWindowFields_Min_Max verifies $min and $max window functions over
-// an unbounded range. (DocuDoltFull)
+// an unbounded range. (DumboDBFull)
 func TestAgg_SetWindowFields_Min_Max(t *testing.T) {
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 

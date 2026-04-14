@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/util/debugbuild"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/util/debugbuild"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // ObjectID represents BSON type ObjectID.
@@ -35,7 +35,7 @@ const ObjectIDLen = 12
 
 // NewObjectID returns a new ObjectID.
 func NewObjectID() ObjectID {
-	return newObjectIDTime(time.Now()) // https://github.com/dolthub/docudolt/issues/3486
+	return newObjectIDTime(time.Now()) // https://github.com/dolthub/dumbodb/issues/3486
 }
 
 // newObjectIDTime returns a new ObjectID with given time.

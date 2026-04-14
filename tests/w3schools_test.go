@@ -25,13 +25,13 @@ import (
 )
 
 // TestW3S_AggAddFields_ComputedAvg verifies that $addFields can compute the average
-// of an array field using the $avg expression operator. (DocuDoltFull)
+// of an array field using the $avg expression operator. (DumboDBFull)
 //
 // Mirrors the w3schools MongoDB $addFields + $avg example:
 // https://www.w3schools.com/mongodb/mongodb_aggregation_addfields.php
 func TestW3S_AggAddFields_ComputedAvg(t *testing.T) {
 	t.Parallel()
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 	ctx := context.Background()
 
@@ -71,14 +71,14 @@ func TestW3S_AggAddFields_ComputedAvg(t *testing.T) {
 
 // TestW3S_Indexing_AtlasSearch verifies that attempting to create an Atlas Search
 // index returns a proper "not implemented" error rather than crashing or returning
-// an unexpected response. (DocuDoltFull)
+// an unexpected response. (DumboDBFull)
 //
-// Atlas Search requires a MongoDB Atlas deployment and is not supported by DocuDolt.
+// Atlas Search requires a MongoDB Atlas deployment and is not supported by DumboDB.
 // The driver should receive a clear error code so callers can detect and handle
 // the "not supported" case.
 func TestW3S_Indexing_AtlasSearch(t *testing.T) {
 	t.Parallel()
-	env := startDocuDolt(t)
+	env := startDumboDB(t)
 	coll := env.collection(t)
 	ctx := context.Background()
 
@@ -92,7 +92,7 @@ func TestW3S_Indexing_AtlasSearch(t *testing.T) {
 	})
 
 	// The server must return an error — not a panic or a hang.
-	require.Error(t, err, "createSearchIndexes must return an error on DocuDolt")
+	require.Error(t, err, "createSearchIndexes must return an error on DumboDB")
 
 	// The error should be a MongoDB command error with a useful message.
 	var cmdErr mongo.CommandError

@@ -26,8 +26,8 @@ import (
 	"github.com/dolthub/dolt/go/store/datas"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // TestInitialCommitMessage verifies that a brand-new database gets an "Initialize database"
@@ -449,10 +449,10 @@ func TestWritesNoNewCommits(t *testing.T) {
 	}
 }
 
-// TestDocuDoltCommit verifies that DocuDoltCommit creates a new dolt commit,
+// TestDumboDBCommit verifies that DumboDBCommit creates a new dolt commit,
 // advances HEAD, and returns a non-empty hash string.
-func TestDocuDoltCommit(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-test-*")
+func TestDumboDBCommit(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-test-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,19 +494,19 @@ func TestDocuDoltCommit(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	// Run DocuDoltCommit.
-	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
+	// Run DumboDBCommit.
+	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "my first commit",
 		Author:  "testuser",
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit: %v", err)
+		t.Fatalf("DumboDBCommit: %v", err)
 	}
 
 	// Hash must be non-empty and not all-zeros.
 	if res.CommitID == "" {
-		t.Error("DocuDoltCommit returned empty hash")
+		t.Error("DumboDBCommit returned empty hash")
 	}
 	allZero := true
 	for _, c := range res.CommitID {
@@ -516,17 +516,17 @@ func TestDocuDoltCommit(t *testing.T) {
 		}
 	}
 	if allZero {
-		t.Errorf("DocuDoltCommit returned all-zero hash: %s", res.CommitID)
+		t.Errorf("DumboDBCommit returned all-zero hash: %s", res.CommitID)
 	}
 
 	// Branch should be "main".
 	if res.Branch != "main" {
-		t.Errorf("DocuDoltCommit branch = %q, want %q", res.Branch, "main")
+		t.Errorf("DumboDBCommit branch = %q, want %q", res.Branch, "main")
 	}
 
 	// Message should match.
 	if res.Message != "my first commit" {
-		t.Errorf("DocuDoltCommit message = %q, want %q", res.Message, "my first commit")
+		t.Errorf("DumboDBCommit message = %q, want %q", res.Message, "my first commit")
 	}
 
 	// HEAD must have advanced past the init commit.
@@ -536,16 +536,16 @@ func TestDocuDoltCommit(t *testing.T) {
 	}
 	headAddr, ok := freshDS.MaybeHeadAddr()
 	if !ok {
-		t.Fatal("no HEAD after DocuDoltCommit")
+		t.Fatal("no HEAD after DumboDBCommit")
 	}
 	if headAddr == initAddr {
-		t.Error("HEAD did not advance after DocuDoltCommit")
+		t.Error("HEAD did not advance after DumboDBCommit")
 	}
 }
 
-// TestDocuDoltCommitDefaultMessage verifies that an empty Message defaults to "dolt commit".
-func TestDocuDoltCommitDefaultMessage(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-default-msg-*")
+// TestDumboDBCommitDefaultMessage verifies that an empty Message defaults to "dolt commit".
+func TestDumboDBCommitDefaultMessage(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-default-msg-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,18 +563,18 @@ func TestDocuDoltCommitDefaultMessage(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
+	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit: %v", err)
+		t.Fatalf("DumboDBCommit: %v", err)
 	}
 	if res.Message != "dolt commit" {
 		t.Errorf("default message = %q, want %q", res.Message, "dolt commit")
 	}
 }
 
-// TestDocuDoltCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
-func TestDocuDoltCommitTwoDistinctHashes(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-two-hashes-*")
+// TestDumboDBCommitTwoDistinctHashes verifies that two sequential commits produce different hashes.
+func TestDumboDBCommitTwoDistinctHashes(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-two-hashes-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,9 +610,9 @@ func TestDocuDoltCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
+	res1, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 1: %v", err)
+		t.Fatalf("DumboDBCommit 1: %v", err)
 	}
 
 	// Insert another document, then commit again.
@@ -625,9 +625,9 @@ func TestDocuDoltCommitTwoDistinctHashes(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	res2, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
+	res2, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 2: %v", err)
+		t.Fatalf("DumboDBCommit 2: %v", err)
 	}
 
 	if res1.CommitID == res2.CommitID {
@@ -635,10 +635,10 @@ func TestDocuDoltCommitTwoDistinctHashes(t *testing.T) {
 	}
 }
 
-// TestDocuDoltCommitNoOpSucceeds verifies that committing with no changes since the last
+// TestDumboDBCommitNoOpSucceeds verifies that committing with no changes since the last
 // commit succeeds (a no-op commit is acceptable).
-func TestDocuDoltCommitNoOpSucceeds(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-noop-*")
+func TestDumboDBCommitNoOpSucceeds(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-noop-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,15 +657,15 @@ func TestDocuDoltCommitNoOpSucceeds(t *testing.T) {
 	}
 
 	// First commit (on empty state after init).
-	res1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
+	res1, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 1: %v", err)
+		t.Fatalf("DumboDBCommit 1: %v", err)
 	}
 
 	// Second commit with no intervening writes — must not error.
-	res2, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
+	res2, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 2 (no-op): %v", err)
+		t.Fatalf("DumboDBCommit 2 (no-op): %v", err)
 	}
 
 	// Both hashes must be non-empty.
@@ -674,10 +674,10 @@ func TestDocuDoltCommitNoOpSucceeds(t *testing.T) {
 	}
 }
 
-// TestDocuDoltCommitWorkingSetClean verifies that after a commit the working set's
+// TestDumboDBCommitWorkingSetClean verifies that after a commit the working set's
 // staged root address equals the HEAD commit's rootValue address (clean state).
-func TestDocuDoltCommitWorkingSetClean(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-ws-clean-*")
+func TestDumboDBCommitWorkingSetClean(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-ws-clean-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,8 +714,8 @@ func TestDocuDoltCommitWorkingSetClean(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	if _, err = b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
-		t.Fatalf("DocuDoltCommit: %v", err)
+	if _, err = b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "clean check", Author: "testuser"}); err != nil {
+		t.Fatalf("DumboDBCommit: %v", err)
 	}
 
 	// Read HEAD rootValue hash.
@@ -750,10 +750,10 @@ func TestDocuDoltCommitWorkingSetClean(t *testing.T) {
 	}
 }
 
-// TestDocuDoltCommitAuthorAndTimestamp verifies that DocuDoltCommit stores the provided
-// author name and timestamp, and that docuDoltLog reflects them on the resulting commit.
-func TestDocuDoltCommitAuthorAndTimestamp(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-author-*")
+// TestDumboDBCommitAuthorAndTimestamp verifies that DumboDBCommit stores the provided
+// author name and timestamp, and that dumboDBLog reflects them on the resulting commit.
+func TestDumboDBCommitAuthorAndTimestamp(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-author-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -773,14 +773,14 @@ func TestDocuDoltCommitAuthorAndTimestamp(t *testing.T) {
 
 	fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
+	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{
 		DBName:    "testdb",
 		Message:   "authored commit",
 		Author:    "alice",
 		Timestamp: fixedTime,
 	})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit: %v", err)
+		t.Fatalf("DumboDBCommit: %v", err)
 	}
 
 	if res.Author != "alice" {
@@ -790,28 +790,28 @@ func TestDocuDoltCommitAuthorAndTimestamp(t *testing.T) {
 		t.Errorf("CommitResult.Timestamp = %d, want %d", res.Timestamp, fixedTime.UnixMilli())
 	}
 
-	// Verify via docuDoltLog that author and timestamp were persisted.
-	logRes, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	// Verify via dumboDBLog that author and timestamp were persisted.
+	logRes, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
 	if err != nil {
-		t.Fatalf("DocuDoltLog: %v", err)
+		t.Fatalf("DumboDBLog: %v", err)
 	}
 	if len(logRes.Commits) == 0 {
-		t.Fatal("expected at least 1 commit from DocuDoltLog")
+		t.Fatal("expected at least 1 commit from DumboDBLog")
 	}
 	c := logRes.Commits[0]
-	// docuDoltLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@docudolt>".
-	if c.Author != "alice <alice@docudolt>" {
-		t.Errorf("log commit Author = %q, want %q", c.Author, "alice <alice@docudolt>")
+	// dumboDBLog formats author as "name <email>"; bare name "alice" becomes "alice <alice@dumbodb>".
+	if c.Author != "alice <alice@dumbodb>" {
+		t.Errorf("log commit Author = %q, want %q", c.Author, "alice <alice@dumbodb>")
 	}
 	if c.Timestamp != fixedTime.UnixMilli() {
 		t.Errorf("log commit Timestamp = %d, want %d", c.Timestamp, fixedTime.UnixMilli())
 	}
 }
 
-// TestDocuDoltCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
+// TestDumboDBCommitTimestampDefaultsToNow verifies that when no Timestamp is provided,
 // the commit timestamp is set to approximately the current time.
-func TestDocuDoltCommitTimestampDefaultsToNow(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-docudolt-commit-ts-default-*")
+func TestDumboDBCommitTimestampDefaultsToNow(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-ts-default-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -830,14 +830,14 @@ func TestDocuDoltCommitTimestampDefaultsToNow(t *testing.T) {
 	}
 
 	before := time.Now().UnixMilli()
-	res, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
+	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{
 		DBName:  "testdb",
 		Message: "no timestamp",
 		Author:  "bob",
 	})
 	after := time.Now().UnixMilli()
 	if err != nil {
-		t.Fatalf("DocuDoltCommit: %v", err)
+		t.Fatalf("DumboDBCommit: %v", err)
 	}
 
 	if res.Timestamp < before || res.Timestamp > after {
@@ -863,7 +863,7 @@ func newBackendForTest(t *testing.T) (b *Backend, dir string) {
 }
 
 // insertDocForTest inserts a document with the given integer _id into the named collection,
-// so that a subsequent DocuDoltCommit records a real content change.
+// so that a subsequent DumboDBCommit records a real content change.
 func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName string, id int64) {
 	t.Helper()
 	db, err := b.Database(dbName)
@@ -884,9 +884,9 @@ func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName stri
 	}
 }
 
-// TestDocuDoltLogFreshDatabase verifies that DocuDoltLog on a brand-new database returns exactly
+// TestDumboDBLogFreshDatabase verifies that DumboDBLog on a brand-new database returns exactly
 // one commit — the "Initialize database" root commit — and that the root commit has no Parent1.
-func TestDocuDoltLogFreshDatabase(t *testing.T) {
+func TestDumboDBLogFreshDatabase(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -896,9 +896,9 @@ func TestDocuDoltLogFreshDatabase(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DocuDoltLog: %v", err)
+		t.Fatalf("DumboDBLog: %v", err)
 	}
 
 	if len(res.Commits) != 1 {
@@ -921,9 +921,9 @@ func TestDocuDoltLogFreshDatabase(t *testing.T) {
 	}
 }
 
-// TestDocuDoltLogAfterOneCommit verifies that after one DocuDoltCommit the log returns
+// TestDumboDBLogAfterOneCommit verifies that after one DumboDBCommit the log returns
 // 2 commits in newest-first order: the user commit followed by the init commit.
-func TestDocuDoltLogAfterOneCommit(t *testing.T) {
+func TestDumboDBLogAfterOneCommit(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -935,14 +935,14 @@ func TestDocuDoltLogAfterOneCommit(t *testing.T) {
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
 
-	commitRes, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
+	commitRes, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first user commit", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit: %v", err)
+		t.Fatalf("DumboDBCommit: %v", err)
 	}
 
-	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DocuDoltLog: %v", err)
+		t.Fatalf("DumboDBLog: %v", err)
 	}
 
 	if len(res.Commits) != 2 {
@@ -973,9 +973,9 @@ func TestDocuDoltLogAfterOneCommit(t *testing.T) {
 	}
 }
 
-// TestDocuDoltLogLimit verifies that the Limit parameter is respected: limit=1 returns
+// TestDumboDBLogLimit verifies that the Limit parameter is respected: limit=1 returns
 // only the HEAD commit even when more commits exist.
-func TestDocuDoltLogLimit(t *testing.T) {
+func TestDumboDBLogLimit(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -988,18 +988,18 @@ func TestDocuDoltLogLimit(t *testing.T) {
 	// Create 3 user commits so there are 4 total (including init).
 	for i := int64(1); i <= 3; i++ {
 		insertDocForTest(t, ctx, b, "testdb", i)
-		if _, err := b.DocuDoltCommit(ctx, &backends.CommitParams{
+		if _, err := b.DumboDBCommit(ctx, &backends.CommitParams{
 			DBName:  "testdb",
 			Message: fmt.Sprintf("commit %d", i),
 			Author:  "testuser",
 		}); err != nil {
-			t.Fatalf("DocuDoltCommit %d: %v", i, err)
+			t.Fatalf("DumboDBCommit %d: %v", i, err)
 		}
 	}
 
-	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
+	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", Limit: 1})
 	if err != nil {
-		t.Fatalf("DocuDoltLog: %v", err)
+		t.Fatalf("DumboDBLog: %v", err)
 	}
 
 	if len(res.Commits) != 1 {
@@ -1010,9 +1010,9 @@ func TestDocuDoltLogLimit(t *testing.T) {
 	}
 }
 
-// TestDocuDoltLogFromHash verifies that setting From=<hash> starts traversal from
+// TestDumboDBLogFromHash verifies that setting From=<hash> starts traversal from
 // that specific commit rather than HEAD.
-func TestDocuDoltLogFromHash(t *testing.T) {
+func TestDumboDBLogFromHash(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1023,20 +1023,20 @@ func TestDocuDoltLogFromHash(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	res1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
+	res1, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit one", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 1: %v", err)
+		t.Fatalf("DumboDBCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	if _, err = b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
-		t.Fatalf("DocuDoltCommit 2: %v", err)
+	if _, err = b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "commit two", Author: "testuser"}); err != nil {
+		t.Fatalf("DumboDBCommit 2: %v", err)
 	}
 
 	// Starting from commit one's hash should return commit one + init commit only.
-	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
+	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
 	if err != nil {
-		t.Fatalf("DocuDoltLog from hash: %v", err)
+		t.Fatalf("DumboDBLog from hash: %v", err)
 	}
 
 	if len(res.Commits) != 2 {
@@ -1050,8 +1050,8 @@ func TestDocuDoltLogFromHash(t *testing.T) {
 	}
 }
 
-// TestDocuDoltLogFromUnknownHash verifies that from=<unknown hash> returns an error.
-func TestDocuDoltLogFromUnknownHash(t *testing.T) {
+// TestDumboDBLogFromUnknownHash verifies that from=<unknown hash> returns an error.
+func TestDumboDBLogFromUnknownHash(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1064,16 +1064,16 @@ func TestDocuDoltLogFromUnknownHash(t *testing.T) {
 	// A syntactically valid but non-existent hash (32 hex bytes = 64 chars).
 	unknownHash := "0000000000000000000000000000000000000000000000000000000000000001"
 
-	_, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
+	_, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
 	if err == nil {
 		t.Error("expected error for unknown from hash, got nil")
 	}
 }
 
-// TestDocuDoltLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
-// verifies that returned hashes match what DocuDoltCommit reported (newest first) and
+// TestDumboDBLogHashOrderAndTimestamps exercises the "commit, commit, log" scenario:
+// verifies that returned hashes match what DumboDBCommit reported (newest first) and
 // that timestamps are non-zero and non-decreasing from root toward HEAD.
-func TestDocuDoltLogHashOrderAndTimestamps(t *testing.T) {
+func TestDumboDBLogHashOrderAndTimestamps(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -1084,20 +1084,20 @@ func TestDocuDoltLogHashOrderAndTimestamps(t *testing.T) {
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 1)
-	r1, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
+	r1, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "alpha", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 1: %v", err)
+		t.Fatalf("DumboDBCommit 1: %v", err)
 	}
 
 	insertDocForTest(t, ctx, b, "testdb", 2)
-	r2, err := b.DocuDoltCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
+	r2, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "beta", Author: "testuser"})
 	if err != nil {
-		t.Fatalf("DocuDoltCommit 2: %v", err)
+		t.Fatalf("DumboDBCommit 2: %v", err)
 	}
 
-	res, err := b.DocuDoltLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
+	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main"})
 	if err != nil {
-		t.Fatalf("DocuDoltLog: %v", err)
+		t.Fatalf("DumboDBLog: %v", err)
 	}
 
 	// Expect 3 commits: beta, alpha, init.
@@ -1132,10 +1132,10 @@ func TestDocuDoltLogHashOrderAndTimestamps(t *testing.T) {
 	}
 }
 
-// TestDocuDoltLogCommitInfoSupportsParent2 is a compile-time structural assertion:
+// TestDumboDBLogCommitInfoSupportsParent2 is a compile-time structural assertion:
 // CommitInfo must have a Parent2 field to support merge commits in the future.
 // This test documents the requirement and ensures the struct is not accidentally changed.
-func TestDocuDoltLogCommitInfoSupportsParent2(t *testing.T) {
+func TestDumboDBLogCommitInfoSupportsParent2(t *testing.T) {
 	var ci backends.CommitInfo
 	ci.Parent2 = "somemergehash"
 	if ci.Parent2 != "somemergehash" {

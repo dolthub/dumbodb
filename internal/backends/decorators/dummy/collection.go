@@ -17,7 +17,7 @@ package dummy
 import (
 	"context"
 
-	"github.com/dolthub/docudolt/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // collection implements backends.Collection interface by delegating all methods to the wrapped database.

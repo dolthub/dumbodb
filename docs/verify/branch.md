@@ -12,13 +12,13 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Prerequisites
 
-A running DocuDolt instance and `mongosh` installed. Connect to your instance:
+A running DumboDB instance and `mongosh` installed. Connect to your instance:
 
 ```js
 mongosh mongodb://localhost:27017
 ```
 
-Replace `localhost:27017` with your DocuDolt address if different.
+Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
@@ -32,14 +32,14 @@ db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@docudolt>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@dumbodb>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
 const hash1 = r1.commitId
 
 // Commit 2: second document added
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@docudolt>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@dumbodb>" })
 printjson(r2)
 // Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
 const hash2 = r2.commitId
@@ -106,7 +106,7 @@ var feature = db.getSiblingDB("branchvdb__d_feature")
 
 // Add a document on the feature branch and commit it
 feature.items.insertOne({ _id: 3, label: "gamma" })
-feature.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "alice <alice@docudolt>" })
+feature.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "alice <alice@dumbodb>" })
 
 // main must not see _id:3
 db.getSiblingDB("branchvdb__d_main").items.countDocuments({})
@@ -152,9 +152,9 @@ correct document count at the ancestor state.
 var db2 = db.getSiblingDB("branchvdb2")
 db2.dropDatabase()
 db2.items.insertOne({ _id: 1, label: "alpha" })
-db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@docudolt>" })
+db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@dumbodb>" })
 db2.items.insertOne({ _id: 2, label: "beta" })
-db2.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@docudolt>" })
+db2.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@dumbodb>" })
 
 // main~1 resolves to commit 1 (one document)
 db2.getSiblingDB("branchvdb2__d_main~1").runCommand({
@@ -199,7 +199,7 @@ safe delete must fail with an error.
 db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "unmerged-branch" })
 var ub = db.getSiblingDB("branchvdb__d_unmerged-branch")
 ub.items.insertOne({ _id: 99, label: "extra" })
-ub.runCommand({ doltCommit: 1, message: "extra commit", author: "alice <alice@docudolt>" })
+ub.runCommand({ doltCommit: 1, message: "extra commit", author: "alice <alice@dumbodb>" })
 
 // Safe delete must fail.
 db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "unmerged-branch", delete: 1 })
@@ -220,7 +220,7 @@ commits that are not reachable from any other branch.
 db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "force-branch" })
 var fb = db.getSiblingDB("branchvdb__d_force-branch")
 fb.items.insertOne({ _id: 77, label: "gone" })
-fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "alice <alice@docudolt>" })
+fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "alice <alice@dumbodb>" })
 
 // Force delete succeeds regardless of merge status.
 db.getSiblingDB("branchvdb__d_main").runCommand({ doltBranch: 1, branch: "force-branch", forceDelete: 1 })
