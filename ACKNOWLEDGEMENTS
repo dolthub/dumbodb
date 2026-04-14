@@ -1,4 +1,4 @@
-Docudolt
+DumboDB
 Copyright 2026 Dolthub, Inc.
 
 This product includes software developed by the FerretDB project
@@ -10,8 +10,11 @@ packages were adapted from FerretDB v1.24.2:
   Repository: https://github.com/FerretDB/FerretDB
   Commit:     cda72d440810406a208c4670aa7047f5bc8d528f
 
-All import paths have been changed from github.com/FerretDB/FerretDB to
-github.com/dolthub/docudolt, and the storage backend has been replaced with a
+All import paths have been updated from github.com/FerretDB/FerretDB to
+github.com/dolthub/dumbodb, and the storage backend has been replaced with a
 Dolt-native implementation.
+
+This product also uses Dolt (https://github.com/dolthub/dolt), a version-controlled
+SQL database, as its storage engine.
 
 A copy of the Apache License, Version 2.0 is included in the LICENSE file.
