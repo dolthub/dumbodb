@@ -308,7 +308,7 @@ const (
 	ErrInvalidFieldPath = ErrorCode(40353) // Location40353
 
 	// ErrMissingField indicates that the required field in document is missing.
-	ErrMissingField = ErrorCode(40414) // Location40414
+	ErrMissingField = ErrorCode(40414) // IDLFailedToParse
 
 	// ErrIDLUnknownField indicates that an unknown field was encountered in a command document.
 	ErrIDLUnknownField = ErrorCode(40415) // IDLUnknownField
