@@ -96,6 +96,10 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			return nil, err
 		}
 
+		// Match MongoDB: enforce a 4096-byte minimum for capped collections and
+		// round larger sizes up to the next 256-byte multiple.
+		params.CappedSize = normalizeCappedSize(params.CappedSize)
+
 		if max, _ := document.Get("max"); max != nil {
 			params.CappedDocuments, err = handlerparams.GetValidatedNumberParamWithMinValue(document.Command(), "max", max, 0)
 			if err != nil {
@@ -342,5 +346,25 @@ func invalidDatabaseNameMsg(dbName, collectionName string) string {
 
 	// Other invalid characters (slash, backslash, space, null, etc.).
 	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
+}
+
+// normalizeCappedSize applies MongoDB's rounding rules to a capped collection
+// size: a minimum of 4096 bytes, and sizes above that rounded up to the next
+// 256-byte multiple.
+func normalizeCappedSize(size int64) int64 {
+	const (
+		minSize   = int64(4096)
+		alignment = int64(256)
+	)
+
+	if size < minSize {
+		return minSize
+	}
+
+	if rem := size % alignment; rem != 0 {
+		size += alignment - rem
+	}
+
+	return size
 }
 

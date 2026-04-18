@@ -77,6 +77,10 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 		)
 	}
 
+	// Match MongoDB: enforce a 4096-byte minimum for capped collections and
+	// round larger sizes up to the next 256-byte multiple.
+	cappedSize = normalizeCappedSize(cappedSize)
+
 	db, err := h.b.Database(dbName)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {

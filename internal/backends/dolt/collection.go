@@ -378,8 +378,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 // evictCappedDocs removes oldest documents from a capped collection to enforce size and count limits.
 // Must be called with state.mu held for writing.
-// avgDocSize is a rough estimate in bytes per document for size-based eviction.
-const cappedAvgDocSize = 512
+// cappedAvgDocSize is a rough estimate in bytes per document for size-based eviction.
+// Kept in sync with avgDocSize in (*collection).Stats so that the eviction
+// trigger point matches the collection size reported via collStats.
+const cappedAvgDocSize = 64
 
 func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *prolly.MutableMap) error {
 	cappedMeta, ok := state.capped[c.name]
