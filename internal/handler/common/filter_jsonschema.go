@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -73,8 +74,8 @@ func validateJSONSchemaValue(value any, schema *types.Document, isDocument bool)
 			arr, ok := schemaVal.(*types.Array)
 			if !ok {
 				return false, handlererrors.NewCommandErrorMsgWithArgument(
-					handlererrors.ErrBadValue,
-					"$jsonSchema keyword 'required' must be an array",
+					handlererrors.ErrTypeMismatch,
+					fmt.Sprintf("$jsonSchema keyword 'required' must be an array, but found an element of type %s", handlerparams.AliasFromType(schemaVal)),
 					"$jsonSchema",
 				)
 			}
