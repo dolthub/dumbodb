@@ -162,17 +162,19 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Rebase already-up-to-date (no commits to replay)
+	// Scenario 4: Rebase onto same tip replays feature's commit again
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AlreadyUpToDate", func(t *testing.T) {
-		// feature is now rebased onto main, so rebasing again yields 0 commits.
+		// After Scenario 1, feature = C2' (parent = C3, main tip = C3). feature
+		// is still one commit ahead of main, so a second rebase replays that
+		// commit onto main — matching git's behavior.
 		raw := runCommandRaw(t, featureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 
-		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for already-up-to-date rebase")
-		assert.EqualValues(t, 0, raw["commitsReplayed"], "commitsReplayed must be 0 when nothing to replay")
+		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for clean rebase")
+		assert.EqualValues(t, 1, raw["commitsReplayed"], "feature's lone commit must replay onto main")
 	})
 
 	// -------------------------------------------------------------------------
@@ -340,7 +342,9 @@ func TestRebaseVerify(t *testing.T) {
 			{Key: "continue", Value: int32(1)},
 		})
 		assert.EqualValues(t, 1, continueRaw["ok"], "continue must succeed after conflict resolution")
-		assert.EqualValues(t, 1, continueRaw["commitsReplayed"], "one commit must have been replayed")
+		// Two commits replay: feature-adds-2 (clean) before the conflict, then
+		// feature-modifies-1 after the resolution.
+		assert.EqualValues(t, 2, continueRaw["commitsReplayed"], "two commits must have been replayed across the rebase")
 		_, hasTip := continueRaw["newTip"]
 		assert.True(t, hasTip, "continue response must include newTip")
 	})

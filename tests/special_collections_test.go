@@ -44,18 +44,17 @@ func TestCapped_SmallSize_ManyInserts(t *testing.T) {
 		db.Drop(context.Background()) //nolint:errcheck
 	})
 
-	// Create a capped collection with 1024 bytes.
-	// The dolt backend estimates avgDocSize=64 bytes, so 20 documents occupy
-	// 1280 bytes, which exceeds the 1024-byte cap and must trigger eviction.
-	const cappedSize = int64(1024)
+	// Create a capped collection at MongoDB's 4096-byte minimum. The dolt
+	// backend estimates avgDocSize=64 bytes, so 80 documents occupy 5120
+	// bytes, which exceeds the cap and must trigger eviction.
+	const cappedSize = int64(4096)
 	err := db.CreateCollection(ctx, "cappedcoll", options.CreateCollection().SetCapped(true).SetSizeInBytes(cappedSize))
 	require.NoError(t, err, "creating capped collection must succeed")
 
 	coll := db.Collection("cappedcoll")
 
-	// Insert 20 documents.  At 64 estimated bytes each, total size (1280 bytes)
-	// exceeds the 1024-byte cap, so the collection must evict old documents.
-	docs := make([]interface{}, 20)
+	const numDocs = 80
+	docs := make([]interface{}, numDocs)
 	for i := range docs {
 		docs[i] = bson.D{{Key: "i", Value: int32(i)}}
 	}
@@ -64,7 +63,7 @@ func TestCapped_SmallSize_ManyInserts(t *testing.T) {
 
 	count, err := coll.CountDocuments(ctx, bson.D{})
 	require.NoError(t, err, "CountDocuments must not error")
-	require.Less(t, count, int64(20), "capped collection must evict old documents when size exceeded")
+	require.Less(t, count, int64(numDocs), "capped collection must evict old documents when size exceeded")
 }
 
 // TestView_WithLookupPipeline verifies that a view defined with a $lookup stage
