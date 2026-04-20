@@ -40,7 +40,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     { "commitId": "<initHash>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
   ],
@@ -51,6 +50,7 @@ Expected:
 Key checks:
 - Exactly 1 commit: `"Initialize database"`
 - No `parent1` field — it is the root commit
+- Response has no top-level `branch` field
 
 ---
 
@@ -93,7 +93,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     { "commitId": "<hash3>", "parent1": "<hash2>", "message": "third",               "timestamp": "<...>", "author": "<...>" },
     { "commitId": "<hash2>", "parent1": "<hash1>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
@@ -125,7 +124,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     { "commitId": "<hash3>", "message": "third",  "timestamp": "<...>", "author": "<...>" },
     { "commitId": "<hash2>", "message": "second", "timestamp": "<...>", "author": "<...>" }
@@ -138,6 +136,29 @@ Key checks:
 - Exactly 2 entries
 - First entry is `hash3` (HEAD), second is `hash2`
 - `hash1` ("first") does **not** appear
+
+---
+
+## Scenario 3b: Log with limit=0 — returns an empty list
+
+`limit: 0` explicitly requests zero commits. The response must return an empty
+`commits` array regardless of how much history exists, and the same holds when
+combined with `from`.
+
+```js
+db.runCommand({ doltLog: 1, limit: 0 })
+db.runCommand({ doltLog: 1, from: hash2, limit: 0 })
+```
+
+Expected for both:
+
+```json
+{ "commits": [], "ok": 1 }
+```
+
+Key checks:
+- `commits` is an empty array
+- No top-level `branch` field in the response
 
 ---
 
@@ -155,7 +176,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     { "commitId": "<hash2>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
     { "commitId": "<hash1>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
@@ -191,7 +211,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     {
       "commitId": "<hash3>",
@@ -280,7 +299,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     {
       "commitId": "<hashM>",
@@ -317,7 +335,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" },
     { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>" },
@@ -380,7 +397,6 @@ Expected:
 
 ```json
 {
-  "branch": "main",
   "commits": [
     { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>" },
     { "commitId": "<hashB>", "parent1": "<hashA>", "message": "add-two", "timestamp": "<...>", "author": "<...>" }
@@ -402,9 +418,10 @@ Key checks:
 | Command | Behaviour |
 |---|---|
 | `{ doltLog: 1 }` | All commits from HEAD, up to default limit (20) |
-| `{ doltLog: 1, limit: N }` | At most N commits from HEAD |
+| `{ doltLog: 1, limit: N }` (N > 0) | At most N commits from HEAD |
+| `{ doltLog: 1, limit: 0 }` | Empty `commits` array |
 | `{ doltLog: 1, from: "<hash>" }` | All commits from `<hash>` backwards |
-| `{ doltLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` |
+| `{ doltLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` (empty when N=0) |
 
 - Commits are returned newest-first.
 - Each entry contains `hash`, `message`, `timestamp`, and `author`.

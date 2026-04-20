@@ -970,6 +970,16 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
+	// limit=0 explicitly means "return zero commits". Short-circuit before touching the backend.
+	if document.Has("limit") && limit == 0 {
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"commits", types.MakeArray(0),
+				"ok", float64(1),
+			)),
+		)
+	}
+
 	res, err := vb.DumboDBLog(connCtx, &backends.LogParams{
 		DBName:     dbName,
 		Branch:     branch,
@@ -1011,7 +1021,6 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"branch", branch,
 			"commits", commits,
 			"ok", float64(1),
 		)),

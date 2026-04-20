@@ -41,7 +41,6 @@ import (
 
 // logResult holds the decoded top-level response from a dumboDBLog command.
 type logResult struct {
-	Branch  string
 	Commits []commitEntry
 }
 
@@ -60,7 +59,8 @@ type commitEntry struct {
 func decodeLogResult(t *testing.T, raw bson.M) logResult {
 	t.Helper()
 
-	branch, _ := raw["branch"].(string)
+	_, hasBranch := raw["branch"]
+	require.False(t, hasBranch, "doltLog result must not include 'branch' field")
 
 	rawCommits, ok := raw["commits"]
 	require.True(t, ok, "doltLog result missing 'commits' field")
@@ -69,7 +69,6 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 	require.True(t, ok, "doltLog 'commits' is not an array, got %T", rawCommits)
 
 	var out logResult
-	out.Branch = branch
 
 	for _, c := range commitsArr {
 		cm, ok := c.(bson.M)
@@ -196,6 +195,35 @@ func TestLogVerify(t *testing.T) {
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hash1, c.CommitID, "hash1 must not appear when limit=2")
 		}
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 3b: limit=0 returns an empty commits array (not "all commits")
+	// -------------------------------------------------------------------------
+	t.Run("Scenario3b_LimitZero", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(0)},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		assert.Empty(t, lr.Commits, "limit=0 must return an empty commits array")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 3c: limit=0 combined with from= also returns an empty array
+	// -------------------------------------------------------------------------
+	t.Run("Scenario3c_LimitZeroWithFrom", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "from", Value: hash2},
+			{Key: "limit", Value: int32(0)},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		assert.Empty(t, lr.Commits, "limit=0 with from= must still return an empty commits array")
 	})
 
 	// -------------------------------------------------------------------------

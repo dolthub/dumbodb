@@ -394,14 +394,13 @@ Returns commit history for the branch encoded in the database name, newest-first
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `limit` | int32 | no | `0` (all) | Maximum number of commits to return |
+| `limit` | int32 | no | unset (default 20) | Maximum number of commits to return. `0` explicitly requests an empty list. |
 | `from` | string | no | HEAD | Start traversal from this commit hash instead of HEAD |
 
 ### Response fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `branch` | string | Branch name from the connection |
 | `commits` | array | List of commit objects (see below) |
 | `ok` | number | `1` |
 
@@ -422,7 +421,6 @@ Returns commit history for the branch encoded in the database name, newest-first
 ```js
 db.getSiblingDB("orders__d_main").runCommand({ doltLog: 1, limit: 2 })
 // {
-//   branch: "main",
 //   commits: [
 //     {
 //       commitId: "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",

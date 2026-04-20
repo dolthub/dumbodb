@@ -7,7 +7,6 @@ Connect from any MongoDB client. Commit changes when ready, then query your hist
 ```js
 db.runCommand({ doltLog: 1, limit: 3 })
 {
-  branch: 'main',
   commits: [
     {
       commitId: 'v9ra3pmi0f6kotj5k3fganpmb3oi9t1k',
