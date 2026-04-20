@@ -52,8 +52,7 @@ import (
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
-	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions/commitwalk"
+	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
@@ -1923,50 +1922,40 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	}
 	// Non-fatal: if Datasets() fails we simply omit all ref annotations.
 
-	// Use Dolt's topological-order commit iterator so both parents of a merge
-	// commit are walked. The iterator wraps the same ChunkStore we write to, so
-	// it sees every commit dumbo has created.
-	ddb, err := doltdb.DoltDBFromCS(db.cs, params.DBName)
-	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBLog: building DoltDB for walk: %w", err)
-	}
-	itr, err := commitwalk.GetTopologicalOrderIterator[context.Context](ctx, ddb, []hash.Hash{startHash}, nil)
+	// Use commitgraph's topological-order iterator so both parents of a merge
+	// commit are walked. The resolver uses the same ValueStore we write to, so
+	// it sees every commit DumboDB has created.
+	resolver := &doltHashResolver{vs: db.vs, ns: db.ns}
+	itr, err := commitgraph.GetTopologicalOrderIterator(ctx, resolver, []hash.Hash{startHash}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DumboDBLog: building topological iterator: %w", err)
 	}
 
 	var commits []backends.CommitInfo
 	for len(commits) < limit {
-		h, optCmt, meta, _, iterErr := itr.Next(ctx)
+		ci, iterErr := itr.Next(ctx)
 		if iterErr == io.EOF {
 			break
 		}
 		if iterErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBLog: walking commits: %w", iterErr)
 		}
-		cmt, ok := optCmt.ToCommit()
-		if !ok {
-			// Ghost commit (shallow clone); skip.
+		if ci.IsGhost {
 			continue
 		}
 
-		parentAddrs, err := cmt.ParentHashes(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBLog: reading parents for %q: %w", h, err)
-		}
-
 		info := backends.CommitInfo{
-			CommitID:  h.String(),
-			Author:    meta.Name + " <" + meta.Email + ">",
-			Message:   meta.Description,
-			Timestamp: meta.UserTimestamp,
-			Refs:      refsForCommit[h.String()],
+			CommitID:  ci.Hash.String(),
+			Author:    ci.Meta.Name + " <" + ci.Meta.Email + ">",
+			Message:   ci.Meta.Description,
+			Timestamp: ci.Meta.UserTimestamp,
+			Refs:      refsForCommit[ci.Hash.String()],
 		}
-		if len(parentAddrs) >= 1 {
-			info.Parent1 = parentAddrs[0].String()
+		if len(ci.Parents) >= 1 {
+			info.Parent1 = ci.Parents[0].String()
 		}
-		if len(parentAddrs) >= 2 {
-			info.Parent2 = parentAddrs[1].String()
+		if len(ci.Parents) >= 2 {
+			info.Parent2 = ci.Parents[1].String()
 		}
 
 		commits = append(commits, info)
@@ -2950,5 +2939,45 @@ func (b *Backend) commitRevert(
 	return &backends.RevertResult{
 		CommitID: newHash.String(),
 		Message:  commitMsg,
+	}, nil
+}
+
+// doltHashResolver implements commitgraph.HashResolver using the low-level
+// ValueStore, avoiding the doltdb package (and its transitive SQL dependency).
+type doltHashResolver struct {
+	vs *dolttypes.ValueStore
+	ns tree.NodeStore
+}
+
+func (r *doltHashResolver) ResolveCommitHash(ctx context.Context, h hash.Hash) (*commitgraph.CommitInfo, error) {
+	commit, err := datas.LoadCommitAddr(ctx, r.vs, h)
+	if err != nil {
+		if err == datas.ErrCommitNotFound {
+			return &commitgraph.CommitInfo{Hash: h, IsGhost: true}, nil
+		}
+		return nil, err
+	}
+
+	meta, err := datas.GetCommitMeta(ctx, commit.NomsValue())
+	if err != nil {
+		return nil, err
+	}
+
+	height := commit.Height()
+
+	sm, ok := commit.NomsValue().(dolttypes.SerialMessage)
+	if !ok {
+		return nil, fmt.Errorf("dolt: ResolveCommitHash: expected SerialMessage, got %T", commit.NomsValue())
+	}
+	parentHashes, err := dolttypes.SerialCommitParentAddrs(r.vs.Format(), sm)
+	if err != nil {
+		return nil, err
+	}
+
+	return &commitgraph.CommitInfo{
+		Hash:    h,
+		Height:  height,
+		Meta:    meta,
+		Parents: parentHashes,
 	}, nil
 }
