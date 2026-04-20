@@ -265,7 +265,7 @@ func TestCommitVerify(t *testing.T) {
 
 		entry, ok := commits[0].(bson.M)
 		require.True(t, ok)
-		assert.Equal(t, "bob", entry["author"], "doltLog must reflect the commit author")
+		assert.Equal(t, "bob <bob@dumbodb>", entry["author"], "doltLog must reflect the commit author (Name <email>)")
 	})
 
 	// -------------------------------------------------------------------------
