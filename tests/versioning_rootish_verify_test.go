@@ -286,20 +286,26 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: verifydb__d_main@{yesterday} — reflog rejected on first command
+	// Scenario 6: reflog — rejected on first command (code 96).
+	// Uses percent-encoded DB names matching the docs: raw @, {, }, space are
+	// invalid in mongosh DB names, so the docs show percent-encoded forms.
+	// Exercising the same encoded forms here proves a mongosh user following
+	// the doc actually reaches the server-side parser.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_Reflog_AnyCommandFails", func(t *testing.T) {
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main@{yesterday}"), "reflog_yesterday")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main@{5 minutes ago}"), "reflog_minutes_ago")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_@{1}"), "reflog_bare")
+		assertRootishRejected(t, env.client.Database(dbName+"__d_main%40%7Byesterday%7D"), "reflog_yesterday")
+		assertRootishRejected(t, env.client.Database(dbName+"__d_main%40%7B5%20minutes%20ago%7D"), "reflog_minutes_ago")
+		assertRootishRejected(t, env.client.Database(dbName+"__d_%40%7B1%7D"), "reflog_bare")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: verifydb__d_main..feature — range rejected on first command
+	// Scenario 7: range — rejected on first command (code 96).
+	// Uses percent-encoded `.` (%2E) matching the docs: raw `.` is invalid in
+	// MongoDB DB names and rejected by mongosh client-side.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_Range_AnyCommandFails", func(t *testing.T) {
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main..feature"), "range_two_dot")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main...feature"), "range_three_dot")
+		assertRootishRejected(t, env.client.Database(dbName+"__d_main%2E%2Efeature"), "range_two_dot")
+		assertRootishRejected(t, env.client.Database(dbName+"__d_main%2E%2E%2Efeature"), "range_three_dot")
 	})
 }
 

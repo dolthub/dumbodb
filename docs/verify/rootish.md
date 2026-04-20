@@ -266,39 +266,56 @@ db.getSiblingDB("verifydb__d_HEAD~1").items.find({}).toArray()
 
 ---
 
-## Scenario 6: `verifydb__d_main@{yesterday}` — returns a clear 'not supported' error
+## Scenario 6: reflog syntax — returns a clear 'not supported' error
 
-Reflog syntax is not supported. The error fires on the first command (same reason as
-Scenario 5 — `getSiblingDB` is client-side only).
+Reflog syntax (`<ref>@{...}`) is not supported. The raw `@`, `{`, `}`, and space
+characters are invalid in MongoDB database names, so mongosh rejects them
+client-side with `MongoshInvalidInputError: [COMMON-10001] Invalid database name`
+before any network call is made. To reach the server-side parser, percent-encode
+the special characters: `@` → `%40`, `{` → `%7B`, `}` → `%7D`, space → `%20`.
+DumboDB decodes the DB name server-side (the same mechanism Scenario 2 uses for
+`.` in branch names) and returns the documented code-96 rejection.
 
 ```js
-db.getSiblingDB("verifydb__d_main@{yesterday}").items.find({}).toArray()
+// main@{yesterday} → percent-encoded
+db.getSiblingDB("verifydb__d_main%40%7Byesterday%7D").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main@{yesterday}": reflog syntax is not supported
 
-// Other reflog forms also rejected
-db.getSiblingDB("verifydb__d_main@{5 minutes ago}").items.find({}).toArray()
+// main@{5 minutes ago} → percent-encoded (note %20 for spaces)
+db.getSiblingDB("verifydb__d_main%40%7B5%20minutes%20ago%7D").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main@{5 minutes ago}": reflog syntax is not supported
 
-db.getSiblingDB("verifydb__d_@{1}").items.find({}).toArray()
+// @{1} → percent-encoded
+db.getSiblingDB("verifydb__d_%40%7B1%7D").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "@{1}": reflog syntax is not supported
 ```
 
+> **Why not type the raw form?** Typing `verifydb__d_main@{yesterday}` in mongosh
+> fails with a client-side validation error, not the server-side `reflog syntax is
+> not supported`. Percent-encoding is the only way a mongosh user can actually reach
+> the documented error path. Drivers with permissive DB-name validation (the Go
+> mongo-driver among them) accept the raw form and also reach the same server error.
+
 ---
 
-## Scenario 7: `verifydb__d_main..feature` — returns a clear 'not supported' error
+## Scenario 7: range syntax — returns a clear 'not supported' error
 
-Range syntax is not supported. The error fires on the first command.
+Range syntax (`<ref>..<ref>`) is not supported. The `.` character is forbidden in
+MongoDB database names, so mongosh rejects raw range expressions client-side.
+Percent-encode `.` as `%2E` (the same encoding used for branch names like `v1.0`
+in Scenario 2) to reach the server-side rejection.
 
 ```js
-db.getSiblingDB("verifydb__d_main..feature").items.find({}).toArray()
+// main..feature → percent-encoded
+db.getSiblingDB("verifydb__d_main%2E%2Efeature").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main..feature": range syntax is not supported
 
-// Three-dot range also rejected
-db.getSiblingDB("verifydb__d_main...feature").items.find({}).toArray()
+// main...feature (three-dot range) → percent-encoded
+db.getSiblingDB("verifydb__d_main%2E%2E%2Efeature").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main...feature": range syntax is not supported
 ```
@@ -315,8 +332,8 @@ db.getSiblingDB("verifydb__d_main...feature").items.find({}).toArray()
 | Commit hash (32 chars) | `mydb__d_<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
 | Ancestor expression | `mydb__d_main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
 | HEAD | `mydb__d_HEAD` | ❌ | ❌ | ❌ | Rejected on first command (code 96); `getSiblingDB` is client-side only |
-| Reflog | `mydb__d_main@{yesterday}` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
-| Range | `mydb__d_main..feature` | ❌ | ❌ | ❌ | Rejected on first command (code 96) |
+| Reflog | `mydb__d_main%40%7Byesterday%7D` (encodes `main@{yesterday}`) | ❌ | ❌ | ❌ | Raw `@{}` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
+| Range | `mydb__d_main%2E%2Efeature` (encodes `main..feature`) | ❌ | ❌ | ❌ | Raw `.` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
 
 ¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
 ² **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "newname" })`. Works whenever
