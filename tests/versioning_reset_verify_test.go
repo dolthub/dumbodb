@@ -115,6 +115,7 @@ func TestResetVerify(t *testing.T) {
 
 		assert.True(t, addedIDs[int32(2)], "_id:2 must appear as added (was in C2 but HEAD=C1)")
 		assert.True(t, addedIDs[int32(3)], "_id:3 must appear as added (uncommitted insert preserved)")
+		assert.Len(t, addedIDs, 2, "exactly _id:2 and _id:3 should be in the added set")
 		assert.Empty(t, cd.Removed, "no documents should be removed")
 		assert.Empty(t, cd.Modified, "no documents should be modified")
 	})
