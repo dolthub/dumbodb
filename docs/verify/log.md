@@ -335,6 +335,38 @@ Key checks:
 
 ---
 
+## Scenario 7b: doltLog on the feat branch connection
+
+Running `doltLog` against `logmerge__d_feat` must walk feat's HEAD, not main's.
+The walk is `hashC → hashA → init`; `hashB` and `hashM` are unreachable from
+feat's tip. The tip commit (`hashC`) carries both `"HEAD"` and `"feat"` refs.
+
+```js
+mdb.getSiblingDB("logmerge__d_feat").runCommand({ doltLog: 1 })
+```
+
+Expected:
+
+```json
+{
+  "branch": "feat",
+  "commits": [
+    { "commitId": "<hashC>", "refs": ["HEAD", "feat"], "parent1": "<hashA>", "message": "add-three-feat",    "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hashA>",                            "parent1": "<initH>", "message": "add-one",           "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<initH>",                                                   "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- `commits[0].commitId` equals `hashC` (feat tip — **not** `hashM`, the merge on main)
+- `commits[0].refs` contains `"HEAD"` and `"feat"` (connection branch decoration)
+- `hashB` (main-only) and `hashM` (merge) do **not** appear
+- Non-head commits have no `refs` field
+
+---
+
 ## Scenario 8: limit works correctly on non-linear history
 
 `limit=2` from main HEAD follows `parent1`: `hashM → hashB`. Commits further back

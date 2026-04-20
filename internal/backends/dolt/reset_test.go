@@ -60,7 +60,7 @@ func countDocs(t *testing.T, b *Backend, dbName, collName string) int {
 func logHashes(t *testing.T, b *Backend, dbName string) []string {
 	t.Helper()
 
-	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{DBName: dbName})
+	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{DBName: dbName, Branch: "main"})
 	if err != nil {
 		t.Fatalf("logHashes: DumboDBLog: %v", err)
 	}

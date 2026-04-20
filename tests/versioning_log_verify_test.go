@@ -376,6 +376,41 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
+	// Scenario 7b: dumboDBLog run against the feat branch (no from=)
+	//
+	// Regression test for do-h7np: previously the handler resolved HEAD from
+	// main's dataset regardless of the connection branch, so the walk from
+	// __d_feat returned main's history (hashM → hashB → hashA → init) and
+	// refs only decorated main. The correct walk from feat's HEAD is
+	// hashC → hashA → init, and hashC must be decorated with HEAD + feat.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7b_FromFeatBranchConnection", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(mergeDBName+"__d_feat").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		require.Len(t, lr.Commits, 3, "walk from feat HEAD must be hashC → hashA → Initialize")
+		assert.Equal(t, hashC, lr.Commits[0].CommitID, "commits[0] must be hashC (feat tip)")
+		assert.Equal(t, "add-three-feat", lr.Commits[0].Message)
+		assert.Equal(t, hashA, lr.Commits[1].CommitID, "commits[1] must be hashA (common ancestor)")
+		assert.Equal(t, "Initialize database", lr.Commits[2].Message, "commits[2] must be Initialize root")
+
+		for _, c := range lr.Commits {
+			assert.NotEqual(t, hashB, c.CommitID, "hashB (main-only) must not appear on feat walk")
+			assert.NotEqual(t, hashM, c.CommitID, "hashM (merge) must not appear on feat walk")
+		}
+
+		head := lr.Commits[0]
+		assert.Contains(t, head.Refs, "HEAD", "feat HEAD must carry 'HEAD' ref")
+		assert.Contains(t, head.Refs, "feat", "feat HEAD must carry 'feat' ref")
+		for _, c := range lr.Commits[1:] {
+			assert.Empty(t, c.Refs, "non-head commit %s must have no refs", c.CommitID)
+		}
+	})
+
+	// -------------------------------------------------------------------------
 	// Scenario 8: limit works correctly on non-linear history
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_LimitOnNonLinearHistory", func(t *testing.T) {

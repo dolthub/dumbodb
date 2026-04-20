@@ -1873,11 +1873,15 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 			return nil, fmt.Errorf("dolt: DumboDBLog: invalid from hash %q", params.From)
 		}
 	} else {
-		var ok bool
-		startHash, ok = db.ds.MaybeHeadAddr()
-		if !ok {
-			return &backends.LogResult{}, nil
+		// Resolve the connection's branch (or rootish expression) to its HEAD
+		// commit. Using db.ds here would be wrong: db.ds is pinned to
+		// refs/heads/main, so the traversal would always start from main's HEAD
+		// regardless of which branch the connection specified.
+		h, rErr := resolveRootishToCommitHash(ctx, db, params.Branch)
+		if rErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBLog: resolving branch %q: %w", params.Branch, rErr)
 		}
+		startHash = h
 	}
 
 	// Build a map from commit hash string → ref labels by iterating over all
