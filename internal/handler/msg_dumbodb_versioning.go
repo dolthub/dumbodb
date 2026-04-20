@@ -149,12 +149,19 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 //	"mydb__d_branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
 //	"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
 //	"mydb__d_main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
+//	"mydb__d_HEAD"                              → dbName="mydb", rootish="main",                              readOnly=false (HEAD alias)
+//	"mydb__d_HEAD~2"                            → dbName="mydb", rootish="main~2",                            readOnly=true  (HEAD-relative alias)
 //
 // If no separator is present the rootish defaults to "main" and readOnly is false.
 //
 // readOnly is true when the rootish is syntactically a commit hash or ancestor expression.
 // Bare names are assumed to be branch names (writable); tag detection requires a backend call
 // not performed here.
+//
+// HEAD and HEAD~N are rewritten to main and main~N respectively: DumboDB connections are
+// stateless, so the only meaningful "current branch" is the default branch (main). Writing
+// via "HEAD" therefore mutates main's working set, same as writing via "main". Callers of
+// branchFromDBName never see the literal "HEAD".
 //
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
 //
@@ -178,11 +185,27 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 			if err = parseRootish(candidate); err != nil {
 				return "", "", false, err
 			}
+			candidate = resolveHEADAlias(candidate)
 			return encoded[:idx], candidate, rootishIsReadOnly(candidate), nil
 		}
 	}
 
 	return encoded, "main", false, nil
+}
+
+// resolveHEADAlias rewrites HEAD and HEAD~N to main and main~N.
+//
+// DumboDB connections are stateless, so the only "current branch" is the default branch.
+// HEAD is therefore an alias for main; downstream resolution sees a regular branch or
+// ancestor expression and never the literal "HEAD".
+func resolveHEADAlias(rootish string) string {
+	if rootish == "HEAD" {
+		return "main"
+	}
+	if strings.HasPrefix(rootish, "HEAD~") {
+		return "main" + rootish[len("HEAD"):]
+	}
+	return rootish
 }
 
 // rootishAllDigits reports whether s consists entirely of ASCII decimal digits
@@ -256,9 +279,11 @@ func enforceWritableRootish(encodedDB string) error {
 //   - Tag name (resolved as refs/tags/<rootish>)
 //   - Bare commit hash (full 32-char lowercase base32, i.e. 0-9a-v)
 //   - Relative ancestor expression (<branch>~<N>)
+//   - HEAD (alias for the default branch, rewritten to main by resolveHEADAlias)
+//   - HEAD-relative ancestor expression (HEAD~N, rewritten to main~N)
 //
 // Rejected forms (returned as ErrOperationFailed):
-//   - HEAD and HEAD-relative forms (HEAD, HEAD~1, HEAD^)
+//   - HEAD caret forms (HEAD^, HEAD^N)
 //   - Reflog syntax (<ref>@{<spec>})
 //   - Range syntax (<ref>..<ref>)
 //   - Regex commit search (:/<pattern>)
@@ -269,14 +294,6 @@ func parseRootish(s string) error {
 		return handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
 			"rootish must not be empty",
-		)
-	}
-
-	// Reject HEAD and HEAD-relative forms.
-	if s == "HEAD" || strings.HasPrefix(s, "HEAD~") || strings.HasPrefix(s, "HEAD^") {
-		return handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrOperationFailed,
-			fmt.Sprintf("rootish %q: HEAD and HEAD-relative forms are not supported; use a branch name, tag, commit hash, or <branch>~<N>", s),
 		)
 	}
 

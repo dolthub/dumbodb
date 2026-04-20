@@ -245,6 +245,10 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // "feature%2Ffoo". The handler has already validated the encoding before the
 // backend is reached, so decode errors here fall back to the raw value.
 //
+// HEAD and HEAD~N are rewritten to main and main~N: DumboDB has no stateful
+// "current branch" concept per connection, so HEAD aliases the default branch.
+// Downstream resolvers never see the literal "HEAD".
+//
 // All-digit strings after __d_ (e.g. Unix nanosecond timestamps) are not valid
 // rootish expressions and cause the whole encoded name to be treated as a plain
 // database name. This prevents spurious "not found as branch or tag" errors when
@@ -259,6 +263,11 @@ func splitEncodedDBName(encoded string) (dbName, rootish string) {
 		// All-digit strings are not valid rootish expressions; treat the whole
 		// encoded name as a plain database name instead.
 		if !splitAllDigits(candidate) {
+			if candidate == "HEAD" {
+				candidate = "main"
+			} else if strings.HasPrefix(candidate, "HEAD~") {
+				candidate = "main" + candidate[len("HEAD"):]
+			}
 			return encoded[:idx], candidate
 		}
 	}
