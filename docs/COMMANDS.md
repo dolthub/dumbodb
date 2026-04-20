@@ -386,7 +386,10 @@ db.getSiblingDB("orders__d_feature").runCommand({ doltRebase: 1, abort: 1 })
 
 ## doltLog
 
-Returns commit history for the branch encoded in the database name, newest-first.
+Returns commit history for the branch encoded in the database name, walking the
+full commit graph in reverse topological order. Both parents of merge commits
+are visited; ties between commits at the same height are broken by newer
+timestamp first.
 
 **Alias:** `dumboLog`
 
@@ -451,7 +454,7 @@ None specific to this command; missing backend support returns `OperationFailed`
 - Every database is initialized with a root `"Initialize database"` commit; the root commit has no `parent1`.
 - `refs` appears only on commits that are the HEAD of one or more branches. The connection branch gets both `"HEAD"` and its bare name; other branches get only the bare name.
 - Merge commits include `parent2`.
-- `from` starts traversal at that commit, walking `parent1` only (linear walk, not DAG).
+- `from` starts traversal at the given commit; the walk still visits both parents of any merge commit reachable from that start.
 
 ---
 

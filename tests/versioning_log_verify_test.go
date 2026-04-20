@@ -379,9 +379,9 @@ func TestLogVerify(t *testing.T) {
 	// Scenario 7: dumboDBLog from feature tip shows only feature branch history
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FromFeatureTip", func(t *testing.T) {
-		// Starting at hashC (feat tip) the walk follows parent1 only:
-		// hashC → hashA → "Initialize database".
-		// hashB (main-only) and hashM (merge) must not appear.
+		// Starting at hashC (feat tip) the reachable commits via the topological
+		// walk are hashC → hashA → "Initialize database". hashB (reachable only
+		// via main) and hashM (the merge commit) must not appear.
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -439,10 +439,37 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 8: limit works correctly on non-linear history
+	// Scenario 8: topological walk visits both merge parents
+	//
+	// The full walk from main HEAD must reach every commit reachable via BOTH
+	// parents of the merge, not just parent1. With height-then-newer-timestamp
+	// tie-breaking, the height-2 commits hashB (older) and hashC (newer) both
+	// appear, with hashC ordered before hashB.
 	// -------------------------------------------------------------------------
-	t.Run("Scenario8_LimitOnNonLinearHistory", func(t *testing.T) {
-		// limit=2 from main HEAD follows parent1: hashM → hashB.  hashA must not appear.
+	t.Run("Scenario8_TopologicalMergeWalk", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+		}).Decode(&raw))
+
+		lr := decodeLogResult(t, raw)
+		// hashM, hashC, hashB, hashA, Initialize — all 5 commits reachable from hashM.
+		require.Len(t, lr.Commits, 5, "topological walk from hashM must return all 5 commits")
+		assert.Equal(t, hashM, lr.Commits[0].CommitID, "commits[0] must be hashM (merge tip)")
+		assert.Equal(t, hashC, lr.Commits[1].CommitID, "commits[1] must be hashC (newer of the two height-2 parents)")
+		assert.Equal(t, hashB, lr.Commits[2].CommitID, "commits[2] must be hashB (older of the two height-2 parents)")
+		assert.Equal(t, hashA, lr.Commits[3].CommitID, "commits[3] must be hashA (common ancestor)")
+		assert.Equal(t, "Initialize database", lr.Commits[4].Message, "commits[4] must be Initialize root")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: limit truncates the topological walk but still visits parent2
+	//
+	// With limit=2 the walk stops after hashM and hashC; hashC (reachable only
+	// via the merge's parent2) must appear before hashB because it has the
+	// newer timestamp.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_LimitOnNonLinearHistory", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"__d_main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -452,11 +479,11 @@ func TestLogVerify(t *testing.T) {
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 2, "limit=2 must return exactly 2 commits")
 		assert.Equal(t, hashM, lr.Commits[0].CommitID, "commits[0] must be hashM (HEAD/merge)")
-		assert.Equal(t, hashB, lr.Commits[1].CommitID, "commits[1] must be hashB (parent1 of merge)")
+		assert.Equal(t, hashC, lr.Commits[1].CommitID, "commits[1] must be hashC — newer timestamp wins the height-2 tie")
 
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hashA, c.CommitID, "hashA must not appear with limit=2")
-			assert.NotEqual(t, hashC, c.CommitID, "hashC (feat-only) must not appear with limit=2")
+			assert.NotEqual(t, hashB, c.CommitID, "hashB appears only after hashC under newer-first tie-breaking")
 		}
 	})
 

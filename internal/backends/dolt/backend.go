@@ -39,6 +39,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -51,6 +52,8 @@ import (
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions/commitwalk"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
@@ -1838,9 +1841,12 @@ func mergeAddressMaps(ctx context.Context, state *dbState, intoAM, fromAM, baseA
 }
 
 // DumboDBLog implements backends.VersioningBackend.
-// It returns the commit history for the given branch, walking HEAD backwards
-// through the parent1 chain up to the specified limit (default 20).
-// If params.From is set, traversal starts from that commit hash instead of HEAD.
+// It returns the commit history reachable from the starting commit (HEAD or
+// params.From) in reverse topological order — higher commits first, with ties
+// broken by timestamp (newer first). Both parents of merge commits are walked,
+// so feature-branch commits reachable only via parent2 are included.
+// If params.Limit <= 0 the default limit of 20 applies; a limit of 0 is
+// handled as "empty list" in the handler and never reaches this function.
 // Each CommitInfo is annotated with Refs when its commitId matches one or more
 // branch heads (git --decorate style). The connection branch (ConnBranch) gets
 // two entries: "HEAD" and the bare branch name; all other branch heads get only
@@ -1871,6 +1877,14 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		startHash, ok = hash.MaybeParse(params.From)
 		if !ok {
 			return nil, fmt.Errorf("dolt: DumboDBLog: invalid from hash %q", params.From)
+		}
+		// Validate that the from hash resolves to an actual commit so the caller
+		// gets a clear error rather than an empty result.
+		if _, loadErr := datas.LoadCommitAddr(ctx, db.vs, startHash); loadErr != nil {
+			if loadErr == datas.ErrCommitNotFound {
+				return nil, fmt.Errorf("dolt: DumboDBLog: commit not found: %q", params.From)
+			}
+			return nil, fmt.Errorf("dolt: DumboDBLog: loading commit %q: %w", startHash, loadErr)
 		}
 	} else {
 		// Resolve the connection's branch (or rootish expression) to its HEAD
@@ -1909,41 +1923,44 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	}
 	// Non-fatal: if Datasets() fails we simply omit all ref annotations.
 
-	// Walk the parent chain.
+	// Use Dolt's topological-order commit iterator so both parents of a merge
+	// commit are walked. The iterator wraps the same ChunkStore we write to, so
+	// it sees every commit dumbo has created.
+	ddb, err := doltdb.DoltDBFromCS(db.cs, params.DBName)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBLog: building DoltDB for walk: %w", err)
+	}
+	itr, err := commitwalk.GetTopologicalOrderIterator[context.Context](ctx, ddb, []hash.Hash{startHash}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBLog: building topological iterator: %w", err)
+	}
+
 	var commits []backends.CommitInfo
-	currentHash := startHash
-	checkFrom := params.From != ""
-
 	for len(commits) < limit {
-		commit, loadErr := datas.LoadCommitAddr(ctx, db.vs, currentHash)
-		if loadErr != nil {
-			if loadErr == datas.ErrCommitNotFound {
-				if checkFrom {
-					return nil, fmt.Errorf("dolt: DumboDBLog: commit not found: %q", params.From)
-				}
-				break
-			}
-			return nil, fmt.Errorf("dolt: DumboDBLog: loading commit %q: %w", currentHash, loadErr)
+		h, optCmt, meta, _, iterErr := itr.Next(ctx)
+		if iterErr == io.EOF {
+			break
 		}
-		// The from hash was successfully resolved on the first iteration.
-		checkFrom = false
-
-		meta, err := datas.GetCommitMeta(ctx, commit.NomsValue())
-		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBLog: reading meta for %q: %w", currentHash, err)
+		if iterErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBLog: walking commits: %w", iterErr)
+		}
+		cmt, ok := optCmt.ToCommit()
+		if !ok {
+			// Ghost commit (shallow clone); skip.
+			continue
 		}
 
-		parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		parentAddrs, err := cmt.ParentHashes(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBLog: reading parents for %q: %w", currentHash, err)
+			return nil, fmt.Errorf("dolt: DumboDBLog: reading parents for %q: %w", h, err)
 		}
 
 		info := backends.CommitInfo{
-			CommitID:  currentHash.String(),
+			CommitID:  h.String(),
 			Author:    meta.Name + " <" + meta.Email + ">",
 			Message:   meta.Description,
 			Timestamp: meta.UserTimestamp,
-			Refs:      refsForCommit[currentHash.String()],
+			Refs:      refsForCommit[h.String()],
 		}
 		if len(parentAddrs) >= 1 {
 			info.Parent1 = parentAddrs[0].String()
@@ -1953,11 +1970,6 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		}
 
 		commits = append(commits, info)
-
-		if len(parentAddrs) == 0 {
-			break // root commit, stop walking
-		}
-		currentHash = parentAddrs[0]
 	}
 
 	return &backends.LogResult{Commits: commits}, nil

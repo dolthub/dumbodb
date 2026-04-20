@@ -284,8 +284,16 @@ init ← hashA ← hashB (main)
               hashC (feat)  →  hashM (HEAD on main, parent1=hashB, parent2=hashC)
 ```
 
-`doltLog` follows `parent1` linearly, so the walk from main HEAD is:
-`hashM → hashB → hashA → init`.
+`doltLog` walks the commit graph in reverse topological order, visiting **both**
+parents of a merge commit. Ties between commits at the same height are broken
+by timestamp (newer first), so the walk from main HEAD is:
+
+```
+hashM → hashC → hashB → hashA → init
+```
+
+(hashC is committed later than hashB, so it sorts before hashB under the
+newer-timestamp tie-breaker.)
 
 ---
 
@@ -324,8 +332,9 @@ Key checks:
 
 ## Scenario 7: doltLog from feature tip shows only feature branch history
 
-Starting traversal at `hashC` follows `parent1` only: `hashC → hashA → init`.
-`hashB` (reachable only via main) and `hashM` (the merge commit) must **not** appear.
+Starting traversal at `hashC` reaches only commits reachable from that tip:
+`hashC → hashA → init`. `hashB` (reachable only via main's tip) and `hashM`
+(the merge commit) must **not** appear.
 
 ```js
 mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1, from: hashC })
@@ -366,7 +375,6 @@ Expected:
 
 ```json
 {
-  "branch": "feat",
   "commits": [
     { "commitId": "<hashC>", "refs": ["HEAD", "feat"], "parent1": "<hashA>", "message": "add-three-feat",    "timestamp": "<...>", "author": "<...>" },
     { "commitId": "<hashA>",                            "parent1": "<initH>", "message": "add-one",           "timestamp": "<...>", "author": "<...>" },
@@ -384,10 +392,43 @@ Key checks:
 
 ---
 
-## Scenario 8: limit works correctly on non-linear history
+## Scenario 8: full walk visits both parents of the merge commit
 
-`limit=2` from main HEAD follows `parent1`: `hashM → hashB`. Commits further back
-(`hashA`, init) must **not** appear.
+From main HEAD the walk reaches every commit transitively reachable via **both**
+parents of `hashM`, ordered by commit height then newer-timestamp-first.
+
+```js
+mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1 })
+```
+
+Expected:
+
+```json
+{
+  "commits": [
+    { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hashB>", "parent1": "<hashA>", "message": "add-two",        "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>" },
+    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- All five commits appear (previously `hashC` was missing because the walk
+  only followed `parent1`).
+- `hashC` sorts before `hashB` — both have the same height (2), tied by
+  newer timestamp first.
+
+---
+
+## Scenario 9: limit truncates the topological walk
+
+`limit=2` from main HEAD returns the two highest-priority commits in topological
+order. `hashC` still wins the height-2 tie over `hashB`, so it appears in the
+result and `hashB` does not.
 
 ```js
 mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1, limit: 2 })
@@ -399,7 +440,7 @@ Expected:
 {
   "commits": [
     { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashB>", "parent1": "<hashA>", "message": "add-two", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" }
   ],
   "ok": 1
 }
@@ -408,8 +449,8 @@ Expected:
 Key checks:
 - Exactly 2 entries
 - `commits[0]` is the merge commit `hashM` with both `parent1` and `parent2`
-- `commits[1]` is `hashB` (parent1 of the merge commit)
-- `hashA` and `hashC` do **not** appear
+- `commits[1]` is `hashC` — newer timestamp wins the height-2 tie over `hashB`
+- `hashA`, `hashB`, and `init` do **not** appear
 
 ---
 
@@ -423,7 +464,9 @@ Key checks:
 | `{ doltLog: 1, from: "<hash>" }` | All commits from `<hash>` backwards |
 | `{ doltLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` (empty when N=0) |
 
-- Commits are returned newest-first.
+- Commits are returned in reverse topological order — higher commits first,
+  with ties broken by newer timestamp first. Both parents of merge commits are
+  visited.
 - Each entry contains `hash`, `message`, `timestamp`, and `author`.
 - `parent1` is present on all non-root commits.
 - `parent2` is present only on merge commits.
