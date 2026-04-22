@@ -1127,9 +1127,16 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	dbName, branch, _, err := branchFromDBName(encodedDB)
+	dbName, branch, readOnly, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
+	}
+
+	if readOnly {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"doltStatus: no working set (connection is at a specific commit, not a named branch)",
+		)
 	}
 
 	vb := h.versioningBackend()
@@ -1154,6 +1161,9 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		entry := must.NotFail(types.NewDocument(
 			"name", t.Name,
 			"status", t.Status,
+			"added", int32(t.Added),
+			"modified", int32(t.Modified),
+			"deleted", int32(t.Deleted),
 		))
 		collections.Append(entry)
 	}

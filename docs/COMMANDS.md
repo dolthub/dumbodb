@@ -473,8 +473,18 @@ None (beyond the implicit `$db` connection).
 | Field | Type | Description |
 |-------|------|-------------|
 | `branch` | string | Active branch name |
-| `collections` | array | Changed collections: `[{name, status}, ...]` |
+| `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]` |
 | `ok` | number | `1` |
+
+### Collection entry
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Collection name |
+| `status` | string | `"added"`, `"modified"`, or `"deleted"` (see table below) |
+| `added` | int | Docs in the working-set copy but not in the HEAD copy |
+| `modified` | int | Docs present in both with different content (counted per doc, not per field) |
+| `deleted` | int | Docs in the HEAD copy but not in the working-set copy |
 
 ### Status values
 
@@ -495,7 +505,7 @@ db.runCommand({ doltStatus: 1 })
 // {
 //   branch: "main",
 //   collections: [
-//     { name: "orders", status: "modified" }
+//     { name: "orders", status: "modified", added: 1, modified: 0, deleted: 0 }
 //   ],
 //   ok: 1
 // }
@@ -506,10 +516,17 @@ db.runCommand({ doltStatus: 1 })
 // { branch: "main", collections: [], ok: 1 }
 ```
 
+### Errors
+
+| Condition | Error |
+|-----------|-------|
+| Connection is a read-only rootish (commit hash or ancestor expression) | `OperationFailed: doltStatus: no working set (connection is at a specific commit, not a named branch)` |
+
 ### Notes
 
 - Only collections with uncommitted changes appear; unchanged collections are omitted.
 - `collections` is always an array (empty when clean).
+- Counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `doltDiff` for field-level detail.
 
 ---
 

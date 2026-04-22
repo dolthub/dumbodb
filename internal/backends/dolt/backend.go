@@ -2029,7 +2029,28 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 			continue
 		}
 
-		tables = append(tables, backends.TableStatus{Name: name, Status: status})
+		aMap, mapErr := collectionMapFromAM(ctx, state, headAM, name)
+		if mapErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBStatus: opening HEAD map for %q.%q: %w", params.DBName, name, mapErr)
+		}
+
+		bMap, mapErr := collectionMapFromAM(ctx, state, workingAM, name)
+		if mapErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBStatus: opening working map for %q.%q: %w", params.DBName, name, mapErr)
+		}
+
+		addedCount, modifiedCount, deletedCount, countErr := countCollectionMapDiffs(ctx, aMap, bMap)
+		if countErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
+		}
+
+		tables = append(tables, backends.TableStatus{
+			Name:     name,
+			Status:   status,
+			Added:    addedCount,
+			Modified: modifiedCount,
+			Deleted:  deletedCount,
+		})
 	}
 
 	if tables == nil {

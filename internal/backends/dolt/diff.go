@@ -650,3 +650,72 @@ func diffCollectionMaps(
 
 	return added, removed, modified, nil
 }
+
+// countCollectionMapDiffs counts the document-level differences between two
+// prolly.Maps without deserializing documents. It parallels diffCollectionMaps
+// but skips the types.Document construction — callers that need only counts
+// (e.g. DumboDBStatus) avoid the per-document decode cost this way.
+//
+// The prolly-map value for each document encodes its content hash, so a
+// byte-level comparison of values at the same key reliably detects changes.
+func countCollectionMapDiffs(
+	ctx context.Context,
+	aMap, bMap prolly.Map,
+) (added, modified, deleted int, err error) {
+	iterA, err := aMap.IterAll(ctx)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("iterating a map: %w", err)
+	}
+
+	iterB, err := bMap.IterAll(ctx)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("iterating b map: %w", err)
+	}
+
+	kA, vA, errA := iterA.Next(ctx)
+	kB, vB, errB := iterB.Next(ctx)
+
+	for {
+		doneA := errA == io.EOF
+		doneB := errB == io.EOF
+
+		if doneA && doneB {
+			break
+		}
+
+		if errA != nil && !doneA {
+			return 0, 0, 0, fmt.Errorf("iterating a map: %w", errA)
+		}
+
+		if errB != nil && !doneB {
+			return 0, 0, 0, fmt.Errorf("iterating b map: %w", errB)
+		}
+
+		switch {
+		case doneA:
+			added++
+			kB, vB, errB = iterB.Next(ctx)
+		case doneB:
+			deleted++
+			kA, vA, errA = iterA.Next(ctx)
+		default:
+			cmp := bytes.Compare(kA, kB)
+			switch {
+			case cmp < 0:
+				deleted++
+				kA, vA, errA = iterA.Next(ctx)
+			case cmp > 0:
+				added++
+				kB, vB, errB = iterB.Next(ctx)
+			default:
+				if !bytes.Equal(vA, vB) {
+					modified++
+				}
+				kA, vA, errA = iterA.Next(ctx)
+				kB, vB, errB = iterB.Next(ctx)
+			}
+		}
+	}
+
+	return added, modified, deleted, nil
+}

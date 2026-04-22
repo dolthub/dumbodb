@@ -192,9 +192,21 @@ type VersioningStatusParams struct {
 }
 
 // TableStatus represents the change status of a single table in a versioning status result.
+//
+// Added, Modified, and Deleted are document-level counts of uncommitted changes in the
+// collection, computed by diffing the working set against HEAD:
+//   - Added: documents present in the working set but not at HEAD
+//   - Modified: documents present in both but with differing content
+//   - Deleted: documents present at HEAD but not in the working set
+//
+// For a collection with Status == "added", all working-set documents count toward Added
+// (HEAD has no copy). For Status == "deleted", all HEAD documents count toward Deleted.
 type TableStatus struct {
-	Name   string
-	Status string // "added", "modified", or "deleted"
+	Name     string
+	Status   string // "added", "modified", or "deleted"
+	Added    int
+	Modified int
+	Deleted  int
 }
 
 // VersioningStatusResult represents the result of VersioningBackend.DumboDBStatus method.
