@@ -230,38 +230,54 @@ db.getSiblingDB("verifydb__d_back-one").items.find({}).toArray()
 
 ---
 
-## Scenario 5: `verifydb__d_HEAD` — returns a clear 'not supported' error
+## Scenario 5: `verifydb__d_HEAD` — aliases the default branch (main)
 
-HEAD is not a valid rootish. The parse error is returned on the **first command** sent to
-the server for that database name.
+HEAD is a rootish alias for the default branch. DumboDB connections are stateless, so there
+is no per-session "current branch" the way `git` has a per-working-tree HEAD. Since the only
+default branch DumboDB knows is `main`, HEAD is rewritten to `main` before resolution.
 
-> **Why doesn't `getSiblingDB` itself fail?**
-> `getSiblingDB()` is pure client-side JavaScript in mongosh — it constructs a local
-> `Database` object and makes zero network calls. The server never sees the database
-> name until a command is issued. There is no mechanism to validate earlier; the error
-> fires on first contact, which is as early as the server can act.
+Concretely: `verifydb__d_HEAD` behaves identically to `verifydb__d_main` (reads the working
+set, writes go to main's working set). `verifydb__d_HEAD~N` behaves identically to
+`verifydb__d_main~N` (read-only snapshot of the Nth first-parent ancestor).
 
 ```js
-// getSiblingDB is client-side only — no server contact, no error yet.
 const head = db.getSiblingDB("verifydb__d_HEAD")
 
-// The parse error fires on the first command sent to the server:
+// Read: returns both documents, same as connecting via __d_main.
 head.items.find({}).toArray()
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "HEAD": HEAD and HEAD-relative forms are not
-//   supported; use a branch name, tag, commit hash, or <branch>~<N>
+// Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
 
-// Any other command produces the same parse error:
-head.runCommand({ ping: 1 })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "HEAD": HEAD and HEAD-relative forms are not
-//   supported; use a branch name, tag, commit hash, or <branch>~<N>
+// doltCurrentBranch resolves HEAD to the default branch and returns "main".
+head.runCommand({ doltCurrentBranch: 1 })
+// Expected: { branch: "main", ok: 1 }
 
-// HEAD-relative forms are also rejected on first command:
-db.getSiblingDB("verifydb__d_HEAD~1").items.find({}).toArray()
+// Write via HEAD goes to main's working set. Insert then remove to keep state clean.
+head.items.insertOne({ _id: 5, label: "via-HEAD" })
+// Expected: { acknowledged: true, insertedId: 5 }
+
+// The write is visible on main — they are the same working set.
+db.getSiblingDB("verifydb__d_main").items.countDocuments({})
+// Expected: 3
+
+head.items.deleteOne({ _id: 5 })
+// Expected: { acknowledged: true, deletedCount: 1 }
+
+// HEAD~N resolves to the Nth first-parent ancestor of main. It is read-only,
+// same as main~N.
+const prev = db.getSiblingDB("verifydb__d_HEAD~1")
+prev.items.find({}).toArray()
+// Expected: [ { _id: 1, label: "first", version: 1 } ]
+// (HEAD~1 is the parent of main's HEAD — commit 1, one document.)
+
+prev.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "HEAD~1": HEAD and HEAD-relative forms are not
-//   supported; use a branch name, tag, commit hash, or <branch>~<N>
+//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+
+// HEAD caret forms (HEAD^, HEAD^N) are still rejected — use HEAD~N instead.
+db.getSiblingDB("verifydb__d_HEAD^").items.find({}).toArray()
+// Expected error (code 96):
+//   MongoServerError[OperationFailed]: rootish "HEAD^": caret syntax (^, ^N, ^{type}) is not
+//   supported; use ~N for ancestor traversal
 ```
 
 ---
@@ -331,7 +347,8 @@ db.getSiblingDB("verifydb__d_main%2E%2E%2Efeature").items.find({}).toArray()
 | Tag name | `mydb__d_v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | ✅ | Collection writes blocked; branch creation resolves the tag's commit |
 | Commit hash (32 chars) | `mydb__d_<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
 | Ancestor expression | `mydb__d_main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
-| HEAD | `mydb__d_HEAD` | ❌ | ❌ | ❌ | Rejected on first command (code 96); `getSiblingDB` is client-side only |
+| HEAD | `mydb__d_HEAD` | ✅ | ✅ | ✅ | Alias for the default branch (`main`); writes go to main's working set |
+| HEAD-relative | `mydb__d_HEAD~N` | ✅ | ❌ | ✅ | Alias for `main~N`; collection writes blocked, branch creation walks ancestry |
 | Reflog | `mydb__d_main%40%7Byesterday%7D` (encodes `main@{yesterday}`) | ❌ | ❌ | ❌ | Raw `@{}` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
 | Range | `mydb__d_main%2E%2Efeature` (encodes `main..feature`) | ❌ | ❌ | ❌ | Raw `.` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
 
@@ -345,7 +362,8 @@ All errors use MongoDB error code **96** (`OperationFailed`).
 
 ```js
 try {
-  db.getSiblingDB("verifydb__d_HEAD").items.find({}).toArray()
+  // Reflog syntax is rejected — use percent-encoded form so it reaches the server.
+  db.getSiblingDB("verifydb__d_main%40%7Byesterday%7D").items.find({}).toArray()
 } catch (e) {
   print("code:", e.code)      // 96
   print("message:", e.message)

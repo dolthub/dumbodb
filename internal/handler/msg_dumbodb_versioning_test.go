@@ -41,6 +41,10 @@ func TestParseRootish(t *testing.T) {
 		{"relative ancestor tilde-3", "main~3"},
 		{"relative ancestor feature branch", "feature-x~2"},
 		{"relative ancestor count zero", "main~0"},
+		{"HEAD alias", "HEAD"},
+		{"HEAD tilde-1", "HEAD~1"},
+		{"HEAD tilde-0", "HEAD~0"},
+		{"HEAD tilde-5", "HEAD~5"},
 	}
 
 	for _, tc := range validCases {
@@ -57,10 +61,8 @@ func TestParseRootish(t *testing.T) {
 		name    string
 		rootish string
 	}{
-		{"HEAD", "HEAD"},
-		{"HEAD tilde-1", "HEAD~1"},
-		{"HEAD tilde-3", "HEAD~3"},
 		{"HEAD caret", "HEAD^"},
+		{"HEAD caret N", "HEAD^2"},
 		{"reflog yesterday", "main@{yesterday}"},
 		{"reflog 5 minutes ago", "@{5 minutes ago}"},
 		{"range double-dot", "main..feature"},
@@ -117,6 +119,9 @@ func TestBranchFromDBName(t *testing.T) {
 		{"tag name not all-base32 writable", "mydb__d_v1.0", "mydb", "v1.0", false},
 		{"commit hash read-only", "mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61", true},
 		{"relative ancestor read-only", "mydb__d_main~3", "mydb", "main~3", true},
+		{"HEAD alias rewrites to main", "mydb__d_HEAD", "mydb", "main", false},
+		{"HEAD tilde-1 rewrites to main tilde-1", "mydb__d_HEAD~1", "mydb", "main~1", true},
+		{"HEAD tilde-0 rewrites to main tilde-0", "mydb__d_HEAD~0", "mydb", "main~0", true},
 		{"db name with underscore", "my_db__d_main", "my_db", "main", false},
 		{"double underscore db name treated as plain", "__", "__", "main", false},
 		{"leading double underscore treated as plain", "__main", "__main", "main", false},
@@ -149,8 +154,7 @@ func TestBranchFromDBName(t *testing.T) {
 		name    string
 		encoded string
 	}{
-		{"HEAD in rootish", "mydb__d_HEAD"},
-		{"HEAD-relative", "mydb__d_HEAD~1"},
+		{"HEAD caret", "mydb__d_HEAD^"},
 		{"reflog syntax", "mydb__d_main@{yesterday}"},
 		{"range syntax", "mydb__d_main..feature"},
 		{"regex search", "mydb__d_:/fix bug"},
@@ -240,8 +244,11 @@ func TestEnforceWritableRootish(t *testing.T) {
 		{"mydb", false, ""},
 		{"mydb__d_main", false, ""},
 		{"mydb__d_feature", false, ""},
+		{"mydb__d_HEAD", false, ""},
 		{"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61", true, "cannot write to a read-only database snapshot"},
 		{"mydb__d_main~1", true, "cannot write to a read-only database snapshot"},
+		{"mydb__d_HEAD~1", true, "cannot write to a read-only database snapshot"},
+		{"mydb__d_HEAD~0", true, "cannot write to a read-only database snapshot"},
 		{"mydb__d_00000000000000000000000000000000", true, "cannot write to a read-only database snapshot"},
 	}
 

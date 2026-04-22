@@ -271,18 +271,55 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: verifydb__d_HEAD — any command returns code 96
-	// (getSiblingDB / client.Database is client-side only; error fires on first command)
+	// Scenario 5: verifydb__d_HEAD — aliases main; HEAD~N aliases main~N.
+	// HEAD^ and other caret forms are still rejected with code 96.
 	// -------------------------------------------------------------------------
-	t.Run("Scenario5_HEAD_AnyCommandFails", func(t *testing.T) {
+	t.Run("Scenario5_HEAD_AliasesMain", func(t *testing.T) {
 		headDB := env.client.Database(dbName + "__d_HEAD")
+		headItems := headDB.Collection("items")
 
-		// find returns code 96.
-		assertRootishRejected(t, headDB, "HEAD find")
+		// Read via HEAD returns the same two docs main has at HEAD.
+		nHead, err := headItems.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err, "find on HEAD must succeed")
+		assert.Equal(t, int64(2), nHead, "HEAD: expected 2 docs (same as main HEAD)")
 
-		// HEAD-relative forms also rejected.
-		assertRootishRejected(t, env.client.Database(dbName+"__d_HEAD~1"), "HEAD~1 find")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_HEAD~2"), "HEAD~2 find")
+		// doltCurrentBranch reports "main" because HEAD was rewritten.
+		var branchResult bson.M
+		require.NoError(t, headDB.RunCommand(ctx, bson.D{
+			{Key: "doltCurrentBranch", Value: int32(1)},
+		}).Decode(&branchResult))
+		assert.Equal(t, "main", branchResult["branch"], "HEAD resolves to main")
+
+		// Write via HEAD goes to main's working set. Insert, verify visible on main,
+		// then clean up to keep state stable for later scenarios.
+		_, err = headItems.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(5)},
+			{Key: "label", Value: "via-HEAD"},
+		})
+		require.NoError(t, err, "write via HEAD must succeed (HEAD aliases main)")
+
+		mainItems := env.client.Database(dbName + "__d_main").Collection("items")
+		nMain, err := mainItems.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), nMain, "HEAD write must be visible on main — same working set")
+
+		_, err = headItems.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(5)}})
+		require.NoError(t, err, "cleanup delete via HEAD must succeed")
+
+		// HEAD~1 aliases main~1 — read returns commit 1 state (one document),
+		// writes blocked with code 96.
+		prevDB := env.client.Database(dbName + "__d_HEAD~1")
+		prevItems := prevDB.Collection("items")
+
+		nPrev, err := prevItems.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err, "find on HEAD~1 must succeed")
+		assert.Equal(t, int64(1), nPrev, "HEAD~1: expected 1 doc (main~1 state)")
+
+		_, err = prevItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
+		assertWriteBlockedOperationFailed(t, err, "insert on HEAD~1")
+
+		// HEAD caret forms (HEAD^, HEAD^N) are still rejected at parse time.
+		assertRootishRejected(t, env.client.Database(dbName+"__d_HEAD^"), "HEAD^ find")
 	})
 
 	// -------------------------------------------------------------------------
