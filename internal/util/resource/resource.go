@@ -50,7 +50,17 @@ func profileName(obj any) string {
 // Track tracks the lifetime of an object until Untrack is called on it.
 //
 // Obj should a pointer to a struct with a field "token" of type *Token.
+//
+// Tracking uses runtime/pprof and a finalizer to report unclosed objects;
+// the per-call cost (stack capture + finalizer registration) is ~1μs and
+// non-trivial on hot iterator paths. It is gated on [debugbuild.Enabled]
+// so production builds compile it out entirely while race and
+// `ferretdb_debug` builds still catch leaks.
 func Track(obj any, token *Token) {
+	if !debugbuild.Enabled {
+		return
+	}
+
 	checkArgs(obj, token)
 
 	name := profileName(obj)
@@ -101,7 +111,13 @@ func Track(obj any, token *Token) {
 // Untrack stops tracking the lifetime of an object.
 //
 // It is safe to call this function multiple times.
+//
+// Paired with [Track]; also gated on [debugbuild.Enabled].
 func Untrack(obj any, token *Token) {
+	if !debugbuild.Enabled {
+		return
+	}
+
 	checkArgs(obj, token)
 
 	p := pprof.Lookup(profileName(obj))
