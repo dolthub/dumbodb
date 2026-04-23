@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/binary"
@@ -128,9 +129,175 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 
+	// Optimization: build a cheap byte-level prefilter from a simple scalar
+	// equality in the query. The handler's FilterIterator still validates
+	// every document we return, so a false positive (prefilter passes but
+	// the doc doesn't actually match) is harmless. False negatives would be
+	// silent data loss, so buildScanPrefilter only returns a predicate when
+	// it can be proven that a document whose JSON does NOT contain the
+	// pattern cannot possibly match the filter.
+	//
+	// Under case-insensitive collation the handler will re-check matches
+	// against a regex substitution of the filter, so byte-level equality is
+	// not a sound lower bound — skip the prefilter.
+	var pf func([]byte) bool
+	if params != nil && !onlyRecordIDs && !params.CaseInsensitive {
+		pf = buildScanPrefilter(params.Filter)
+	}
+
 	return &backends.QueryResult{
-		Iter: newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs),
+		Iter: newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs, pf),
 	}, nil
+}
+
+// buildScanPrefilter returns a byte-level predicate over a document's raw
+// canonical Extended JSON bytes that is sound for the given filter — i.e. if
+// the predicate returns false, the document is guaranteed not to match.
+// Returns nil when no sound prefilter can be built (complex filter, null
+// value, unsupported type, ambiguous numeric, etc.); in that case the scan
+// falls back to decoding every document.
+func buildScanPrefilter(filter *types.Document) func([]byte) bool {
+	if filter == nil {
+		return nil
+	}
+
+	keys := filter.Keys()
+	// Collect one required substring per top-level field=scalar constraint.
+	// Each element of patterns is a list of alternatives — at least one must
+	// appear in the doc's JSON. Multiple fields are AND-combined.
+	var patterns [][][]byte
+	for _, field := range keys {
+		// $and/$or/$comment/etc. — bail out and let the handler filter.
+		if strings.HasPrefix(field, "$") {
+			return nil
+		}
+		// Dotted paths pick into sub-documents; JSON encoding isn't a
+		// straightforward substring for them.
+		if strings.ContainsRune(field, '.') {
+			return nil
+		}
+		v, err := filter.Get(field)
+		if err != nil {
+			return nil
+		}
+		alts := extJSONFieldPatterns(field, v)
+		if alts == nil {
+			return nil
+		}
+		patterns = append(patterns, alts)
+	}
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	return func(jsonBytes []byte) bool {
+		for _, alts := range patterns {
+			found := false
+			for _, p := range alts {
+				if bytes.Contains(jsonBytes, p) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// extJSONFieldPatterns returns the set of byte substrings, any one of which
+// must appear in a document's canonical Extended JSON bytes if the document
+// matches `{field: value}` under MongoDB's equality semantics. Returns nil
+// when the filter value is too complex or its type bracket is too broad for
+// a sound byte-level check (operator docs, arrays, null, etc.).
+//
+// For numerics, MongoDB treats int32/int64/double/decimal128 as equal when
+// the numeric value is the same, so we enumerate every canonical encoding
+// a matching document could use.
+func extJSONFieldPatterns(field string, value any) [][]byte {
+	switch v := value.(type) {
+	case *types.Document:
+		// Operator form like {$eq: x} / {$gt: x} — downstream has to decide.
+		return nil
+	case *types.Array, types.NullType:
+		return nil
+	case int32:
+		return numericFieldPatterns(field, int64(v), float64(v), false)
+	case int64:
+		return numericFieldPatterns(field, v, float64(v), false)
+	case float64:
+		if v != v || v-v != 0 { // NaN or ±Inf — ExtJSON has special forms.
+			return nil
+		}
+		asInt := int64(v)
+		exact := float64(asInt) == v
+		return numericFieldPatterns(field, asInt, v, !exact)
+	case string, bool, time.Time, types.ObjectID, types.Binary, types.Timestamp, types.Decimal128:
+		p, err := marshalExtJSONField(field, value)
+		if err != nil {
+			return nil
+		}
+		return [][]byte{p}
+	case types.Regex:
+		// Regex in a filter value means pattern match, not literal
+		// equality — byte-level substring check isn't sound.
+		return nil
+	default:
+		return nil
+	}
+}
+
+// numericFieldPatterns enumerates the canonical Extended JSON byte patterns
+// a field could have if its stored value is numerically equal to the filter.
+// If fractional is true, integer-form patterns are skipped because the
+// filter value is not an exact integer and can't equal any stored int.
+func numericFieldPatterns(field string, asInt int64, asDouble float64, fractional bool) [][]byte {
+	var out [][]byte
+	if !fractional {
+		if p, err := marshalExtJSONField(field, int32(asInt)); err == nil && int64(int32(asInt)) == asInt {
+			out = append(out, p)
+		}
+		if p, err := marshalExtJSONField(field, asInt); err == nil {
+			out = append(out, p)
+		}
+	}
+	if p, err := marshalExtJSONField(field, asDouble); err == nil {
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// marshalExtJSONField serializes `{field: value}` to canonical Extended JSON
+// and strips the outer braces, yielding just the `"field":<canonical-value>`
+// fragment suitable for substring matching against a stored document's JSON.
+func marshalExtJSONField(field string, value any) ([]byte, error) {
+	tmp, err := types.NewDocument(field, value)
+	if err != nil {
+		return nil, err
+	}
+	wdoc, err := bson.FromDocument(tmp)
+	if err != nil {
+		return nil, err
+	}
+	bsonBytes, err := wdoc.Encode()
+	if err != nil {
+		return nil, err
+	}
+	extJSON, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
+	if err != nil {
+		return nil, err
+	}
+	// Strip the outer `{` and `}` so the remainder matches as an interior
+	// field-value pair in any document containing that field.
+	if len(extJSON) < 2 || extJSON[0] != '{' || extJSON[len(extJSON)-1] != '}' {
+		return nil, fmt.Errorf("unexpected ExtJSON shape %q", extJSON)
+	}
+	return extJSON[1 : len(extJSON)-1], nil
 }
 
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
@@ -1116,26 +1283,38 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 // readDocJSON reads a JSON document from the dolt chunk store at the given hash
 // and decodes it back to a types.Document.
 func readDocJSON(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*types.Document, error) {
-	// Step 1: Read the JSON prolly tree node.
+	jsonBytes, err := readDocJSONBytes(ctx, ns, h)
+	if err != nil {
+		return nil, err
+	}
+	return decodeDocFromJSON(jsonBytes)
+}
+
+// readDocJSONBytes reads the raw canonical Extended JSON bytes for a document.
+// Cheap: just pulls the stored bytes from the chunk store without decoding.
+// Use this when you want to inspect the document (e.g. for filter pushdown)
+// before paying the cost of a full BSON / types.Document decode.
+func readDocJSONBytes(ctx context.Context, ns tree.NodeStore, h hash.Hash) ([]byte, error) {
 	jsonDoc := tree.NewJSONDoc(h, ns)
 	wrapper, err := jsonDoc.ToIndexedJSONDocument(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: reading JSON document: %w", err)
 	}
-
-	// Step 2: Get raw JSON bytes from the wrapper.
 	jsonBytes, err := sqltypes.MarshallJson(ctx, wrapper)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: getting JSON bytes: %w", err)
 	}
+	return jsonBytes, nil
+}
 
-	// Step 3: Convert Canonical Extended JSON bytes → BSON raw.
+// decodeDocFromJSON converts canonical Extended JSON bytes to a types.Document
+// via a BSON round-trip. This is the expensive half of readDocJSON; skip it
+// when a prefilter has already ruled the document out.
+func decodeDocFromJSON(jsonBytes []byte) (*types.Document, error) {
 	var rawBSON mongobson.Raw
 	if err := mongobson.UnmarshalExtJSON(jsonBytes, true, &rawBSON); err != nil {
 		return nil, fmt.Errorf("dolt: converting JSON to BSON: %w", err)
 	}
-
-	// Step 4: Convert BSON bytes → types.Document.
 	return decodeDocument([]byte(rawBSON))
 }
 
@@ -1177,10 +1356,16 @@ type mapIter struct {
 	limit        int64
 	count        int64
 	onlyRecordID bool
+	// prefilter, if non-nil, is a cheap byte-level check applied to each
+	// document's raw canonical Extended JSON before the expensive decode.
+	// Returning false means "definitely doesn't match the filter"; returning
+	// true means "may match — run the full filter downstream." A nil
+	// prefilter keeps the unconditional full-scan behavior.
+	prefilter func([]byte) bool
 }
 
 // newMapIter creates an iterator over the prolly.Map.
-func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool) types.DocumentsIterator {
+func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
 	var iter prolly.MapIter
 	var err error
 
@@ -1200,6 +1385,7 @@ func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bo
 		iter:         iter,
 		limit:        limit,
 		onlyRecordID: onlyRecordID,
+		prefilter:    prefilter,
 	}
 }
 
@@ -1251,10 +1437,24 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 			continue
 		}
 
-		// Read and decode the JSON document.
-		doc, err := readDocJSON(it.ctx, it.ns, jsonHash)
-		if err != nil {
-			return struct{}{}, nil, err
+		var doc *types.Document
+		if it.prefilter != nil {
+			jsonBytes, err := readDocJSONBytes(it.ctx, it.ns, jsonHash)
+			if err != nil {
+				return struct{}{}, nil, err
+			}
+			if !it.prefilter(jsonBytes) {
+				continue
+			}
+			doc, err = decodeDocFromJSON(jsonBytes)
+			if err != nil {
+				return struct{}{}, nil, err
+			}
+		} else {
+			doc, err = readDocJSON(it.ctx, it.ns, jsonHash)
+			if err != nil {
+				return struct{}{}, nil, err
+			}
 		}
 
 		doc.SetRecordID(recordID)

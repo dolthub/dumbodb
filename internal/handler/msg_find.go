@@ -245,7 +245,8 @@ type findCursorData struct {
 // makeFindQueryParams creates the backend's query parameters for the find command.
 func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindParams, cInfo *backends.CollectionInfo) (*backends.QueryParams, error) { //nolint:lll // for readability
 	qp := &backends.QueryParams{
-		Comment: params.Comment,
+		Comment:         params.Comment,
+		CaseInsensitive: params.ParsedCollation.CaseInsensitive(),
 	}
 
 	var err error

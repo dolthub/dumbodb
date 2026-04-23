@@ -81,6 +81,12 @@ type QueryParams struct {
 
 	OnlyRecordIDs bool
 	Comment       string
+	// CaseInsensitive is set when the query runs under a collation whose
+	// strength is ≤ 2 (case-insensitive). Backends that apply byte-level
+	// filter optimizations (e.g. scan prefilters) must disable them in
+	// that case, since the handler will re-check matches under a regex
+	// substitution and bytes that compare unequal may still match.
+	CaseInsensitive bool
 }
 
 // QueryResult represents the results of Collection.Query method.
