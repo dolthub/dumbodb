@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire/wirebson"
@@ -114,10 +115,122 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 
 	onlyRecordIDs := params != nil && params.OnlyRecordIDs
 
+	// Fast path: if the filter pins _id to a concrete scalar value, use the
+	// primary-key point lookup instead of a full collection scan. The handler's
+	// downstream FilterIterator applies any remaining predicates.
+	if params != nil && params.Filter != nil {
+		if idVal, ok := simpleIDEquality(params.Filter); ok {
+			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
+			if err == nil {
+				return &backends.QueryResult{Iter: iter}, nil
+			}
+			// Fall back to full scan on any error (e.g. unsupported _id type).
+		}
+	}
+
 	return &backends.QueryResult{
 		Iter: newMapIter(ctx, state.ns, m, reverse, limit, onlyRecordIDs),
 	}, nil
 }
+
+// simpleIDEquality reports whether filter contains an "_id" field bound to a
+// concrete scalar value that can be hashed into a primary key. It rejects
+// operator forms ({_id: {$eq: x}}), array equality ({_id: [1,2]}), and null.
+// Other filter fields are allowed — the handler re-checks them on the result.
+func simpleIDEquality(filter *types.Document) (any, bool) {
+	v, err := filter.Get("_id")
+	if err != nil {
+		return nil, false
+	}
+	switch val := v.(type) {
+	case *types.Document:
+		// {$eq: x} / {$gt: x} / etc. — let the full scan handle it.
+		for _, k := range val.Keys() {
+			if strings.HasPrefix(k, "$") {
+				return nil, false
+			}
+		}
+		// An embedded document with no operator keys is a literal _id value.
+		return v, true
+	case *types.Array, types.NullType:
+		return nil, false
+	default:
+		return v, true
+	}
+}
+
+// pointLookupByID performs a single prolly.Map.Get against the hashed _id and
+// returns an iterator over the at-most-one matching document.
+func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal any, onlyRecordID bool) (types.DocumentsIterator, error) {
+	h, err := hashID(idVal)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := buildKey(h[:])
+	if err != nil {
+		return nil, err
+	}
+
+	var doc *types.Document
+	err = m.Get(ctx, key, func(k, v val.Tuple) error {
+		if v == nil {
+			return nil
+		}
+
+		keyBytes, ok := keyDesc.GetBytes(0, k)
+		if !ok {
+			return nil
+		}
+		recordID := keyBytesToRecordID(keyBytes)
+
+		if onlyRecordID {
+			d, err := types.NewDocument()
+			if err != nil {
+				return err
+			}
+			d.SetRecordID(recordID)
+			doc = d
+			return nil
+		}
+
+		jsonHash, ok := valDesc.GetJSONAddr(0, v)
+		if !ok {
+			return nil
+		}
+		d, err := readDocJSON(ctx, ns, jsonHash)
+		if err != nil {
+			return err
+		}
+		d.SetRecordID(recordID)
+		doc = d
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if doc == nil {
+		return newEmptyIter(), nil
+	}
+	return &singleDocIter{doc: doc}, nil
+}
+
+// singleDocIter yields exactly one document then reports done.
+type singleDocIter struct {
+	doc *types.Document
+}
+
+func (it *singleDocIter) Next() (struct{}, *types.Document, error) {
+	if it.doc == nil {
+		return struct{}{}, nil, iterator.ErrIteratorDone
+	}
+	d := it.doc
+	it.doc = nil
+	return struct{}{}, d, nil
+}
+
+func (it *singleDocIter) Close() {}
 
 // Explain implements backends.Collection.
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
