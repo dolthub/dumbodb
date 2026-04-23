@@ -45,7 +45,11 @@ import (
 // For each group of documents, accumulators are applied.
 type group struct {
 	groupExpression any
-	groupBy         []groupBy
+	// groupExprCompiled caches a parsed aggregations.Expression when
+	// groupExpression is a "$field" string. Parsing it once up front avoids
+	// per-document path parsing in the hot loop.
+	groupExprCompiled *aggregations.Expression
+	groupBy           []groupBy
 }
 
 // groupBy represents accumulation to apply on the group.
@@ -110,10 +114,19 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	return &group{
+	g := &group{
 		groupExpression: groupKey,
 		groupBy:         groups,
-	}, nil
+	}
+
+	if s, ok := groupKey.(string); ok {
+		// Pre-compile once; ErrNotExpression means the literal is used as-is.
+		if expr, err := aggregations.NewExpression(s, nil); err == nil {
+			g.groupExprCompiled = expr
+		}
+	}
+
+	return g, nil
 }
 
 // Process implements Stage interface.
@@ -252,22 +265,14 @@ func (g *group) groupDocuments(iter types.DocumentsIterator) ([]groupedDocuments
 			types.Regex, int32, types.Timestamp, int64:
 			m.addOrAppend(groupKey, doc)
 		case string:
-			expression, err := aggregations.NewExpression(groupKey, nil)
-			if err != nil {
-				var exprErr *aggregations.ExpressionError
-				if errors.As(err, &exprErr) {
-					if exprErr.Code() == aggregations.ErrNotExpression {
-						m.addOrAppend(groupKey, doc)
-						continue
-					}
-
-					return nil, processGroupStageError(err)
-				}
-
-				return nil, lazyerrors.Error(err)
+			// g.groupExprCompiled is set iff groupKey is a valid "$path"
+			// expression; a plain literal leaves it nil and is added as-is.
+			if g.groupExprCompiled == nil {
+				m.addOrAppend(groupKey, doc)
+				continue
 			}
 
-			val, err := expression.Evaluate(doc)
+			val, err := g.groupExprCompiled.Evaluate(doc)
 			if err != nil {
 				// $group treats non-existent fields as nulls
 				val = types.Null
@@ -363,13 +368,53 @@ type groupedDocuments struct {
 }
 
 // groupMap holds groups of documents.
+//
+// Group keys can be any BSON type (including arrays and binaries) and
+// numeric types are grouped numerically regardless of int/int64/float — so
+// the general path falls back to a linear scan with types.CompareForAggregation.
+// For hashable, comparably-typed keys (strings, bools, int32/int64, ObjectID)
+// a fast path map indexes into docs, cutting O(n*k) group lookups to O(n).
 type groupMap struct {
 	docs []groupedDocuments
+	// fast indexes groupedDocuments by key for keys that cannot collide
+	// with numerically-equal keys of another Go type. Numeric keys are
+	// intentionally excluded because CompareForAggregation treats
+	// int32(1)/int64(1)/float64(1.0) as equal.
+	fast map[any]int
 }
 
 // addOrAppend adds a groupID documents pair if the groupID does not exist,
 // if the groupID exists it appends the documents to the slice.
 func (m *groupMap) addOrAppend(groupKey any, docs ...*types.Document) {
+	if hashable, key := hashableGroupKey(groupKey); hashable {
+		if m.fast == nil {
+			m.fast = make(map[any]int)
+		}
+
+		if i, ok := m.fast[key]; ok {
+			m.docs[i].documents = append(m.docs[i].documents, docs...)
+			return
+		}
+
+		// No entry yet — but a numeric-equal entry might already exist in
+		// m.docs from a prior add with a differently-typed numeric key.
+		// Scan once to stay consistent with CompareForAggregation semantics.
+		for i, g := range m.docs {
+			if types.CompareForAggregation(groupKey, g.groupID) == types.Equal {
+				m.docs[i].documents = append(m.docs[i].documents, docs...)
+				m.fast[key] = i
+				return
+			}
+		}
+
+		m.fast[key] = len(m.docs)
+		m.docs = append(m.docs, groupedDocuments{
+			groupID:   groupKey,
+			documents: docs,
+		})
+		return
+	}
+
 	for i, g := range m.docs {
 		// groupID is a distinct key and can be any BSON type including array and Binary,
 		// so we cannot use structure like map.
@@ -385,6 +430,33 @@ func (m *groupMap) addOrAppend(groupKey any, docs ...*types.Document) {
 		groupID:   groupKey,
 		documents: docs,
 	})
+}
+
+// hashableGroupKey returns true and a map-friendly key when groupKey is a
+// Go-comparable type. Numeric types are normalized into a float64 bucket
+// because CompareForAggregation treats int32(1)/int64(1)/float64(1.0) as
+// equal; a mismatched numeric hit is disambiguated in addOrAppend via a
+// CompareForAggregation scan on first insert.
+func hashableGroupKey(groupKey any) (bool, any) {
+	switch k := groupKey.(type) {
+	case string:
+		return true, k
+	case bool:
+		return true, k
+	case types.ObjectID:
+		return true, k
+	case types.NullType:
+		return true, k
+	case int32:
+		return true, float64(k)
+	case int64:
+		return true, float64(k)
+	case float64:
+		return true, k
+	case time.Time:
+		return true, k.UnixNano()
+	}
+	return false, nil
 }
 
 // processGroupStageError takes internal error related to operator evaluation and

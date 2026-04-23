@@ -305,22 +305,24 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 	return projected, nil
 }
 
-// projectDocumentWithoutID applies projection to the copy of the document and returns projected document.
-// It ignores _id field in the projection.
+// projectDocumentWithoutID applies projection to the document and returns the projected document.
+// It ignores the _id field in the projection (the caller handles _id).
+//
+// The function does not mutate doc or projection: inclusion builds a fresh
+// output document; exclusion starts from a single deep copy of doc (minus
+// _id) and removes excluded fields in place. A previous implementation
+// deep-copied doc, projection, and (on exclusion) the already-copied doc
+// again on every input document — a hot-path cost that dominated $project.
 func projectDocumentWithoutID(doc *types.Document, projection *types.Document, inclusion bool) (*types.Document, error) {
-	projectionWithoutID := projection.DeepCopy()
-	projectionWithoutID.Remove("_id")
-
-	docWithoutID := doc.DeepCopy()
-	docWithoutID.Remove("_id")
-
-	projected := types.MakeDocument(0)
-
-	if !inclusion {
-		projected = docWithoutID.DeepCopy()
+	var projected *types.Document
+	if inclusion {
+		projected = types.MakeDocument(0)
+	} else {
+		projected = doc.DeepCopy()
+		projected.Remove("_id")
 	}
 
-	iter := projectionWithoutID.Iterator()
+	iter := projection.Iterator()
 	defer iter.Close()
 
 	for {
@@ -331,6 +333,12 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 
 		if err != nil {
 			return nil, lazyerrors.Error(err)
+		}
+
+		// _id is handled separately by ProjectDocument; skip it here so we
+		// don't need to allocate a copy of the projection just to strip _id.
+		if key == "_id" {
+			continue
 		}
 
 		// TODO https://github.com/dolthub/dumbodb/issues/3127
@@ -385,8 +393,11 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 
 		case bool: // field: bool
 			if inclusion {
-				// inclusion projection copies the field on the path from docWithoutID to projected.
-				if _, err = includeProjection(path, docWithoutID, projected); err != nil {
+				// includeProjection reads fields from doc and writes to
+				// projected. It never mutates source, so we pass doc
+				// directly. _id never appears in path (handled above) so
+				// the _id field of doc is harmless here.
+				if _, err = includeProjection(path, doc, projected); err != nil {
 					return nil, err
 				}
 

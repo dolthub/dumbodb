@@ -39,7 +39,11 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 		return lazyerrors.Errorf("maximum sort keys exceeded: %v", sortDoc.Len())
 	}
 
-	sortFuncs := make([]sortFunc, sortDoc.Len())
+	nKeys := sortDoc.Len()
+	sortTypes := make([]types.SortType, nKeys)
+	// isMeta[k] short-circuits comparison when key k is {$meta: "textScore"}.
+	isMeta := make([]bool, nKeys)
+	paths := make([]types.Path, nKeys)
 
 	for i, sortKey := range sortDoc.Keys() {
 		fields := strings.Split(sortKey, ".")
@@ -63,7 +67,8 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 
 		if isMetaTextScore(sortField) {
 			// All docs have the same text score (0.0); preserve stable order.
-			sortFuncs[i] = func(a, b *types.Document) bool { return false }
+			isMeta[i] = true
+			sortTypes[i] = types.Ascending
 			continue
 		}
 
@@ -77,18 +82,72 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 			return err
 		}
 
-		sortFuncs[i] = lessFunc(sortPath, sortType)
+		sortTypes[i] = sortType
+		paths[i] = sortPath
 	}
 
-	if len(sortFuncs) == 0 {
-		// no keys to sort by
-		return nil
+	// Decorate-sort-undecorate: extract all sort keys for each doc once
+	// up front, then sort indices into that table. This drops per-compare
+	// GetByPath calls (~2*N*log N) to N.
+	keys := make([][]any, len(docs))
+	for di, d := range docs {
+		row := make([]any, nKeys)
+		for k := 0; k < nKeys; k++ {
+			if isMeta[k] {
+				continue
+			}
+			v, err := d.GetByPath(paths[k])
+			if err != nil {
+				// sort order treats null and non-existent field equivalent
+				v = types.Null
+			}
+			row[k] = v
+		}
+		keys[di] = row
 	}
 
-	sorter := &docsSorter{docs: docs, sorts: sortFuncs}
+	sorter := &decoratedSorter{
+		docs:   docs,
+		keys:   keys,
+		types:  sortTypes,
+		isMeta: isMeta,
+	}
 	sort.Stable(sorter)
 
 	return nil
+}
+
+// decoratedSorter sorts docs and the parallel keys table in lockstep, using
+// the precomputed keys to avoid GetByPath calls inside Less.
+type decoratedSorter struct {
+	docs   []*types.Document
+	keys   [][]any
+	types  []types.SortType
+	isMeta []bool
+}
+
+func (s *decoratedSorter) Len() int { return len(s.docs) }
+
+func (s *decoratedSorter) Swap(i, j int) {
+	s.docs[i], s.docs[j] = s.docs[j], s.docs[i]
+	s.keys[i], s.keys[j] = s.keys[j], s.keys[i]
+}
+
+func (s *decoratedSorter) Less(i, j int) bool {
+	a, b := s.keys[i], s.keys[j]
+	for k := 0; k < len(s.types); k++ {
+		if s.isMeta[k] {
+			continue
+		}
+		switch types.CompareOrderForSort(a[k], b[k], s.types[k]) {
+		case types.Less:
+			return true
+		case types.Greater:
+			return false
+		}
+		// Equal: fall through to the next key.
+	}
+	return false
 }
 
 // SortDocumentsWithCollation sorts documents like SortDocuments but uses
