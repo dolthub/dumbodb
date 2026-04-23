@@ -54,6 +54,26 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 	isFindAndModify := (strings.ToLower(cmd) == "findandmodify")
 
+	// Accumulate modified documents and apply them in a single UpdateAll at
+	// the end of iteration. Each UpdateAll triggers a full prolly-tree flush
+	// and NBS journal sync, so calling it once per doc turns UpdateMany over
+	// N matches into N synchronous fsyncs — this is the bulk of update_many's
+	// historic 74–97x gap vs. MongoDB.
+	var pending []*types.Document
+
+	// flushPending applies all accumulated updates in a single backend call.
+	flushPending := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		if _, err := c.UpdateAll(ctx, &backends.UpdateAllParams{Docs: pending}); err != nil {
+			return lazyerrors.Error(err)
+		}
+		result.Modified.Count += int32(len(pending))
+		pending = nil
+		return nil
+	}
+
 	for {
 		var upsert, modified bool
 
@@ -69,6 +89,9 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 
 			if !upsert {
+				if err := flushPending(); err != nil {
+					return nil, err
+				}
 				return result, nil
 			}
 		}
@@ -106,6 +129,12 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		}
 
 		if upsert {
+			// Upsert inserts one new doc; there's nothing to batch here,
+			// but any pending updates must land first so their modified
+			// count is reflected before the caller sees the upsert result.
+			if err := flushPending(); err != nil {
+				return nil, err
+			}
 			_, err = c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 			if err != nil {
 				return nil, lazyerrors.Error(err)
@@ -115,13 +144,10 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			// upsert happens only once, no need to iterate further
 			return result, nil
 		} else if modified {
-			_, err := c.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{doc}})
-			if err != nil {
-				return nil, lazyerrors.Error(err)
-			}
-
-			result.Modified.Count++
+			pending = append(pending, doc)
 			if isFindAndModify {
+				// findAndModify matches at most one doc, so "the modified
+				// doc" is unambiguous.
 				result.Modified.Doc = doc
 			}
 		}
