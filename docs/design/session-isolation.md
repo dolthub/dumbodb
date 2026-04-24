@@ -360,6 +360,140 @@ to merge uncommitted state across branches — that's a recipe for confusion.
    Only `doltCommit` fsyncs.
 3. **Phase 3:** Session timeout, cleanup, metrics.
 
+## Correctness Testing
+
+Session isolation introduces concurrency and merge semantics that don't exist
+in DumboDB today. These tests should live in `tests/` as Go integration tests
+running against a live DumboDB server, using multiple concurrent mongo clients.
+
+### Test 1: Basic isolation — writes invisible to other sessions
+
+Two clients connect to the same branch. Client A inserts a document. Client B
+reads the collection. Client B should NOT see Client A's uncommitted document.
+
+```
+Client A: insert {_id: 1, x: "from A"}
+Client B: find {} → should return [] (empty, A hasn't committed)
+Client A: doltCommit
+Client B: re-fork or reconnect
+Client B: find {} → should return [{_id: 1, x: "from A"}]
+```
+
+### Test 2: Read-your-own-writes
+
+A single client inserts a document and reads it back within the same session,
+before committing.
+
+```
+Client A: insert {_id: 1, x: "hello"}
+Client A: find {_id: 1} → should return [{_id: 1, x: "hello"}]
+Client A: doltCommit
+Client A: find {_id: 1} → should still return [{_id: 1, x: "hello"}]
+```
+
+### Test 3: Non-conflicting concurrent writes merge cleanly
+
+Two clients write to different documents on the same branch, then both commit.
+No conflicts — both documents should appear.
+
+```
+Client A: insert {_id: 1, x: "from A"}
+Client B: insert {_id: 2, x: "from B"}
+Client A: doltCommit → succeeds
+Client B: doltCommit → succeeds (three-way merge, no overlap)
+Client C: find {} → [{_id: 1, x: "from A"}, {_id: 2, x: "from B"}]
+```
+
+### Test 4: Conflicting writes produce a conflict
+
+Two clients modify the same document on the same branch, then both commit.
+The second committer should get a conflict.
+
+```
+Client A: update {_id: 1}, {$set: {x: "A's version"}}
+Client B: update {_id: 1}, {$set: {x: "B's version"}}
+Client A: doltCommit → succeeds
+Client B: doltCommit → conflict error (same doc modified by both)
+```
+
+### Test 5: Conflict resolution and continue
+
+After a conflict, the session should be able to resolve it and re-commit.
+
+```
+Client B: doltCommit → conflict on _id:1
+Client B: doltConflicts → shows the conflict
+Client B: doltResolveConflict (choose "ours" or "theirs" or manual)
+Client B: doltCommit → succeeds
+```
+
+### Test 6: Abandoned session cleanup
+
+A client writes without committing, then disconnects. The uncommitted data
+should not appear on the branch and should eventually be cleaned up.
+
+```
+Client A: insert {_id: 99, x: "never committed"}
+Client A: disconnect (no doltCommit)
+Client B: find {_id: 99} → should return [] (empty)
+Wait for session timeout
+Verify: no leaked AM state in the session registry
+```
+
+### Test 7: Multi-branch isolation within one session
+
+A single client writes to two branches in the same session. Commits are
+independent — committing one branch doesn't affect the other.
+
+```
+Client A on mydb (main): insert {_id: 1, x: "main write"}
+Client A on mydb__d_feat: insert {_id: 2, x: "feat write"}
+Client A on mydb__d_feat: doltCommit → succeeds (only feat branch)
+Client B on mydb (main): find {} → should NOT see {_id: 1} (uncommitted on main)
+Client B on mydb__d_feat: find {} → should see {_id: 2} (committed on feat)
+Client A on mydb (main): doltCommit → succeeds
+Client B on mydb (main): find {} → now sees {_id: 1}
+```
+
+### Test 8: Session reconnection preserves uncommitted state
+
+A client writes, disconnects, reconnects with the same lsid, and continues.
+
+```
+Client A (lsid: ABC): insert {_id: 1, x: "before disconnect"}
+Client A: disconnect
+Client A (lsid: ABC): reconnect
+Client A: find {_id: 1} → should return [{_id: 1, x: "before disconnect"}]
+Client A: doltCommit → succeeds
+```
+
+### Test 9: Concurrent commits — serialization order
+
+Three clients all commit to the same branch. Each commit should merge against
+the result of the previous commit, not against the original fork point.
+
+```
+All three fork from the same branch HEAD (commit C0)
+Client A: insert {_id: 1}
+Client B: insert {_id: 2}
+Client C: insert {_id: 3}
+Client A: doltCommit → new HEAD is C1 (contains _id:1)
+Client B: doltCommit → merges against C1, new HEAD is C2 (contains _id:1, _id:2)
+Client C: doltCommit → merges against C2, new HEAD is C3 (contains _id:1, _id:2, _id:3)
+```
+
+### Test 10: Delete + insert conflict
+
+One client deletes a document, another modifies it. The second committer
+should get a conflict.
+
+```
+Client A: delete {_id: 1}
+Client B: update {_id: 1}, {$set: {x: "modified"}}
+Client A: doltCommit → succeeds (_id:1 is gone)
+Client B: doltCommit → conflict (B modified a doc that A deleted)
+```
+
 ## Files to Change
 
 | File | Change |
