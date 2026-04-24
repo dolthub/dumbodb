@@ -416,9 +416,14 @@ No conflicts — three-way merge combines both sets of changes.
 ```
 Client A: insert {_id: 1, x: "from A"}           ← A forks from HEAD C0
 Client B: insert {_id: 2, x: "from B"}           ← B forks from HEAD C0
+Client A: find {} → [{_id: 1}]                    ← A sees own write only (pinned to C0)
+Client B: find {} → [{_id: 2}]                    ← B sees own write only (pinned to C0)
 Client A: doltCommit → succeeds                   ← HEAD advances to C1
+Client A: find {} → [{_id: 1}, {_id: 2}]          ← A's fork resets to C1 after commit; sees both
+Client B: find {} → [{_id: 2}]                    ← B still pinned to C0, doesn't see A's commit yet
 Client B: doltCommit → succeeds                   ← B merges against C1 (base=C0, ours=B's AM, theirs=C1)
-Client C: find {} → [{_id: 1, x: "from A"}, {_id: 2, x: "from B"}]  ← C is read-only, sees HEAD
+Client B: find {} → [{_id: 1}, {_id: 2}]          ← B's fork resets to C2; sees both
+Client C: find {} → [{_id: 1}, {_id: 2}]          ← C is read-only, sees HEAD
 ```
 
 ### Test 4: Conflicting writes produce a conflict
