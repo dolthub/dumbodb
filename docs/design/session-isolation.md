@@ -66,27 +66,64 @@ Every write path (InsertAll, UpdateAll, DeleteAll) acquires `state.mu`, mutates
 a prolly.Map, calls `updateAddressMap()` to update `state.am` and `cs.Commit()`
 to fsync. All synchronous, all blocking.
 
+## Key Concept: Branch Sessions
+
+A MongoDB session (`lsid`) is server-scoped — one session can touch multiple
+databases. In DumboDB, databases map to branches via rootish connection strings:
+
+```js
+const main = db.getSiblingDB("mydb")              // mydb on default branch
+const feat = db.getSiblingDB("mydb__d_feat")       // mydb on feat branch
+```
+
+From the driver's perspective, these are two separate databases. Both commands
+carry the same `lsid`. But they target different branches with different commit
+histories and different AddressMaps.
+
+This means **the isolation unit is the (session, database, branch) tuple** — not
+the session alone. We call this a **branch session**:
+
+```
+Session ABC (lsid)
+  ├── mydb / main    → branchSession (forked AM, dirty flag, fork point)
+  ├── mydb / feat    → branchSession (forked AM, dirty flag, fork point)
+  └── otherdb / main → branchSession (forked AM, dirty flag, fork point)
+```
+
+A single client session can have uncommitted changes on multiple branches
+simultaneously. Each branch session forks independently and merges independently
+via `doltCommit`.
+
 ## Proposed Architecture
 
 ```
-Client A ──► Handler ──► session A ──► sessionAM (forked from branch HEAD)
-                                          │
-                                     doltCommit
-                                          │
-                                     three-way merge ──► branch HEAD AM ──► cs.Commit()
-                                          │
-Client B ──► Handler ──► session B ──► sessionAM (forked from branch HEAD)
+Client A ──► Handler ──► session A ──┬── mydb/main branchSession (forked AM)
+                                     └── mydb/feat branchSession (forked AM)
+                                              │
+                                         doltCommit (on feat)
+                                              │
+                                         three-way merge ──► feat HEAD AM ──► cs.Commit()
+
+Client B ──► Handler ──► session B ──── mydb/main branchSession (forked AM)
 ```
 
-### Session State
+### Data Structures
 
 ```go
-// sessionState holds per-connection write state.
-type sessionState struct {
+// branchSession holds the isolated working state for one (session, db, branch)
+// tuple. This is the fundamental isolation unit.
+type branchSession struct {
     mu       sync.Mutex
     forkHash hash.Hash           // branch HEAD hash at fork time (merge base)
-    am       prolly.AddressMap   // session-scoped address map (copy-on-write from branch)
+    am       prolly.AddressMap   // branch-session-scoped address map
     dirty    bool                // true if any writes have occurred
+}
+
+// sessionState holds all branch sessions for one client session (lsid).
+type sessionState struct {
+    mu       sync.Mutex
+    branches map[string]*branchSession  // key = "dbname/branch"
+    lastUsed time.Time                  // for timeout-based cleanup
 }
 ```
 
@@ -100,27 +137,34 @@ already receives on every command but currently ignores
 // Added to Backend
 type Backend struct {
     // ...existing fields...
-    sessions sync.Map  // map[string]*sessionState  (key = lsid string)
+    sessions sync.Map  // map[string]*sessionState  (key = lsid UUID string)
 }
 ```
 
 ### Lifecycle
 
-1. **First request with new lsid** → create sessionState, fork the current
-   branch AM (`state.am`) and record `forkHash = cs.Root()`.
+1. **First request with new lsid** → create sessionState with empty branches map.
 
-2. **Reads** → read from `session.am` (sees own writes, not other sessions').
+2. **First write to a specific branch** (e.g., `mydb__d_feat`) → create a
+   branchSession, fork the current branch AM (`state.am`) and record
+   `forkHash = cs.Root()`. Subsequent reads/writes on that branch in this
+   session use this forked AM.
 
-3. **Writes (insert/update/delete)** → mutate `session.am`. No `cs.Commit()`,
-   no fsync. Set `session.dirty = true`. Write prolly map nodes to the value
-   store (they need to exist in the chunk store for the AM to reference them)
-   but don't update the branch root.
+3. **Reads** → if a branchSession exists for this (session, db, branch), read
+   from its AM (sees own writes). If no branchSession exists (session hasn't
+   written to this branch yet), read from the shared branch HEAD directly.
 
-4. **doltCommit** → merge session into branch:
+4. **Writes (insert/update/delete)** → mutate the branchSession's AM. No
+   `cs.Commit()`, no fsync. Set `dirty = true`. Write prolly map nodes to the
+   value store (they need to exist in the chunk store for the AM to reference
+   them) but don't update the branch root.
+
+5. **doltCommit on a specific branch** → merge that branchSession into the
+   branch HEAD:
    ```
-   base  = session.forkHash    (the branch HEAD when session forked)
-   ours  = session.am          (session's current state)
-   theirs = state.am           (current branch HEAD, may have advanced)
+   base   = branchSession.forkHash  (branch HEAD when this session forked)
+   ours   = branchSession.am        (session's current state on this branch)
+   theirs = state.am                (current branch HEAD, may have advanced)
    
    merged = three_way_merge(base, ours, theirs)
    ```
@@ -265,22 +309,38 @@ session discovery would allow data access.
 
 ### Edge Cases
 
-**Session reads branch HEAD instead of session state:**
-Not allowed. Once a session forks, it reads its own AM. To see other sessions'
-committed changes, the session must either commit (which merges) or explicitly
-reset/re-fork.
+**Reading a branch you haven't written to:**
+No branchSession exists yet → reads go directly to the shared branch HEAD.
+The session only forks on first write. This keeps read-only access cheap.
 
-**Multiple doltCommits in one session:**
-Each commit merges, advances the fork point, and continues. The session stays
-alive with a fresh fork point.
+**Reading a branch you HAVE written to:**
+Reads come from the branchSession's AM — you see your own uncommitted changes,
+but not changes from other sessions that committed after your fork point. To
+pick up other sessions' committed changes, either commit (merge) or explicitly
+reset your branchSession.
+
+**Multiple doltCommits in one session on the same branch:**
+Each commit merges the branchSession into the branch HEAD, advances the fork
+point to the new HEAD, and continues. The branchSession stays alive with a
+fresh fork point — no need to reconnect.
+
+**doltCommit on one branch, dirty state on another:**
+Each branchSession is independent. Committing `mydb__d_feat` does not affect
+the dirty state on `mydb__d_main`. The client can commit branches independently.
 
 **doltBranch/doltCheckout within a session:**
-Switching branches discards the current session's dirty state (or errors if
-dirty). The session re-forks from the new branch's HEAD.
+Creating a new branch doesn't affect existing branchSessions. "Checking out"
+a different branch (connecting via a different rootish) creates a new
+branchSession for that branch if the session writes to it.
 
-**Concurrent doltCommits from different sessions:**
-Serialized by `state.mu`. Second committer merges against the first's result.
-Both succeed unless they conflict on the same documents.
+**Concurrent doltCommits from different sessions on the same branch:**
+Serialized by `state.mu`. Second committer merges against the first's result
+using three-way merge. Both succeed unless they conflict on the same documents.
+
+**doltMerge between branches within a session:**
+If the session has dirty branchSessions on both the source and target branches,
+the merge should require both to be committed first (or error). We don't want
+to merge uncommitted state across branches — that's a recipe for confusion.
 
 ## What This Enables
 
