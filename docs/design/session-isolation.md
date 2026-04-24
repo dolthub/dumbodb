@@ -426,6 +426,21 @@ Client B: find {} → [{_id: 1}, {_id: 2}]          ← B's fork resets to C2; s
 Client C: find {} → [{_id: 1}, {_id: 2}]          ← C is read-only, sees HEAD
 ```
 
+### Test 3b: After commit, session returns to read-only and sees new commits
+
+After committing, a session's branchSession is cleared. The session returns to
+read-only mode — subsequent reads go to the branch HEAD, picking up any commits
+made by other sessions in the meantime.
+
+```
+Client A: insert {_id: 1, x: "from A"}           ← A forks
+Client A: doltCommit → succeeds                   ← HEAD advances to C1, A's fork is cleared
+Client B: insert {_id: 2, x: "from B"}           ← B forks from C1
+Client B: doltCommit → succeeds                   ← HEAD advances to C2, B's fork is cleared
+Client A: find {} → [{_id: 1}, {_id: 2}]          ← A has no fork, reads HEAD (C2), sees B's commit
+Client B: find {} → [{_id: 1}, {_id: 2}]          ← B has no fork, reads HEAD (C2), sees A's commit
+```
+
 ### Test 4: Conflicting writes produce a conflict
 
 Two clients modify the same document on the same branch, then both commit.
