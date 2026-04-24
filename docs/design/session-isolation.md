@@ -26,8 +26,14 @@ With session isolation, DumboDB changes this model: regular writes stay in
 memory (no commit, no fsync), and `doltCommit` is the explicit durability
 checkpoint. This means DumboDB would be *less* durable per-write than MongoDB's
 default, but with the tradeoff of faster writes and version-control-native
-semantics. Users who need per-write durability can call `doltCommit` after
-every write.
+semantics.
+
+For users who want MongoDB-compatible durability (every write crash-safe),
+DumboDB supports an `autoCommit` mode. When enabled, every write operation
+automatically triggers a `doltCommit` after it completes — equivalent to
+MongoDB's default behavior. This is the simplest migration path for existing
+MongoDB applications that don't use version control features and expect
+per-write durability.
 
 ## Design Goals
 
