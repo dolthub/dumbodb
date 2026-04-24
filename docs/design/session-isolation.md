@@ -1,8 +1,53 @@
 # Session Isolation and Commit-Based Durability
 
-**Status:** Design  
+**Status:** Design (deferred — not implementing yet)  
 **Author:** mayor  
-**Date:** 2026-04-24
+**Date:** 2026-04-24  
+**Flag:** `--session-isolation` (future)
+
+## Implementation Status
+
+This design is **deferred**. DumboDB's first priority is to behave like MongoDB
+by default: shared state, document-level locking, last-writer-wins. Session
+isolation will be gated behind a `--session-isolation` server flag when we're
+ready to implement it.
+
+## How MongoDB Handles Concurrent Writes
+
+MongoDB has **no conflict detection**. Concurrent writes to the same document
+are serialized via WiredTiger's document-level lock:
+
+1. Client A sends `{$set: {x: 1}}` on doc `_id: 1`
+2. Client B sends `{$set: {y: 2}}` on doc `_id: 1` at the same time
+3. One client acquires the document lock first, writes, releases
+4. The other client acquires the lock, reads the now-updated document, applies
+   its change, writes
+5. Both succeed. Both fields are updated. No conflict, no error.
+
+If both clients set the **same field**, the second writer silently overwrites
+the first. No conflict detection, no notification. Last-writer-wins.
+
+This is document-level granularity — there is no field-level merge. MongoDB
+does not attempt to combine non-overlapping field changes into a merged result.
+It simply serializes access and lets the last write stand.
+
+**DumboDB's current behavior matches this:** shared `state.am`, mutex-protected,
+last-writer-wins. This is the correct default for MongoDB compatibility.
+
+## What This Design Proposes (Future, `--session-isolation`)
+
+The session isolation model described below is **stricter** than MongoDB. It
+detects conflicts via three-way merge at `doltCommit` time. If two sessions
+modify the same document, the second committer gets a conflict error instead
+of silently overwriting. This is a version-control-native behavior — the same
+semantics as `dolt merge` or `git merge`.
+
+This is a deliberate departure from MongoDB's model and should only be enabled
+when users opt in via `--session-isolation`. Applications that depend on
+MongoDB's last-writer-wins semantics would break if conflicts were surfaced
+unexpectedly.
+
+---
 
 ## Problem
 
