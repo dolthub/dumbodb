@@ -763,7 +763,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	var updated int32
 
-	for _, doc := range params.Docs {
+	for i, doc := range params.Docs {
 		// Build key from the document's _id field.
 		docID, err := doc.Get("_id")
 		if err != nil {
@@ -780,11 +780,21 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, err
 		}
 
-		// Check if the document exists.
-		var found bool
+		// Locate the existing stored document so a partial update can reuse
+		// its chunks. Capture the existing JSON hash while we're here.
+		var (
+			found        bool
+			existingHash hash.Hash
+		)
 
 		if err := mut.Get(ctx, key, func(k, v val.Tuple) error {
-			found = v != nil
+			if v == nil {
+				return nil
+			}
+			found = true
+			if addr, ok := valDesc.GetJSONAddr(0, v); ok {
+				existingHash = addr
+			}
 			return nil
 		}); err != nil {
 			return nil, err
@@ -794,10 +804,27 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			continue
 		}
 
-		// Convert updated document to JSON and write to JSON chunk store.
-		jsonHash, err := writeDocJSON(ctx, state.ns, doc)
-		if err != nil {
-			return nil, err
+		// Prefer a partial update when the handler supplied a trackable
+		// mutation list and the prior document is indexed. Any error in the
+		// partial path falls through to a full rewrite from doc below.
+		var jsonHash hash.Hash
+
+		var mutations []backends.FieldMutation
+		if i < len(params.FieldMutations) {
+			mutations = params.FieldMutations[i]
+		}
+
+		if len(mutations) > 0 && !existingHash.IsEmpty() {
+			if h, err := applyFieldMutations(ctx, state.ns, existingHash, mutations); err == nil {
+				jsonHash = h
+			}
+		}
+
+		if jsonHash.IsEmpty() {
+			jsonHash, err = writeDocJSON(ctx, state.ns, doc)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		v, err := buildValue(jsonHash)
@@ -1278,6 +1305,119 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 	}
 
 	return root.HashOf(), nil
+}
+
+// applyFieldMutations mutates the stored JSON document at existingHash
+// field-by-field using Dolt's IndexedJsonDocument.Set / .Remove, which
+// re-chunks only the affected region of the prolly tree and shares every
+// unchanged chunk with the new root. Returns the root hash of the mutated
+// document.
+//
+// Returns an error if the stored document is not in the indexed JSON format
+// (e.g. a legacy multi-chunk blob) or if Set / Remove falls back to an
+// in-memory representation, which would defeat structural sharing. The caller
+// treats any error as a signal to fall back to a full rewrite via
+// writeDocJSON.
+func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash hash.Hash, mutations []backends.FieldMutation) (hash.Hash, error) {
+	wrapper, err := tree.NewJSONDoc(existingHash, ns).ToIndexedJSONDocument(ctx)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("dolt: loading indexed JSON document: %w", err)
+	}
+
+	idx, ok := wrapper.(tree.IndexedJsonDocument)
+	if !ok {
+		// Legacy non-indexed multi-chunk document: no structural sharing
+		// available.
+		return hash.Hash{}, fmt.Errorf("dolt: stored document is not indexed")
+	}
+
+	for _, m := range mutations {
+		// isSimpleTopLevelKey in the handler already guarantees m.Key is a
+		// bare identifier, so "$." + key is a safe MySQL-style JSON path.
+		path := "$." + m.Key
+
+		if m.Unset {
+			res, _, err := idx.Remove(ctx, path)
+			if err != nil {
+				return hash.Hash{}, err
+			}
+			next, ok := res.(tree.IndexedJsonDocument)
+			if !ok {
+				return hash.Hash{}, fmt.Errorf("dolt: remove fell back to in-memory document")
+			}
+			idx = next
+			continue
+		}
+
+		valJSON, err := marshalExtJSONValue(m.Value)
+		if err != nil {
+			return hash.Hash{}, err
+		}
+
+		res, _, err := idx.Set(ctx, path, sqltypes.NewLazyJSONDocument(valJSON))
+		if err != nil {
+			return hash.Hash{}, err
+		}
+		next, ok := res.(tree.IndexedJsonDocument)
+		if !ok {
+			return hash.Hash{}, fmt.Errorf("dolt: set fell back to in-memory document")
+		}
+		idx = next
+	}
+
+	// SerializeJsonToAddr fast-paths IndexedJsonDocument by returning its
+	// cached root node rather than re-chunking, so this is O(1).
+	root, err := tree.SerializeJsonToAddr(ctx, ns, idx)
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	return root.HashOf(), nil
+}
+
+// marshalExtJSONValue produces the canonical Extended JSON encoding of a
+// single BSON value, bare (without any field-name wrapper). It matches the
+// encoding produced by writeDocJSON so a value inserted here round-trips
+// through readDocJSON identically to one written by a full rewrite.
+func marshalExtJSONValue(value any) ([]byte, error) {
+	tmp, err := types.NewDocument("v", value)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: wrapping value for ExtJSON: %w", err)
+	}
+
+	var bsonBytes []byte
+	if docHasMinMaxKey(tmp) {
+		bsonBytes, err = bson.FromDocumentRaw(tmp)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: encoding value with MinKey/MaxKey to BSON: %w", err)
+		}
+	} else {
+		wdoc, err := bson.FromDocument(tmp)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: encoding value to wirebson: %w", err)
+		}
+		bsonBytes, err = wdoc.Encode()
+		if err != nil {
+			return nil, fmt.Errorf("dolt: encoding value to BSON: %w", err)
+		}
+	}
+
+	extJSON, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: converting value to ExtJSON: %w", err)
+	}
+
+	// Strip `{"v":` prefix and `}` suffix. The MongoDB driver emits compact
+	// JSON with no whitespace, but we trim any leading spaces after the
+	// colon defensively.
+	prefix := []byte(`{"v":`)
+	if !bytes.HasPrefix(extJSON, prefix) || extJSON[len(extJSON)-1] != '}' {
+		return nil, fmt.Errorf("dolt: unexpected ExtJSON shape %q", extJSON)
+	}
+	inner := bytes.TrimLeft(extJSON[len(prefix):len(extJSON)-1], " ")
+	if len(inner) == 0 {
+		return nil, fmt.Errorf("dolt: empty ExtJSON value for %q", extJSON)
+	}
+	return inner, nil
 }
 
 // readDocJSON reads a JSON document from the dolt chunk store at the given hash

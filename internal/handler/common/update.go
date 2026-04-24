@@ -61,16 +61,28 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 	// historic 74–97x gap vs. MongoDB.
 	var pending []*types.Document
 
+	// pendingMutations runs parallel to pending: entry i, if non-nil, gives
+	// the field-level mutations that recreate pending[i] from the prior
+	// stored version. Populated only when the update is a plain $set/$unset
+	// against bare top-level keys — anything more complex stays nil so the
+	// backend falls back to a full rewrite for that doc.
+	var pendingMutations [][]backends.FieldMutation
+
 	// flushPending applies all accumulated updates in a single backend call.
 	flushPending := func() error {
 		if len(pending) == 0 {
 			return nil
 		}
-		if _, err := c.UpdateAll(ctx, &backends.UpdateAllParams{Docs: pending}); err != nil {
+		params := &backends.UpdateAllParams{Docs: pending}
+		if hasAnyMutations(pendingMutations) {
+			params.FieldMutations = pendingMutations
+		}
+		if _, err := c.UpdateAll(ctx, params); err != nil {
 			return lazyerrors.Error(err)
 		}
 		result.Modified.Count += int32(len(pending))
 		pending = nil
+		pendingMutations = nil
 		return nil
 	}
 
@@ -107,11 +119,17 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 		}
 
+		// Snapshot simple $set/$unset mutations before applying the operator:
+		// processUpdateOperator mutates doc in place, so after it runs we can
+		// no longer see the "old" state needed to derive a partial update.
+		var mutations []backends.FieldMutation
+
 		if param.IsPipeline {
 			modified, err = processPipelineUpdate(doc, param.Pipeline)
 		} else if !param.HasUpdateOperators {
 			modified, err = processReplacementDoc(cmd, doc, param.Update)
 		} else {
+			mutations = collectSimpleFieldMutations(param.Update)
 			modified, err = processUpdateOperator(cmd, doc, param.Update, upsert, param.Filter, param.ArrayFilters)
 		}
 
@@ -145,6 +163,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			return result, nil
 		} else if modified {
 			pending = append(pending, doc)
+			pendingMutations = append(pendingMutations, mutations)
 			if isFindAndModify {
 				// findAndModify matches at most one doc, so "the modified
 				// doc" is unambiguous.
@@ -682,6 +701,129 @@ func processUpdateOperator(command string, doc, update *types.Document, upsert b
 	}
 
 	return docUpdated, nil
+}
+
+// hasAnyMutations reports whether any entry in muts is a non-empty mutation
+// list — i.e. whether the backend can exploit a partial update for at least
+// one document in the batch.
+func hasAnyMutations(muts [][]backends.FieldMutation) bool {
+	for _, m := range muts {
+		if len(m) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// collectSimpleFieldMutations derives a flat list of field-level mutations
+// from an update spec when the spec consists entirely of $set and $unset on
+// bare top-level field names. Anything else (nested paths, positional
+// operators, $inc/$mul/$rename/$push/..., pipeline stages) yields nil and the
+// backend falls back to a full document rewrite.
+//
+// The caller is responsible for still applying the operators to the in-memory
+// document; this function only produces a hint the backend can use to avoid
+// re-chunking unchanged JSON.
+func collectSimpleFieldMutations(update *types.Document) []backends.FieldMutation {
+	if update == nil {
+		return nil
+	}
+
+	var out []backends.FieldMutation
+
+	iter := update.Iterator()
+	defer iter.Close()
+
+	for {
+		operator, opVal, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+		if err != nil {
+			return nil
+		}
+
+		opDoc, ok := opVal.(*types.Document)
+		if !ok {
+			return nil
+		}
+
+		switch operator {
+		case "$set":
+			opIter := opDoc.Iterator()
+			for {
+				key, val, err := opIter.Next()
+				if errors.Is(err, iterator.ErrIteratorDone) {
+					break
+				}
+				if err != nil {
+					opIter.Close()
+					return nil
+				}
+				if !isSimpleTopLevelKey(key) {
+					opIter.Close()
+					return nil
+				}
+				out = append(out, backends.FieldMutation{Key: key, Value: val})
+			}
+			opIter.Close()
+
+		case "$unset":
+			opIter := opDoc.Iterator()
+			for {
+				key, _, err := opIter.Next()
+				if errors.Is(err, iterator.ErrIteratorDone) {
+					break
+				}
+				if err != nil {
+					opIter.Close()
+					return nil
+				}
+				if !isSimpleTopLevelKey(key) {
+					opIter.Close()
+					return nil
+				}
+				out = append(out, backends.FieldMutation{Key: key, Unset: true})
+			}
+			opIter.Close()
+
+		default:
+			return nil
+		}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// isSimpleTopLevelKey reports whether key is a bare identifier that maps
+// cleanly to a single JSON object field — no dot-notation, no array indices,
+// no special characters that would need escaping in a MySQL-style JSON path.
+//
+// _id is excluded because partial updates cannot touch the primary key:
+// the key of the backing map is derived from _id, and rewriting it would
+// require a delete+insert rather than an in-place mutation.
+func isSimpleTopLevelKey(key string) bool {
+	if key == "" || key == "_id" {
+		return false
+	}
+	for i, r := range key {
+		switch {
+		case r == '_':
+			// always allowed
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // getSortedKVOps extracts key-value pairs and associated operators from update document

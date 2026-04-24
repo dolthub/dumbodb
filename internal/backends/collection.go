@@ -231,6 +231,36 @@ func (cc *collectionContract) InsertAll(ctx context.Context, params *InsertAllPa
 // UpdateAllParams represents the parameters of Collection.Update method.
 type UpdateAllParams struct {
 	Docs []*types.Document
+
+	// FieldMutations, when non-nil, must have the same length as Docs. Entry i,
+	// if non-empty, describes the field-level changes that transform the prior
+	// stored version of Docs[i] into Docs[i]. Backends may use it to apply a
+	// partial update that preserves structural sharing instead of rewriting
+	// the document wholesale. A nil or empty entry, or a nil FieldMutations
+	// slice altogether, means the backend must write Docs[i] in full.
+	FieldMutations [][]FieldMutation
+}
+
+// FieldMutation describes a single field-level change applied to a document.
+//
+// Only flat, top-level field assignments and deletions are representable:
+// Key must be a bare field name (no dot-notation, no array indices, no MongoDB
+// path operators). Callers that cannot express a mutation cleanly should omit
+// the mutation list for that document so the backend falls back to a full
+// rewrite.
+type FieldMutation struct {
+	// Key is the top-level field name to modify.
+	Key string
+
+	// Unset, when true, removes Key from the document. Otherwise Key is set
+	// to Value.
+	Unset bool
+
+	// Value is the new value to assign when Unset is false. It must be a
+	// BSON-encodable value of the same Go type that appears in a
+	// types.Document (string, int32, int64, float64, bool, *types.Document,
+	// *types.Array, types.ObjectID, time.Time, etc.).
+	Value any
 }
 
 // UpdateAllResult represents the results of Collection.Update method.
