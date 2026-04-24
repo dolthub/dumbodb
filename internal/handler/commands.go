@@ -64,6 +64,10 @@ func (h *Handler) initCommands() {
 			anonymous: true,
 			Help:      "", // hidden
 		},
+		"bulkWrite": {
+			Handler: h.MsgBulkWrite,
+			Help:    "Performs multiple write operations across collections in a single command.",
+		},
 		"collMod": {
 			Handler: h.MsgCollMod,
 			Help:    "Adds options to a collection or modify view definitions.",
