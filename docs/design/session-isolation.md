@@ -171,11 +171,52 @@ With session isolation, writeConcern becomes mostly irrelevant for individual
 writes — they're all fast because none fsync. The durability signal is
 exclusively `doltCommit`.
 
+### Session Identity and Reconnection
+
+MongoDB's `lsid` (logical session ID) is a client-generated UUID sent with
+every command in the wire protocol:
+
+```js
+// Driver creates a session
+const session = client.startSession()
+// session.id = { id: UUID("abc-123-...") }
+
+// Every command includes lsid:
+// { insert: "col", documents: [...], lsid: { id: UUID("abc-123-...") } }
+```
+
+The session is tied to the `lsid`, **not the TCP connection**. This means:
+
+**Reconnection:** If a client disconnects (network glitch, process restart) and
+reconnects with the same `lsid`, DumboDB looks up the session in the registry
+and resumes where the client left off — uncommitted writes are still there.
+
+**Session timeout:** Sessions persist for a configurable period of inactivity
+(default: 30 minutes). After timeout, the session state is discarded and
+uncommitted changes are lost. This matches MongoDB's `logicalSessionTimeoutMinutes`.
+
+**endSession command:** Explicit client signal to discard session state. Any
+uncommitted changes are lost. DumboDB should implement this alongside the
+session registry.
+
+**Session transfer:** The wire protocol allows two different connections to
+share an `lsid`. This means two processes could collaborate on the same
+uncommitted working set. We don't need to encourage this, but it falls out
+naturally from keying on `lsid` rather than connection.
+
+**Retryable writes (future):** MongoDB uses `lsid` + `txnNumber` to deduplicate
+retried writes. If a client retries an insert after a timeout, the server
+recognizes the `(lsid, txnNumber)` pair and returns the cached result instead
+of double-inserting. Not required for Phase 1, but the session registry makes
+it straightforward to add later.
+
 ### What About Non-Session Clients?
 
 Clients that don't send `lsid` (e.g., simple `mongosh` without explicit
-sessions) get an implicit session scoped to their connection. Behavior is
-identical — writes accumulate in the implicit session, `doltCommit` flushes.
+sessions) get an implicit session scoped to their TCP connection. DumboDB
+generates an internal session ID on connect, and discards it on disconnect.
+Behavior is identical — writes accumulate in the implicit session, `doltCommit`
+flushes.
 
 ### Edge Cases
 
