@@ -634,13 +634,18 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	// Wrap the updated map in a DTBL chunk and update the address map.
+	// autoCommit=true means "create a dolt commit on every write," which already
+	// triggers its own NBS journal fsync — deferring the working-set update but
+	// still committing synchronously would leave the history and working set
+	// inconsistent, so we only honor SkipDurableSync when autoCommit is off.
+	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForMap(ctx, newMap)
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}); err != nil {
+	}, skipSync); err != nil {
 		return nil, err
 	}
 
@@ -848,13 +853,14 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
+	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForMap(ctx, newMap)
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}); err != nil {
+	}, skipSync); err != nil {
 		return nil, err
 	}
 
@@ -982,13 +988,14 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, err
 	}
 
+	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
 	dtblHash, err := state.dtblHashForMap(ctx, newMap)
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
-	}); err != nil {
+	}, skipSync); err != nil {
 		return nil, err
 	}
 

@@ -34,7 +34,7 @@ type InsertParams struct {
 	Ordered    bool         `ferretdb:"ordered,opt"`
 
 	MaxTimeMS                int64           `ferretdb:"maxTimeMS,ignored"`
-	WriteConcern             any             `ferretdb:"writeConcern,ignored"`
+	WriteConcern             *types.Document `ferretdb:"writeConcern,opt"`
 	BypassDocumentValidation bool            `ferretdb:"bypassDocumentValidation,ignored"`
 	BypassEmptyTsReplacement bool            `ferretdb:"bypassEmptyTsReplacement,ignored"`
 	Comment                  string          `ferretdb:"comment,ignored"`
@@ -48,6 +48,11 @@ type InsertParams struct {
 	ApiVersion           string `ferretdb:"apiVersion,ignored"`
 	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+
+	// SkipDurableSync is derived from WriteConcern in GetInsertParams and
+	// propagated into backend params so the storage layer can skip the
+	// synchronous NBS journal fsync. Not populated from the wire.
+	SkipDurableSync bool `ferretdb:"-"`
 }
 
 // GetInsertParams returns the parameters for an insert command.
@@ -60,6 +65,8 @@ func GetInsertParams(document *types.Document, l *slog.Logger) (*InsertParams, e
 	if err != nil {
 		return nil, err
 	}
+
+	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	for i := 0; i < params.Docs.Len(); i++ {
 		doc := must.NotFail(params.Docs.Get(i))

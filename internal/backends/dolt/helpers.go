@@ -377,6 +377,16 @@ func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (pr
 // rootValue so that `dolt status` shows "Changes not staged for commit".
 // The caller must hold state.mu (write lock).
 func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error) error {
+	return state.updateAddressMapWithSync(ctx, branch, fn, false)
+}
+
+// updateAddressMapWithSync is updateAddressMap with an explicit skipSync flag:
+// when skipSync is true, the new AM is held only in memory and written to the
+// value store, but doltDB.UpdateWorkingSet (the call that triggers the NBS
+// journal fsync) is deferred. Callers that pass skipSync=true must ensure a
+// background flusher or Close-time flush eventually calls flushWorkingSet to
+// make the state durable. The caller must hold state.mu (write lock).
+func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error, skipSync bool) error {
 	// Get the current AM for this branch (initializes from HEAD if needed).
 	currentAM, err := state.getOrInitBranchAM(ctx, branch)
 	if err != nil {
@@ -401,6 +411,24 @@ func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn fu
 		return fmt.Errorf("dolt: writing RTVL for working set: %w", err)
 	}
 
+	// Persist the updated AM before (optionally) pushing it to the working set.
+	// Later branchDirty entries need to see the in-memory AM, so record it first.
+	if branch == "main" {
+		state.am = newAM
+	} else {
+		state.branchAMs[branch] = newAM
+	}
+
+	if skipSync {
+		// Defer the journal-sync'ing UpdateWorkingSet call. Mark the branch dirty
+		// so the backend's background flusher (or Close) picks it up later.
+		if state.dirtyBranches == nil {
+			state.dirtyBranches = make(map[string]struct{})
+		}
+		state.dirtyBranches[branch] = struct{}{}
+		return nil
+	}
+
 	// Get the staged AM from the branch HEAD's rootValue. Staged stays at HEAD until an
 	// explicit stage operation advances it.
 	stagedAM, err := headRootAMForBranch(ctx, state, branch)
@@ -412,11 +440,47 @@ func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn fu
 		return fmt.Errorf("dolt: updating working set: %w", err)
 	}
 
-	// Persist the updated AM.
-	if branch == "main" {
-		state.am = newAM
-	} else {
-		state.branchAMs[branch] = newAM
+	// The working set is now current — clear any prior deferred dirty flag.
+	if state.dirtyBranches != nil {
+		delete(state.dirtyBranches, branch)
+	}
+
+	return nil
+}
+
+// flushDirtyBranches pushes any branches with deferred UpdateWorkingSet calls
+// (from skipSync writes) to the dolt working set. This is the durable step
+// previously performed inline; calling it later trades per-write latency for
+// a periodic fsync on behalf of a pool of deferred writes.
+// The caller must hold state.mu (write lock).
+func (state *dbState) flushDirtyBranches(ctx context.Context) error {
+	if len(state.dirtyBranches) == 0 {
+		return nil
+	}
+
+	branches := make([]string, 0, len(state.dirtyBranches))
+	for b := range state.dirtyBranches {
+		branches = append(branches, b)
+	}
+
+	for _, branch := range branches {
+		var workingAM prolly.AddressMap
+		if branch == "main" {
+			workingAM = state.am
+		} else {
+			workingAM = state.branchAMs[branch]
+		}
+
+		stagedAM, err := headRootAMForBranch(ctx, state, branch)
+		if err != nil {
+			return fmt.Errorf("dolt: reading HEAD AM for staged root: %w", err)
+		}
+
+		if err := updateWorkingSet(ctx, state.doltDB, workingAM, stagedAM, branch); err != nil {
+			return fmt.Errorf("dolt: updating working set: %w", err)
+		}
+
+		delete(state.dirtyBranches, branch)
 	}
 
 	return nil

@@ -140,7 +140,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 			iter = common.LimitIterator(iter, closer, 1)
 		}
 
-		result, err := common.UpdateDocument(ctx, c, "update", iter, &u)
+		result, err := common.UpdateDocument(ctx, c, "update", iter, &u, params.SkipDurableSync)
 		if err != nil {
 			return 0, 0, nil, lazyerrors.Error(err)
 		}

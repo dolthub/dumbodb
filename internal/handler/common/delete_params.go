@@ -35,7 +35,7 @@ type DeleteParams struct {
 	Let *types.Document `ferretdb:"let,unimplemented"`
 
 	MaxTimeMS      int64           `ferretdb:"maxTimeMS,ignored"`
-	WriteConcern   *types.Document `ferretdb:"writeConcern,ignored"`
+	WriteConcern   *types.Document `ferretdb:"writeConcern,opt"`
 	LSID           any             `ferretdb:"lsid,ignored"`
 	TxnNumber      int64           `ferretdb:"txnNumber,ignored"`
 	ClusterTime    any             `ferretdb:"$clusterTime,ignored"`
@@ -44,6 +44,11 @@ type DeleteParams struct {
 	ApiVersion           string `ferretdb:"apiVersion,ignored"`
 	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+
+	// SkipDurableSync is derived from WriteConcern in GetDeleteParams and
+	// propagated into backend params so the storage layer can skip the
+	// synchronous NBS journal fsync. Not populated from the wire.
+	SkipDurableSync bool `ferretdb:"-"`
 }
 
 // Delete represents single delete operation parameters.
@@ -68,6 +73,8 @@ func GetDeleteParams(document *types.Document, l *slog.Logger) (*DeleteParams, e
 	if err != nil {
 		return nil, err
 	}
+
+	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	return &params, nil
 }

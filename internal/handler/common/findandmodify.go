@@ -50,7 +50,7 @@ type FindAndModifyParams struct {
 	ArrayFilters *types.Array    `ferretdb:"arrayFilters,opt"`
 
 	Hint                     string          `ferretdb:"hint,ignored"`
-	WriteConcern             *types.Document `ferretdb:"writeConcern,ignored"`
+	WriteConcern             *types.Document `ferretdb:"writeConcern,opt"`
 	BypassDocumentValidation bool            `ferretdb:"bypassDocumentValidation,ignored"`
 	BypassEmptyTsReplacement bool            `ferretdb:"bypassEmptyTsReplacement,ignored"`
 	LSID                     any             `ferretdb:"lsid,ignored"`
@@ -61,6 +61,11 @@ type FindAndModifyParams struct {
 	ApiVersion           string `ferretdb:"apiVersion,ignored"`
 	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+
+	// SkipDurableSync is derived from WriteConcern in GetFindAndModifyParams and
+	// propagated into backend params so the storage layer can skip the
+	// synchronous NBS journal fsync. Not populated from the wire.
+	SkipDurableSync bool `ferretdb:"-"`
 }
 
 // GetFindAndModifyParams returns `findAndModifyParams` command parameters.
@@ -71,6 +76,8 @@ func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModify
 	if err != nil {
 		return nil, err
 	}
+
+	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	if params.Collection == "" {
 		return nil, handlererrors.NewCommandErrorMsg(

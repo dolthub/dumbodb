@@ -41,7 +41,7 @@ type UpdateParams struct {
 	Ordered                  bool            `ferretdb:"ordered,ignored"`
 	BypassDocumentValidation bool            `ferretdb:"bypassDocumentValidation,ignored"`
 	BypassEmptyTsReplacement bool            `ferretdb:"bypassEmptyTsReplacement,ignored"`
-	WriteConcern             *types.Document `ferretdb:"writeConcern,ignored"`
+	WriteConcern             *types.Document `ferretdb:"writeConcern,opt"`
 	LSID                     any             `ferretdb:"lsid,ignored"`
 	TxnNumber                int64           `ferretdb:"txnNumber,ignored"`
 	Autocommit               bool            `ferretdb:"autocommit,ignored"`
@@ -51,6 +51,11 @@ type UpdateParams struct {
 	ApiVersion           string `ferretdb:"apiVersion,ignored"`
 	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
 	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+
+	// SkipDurableSync is derived from WriteConcern in GetUpdateParams and
+	// propagated into backend params so the storage layer can skip the
+	// synchronous NBS journal fsync. Not populated from the wire.
+	SkipDurableSync bool `ferretdb:"-"`
 }
 
 // Update represents a single update operation parameters.
@@ -102,6 +107,8 @@ func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, e
 	if err != nil {
 		return nil, err
 	}
+
+	params.SkipDurableSync = DecideWriteConcern(params.WriteConcern).SkipDurableSync
 
 	if len(params.Updates) > 0 {
 		for i := range params.Updates {

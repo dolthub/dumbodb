@@ -193,6 +193,12 @@ func (cc *collectionContract) Explain(ctx context.Context, params *ExplainParams
 // InsertAllParams represents the parameters of Collection.InsertAll method.
 type InsertAllParams struct {
 	Docs []*types.Document
+
+	// SkipDurableSync, when true, tells the backend the client opted out of a
+	// synchronous journal fsync via MongoDB writeConcern (j:false or w:0).
+	// Backends that support it may acknowledge before the write is durable and
+	// rely on a periodic background flush.
+	SkipDurableSync bool
 }
 
 // InsertAllResult represents the results of Collection.InsertAll method.
@@ -239,6 +245,10 @@ type UpdateAllParams struct {
 	// the document wholesale. A nil or empty entry, or a nil FieldMutations
 	// slice altogether, means the backend must write Docs[i] in full.
 	FieldMutations [][]FieldMutation
+
+	// SkipDurableSync, when true, tells the backend the client opted out of a
+	// synchronous journal fsync via MongoDB writeConcern. See InsertAllParams.
+	SkipDurableSync bool
 }
 
 // FieldMutation describes a single field-level change applied to a document.
@@ -300,6 +310,10 @@ func (cc *collectionContract) UpdateAll(ctx context.Context, params *UpdateAllPa
 type DeleteAllParams struct {
 	IDs       []any
 	RecordIDs []int64
+
+	// SkipDurableSync, when true, tells the backend the client opted out of a
+	// synchronous journal fsync via MongoDB writeConcern. See InsertAllParams.
+	SkipDurableSync bool
 }
 
 // DeleteAllResult represents the results of Collection.Delete method.

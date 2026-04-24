@@ -82,7 +82,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	for i, p := range params.Deletes {
 		var d int32
-		d, err = h.execDelete(connCtx, c, &p)
+		d, err = h.execDelete(connCtx, c, &p, params.SkipDurableSync)
 
 		deleted += d
 
@@ -127,7 +127,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 //
 // It returns a number of deleted documents or error.
 // The error is either a (wrapped) *handlererrors.CommandError or something fatal.
-func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *common.Delete) (int32, error) {
+func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *common.Delete, skipDurableSync bool) (int32, error) {
 	var qp backends.QueryParams
 	if !h.DisablePushdown {
 		qp.Filter = p.Filter
@@ -176,7 +176,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 		return 0, nil
 	}
 
-	d, err := c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: ids})
+	d, err := c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: ids, SkipDurableSync: skipDurableSync})
 	if err != nil {
 		return 0, lazyerrors.Error(err)
 	}

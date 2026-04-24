@@ -140,6 +140,14 @@ type dbState struct {
 	// mergeState is non-nil when a merge is in progress (conflicts exist that must be resolved
 	// before DumboDBCommit will succeed). Protected by mu.
 	mergeState *mergeInProgress
+
+	// dirtyBranches tracks branches whose in-memory AM has advanced past what
+	// dolt.UpdateWorkingSet (and thus the NBS journal) has been told about.
+	// Populated by writes that carried MongoDB writeConcern j:false / w:0, where
+	// we skip the synchronous fsync. The backend's flush loop and Close() drain
+	// this set by calling flushDirtyBranches, making the state durable.
+	// Protected by mu.
+	dirtyBranches map[string]struct{}
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -150,7 +158,21 @@ type Backend struct {
 
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
+
+	// flusherStop is closed by Close to signal the background flusher to
+	// drain any remaining dirty state and exit.
+	flusherStop chan struct{}
+	// flusherDone is closed by the flusher goroutine when it exits, so Close
+	// can wait for the final drain to complete before tearing down dbs.
+	flusherDone chan struct{}
 }
+
+// deferredFlushInterval is how often the backend drains per-database dirty
+// state from writeConcern j:false / w:0 writes into the dolt working set
+// (and thus through the NBS journal fsync). A short-enough interval keeps
+// the worst-case window of unflushed writes bounded, while still letting
+// many writes amortize over a single fsync.
+const deferredFlushInterval = 100 * time.Millisecond
 
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
 // When autoCommit is true, every document write (insert/update/delete) is
@@ -161,10 +183,12 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 	}
 
 	b := &Backend{
-		dataDir:    dataDir,
-		l:          l,
-		autoCommit: autoCommit,
-		dbs:        make(map[string]*dbState),
+		dataDir:     dataDir,
+		l:           l,
+		autoCommit:  autoCommit,
+		dbs:         make(map[string]*dbState),
+		flusherStop: make(chan struct{}),
+		flusherDone: make(chan struct{}),
 	}
 
 	// Initialize the admin database so it always exists on disk, matching
@@ -176,11 +200,72 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 		return nil, fmt.Errorf("dolt: initializing admin database: %w", err)
 	}
 
+	go b.deferredFlushLoop()
+
 	return backends.BackendContract(b), nil
+}
+
+// deferredFlushLoop drains dbState.dirtyBranches on every database at a fixed
+// interval. Each tick picks up any branches whose in-memory AM has advanced
+// past the last UpdateWorkingSet call (the source of the NBS journal fsync)
+// and flushes them. Errors are logged; the loop keeps running so a transient
+// failure on one database doesn't starve the others.
+func (b *Backend) deferredFlushLoop() {
+	defer close(b.flusherDone)
+
+	ticker := time.NewTicker(deferredFlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.flusherStop:
+			b.flushAllDirty(context.Background())
+			return
+		case <-ticker.C:
+			b.flushAllDirty(context.Background())
+		}
+	}
+}
+
+// flushAllDirty iterates the open databases and drains each one's dirty
+// branches. Takes the backend lock briefly to snapshot the database list so
+// we don't hold it across per-DB flushes.
+func (b *Backend) flushAllDirty(ctx context.Context) {
+	b.mu.RLock()
+	dbs := make([]*dbState, 0, len(b.dbs))
+	for _, db := range b.dbs {
+		dbs = append(dbs, db)
+	}
+	b.mu.RUnlock()
+
+	for _, db := range dbs {
+		db.mu.Lock()
+		if len(db.dirtyBranches) > 0 {
+			if err := db.flushDirtyBranches(ctx); err != nil {
+				b.l.Warn("dolt: deferred flush failed", "err", err)
+			}
+		}
+		db.mu.Unlock()
+	}
 }
 
 // Close implements backends.Backend.
 func (b *Backend) Close() {
+	// Signal the flusher to drain any remaining deferred writes and exit.
+	// Guard against a double close by checking whether it's already closed,
+	// and against tests that bypass NewBackend by skipping if never started.
+	if b.flusherStop != nil {
+		select {
+		case <-b.flusherStop:
+			// already closed
+		default:
+			close(b.flusherStop)
+		}
+		if b.flusherDone != nil {
+			<-b.flusherDone
+		}
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

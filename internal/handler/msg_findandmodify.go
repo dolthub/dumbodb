@@ -191,7 +191,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		}
 
 		if doc != nil {
-			if _, err = c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{must.NotFail(doc.Get("_id"))}}); err != nil {
+			if _, err = c.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{must.NotFail(doc.Get("_id"))}, SkipDurableSync: params.SkipDurableSync}); err != nil {
 				return nil, lazyerrors.Error(err)
 			}
 			result.modified = 1
@@ -212,7 +212,7 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	}
 
 	// TODO https://github.com/dolthub/dumbodb/issues/2168
-	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update)
+	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update, params.SkipDurableSync)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
