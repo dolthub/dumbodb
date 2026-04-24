@@ -22,5 +22,9 @@ const (
 	MinWireVersion = int32(0) // needed for some apps and drivers
 
 	// MaxWireVersion is the maximal supported wire protocol version.
-	MaxWireVersion = int32(21)
+	// Wire 24 corresponds to MongoDB rapid release 7.3. Wire 22-24 add
+	// server-internal features (sharded exhaust cursors, aggregation
+	// validation tightening, compaction tweaks) that DumboDB does not
+	// implement and that drivers do not gate behavior on.
+	MaxWireVersion = int32(24)
 )
