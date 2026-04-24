@@ -10,8 +10,23 @@ DumboDB currently has no session isolation. Two clients connected to the same
 branch share a single `dbState.am` (AddressMap) protected by a mutex. Writes
 are immediately visible to all other clients — last-writer-wins, no isolation.
 
-Every write also fsyncs the NBS journal via `cs.Commit()`, making single-doc
-writes ~3-4x slower than MongoDB's default `{w:1, j:false}` mode.
+Every write calls `cs.Commit()` to update the chunk store root pointer. This
+adds per-write overhead on top of prolly tree mutation and BSON serialization.
+The exact cost breakdown has not been profiled — the overhead may come from the
+root commit, tree mutation, serialization, or a combination.
+
+For context: MongoDB by default acknowledges writes after they reach server
+memory, without waiting for data to be written to the on-disk journal. This is
+called "unacknowledged journal" mode. Data is flushed to disk periodically in
+the background (every ~100ms). The tradeoff is speed vs. crash safety — if the
+server crashes before the background flush, the most recent writes are lost.
+MongoDB users who need crash safety on every write must explicitly opt in.
+
+DumboDB currently does the opposite: every single write goes through the full
+commit path, guaranteeing crash safety but at a performance cost. With session
+isolation, we can flip this default — writes stay in memory until the user
+explicitly calls `doltCommit`, which is both the durability flush and the
+version-control checkpoint.
 
 ## Design Goals
 
@@ -160,16 +175,20 @@ the `doltMerge` command — extract and reuse it.
 
 ### WriteConcern Integration
 
-| WriteConcern | Behavior |
-|---|---|
-| Default / `{w:1, j:true}` | Write to session AM only. `doltCommit` for durability. |
-| `{w:1, j:false}` | Same — writes are already memory-only. |
-| `{w:0}` | Fire and forget — same fast path. |
-| `doltCommit` | Merge + `cs.Commit()` + fsync. Always durable. |
+MongoDB's `writeConcern` lets clients choose per-write durability guarantees.
+With session isolation, DumboDB simplifies this — all regular writes are
+memory-only, and `doltCommit` is the single durability signal:
 
-With session isolation, writeConcern becomes mostly irrelevant for individual
-writes — they're all fast because none fsync. The durability signal is
-exclusively `doltCommit`.
+| Client request | DumboDB behavior |
+|---|---|
+| Regular write (insert/update/delete) | Writes to session AM in memory. Fast, not crash-safe. |
+| `doltCommit` | Merges session into branch, flushes to disk. Crash-safe. |
+
+The MongoDB `writeConcern` parameter is accepted but effectively irrelevant —
+individual writes are always memory-only regardless of what the client requests.
+`doltCommit` is always crash-safe regardless of what the client requests. This
+is a deliberate departure from MongoDB's model: DumboDB's durability story is
+version-control-native, not per-write configurable.
 
 ### Session Identity and Reconnection
 
