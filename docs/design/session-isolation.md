@@ -218,6 +218,31 @@ generates an internal session ID on connect, and discards it on disconnect.
 Behavior is identical — writes accumulate in the implicit session, `doltCommit`
 flushes.
 
+### Session Security: Discovery and Hijacking
+
+Since `lsid` is client-generated, a concern arises: can another user discover
+and attach to someone else's session? In MongoDB, `$listSessions` and
+`$listLocalSessions` aggregation stages enumerate active sessions (with admin
+privileges). In standard MongoDB this is benign because sessions don't hold
+uncommitted data. In DumboDB, where sessions hold uncommitted working sets,
+session discovery would allow data access.
+
+**Options (no decision required now):**
+
+1. **Don't implement `$listSessions`** — simplest first pass. Without a
+   discovery mechanism, the `lsid` UUID (128 bits) is effectively unguessable.
+   No enumeration = no hijacking vector. This is the likely Phase 1 approach.
+
+2. **Scope sessions to authenticated users** — tie sessions to `(lsid, username)`
+   so only the user who created the session can resume it. MongoDB already does
+   this when auth is enabled. This is the right long-term answer, but DumboDB
+   currently has **no authentication at all**, so this is deferred until auth
+   lands.
+
+3. **Server-generated session IDs** — DumboDB ignores the client's `lsid` and
+   generates its own, returning it to the client. More secure but breaks wire
+   protocol expectations. Not recommended.
+
 ### Edge Cases
 
 **Session reads branch HEAD instead of session state:**
