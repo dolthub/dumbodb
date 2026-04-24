@@ -15,18 +15,19 @@ adds per-write overhead on top of prolly tree mutation and BSON serialization.
 The exact cost breakdown has not been profiled — the overhead may come from the
 root commit, tree mutation, serialization, or a combination.
 
-For context: MongoDB by default acknowledges writes after they reach server
-memory, without waiting for data to be written to the on-disk journal. This is
-called "unacknowledged journal" mode. Data is flushed to disk periodically in
-the background (every ~100ms). The tradeoff is speed vs. crash safety — if the
-server crashes before the background flush, the most recent writes are lost.
-MongoDB users who need crash safety on every write must explicitly opt in.
+For context: since MongoDB 5.0, the default write concern is `{w:"majority"}`
+which implies journal sync — MongoDB waits for the write to be flushed to the
+on-disk journal before acknowledging. On a standalone server (non-replica-set),
+this means every write is crash-safe by default. Both MongoDB and DumboDB
+currently fsync on every write, so the benchmark performance gap is purely
+engine overhead (WiredTiger vs prolly trees), not a durability shortcut.
 
-DumboDB currently does the opposite: every single write goes through the full
-commit path, guaranteeing crash safety but at a performance cost. With session
-isolation, we can flip this default — writes stay in memory until the user
-explicitly calls `doltCommit`, which is both the durability flush and the
-version-control checkpoint.
+With session isolation, DumboDB changes this model: regular writes stay in
+memory (no commit, no fsync), and `doltCommit` is the explicit durability
+checkpoint. This means DumboDB would be *less* durable per-write than MongoDB's
+default, but with the tradeoff of faster writes and version-control-native
+semantics. Users who need per-write durability can call `doltCommit` after
+every write.
 
 ## Design Goals
 
