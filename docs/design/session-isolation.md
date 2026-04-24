@@ -366,7 +366,7 @@ Session isolation introduces concurrency and merge semantics that don't exist
 in DumboDB today. These tests should live in `tests/` as Go integration tests
 running against a live DumboDB server, using multiple concurrent mongo clients.
 
-### Test 1: Basic isolation — uncommitted writes invisible to other sessions
+### Test 1: Uncommitted writes invisible to read-only sessions
 
 Two clients connect to the same branch. Client A inserts a document. Client B
 (read-only, has not written) reads the collection. Since A hasn't committed,
@@ -380,7 +380,7 @@ Client A: doltCommit                              ← A's insert merges into bra
 Client B: find {} → should return [{_id: 1, x: "from A"}]  ← B still reads HEAD (now updated)
 ```
 
-### Test 1b: Dirty session is pinned to fork point
+### Test 2: Dirty session is pinned to fork point
 
 When Client B has its own uncommitted writes, it reads from its forked AM,
 which is pinned to the branch HEAD at the time of B's first write. B does
@@ -395,7 +395,7 @@ Client B: doltCommit                              ← three-way merge picks up b
 Client B: find {} → should return [{_id: 1}, {_id: 2}]
 ```
 
-### Test 2: Read-your-own-writes
+### Test 3: Read-your-own-writes
 
 A single client inserts a document and reads it back within the same session,
 before committing. The write creates a forked branchSession; reads within that
@@ -408,7 +408,7 @@ Client A: doltCommit
 Client A: find {_id: 1} → should still return [{_id: 1, x: "hello"}]
 ```
 
-### Test 3: Non-conflicting concurrent writes merge cleanly
+### Test 4: Non-conflicting concurrent writes merge cleanly
 
 Two clients write to different documents on the same branch, then both commit.
 No conflicts — three-way merge combines both sets of changes.
@@ -426,7 +426,7 @@ Client B: find {} → [{_id: 1}, {_id: 2}]          ← B's fork resets to C2; s
 Client C: find {} → [{_id: 1}, {_id: 2}]          ← C is read-only, sees HEAD
 ```
 
-### Test 3b: After commit, session returns to read-only and sees new commits
+### Test 5: After commit, session returns to read-only and sees new commits
 
 After committing, a session's branchSession is cleared. The session returns to
 read-only mode — subsequent reads go to the branch HEAD, picking up any commits
@@ -441,7 +441,7 @@ Client A: find {} → [{_id: 1}, {_id: 2}]          ← A has no fork, reads HEA
 Client B: find {} → [{_id: 1}, {_id: 2}]          ← B has no fork, reads HEAD (C2), sees A's commit
 ```
 
-### Test 4: Conflicting writes produce a conflict
+### Test 6: Conflicting writes produce a conflict
 
 Two clients modify the same document on the same branch, then both commit.
 The second committer should get a merge conflict.
@@ -454,9 +454,9 @@ Client A: doltCommit → succeeds
 Client B: doltCommit → conflict error (both modified _id:1 relative to the common base)
 ```
 
-### Test 5: Conflict resolution and continue
+### Test 7: Conflict resolution and continue
 
-Continues from Test 4. After a conflict, the session can resolve and re-commit.
+Continues from Test 6. After a conflict, the session can resolve and re-commit.
 
 ```
 Client B: doltCommit → conflict on _id:1
@@ -465,7 +465,7 @@ Client B: doltResolveConflict (choose "ours" or "theirs" or manual)
 Client B: doltCommit → succeeds
 ```
 
-### Test 6: Abandoned session cleanup
+### Test 8: Abandoned session cleanup
 
 A client writes without committing, then disconnects. Since the write never
 reached the branch HEAD (it was only in the session's forked AM), no other
@@ -479,7 +479,7 @@ Wait for session timeout
 Verify: session registry no longer holds A's branchSession
 ```
 
-### Test 7: Multi-branch isolation within one session
+### Test 9: Multi-branch isolation within one session
 
 A single client writes to two branches in the same session. Each branch has
 its own branchSession. Commits are independent.
@@ -494,7 +494,7 @@ Client A on mydb (main): doltCommit → succeeds
 Client B on mydb (main): find {} → now sees {_id: 1}          ← B reads updated main HEAD
 ```
 
-### Test 8: Session reconnection preserves uncommitted state
+### Test 10: Session reconnection preserves uncommitted state
 
 A client writes, disconnects, reconnects with the same lsid, and continues
 working with the same forked branchSession.
@@ -507,7 +507,7 @@ Client A: find {_id: 1} → should return [{_id: 1, x: "before disconnect"}]  �
 Client A: doltCommit → succeeds
 ```
 
-### Test 9: Concurrent commits — serialization order
+### Test 11: Concurrent commits — serialization order
 
 Three clients all fork from the same branch HEAD. Each commit merges against
 the result of the previous commit (the current HEAD at commit time), not
@@ -524,7 +524,7 @@ Client C: doltCommit → merge(base=C0, ours=C, theirs=C2) → HEAD is C3
 Final state: all three documents present
 ```
 
-### Test 10: Delete + modify conflict
+### Test 12: Delete + modify conflict
 
 One client deletes a document, another modifies it. The second committer
 should get a conflict — the base document was changed by both sides
