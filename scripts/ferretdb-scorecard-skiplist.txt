@@ -108,3 +108,14 @@ TestDBStatsCommandFreeStorage
 # message. Structural incompatibility, not a dumbodb bug.
 #
 TestCompactCommandNonExistent
+
+# --- Category: hard-coded wire version assertions (do-2h5w) ---
+#
+# These tests assert maxWireVersion == 21. DumboDB now advertises wire 24
+# (MongoDB 7.3 rapid release; wires 22-24 add no client-observable behavior).
+# The assertions test the literal version number, not real protocol behavior,
+# so the failures are not dumbodb bugs. Owner-approved skiplist additions
+# bundled with the wire version bump (do-2h5w).
+#
+TestHello
+TestCommandsReplication
