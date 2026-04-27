@@ -19,7 +19,7 @@ import (
 	"crypto/rand"
 
 	"github.com/FerretDB/wire"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -39,7 +39,7 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, lazyerrors.Error(err)
 	}
 
-	sessionID := primitive.Binary{
+	sessionID := bson.Binary{
 		Subtype: 0x04, // UUID subtype
 		Data:    id[:],
 	}

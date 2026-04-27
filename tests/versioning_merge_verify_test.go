@@ -30,6 +30,7 @@ package tests
 // database and the side effects of one scenario carry into the next.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand/v2"
@@ -37,8 +38,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // runCommandRaw runs a command and returns the raw BSON response as bson.M,
@@ -49,7 +50,7 @@ func runCommandRaw(t *testing.T, db *mongo.Database, cmd interface{}) bson.M {
 	t.Helper()
 
 	result := db.RunCommand(context.Background(), cmd)
-	rawBytes, err := result.DecodeBytes()
+	rawBytes, err := result.Raw()
 	if err != nil {
 		// The driver returns an error for ok:0; try to get the raw bytes anyway.
 		if rawBytes == nil {
@@ -58,7 +59,9 @@ func runCommandRaw(t *testing.T, db *mongo.Database, cmd interface{}) bson.M {
 	}
 
 	var m bson.M
-	require.NoError(t, bson.Unmarshal(rawBytes, &m))
+	dec := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(rawBytes)))
+	dec.DefaultDocumentM()
+	require.NoError(t, dec.Decode(&m))
 	return m
 }
 
@@ -151,7 +154,7 @@ func TestMergeVerify(t *testing.T) {
 		assert.EqualValues(t, 1, raw["ok"])
 
 		// feature now has both documents.
-		n, err := env.client.Database(dbName + "__d_feature").Collection("items").CountDocuments(ctx, bson.D{})
+		n, err := env.client.Database(dbName+"__d_feature").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), n, "feature must have 2 documents after fast-forward merge")
 	})
@@ -190,7 +193,7 @@ func TestMergeVerify(t *testing.T) {
 		hashC3 := dumboDBCommit(t, env, dbName, "add-three", "alice <alice@dumbodb>")
 
 		// Commit _id:4 on feature independently → C4.
-		_, err = env.client.Database(dbName + "__d_feature").Collection("items").InsertOne(ctx, bson.D{
+		_, err = env.client.Database(dbName+"__d_feature").Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(4)},
 			{Key: "v", Value: int32(4)},
 		})
@@ -230,7 +233,7 @@ func TestMergeVerify(t *testing.T) {
 		assert.Equal(t, "bob <bob@x>", head.Author, "merge commit author must be bob <bob@x>")
 
 		// All four documents must be visible on main after the merge.
-		n, err := env.client.Database(dbName + "__d_main").Collection("items").CountDocuments(ctx, bson.D{})
+		n, err := env.client.Database(dbName+"__d_main").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(4), n, "main must have all 4 documents after three-way merge")
 	})
@@ -386,10 +389,10 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 // two branches independently modify the same document, creating a conflict.
 //
 // Scenarios:
-//   5. Conflicting merge returns ok:0 with conflicts array
-//   6. dumboDBConflicts lists the conflict
-//   7. dumboDBResolveConflict with "ours" preserves our version
-//   8. dumboDBCommit after resolution creates a merge commit
+//  5. Conflicting merge returns ok:0 with conflicts array
+//  6. dumboDBConflicts lists the conflict
+//  7. dumboDBResolveConflict with "ours" preserves our version
+//  8. dumboDBCommit after resolution creates a merge commit
 //
 // Additionally tests:
 //   - dumboDBCommit is blocked while conflicts remain
@@ -598,7 +601,7 @@ func TestMergeConflictAbort(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName+"__d_main", "main-100", "alice")
 
-	_, err = env.client.Database(dbName + "__d_feature").Collection("items").UpdateOne(ctx,
+	_, err = env.client.Database(dbName+"__d_feature").Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 	)

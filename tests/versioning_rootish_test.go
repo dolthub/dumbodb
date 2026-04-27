@@ -22,8 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // assertRootishRejected verifies that any operation on an invalid rootish
@@ -153,7 +153,7 @@ func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	var docs []bson.D
 	require.NoError(t, cur.All(ctx, &docs))
 	require.Len(t, docs, 1)
-	assert.Equal(t, int32(1), docs[0].Map()["_id"])
+	assert.Equal(t, int32(1), dmap(docs[0])["_id"])
 }
 
 // TestRootish_CommitHash_DataIsolation is a focused end-to-end test of snapshot
@@ -170,7 +170,7 @@ func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	// hash1 has 1 doc; HEAD (after setup) has 2 docs.
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
-	snapColl := env.client.Database(dbName+"__d_"+hash1).Collection(collName)
+	snapColl := env.client.Database(dbName + "__d_" + hash1).Collection(collName)
 	mainColl := env.client.Database(dbName).Collection(collName)
 
 	// Main has 2 docs.

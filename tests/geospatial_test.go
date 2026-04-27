@@ -20,8 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // TestGeo_near_InvalidPointLongitude verifies that $near with $geometry and
@@ -149,7 +149,7 @@ func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 	// Moscow [37.62, 55.75] is ~2500 km from London — outside the 15° radius.
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", bson.A{float64(-0.12), float64(51.50)})), // London
-		d(e("_id", int32(2)), e("loc", bson.A{float64(2.35), float64(48.85)})), // Paris
+		d(e("_id", int32(2)), e("loc", bson.A{float64(2.35), float64(48.85)})),  // Paris
 		d(e("_id", int32(3)), e("loc", bson.A{float64(37.62), float64(55.75)})), // Moscow
 	)
 

@@ -20,9 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // TestBSON_minkey_maxkey_insert verifies that documents containing MinKey and MaxKey
@@ -38,13 +37,13 @@ func TestBSON_minkey_maxkey_insert(t *testing.T) {
 	// Insert documents with MinKey and MaxKey special BSON types.
 	_, err := coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
-		{Key: "k", Value: primitive.MinKey{}},
+		{Key: "k", Value: bson.MinKey{}},
 	})
 	require.NoError(t, err, "inserting a document with MinKey must succeed")
 
 	_, err = coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
-		{Key: "k", Value: primitive.MaxKey{}},
+		{Key: "k", Value: bson.MaxKey{}},
 	})
 	require.NoError(t, err, "inserting a document with MaxKey must succeed")
 
@@ -56,7 +55,7 @@ func TestBSON_minkey_maxkey_insert(t *testing.T) {
 	var foundMinKey bool
 	for _, el := range minDoc {
 		if el.Key == "k" {
-			_, foundMinKey = el.Value.(primitive.MinKey)
+			_, foundMinKey = el.Value.(bson.MinKey)
 			break
 		}
 	}
@@ -70,7 +69,7 @@ func TestBSON_minkey_maxkey_insert(t *testing.T) {
 	var foundMaxKey bool
 	for _, el := range maxDoc {
 		if el.Key == "k" {
-			_, foundMaxKey = el.Value.(primitive.MaxKey)
+			_, foundMaxKey = el.Value.(bson.MaxKey)
 			break
 		}
 	}
@@ -95,13 +94,13 @@ func TestBSON_minkey_sort_order(t *testing.T) {
 	// Insert MinKey and MaxKey docs.
 	_, err := coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
-		{Key: "v", Value: primitive.MinKey{}},
+		{Key: "v", Value: bson.MinKey{}},
 	})
 	require.NoError(t, err)
 
 	_, err = coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(4)},
-		{Key: "v", Value: primitive.MaxKey{}},
+		{Key: "v", Value: bson.MaxKey{}},
 	})
 	require.NoError(t, err)
 
@@ -151,13 +150,13 @@ func TestBSON_minkey_type_filter(t *testing.T) {
 
 	_, err := coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
-		{Key: "val", Value: primitive.MinKey{}},
+		{Key: "val", Value: bson.MinKey{}},
 	})
 	require.NoError(t, err)
 
 	_, err = coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
-		{Key: "val", Value: primitive.MaxKey{}},
+		{Key: "val", Value: bson.MaxKey{}},
 	})
 	require.NoError(t, err)
 

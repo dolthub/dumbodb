@@ -38,14 +38,32 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // buildOnce ensures the dumbodb binary is built exactly once per test run.
 var buildOnce sync.Once
+
+// dmap converts a bson.D (or already-bson.M) to a bson.M for ergonomic
+// key-based access in tests. Replaces v1's bson.D.Map() method, which was
+// removed in v2; also accepts bson.M so callers do not need to switch on
+// the v2 driver's BSONOptions.DefaultDocumentM behavior at every site.
+func dmap(v any) bson.M {
+	switch x := v.(type) {
+	case bson.M:
+		return x
+	case bson.D:
+		m := make(bson.M, len(x))
+		for _, e := range x {
+			m[e.Key] = e.Value
+		}
+		return m
+	default:
+		panic(fmt.Sprintf("dmap: unsupported type %T", v))
+	}
+}
 
 // dumboDBTestEnv holds a running dumbodb process and a connected MongoDB client.
 type dumboDBTestEnv struct {
@@ -125,8 +143,12 @@ func startDumboDB(tb testing.TB, extraArgs ...string) *dumboDBTestEnv {
 	}
 
 	// Connect with the MongoDB driver.
-	ctx := context.Background()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(fmt.Sprintf("mongodb://%s/", addr)))
+	// DefaultDocumentM matches v1's behavior of decoding sub-documents into bson.M
+	// when the surrounding container's element type is interface{}. Most tests
+	// type-assert to bson.M, so this keeps them working unchanged.
+	client, err := mongo.Connect(options.Client().
+		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
+		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
 	require.NoError(tb, err)
 	env.client = client
 
@@ -161,12 +183,12 @@ func insertDocs(tb testing.TB, coll *mongo.Collection, docs ...bson.D) {
 }
 
 // e is shorthand for bson.E (key-value pair in a bson.D document).
-func e(key string, val interface{}) primitive.E {
-	return primitive.E{Key: key, Value: val}
+func e(key string, val interface{}) bson.E {
+	return bson.E{Key: key, Value: val}
 }
 
 // d builds a bson.D from key-value pairs.
-func d(elems ...primitive.E) bson.D {
+func d(elems ...bson.E) bson.D {
 	return bson.D(elems)
 }
 
@@ -247,9 +269,9 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	// flags: 0b0001 (1) — bit 0 is set.
 	// flags: 0b0000 (0) — all bits clear.
 	insertDocs(t, coll,
-		d(e("_id", int32(1)), e("flags", int32(4))),  // 0b0100
-		d(e("_id", int32(2)), e("flags", int32(1))),  // 0b0001
-		d(e("_id", int32(3)), e("flags", int32(0))),  // 0b0000
+		d(e("_id", int32(1)), e("flags", int32(4))), // 0b0100
+		d(e("_id", int32(2)), e("flags", int32(1))), // 0b0001
+		d(e("_id", int32(3)), e("flags", int32(0))), // 0b0000
 	)
 
 	ctx := context.Background()
@@ -324,9 +346,9 @@ func TestQuery_geo_within_box(t *testing.T) {
 
 	// Store coordinates as legacy [lon, lat] arrays.
 	insertDocs(t, coll,
-		d(e("_id", int32(1)), e("loc", bson.A{float64(5), float64(5)})),   // inside
-		d(e("_id", int32(2)), e("loc", bson.A{float64(15), float64(5)})),  // outside (x > 10)
-		d(e("_id", int32(3)), e("loc", bson.A{float64(2), float64(2)})),   // inside
+		d(e("_id", int32(1)), e("loc", bson.A{float64(5), float64(5)})),  // inside
+		d(e("_id", int32(2)), e("loc", bson.A{float64(15), float64(5)})), // outside (x > 10)
+		d(e("_id", int32(3)), e("loc", bson.A{float64(2), float64(2)})),  // inside
 	)
 
 	ctx := context.Background()
@@ -417,7 +439,7 @@ func TestQuery_type_decimal(t *testing.T) {
 	env := startDumboDB(t)
 	coll := env.collection(t)
 
-	decVal, decErr := primitive.ParseDecimal128("3.14")
+	decVal, decErr := bson.ParseDecimal128("3.14")
 	require.NoError(t, decErr)
 
 	insertDocs(t, coll,
@@ -861,7 +883,7 @@ func TestQuery_type_number_alias_decimal(t *testing.T) {
 	env := startDumboDB(t)
 	coll := env.collection(t)
 
-	decVal, decErr := primitive.ParseDecimal128("9.99")
+	decVal, decErr := bson.ParseDecimal128("9.99")
 	require.NoError(t, decErr)
 
 	insertDocs(t, coll,
@@ -904,9 +926,9 @@ func TestQuery_type_objectid(t *testing.T) {
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
-		d(e("_id", int32(1)), e("ref", primitive.NewObjectID())),
+		d(e("_id", int32(1)), e("ref", bson.NewObjectID())),
 		d(e("_id", int32(2)), e("ref", "not-an-oid")),
-		d(e("_id", int32(3)), e("ref", primitive.NewObjectID())),
+		d(e("_id", int32(3)), e("ref", bson.NewObjectID())),
 	)
 
 	ctx := context.Background()
@@ -931,4 +953,3 @@ func TestQuery_type_objectid(t *testing.T) {
 	}
 	require.Equal(t, []int32{1, 3}, ids)
 }
-

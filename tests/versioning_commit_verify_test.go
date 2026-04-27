@@ -34,8 +34,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // commitVerifySetup mirrors the Setup section of docs/verify/commit.md.
@@ -286,7 +285,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.EqualValues(t, 1, result["ok"])
 
 		// The echoed timestamp must equal the provided value (within millisecond precision).
-		echoedTS, ok := result["timestamp"].(primitive.DateTime)
+		echoedTS, ok := result["timestamp"].(bson.DateTime)
 		require.True(t, ok, "timestamp must be a BSON datetime, got %T", result["timestamp"])
 		assert.Equal(t, fixedTime.UnixMilli(), int64(echoedTS),
 			"echoed timestamp must match the provided fixed time")
@@ -304,7 +303,7 @@ func TestCommitVerify(t *testing.T) {
 
 		entry, ok := commits[0].(bson.M)
 		require.True(t, ok)
-		logTS, ok := entry["timestamp"].(primitive.DateTime)
+		logTS, ok := entry["timestamp"].(bson.DateTime)
 		require.True(t, ok, "log timestamp must be a BSON datetime")
 		assert.Equal(t, fixedTime.UnixMilli(), int64(logTS),
 			"doltLog timestamp must match the provided fixed time")

@@ -21,8 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // TestMongoDB_GroupAndTotalTutorial verifies the $match → $sort → $group ($first, $sum, $push)
@@ -102,9 +101,9 @@ func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	//   Busby Bee: 35
 	//   Cam Elot: 25
 
-	r0 := results[0].Map()
-	r1 := results[1].Map()
-	r2 := results[2].Map()
+	r0 := dmap(results[0])
+	r1 := dmap(results[1])
+	r2 := dmap(results[2])
 
 	// --- Result 0: Ant O. Knee (highest total) ---
 
@@ -120,7 +119,7 @@ func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	assert.EqualValues(t, 2, r0["totalNum"])
 
 	// $first "$ord_date" must return the datetime from the first sorted document.
-	// The driver decodes BSON Date as primitive.DateTime (int64 ms since epoch).
+	// The driver decodes BSON Date as bson.DateTime (int64 ms since epoch).
 	fpd0 := r0["firstPurchaseDate"]
 	assertDateTimeEqual(t, mar01, fpd0, "firstPurchaseDate for Ant O. Knee must be 2020-03-01")
 
@@ -129,11 +128,11 @@ func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	require.True(t, ok, "orders must be a BSON array, got %T", r0["orders"])
 	require.Len(t, orders0, 2, "Ant O. Knee has 2 orders")
 
-	o00 := orders0[0].(bson.D).Map()
+	o00 := orders0[0].(bson.M)
 	assert.EqualValues(t, 25, o00["amount"], "first order amount must be 25, not the literal string \"$price\"")
 	assertDateTimeEqual(t, mar01, o00["date"], "first order date must be 2020-03-01")
 
-	o01 := orders0[1].(bson.D).Map()
+	o01 := orders0[1].(bson.M)
 	assert.EqualValues(t, 70, o01["amount"], "second order amount must be 70")
 	assertDateTimeEqual(t, mar08, o01["date"], "second order date must be 2020-03-08")
 
@@ -147,7 +146,7 @@ func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	orders1, ok := r1["orders"].(bson.A)
 	require.True(t, ok)
 	require.Len(t, orders1, 1)
-	o10 := orders1[0].(bson.D).Map()
+	o10 := orders1[0].(bson.M)
 	assert.EqualValues(t, 35, o10["amount"])
 	assertDateTimeEqual(t, jan15, o10["date"], "Busby Bee order date must be 2020-01-15")
 
@@ -158,13 +157,13 @@ func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	assert.EqualValues(t, 25, r2["totalValue"])
 }
 
-// assertDateTimeEqual checks that a BSON date value (primitive.DateTime or time.Time)
+// assertDateTimeEqual checks that a BSON date value (bson.DateTime or time.Time)
 // equals the expected time.
 func assertDateTimeEqual(t *testing.T, want time.Time, got any, msgAndArgs ...any) {
 	t.Helper()
 
 	switch v := got.(type) {
-	case primitive.DateTime:
+	case bson.DateTime:
 		assert.True(t, want.Equal(v.Time()), msgAndArgs...)
 	case time.Time:
 		assert.True(t, want.Equal(v), msgAndArgs...)

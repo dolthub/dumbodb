@@ -26,13 +26,13 @@ import (
 	"time"
 
 	"github.com/FerretDB/wire/wirebson"
-	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
+	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
 	"github.com/google/uuid"
-	mongobson "go.mongodb.org/mongo-driver/bson"
+	mongobson "go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
@@ -1484,7 +1484,6 @@ func decodeDocument(data []byte) (*types.Document, error) {
 
 	return doc, nil
 }
-
 
 // keyBytesToRecordID derives a stable int64 RecordID from the fixed 20-byte hash key.
 // The first 8 bytes are interpreted as a big-endian int64.

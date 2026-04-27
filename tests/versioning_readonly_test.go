@@ -22,8 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // dumboDBCommit runs dumboDBCommit on the given database and returns the commit hash.
@@ -285,7 +285,7 @@ func TestReadOnlyRootish_AncestorExpr_ReadsSucceed(t *testing.T) {
 	setupVersioningDB(t, env, dbName, collName)
 
 	// main~1 = one commit back from HEAD = first commit.
-	ancestorColl := env.client.Database(dbName+"__d_main~1").Collection(collName)
+	ancestorColl := env.client.Database(dbName + "__d_main~1").Collection(collName)
 
 	t.Run("find", func(t *testing.T) {
 		t.Parallel()

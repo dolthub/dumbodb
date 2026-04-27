@@ -20,9 +20,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // TestCRUD_FindOneAndUpdate_Basic verifies findOneAndUpdate returns the OLD document
@@ -44,14 +44,14 @@ func TestCRUD_FindOneAndUpdate_Basic(t *testing.T) {
 	require.NoError(t, err, "findOneAndUpdate must not error on existing document")
 
 	// Default ReturnDocument=Before — the result is the original doc.
-	m := before.Map()
+	m := dmap(before)
 	assert.Equal(t, "alice", m["name"])
 	assert.Equal(t, int32(10), m["score"], "default behavior returns document BEFORE update")
 
 	// Verify the update was actually applied.
 	var after bson.D
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "name", Value: "alice"}}).Decode(&after))
-	assert.Equal(t, int32(20), after.Map()["score"], "document must reflect update")
+	assert.Equal(t, int32(20), dmap(after)["score"], "document must reflect update")
 }
 
 // TestCRUD_FindOneAndUpdate_ReturnAfter verifies findOneAndUpdate with
@@ -74,7 +74,7 @@ func TestCRUD_FindOneAndUpdate_ReturnAfter(t *testing.T) {
 	).Decode(&result)
 	require.NoError(t, err)
 
-	assert.Equal(t, int32(99), result.Map()["score"], "ReturnDocument=After must return updated document")
+	assert.Equal(t, int32(99), dmap(result)["score"], "ReturnDocument=After must return updated document")
 }
 
 // TestCRUD_FindOneAndUpdate_Upsert verifies that findOneAndUpdate with Upsert=true
@@ -96,7 +96,7 @@ func TestCRUD_FindOneAndUpdate_Upsert(t *testing.T) {
 	).Decode(&result)
 	require.NoError(t, err, "findOneAndUpdate with upsert must insert a new document")
 
-	m := result.Map()
+	m := dmap(result)
 	assert.Equal(t, "charlie", m["name"])
 	assert.Equal(t, int32(42), m["score"])
 
@@ -146,7 +146,7 @@ func TestCRUD_FindOneAndUpdate_Projection(t *testing.T) {
 		opts,
 	).Decode(&result))
 
-	m := result.Map()
+	m := dmap(result)
 	assert.Equal(t, int32(10), m["score"])
 	assert.Nil(t, m["name"], "projected-out field must not appear")
 	assert.Nil(t, m["extra"], "projected-out field must not appear")
@@ -169,7 +169,7 @@ func TestCRUD_FindOneAndDelete_Basic(t *testing.T) {
 		bson.D{{Key: "name", Value: "eve"}},
 	).Decode(&deleted)
 	require.NoError(t, err, "findOneAndDelete must not error on existing document")
-	assert.Equal(t, "eve", deleted.Map()["name"])
+	assert.Equal(t, "eve", dmap(deleted)["name"])
 
 	// Verify the document is gone.
 	count, err := coll.CountDocuments(ctx, bson.D{{Key: "name", Value: "eve"}})
@@ -212,7 +212,7 @@ func TestCRUD_FindOneAndDelete_Sort(t *testing.T) {
 	opts := options.FindOneAndDelete().SetSort(bson.D{{Key: "score", Value: 1}})
 	var result bson.D
 	require.NoError(t, coll.FindOneAndDelete(ctx, bson.D{}, opts).Decode(&result))
-	assert.Equal(t, int32(1), result.Map()["score"], "sort ascending should delete the lowest-score doc")
+	assert.Equal(t, int32(1), dmap(result)["score"], "sort ascending should delete the lowest-score doc")
 
 	// Two documents must remain.
 	count, err := coll.CountDocuments(ctx, bson.D{})
@@ -249,7 +249,7 @@ func TestCRUD_UpdateMany_Basic(t *testing.T) {
 	// Verify inactive doc was untouched.
 	var inactive bson.D
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "status", Value: "inactive"}}).Decode(&inactive))
-	assert.Nil(t, inactive.Map()["updated"], "inactive document must not have 'updated' field")
+	assert.Nil(t, dmap(inactive)["updated"], "inactive document must not have 'updated' field")
 }
 
 // TestCRUD_UpdateMany_Upsert verifies UpdateMany with Upsert inserts when no
@@ -259,7 +259,7 @@ func TestCRUD_UpdateMany_Upsert(t *testing.T) {
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	opts := options.Update().SetUpsert(true)
+	opts := options.UpdateMany().SetUpsert(true)
 	result, err := coll.UpdateMany(ctx,
 		bson.D{{Key: "name", Value: "upserted"}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "created", Value: true}}}},
@@ -366,7 +366,7 @@ func TestCRUD_BulkWrite_InsertUpdateDelete(t *testing.T) {
 
 	var updated bson.D
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "name", Value: "to-update"}}).Decode(&updated))
-	assert.Equal(t, int32(10), updated.Map()["v"])
+	assert.Equal(t, int32(10), dmap(updated)["v"])
 
 	err = coll.FindOne(ctx, bson.D{{Key: "name", Value: "to-delete"}}).Err()
 	assert.ErrorIs(t, err, mongo.ErrNoDocuments, "deleted document must be gone")
@@ -460,7 +460,7 @@ func TestCRUD_BulkWrite_ReplaceOne(t *testing.T) {
 
 	var doc bson.D
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "name", Value: "replaced"}}).Decode(&doc))
-	m := doc.Map()
+	m := dmap(doc)
 	assert.Equal(t, "replaced", m["name"])
 	assert.Nil(t, m["extra"], "ReplaceOne must drop fields not in the replacement document")
 }
@@ -472,7 +472,7 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	opts := options.Update().SetUpsert(true)
+	opts := options.UpdateOne().SetUpsert(true)
 
 	// First call: no match → upsert insert. $setOnInsert must apply.
 	result, err := coll.UpdateOne(ctx,
@@ -488,7 +488,7 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 
 	var doc bson.D
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "key", Value: "soi-test"}}).Decode(&doc))
-	assert.Equal(t, true, doc.Map()["created"], "$setOnInsert must set 'created' on upsert insert")
+	assert.Equal(t, true, dmap(doc)["created"], "$setOnInsert must set 'created' on upsert insert")
 
 	// Second call: now a document exists → update (not insert). $setOnInsert must NOT change 'created'.
 	result, err = coll.UpdateOne(ctx,
@@ -503,7 +503,7 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 	assert.Equal(t, int64(0), result.UpsertedCount, "second call must update, not upsert")
 
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "key", Value: "soi-test"}}).Decode(&doc))
-	assert.Equal(t, true, doc.Map()["created"], "$setOnInsert must NOT change 'created' on update")
+	assert.Equal(t, true, dmap(doc)["created"], "$setOnInsert must NOT change 'created' on update")
 }
 
 // TestCRUD_InsertMany_DuplicateKey verifies InsertMany returns a BulkWriteException
@@ -569,7 +569,7 @@ func TestCRUD_ReplaceOne_Basic(t *testing.T) {
 
 	var doc bson.D
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "name", Value: "new"}}).Decode(&doc))
-	assert.Nil(t, doc.Map()["extra"], "ReplaceOne must remove fields not in replacement")
+	assert.Nil(t, dmap(doc)["extra"], "ReplaceOne must remove fields not in replacement")
 }
 
 // TestCRUD_CountDocuments_WithFilter verifies CountDocuments returns the correct
@@ -606,8 +606,8 @@ func TestCRUD_Distinct_Basic(t *testing.T) {
 		bson.D{{Key: "cat", Value: "B"}, {Key: "v", Value: int32(3)}},
 	)
 
-	values, err := coll.Distinct(ctx, "cat", bson.D{})
-	require.NoError(t, err)
+	var values []any
+	require.NoError(t, coll.Distinct(ctx, "cat", bson.D{}).Decode(&values))
 	assert.Len(t, values, 2, "Distinct must return 2 unique categories")
 	// Values may be in any order.
 	found := map[string]bool{}
@@ -629,8 +629,8 @@ func TestCRUD_Distinct_WithFilter(t *testing.T) {
 		bson.D{{Key: "group", Value: "y"}, {Key: "val", Value: int32(3)}},
 	)
 
-	vals, err := coll.Distinct(ctx, "val", bson.D{{Key: "group", Value: "x"}})
-	require.NoError(t, err)
+	var vals []any
+	require.NoError(t, coll.Distinct(ctx, "val", bson.D{{Key: "group", Value: "x"}}).Decode(&vals))
 	assert.Len(t, vals, 2)
 }
 func TestUpdateMany_upsert(t *testing.T) {
@@ -645,7 +645,7 @@ func TestUpdateMany_upsert(t *testing.T) {
 	res, err := coll.UpdateMany(ctx,
 		d(e("status", "pending")),
 		d(e("$set", d(e("status", "pending"), e("count", int32(1))))),
-		options.Update().SetUpsert(true),
+		options.UpdateMany().SetUpsert(true),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), res.MatchedCount, "no documents should match before upsert")

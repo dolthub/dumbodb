@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // assertExplainResponse checks that the explain response contains the expected
@@ -28,11 +28,11 @@ import (
 func assertExplainResponse(t *testing.T, res bson.D, verbosity string) {
 	t.Helper()
 
-	m := res.Map()
+	m := dmap(res)
 
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
 	assert.NotEmpty(t, m["queryPlanner"], "queryPlanner must be present and non-empty")
-	assert.IsType(t, bson.D{}, m["queryPlanner"], "queryPlanner must be a document")
+	assert.IsType(t, bson.M{}, m["queryPlanner"], "queryPlanner must be a document")
 	assert.NotNil(t, m["serverInfo"], "serverInfo must be present")
 	assert.NotNil(t, m["command"], "command must be present")
 
@@ -242,7 +242,7 @@ func TestDB_RunCommand_DbStats(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "dbStats via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
 
@@ -316,7 +316,7 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "collStats via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
 
@@ -358,7 +358,7 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 	assert.GreaterOrEqual(t, nindexes, int32(1), "nindexes must be >= 1")
 
 	// indexDetails must be a document.
-	_, ok = m["indexDetails"].(bson.D)
+	_, ok = m["indexDetails"].(bson.M)
 	assert.True(t, ok, "indexDetails must be a document, got %T", m["indexDetails"])
 
 	// indexBuilds must be an array.
@@ -370,7 +370,7 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 	assert.True(t, ok, "totalIndexSize must be int32, got %T", m["totalIndexSize"])
 
 	// indexSizes must be a document.
-	_, ok = m["indexSizes"].(bson.D)
+	_, ok = m["indexSizes"].(bson.M)
 	assert.True(t, ok, "indexSizes must be a document, got %T", m["indexSizes"])
 
 	// totalSize must be int32 and > 0.
@@ -409,7 +409,7 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "listCollections via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// Top-level ok must be 1.
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
@@ -417,10 +417,10 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 	// cursor must be present and be a document.
 	cursorRaw, ok := m["cursor"]
 	require.True(t, ok, "response must contain a 'cursor' field")
-	cursor, ok := cursorRaw.(bson.D)
+	cursor, ok := cursorRaw.(bson.M)
 	require.True(t, ok, "cursor must be a document (bson.D), got %T", cursorRaw)
 
-	cm := cursor.Map()
+	cm := dmap(cursor)
 
 	// cursor.id must be 0 (no server-side cursor for listCollections).
 	assert.EqualValues(t, int64(0), cm["id"], "cursor.id must be 0")
@@ -437,11 +437,11 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 	// Find the collection entry by name.
 	found := false
 	for _, item := range firstBatch {
-		entry, ok := item.(bson.D)
+		entry, ok := item.(bson.M)
 		if !ok {
 			continue
 		}
-		if entry.Map()["name"] == coll.Name() {
+		if dmap(entry)["name"] == coll.Name() {
 			found = true
 			break
 		}
@@ -465,7 +465,7 @@ func TestDB_RunCommand_BuildInfo(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "buildInfo must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// ok must be 1.
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
@@ -507,9 +507,9 @@ func TestDB_RunCommand_BuildInfo(t *testing.T) {
 	// openssl must be a document with compiled and running fields.
 	opensslRaw, ok := m["openssl"]
 	require.True(t, ok, "openssl must be present in buildInfo response")
-	openssl, ok := opensslRaw.(bson.D)
+	openssl, ok := opensslRaw.(bson.M)
 	require.True(t, ok, "openssl must be a document, got %T", opensslRaw)
-	opensslMap := openssl.Map()
+	opensslMap := dmap(openssl)
 	_, ok = opensslMap["compiled"].(string)
 	assert.True(t, ok, "openssl.compiled must be a string, got %T", opensslMap["compiled"])
 	_, ok = opensslMap["running"].(string)
@@ -548,7 +548,7 @@ func TestDB_RunCommand_Validate(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "validate via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// ok must be 1.
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
@@ -572,12 +572,12 @@ func TestDB_RunCommand_Validate(t *testing.T) {
 	assert.GreaterOrEqual(t, nIndexes, int32(1), "nIndexes must be >= 1")
 
 	// keysPerIndex must be a document with at least one entry.
-	keysPerIndex, ok := m["keysPerIndex"].(bson.D)
+	keysPerIndex, ok := m["keysPerIndex"].(bson.M)
 	require.True(t, ok, "keysPerIndex must be a document, got %T", m["keysPerIndex"])
 	assert.NotEmpty(t, keysPerIndex, "keysPerIndex must have at least one entry")
 
 	// indexDetails must be a document.
-	_, ok = m["indexDetails"].(bson.D)
+	_, ok = m["indexDetails"].(bson.M)
 	assert.True(t, ok, "indexDetails must be a document, got %T", m["indexDetails"])
 
 	// repaired must be false (no repairs needed for a fresh collection).
@@ -614,7 +614,7 @@ func TestDB_ListDatabases(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "listDatabases via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// Top-level ok must be 1 (float64).
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
@@ -638,10 +638,10 @@ func TestDB_ListDatabases(t *testing.T) {
 	// Collect database names and verify each entry's field types.
 	dbNames := make(map[string]bool)
 	for i, item := range databases {
-		entry, ok := item.(bson.D)
+		entry, ok := item.(bson.M)
 		require.True(t, ok, "databases[%d] must be a document (bson.D), got %T", i, item)
 
-		em := entry.Map()
+		em := dmap(entry)
 
 		name, ok := em["name"].(string)
 		require.True(t, ok, "databases[%d].name must be a string, got %T", i, em["name"])
@@ -686,7 +686,7 @@ func TestDB_RunCommand_Hello(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "hello via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// ok must be 1.
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
@@ -719,7 +719,7 @@ func TestDB_RunCommand_Hello(t *testing.T) {
 	// connectionId must be int32.
 	assert.IsType(t, int32(0), m["connectionId"], "connectionId must be int32")
 
-	// localTime must be present (primitive.DateTime is an int64 alias decoded from BSON UTC datetime).
+	// localTime must be present (bson.DateTime is an int64 alias decoded from BSON UTC datetime).
 	_, ok = m["localTime"]
 	assert.True(t, ok, "localTime must be present in hello response")
 }
@@ -739,7 +739,7 @@ func TestDB_RunCommand_IsMaster(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "isMaster via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// ok must be 1.
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
@@ -792,7 +792,7 @@ func TestDB_RunCommand_ServerStatus(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "serverStatus via RunCommand must not error")
 
-	m := res.Map()
+	m := dmap(res)
 
 	// ok must be 1.
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
