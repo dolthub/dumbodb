@@ -27,8 +27,8 @@ jobs:
           # Start clean (preserve .git)
           find wiki -mindepth 1 -not -path 'wiki/.git*' -delete
 
-          # Home page: README is the landing page
-          cp README.md wiki/Home.md
+          # Home page: README with links rewritten for wiki context
+          sed 's|docs/COMMANDS.md|Commands|g' README.md > wiki/Home.md
 
           # Command reference
           cp docs/COMMANDS.md wiki/Commands.md
