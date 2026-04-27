@@ -450,9 +450,12 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	author, err := common.GetRequiredParam[string](document, "author")
+	author, err := common.GetOptionalParam[string](document, "author", "")
 	if err != nil {
 		return nil, err
+	}
+	if author == "" {
+		author = "dumbodb <dumbodb@dumbodb>"
 	}
 
 	ts, err := common.GetOptionalParam[time.Time](document, "timestamp", time.Time{})
@@ -810,7 +813,9 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		for _, c := range res.Collections {
 			entry := must.NotFail(types.NewDocument(
 				"name", c.Collection,
+				"collection", c.Collection,
 				"count", int32(c.Count),
+				"conflictCount", int32(c.Count),
 			))
 			collectionsArr.Append(entry)
 		}
