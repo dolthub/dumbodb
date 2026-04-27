@@ -25,7 +25,7 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/dumbodb/build/version"
+	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"

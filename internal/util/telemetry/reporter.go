@@ -27,7 +27,7 @@ import (
 
 	"github.com/AlekSi/pointer"
 
-	"github.com/dolthub/dumbodb/build/version"
+	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
 	"github.com/dolthub/dumbodb/internal/util/ctxutil"
 	"github.com/dolthub/dumbodb/internal/util/iterator"

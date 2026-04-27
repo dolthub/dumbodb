@@ -23,7 +23,7 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dumbodb/build/version"
+	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
