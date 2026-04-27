@@ -347,16 +347,31 @@ func (c *conn) run(ctx context.Context) (err error) {
 			resBody = proxyBody
 		}
 
-		if resHeader == nil || resBody == nil {
-			panic("no response to send to client")
+		// If the client set moreToCome on an OP_MSG request, it is a
+		// fire-and-forget message (e.g. unacknowledged writes with w:0)
+		// and the server MUST NOT send a response. Sending one anyway
+		// desynchronizes the wire stream and the next response is read
+		// by the driver as belonging to a later request, which surfaces
+		// as "Server ended moreToCome unexpectedly" in MongoDB drivers.
+		fireAndForget := false
+		if reqHeader.OpCode == wire.OpCodeMsg {
+			if reqMsg, ok := reqBody.(*wire.OpMsg); ok && reqMsg.Flags.FlagSet(wire.OpMsgMoreToCome) {
+				fireAndForget = true
+			}
 		}
 
-		if err = wire.WriteMessage(bufw, resHeader, resBody); err != nil {
-			return
-		}
+		if !fireAndForget {
+			if resHeader == nil || resBody == nil {
+				panic("no response to send to client")
+			}
 
-		if err = bufw.Flush(); err != nil {
-			return
+			if err = wire.WriteMessage(bufw, resHeader, resBody); err != nil {
+				return
+			}
+
+			if err = bufw.Flush(); err != nil {
+				return
+			}
 		}
 
 		if resCloseConn {
