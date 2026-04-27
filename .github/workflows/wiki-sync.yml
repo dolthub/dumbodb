@@ -1,0 +1,88 @@
+name: Sync docs to wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  wiki-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      - name: Checkout wiki repo
+        uses: actions/checkout@v4
+        with:
+          repository: dolthub/dumbodb.wiki
+          path: wiki
+          token: ${{ secrets.WIKI_SYNC_TOKEN }}
+
+      - name: Sync docs to wiki
+        run: |
+          # Start clean (preserve .git)
+          find wiki -mindepth 1 -not -path 'wiki/.git*' -delete
+
+          # COMMANDS.md becomes the wiki landing page
+          if [ -f docs/COMMANDS.md ]; then
+            cp docs/COMMANDS.md wiki/Home.md
+          fi
+
+          # Copy all top-level docs
+          for f in docs/*.md; do
+            [ -f "$f" ] && cp "$f" "wiki/$(basename "$f")"
+          done
+
+          # Copy design docs with prefix for wiki namespace
+          if [ -d docs/design ]; then
+            for f in docs/design/*.md; do
+              [ -f "$f" ] && cp "$f" "wiki/Design-$(basename "$f")"
+            done
+          fi
+
+          # Copy verify docs with prefix
+          if [ -d docs/verify ]; then
+            for f in docs/verify/*.md; do
+              [ -f "$f" ] && cp "$f" "wiki/Verify-$(basename "$f")"
+            done
+          fi
+
+          # Generate sidebar
+          cd wiki
+          {
+            echo "### DumboDB"
+            echo "- [[Home]]"
+            echo "- [[COMMANDS]]"
+            echo ""
+            echo "### Design"
+            for f in Design-*.md; do
+              [ -f "$f" ] || continue
+              name="${f%.md}"
+              name="${name#Design-}"
+              echo "- [[$name|$f]]"
+            done
+            echo ""
+            echo "### Verification"
+            for f in Verify-*.md; do
+              [ -f "$f" ] || continue
+              name="${f%.md}"
+              name="${name#Verify-}"
+              echo "- [[$name|$f]]"
+            done
+          } > _Sidebar.md
+
+      - name: Commit and push to wiki
+        run: |
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to push to wiki."
+          else
+            git commit -m "docs: sync from main ($(git -C .. rev-parse --short HEAD))"
+            git push
+          fi
