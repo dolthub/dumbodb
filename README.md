@@ -129,26 +129,6 @@ That repo uses a dual-client harness (`PairTest`) that runs each operation again
 | `DumboDBXFail` | Both exercised; DumboDB divergence recorded but not fatal |
 | `DumboDBMongoOnly` | MongoDB only; DumboDB skipped (auth, sharding, GridFS, etc.) |
 
-### FerretDB integration tests
-
-The `ferretdb/` directory is a Git submodule containing the [FerretDB](https://github.com/FerretDB/FerretDB) integration test suite. Initialize it once:
-
-```bash
-git submodule update --init --recursive
-```
-
-| Make target | Target | Purpose |
-|---|---|---|
-| `ferretdb-scorecard` | DumboDB | DumboDB's current pass rate |
-| `ferretdb-compat` | DumboDB vs MongoDB | Diff DumboDB against MongoDB |
-| `mongodb-reference` | Real MongoDB | Gold-standard baseline |
-| `ferretdb-reference` | FerretDB | FerretDB baseline |
-
-```bash
-make ferretdb-scorecard
-# Results: .runtime/ferretdb-scorecard.txt
-```
-
 ## Acknowledgements
 
 DumboDB is built on two open-source projects:
@@ -166,6 +146,5 @@ tests/                DumboDB-specific regression tests
 docs/
   design/             Design documents and architecture notes
   verify/             Manual + automated verification guides
-ferretdb/             FerretDB integration test suite (submodule)
-.github/workflows/    CI: scorecard, parity, bats
+.github/workflows/    CI: go test, bats
 ```
