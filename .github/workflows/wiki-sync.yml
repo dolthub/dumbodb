@@ -60,17 +60,17 @@ jobs:
             echo "### Design"
             for f in Design-*.md; do
               [ -f "$f" ] || continue
-              name="${f%.md}"
-              name="${name#Design-}"
-              echo "- [[$name|$f]]"
+              page="${f%.md}"
+              label="${page#Design-}"
+              echo "- [[$label|$page]]"
             done
             echo ""
             echo "### Verification"
             for f in Verify-*.md; do
               [ -f "$f" ] || continue
-              name="${f%.md}"
-              name="${name#Verify-}"
-              echo "- [[$name|$f]]"
+              page="${f%.md}"
+              label="${page#Verify-}"
+              echo "- [[$label|$page]]"
             done
           } > _Sidebar.md
 
