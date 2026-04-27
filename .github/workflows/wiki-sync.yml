@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'README.md'
   workflow_dispatch:
 
 jobs:
@@ -21,58 +22,38 @@ jobs:
           path: wiki
           token: ${{ secrets.WIKI_SYNC_TOKEN }}
 
-      - name: Sync docs to wiki
+      - name: Build wiki pages
         run: |
           # Start clean (preserve .git)
           find wiki -mindepth 1 -not -path 'wiki/.git*' -delete
 
-          # COMMANDS.md becomes the wiki landing page
-          if [ -f docs/COMMANDS.md ]; then
-            cp docs/COMMANDS.md wiki/Home.md
-          fi
+          # Home page: README is the landing page
+          cp README.md wiki/Home.md
 
-          # Copy all top-level docs
-          for f in docs/*.md; do
-            [ -f "$f" ] && cp "$f" "wiki/$(basename "$f")"
-          done
+          # Command reference
+          cp docs/COMMANDS.md wiki/Commands.md
 
-          # Copy design docs with prefix for wiki namespace
-          if [ -d docs/design ]; then
-            for f in docs/design/*.md; do
-              [ -f "$f" ] && cp "$f" "wiki/Design-$(basename "$f")"
-            done
-          fi
+          # Sidebar: simple navigation with command links
+          cat > wiki/_Sidebar.md << 'SIDEBAR'
+          ### Navigation
+          - [[Home]]
+          - [[Commands]]
 
-          # Copy verify docs with prefix
-          if [ -d docs/verify ]; then
-            for f in docs/verify/*.md; do
-              [ -f "$f" ] && cp "$f" "wiki/Verify-$(basename "$f")"
-            done
-          fi
-
-          # Generate sidebar
-          cd wiki
-          {
-            echo "### DumboDB"
-            echo "- [[Home]]"
-            echo "- [[COMMANDS]]"
-            echo ""
-            echo "### Design"
-            for f in Design-*.md; do
-              [ -f "$f" ] || continue
-              page="${f%.md}"
-              label="${page#Design-}"
-              echo "- [[$label|$page]]"
-            done
-            echo ""
-            echo "### Verification"
-            for f in Verify-*.md; do
-              [ -f "$f" ] || continue
-              page="${f%.md}"
-              label="${page#Verify-}"
-              echo "- [[$label|$page]]"
-            done
-          } > _Sidebar.md
+          ### dolt* Commands
+          - [[doltCommit|Commands#doltcommit]]
+          - [[doltBranch|Commands#doltbranch]]
+          - [[doltMerge|Commands#doltmerge]]
+          - [[doltLog|Commands#doltlog]]
+          - [[doltDiff|Commands#doltdiff]]
+          - [[doltStatus|Commands#doltstatus]]
+          - [[doltReset|Commands#doltreset]]
+          - [[doltRevert|Commands#doltrevert]]
+          - [[doltCherryPick|Commands#doltcherrypick]]
+          - [[doltRebase|Commands#doltrebase]]
+          - [[doltCurrentBranch|Commands#doltcurrentbranch]]
+          - [[doltConflicts|Commands#doltconflicts]]
+          - [[doltResolveConflict|Commands#doltresolveconflict]]
+          SIDEBAR
 
       - name: Commit and push to wiki
         run: |
