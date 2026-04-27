@@ -971,3 +971,4 @@ detail.conflicts.forEach(c => {
 main.runCommand({ doltMerge: 1, continue: 1 })
 // { commitId: "...", message: "Merge branch 'feature' into 'main'", ok: 1 }
 ```
+
