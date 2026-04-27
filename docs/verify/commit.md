@@ -12,11 +12,12 @@ scenario top to bottom. Each section builds on the previous setup.
 
 ## Parameters
 
-| Parameter   | Type     | Required | Default      | Description                              |
-|-------------|----------|----------|--------------|------------------------------------------|
-| `message`   | string   | no       | `""`         | Commit message                           |
-| `author`    | string   | **yes**  | —            | Name of the commit author                |
-| `timestamp` | datetime | no       | current time | Commit timestamp (BSON Date)             |
+| Parameter    | Type     | Required | Default      | Description                                                                  |
+|--------------|----------|----------|--------------|------------------------------------------------------------------------------|
+| `message`    | string   | no       | `""`         | Commit message                                                               |
+| `author`     | string   | **yes**  | —            | Name of the commit author                                                    |
+| `timestamp`  | datetime | no       | current time | Commit timestamp (BSON Date)                                                 |
+| `allowEmpty` | bool     | no       | `false`      | When true, create a commit even if the working set has no changes vs HEAD    |
 
 ## Prerequisites
 
@@ -57,9 +58,10 @@ After setup, `commitdb` has one commit on `main` with two documents.
 
 `doltCommit` returns `hash`, `branch`, `message`, `author`, `timestamp`, and `ok`.
 
-The response from setup already demonstrates the shape. Verify each field:
+The response from setup already demonstrates the shape. Verify each field after a real change:
 
 ```js
+db.items.insertOne({ _id: 100, label: "shape", v: 100 })
 const r = db.runCommand({ doltCommit: 1, message: "shape check", author: "alice <alice@dumbodb>" })
 printjson(r)
 ```
@@ -106,16 +108,16 @@ printjson(r2)
 
 // Verify isolation: feature has the new doc, main does not
 feature.items.countDocuments({})
-// Expected: 3 (two from setup + _id:3)
+// Expected: 4 (three from setup + Scenario 1 + _id:3)
 
 db.getSiblingDB("commitdb__d_main").items.countDocuments({})
-// Expected: 2 (feature commit must not affect main)
+// Expected: 3 (feature commit must not affect main)
 ```
 
 Key checks:
 - `hash` is non-empty, `message` echoes `"feature commit"`, `ok` is `1`
-- `feature` branch has 3 documents after the commit
-- `main` branch still has 2 documents — the feature commit did not affect main
+- `feature` branch has 4 documents after the commit
+- `main` branch still has 3 documents — the feature commit did not affect main
 
 ---
 
@@ -144,17 +146,60 @@ Key check: `r3a.commitId !== r3b.commitId`.
 
 ## Scenario 4: Commit on empty working set
 
-When no changes are pending since the last commit, `doltCommit` still succeeds.
+By default, `doltCommit` rejects an empty commit (no changes since the last commit). Pass
+`allowEmpty: true` to opt in to creating an empty commit.
+
+### 4a — Empty without flag returns an error
 
 ```js
 // No changes since last commit
-const r4 = db.runCommand({ doltCommit: 1, message: "empty", author: "alice <alice@dumbodb>" })
-printjson(r4)
+const r4a = db.runCommand({ doltCommit: 1, message: "empty", author: "alice <alice@dumbodb>" })
+printjson(r4a)
 ```
 
-Expected: `{ hash: "<hash>", branch: "main", message: "empty", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), ok: 1 }`
+Expected: `{ ok: 0, errmsg: "doltCommit: nothing to commit, working tree clean", code: 96, ... }`
 
-Key check: `ok` is `1`; `hash` is non-empty.
+Key checks:
+- `ok` is `0`
+- `errmsg` mentions "nothing to commit"
+- no `commitId` is returned
+- HEAD is unchanged (verify with `db.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId` before and after)
+
+### 4b — Empty with `allowEmpty: true` succeeds and advances HEAD
+
+```js
+const headBefore = db.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+
+const r4b = db.runCommand({
+  doltCommit: 1,
+  message:    "empty allowed",
+  author:     "alice <alice@dumbodb>",
+  allowEmpty: true,
+})
+printjson(r4b)
+
+const headAfter = db.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+print("hashes differ:", headBefore !== headAfter)
+// Expected: true
+```
+
+Expected: `{ commitId: "<new hash>", branch: "main", message: "empty allowed", author: "...", timestamp: ISODate("..."), ok: 1 }`
+
+Key checks:
+- `ok` is `1`
+- `commitId` is non-empty
+- `commitId` differs from `headBefore` (a new commit was created even though no data changed)
+
+### 4c — Repeated bare empty commits keep failing the same way
+
+```js
+const r4c = db.runCommand({ doltCommit: 1, message: "still empty", author: "alice <alice@dumbodb>" })
+printjson(r4c)
+```
+
+Expected: `{ ok: 0, errmsg: "doltCommit: nothing to commit, working tree clean", code: 96, ... }`
+
+Key check: the empty commit from 4b cleared no working changes (none existed), so the gate fires again.
 
 ---
 
@@ -164,10 +209,11 @@ The hash returned by `doltCommit` can immediately be used as a `from` or `to`
 argument in `doltDiff`.
 
 ```js
-// Record state before a change
+// Insert a doc and commit so hashBefore captures a real change.
+db.items.insertOne({ _id: 50, label: "pre", v: 50 })
 const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author: "alice <alice@dumbodb>" }).commitId
 
-// Make a change and commit
+// Make another change and commit
 db.items.insertOne({ _id: 99, label: "new", v: 99 })
 const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "alice <alice@dumbodb>" }).commitId
 
@@ -185,6 +231,7 @@ The `author` provided to `doltCommit` is echoed in the response and stored in th
 commit — it is visible via `doltLog`.
 
 ```js
+db.items.insertOne({ _id: 60, label: "author", v: 60 })
 const r6 = db.runCommand({ doltCommit: 1, message: "authored commit", author: "bob" })
 printjson(r6)
 // Expected: { hash: "...", branch: "main", message: "authored commit", author: "bob", timestamp: ISODate("..."), ok: 1 }
@@ -208,6 +255,7 @@ The value is echoed in the response and stored in the commit (visible via `doltL
 
 ```js
 const fixedTime = new Date("2020-06-15T12:00:00Z")
+db.items.insertOne({ _id: 70, label: "timestamp", v: 70 })
 const r7 = db.runCommand({
   doltCommit: 1,
   message:     "fixed-time commit",
@@ -236,7 +284,8 @@ Key checks:
 | Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@dumbodb>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
 | Commit on branch | `featureDB.runCommand({ doltCommit: 1, ..., author: "alice <alice@dumbodb>" })` | Data committed to branch; isolation verified via count |
 | Two sequential commits | Call twice with same author | Hashes are different |
-| Empty working set | Commit with no pending changes | Succeeds with `ok:1` |
+| Empty working set, no flag | Commit with no pending changes | Fails with `ok:0` and "nothing to commit" |
+| Empty working set, `allowEmpty:true` | Commit with no pending changes plus the flag | Succeeds with `ok:1` and a new hash |
 | Use hash in diff | `{ doltDiff: 1, from: hash1, to: hash2 }` | Shows changes between commits |
 | Custom author | Pass `author: "bob"` | Response and doltLog echo `"bob"` |
 | Custom timestamp | Pass `timestamp: new Date("2020-06-15")` | Response and doltLog echo fixed time |

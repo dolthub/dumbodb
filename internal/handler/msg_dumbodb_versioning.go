@@ -463,6 +463,11 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	allowEmpty, err := common.GetOptionalBoolOrIntParam(document, "allowEmpty", false)
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -472,13 +477,20 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	res, err := vb.DumboDBCommit(connCtx, &backends.CommitParams{
-		DBName:    dbName,
-		Branch:    branch,
-		Message:   message,
-		Author:    author,
-		Timestamp: ts,
+		DBName:     dbName,
+		Branch:     branch,
+		Message:    message,
+		Author:     author,
+		Timestamp:  ts,
+		AllowEmpty: allowEmpty,
 	})
 	if err != nil {
+		if errors.Is(err, backends.ErrEmptyCommit) {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrOperationFailed,
+				"doltCommit: "+err.Error(),
+			)
+		}
 		return nil, lazyerrors.Error(err)
 	}
 

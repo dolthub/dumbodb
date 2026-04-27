@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -563,7 +564,7 @@ func TestDumboDBCommitDefaultMessage(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser"})
+	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Author: "testuser", AllowEmpty: true})
 	if err != nil {
 		t.Fatalf("DumboDBCommit: %v", err)
 	}
@@ -635,10 +636,11 @@ func TestDumboDBCommitTwoDistinctHashes(t *testing.T) {
 	}
 }
 
-// TestDumboDBCommitNoOpSucceeds verifies that committing with no changes since the last
-// commit succeeds (a no-op commit is acceptable).
-func TestDumboDBCommitNoOpSucceeds(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-noop-*")
+// TestDumboDBCommitEmptyRejected verifies that DumboDBCommit returns ErrEmptyCommit when
+// the working set has no changes versus HEAD and AllowEmpty is not set, and that
+// AllowEmpty: true overrides the gate to create an empty commit with a new hash.
+func TestDumboDBCommitEmptyRejected(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-dumbodb-commit-empty-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,21 +658,35 @@ func TestDumboDBCommitNoOpSucceeds(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	// First commit (on empty state after init).
-	res1, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "first", Author: "testuser"})
-	if err != nil {
-		t.Fatalf("DumboDBCommit 1: %v", err)
+	// No changes since init: commit without AllowEmpty must return ErrEmptyCommit.
+	if _, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "noop", Author: "testuser"}); !errors.Is(err, backends.ErrEmptyCommit) {
+		t.Fatalf("DumboDBCommit (no changes, no flag): err = %v, want ErrEmptyCommit", err)
 	}
 
-	// Second commit with no intervening writes — must not error.
-	res2, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "no-op", Author: "testuser"})
+	// With AllowEmpty:true the commit succeeds and produces a non-empty hash.
+	res1, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "empty1", Author: "testuser", AllowEmpty: true})
 	if err != nil {
-		t.Fatalf("DumboDBCommit 2 (no-op): %v", err)
+		t.Fatalf("DumboDBCommit (AllowEmpty): %v", err)
+	}
+	if res1.CommitID == "" {
+		t.Errorf("AllowEmpty commit returned empty hash")
 	}
 
-	// Both hashes must be non-empty.
-	if res1.CommitID == "" || res2.CommitID == "" {
-		t.Errorf("got empty hash: %q / %q", res1.CommitID, res2.CommitID)
+	// Still no changes after the empty commit: another bare commit must fail.
+	if _, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "noop2", Author: "testuser"}); !errors.Is(err, backends.ErrEmptyCommit) {
+		t.Fatalf("DumboDBCommit (no changes after empty, no flag): err = %v, want ErrEmptyCommit", err)
+	}
+
+	// AllowEmpty again — new empty commit with a different hash.
+	res2, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "empty2", Author: "testuser", AllowEmpty: true})
+	if err != nil {
+		t.Fatalf("DumboDBCommit (AllowEmpty 2): %v", err)
+	}
+	if res2.CommitID == "" {
+		t.Errorf("AllowEmpty commit 2 returned empty hash")
+	}
+	if res1.CommitID == res2.CommitID {
+		t.Errorf("two AllowEmpty commits produced the same hash %q", res1.CommitID)
 	}
 }
 
@@ -774,10 +790,11 @@ func TestDumboDBCommitAuthorAndTimestamp(t *testing.T) {
 	fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{
-		DBName:    "testdb",
-		Message:   "authored commit",
-		Author:    "alice",
-		Timestamp: fixedTime,
+		DBName:     "testdb",
+		Message:    "authored commit",
+		Author:     "alice",
+		Timestamp:  fixedTime,
+		AllowEmpty: true,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBCommit: %v", err)
@@ -831,9 +848,10 @@ func TestDumboDBCommitTimestampDefaultsToNow(t *testing.T) {
 
 	before := time.Now().UnixMilli()
 	res, err := b.DumboDBCommit(ctx, &backends.CommitParams{
-		DBName:  "testdb",
-		Message: "no timestamp",
-		Author:  "bob",
+		DBName:     "testdb",
+		Message:    "no timestamp",
+		Author:     "bob",
+		AllowEmpty: true,
 	})
 	after := time.Now().UnixMilli()
 	if err != nil {

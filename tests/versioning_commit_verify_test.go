@@ -36,6 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // commitVerifySetup mirrors the Setup section of docs/verify/commit.md.
@@ -80,6 +81,15 @@ func TestCommitVerify(t *testing.T) {
 	// Scenario 1: Response shape — hash, branch, message, author, timestamp, ok
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_ResponseShape", func(t *testing.T) {
+		// Insert a doc so the commit has a pending change (the new doltCommit
+		// gate rejects empty working sets unless allowEmpty:true).
+		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(100)},
+			{Key: "label", Value: "shape"},
+			{Key: "v", Value: int32(100)},
+		})
+		require.NoError(t, err)
+
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
@@ -134,14 +144,16 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, "feature commit", commitResult["message"])
 		assert.EqualValues(t, 1, commitResult["ok"])
 
-		// Verify the commit went to the feature branch: feature has 3 docs, main has 2.
+		// Verify the commit went to the feature branch: feature has 4 docs (the
+		// 3 main carries forward at branch creation plus _id:3), main has 3
+		// (the 2 from setup + _id:100 from Scenario 1).
 		featureCount, err := featureDB.Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
-		assert.Equal(t, int64(3), featureCount, "feature branch must have 3 documents after commit")
+		assert.Equal(t, int64(4), featureCount, "feature branch must have 4 documents after commit")
 
 		mainCount, err := env.client.Database(dbName+"__d_main").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
-		assert.Equal(t, int64(2), mainCount, "main must still have 2 documents (feature commit must not affect main)")
+		assert.Equal(t, int64(3), mainCount, "main must still have 3 documents (feature commit must not affect main)")
 	})
 
 	// -------------------------------------------------------------------------
@@ -186,32 +198,103 @@ func TestCommitVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Commit on empty working set succeeds
+	// Scenario 4: Commit on empty working set
+	//
+	// 4a: bare doltCommit with no pending changes returns an error and does
+	//     not advance HEAD.
+	// 4b: doltCommit with allowEmpty:true on the same empty state succeeds
+	//     and produces a new commit hash distinct from the prior HEAD.
+	// 4c: another bare doltCommit after the empty commit still fails the
+	//     same way (the empty commit cleared no working changes).
 	// -------------------------------------------------------------------------
-	t.Run("Scenario4_EmptyWorkingSetCommitSucceeds", func(t *testing.T) {
-		// After Scenario 3, all changes are committed. No pending changes exist.
-		var result bson.M
+	t.Run("Scenario4_EmptyWorkingSet", func(t *testing.T) {
+		// Capture HEAD before any of the 4* attempts so we can assert that
+		// the rejected attempts did not advance it.
+		var beforeLog bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&beforeLog))
+		beforeCommits, _ := beforeLog["commits"].(bson.A)
+		require.NotEmpty(t, beforeCommits, "doltLog must return a HEAD commit")
+		headBefore, _ := beforeCommits[0].(bson.M)["commitId"].(string)
+		require.NotEmpty(t, headBefore)
+
+		// 4a: bare empty commit must fail with OperationFailed (96) and a
+		// "nothing to commit" message.
+		var rejected bson.M
+		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
 			{Key: "author", Value: "alice <alice@dumbodb>"},
-		}).Decode(&result))
+		}).Decode(&rejected)
+		require.Error(t, err, "doltCommit with no changes and no allowEmpty must fail")
+		cmdErr, ok := err.(mongo.CommandError)
+		require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+		assert.EqualValues(t, 96, cmdErr.Code, "expected OperationFailed (96), got %d: %s", cmdErr.Code, cmdErr.Message)
+		assert.Contains(t, cmdErr.Message, "nothing to commit",
+			"error message must indicate empty working set, got %q", cmdErr.Message)
 
-		hash, ok := result["commitId"].(string)
-		require.True(t, ok, "hash must be a string even for an empty commit")
-		assert.NotEmpty(t, hash, "hash must not be empty")
-		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
+		// HEAD must be unchanged after the rejected attempt.
+		var afterRejectLog bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&afterRejectLog))
+		afterRejectCommits, _ := afterRejectLog["commits"].(bson.A)
+		require.NotEmpty(t, afterRejectCommits)
+		headAfterReject, _ := afterRejectCommits[0].(bson.M)["commitId"].(string)
+		assert.Equal(t, headBefore, headAfterReject,
+			"rejected empty commit must not advance HEAD")
+
+		// 4b: allowEmpty:true on the same empty state must succeed and produce
+		// a new commit hash.
+		var allowed bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltCommit", Value: int32(1)},
+			{Key: "message", Value: "empty allowed"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "allowEmpty", Value: true},
+		}).Decode(&allowed))
+		assert.EqualValues(t, 1, allowed["ok"], "allowEmpty commit must succeed")
+		emptyHash, ok := allowed["commitId"].(string)
+		require.True(t, ok, "allowEmpty commit must return a string commitId")
+		assert.NotEmpty(t, emptyHash)
+		assert.NotEqual(t, headBefore, emptyHash,
+			"allowEmpty commit must advance HEAD to a new hash")
+
+		// 4c: another bare empty commit after 4b still fails — the empty commit
+		// did not introduce a "pending change" gate that would now be satisfied.
+		var rejected2 bson.M
+		err2 := env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltCommit", Value: int32(1)},
+			{Key: "message", Value: "still empty"},
+			{Key: "author", Value: "alice <alice@dumbodb>"},
+		}).Decode(&rejected2)
+		require.Error(t, err2, "second bare empty commit must also fail")
+		cmdErr2, ok := err2.(mongo.CommandError)
+		require.True(t, ok, "expected mongo.CommandError, got %T: %v", err2, err2)
+		assert.EqualValues(t, 96, cmdErr2.Code)
+		assert.Contains(t, cmdErr2.Message, "nothing to commit")
 	})
 
 	// -------------------------------------------------------------------------
 	// Scenario 5: Committed hash is a valid dumboDBDiff reference
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HashIsValidDiffReference", func(t *testing.T) {
+		// Insert a doc so the pre-change commit has a pending change.
+		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(50)},
+			{Key: "label", Value: "pre"},
+			{Key: "v", Value: int32(50)},
+		})
+		require.NoError(t, err)
+
 		// Commit current state and save hashBefore.
 		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@dumbodb>")
 
 		// Insert _id:99 and commit — save hashAfter.
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(99)},
 			{Key: "label", Value: "new"},
 			{Key: "v", Value: int32(99)},
@@ -241,6 +324,14 @@ func TestCommitVerify(t *testing.T) {
 	// Scenario 6: Author is echoed in the response and visible in dumboDBLog
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
+		// Insert a doc so the commit has a pending change.
+		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(60)},
+			{Key: "label", Value: "author"},
+			{Key: "v", Value: int32(60)},
+		})
+		require.NoError(t, err)
+
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
@@ -273,6 +364,14 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_CustomTimestampStoredAndEchoed", func(t *testing.T) {
 		fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
+
+		// Insert a doc so the commit has a pending change.
+		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(70)},
+			{Key: "label", Value: "timestamp"},
+			{Key: "v", Value: int32(70)},
+		})
+		require.NoError(t, err)
 
 		var result bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{

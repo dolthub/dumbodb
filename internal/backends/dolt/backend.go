@@ -1023,6 +1023,16 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	if branch == "main" {
+		if !params.AllowEmpty {
+			headAM, err := db.headRootAM(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("dolt: DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
+			}
+			if db.am.HashOf() == headAM.HashOf() {
+				return nil, backends.ErrEmptyCommit
+			}
+		}
+
 		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.am, message, params.Author, ts)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBCommit: committing db %q: %w", params.DBName, err)
@@ -1055,6 +1065,16 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	branchAM, err := db.getOrInitBranchAM(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DumboDBCommit: loading branch AM for %q: %w", branch, err)
+	}
+
+	if !params.AllowEmpty {
+		branchHeadAM, err := headRootAMForBranch(ctx, db, branch)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DumboDBCommit: reading HEAD AM for branch %q: %w", branch, err)
+		}
+		if branchAM.HashOf() == branchHeadAM.HashOf() {
+			return nil, backends.ErrEmptyCommit
+		}
 	}
 
 	var name, email string

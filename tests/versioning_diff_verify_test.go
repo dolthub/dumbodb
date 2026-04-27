@@ -551,8 +551,9 @@ func TestDiffVerify(t *testing.T) {
 	// Scenario 9: Rootish expressions in from/to — HEAD, HEAD~N, branch name
 	// -------------------------------------------------------------------------
 	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
-		// Commit any pending working set so we start from a clean HEAD.
-		dumboDBCommit(t, env, dbName, "pre-scenario9", "alice <alice@dumbodb>")
+		// Commit any pending working set (allowEmpty so we don't depend on
+		// whether prior scenarios left changes) to land on a clean HEAD.
+		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario9", "alice <alice@dumbodb>")
 
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
@@ -562,8 +563,9 @@ func TestDiffVerify(t *testing.T) {
 
 		rootish := env.client.Database(dbName + "__d_rootishtest")
 
-		// Two commits on main — feature branch stays behind.
-		hashC1 := dumboDBCommit(t, env, dbName, "scenario9-c1", "alice <alice@dumbodb>")
+		// Two commits on main — feature branch stays behind. hashC1 is empty
+		// (no working changes), hashC2 adds _id:1.
+		hashC1 := dumboDBCommitAllowEmpty(t, env, dbName, "scenario9-c1", "alice <alice@dumbodb>")
 
 		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
@@ -686,8 +688,9 @@ func TestDiffVerify(t *testing.T) {
 	})
 
 	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
-		// Commit working set from Scenario 7 for a clean HEAD.
-		dumboDBCommit(t, env, dbName, "pre-scenario8", "alice <alice@dumbodb>")
+		// Commit working set from Scenario 7 for a clean HEAD (allowEmpty so
+		// this passes even when no prior changes are pending).
+		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario8", "alice <alice@dumbodb>")
 
 		nested := env.client.Database(dbName).Collection("nested")
 
