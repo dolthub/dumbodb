@@ -1,4 +1,4 @@
-// Copyright 2021 FerretDB Inc.
+// Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,64 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package version provides information about FerretDB version and build configuration.
-//
-// # Required files
-//
-// The following generated text files may be present in this (`build/version`) directory during building:
-//   - version.txt (required) contains information about the FerretDB version in a format
-//     similar to `git describe` output: `v<major>.<minor>.<patch>`.
-//   - commit.txt (optional) contains information about the source git commit.
-//   - branch.txt (optional) contains information about the source git branch.
-//   - package.txt (optional) contains package type (e.g. "deb", "rpm", "docker", etc).
-//
-// # Go build tags
-//
-// The following Go build tags (also known as build constraints) affect all builds of FerretDB,
-// including embedded usage:
-//
-//	ferretdb_debug			- enables debug build (see below; implied by builds with race detector)
-//	ferretdb_hana			- enables Hana backend (alpha)
-//	ferretdb_no_postgresql	- disables PostgreSQL backend
-//	ferretdb_no_sqlite		- disables SQLite backend
-//
-// # Debug builds
-//
-// Debug builds of FerretDB behave differently in a few aspects:
-//   - Some values that are normally randomized are fixed or less randomized to make debugging easier.
-//   - Some internal errors cause crashes instead of being handled more gracefully.
-//   - Stack traces are collected more liberally.
-//   - Metrics are written to stderr on exit.
-//   - The default logging level is set to debug.
-//
-// Debug builds are orthogonal to production releases, development releases, and local/host builds.
-// For example, the host build could be made non-debug, and the production release, in theory, could be a debug build.
-//
-// Currently, our production releases are non-debug builds,
-// and all other builds and releases (development releases, all-in-one releases, local builds, etc.) are debug builds.
+// Package version provides DumboDB build and MongoDB compatibility version info.
 package version
 
 import (
-	"embed"
-	"fmt"
-	"regexp"
-	"runtime/debug"
-	"strconv"
-	"strings"
-
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Each pattern in a //go:embed line must match at least one file or non-empty directory,
-// but most files are generated and are not present when embeddable FerretDB package is used.
-// As a workaround, mongodb.txt is always present.
+const (
+	// Version is the DumboDB build version.
+	Version = "v0.1.0"
 
-//go:generate go run ./generate.go
+	// MongoDBVersion is the MongoDB version DumboDB advertises to clients
+	// that gate behavior on major.minor.
+	MongoDBVersion = "7.0.21"
 
-//go:embed *.txt
-var gen embed.FS
+	// Commit is the source git commit. Populated as "unknown" until a real
+	// build pipeline injects it.
+	Commit = "unknown"
+)
 
 // Info provides details about the current build.
 //
@@ -90,96 +53,19 @@ type Info struct {
 	MongoDBVersionArray *types.Array
 }
 
-// info singleton instance set by init().
-var info *Info
-
-// unknown is a placeholder for unknown version, commit, and branch values.
-const unknown = "unknown"
+var info = &Info{
+	Version:             Version,
+	Commit:              Commit,
+	Branch:              "unknown",
+	Dirty:               false,
+	Package:             "unknown",
+	DebugBuild:          debugbuild.Enabled,
+	BuildEnvironment:    must.NotFail(types.NewDocument()),
+	MongoDBVersion:      MongoDBVersion,
+	MongoDBVersionArray: must.NotFail(types.NewArray(int32(7), int32(0), int32(21), int32(0))),
+}
 
 // Get returns current build's info.
 func Get() *Info {
 	return info
-}
-
-func init() {
-	versionRe := regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)$`)
-
-	parts := versionRe.FindStringSubmatch(strings.TrimSpace(string(must.NotFail(gen.ReadFile("mongodb.txt")))))
-	if len(parts) != 4 {
-		panic("invalid mongodb.txt")
-	}
-	major := must.NotFail(strconv.ParseInt(parts[1], 10, 32))
-	minor := must.NotFail(strconv.ParseInt(parts[2], 10, 32))
-	patch := must.NotFail(strconv.ParseInt(parts[3], 10, 32))
-	mongoDBVersion := fmt.Sprintf("%d.%d.%d", major, minor, patch)
-	mongoDBVersionArray := must.NotFail(types.NewArray(int32(major), int32(minor), int32(patch), int32(0)))
-
-	info = &Info{
-		Version:             unknown,
-		Commit:              unknown,
-		Branch:              unknown,
-		Dirty:               false,
-		Package:             unknown,
-		DebugBuild:          debugbuild.Enabled,
-		BuildEnvironment:    must.NotFail(types.NewDocument()),
-		MongoDBVersion:      mongoDBVersion,
-		MongoDBVersionArray: mongoDBVersionArray,
-	}
-
-	// do not expose extra information when embeddable FerretDB package is used
-	// (and some of it is most likely absent anyway)
-
-	buildInfo, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
-	}
-
-	// TODO https://github.com/dolthub/dumbodb/issues/4001
-	if buildInfo.Main.Path != "github.com/dolthub/dumbodb" {
-		return
-	}
-
-	for f, sp := range map[string]*string{
-		"version.txt": &info.Version,
-		"commit.txt":  &info.Commit,
-		"branch.txt":  &info.Branch,
-		"package.txt": &info.Package,
-	} {
-		if b, _ := gen.ReadFile(f); len(b) > 0 {
-			*sp = strings.TrimSpace(string(b))
-		}
-	}
-
-	if !strings.HasPrefix(info.Version, "v") {
-		msg := "Invalid build/version/version.txt file content. Please run `bin/task gen-version`.\n"
-		msg += "Alternatively, create this file manually with a content similar to\n"
-		msg += "the output of `git describe`: `v<major>.<minor>.<patch>`.\n"
-		msg += "See https://pkg.go.dev/github.com/dolthub/dumbodb/build/version"
-		panic(msg)
-	}
-
-	info.BuildEnvironment.Set("go.version", buildInfo.GoVersion)
-
-	for _, s := range buildInfo.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			if s.Value != info.Commit {
-				// for non-official builds
-				if info.Commit == unknown {
-					info.Commit = s.Value
-					continue
-				}
-
-				panic(fmt.Sprintf("commit.txt value %q != vcs.revision value %q\n"+
-					"Please run `bin/task gen-version`", info.Commit, s.Value,
-				))
-			}
-
-		case "vcs.modified":
-			info.Dirty = must.NotFail(strconv.ParseBool(s.Value))
-
-		default:
-			info.BuildEnvironment.Set(s.Key, s.Value)
-		}
-	}
 }
