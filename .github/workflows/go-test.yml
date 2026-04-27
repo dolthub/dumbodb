@@ -1,0 +1,28 @@
+name: Go Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build dumbodb
+        run: go build ./cmd/dumbodb/
+
+      - name: Run go test
+        run: go test ./... -count=1 -timeout=5m
