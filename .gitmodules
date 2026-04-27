@@ -1,3 +1,0 @@
-[submodule "ferretdb"]
-	path = ferretdb
-	url = https://github.com/FerretDB/FerretDB.git
