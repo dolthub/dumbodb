@@ -148,3 +148,4 @@ docs/
   verify/             Manual + automated verification guides
 .github/workflows/    CI: go test, bats
 ```
+
