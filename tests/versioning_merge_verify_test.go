@@ -625,12 +625,15 @@ func TestMergeConflictAbort(t *testing.T) {
 	assert.EqualValues(t, 1, abortRaw["ok"])
 	assert.Equal(t, "merge aborted", abortRaw["message"])
 
-	// After abort, dumboDBCommit must succeed (no more conflicts).
+	// After abort, dumboDBCommit must no longer be blocked by merge state.
+	// The working set is clean, so use allowEmpty:true to confirm the only
+	// thing that could fail (merge-state guard) is gone.
 	var commitRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltCommit", Value: int32(1)},
 		{Key: "message", Value: "after abort"},
 		{Key: "author", Value: "tester"},
+		{Key: "allowEmpty", Value: true},
 	}).Decode(&commitRaw))
 	assert.EqualValues(t, 1, commitRaw["ok"])
 

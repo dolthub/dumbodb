@@ -16,19 +16,25 @@ package backends
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
+// ErrEmptyCommit is returned by VersioningBackend.DumboDBCommit when the working set
+// has no changes versus HEAD and CommitParams.AllowEmpty is false.
+var ErrEmptyCommit = errors.New("nothing to commit, working tree clean")
+
 // CommitParams represents the parameters of VersioningBackend.DumboDBCommit method.
 type CommitParams struct {
-	DBName    string
-	Branch    string
-	Message   string
-	Author    string    // required: name of the commit author
-	Timestamp time.Time // optional: commit timestamp; zero value means use current time
+	DBName     string
+	Branch     string
+	Message    string
+	Author     string    // required: name of the commit author
+	Timestamp  time.Time // optional: commit timestamp; zero value means use current time
+	AllowEmpty bool      // if true, create a commit even when the working set has no changes vs HEAD
 }
 
 // CommitResult represents the result of VersioningBackend.DumboDBCommit method.

@@ -50,6 +50,32 @@ func dumboDBCommit(tb testing.TB, env *dumboDBTestEnv, dbName, message string, a
 	return hash
 }
 
+// dumboDBCommitAllowEmpty runs dumboDBCommit with allowEmpty:true so it succeeds even
+// when the working set has no pending changes versus HEAD.
+func dumboDBCommitAllowEmpty(tb testing.TB, env *dumboDBTestEnv, dbName, message string, author ...string) string {
+	tb.Helper()
+
+	a := "testuser"
+	if len(author) > 0 {
+		a = author[0]
+	}
+
+	ctx := context.Background()
+	var result bson.M
+	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: int32(1)},
+		{Key: "message", Value: message},
+		{Key: "author", Value: a},
+		{Key: "allowEmpty", Value: true},
+	}).Decode(&result)
+	require.NoError(tb, err, "doltCommit (allowEmpty) must succeed")
+
+	hash, ok := result["commitId"].(string)
+	require.True(tb, ok, "doltCommit must return a string hash, got %T", result["commitId"])
+	require.NotEmpty(tb, hash, "commit hash must not be empty")
+	return hash
+}
+
 // assertWriteBlockedOperationFailed verifies that the error is a MongoDB
 // CommandError with code 96 (OperationFailed), as expected for writes to
 // read-only rootish connections.
