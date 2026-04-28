@@ -112,7 +112,7 @@ mongosh_eval() {
     [ "$sql_count" -eq "$wire_count" ]
 
     # Assert the wire conflictId matches the _id column in the SQL table (ID alignment).
-    run dolt sql -q 'SELECT LOWER(HEX(_id)) FROM dolt_conflicts_items' --result-format csv
+    run dolt sql -q 'SELECT LOWER(HEX(our__id)) FROM dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
     local sql_id
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
@@ -194,7 +194,7 @@ mongosh_eval() {
     [ "$sql_count" -eq "$wire_count" ]
 
     # Assert the wire conflictId matches the _id column in the SQL table (ID alignment).
-    run dolt sql -q 'SELECT LOWER(HEX(_id)) FROM dolt_conflicts_items' --result-format csv
+    run dolt sql -q 'SELECT LOWER(HEX(our__id)) FROM dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
     local sql_id
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
@@ -278,7 +278,7 @@ mongosh_eval() {
     [ "$sql_count" -eq "$wire_count" ]
 
     # Assert the wire conflictId matches the _id column in the SQL table (ID alignment).
-    run dolt sql -q 'SELECT LOWER(HEX(_id)) FROM dolt_conflicts_items' --result-format csv
+    run dolt sql -q 'SELECT LOWER(HEX(our__id)) FROM dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
     local sql_id
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
