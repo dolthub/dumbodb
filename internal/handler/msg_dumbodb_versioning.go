@@ -1084,6 +1084,24 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
+	if to != "" {
+		if err := parseRootish(to); err != nil {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"doltReset: "+err.Error(),
+				"to",
+			)
+		}
+		// HEAD / HEAD~N target the connection's branch, not the literal default.
+		// Rewrite to <branch> / <branch>~N so the backend's rootish resolver sees
+		// a concrete branch reference.
+		if to == "HEAD" {
+			to = branch
+		} else if strings.HasPrefix(to, "HEAD~") {
+			to = branch + to[len("HEAD"):]
+		}
+	}
+
 	hard, err := common.GetOptionalParam[bool](document, "hard", false)
 	if err != nil {
 		return nil, err

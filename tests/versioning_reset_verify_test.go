@@ -257,4 +257,68 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(1), n,
 			"after hard reset to HEAD: exactly 1 document must be visible")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 5: Reset accepts relative rootish (HEAD~N, branch~N)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario5_RelativeRootish", func(t *testing.T) {
+		items := env.client.Database(dbName).Collection("items")
+
+		// After Scenario 4: HEAD=C1 (only _id:1).
+		// Build two more commits so we can walk back N steps:
+		//   C5: add _id:6 -> HEAD~2 from final state
+		//   C6: add _id:7 -> HEAD~1 from final state
+		//   C7: add _id:8 -> HEAD       (after this commit)
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(6)}, {Key: "v", Value: int32(6)}})
+		require.NoError(t, err)
+		hashC5 := dumboDBCommit(t, env, dbName, "add-six", "alice <alice@dumbodb>")
+
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(7)}, {Key: "v", Value: int32(7)}})
+		require.NoError(t, err)
+		hashC6 := dumboDBCommit(t, env, dbName, "add-seven", "alice <alice@dumbodb>")
+
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(8)}, {Key: "v", Value: int32(8)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "add-eight", "alice <alice@dumbodb>")
+
+		// Hard reset to HEAD~1 — should land on C6 (only _id:1, _id:6, _id:7).
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "to", Value: "HEAD~1"},
+			{Key: "hard", Value: true},
+		}).Decode(&raw))
+		assert.Equal(t, hashC6, raw["commitId"], "HEAD~1 must resolve to C6")
+		assert.EqualValues(t, 1, raw["ok"])
+
+		n, err := items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), n, "after reset to HEAD~1: 3 docs visible (_id:1,6,7)")
+
+		// Hard reset to main~1 — should land on C5 (only _id:1, _id:6).
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "to", Value: "main~1"},
+			{Key: "hard", Value: true},
+		}).Decode(&raw))
+		assert.Equal(t, hashC5, raw["commitId"], "main~1 must resolve to C5")
+
+		n, err = items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), n, "after reset to main~1: 2 docs visible (_id:1,6)")
+
+		// Bare HEAD must equal current branch HEAD (no movement).
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "to", Value: "HEAD"},
+		}).Decode(&raw))
+		assert.Equal(t, hashC5, raw["commitId"], "to:'HEAD' must return current HEAD hash")
+
+		// Bare branch name must resolve to that branch's HEAD.
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "to", Value: "main"},
+		}).Decode(&raw))
+		assert.Equal(t, hashC5, raw["commitId"], "to:'main' must return main's HEAD")
+	})
 }
