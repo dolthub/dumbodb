@@ -191,16 +191,45 @@ stays the same), but is valid and returns the HEAD hash.
 
 ---
 
+## Scenario 5: Relative rootish (HEAD~N, branch~N)
+
+`to` accepts any rootish expression, not just bare commit hashes. `HEAD` and
+`HEAD~N` resolve relative to the connection's branch; `<branch>` and
+`<branch>~N` resolve to the named branch's HEAD or its Nth ancestor.
+
+```js
+// Reset back one commit relative to current HEAD.
+db.runCommand({ doltReset: 1, to: "HEAD~1", hard: true })
+// Expected: { commitId: "<hash of HEAD's parent>", ok: 1 }
+
+// Reset to the second-most-recent commit on main.
+db.runCommand({ doltReset: 1, to: "main~1", hard: true })
+
+// Reset to a branch tip by name.
+db.runCommand({ doltReset: 1, to: "main" })
+```
+
+Accepted forms for `to`:
+- 32-character commit hash (e.g. `f5gnvfbhdj4ipeqsog2pakkd8g53rbrc`)
+- Branch name (e.g. `main`, `feature`)
+- Tag name
+- Relative ancestor expression (`<branch>~N`)
+- `HEAD` (alias for the connection's branch HEAD)
+- `HEAD~N` (Nth first-parent ancestor of the connection's branch HEAD)
+
+---
+
 ## Quick Reference
 
 | Command | HEAD after | Working set after |
 |---|---|---|
 | `{ doltReset: 1 }` | unchanged (HEAD) | unchanged |
 | `{ doltReset: 1, hard: true }` | unchanged (HEAD) | reset to HEAD state |
-| `{ doltReset: 1, to: "<hash>" }` | `<hash>` | unchanged |
-| `{ doltReset: 1, to: "<hash>", hard: true }` | `<hash>` | reset to `<hash>` state |
+| `{ doltReset: 1, to: "<rootish>" }` | `<rootish>` | unchanged |
+| `{ doltReset: 1, to: "<rootish>", hard: true }` | `<rootish>` | reset to `<rootish>` state |
 
 - Soft reset (default): moves HEAD, preserves working tree changes.
 - Hard reset: moves HEAD **and** resets the working tree to the target state.
-- All forms return `{ commitId: "<target_hash>", ok: 1 }`.
+- All forms return `{ commitId: "<resolved_hash>", ok: 1 }`.
 - `to` is optional; when omitted, the target defaults to the current HEAD.
+- `<rootish>` is any commit hash, branch name, tag name, `HEAD`, `HEAD~N`, or `<branch>~N`.

@@ -2173,6 +2173,10 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 //
 // Hard reset (Hard=true): moves HEAD to the target commit and resets both the working tree
 // and the staged root to the target commit's rootValue, discarding all uncommitted changes.
+//
+// CommitID accepts any rootish expression: a 32-char commit hash, a branch or tag name,
+// or a relative ancestor expression (e.g. "main~2"). HEAD/HEAD~N forms are rewritten by
+// the handler to "<branch>"/"<branch>~N" before they reach the backend.
 func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -2196,11 +2200,12 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		commitID = headHash.String()
 	}
 
-	// Parse and validate the target commit hash.
-	targetHash, ok := hash.MaybeParse(commitID)
-	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBReset: invalid commit hash %q", commitID)
+	// Resolve the rootish (hash, branch, tag, or ancestor expression) to a commit hash.
+	targetHash, err := resolveRootishToCommitHash(ctx, db, commitID)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBReset: %w", err)
 	}
+	commitID = targetHash.String()
 
 	// Load the AM from the target commit.
 	targetAM, err := amFromCommitHash(ctx, db, commitID)
