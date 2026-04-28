@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/FerretDB/wire"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -257,8 +257,8 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 			dupID, _ := doc.Get("_id")
 			writeErrors = append(writeErrors, &mongo.WriteError{
-				Index:   docsIndexes[j],
-				Code:    int(handlererrors.ErrDuplicateKeyInsert),
+				Index: docsIndexes[j],
+				Code:  int(handlererrors.ErrDuplicateKeyInsert),
 				Message: fmt.Sprintf(
 					`E11000 duplicate key error collection: %s.%s index: _id_ dup key: { _id: %s }`,
 					params.DB, params.Collection, types.FormatAnyValue(dupID),

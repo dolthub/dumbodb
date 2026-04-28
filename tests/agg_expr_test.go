@@ -22,8 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // aggregate runs a pipeline and decodes the first result into result.
@@ -65,9 +64,9 @@ func TestExpr_abs(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
 
-	assert.Equal(t, int32(5), results[0].Map()["r"])
-	assert.Equal(t, int32(3), results[1].Map()["r"])
-	assert.Equal(t, 2.5, results[2].Map()["r"])
+	assert.Equal(t, int32(5), dmap(results[0])["r"])
+	assert.Equal(t, int32(3), dmap(results[1])["r"])
+	assert.Equal(t, 2.5, dmap(results[2])["r"])
 }
 
 // TestExpr_exp_ln tests the $exp and $ln aggregation expression operators. (DumboDBFull)
@@ -95,7 +94,7 @@ func TestExpr_exp_ln(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	m := results[0].Map()
+	m := dmap(results[0])
 	expVal, _ := m["exp1"].(float64)
 	lnVal, _ := m["ln_e"].(float64)
 
@@ -127,7 +126,7 @@ func TestExpr_zip(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	r, _ := results[0].Map()["r"].(bson.A)
+	r, _ := dmap(results[0])["r"].(bson.A)
 	require.Len(t, r, 3)
 
 	first, _ := r[0].(bson.A)
@@ -164,14 +163,14 @@ func TestExpr_dateAdd(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	// The Go MongoDB driver decodes dates in bson.D as primitive.DateTime (int64 ms).
+	// The Go MongoDB driver decodes dates in bson.D as bson.DateTime (int64 ms).
 	// Convert to time.Time for comparison.
-	gotRaw := results[0].Map()["r"]
+	gotRaw := dmap(results[0])["r"]
 	var gotTime time.Time
 	switch v := gotRaw.(type) {
 	case time.Time:
 		gotTime = v.UTC()
-	case primitive.DateTime:
+	case bson.DateTime:
 		gotTime = v.Time().UTC()
 	case int64:
 		gotTime = time.UnixMilli(v).UTC()
@@ -213,7 +212,7 @@ func TestExpr_dateDiff(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	got, _ := results[0].Map()["r"].(int64)
+	got, _ := dmap(results[0])["r"].(int64)
 	assert.Equal(t, int64(3), got, "$dateDiff of 3 months")
 }
 
@@ -247,8 +246,8 @@ func TestExpr_cond_true(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 2)
 
-	assert.Equal(t, "fail", results[0].Map()["grade"])
-	assert.Equal(t, "pass", results[1].Map()["grade"])
+	assert.Equal(t, "fail", dmap(results[0])["grade"])
+	assert.Equal(t, "pass", dmap(results[1])["grade"])
 }
 
 // TestExpr_convert_int_to_string tests the $convert operator converting int to string. (DumboDBFull)
@@ -277,7 +276,7 @@ func TestExpr_convert_int_to_string(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	assert.Equal(t, "42", results[0].Map()["r"])
+	assert.Equal(t, "42", dmap(results[0])["r"])
 }
 
 // TestExpr_convert_with_onError tests the $convert operator with an onError fallback. (DumboDBFull)
@@ -308,7 +307,7 @@ func TestExpr_convert_with_onError(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	assert.Equal(t, int32(-1), results[0].Map()["r"])
+	assert.Equal(t, int32(-1), dmap(results[0])["r"])
 }
 
 // TestExpr_cmp_operators tests the $cmp comparison expression operator. (DumboDBFull)
@@ -337,9 +336,9 @@ func TestExpr_cmp_operators(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
 
-	assert.Equal(t, int32(-1), results[0].Map()["r"], "1 < 2 should give -1")
-	assert.Equal(t, int32(0), results[1].Map()["r"], "3 == 3 should give 0")
-	assert.Equal(t, int32(1), results[2].Map()["r"], "5 > 4 should give 1")
+	assert.Equal(t, int32(-1), dmap(results[0])["r"], "1 < 2 should give -1")
+	assert.Equal(t, int32(0), dmap(results[1])["r"], "3 == 3 should give 0")
+	assert.Equal(t, int32(1), dmap(results[2])["r"], "5 > 4 should give 1")
 }
 
 // TestAccum_mergeObjects tests $mergeObjects as an accumulator in $group. (DumboDBFull)
@@ -368,8 +367,7 @@ func TestAccum_mergeObjects(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	merged, _ := results[0].Map()["merged"].(bson.D)
-	mergedMap := merged.Map()
+	mergedMap, _ := dmap(results[0])["merged"].(bson.M)
 	// Both sub-documents should be merged together.
 	assert.Equal(t, "red", mergedMap["color"])
 	assert.Equal(t, "large", mergedMap["size"])
@@ -400,8 +398,8 @@ func TestExpr_trunc(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 2)
 
-	assert.Equal(t, float64(3), results[0].Map()["r"])
-	assert.Equal(t, float64(-2), results[1].Map()["r"])
+	assert.Equal(t, float64(3), dmap(results[0])["r"])
+	assert.Equal(t, float64(-2), dmap(results[1])["r"])
 }
 
 // TestExpr_objectToArray tests the $objectToArray aggregation expression operator. (DumboDBFull)
@@ -428,12 +426,12 @@ func TestExpr_objectToArray(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	arr, _ := results[0].Map()["r"].(bson.A)
+	arr, _ := dmap(results[0])["r"].(bson.A)
 	require.Len(t, arr, 2)
 
 	// First element should be {k: "x", v: 1}
-	first, _ := arr[0].(bson.D)
-	fm := first.Map()
+	first, _ := arr[0].(bson.M)
+	fm := dmap(first)
 	assert.Equal(t, "x", fm["k"])
 	assert.Equal(t, int32(1), fm["v"])
 }
@@ -464,7 +462,7 @@ func TestExpr_literal(t *testing.T) {
 	require.Len(t, results, 1)
 
 	// $literal "$v" should return the string "$v", not the field value 10.
-	assert.Equal(t, "$v", results[0].Map()["r"])
+	assert.Equal(t, "$v", dmap(results[0])["r"])
 }
 
 // TestExpr_let tests the $let aggregation expression operator. (DumboDBFull)
@@ -497,7 +495,7 @@ func TestExpr_let(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	assert.Equal(t, int32(30), results[0].Map()["total"])
+	assert.Equal(t, int32(30), dmap(results[0])["total"])
 }
 
 // TestExpr_expr_in_match tests using $expr in a $match stage. (DumboDBFull)
@@ -527,8 +525,8 @@ func TestExpr_expr_in_match(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 2)
 
-	assert.Equal(t, "a", results[0].Map()["_id"])
-	assert.Equal(t, "c", results[1].Map()["_id"])
+	assert.Equal(t, "a", dmap(results[0])["_id"])
+	assert.Equal(t, "c", dmap(results[1])["_id"])
 }
 
 // TestExpr_project_type_check tests type check operators like $isNumber. (DumboDBFull)
@@ -558,16 +556,16 @@ func TestExpr_project_type_check(t *testing.T) {
 	require.Len(t, results, 3)
 
 	// Document a: int32 is a number, not a string.
-	assert.Equal(t, true, results[0].Map()["isNum"])
-	assert.Equal(t, false, results[0].Map()["isStr"])
+	assert.Equal(t, true, dmap(results[0])["isNum"])
+	assert.Equal(t, false, dmap(results[0])["isStr"])
 
 	// Document b: string is not a number, is a string.
-	assert.Equal(t, false, results[1].Map()["isNum"])
-	assert.Equal(t, true, results[1].Map()["isStr"])
+	assert.Equal(t, false, dmap(results[1])["isNum"])
+	assert.Equal(t, true, dmap(results[1])["isStr"])
 
 	// Document c: bool is not a number, not a string.
-	assert.Equal(t, false, results[2].Map()["isNum"])
-	assert.Equal(t, false, results[2].Map()["isStr"])
+	assert.Equal(t, false, dmap(results[2])["isNum"])
+	assert.Equal(t, false, dmap(results[2])["isStr"])
 }
 
 // TestExpr_project_objectToArray_back tests the $objectToArray operator
@@ -594,13 +592,13 @@ func TestExpr_project_objectToArray_back(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	pairs, _ := results[0].Map()["pairs"].(bson.A)
+	pairs, _ := dmap(results[0])["pairs"].(bson.A)
 	require.Len(t, pairs, 2)
 
 	keys := make([]string, 0, 2)
 	for _, p := range pairs {
-		pd, _ := p.(bson.D)
-		keys = append(keys, pd.Map()["k"].(string))
+		pd, _ := p.(bson.M)
+		keys = append(keys, dmap(pd)["k"].(string))
 	}
 
 	assert.Contains(t, keys, "color")
@@ -634,7 +632,7 @@ func TestExpr_project_reduce_sum(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	assert.Equal(t, int32(10), results[0].Map()["sum"])
+	assert.Equal(t, int32(10), dmap(results[0])["sum"])
 }
 
 // TestExpr_project_in_operator tests the $in expression operator (array membership). (DumboDBFull)
@@ -662,9 +660,9 @@ func TestExpr_project_in_operator(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
 
-	assert.Equal(t, true, results[0].Map()["r"], "sports is in the set")
-	assert.Equal(t, false, results[1].Map()["r"], "news is not in the set")
-	assert.Equal(t, true, results[2].Map()["r"], "finance is in the set")
+	assert.Equal(t, true, dmap(results[0])["r"], "sports is in the set")
+	assert.Equal(t, false, dmap(results[1])["r"], "news is not in the set")
+	assert.Equal(t, true, dmap(results[2])["r"], "finance is in the set")
 }
 
 // TestExpr_toDate_objectid tests that $toDate converts an ObjectID to its embedded timestamp. (DumboDBFull)
@@ -678,7 +676,7 @@ func TestExpr_toDate_objectid(t *testing.T) {
 	ctx := context.Background()
 	// Use a fixed time truncated to second precision (ObjectID only stores seconds).
 	ts := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
-	oid := primitive.NewObjectIDFromTimestamp(ts)
+	oid := bson.NewObjectIDFromTimestamp(ts)
 	insertDocs(t, coll, bson.D{{Key: "_id", Value: oid}})
 
 	cursor, err := coll.Aggregate(ctx, bson.A{
@@ -693,7 +691,7 @@ func TestExpr_toDate_objectid(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	got := results[0].Map()["ts"].(primitive.DateTime).Time().UTC()
+	got := dmap(results[0])["ts"].(bson.DateTime).Time().UTC()
 	assert.Equal(t, ts, got, "$toDate should return the ObjectID's embedded timestamp")
 }
 
@@ -706,7 +704,7 @@ func TestExpr_dateTrunc(t *testing.T) {
 
 	ctx := context.Background()
 	// 2024-03-15 14:32:45 UTC
-	ts := primitive.NewDateTimeFromTime(time.Date(2024, 3, 15, 14, 32, 45, 0, time.UTC))
+	ts := bson.NewDateTimeFromTime(time.Date(2024, 3, 15, 14, 32, 45, 0, time.UTC))
 	insertDocs(t, coll,
 		d(e("_id", "a"), e("ts", ts)),
 	)
@@ -730,10 +728,10 @@ func TestExpr_dateTrunc(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	byDay := results[0].Map()["byDay"].(primitive.DateTime).Time().UTC()
+	byDay := dmap(results[0])["byDay"].(bson.DateTime).Time().UTC()
 	assert.Equal(t, time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC), byDay)
 
-	byHour := results[0].Map()["byHour"].(primitive.DateTime).Time().UTC()
+	byHour := dmap(results[0])["byHour"].(bson.DateTime).Time().UTC()
 	assert.Equal(t, time.Date(2024, 3, 15, 14, 0, 0, 0, time.UTC), byHour)
 }
 
@@ -762,7 +760,7 @@ func TestExpr_mod_nan_divisor(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	r, ok := results[0].Map()["r"].(float64)
-	require.True(t, ok, "expected float64 result, got %T", results[0].Map()["r"])
+	r, ok := dmap(results[0])["r"].(float64)
+	require.True(t, ok, "expected float64 result, got %T", dmap(results[0])["r"])
 	assert.True(t, math.IsNaN(r), "expected NaN for $mod with NaN divisor, got %v", r)
 }

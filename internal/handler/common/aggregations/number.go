@@ -18,7 +18,7 @@ import (
 	"math"
 	"math/big"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
@@ -102,10 +102,10 @@ func toDecimalVal(v any) (decimalVal, bool) {
 	case float64:
 		// Convert float64 to its Decimal128 representation.
 		// Use 34 significant digits (Decimal128's max precision) in 'g' format
-		// to avoid exceeding primitive.ParseDecimal128's 35-digit limit.
+		// to avoid exceeding bson.ParseDecimal128's 35-digit limit.
 		bf := new(big.Float).SetPrec(128).SetFloat64(v)
 		s := bf.Text('g', 34)
-		p, err := primitive.ParseDecimal128(s)
+		p, err := bson.ParseDecimal128(s)
 
 		if err != nil {
 			return decimalVal{}, false
@@ -118,7 +118,7 @@ func toDecimalVal(v any) (decimalVal, bool) {
 
 		return decimalVal{m, exp}, true
 	case types.Decimal128:
-		p := primitive.NewDecimal128(v.H, v.L)
+		p := bson.NewDecimal128(v.H, v.L)
 		m, exp, err := p.BigInt()
 
 		if err != nil {
@@ -180,19 +180,19 @@ func avgDecimal128(vs []any) types.Decimal128 {
 	}
 
 	if count == 0 {
-		p, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		p, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 		h, l := p.GetBytes()
 
 		return types.Decimal128{H: h, L: l}
 	}
 
 	sum := sumDecimal128(vs)
-	p := primitive.NewDecimal128(sum.H, sum.L)
+	p := bson.NewDecimal128(sum.H, sum.L)
 
 	m, exp, err := p.BigInt()
 	if err != nil {
 		// NaN or Inf — return zero.
-		p2, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		p2, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 		h, l := p2.GetBytes()
 
 		return types.Decimal128{H: h, L: l}
@@ -236,9 +236,9 @@ func avgDecimal128(vs []any) types.Decimal128 {
 		}
 	}
 
-	result, ok := primitive.ParseDecimal128FromBigInt(quotient, resultExp)
+	result, ok := bson.ParseDecimal128FromBigInt(quotient, resultExp)
 	if !ok {
-		result, _ = primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		result, _ = bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 	}
 
 	h, l := result.GetBytes()
@@ -328,7 +328,7 @@ func multiplyDecimal128(vs []any) types.Decimal128 {
 	}
 
 	if len(decimals) == 0 {
-		p, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		p, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 		h, l := p.GetBytes()
 
 		return types.Decimal128{H: h, L: l}
@@ -343,9 +343,9 @@ func multiplyDecimal128(vs []any) types.Decimal128 {
 		totalExp += d.exp
 	}
 
-	p, ok := primitive.ParseDecimal128FromBigInt(totalM, totalExp)
+	p, ok := bson.ParseDecimal128FromBigInt(totalM, totalExp)
 	if !ok {
-		p, _ = primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		p, _ = bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 	}
 
 	h, l := p.GetBytes()
@@ -368,7 +368,7 @@ func sumDecimal128(vs []any) types.Decimal128 {
 
 	if len(decimals) == 0 {
 		// No summable values: return Decimal128 zero.
-		p, _ := primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		p, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 		h, l := p.GetBytes()
 
 		return types.Decimal128{H: h, L: l}
@@ -399,10 +399,10 @@ func sumDecimal128(vs []any) types.Decimal128 {
 	}
 
 	// totalM * 10^minExp is the result.
-	p, ok := primitive.ParseDecimal128FromBigInt(totalM, minExp)
+	p, ok := bson.ParseDecimal128FromBigInt(totalM, minExp)
 	if !ok {
 		// Overflow — return Decimal128 zero as fallback.
-		p, _ = primitive.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		p, _ = bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 	}
 
 	h, l := p.GetBytes()

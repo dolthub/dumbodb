@@ -27,7 +27,7 @@ import (
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
@@ -1302,9 +1302,9 @@ func isInvalidBitwiseValue(value float64) bool {
 // Returns (value, true) on success, or (0, false) if the value cannot be
 // represented as an int64 (NaN, Inf, out of range).
 func decimal128ToInt64(d types.Decimal128) (int64, bool) {
-	// Use primitive.Decimal128 which stores (H=high, L=low).
+	// Use bson.Decimal128 which stores (H=high, L=low).
 	// types.Decimal128 stores H and L fields matching the wire format.
-	p := primitive.NewDecimal128(d.H, d.L)
+	p := bson.NewDecimal128(d.H, d.L)
 
 	bi, exp, err := p.BigInt()
 	if err != nil {
@@ -2052,4 +2052,3 @@ func isWordChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' ||
 		r > 127 // include unicode characters as word chars
 }
-

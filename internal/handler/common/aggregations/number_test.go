@@ -3,16 +3,16 @@ package aggregations_test
 import (
 	"testing"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 func TestDecimal128Sum(t *testing.T) {
 	// Verify that summing Decimal128 + float64 produces the expected Decimal128 result.
 	// This corresponds to the FerretDB TestAggregateGroupSumDecimalDouble integration test.
-	d128, err := primitive.ParseDecimal128("42.1")
+	d128, err := bson.ParseDecimal128("42.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestDecimal128Sum(t *testing.T) {
 
 	result := aggregations.SumNumbers(dec, float64(42.1))
 
-	expectedDec128 := primitive.NewDecimal128(3459220962935157325, 6906845732440572485)
+	expectedDec128 := bson.NewDecimal128(3459220962935157325, 6906845732440572485)
 	eh, el := expectedDec128.GetBytes()
 
 	rd, ok := result.(types.Decimal128)

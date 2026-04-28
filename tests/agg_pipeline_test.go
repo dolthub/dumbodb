@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // TestAgg_Lookup_Basic verifies $lookup joins two collections by matching
@@ -69,13 +69,13 @@ func TestAgg_Lookup_Basic(t *testing.T) {
 	require.Len(t, results, 3)
 
 	// First order has a matching item.
-	first := results[0].Map()
+	first := dmap(results[0])
 	itemDetails := first["item_details"].(bson.A)
 	assert.Len(t, itemDetails, 1, "order 1 must have 1 matching item")
-	assert.Equal(t, "apple", itemDetails[0].(bson.D).Map()["name"])
+	assert.Equal(t, "apple", itemDetails[0].(bson.M)["name"])
 
 	// Third order has no matching item — item_details must be an empty array.
-	third := results[2].Map()
+	third := dmap(results[2])
 	noMatch := third["item_details"].(bson.A)
 	assert.Len(t, noMatch, 0, "order with no match must have empty item_details array")
 }
@@ -129,9 +129,9 @@ func TestAgg_Lookup_Pipeline(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	bigOrders := results[0].Map()["big_orders"].(bson.A)
+	bigOrders := dmap(results[0])["big_orders"].(bson.A)
 	assert.Len(t, bigOrders, 1, "only 1 order has amount > 100")
-	assert.Equal(t, int32(150), bigOrders[0].(bson.D).Map()["amount"])
+	assert.Equal(t, int32(150), bigOrders[0].(bson.M)["amount"])
 }
 
 // TestAgg_ReplaceRoot verifies $replaceRoot promotes a nested document to top-level. (DumboDBFull)
@@ -161,7 +161,7 @@ func TestAgg_ReplaceRoot(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	m := results[0].Map()
+	m := dmap(results[0])
 	assert.Equal(t, int32(1), m["x"])
 	assert.Equal(t, int32(2), m["y"])
 	assert.Nil(t, m["outer"], "$replaceRoot must not include outer fields")
@@ -190,7 +190,7 @@ func TestAgg_ReplaceWith(t *testing.T) {
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
-	assert.Equal(t, int32(42), results[0].Map()["value"])
+	assert.Equal(t, int32(42), dmap(results[0])["value"])
 }
 
 // TestAgg_UnwindBasic verifies $unwind deconstructs an array field. (DumboDBFull)
@@ -217,9 +217,9 @@ func TestAgg_UnwindBasic(t *testing.T) {
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
 	assert.Len(t, results, 3, "$unwind must produce one doc per array element")
-	assert.Equal(t, "a", results[0].Map()["tags"])
-	assert.Equal(t, "b", results[1].Map()["tags"])
-	assert.Equal(t, "c", results[2].Map()["tags"])
+	assert.Equal(t, "a", dmap(results[0])["tags"])
+	assert.Equal(t, "b", dmap(results[1])["tags"])
+	assert.Equal(t, "c", dmap(results[2])["tags"])
 }
 
 // TestAgg_UnwindPreserveNullAndEmpty verifies $unwind with preserveNullAndEmptyArrays
@@ -277,9 +277,9 @@ func TestAgg_UnwindIncludeArrayIndex(t *testing.T) {
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
-	assert.Equal(t, int64(0), results[0].Map()["idx"])
-	assert.Equal(t, int64(1), results[1].Map()["idx"])
-	assert.Equal(t, int64(2), results[2].Map()["idx"])
+	assert.Equal(t, int64(0), dmap(results[0])["idx"])
+	assert.Equal(t, int64(1), dmap(results[1])["idx"])
+	assert.Equal(t, int64(2), dmap(results[2])["idx"])
 }
 
 // TestAgg_Bucket verifies $bucket groups documents into ranges. (DumboDBFull)
@@ -315,15 +315,15 @@ func TestAgg_Bucket(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3, "must have 3 buckets: [0,20), [20,40), [40,60)")
 
-	m0 := results[0].Map()
+	m0 := dmap(results[0])
 	assert.Equal(t, int32(0), m0["_id"])
 	assert.Equal(t, int32(2), m0["count"], "bucket [0,20) must contain scores 5 and 15")
 
-	m1 := results[1].Map()
+	m1 := dmap(results[1])
 	assert.Equal(t, int32(20), m1["_id"])
 	assert.Equal(t, int32(2), m1["count"], "bucket [20,40) must contain scores 25 and 35")
 
-	m2 := results[2].Map()
+	m2 := dmap(results[2])
 	assert.Equal(t, int32(40), m2["_id"])
 	assert.Equal(t, int32(1), m2["count"], "bucket [40,60) must contain score 45")
 }
@@ -358,7 +358,7 @@ func TestAgg_BucketAuto(t *testing.T) {
 
 	// Each bucket must have roughly 5 documents.
 	for _, r := range results {
-		count := r.Map()["count"].(int32)
+		count := dmap(r)["count"].(int32)
 		assert.True(t, count >= 4 && count <= 6, "each bucket must have ~5 documents, got %d", count)
 	}
 }
@@ -404,14 +404,14 @@ func TestAgg_Facet(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1, "$facet produces exactly one output document")
 
-	facetDoc := results[0].Map()
+	facetDoc := dmap(results[0])
 
 	byCategory := facetDoc["by_category"].(bson.A)
 	assert.Len(t, byCategory, 3, "by_category must have 3 groups: A, B, C")
 
 	priceStats := facetDoc["price_stats"].(bson.A)
 	require.Len(t, priceStats, 1)
-	statsMap := priceStats[0].(bson.D).Map()
+	statsMap := priceStats[0].(bson.M)
 	assert.Equal(t, int32(150), statsMap["total"])
 }
 
@@ -440,7 +440,7 @@ func TestAgg_AddFields(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	m := results[0].Map()
+	m := dmap(results[0])
 	assert.Equal(t, int32(3), m["a"], "$addFields must preserve existing field 'a'")
 	assert.Equal(t, int32(7), m["sum"], "$addFields must compute sum of a+b")
 	assert.Equal(t, "computed", m["label"])
@@ -468,7 +468,7 @@ func TestAgg_Count(t *testing.T) {
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
-	assert.Equal(t, int32(3), results[0].Map()["total"])
+	assert.Equal(t, int32(3), dmap(results[0])["total"])
 }
 
 // TestAgg_SortByCount verifies $sortByCount groups by a field and sorts by count
@@ -499,12 +499,12 @@ func TestAgg_SortByCount(t *testing.T) {
 	require.Len(t, results, 3)
 
 	// Must be sorted descending by count.
-	assert.Equal(t, "go", results[0].Map()["_id"])
-	assert.Equal(t, int32(3), results[0].Map()["count"])
-	assert.Equal(t, "rust", results[1].Map()["_id"])
-	assert.Equal(t, int32(2), results[1].Map()["count"])
-	assert.Equal(t, "python", results[2].Map()["_id"])
-	assert.Equal(t, int32(1), results[2].Map()["count"])
+	assert.Equal(t, "go", dmap(results[0])["_id"])
+	assert.Equal(t, int32(3), dmap(results[0])["count"])
+	assert.Equal(t, "rust", dmap(results[1])["_id"])
+	assert.Equal(t, int32(2), dmap(results[1])["count"])
+	assert.Equal(t, "python", dmap(results[2])["_id"])
+	assert.Equal(t, int32(1), dmap(results[2])["count"])
 }
 
 // TestAgg_Limit_Skip verifies $limit and $skip work in combination. (DumboDBFull)
@@ -529,9 +529,9 @@ func TestAgg_Limit_Skip(t *testing.T) {
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
-	assert.Equal(t, int32(4), results[0].Map()["n"])
-	assert.Equal(t, int32(5), results[1].Map()["n"])
-	assert.Equal(t, int32(6), results[2].Map()["n"])
+	assert.Equal(t, int32(4), dmap(results[0])["n"])
+	assert.Equal(t, int32(5), dmap(results[1])["n"])
+	assert.Equal(t, int32(6), dmap(results[2])["n"])
 }
 
 // TestAgg_Group_MultipleAccumulators verifies $group with multiple accumulator
@@ -565,7 +565,7 @@ func TestAgg_Group_MultipleAccumulators(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	m := results[0].Map()
+	m := dmap(results[0])
 	assert.Equal(t, int32(60), m["total"])
 	assert.Equal(t, int32(10), m["min_val"])
 	assert.Equal(t, int32(30), m["max_val"])
@@ -599,7 +599,7 @@ func TestAgg_Group_Push(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	members := results[0].Map()["members"].(bson.A)
+	members := dmap(results[0])["members"].(bson.A)
 	assert.Len(t, members, 3, "$push must collect all names")
 }
 
@@ -613,7 +613,7 @@ func TestAgg_Group_AddToSet(t *testing.T) {
 		bson.D{{Key: "tag", Value: "go"}},
 		bson.D{{Key: "tag", Value: "rust"}},
 		bson.D{{Key: "tag", Value: "go"}},   // duplicate
-		bson.D{{Key: "tag", Value: "rust"}},  // duplicate
+		bson.D{{Key: "tag", Value: "rust"}}, // duplicate
 		bson.D{{Key: "tag", Value: "python"}},
 	)
 
@@ -631,7 +631,7 @@ func TestAgg_Group_AddToSet(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
 
-	uniqueTags := results[0].Map()["unique_tags"].(bson.A)
+	uniqueTags := dmap(results[0])["unique_tags"].(bson.A)
 	assert.Len(t, uniqueTags, 3, "$addToSet must deduplicate: go, rust, python")
 }
 
@@ -670,9 +670,9 @@ func TestAgg_SetWindowFields_Sum(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
 
-	assert.Equal(t, int32(100), results[0].Map()["cumulative_sum"])
-	assert.Equal(t, int32(300), results[1].Map()["cumulative_sum"])
-	assert.Equal(t, int32(450), results[2].Map()["cumulative_sum"])
+	assert.Equal(t, int32(100), dmap(results[0])["cumulative_sum"])
+	assert.Equal(t, int32(300), dmap(results[1])["cumulative_sum"])
+	assert.Equal(t, int32(450), dmap(results[2])["cumulative_sum"])
 }
 
 // TestAgg_SetWindowFields_Rank verifies $rank window function assigns ranks to
@@ -711,12 +711,12 @@ func TestAgg_SetWindowFields_Rank(t *testing.T) {
 	// dave scores 75, gets rank 4.
 	byName := map[string]bson.D{}
 	for _, r := range results {
-		byName[r.Map()["name"].(string)] = r
+		byName[dmap(r)["name"].(string)] = r
 	}
-	assert.Equal(t, int64(1), byName["alice"].Map()["rank"])
-	assert.Equal(t, int64(1), byName["carol"].Map()["rank"])
-	assert.Equal(t, int64(3), byName["bob"].Map()["rank"])
-	assert.Equal(t, int64(4), byName["dave"].Map()["rank"])
+	assert.Equal(t, int64(1), dmap(byName["alice"])["rank"])
+	assert.Equal(t, int64(1), dmap(byName["carol"])["rank"])
+	assert.Equal(t, int64(3), dmap(byName["bob"])["rank"])
+	assert.Equal(t, int64(4), dmap(byName["dave"])["rank"])
 }
 
 // TestAgg_SetWindowFields_DenseRank verifies $denseRank assigns consecutive ranks
@@ -750,9 +750,9 @@ func TestAgg_SetWindowFields_DenseRank(t *testing.T) {
 	require.Len(t, results, 3)
 
 	// Both 90s get dense rank 1; 80 gets dense rank 2 (no gap).
-	assert.Equal(t, int64(1), results[0].Map()["dr"])
-	assert.Equal(t, int64(1), results[1].Map()["dr"])
-	assert.Equal(t, int64(2), results[2].Map()["dr"])
+	assert.Equal(t, int64(1), dmap(results[0])["dr"])
+	assert.Equal(t, int64(1), dmap(results[1])["dr"])
+	assert.Equal(t, int64(2), dmap(results[2])["dr"])
 }
 
 // TestAgg_SetWindowFields_DocumentNumber verifies $documentNumber assigns a
@@ -785,9 +785,9 @@ func TestAgg_SetWindowFields_DocumentNumber(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 3)
 
-	assert.Equal(t, int64(1), results[0].Map()["pos"])
-	assert.Equal(t, int64(2), results[1].Map()["pos"])
-	assert.Equal(t, int64(3), results[2].Map()["pos"])
+	assert.Equal(t, int64(1), dmap(results[0])["pos"])
+	assert.Equal(t, int64(2), dmap(results[1])["pos"])
+	assert.Equal(t, int64(3), dmap(results[2])["pos"])
 }
 
 // TestAgg_SetWindowFields_Partition verifies $setWindowFields with a partitionBy
@@ -829,7 +829,7 @@ func TestAgg_SetWindowFields_Partition(t *testing.T) {
 
 	// Verify partition totals.
 	for _, r := range results {
-		m := r.Map()
+		m := dmap(r)
 		dept := m["dept"].(string)
 		total := m["dept_total"].(int32)
 		switch dept {
@@ -878,13 +878,13 @@ func TestAgg_SetWindowFields_Avg(t *testing.T) {
 	require.Len(t, results, 4)
 
 	// day 1: only itself → avg 10
-	assert.InDelta(t, float64(10), results[0].Map()["moving_avg"], 0.001)
+	assert.InDelta(t, float64(10), dmap(results[0])["moving_avg"], 0.001)
 	// day 2: days 1+2 → avg 15
-	assert.InDelta(t, float64(15), results[1].Map()["moving_avg"], 0.001)
+	assert.InDelta(t, float64(15), dmap(results[1])["moving_avg"], 0.001)
 	// day 3: days 2+3 → avg 25
-	assert.InDelta(t, float64(25), results[2].Map()["moving_avg"], 0.001)
+	assert.InDelta(t, float64(25), dmap(results[2])["moving_avg"], 0.001)
 	// day 4: days 3+4 → avg 35
-	assert.InDelta(t, float64(35), results[3].Map()["moving_avg"], 0.001)
+	assert.InDelta(t, float64(35), dmap(results[3])["moving_avg"], 0.001)
 }
 
 // TestAgg_SetWindowFields_Min_Max verifies $min and $max window functions over
@@ -930,7 +930,7 @@ func TestAgg_SetWindowFields_Min_Max(t *testing.T) {
 
 	// All documents should see the global min=10 and max=80.
 	for _, r := range results {
-		m := r.Map()
+		m := dmap(r)
 		assert.Equal(t, int32(10), m["global_min"])
 		assert.Equal(t, int32(80), m["global_max"])
 	}

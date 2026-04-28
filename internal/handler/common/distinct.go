@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -92,7 +92,7 @@ func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParam
 // decimal128ToFloat64 converts a Decimal128 to float64 via its string representation.
 // Returns (value, true) on success, or (0, false) for NaN/Infinity or parse errors.
 func decimal128ToFloat64(d types.Decimal128) (float64, bool) {
-	s := primitive.NewDecimal128(d.H, d.L).String()
+	s := bson.NewDecimal128(d.H, d.L).String()
 	switch s {
 	case "NaN", "Infinity", "-Infinity":
 		return 0, false

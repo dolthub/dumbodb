@@ -20,10 +20,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
 // TestTransactionSmoke verifies the basic session and transaction lifecycle:
@@ -45,7 +45,7 @@ func TestTransactionSmoke(t *testing.T) {
 
 	// Execute the transaction body via WithTransaction so the driver
 	// handles StartTransaction / CommitTransaction automatically.
-	_, err = sess.WithTransaction(ctx, func(sessCtx mongo.SessionContext) (interface{}, error) {
+	_, err = sess.WithTransaction(ctx, func(sessCtx context.Context) (interface{}, error) {
 		_, insErr := coll.InsertOne(sessCtx, bson.D{
 			{Key: "txn", Value: "commit"},
 			{Key: "n", Value: int32(1)},

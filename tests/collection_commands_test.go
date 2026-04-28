@@ -20,9 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/bsontype"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // TestCollMod_NonExistentCollection verifies that collMod on a collection that
@@ -191,7 +190,7 @@ func TestAutoCompact_Enable_Disable_FreeSpaceTargetMB(t *testing.T) {
 func assertValidateResponse(t *testing.T, res bson.D, coll *mongo.Collection) {
 	t.Helper()
 
-	m := res.Map()
+	m := dmap(res)
 
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
 	assert.Equal(t, true, m["valid"], "valid must be true for a healthy collection")
@@ -207,10 +206,10 @@ func assertValidateResponse(t *testing.T, res bson.D, coll *mongo.Collection) {
 	require.True(t, ok, "nIndexes must be int32, got %T", m["nIndexes"])
 	assert.GreaterOrEqual(t, nIndexes, int32(1), "nIndexes must be >= 1")
 
-	_, ok = m["keysPerIndex"].(bson.D)
+	_, ok = m["keysPerIndex"].(bson.M)
 	assert.True(t, ok, "keysPerIndex must be a document, got %T", m["keysPerIndex"])
 
-	_, ok = m["indexDetails"].(bson.D)
+	_, ok = m["indexDetails"].(bson.M)
 	assert.True(t, ok, "indexDetails must be a document, got %T", m["indexDetails"])
 
 	for _, field := range []string{"warnings", "errors", "extraIndexEntries", "missingIndexEntries", "corruptRecords"} {
@@ -245,7 +244,7 @@ func TestValidate_Full(t *testing.T) {
 	assertValidateResponse(t, res, coll)
 
 	// repaired must be false — full:true is a read-only deep scan, not a repair.
-	m := res.Map()
+	m := dmap(res)
 	assert.Equal(t, false, m["repaired"], "full:true must not set repaired:true")
 }
 
@@ -275,7 +274,7 @@ func TestValidate_Repair(t *testing.T) {
 	assertValidateResponse(t, res, coll)
 
 	// A fresh, consistent collection requires no repairs — repaired must be false.
-	m := res.Map()
+	m := dmap(res)
 	assert.Equal(t, false, m["repaired"], "repaired must be false when no repairs were needed")
 }
 
@@ -303,7 +302,7 @@ func TestConvertToCapped_VerifyCapped(t *testing.T) {
 		{Key: "size", Value: cappedSize},
 	}).Decode(&convertRes)
 	require.NoError(t, err, "convertToCapped must succeed")
-	assert.Equal(t, float64(1), convertRes.Map()["ok"], "convertToCapped ok must be 1")
+	assert.Equal(t, float64(1), dmap(convertRes)["ok"], "convertToCapped ok must be 1")
 
 	// Verify listCollections shows capped=true and size=cappedSize for this collection.
 	cursor, err := coll.Database().ListCollections(ctx, bson.D{
@@ -329,11 +328,11 @@ func TestConvertToCapped_VerifyCapped(t *testing.T) {
 	sizeVal := optionsDoc.Lookup("size")
 	var gotSize int64
 	switch sizeVal.Type {
-	case bsontype.Int32:
+	case bson.TypeInt32:
 		gotSize = int64(sizeVal.Int32())
-	case bsontype.Int64:
+	case bson.TypeInt64:
 		gotSize = sizeVal.Int64()
-	case bsontype.Double:
+	case bson.TypeDouble:
 		gotSize = int64(sizeVal.Double())
 	default:
 		t.Fatalf("options.size must be a numeric type, got %s", sizeVal.Type)
@@ -361,7 +360,7 @@ func TestConvertToCapped_Basic(t *testing.T) {
 		{Key: "size", Value: int64(1024 * 1024)},
 	}).Decode(&res)
 	require.NoError(t, err, "convertToCapped on existing collection must succeed")
-	assert.Equal(t, float64(1), res.Map()["ok"], "ok must be 1")
+	assert.Equal(t, float64(1), dmap(res)["ok"], "ok must be 1")
 }
 
 // TestConvertToCapped_NonExistentCollection verifies that convertToCapped on a collection
@@ -462,7 +461,7 @@ func TestDataSize_BasicCollection(t *testing.T) {
 	}).Decode(&res)
 	require.NoError(t, err, "dataSize on existing collection must not error")
 
-	m := res.Map()
+	m := dmap(res)
 	assert.Equal(t, float64(1), m["ok"], "ok must be 1")
 
 	size, ok := m["size"].(int64)
@@ -501,7 +500,7 @@ func TestDataSize_WithKeyRange(t *testing.T) {
 		{Key: "dataSize", Value: namespace},
 	}).Decode(&fullRes)
 	require.NoError(t, err)
-	fullNum := fullRes.Map()["numObjects"].(int64)
+	fullNum := dmap(fullRes)["numObjects"].(int64)
 	assert.EqualValues(t, 5, fullNum, "full dataSize must count all 5 documents")
 
 	// Retrieve size for range v in [2, 4) — expects documents with v=2 and v=3.
@@ -514,14 +513,14 @@ func TestDataSize_WithKeyRange(t *testing.T) {
 	}).Decode(&rangeRes)
 	require.NoError(t, err, "dataSize with key range must not error")
 
-	rm := rangeRes.Map()
+	rm := dmap(rangeRes)
 	assert.Equal(t, float64(1), rm["ok"], "ok must be 1")
 
 	rangeNum := rm["numObjects"].(int64)
 	assert.EqualValues(t, 2, rangeNum, "dataSize with range [2,4) must count 2 documents (v=2, v=3)")
 
 	rangeSize := rm["size"].(int64)
-	fullSize := fullRes.Map()["size"].(int64)
+	fullSize := dmap(fullRes)["size"].(int64)
 	assert.Less(t, rangeSize, fullSize, "range size must be less than full collection size")
 }
 
@@ -588,12 +587,12 @@ func TestRenameCollection_DropTarget(t *testing.T) {
 		{Key: "dropTarget", Value: true},
 	}).Decode(&res)
 	require.NoError(t, err, "renameCollection with dropTarget:true must succeed when target exists")
-	assert.Equal(t, float64(1), res.Map()["ok"], "ok must be 1")
+	assert.Equal(t, float64(1), dmap(res)["ok"], "ok must be 1")
 
 	// Verify the renamed collection has the source document (not the old target doc).
 	var doc bson.D
 	require.NoError(t, db.Collection(dstName).FindOne(ctx, bson.D{}).Decode(&doc))
-	m := doc.Map()
+	m := dmap(doc)
 	_, hasX := m["x"]
 	assert.True(t, hasX, "renamed collection must contain source document with field 'x'")
 }
@@ -613,11 +612,11 @@ func TestServerStatus_ReplicationField(t *testing.T) {
 		{Key: "serverStatus", Value: int32(1)},
 	}).Decode(&res)
 	require.NoError(t, err, "serverStatus must not error")
-	assert.Equal(t, float64(1), res.Map()["ok"], "ok must be 1")
+	assert.Equal(t, float64(1), dmap(res)["ok"], "ok must be 1")
 
 	// On a standalone server, the repl field must be absent.
 	// MongoDB only includes repl when the server is part of a replica set.
-	_, hasRepl := res.Map()["repl"]
+	_, hasRepl := dmap(res)["repl"]
 	assert.False(t, hasRepl, "standalone server must not include a 'repl' field in serverStatus")
 }
 
@@ -647,7 +646,7 @@ func TestDbStats_ScaleOption(t *testing.T) {
 		{Key: "dbStats", Value: int32(1)},
 	}).Decode(&unscaled)
 	require.NoError(t, err, "dbStats without scale must not error")
-	um := unscaled.Map()
+	um := dmap(unscaled)
 
 	// Retrieve dbStats with scale=1024.
 	const scale = int32(1024)
@@ -657,7 +656,7 @@ func TestDbStats_ScaleOption(t *testing.T) {
 		{Key: "scale", Value: scale},
 	}).Decode(&scaled)
 	require.NoError(t, err, "dbStats with scale must not error")
-	sm := scaled.Map()
+	sm := dmap(scaled)
 
 	assert.Equal(t, float64(1), um["ok"], "unscaled ok must be 1")
 	assert.Equal(t, float64(1), sm["ok"], "scaled ok must be 1")

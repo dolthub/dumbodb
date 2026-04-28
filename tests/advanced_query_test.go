@@ -20,9 +20,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // TestAdvancedQuery_JsonSchema_ExclusiveMinimum_Maximum verifies $jsonSchema with
@@ -252,7 +252,7 @@ func TestAdvancedQuery_Regex_LookaheadSupported(t *testing.T) {
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 1)
-	assert.Equal(t, int32(1), results[0].Map()["_id"])
+	assert.Equal(t, int32(1), dmap(results[0])["_id"])
 }
 
 // TestAdvancedQuery_TextSearch_MetaTextScore_Projection verifies that $text search

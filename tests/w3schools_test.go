@@ -20,8 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // TestW3S_AggAddFields_ComputedAvg verifies that $addFields can compute the average
@@ -54,17 +54,17 @@ func TestW3S_AggAddFields_ComputedAvg(t *testing.T) {
 	require.Len(t, results, 3)
 
 	// Alice: (85+92+78)/3 = 85.0
-	aliceAvg, ok := results[0].Map()["avgScore"].(float64)
+	aliceAvg, ok := dmap(results[0])["avgScore"].(float64)
 	require.True(t, ok, "avgScore for Alice must be float64")
 	assert.InDelta(t, 85.0, aliceAvg, 0.001)
 
 	// Bob: (70+88+95)/3 = 84.333...
-	bobAvg, ok := results[1].Map()["avgScore"].(float64)
+	bobAvg, ok := dmap(results[1])["avgScore"].(float64)
 	require.True(t, ok, "avgScore for Bob must be float64")
 	assert.InDelta(t, 84.333, bobAvg, 0.001)
 
 	// Carol: (60+72+84)/3 = 72.0
-	carolAvg, ok := results[2].Map()["avgScore"].(float64)
+	carolAvg, ok := dmap(results[2])["avgScore"].(float64)
 	require.True(t, ok, "avgScore for Carol must be float64")
 	assert.InDelta(t, 72.0, carolAvg, 0.001)
 }

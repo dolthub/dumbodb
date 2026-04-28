@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // TestIndex_TTL_CreateOne verifies that a TTL index (expireAfterSeconds) can be created (do-81xd).
@@ -34,7 +34,7 @@ func TestIndex_TTL_CreateOne(t *testing.T) {
 	expireAfter := int32(3600)
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
-		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+		Options: options.Index().SetExpireAfterSeconds(expireAfter),
 	}
 	name, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestIndex_TTL_ZeroSeconds(t *testing.T) {
 	expireAfter := int32(0)
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "expireAt", Value: 1}},
-		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+		Options: options.Index().SetExpireAfterSeconds(expireAfter),
 	}
 	name, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestIndex_TTL_InsertDocs(t *testing.T) {
 	expireAfter := int32(3600)
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "ts", Value: 1}},
-		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+		Options: options.Index().SetExpireAfterSeconds(expireAfter),
 	}
 	_, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestIndex_Hashed_CannotBeUnique(t *testing.T) {
 	unique := true
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "shardKey", Value: "hashed"}},
-		Options: &options.IndexOptions{Unique: &unique},
+		Options: options.Index().SetUnique(unique),
 	}
 	_, err := coll.Indexes().CreateOne(ctx, model)
 	require.Error(t, err, "hashed+unique should fail")
@@ -206,7 +206,7 @@ func TestIndex_Sparse_UniqueWithMissingField(t *testing.T) {
 	unique := true
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "email", Value: 1}},
-		Options: &options.IndexOptions{Sparse: &sparse, Unique: &unique},
+		Options: options.Index().SetSparse(sparse).SetUnique(unique),
 	}
 	_, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
@@ -233,8 +233,7 @@ func TestIndex_ListIndexes_AfterDrop(t *testing.T) {
 	name, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
 
-	_, err = coll.Indexes().DropOne(ctx, name)
-	require.NoError(t, err)
+	require.NoError(t, coll.Indexes().DropOne(ctx, name))
 
 	cur, err := coll.Indexes().List(ctx)
 	require.NoError(t, err)
@@ -257,8 +256,7 @@ func TestIndex_ListIndexes_AfterDropAll(t *testing.T) {
 	_, err := coll.Indexes().CreateMany(ctx, models)
 	require.NoError(t, err)
 
-	_, err = coll.Indexes().DropAll(ctx)
-	require.NoError(t, err)
+	require.NoError(t, coll.Indexes().DropAll(ctx))
 
 	cur, err := coll.Indexes().List(ctx)
 	require.NoError(t, err)
@@ -327,7 +325,7 @@ func TestIndex_TTL_InsertAndVerifyNotExpiredYet(t *testing.T) {
 	expireAfter := int32(3600)
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
-		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+		Options: options.Index().SetExpireAfterSeconds(expireAfter),
 	}
 	_, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
@@ -354,7 +352,7 @@ func TestIndex_TTL_OnNestedDateField(t *testing.T) {
 	expireAfter := int32(86400)
 	model := mongo.IndexModel{
 		Keys:    bson.D{{Key: "meta.expiresAt", Value: 1}},
-		Options: &options.IndexOptions{ExpireAfterSeconds: &expireAfter},
+		Options: options.Index().SetExpireAfterSeconds(expireAfter),
 	}
 	name, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
