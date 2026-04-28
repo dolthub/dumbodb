@@ -46,6 +46,7 @@ type diffResult struct {
 // collDiffResult holds the decoded per-collection section of a dumboDBDiff response.
 type collDiffResult struct {
 	Name     string
+	Status   string
 	Added    []bson.M
 	Removed  []bson.M
 	Modified []modifiedDocResult
@@ -84,6 +85,10 @@ func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 
 		cd := collDiffResult{
 			Name: cm["name"].(string),
+		}
+
+		if statusRaw, ok := cm["status"].(string); ok {
+			cd.Status = statusRaw
 		}
 
 		if addedRaw, ok := cm["added"].(bson.A); ok {
@@ -237,6 +242,9 @@ func TestDiffVerify(t *testing.T) {
 				}
 				return names
 			}())
+
+		// items existed in both sides with doc-level changes → status: "modified"
+		assert.Equal(t, "modified", cd.Status, "items collection should have status 'modified'")
 
 		// added: exactly _id:3
 		require.Len(t, cd.Added, 1, "expected 1 added doc")
@@ -736,5 +744,76 @@ func TestDiffVerify(t *testing.T) {
 		// $.address.zip and $.name must not appear (unchanged).
 		assert.Nil(t, findFieldDiffResult(mod, "$.address.zip"), "unchanged $.address.zip must not appear")
 		assert.Nil(t, findFieldDiffResult(mod, "$.name"), "unchanged $.name must not appear")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: Collection-level lifecycle status (added / deleted / modified)
+	//
+	// Each collection entry in the diff carries a `status` field that says what
+	// happened to the collection itself, independent of its document-level diffs:
+	//   - "added"    — collection exists only in "to"
+	//   - "deleted"  — collection exists only in "from"
+	//   - "modified" — collection exists in both with at least one doc change
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_CollectionStatus", func(t *testing.T) {
+		// Pre-stage: clean any pending working-set changes so we can reason about
+		// a fresh baseline commit.
+		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario10", "alice <alice@dumbodb>")
+
+		db := env.client.Database(dbName)
+
+		// Baseline: 'staying' (will persist) and 'going' (will be dropped).
+		stay := db.Collection("scen10_staying")
+		gone := db.Collection("scen10_going")
+
+		_, err := stay.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
+		require.NoError(t, err)
+		_, err = gone.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+
+		hashBaseline := dumboDBCommit(t, env, dbName, "scen10 baseline", "alice <alice@dumbodb>")
+
+		// Working-set lifecycle:
+		//   - scen10_staying: modify a doc                → status: "modified"
+		//   - scen10_going:   drop the collection         → status: "deleted"
+		//   - scen10_arrival: create a new collection     → status: "added"
+		_, err = stay.UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: int32(1)}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}},
+		)
+		require.NoError(t, err)
+
+		require.NoError(t, gone.Drop(ctx))
+
+		newColl := db.Collection("scen10_arrival")
+		_, err = newColl.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(42)}, {Key: "label", Value: "new"}})
+		require.NoError(t, err)
+
+		// Diff baseline → working set; assert each collection has the expected status.
+		var raw bson.M
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "doltDiff", Value: int32(1)},
+			{Key: "from", Value: hashBaseline},
+		}).Decode(&raw))
+
+		dr := decodeDiffResult(t, raw)
+
+		stayDiff := findCollDiff(dr, "scen10_staying")
+		require.NotNil(t, stayDiff, "expected diff for 'scen10_staying'")
+		assert.Equal(t, "modified", stayDiff.Status, "modified-existing collection should have status 'modified'")
+		require.Len(t, stayDiff.Modified, 1, "scen10_staying should have 1 modified doc")
+		assert.Equal(t, int32(1), stayDiff.Modified[0].ID)
+
+		goneDiff := findCollDiff(dr, "scen10_going")
+		require.NotNil(t, goneDiff, "expected diff for dropped 'scen10_going' collection")
+		assert.Equal(t, "deleted", goneDiff.Status, "dropped collection should have status 'deleted'")
+		require.Len(t, goneDiff.Removed, 1, "all docs from dropped collection should be in 'removed'")
+		assert.Equal(t, int32(1), goneDiff.Removed[0]["_id"])
+
+		newDiff := findCollDiff(dr, "scen10_arrival")
+		require.NotNil(t, newDiff, "expected diff for newly created 'scen10_arrival' collection")
+		assert.Equal(t, "added", newDiff.Status, "newly created collection should have status 'added'")
+		require.Len(t, newDiff.Added, 1, "all docs in new collection should be in 'added'")
+		assert.Equal(t, int32(42), newDiff.Added[0]["_id"])
 	})
 }

@@ -256,6 +256,7 @@ type ModifiedDoc struct {
 // CollectionDiff represents the changes to a single collection.
 type CollectionDiff struct {
 	Name     string
+	Status   string            // "added" (only in b), "deleted" (only in a), or "modified" (in both with doc changes)
 	Added    []*types.Document // full documents added in "b"
 	Removed  []*types.Document // full documents removed from "a"
 	Modified []ModifiedDoc     // documents changed between "a" and "b"

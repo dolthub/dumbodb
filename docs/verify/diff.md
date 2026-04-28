@@ -71,6 +71,7 @@ Expected result structure:
   "collections": [
     {
       "name": "items",
+      "status": "modified",
       "added": [
         { "_id": 3, "label": "gamma", "score": 30 }
       ],
@@ -92,6 +93,7 @@ Expected result structure:
 ```
 
 Key checks:
+- `status` is `"modified"` (the collection existed in both sides)
 - `added` contains exactly `_id:3`
 - `removed` contains exactly `_id:2`
 - `modified` contains exactly `_id:1` with a `score` field diff (`a: 10`, `b: 99`)
@@ -326,7 +328,71 @@ Key checks:
 | `{ doltDiff: 1, from: "branch", to: "HEAD" }` | branch tip | connection HEAD |
 
 - Only collections with at least one change appear in the result.
+- Each collection entry carries a `status` field describing the collection's
+  lifecycle between the two sides:
+  - `"added"` — collection exists in `to` but not in `from` (newly created).
+  - `"deleted"` — collection exists in `from` but not in `to` (dropped).
+  - `"modified"` — collection exists in both sides with at least one document-level change.
 - `added` and `removed` contain full documents.
 - `modified` contains only the changed fields with `from` (old) and `to` (new) values.
 - Unchanged fields do not appear in `modified[].diff`.
 - `HEAD` always resolves to the connection's own branch tip, not necessarily main.
+
+---
+
+## Scenario 10: Collection-level lifecycle (added / deleted / modified)
+
+A diff result may span multiple collections that experienced different lifecycle
+events. The `status` field on each collection entry says what happened to the
+collection itself, independent of its document-level diff arrays.
+
+```js
+// Baseline commit:
+//   db.staying  = [ { _id:1, v:1 } ]
+//   db.going    = [ { _id:1 } ]
+
+// Working-set changes (not committed):
+db.staying.updateOne({ _id: 1 }, { $set: { v: 2 } })   // modified
+db.going.drop()                                        // deleted
+db.arrival.insertOne({ _id: 42, label: "new" })        // added
+
+db.runCommand({ doltDiff: 1, from: hashBaseline })
+```
+
+Expected:
+
+```json
+{
+  "collections": [
+    {
+      "name": "arrival",
+      "status": "added",
+      "added": [ { "_id": 42, "label": "new" } ],
+      "removed": [],
+      "modified": []
+    },
+    {
+      "name": "going",
+      "status": "deleted",
+      "added": [],
+      "removed": [ { "_id": 1 } ],
+      "modified": []
+    },
+    {
+      "name": "staying",
+      "status": "modified",
+      "added": [],
+      "removed": [],
+      "modified": [
+        { "_id": 1, "diff": [ { "type": "modified", "path": "$.v", "from": 1, "to": 2 } ] }
+      ]
+    }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- `arrival.status == "added"` — created since baseline; all docs appear in `added`.
+- `going.status == "deleted"` — dropped since baseline; all prior docs appear in `removed`.
+- `staying.status == "modified"` — present in both sides with at least one doc-level change.

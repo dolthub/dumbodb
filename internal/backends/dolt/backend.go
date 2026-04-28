@@ -2311,6 +2311,30 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 	var diffs []backends.CollectionDiff
 
 	for _, name := range names {
+		// Determine collection-level status from presence in each side.
+		aHash, hashErr := aAM.Get(ctx, name)
+		if hashErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBDiff: probing a-side AM for %q.%q: %w", params.DBName, name, hashErr)
+		}
+
+		bHash, hashErr := bAM.Get(ctx, name)
+		if hashErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBDiff: probing b-side AM for %q.%q: %w", params.DBName, name, hashErr)
+		}
+
+		inA := !aHash.IsEmpty()
+		inB := !bHash.IsEmpty()
+
+		var status string
+		switch {
+		case !inA && inB:
+			status = "added"
+		case inA && !inB:
+			status = "deleted"
+		default:
+			status = "modified"
+		}
+
 		// Load or substitute an empty map for each side.
 		aMap, mapErr := collectionMapFromAM(ctx, state, aAM, name)
 		if mapErr != nil {
@@ -2327,12 +2351,16 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 			return nil, fmt.Errorf("dolt: DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
 		}
 
-		if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
+		// A "modified" collection with no document-level changes is no diff at all.
+		// "added" and "deleted" collections always surface, even when empty, so the
+		// caller can see the lifecycle event.
+		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
 			continue
 		}
 
 		diffs = append(diffs, backends.CollectionDiff{
 			Name:     name,
+			Status:   status,
 			Added:    added,
 			Removed:  removed,
 			Modified: modified,

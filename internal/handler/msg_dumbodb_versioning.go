@@ -127,6 +127,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 		collEntry := must.NotFail(types.NewDocument(
 			"name", cd.Name,
+			"status", cd.Status,
 			"added", added,
 			"removed", removed,
 			"modified", modified,
