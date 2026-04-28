@@ -76,7 +76,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: merge feature into main ----------------------------
     run mongosh_eval "$main_db" '
-        JSON.stringify(db.runCommand({doltMerge: 1, merge_in: "feature", message: "merge", author: "alice <a@t>"}))
+        try { JSON.stringify(db.runCommand({doltMerge: 1, merge_in: "feature", message: "merge", author: "alice <a@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
     # ok:0 is expected; doltMerge exits non-zero on conflict — status allowed.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
@@ -159,7 +159,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: cherry-pick C2 onto main --------------------------
     run mongosh_eval "$main_db" \
-        "JSON.stringify(db.runCommand({doltCherryPick: 1, commit: '${hash_c2}'}))"
+        "try { JSON.stringify(db.runCommand({doltCherryPick: 1, commit: '${hash_c2}'})) } catch(e) { JSON.stringify(e.errorResponse) }"
     # ok:0 expected on conflict.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
 
@@ -238,7 +238,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: rebase feature onto main --------------------------
     run mongosh_eval "test__d_feature" '
-        JSON.stringify(db.runCommand({doltRebase: 1, onto: "main", author: "bob <b@t>"}))
+        try { JSON.stringify(db.runCommand({doltRebase: 1, onto: "main", author: "bob <b@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
     # ok:0 expected on conflict.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
@@ -319,7 +319,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: revert C2 on main ---------------------------------
     run mongosh_eval "$main_db" \
-        "JSON.stringify(db.runCommand({doltRevert: 1, commit: '${hash_c2}'}))"
+        "try { JSON.stringify(db.runCommand({doltRevert: 1, commit: '${hash_c2}'})) } catch(e) { JSON.stringify(e.errorResponse) }"
     # ok:0 expected on conflict.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
 
