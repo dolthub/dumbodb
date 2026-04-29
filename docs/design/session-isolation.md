@@ -1,51 +1,83 @@
-# Session Isolation and Commit-Based Durability
+# Session Isolation, Transactions, and Commit-Based Durability
 
-**Status:** Design (deferred — not implementing yet)  
+**Status:** Design  
 **Author:** mayor  
-**Date:** 2026-04-24  
-**Flag:** `--session-isolation` (future)
+**Date:** 2026-04-24 (updated 2026-04-29)
 
-## Implementation Status
+## Two Modes of Operation
 
-This design is **deferred**. DumboDB's first priority is to behave like MongoDB
-by default: shared state, document-level locking, last-writer-wins. Session
-isolation will be gated behind a `--session-isolation` server flag when we're
-ready to implement it.
+DumboDB supports two concurrency models, selected at server startup:
 
-## How MongoDB Handles Concurrent Writes
+### Default mode (no flag)
 
-MongoDB has **no conflict detection**. Concurrent writes to the same document
-are serialized via WiredTiger's document-level lock:
+MongoDB-compatible transactions via `startTransaction` / `commitTransaction` /
+`abortTransaction`. Uses **pessimistic document-level locking** — when a
+transaction writes to a document, other transactions that try to write to the
+same document **block** until the first transaction commits or aborts. If the
+lock wait exceeds a timeout, the blocked transaction gets a `WriteConflict`
+error and must retry.
 
-1. Client A sends `{$set: {x: 1}}` on doc `_id: 1`
-2. Client B sends `{$set: {y: 2}}` on doc `_id: 1` at the same time
-3. One client acquires the document lock first, writes, releases
-4. The other client acquires the lock, reads the now-updated document, applies
-   its change, writes
-5. Both succeed. Both fields are updated. No conflict, no error.
+This matches MongoDB's behavior: two transactions can never both succeed with
+conflicting writes to the same document.
 
-If both clients set the **same field**, the second writer silently overwrites
-the first. No conflict detection, no notification. Last-writer-wins.
+Non-transactional writes (outside `startTransaction`) use shared state with
+document-level mutex, same as MongoDB's default.
 
-This is document-level granularity — there is no field-level merge. MongoDB
-does not attempt to combine non-overlapping field changes into a merged result.
-It simply serializes access and lets the last write stand.
+### `--session-isolation` mode
 
-**DumboDB's current behavior matches this:** shared `state.am`, mutex-protected,
-last-writer-wins. This is the correct default for MongoDB compatibility.
+Version-control-native isolation via `doltCommit`. Uses **optimistic concurrency
+with three-way merge** — each session works on its own forked snapshot. At
+`doltCommit` time, changes are merged back using the fork point as the common
+ancestor. If two sessions modified the same document, the second committer gets
+a merge conflict (surfaced via `doltConflicts`).
 
-## What This Design Proposes (Future, `--session-isolation`)
+In this mode, `startTransaction` returns an error:
+```
+{ ok: 0, errmsg: "Transactions are not available in session-isolation mode. Use doltCommit instead.", code: 263 }
+```
 
-The session isolation model described below is **stricter** than MongoDB. It
-detects conflicts via three-way merge at `doltCommit` time. If two sessions
-modify the same document, the second committer gets a conflict error instead
-of silently overwriting. This is a version-control-native behavior — the same
-semantics as `dolt merge` or `git merge`.
+## How MongoDB Transactions Work
 
-This is a deliberate departure from MongoDB's model and should only be enabled
-when users opt in via `--session-isolation`. Applications that depend on
-MongoDB's last-writer-wins semantics would break if conflicts were surfaced
-unexpectedly.
+MongoDB uses pessimistic locking for transactions:
+
+1. Client A calls `startTransaction()`, then writes to doc `_id: 1`
+   → Server acquires a write lock on that document
+2. Client B calls `startTransaction()`, then tries to write to doc `_id: 1`
+   → Server **blocks** Client B (or returns `WriteConflict` after timeout)
+3. Client A calls `commitTransaction()` → lock released, changes visible
+4. Client B retries and succeeds
+
+Key properties:
+- Conflicts are **prevented** (via locks), not detected after the fact
+- `abortTransaction()` discards all changes and releases locks
+- Reads within a transaction see a **snapshot** from when the transaction started
+- Multiple collections can participate in a single transaction
+
+### How DumboDB Implements This (Default Mode)
+
+The session registry and branch session infrastructure (described below) serves
+both modes. In default mode:
+
+- `startTransaction` → creates a branch session (forked AM), sets `inTransaction = true`
+- Writes within the transaction → mutate the branch session's AM
+- **Document locking**: when a transaction writes to a document, its `_id` is
+  added to a per-branch lock set. Other transactions that try to write to the
+  same `_id` receive `WriteConflict` (error code 112) immediately
+- `commitTransaction` → flush the branch session's AM to the shared state
+  (no three-way merge needed — locks guarantee no conflicts). `cs.Commit()` for
+  durability. Release all document locks.
+- `abortTransaction` → discard the branch session's AM. Release all document locks.
+
+Non-transactional writes (no `startTransaction`) continue to use the shared
+`state.am` directly with mutex serialization, same as today.
+
+### How DumboDB Implements This (`--session-isolation` Mode)
+
+- Every write implicitly forks (no `startTransaction` needed)
+- No document locking — two sessions can write to the same document concurrently
+- `doltCommit` triggers a three-way merge with conflict detection
+- Conflicts are surfaced, not prevented
+- `startTransaction` returns an error directing users to `doltCommit`
 
 ---
 
@@ -162,12 +194,15 @@ Client B ──► Handler ──► session B ──── mydb/main branchSess
 
 ```go
 // branchSession holds the isolated working state for one (session, db, branch)
-// tuple. This is the fundamental isolation unit.
+// tuple. This is the fundamental isolation unit for both transaction modes.
 type branchSession struct {
-    mu       sync.Mutex
-    forkHash hash.Hash           // branch HEAD hash at fork time (merge base)
-    am       prolly.AddressMap   // branch-session-scoped address map
-    dirty    bool                // true if any writes have occurred
+    mu            sync.Mutex
+    forkHash      hash.Hash           // branch HEAD hash at fork time (merge base)
+    am            prolly.AddressMap   // branch-session-scoped address map
+    dirty         bool                // true if any writes have occurred
+    inTransaction bool                // true between startTransaction/commit/abort
+    txnNumber     int64               // MongoDB transaction number
+    lockedDocs    map[string]hash.HashSet // docs locked by this txn (key = collection name)
 }
 
 // sessionState holds all branch sessions for one client session (lsid).
@@ -176,6 +211,14 @@ type sessionState struct {
     branches map[string]*branchSession  // key = "dbname/branch"
     lastUsed time.Time                  // for timeout-based cleanup
 }
+
+// branchLocks tracks document-level locks for the default (transaction) mode.
+// One per (db, branch) — shared across all sessions on that branch.
+type branchLocks struct {
+    mu    sync.Mutex
+    locks map[string]map[hash.Hash]string  // collection → docID hash → owning lsid
+}
+```
 ```
 
 Sessions are keyed by MongoDB's `lsid` (logical session ID), which DumboDB
@@ -589,15 +632,75 @@ Client A: doltCommit → succeeds (_id:1 removed from HEAD)
 Client B: doltCommit → conflict (base had _id:1, A deleted it, B modified it)
 ```
 
+## Transaction Tests (Default Mode)
+
+These tests apply when the server runs WITHOUT `--session-isolation`:
+
+### Test 13: Basic startTransaction / commitTransaction
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1, x: "in txn"}
+Client B: find {} → should return [] (A hasn't committed)
+Client A: commitTransaction
+Client B: find {} → should return [{_id: 1, x: "in txn"}]
+```
+
+### Test 14: abortTransaction discards changes
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1, x: "will abort"}
+Client A: find {_id: 1} → [{_id: 1, x: "will abort"}] (read-your-own-writes)
+Client A: abortTransaction
+Client A: find {_id: 1} → [] (changes discarded)
+```
+
+### Test 15: Document locking — concurrent txn blocked on same doc
+
+```
+Setup: collection has {_id: 1, x: "original"}
+Client A: startTransaction
+Client A: update {_id: 1}, {$set: {x: "A"}}     ← acquires lock on _id:1
+Client B: startTransaction
+Client B: update {_id: 1}, {$set: {x: "B"}}     ← WriteConflict error (doc locked by A)
+Client A: commitTransaction                       ← releases lock
+Client B: (retries) update {_id: 1} → succeeds
+Client B: commitTransaction
+```
+
+### Test 16: Non-conflicting transactions succeed
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1}                         ← locks _id:1
+Client B: startTransaction
+Client B: insert {_id: 2}                         ← locks _id:2 (different doc, no conflict)
+Client A: commitTransaction
+Client B: commitTransaction
+Both documents present.
+```
+
+### Test 17: startTransaction rejected in --session-isolation mode
+
+```
+Server started with --session-isolation
+Client A: startTransaction → error: "Transactions are not available in
+  session-isolation mode. Use doltCommit instead."
+```
+
 ## Files to Change
 
 | File | Change |
 |---|---|
-| `backend.go` | Add session registry, getOrCreateSession() |
+| `backend.go` | Add session registry, getOrCreateSession(), branchLocks |
 | `collection.go` | InsertAll/UpdateAll/DeleteAll use session AM |
 | `helpers.go` | updateAddressMap becomes session-aware |
-| `backend.go` (DumboDBCommit) | Add three-way merge before commit |
+| `backend.go` (DumboDBCommit) | Add three-way merge before commit (session-isolation mode) |
 | `conninfo/conn_info.go` | Thread lsid through context |
 | `handler/common/insert.go` | Stop ignoring lsid, pass to backend |
 | `handler/common/update_params.go` | Same |
 | `handler/common/delete_params.go` | Same |
+| `handler/msg_session.go` | Implement startSession, endSession |
+| `handler/msg_transaction.go` | NEW: startTransaction, commitTransaction, abortTransaction |
+| `cmd/dumbodb/main.go` | Add `--session-isolation` flag |
