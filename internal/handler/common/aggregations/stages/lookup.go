@@ -233,7 +233,9 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		}
 	} else {
 		// Simple equality join form.
-		// Supports array localField: if localField value is an array, any element match counts.
+		// MongoDB equality semantics: a foreign doc matches if any element of
+		// localField (treated as a singleton when scalar) equals any element of
+		// foreignField (treated as a singleton when scalar).
 		for _, doc := range docs {
 			localVal := getFieldValue(doc, l.localField)
 
@@ -242,15 +244,8 @@ func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, clos
 			for _, fromDoc := range fromDocs {
 				foreignVal := getFieldValue(fromDoc, l.foreignField)
 
-				if localValArr, isArr := localVal.(*types.Array); isArr {
-					// Array localField: match if foreignVal equals any element.
-					if arrayContainsValue(localValArr, foreignVal) {
-						matched = append(matched, fromDoc.DeepCopy())
-					}
-				} else {
-					if valuesEqual(localVal, foreignVal) {
-						matched = append(matched, fromDoc.DeepCopy())
-					}
+				if lookupValuesMatch(localVal, foreignVal) {
+					matched = append(matched, fromDoc.DeepCopy())
 				}
 			}
 
@@ -488,6 +483,42 @@ func getFieldValue(doc *types.Document, field string) any {
 	}
 
 	return v
+}
+
+// lookupValuesMatch reports whether localVal and foreignVal match under MongoDB
+// $lookup equality semantics: arrays on either side are treated as a set of
+// candidate values, and a match exists if any candidate from one side equals
+// any candidate from the other.
+func lookupValuesMatch(localVal, foreignVal any) bool {
+	localArr, localIsArr := localVal.(*types.Array)
+	foreignArr, foreignIsArr := foreignVal.(*types.Array)
+
+	switch {
+	case localIsArr && foreignIsArr:
+		arrIter := localArr.Iterator()
+		defer arrIter.Close()
+
+		for {
+			_, elem, err := arrIter.Next()
+			if errors.Is(err, iterator.ErrIteratorDone) {
+				return false
+			}
+
+			if err != nil {
+				return false
+			}
+
+			if arrayContainsValue(foreignArr, elem) {
+				return true
+			}
+		}
+	case localIsArr:
+		return arrayContainsValue(localArr, foreignVal)
+	case foreignIsArr:
+		return arrayContainsValue(foreignArr, localVal)
+	default:
+		return valuesEqual(localVal, foreignVal)
+	}
 }
 
 // arrayContainsValue reports whether the array contains a value equal to target.
