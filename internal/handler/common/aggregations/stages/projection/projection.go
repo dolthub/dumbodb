@@ -76,7 +76,6 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			)
 		}
 
-		// TODO https://github.com/dolthub/dumbodb/issues/3127
 		path, err := types.NewPathFromString(key)
 		if err != nil {
 			if strings.HasSuffix(key, "$") {
@@ -294,7 +293,6 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 
 	projectedWithoutID, err := projectDocumentWithoutID(doc, projection, inclusion)
 	if err != nil {
-		// TODO https://github.com/dolthub/dumbodb/issues/2633
 		return nil, err
 	}
 
@@ -341,7 +339,6 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 			continue
 		}
 
-		// TODO https://github.com/dolthub/dumbodb/issues/3127
 		path, err := types.NewPathFromString(key)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
@@ -724,7 +721,6 @@ func processOperatorError(err error) error {
 				"$project (stage)",
 			)
 		case aggregations.ErrUndefinedVariable:
-			// TODO https://github.com/dolthub/dumbodb/issues/2275
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
 				"Aggregation expression variables are not implemented yet",

@@ -133,7 +133,6 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	pairs := []any{
 		"db", dbName,
 		"collections", int64(len(list.Collections)),
-		// TODO https://github.com/dolthub/dumbodb/issues/176
 		"views", int64(0),
 		"objects", stats.CountDocuments,
 		"avgObjSize", avgObjSize,

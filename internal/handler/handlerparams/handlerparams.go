@@ -50,7 +50,6 @@ var (
 func GetWholeNumberParam(value any) (int64, error) {
 	switch value := value.(type) {
 	// add string support
-	// TODO https://github.com/dolthub/dumbodb/issues/1089
 	case float64:
 		switch {
 		case math.IsInf(value, 1):

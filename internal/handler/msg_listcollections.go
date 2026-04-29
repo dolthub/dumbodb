@@ -46,7 +46,6 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 
 	common.Ignored(document, h.L, "comment")
 
-	// TODO https://github.com/dolthub/dumbodb/issues/3770
 	common.Ignored(document, h.L, "authorizedCollections")
 
 	dbName, err := common.GetRequiredParam[string](document, "$db")

@@ -98,7 +98,6 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	if name != "" {
 		// That does not work for TLS-only setups, IPv6 addresses, etc.
 		// The proper solution is to support `replSetInitiate` command.
-		// TODO https://github.com/dolthub/dumbodb/issues/3936
 		if strings.HasPrefix(tcpHost, ":") {
 			tcpHost = "localhost" + tcpHost
 		}

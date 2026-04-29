@@ -134,7 +134,6 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	ctx := connCtx
 	cancel := func() {}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/2983
 	if params.MaxTimeMS != 0 {
 		findDone := make(chan struct{})
 		defer close(findDone)

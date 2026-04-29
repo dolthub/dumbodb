@@ -48,7 +48,6 @@ func (h *Handler) MsgUsersInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/4141
 	if err = common.UnimplementedNonDefault(document, "filter", func(v any) bool {
 		if v == nil || v == types.Null {
 			return true

@@ -51,7 +51,6 @@ func SortDocuments(docs []*types.Document, sortDoc *types.Document) error {
 		switch {
 		case sortKey == "$natural":
 		default:
-			// TODO https://github.com/dolthub/dumbodb/issues/3127
 			for _, field := range fields {
 				if strings.HasPrefix(field, "$") {
 					return handlererrors.NewCommandErrorMsgWithArgument(
@@ -240,7 +239,6 @@ func ValidateSortDocument(sortDoc *types.Document) (*types.Document, error) {
 				)
 			}
 		default:
-			// TODO https://github.com/dolthub/dumbodb/issues/3127
 			for _, field := range fields {
 				if strings.HasPrefix(field, "$") {
 					return nil, handlererrors.NewCommandErrorMsgWithArgument(

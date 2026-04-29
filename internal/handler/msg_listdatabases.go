@@ -43,7 +43,6 @@ func (h *Handler) MsgListDatabases(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	common.Ignored(document, h.L, "comment")
 
-	// TODO https://github.com/dolthub/dumbodb/issues/3769
 	common.Ignored(document, h.L, "authorizedDatabases")
 
 	var nameOnly bool

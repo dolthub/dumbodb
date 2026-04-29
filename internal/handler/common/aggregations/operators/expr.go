@@ -71,7 +71,6 @@ func (e *expr) validateExpr(exprValue any) error {
 
 			_, err = op.Process(nil)
 			if err != nil {
-				// TODO https://github.com/dolthub/dumbodb/issues/3129
 				return processExprOperatorErrors(err, e.errArgument)
 			}
 
@@ -285,7 +284,6 @@ func processExprOperatorErrors(err error, argument string) error {
 				argument,
 			)
 		case aggregations.ErrUndefinedVariable:
-			// TODO https://github.com/dolthub/dumbodb/issues/2275
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
 				"Aggregation expression variables are not implemented yet",

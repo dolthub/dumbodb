@@ -37,7 +37,6 @@ import (
 // WriteErrorDocument returns a document representation of the write error.
 //
 // Find a better place for this function.
-// TODO https://github.com/dolthub/dumbodb/issues/3263
 func WriteErrorDocument(we *mongo.WriteError) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"index", int32(we.Index),
@@ -140,7 +139,6 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				doc.Set("_id", types.NewObjectID())
 			}
 
-			// TODO https://github.com/dolthub/dumbodb/issues/3454
 			if err = doc.ValidateData(); err != nil {
 				var ve *types.ValidationError
 				if !errors.As(err, &ve) {

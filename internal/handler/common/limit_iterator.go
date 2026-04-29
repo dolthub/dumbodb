@@ -36,7 +36,6 @@ func LimitIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, l
 	case limit < 0:
 		// limit parameter range should be handled by GetLimitParam.
 		// aggregation limit stage allows limit of math.MaxInt64.
-		// TODO https://github.com/dolthub/dumbodb/issues/2255
 		panic(fmt.Sprintf("invalid limit value: %d", limit))
 	default:
 		res := &limitIterator{

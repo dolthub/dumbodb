@@ -73,7 +73,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	}
 
 	// handle collection-agnostic pipelines ({aggregate: 1})
-	// TODO https://github.com/dolthub/dumbodb/issues/1890
 	var ok bool
 	var cName string
 
@@ -313,7 +312,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	ctx := connCtx
 	cancel := func() {}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/2983
 	if maxTimeMS != 0 {
 		findDone := make(chan struct{})
 		defer close(findDone)
@@ -469,7 +467,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		iter, err = processStagesDocuments(ctx, closer, &stagesDocumentsParams{c, qp, stagesDocuments})
 	} else {
-		// TODO https://github.com/dolthub/dumbodb/issues/2423
 		statistics := stages.GetStatistics(collStatsDocuments)
 
 		iter, err = processStagesStats(ctx, closer, &stagesStatsParams{
@@ -574,7 +571,6 @@ type stagesStatsParams struct {
 // processStagesStats retrieves the statistics from the database and then processes them through the stages.
 //
 // Move $collStats specific logic to its stage.
-// TODO https://github.com/dolthub/dumbodb/issues/2423
 func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *stagesStatsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Clarify what needs to be retrieved from the database and retrieve it.
 	_, hasCount := p.statistics[stages.StatisticCount]

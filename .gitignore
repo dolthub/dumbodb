@@ -12,3 +12,6 @@ state.json
 
 # Docudolt runtime data directory (default --data-dir)
 data/
+
+# Gas Town (added by gt)
+CLAUDE.local.md

@@ -34,7 +34,7 @@ const ObjectIDLen = 12
 
 // NewObjectID returns a new ObjectID.
 func NewObjectID() ObjectID {
-	return newObjectIDTime(time.Now()) // https://github.com/dolthub/dumbodb/issues/3486
+	return newObjectIDTime(time.Now())
 }
 
 // newObjectIDTime returns a new ObjectID with given time.

@@ -59,7 +59,6 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	// Use ExtractParam.
-	// TODO https://github.com/dolthub/dumbodb/issues/2859
 	v, _ := document.Get("collection")
 	if v == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -155,12 +154,10 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	// Handle comment.
-	// TODO https://github.com/dolthub/dumbodb/issues/2986
 
 	username := conninfo.Get(connCtx).Username()
 
 	// Use ExtractParam.
-	// TODO https://github.com/dolthub/dumbodb/issues/2859
 	c := h.cursors.Get(cursorID)
 	if c == nil || c.Username != username {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -183,7 +180,6 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		// Use 16MB batchSize limit.
 		// Unlimited default batchSize is used for missing batchSize and zero values,
 		// set 250 assuming it is small enough not to crash DumboDB.
-		// TODO https://github.com/dolthub/dumbodb/issues/2824
 		v = int32(250)
 	}
 

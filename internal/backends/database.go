@@ -121,7 +121,7 @@ type CollectionInfo struct {
 
 // Capped returns true if collection is capped.
 func (ci *CollectionInfo) Capped() bool {
-	return ci.CappedSize > 0 // TODO https://github.com/dolthub/dumbodb/issues/3631
+	return ci.CappedSize > 0
 }
 
 // ListCollections returns a list collections in the database sorted by name.
@@ -182,7 +182,7 @@ type CreateCollectionParams struct {
 
 // Capped returns true if capped collection creation is requested.
 func (ccp *CreateCollectionParams) Capped() bool {
-	return ccp.CappedSize > 0 // TODO https://github.com/dolthub/dumbodb/issues/3631
+	return ccp.CappedSize > 0
 }
 
 // CollModParams represents the parameters of Database.CollMod method.

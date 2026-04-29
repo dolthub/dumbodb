@@ -47,7 +47,6 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, err
 	}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/2612
 	_ = params.Ordered
 
 	matched, modified, upserted, err := h.updateDocument(connCtx, params)

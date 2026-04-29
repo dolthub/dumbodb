@@ -103,7 +103,6 @@ func newPath(path ...string) (Path, error) {
 			return res, newPathError(ErrPathElementInvalid, errors.New("path element must not contain spaces"))
 		case strings.Contains(e, "."):
 			return res, newPathError(ErrPathElementInvalid, errors.New("path element must not contain '.'"))
-			// TODO https://github.com/dolthub/dumbodb/issues/3127
 			// enable validation of `$` prefix and update Path struct comment
 			// case strings.HasPrefix(e, "$"):
 			//	return res, newPathError(ErrPathElementInvalid, errors.New("path element must not start with '$'"))

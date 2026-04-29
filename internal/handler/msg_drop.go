@@ -84,7 +84,6 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	case err == nil:
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
-				"nIndexesWas", int32(1), // TODO https://github.com/dolthub/dumbodb/issues/2337
 				"ns", dbName+"."+collectionName,
 				"ok", float64(1),
 			)),

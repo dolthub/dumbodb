@@ -40,7 +40,6 @@ const timeLayout = "2006-01-02T15:04:05.000Z0700"
 //
 // See https://golang.org/s/slog-handler-guide.
 //
-// TODO https://github.com/dolthub/dumbodb/issues/4438
 //
 //nolint:vet // for readability
 type consoleHandler struct {

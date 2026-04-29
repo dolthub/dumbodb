@@ -105,7 +105,6 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 	}
 
 	// support cross-database rename
-	// TODO https://github.com/dolthub/dumbodb/issues/2563
 	if oldDBName != newDBName {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,

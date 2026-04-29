@@ -112,7 +112,6 @@ func NewExpression(expression string, opts *commonpath.FindValuesOpts) (*Express
 			return nil, newExpressionError(ErrInvalidExpression, v)
 		}
 
-		// TODO https://github.com/dolthub/dumbodb/issues/2275
 		return nil, newExpressionError(ErrUndefinedVariable, v)
 	case strings.HasPrefix(expression, "$"):
 		// dollar sign $ prefixed string indicates Expression accesses field or embedded fields

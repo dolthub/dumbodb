@@ -182,7 +182,6 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 		return nil, lazyerrors.Error(err)
 	}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/174
 	filter := must.NotFail(types.NewDocument("_id", dbName+"."+username))
 
 	// Filter isn't being passed to the query as we are filtering after retrieving all data

@@ -247,7 +247,6 @@ func (c *conn) run(ctx context.Context) (err error) {
 		var resHeader *wire.MsgHeader
 		var resBody wire.MsgBody
 
-		// TODO https://github.com/dolthub/dumbodb/issues/2412
 		reqHeader, reqBody, err = wire.ReadMessage(bufr)
 		if err != nil {
 			return
@@ -546,7 +545,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	}
 
 	// Don't call MarshalBinary there. Fix header in the caller?
-	// TODO https://github.com/dolthub/dumbodb/issues/273
 	b, err := resBody.MarshalBinary()
 	if err != nil {
 		result = ""

@@ -341,7 +341,6 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 // However, if non-boolean result is returned from processing aggregation expression,
 // it returns false for null or zero value and true for all other values.
 func filterExprOperator(doc, filter *types.Document) (bool, error) {
-	// TODO https://github.com/dolthub/dumbodb/issues/3170
 	op, err := operators.NewExpr(filter, "$expr")
 	if err != nil {
 		return false, err
@@ -1136,7 +1135,6 @@ func filterFieldExprBitsAllClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dumbodb/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",
@@ -1177,7 +1175,6 @@ func filterFieldExprBitsAllSet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) == bitmask, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dumbodb/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",
@@ -1218,7 +1215,6 @@ func filterFieldExprBitsAnyClear(fieldValue, maskValue any) (bool, error) {
 		return (^uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dumbodb/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",
@@ -1259,7 +1255,6 @@ func filterFieldExprBitsAnySet(fieldValue, maskValue any) (bool, error) {
 		return (uint64(value) & bitmask) != 0, nil
 
 	case types.Binary:
-		// TODO https://github.com/dolthub/dumbodb/issues/508
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,
 			"BinData() not supported yet",

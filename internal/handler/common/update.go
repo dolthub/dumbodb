@@ -48,7 +48,6 @@ type kvOp struct {
 //
 // In case of updating multiple documents, UpdateDocument returns an error immediately after one of the
 // operation fails. The rest of the documents are not processed.
-// TODO https://github.com/dolthub/dumbodb/issues/2612
 func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter types.DocumentsIterator, param *Update, skipDurableSync bool) (*UpdateResult, error) { //nolint:lll // for readability
 	result := new(UpdateResult)
 
@@ -141,7 +140,6 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			doc.Set("_id", types.NewObjectID())
 		}
 
-		// TODO https://github.com/dolthub/dumbodb/issues/3454
 		if err = doc.ValidateData(); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
@@ -554,7 +552,6 @@ func processReplacementDoc(command string, doc, update *types.Document) (bool, e
 // Returns CommandError if the command is findAndModify, otherwise returns WriteError.
 // filter is the query filter used to match the document (needed for $ positional operator).
 // arrayFilters is used for $[identifier] positional operator.
-// TODO https://github.com/dolthub/dumbodb/issues/3044
 func processUpdateOperator(command string, doc, update *types.Document, upsert bool, filter *types.Document, arrayFilters *types.Array) (bool, error) {
 	var docUpdated bool
 	var err error

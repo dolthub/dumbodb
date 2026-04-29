@@ -80,7 +80,6 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 		positionalProjection := strings.HasSuffix(key, "$")
 
-		// TODO https://github.com/dolthub/dumbodb/issues/3127
 		path, err := types.NewPathFromString(key)
 		if err != nil {
 			if positionalProjection {

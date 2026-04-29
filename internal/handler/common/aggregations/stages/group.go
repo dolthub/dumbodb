@@ -186,7 +186,6 @@ func validateGroupKey(groupKey any) error {
 
 		_, err = op.Process(nil)
 		if err != nil {
-			// TODO https://github.com/dolthub/dumbodb/issues/3129
 			return processGroupStageError(err)
 		}
 	}
@@ -519,7 +518,6 @@ func processGroupStageError(err error) error {
 				"$group (stage)",
 			)
 		case aggregations.ErrUndefinedVariable:
-			// TODO https://github.com/dolthub/dumbodb/issues/2275
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
 				"Aggregation expression variables are not implemented yet",

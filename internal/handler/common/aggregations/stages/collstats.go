@@ -58,13 +58,10 @@ func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	var cs collStats
 
 	// Return error on invalid type of count.
-	// TODO https://github.com/dolthub/dumbodb/issues/2336
 	cs.count = fields.Has("count")
 
-	// TODO https://github.com/dolthub/dumbodb/issues/2341
 	cs.latencyStats = fields.Has("latencyStats")
 
-	// TODO https://github.com/dolthub/dumbodb/issues/2341
 	cs.queryExecStats = fields.Has("queryExecStats")
 
 	if fields.Has("storageStats") {

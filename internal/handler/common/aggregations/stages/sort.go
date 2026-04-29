@@ -50,7 +50,6 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/2090
 
 	return &sort{
 		fields: fields,
@@ -63,7 +62,6 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 func (s *sort) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	iter, err := common.SortIterator(iter, closer, s.fields)
 	if err != nil {
-		// TODO https://github.com/dolthub/dumbodb/issues/3125
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(

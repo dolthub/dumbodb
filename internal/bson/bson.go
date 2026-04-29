@@ -207,7 +207,6 @@ func convertToTypes(v any) (any, error) {
 		return v, nil
 	case wirebson.Binary:
 		// Special case to prevent it from being stored as null in sjson.
-		// TODO https://github.com/dolthub/dumbodb/issues/260
 		if v.B == nil {
 			v.B = []byte{}
 		}

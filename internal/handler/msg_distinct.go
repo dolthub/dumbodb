@@ -78,7 +78,6 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		qp.Filter = params.Filter
 	}
 
-	// TODO https://github.com/dolthub/dumbodb/issues/3235
 	queryRes, err := c.Query(connCtx, &qp)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
