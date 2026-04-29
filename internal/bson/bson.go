@@ -114,11 +114,6 @@ func convertFromTypes(v any) (any, error) {
 	}
 }
 
-// From converts types package value to wirebson package value.
-func From[T types.Type](v T) (any, error) {
-	return convertFromTypes(v)
-}
-
 // FromArray converts [*types.Array] to [*wirebson.Array].
 func FromArray(arr *types.Array) (*wirebson.Array, error) {
 	iter := arr.Iterator()

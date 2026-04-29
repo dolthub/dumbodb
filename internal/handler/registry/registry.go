@@ -94,21 +94,3 @@ func NewHandler(name string, opts *NewHandlerOpts) (*handler.Handler, CloseBacke
 	return newHandler(opts)
 }
 
-// Handlers returns a list of all handlers registered at compile-time.
-func Handlers() []string {
-	res := make([]string, 0, len(registry))
-
-	for _, h := range []string{"stub", "dolt"} {
-		if _, ok := registry[h]; !ok {
-			continue
-		}
-
-		res = append(res, h)
-	}
-
-	if len(res) != len(registry) {
-		panic("registry is not in sync")
-	}
-
-	return res
-}

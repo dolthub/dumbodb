@@ -66,20 +66,3 @@ func SpanContextFromComment(comment string) (trace.SpanContext, error) {
 	return sc, nil
 }
 
-// CommentFromSpanContext creates a json-encoded string with tracing information (see commentData) from span context.
-func CommentFromSpanContext(sc trace.SpanContext) (string, error) {
-	if !sc.IsValid() {
-		return "", lazyerrors.New("invalid span context")
-	}
-
-	var data commentData
-	data.FerretDB.TraceID = sc.TraceID().String()
-	data.FerretDB.SpanID = sc.SpanID().String()
-
-	comment, err := json.Marshal(data)
-	if err != nil {
-		return "", lazyerrors.Error(err)
-	}
-
-	return string(comment), nil
-}

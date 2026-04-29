@@ -16,7 +16,6 @@
 package logging
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -44,15 +43,6 @@ func Error(err error) slog.Attr {
 	}
 
 	return slog.String("error", err.Error())
-}
-
-// GoError returns [slog.Attr] for the given error (that can be nil) with error's Go representation as a value.
-func GoError(err error) slog.Attr {
-	if err == nil {
-		return slog.String("error", "<nil>")
-	}
-
-	return slog.String("error", fmt.Sprintf("%#v", err))
 }
 
 // WithName returns a logger with a given period-separated name.

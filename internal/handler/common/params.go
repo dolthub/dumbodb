@@ -112,58 +112,6 @@ func GetOptionalBoolOrIntParam(doc *types.Document, key string, defaultValue boo
 	}
 }
 
-// GetOptionalNullParam returns doc's value for key, default value for missing parameter or null,
-// or protocol error for other invalid type.
-func GetOptionalNullParam[T types.Type](doc *types.Document, key string, defaultValue T) (T, error) {
-	v, err := GetOptionalParam(doc, key, defaultValue)
-	if err != nil {
-		// the only possible error here is type mismatch, so the key is present
-		if _, ok := must.NotFail(doc.Get(key)).(types.NullType); ok {
-			err = nil
-		}
-	}
-
-	return v, err
-}
-
-// AssertType asserts value's type, returning protocol error for unexpected types.
-//
-// If a custom error is needed, use a normal Go type assertion instead:
-//
-//	d, ok := value.(*types.Document)
-//	if !ok {
-//	  return handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, "expected document")
-//	}
-func AssertType[T types.Type](value any) (T, error) {
-	res, ok := value.(T)
-	if !ok {
-		msg := fmt.Sprintf("got type %T, expected %T", value, res)
-		return res, handlererrors.NewCommandErrorMsg(handlererrors.ErrBadValue, msg)
-	}
-
-	return res, nil
-}
-
-// GetLimitParam returns limit value from provided query document.
-func GetLimitParam(doc *types.Document) (int64, error) {
-	v, _ := doc.Get("limit")
-	if v == nil {
-		return 0, nil
-	}
-
-	res, err := handlerparams.GetWholeNumberParam(v)
-	if err != nil {
-		msg := fmt.Sprintf(
-			`BSON field '%s' is the wrong type '%s', expected type '%s'`,
-			"limit", handlerparams.AliasFromType(v), handlerparams.AliasFromType(res),
-		)
-
-		return res, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrTypeMismatch, msg, "limit")
-	}
-
-	return res, nil
-}
-
 // GetLimitStageParam returns $limit stage argument from the provided value.
 // It returns the proper error if value doesn't meet requirements.
 func GetLimitStageParam(value any) (int64, error) {

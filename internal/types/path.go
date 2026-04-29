@@ -184,11 +184,6 @@ func (p Path) Append(elem string) Path {
 	return NewStaticPath(elems...)
 }
 
-// RemoveByPath removes document by path, doing nothing if the key does not exist.
-func RemoveByPath[T CompositeTypeInterface](comp T, path Path) {
-	removeByPath(comp, path)
-}
-
 // IsConflictPath returns PathError error if adding a path creates conflict at any of paths.
 // Returned PathError error codes:
 //

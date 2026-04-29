@@ -20,8 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Provider provides access to FerretDB process state.
@@ -62,13 +60,6 @@ func NewProvider(filename string) (*Provider, error) {
 	return p, nil
 }
 
-// MetricsCollector returns Prometheus metrics collector for that provider.
-//
-// If addUUIDToMetric is true, then the UUID is added to the Prometheus metric.
-func (p *Provider) MetricsCollector(addUUIDToMetric bool) prometheus.Collector {
-	return newMetricsCollector(p, addUUIDToMetric)
-}
-
 // Get returns a copy of the current process state.
 //
 // It is okay to call this function often.
@@ -78,20 +69,6 @@ func (p *Provider) Get() *State {
 	defer p.rw.RUnlock()
 
 	return p.s.deepCopy()
-}
-
-// Subscribe returns a channel that would receive notifications on state changes.
-// One notification would be scheduled immediately.
-func (p *Provider) Subscribe() chan struct{} {
-	p.rw.Lock()
-	defer p.rw.Unlock()
-
-	ch := make(chan struct{}, 1)
-	ch <- struct{}{}
-
-	p.subs[ch] = struct{}{}
-
-	return ch
 }
 
 // Update gets the current state, calls the given function, updates state, and notifies all subscribers.

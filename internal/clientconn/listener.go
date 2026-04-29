@@ -135,19 +135,6 @@ func Listen(opts *NewListenerOpts) (*Listener, error) {
 	return l, nil
 }
 
-// Listening returns true if the listener is currently listening and accepting new connection.
-//
-// It returns false when listener is stopped
-// or when it is still running with established connections.
-func (l *Listener) Listening() bool {
-	select {
-	case <-l.listenersClosed:
-		return false
-	default:
-		return true
-	}
-}
-
 // Run runs the listener until ctx is canceled.
 //
 // When this method returns, listener and all connections, as well as handler are closed.

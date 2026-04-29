@@ -25,15 +25,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Common interface with bson.Document.
-//
-// Remove this type.
-// TODO https://github.com/dolthub/dumbodb/issues/260
-type document interface {
-	Keys() []string
-	Values() []any
-}
-
 // Document represents BSON document: an ordered collection of fields
 // (key/value pairs where key is a string and value is any BSON value).
 //
@@ -54,45 +45,6 @@ type Document struct {
 type field struct {
 	value any
 	key   string
-}
-
-// ConvertDocument converts bson.Document to *types.Document.
-// It references the same data without copying it.
-//
-// Remove this function.
-// TODO https://github.com/dolthub/dumbodb/issues/260
-func ConvertDocument(d document) (*Document, error) {
-	if d == nil {
-		panic("types.ConvertDocument: d is nil")
-	}
-
-	keys := d.Keys()
-	values := d.Values()
-	l := len(keys)
-
-	if lv := len(values); l != lv {
-		panic(fmt.Sprintf("document must have the same number of keys and values (keys: %d, values: %d)", l, lv))
-	}
-
-	if l == 0 {
-		return new(Document), nil
-	}
-
-	docKeys := make(map[string]int, l)
-	docFields := make([]field, l)
-
-	for i, key := range keys {
-		docKeys[key]++
-		docFields[i] = field{
-			key:   key,
-			value: values[i],
-		}
-	}
-
-	return &Document{
-		keys:   docKeys,
-		fields: docFields,
-	}, nil
 }
 
 // MakeDocument creates an empty document with set capacity.
@@ -489,11 +441,6 @@ func (d *Document) moveIDToTheFirstIndex() {
 
 	d.fields = slices.Delete(d.fields, idIdx+1, idIdx+2)
 }
-
-// check interfaces
-var (
-	_ document = (*Document)(nil)
-)
 
 // LogValue implements [slog.LogValuer].
 func (doc *Document) LogValue() slog.Value {

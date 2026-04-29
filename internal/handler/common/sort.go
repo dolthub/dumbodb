@@ -276,29 +276,6 @@ func ValidateSortDocument(sortDoc *types.Document) (*types.Document, error) {
 	return res, nil
 }
 
-// lessFunc takes sort key and type and returns sort.Interface's Less function which
-// compares selected key of 2 documents.
-func lessFunc(sortPath types.Path, sortType types.SortType) func(a, b *types.Document) bool {
-	return func(a, b *types.Document) bool {
-		aField, err := a.GetByPath(sortPath)
-		if err != nil {
-			// sort order treats null and non-existent field equivalent,
-			// hence use null for sorting.
-			aField = types.Null
-		}
-
-		bField, err := b.GetByPath(sortPath)
-		if err != nil {
-			// same logic as above
-			bField = types.Null
-		}
-
-		result := types.CompareOrderForSort(aField, bField, sortType)
-
-		return result == types.Less
-	}
-}
-
 type sortFunc func(a, b *types.Document) bool
 
 type docsSorter struct {
