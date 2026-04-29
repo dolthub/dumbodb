@@ -1335,6 +1335,28 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 }
 
 // Stats implements backends.Collection.
+// Count implements backends.Collection.
+//
+// Returns the entry count from prolly tree metadata in O(1). The handler only
+// calls this for unfiltered counts; filtered counts still go through Query.
+func (c *collection) Count(ctx context.Context, _ *backends.CountParams) (*backends.CountResult, error) {
+	m, exists, _, err := c.getMap(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return &backends.CountResult{Count: 0}, nil
+	}
+
+	n, err := m.Count()
+	if err != nil {
+		return nil, err
+	}
+
+	return &backends.CountResult{Count: int64(n)}, nil
+}
+
 func (c *collection) Stats(ctx context.Context, params *backends.CollectionStatsParams) (*backends.CollectionStatsResult, error) {
 	m, exists, _, err := c.getMap(ctx)
 	if err != nil {

@@ -71,6 +71,33 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		return nil, lazyerrors.Error(err)
 	}
 
+	// Fast path: unfiltered count. The backend can return the entry count from
+	// tree metadata in O(1) instead of scanning every document.
+	if params.Filter.Len() == 0 {
+		countRes, err := c.Count(connCtx, &backends.CountParams{})
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		total := countRes.Count
+		if params.Skip > 0 {
+			total -= params.Skip
+			if total < 0 {
+				total = 0
+			}
+		}
+		if params.Limit > 0 && total > params.Limit {
+			total = params.Limit
+		}
+
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"n", int32(total),
+				"ok", float64(1),
+			)),
+		)
+	}
+
 	var qp backends.QueryParams
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter

@@ -43,6 +43,7 @@ const DefaultIndexName = "_id_"
 // See collectionContract and its methods for additional details.
 type Collection interface {
 	Query(context.Context, *QueryParams) (*QueryResult, error)
+	Count(context.Context, *CountParams) (*CountResult, error)
 	Explain(context.Context, *ExplainParams) (*ExplainResult, error)
 	InsertAll(context.Context, *InsertAllParams) (*InsertAllResult, error)
 	UpdateAll(context.Context, *UpdateAllParams) (*UpdateAllResult, error)
@@ -128,6 +129,40 @@ func (cc *collectionContract) Query(ctx context.Context, params *QueryParams) (*
 	}
 
 	res, err := cc.c.Query(ctx, params)
+	if err != nil {
+		span.SetStatus(otelcodes.Error, "")
+	}
+
+	checkError(err)
+
+	return res, err
+}
+
+// CountParams represents the parameters of Collection.Count method.
+type CountParams struct{}
+
+// CountResult represents the results of Collection.Count method.
+type CountResult struct {
+	// Count is the total number of documents in the collection.
+	Count int64
+}
+
+// Count returns the total number of documents in the collection.
+//
+// Backends are expected to implement this in O(1) when possible (e.g. via
+// tree metadata) — the handler only calls Count for unfiltered counts where
+// a full scan would otherwise be needed solely to count entries.
+//
+// If database or collection does not exist, returns Count=0 and no error.
+func (cc *collectionContract) Count(ctx context.Context, params *CountParams) (*CountResult, error) {
+	ctx, span := otel.Tracer("").Start(ctx, "Count")
+	defer span.End()
+
+	if params == nil {
+		params = new(CountParams)
+	}
+
+	res, err := cc.c.Count(ctx, params)
 	if err != nil {
 		span.SetStatus(otelcodes.Error, "")
 	}

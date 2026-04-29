@@ -56,6 +56,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	return c.origC.Query(ctx, params)
 }
 
+// Count implements backends.Collection interface.
+func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*backends.CountResult, error) {
+	return c.origC.Count(ctx, params)
+}
+
 // InsertAll implements backends.Collection interface.
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
 	res, err := c.origC.InsertAll(ctx, params)

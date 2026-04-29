@@ -215,6 +215,11 @@ func (c *collection) Query(_ context.Context, _ *backends.QueryParams) (*backend
 	return nil, fmt.Errorf("stub: Query %q.%q not implemented", c.dbName, c.name)
 }
 
+// Count implements backends.Collection interface.
+func (c *collection) Count(_ context.Context, _ *backends.CountParams) (*backends.CountResult, error) {
+	return &backends.CountResult{}, nil
+}
+
 // Explain implements backends.Collection interface.
 func (c *collection) Explain(_ context.Context, _ *backends.ExplainParams) (*backends.ExplainResult, error) {
 	return nil, fmt.Errorf("stub: Explain %q.%q not implemented", c.dbName, c.name)
