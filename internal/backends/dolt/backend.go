@@ -124,9 +124,13 @@ type dbState struct {
 	uuids      map[string]string               // collection name → UUID string (in-memory)
 	indexes    map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
 	// secIndexMaps holds the secondary-index prolly.Maps for each collection.
-	// Keyed by collection name, then by index name.
-	// spike/index-poc: maps are built on createIndex and maintained on insert/delete.
+	// Keyed by collection name, then by index name. Hydrated on db open from
+	// each DTBL's SecondaryIndexes AM and kept in sync with collIndexAMs.
 	secIndexMaps map[string]map[string]prolly.Map
+	// collIndexAMs holds the per-collection secondary-index AddressMap that gets
+	// inlined into the DTBL's secondary_indexes field. Keyed by collection name.
+	// Each AM maps index name → IndexEntry chunk hash.
+	collIndexAMs map[string]prolly.AddressMap
 	validators map[string]*collectionValidator // collection name → validator (in-memory)
 	capped     map[string]*cappedCollectionMeta // collection name → capped config (in-memory)
 	// insertionOrder tracks document _id values in insertion order for FIFO eviction in capped collections.
@@ -699,6 +703,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),
+		collIndexAMs:   make(map[string]prolly.AddressMap),
 		validators:     make(map[string]*collectionValidator),
 		capped:         make(map[string]*cappedCollectionMeta),
 		insertionOrder: make(map[string][]any),
@@ -722,6 +727,16 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	b.dbs[dbName] = db
+
+	// Hydrate persisted secondary indexes from each collection's DTBL so that
+	// listIndexes, unique-constraint enforcement, and tryIndexLookup all work
+	// across restarts. Failures are fatal because silently dropping indexes on
+	// open would corrupt query results and unique-constraint behaviour.
+	if err := db.hydrateAllIndexes(ctx); err != nil {
+		_ = doltDB.Close()
+		delete(b.dbs, dbName)
+		return nil, fmt.Errorf("dolt: hydrating secondary indexes for %q: %w", dbName, err)
+	}
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
 	// previous server session. Errors are non-fatal: if the state file is corrupted

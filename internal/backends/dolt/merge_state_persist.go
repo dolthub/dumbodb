@@ -387,8 +387,10 @@ func clearConflictArtifacts(ctx context.Context, state *dbState, ms *mergeInProg
 			return fmt.Errorf("opening collection %q: %w", collName, err)
 		}
 
-		// Build a DTBL with no artifacts.
-		newDTBLHash, err := state.dtblHashForMap(ctx, collMap)
+		// Build a DTBL with no artifacts. Routes through dtblHashForCollection
+		// so the DTBL inlines this collection's secondary-index AM (or the
+		// shared empty AM if there are no secondary indexes).
+		newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, hash.Hash{})
 		if err != nil {
 			return fmt.Errorf("building clean DTBL for %q: %w", collName, err)
 		}

@@ -366,7 +366,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
-		newCollHash, hashErr := db.dtblHashForMapWithArtifacts(ctx, newCollMap, newArtHash)
+		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newArtHash)
 		if hashErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
 		}
@@ -517,7 +517,7 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 		return am, fmt.Errorf("opening collection map for %q: %w", collName, err)
 	}
 
-	newDTBLHash, err := state.dtblHashForMapWithArtifacts(ctx, collMap, newArtHash)
+	newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, newArtHash)
 	if err != nil {
 		return am, fmt.Errorf("building DTBL for %q: %w", collName, err)
 	}
@@ -695,7 +695,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			}
 		}
 
-		mergedH, err := state.dtblHashForMapWithArtifacts(ctx, mergedMap, artHash)
+		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, artHash)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
 		}
