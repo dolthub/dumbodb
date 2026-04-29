@@ -412,57 +412,92 @@ func (it *singleDocIter) Next() (struct{}, *types.Document, error) {
 
 func (it *singleDocIter) Close() {}
 
-// tryIndexLookup checks whether the filter is a simple single-field equality
-// query and an index exists for that field. If so it uses the secondary index
-// to fetch matching documents and returns (docs, true, err).
-// Returns (nil, false, nil) if no suitable index was found (caller should fall back).
+// tryIndexLookup picks an indexed field constrained by the filter (equality or
+// supported range operators) and uses its secondary index to narrow the result
+// set. The returned docs are a superset of the matches: the handler's
+// FilterIterator re-validates every document against the full filter, so any
+// false positives the index lookup admits (e.g. compound filters where only
+// one field is indexed) are filtered out downstream. The lookup is sound — it
+// never drops a matching document.
+//
+// Returns (nil, false, nil) if no suitable index was found (caller should fall
+// back to the full scan).
 func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document) ([]*types.Document, bool, error) {
-	// Only handle single-field equality: { field: value } with no operators.
-	if filter.Len() != 1 {
+	if filter == nil || filter.Len() == 0 {
 		return nil, false, nil
 	}
 
-	var field string
-	var filterVal any
-	for _, k := range filter.Keys() {
-		field = k
-		v, _ := filter.Get(k)
-		// Reject operator documents.
-		if _, isDoc := v.(*types.Document); isDoc {
-			return nil, false, nil
-		}
-		filterVal = v
-	}
-
-	// Check if there is a secondary index on this field.
 	state.mu.RLock()
 	secMaps := state.secIndexMaps[c.name]
 	idxInfos := state.indexes[c.name]
 	state.mu.RUnlock()
 
-	var matchingIdxName string
+	if len(secMaps) == 0 || len(idxInfos) == 0 {
+		return nil, false, nil
+	}
+
+	// Map indexed-leading-field → IndexInfo. Only single-field indexes are
+	// usable here; compound indexes require key-prefix matching that the
+	// planner doesn't yet do.
+	indexedField := make(map[string]string, len(idxInfos))
 	for _, idx := range idxInfos {
-		if len(idx.Key) == 1 && idx.Key[0].Field == field {
-			matchingIdxName = idx.Name
-			break
+		if len(idx.Key) == 1 && idx.Key[0].Field != "" {
+			indexedField[idx.Key[0].Field] = idx.Name
 		}
 	}
-	if matchingIdxName == "" {
+	if len(indexedField) == 0 {
 		return nil, false, nil
 	}
 
-	idxMap, ok := secMaps[matchingIdxName]
-	if !ok {
+	var (
+		chosenIdxName string
+		startKey      []byte
+		stopKey       []byte
+		usable        bool
+	)
+
+	for _, k := range filter.Keys() {
+		// Top-level $-operators ($and/$or/$nor/$comment/...) make the
+		// per-field analysis below unsound — bail.
+		if strings.HasPrefix(k, "$") {
+			return nil, false, nil
+		}
+		// Dotted paths look up into sub-documents; the index is keyed on the
+		// flat field, so it can't be used for those constraints.
+		if strings.ContainsRune(k, '.') {
+			continue
+		}
+		idxName, ok := indexedField[k]
+		if !ok {
+			continue
+		}
+		v, err := filter.Get(k)
+		if err != nil {
+			continue
+		}
+		s, e, ok := indexBoundsForFilterValue(v)
+		if !ok {
+			continue
+		}
+		if _, mapped := secMaps[idxName]; !mapped {
+			continue
+		}
+		chosenIdxName = idxName
+		startKey, stopKey = s, e
+		usable = true
+		break
+	}
+
+	if !usable {
 		return nil, false, nil
 	}
 
-	// Look up matching primary key bytes in the secondary index.
-	primaryIDBytesList, err := idxpkg.EqualityLookup(ctx, idxMap, filterVal)
+	idxMap := secMaps[chosenIdxName]
+	primaryIDBytesList, err := idxpkg.RangeLookup(ctx, idxMap, startKey, stopKey)
 	if err != nil {
 		return nil, false, err
 	}
 
-	// Fetch the actual documents from the primary map.
 	docs := make([]*types.Document, 0, len(primaryIDBytesList))
 	for _, idBytes := range primaryIDBytesList {
 		key, err := buildKey(idBytes)
@@ -490,6 +525,121 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 
 	return docs, true, nil
+}
+
+// indexBoundsForFilterValue translates the value side of a single
+// {field: value} filter clause into a [startKey, stopKey) byte range over the
+// secondary index. The bounds are always sound: any document matching the
+// clause is guaranteed to lie in the returned range, though the range may
+// include false positives (the handler will filter them out).
+//
+// Supported value shapes:
+//   - bare scalar v                          → [KS(v)+0x04, KS(v)+0x05)
+//   - operator doc using only $eq / $gt /
+//     $gte / $lt / $lte                      → bounds derived from the
+//                                              tightest clause on each side.
+//
+// Returns ok=false for value shapes the index path can't handle (regex,
+// $in, $ne, nested operators, mixed comparisons against arrays, …); the
+// caller falls back to the full-scan path.
+func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
+	opDoc, isOp := v.(*types.Document)
+	if !isOp {
+		// Bare scalar equality. types.Null and array equality have semantics
+		// (e.g. matching missing fields, element-wise array match) that the
+		// byte-level index can't reproduce — skip and let the scan path
+		// handle them.
+		switch v.(type) {
+		case nil, types.NullType, *types.Array:
+			return nil, nil, false
+		}
+		return idxpkg.LowerBoundInclusive(v), idxpkg.UpperBoundInclusive(v), true
+	}
+
+	// Operator document. Every key must be a supported comparison operator
+	// against a scalar; anything else (e.g. $regex, $in, $ne, $type, $exists)
+	// makes the byte-level bounds unsound for this clause.
+	var (
+		hasLower, lowerInclusive bool
+		lowerVal                 any
+		hasUpper, upperInclusive bool
+		upperVal                 any
+		hasEq                    bool
+		eqVal                    any
+	)
+	for _, opKey := range opDoc.Keys() {
+		opVal, err := opDoc.Get(opKey)
+		if err != nil {
+			return nil, nil, false
+		}
+		switch opVal.(type) {
+		case *types.Document, *types.Array, nil, types.NullType, types.Regex:
+			return nil, nil, false
+		}
+		switch opKey {
+		case "$eq":
+			hasEq = true
+			eqVal = opVal
+		case "$gte":
+			if !hasLower || compareScalars(opVal, lowerVal) > 0 {
+				lowerVal, lowerInclusive, hasLower = opVal, true, true
+			}
+		case "$gt":
+			if !hasLower || compareScalars(opVal, lowerVal) >= 0 {
+				lowerVal, lowerInclusive, hasLower = opVal, false, true
+			}
+		case "$lte":
+			if !hasUpper || compareScalars(opVal, upperVal) < 0 {
+				upperVal, upperInclusive, hasUpper = opVal, true, true
+			}
+		case "$lt":
+			if !hasUpper || compareScalars(opVal, upperVal) <= 0 {
+				upperVal, upperInclusive, hasUpper = opVal, false, true
+			}
+		default:
+			return nil, nil, false
+		}
+	}
+
+	if hasEq {
+		// $eq with a range narrows further, but for correctness we just
+		// translate $eq alone to its tight equality range. The handler will
+		// re-check any range constraint that may also be present.
+		return idxpkg.LowerBoundInclusive(eqVal), idxpkg.UpperBoundInclusive(eqVal), true
+	}
+
+	if !hasLower && !hasUpper {
+		return nil, nil, false
+	}
+
+	if hasLower {
+		if lowerInclusive {
+			startKey = idxpkg.LowerBoundInclusive(lowerVal)
+		} else {
+			startKey = idxpkg.LowerBoundExclusive(lowerVal)
+		}
+	}
+	if hasUpper {
+		if upperInclusive {
+			stopKey = idxpkg.UpperBoundInclusive(upperVal)
+		} else {
+			stopKey = idxpkg.UpperBoundExclusive(upperVal)
+		}
+	}
+	return startKey, stopKey, true
+}
+
+// compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
+// multiple bounds on the same side ($gte:1, $gte:5 → keep the tighter 5).
+func compareScalars(a, b any) int {
+	switch types.Compare(a, b) {
+	case types.Less:
+		return -1
+	case types.Greater:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Explain implements backends.Collection.
