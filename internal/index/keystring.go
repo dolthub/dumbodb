@@ -47,7 +47,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/dolthub/docudolt/internal/types"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // CType constants for the first byte of a KeyString-encoded value.

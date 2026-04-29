@@ -25,10 +25,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/dolthub/docudolt/internal/backends"
-	"github.com/dolthub/docudolt/internal/backends/dolt"
-	"github.com/dolthub/docudolt/internal/types"
-	"github.com/dolthub/docudolt/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/backends/dolt"
+	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // TestSecondaryIndex_EmailEqualityQuery is the spike/index-poc end-to-end test.
@@ -49,7 +49,7 @@ func TestSecondaryIndex_EmailEqualityQuery(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)), false)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSecondaryIndex_NoBuildOnInsertBeforeCreate(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	b, err := dolt.NewBackend(dir, slog.New(slog.NewTextHandler(os.Stderr, nil)), false)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
 	}
