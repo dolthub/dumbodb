@@ -123,6 +123,10 @@ type dbState struct {
 	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name → AM)
 	uuids      map[string]string               // collection name → UUID string (in-memory)
 	indexes    map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
+	// secIndexMaps holds the secondary-index prolly.Maps for each collection.
+	// Keyed by collection name, then by index name.
+	// spike/index-poc: maps are built on createIndex and maintained on insert/delete.
+	secIndexMaps map[string]map[string]prolly.Map
 	validators map[string]*collectionValidator // collection name → validator (in-memory)
 	capped     map[string]*cappedCollectionMeta // collection name → capped config (in-memory)
 	// insertionOrder tracks document _id values in insertion order for FIFO eviction in capped collections.
@@ -694,6 +698,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		branchAMs:      make(map[string]prolly.AddressMap),
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
+		secIndexMaps:   make(map[string]map[string]prolly.Map),
 		validators:     make(map[string]*collectionValidator),
 		capped:         make(map[string]*cappedCollectionMeta),
 		insertionOrder: make(map[string][]any),
