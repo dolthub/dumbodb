@@ -26,7 +26,19 @@ jobs:
 
       - name: Install dolt
         run: |
-          sudo bash -c 'curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash'
+          set -euo pipefail
+          # Retry the download — install.sh is hosted on GitHub releases and
+          # occasionally returns 5xx. Without pipefail, a curl failure here is
+          # silently masked because the piped bash exits 0 on empty input,
+          # leaving CI to discover the missing binary later as "dolt: command not found".
+          for attempt in 1 2 3; do
+            if sudo bash -c 'set -o pipefail; curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash'; then
+              break
+            fi
+            echo "dolt install attempt $attempt failed; retrying..."
+            sleep 5
+          done
+          dolt version
 
       - name: Install mongosh
         run: |
