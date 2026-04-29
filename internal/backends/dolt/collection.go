@@ -498,11 +498,14 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		return nil, false, err
 	}
 
+	// Fetch the actual documents from the primary map. Errors propagate so
+	// callers see real failures instead of empty results that look like a
+	// missing match.
 	docs := make([]*types.Document, 0, len(primaryIDBytesList))
 	for _, idBytes := range primaryIDBytesList {
 		key, err := buildKey(idBytes)
 		if err != nil {
-			continue
+			return nil, true, fmt.Errorf("dolt: index lookup building key: %w", err)
 		}
 		var doc *types.Document
 		if err := primary.Get(ctx, key, func(k, v val.Tuple) error {
@@ -511,13 +514,13 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 			}
 			jsonHash, ok := valDesc.GetJSONAddr(0, v)
 			if !ok {
-				return nil
+				return fmt.Errorf("dolt: primary value tuple missing JSON addr")
 			}
 			var decErr error
 			doc, decErr = readDocJSON(ctx, state.ns, jsonHash)
 			return decErr
 		}); err != nil {
-			continue
+			return nil, true, fmt.Errorf("dolt: index lookup primary fetch: %w", err)
 		}
 		if doc != nil {
 			docs = append(docs, doc)
@@ -881,8 +884,19 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	// triggers its own NBS journal fsync — deferring the working-set update but
 	// still committing synchronously would leave the history and working set
 	// inconsistent, so we only honor SkipDurableSync when autoCommit is off.
+	// Maintain secondary indexes for any documents we just inserted, then
+	// persist the updated index maps before we build the DTBL — the DTBL's
+	// SecondaryIndexes field needs to reflect the post-insert state so that a
+	// later reopen sees the inserted entries in every index.
+	if err := c.updateSecondaryIndexesOnInsert(ctx, state, params.Docs); err != nil {
+		return nil, fmt.Errorf("dolt: updating secondary indexes: %w", err)
+	}
+	if err := state.persistIndexes(ctx, c.name); err != nil {
+		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+	}
+
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
-	dtblHash, err := state.dtblHashForMap(ctx, newMap)
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -890,11 +904,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return ed.Update(ctx, c.name, dtblHash)
 	}, skipSync); err != nil {
 		return nil, err
-	}
-
-	// Maintain secondary indexes for any documents we just inserted.
-	if err := c.updateSecondaryIndexesOnInsert(ctx, state, params.Docs); err != nil {
-		return nil, fmt.Errorf("dolt: updating secondary indexes: %w", err)
 	}
 
 	if c.db.backend.autoCommit {
@@ -920,7 +929,6 @@ func (c *collection) updateSecondaryIndexesOnInsert(ctx context.Context, state *
 	idxInfos := state.indexes[c.name]
 
 	for idxName, idxMap := range secMaps {
-		// Find the matching IndexInfo.
 		var idxInfo *backends.IndexInfo
 		for i := range idxInfos {
 			if idxInfos[i].Name == idxName {
@@ -929,28 +937,30 @@ func (c *collection) updateSecondaryIndexesOnInsert(ctx context.Context, state *
 			}
 		}
 		if idxInfo == nil {
-			continue
+			// secIndexMaps and state.indexes drifted: that's a backend
+			// invariant violation, not a per-doc skip.
+			return fmt.Errorf("dolt: index %q has a map but no IndexInfo on %q", idxName, c.name)
 		}
 
 		mut := idxMap.Mutate()
 		for _, doc := range docs {
 			docID, err := doc.Get("_id")
 			if err != nil {
-				continue
+				return fmt.Errorf("dolt: secondary index %q: document missing _id: %w", idxName, err)
 			}
 			h, err := hashID(docID)
 			if err != nil {
-				continue
+				return fmt.Errorf("dolt: secondary index %q: hashing _id: %w", idxName, err)
 			}
 			idBytes := h[:]
 			fieldVals := extractIndexFieldValues(doc, *idxInfo)
 			if err := idxpkg.InsertEntry(ctx, mut, fieldVals, idBytes); err != nil {
-				return err
+				return fmt.Errorf("dolt: secondary index %q: inserting entry: %w", idxName, err)
 			}
 		}
 		updated, err := mut.Map(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("dolt: secondary index %q: flushing map: %w", idxName, err)
 		}
 		secMaps[idxName] = updated
 	}
@@ -1149,8 +1159,18 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
+	// Re-persist secondary indexes so the DTBL we are about to write inlines
+	// the latest secondary_indexes AM. UpdateAll itself does not currently
+	// rebuild the secondary-index entries (see do-* follow-ups), but routing
+	// the write through persistIndexes preserves whatever in-memory maps the
+	// collection holds (e.g. from a recent CreateIndexes / InsertAll on the
+	// same handle) into the persisted DTBL.
+	if err := state.persistIndexes(ctx, c.name); err != nil {
+		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+	}
+
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
-	dtblHash, err := state.dtblHashForMap(ctx, newMap)
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -1284,8 +1304,15 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, err
 	}
 
+	// Persist secondary indexes through the DTBL write so any in-memory
+	// updates survive restart (DeleteAll itself does not yet rebuild index
+	// entries — tracked separately).
+	if err := state.persistIndexes(ctx, c.name); err != nil {
+		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+	}
+
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
-	dtblHash, err := state.dtblHashForMap(ctx, newMap)
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, newMap, hash.Hash{})
 	if err != nil {
 		return nil, err
 	}
@@ -1474,21 +1501,19 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 
 	state.indexes[c.name] = existing
 
-	// Build prolly.Map secondary indexes for newly added indexes.
-	// spike/index-poc: build by scanning primary map.
+	// Build prolly.Map secondary indexes for newly added indexes by scanning
+	// the primary map. Errors are returned to the caller — a half-built index
+	// would silently miss matches and return wrong results from later queries.
 	for _, idx := range params.Indexes {
 		if idx.Name == backends.DefaultIndexName {
 			continue
 		}
-		// Skip if index map already exists.
 		if _, exists := state.secIndexMaps[c.name][idx.Name]; exists {
 			continue
 		}
 		idxMap, err := c.buildSecondaryIndex(ctx, state, idx)
 		if err != nil {
-			// Non-fatal for spike: log and continue.
-			_ = err
-			continue
+			return nil, fmt.Errorf("dolt: building secondary index %q on %q: %w", idx.Name, c.name, err)
 		}
 		if state.secIndexMaps[c.name] == nil {
 			state.secIndexMaps[c.name] = make(map[string]prolly.Map)
@@ -1496,7 +1521,59 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		state.secIndexMaps[c.name][idx.Name] = idxMap
 	}
 
+	// Persist the new index set and re-write the collection's DTBL so the
+	// secondary_indexes AM survives restart even if no document writes follow.
+	if err := state.persistIndexes(ctx, c.name); err != nil {
+		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+	}
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state); err != nil {
+		return nil, fmt.Errorf("dolt: rewriting DTBL for %q: %w", c.name, err)
+	}
+
 	return &backends.CreateIndexesResult{}, nil
+}
+
+// rewriteDTBLAfterIndexChange rebuilds the collection's DTBL with the
+// current state.collIndexAMs[c.name] and updates the collections AM. Called
+// after CreateIndexes / DropIndexes so an index-only change is durable.
+//
+// If the collection has no primary map yet (no inserts have happened) it
+// uses a freshly created empty map — the same path as loadOrCreateMap.
+//
+// The caller must hold state.mu (write lock).
+func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState) error {
+	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
+	if err != nil {
+		return err
+	}
+	rootHash, err := am.Get(ctx, c.name)
+	if err != nil {
+		return err
+	}
+
+	var primary prolly.Map
+	if rootHash.IsEmpty() {
+		primary, err = newEmptyMap(ctx, state.ns)
+		if err != nil {
+			return err
+		}
+	} else {
+		primary, err = openCollection(ctx, state.cs, state.ns, rootHash)
+		if err != nil {
+			return err
+		}
+	}
+
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, primary, hash.Hash{})
+	if err != nil {
+		return err
+	}
+	return state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+		if rootHash.IsEmpty() {
+			return ed.Add(ctx, c.name, dtblHash)
+		}
+		return ed.Update(ctx, c.name, dtblHash)
+	})
 }
 
 // buildSecondaryIndex scans the primary map and builds a secondary index prolly.Map.
@@ -1507,18 +1584,24 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		return prolly.Map{}, fmt.Errorf("index: creating empty map: %w", err)
 	}
 
-	// Try to open the primary map; if collection doesn't exist yet, return empty index.
+	// If the collection does not exist yet (no primary map), the index is
+	// validly empty: subsequent inserts will populate it through
+	// updateSecondaryIndexesOnInsert. AM-resolution and root-hash errors are
+	// real failures and propagate.
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
-		return idxMap, nil
+		return prolly.Map{}, fmt.Errorf("index: resolving branch AM: %w", err)
 	}
 	rootHash, err := am.Get(ctx, c.name)
-	if err != nil || rootHash.IsEmpty() {
+	if err != nil {
+		return prolly.Map{}, fmt.Errorf("index: looking up collection in AM: %w", err)
+	}
+	if rootHash.IsEmpty() {
 		return idxMap, nil
 	}
 	primaryMap, err := openCollection(ctx, state.cs, state.ns, rootHash)
 	if err != nil {
-		return idxMap, nil
+		return prolly.Map{}, fmt.Errorf("index: opening primary map: %w", err)
 	}
 
 	mut := idxMap.Mutate()
@@ -1539,20 +1622,18 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			break
 		}
 
-		// Get the _id bytes from the primary key.
 		idBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
-			continue
+			return prolly.Map{}, fmt.Errorf("index: primary key tuple missing _id bytes")
 		}
 
-		// Decode the document to extract the indexed field value(s).
 		jsonHash, ok := valDesc.GetJSONAddr(0, v)
 		if !ok {
-			continue
+			return prolly.Map{}, fmt.Errorf("index: primary value tuple missing JSON addr")
 		}
 		doc, err := readDocJSON(ctx, state.ns, jsonHash)
 		if err != nil {
-			continue
+			return prolly.Map{}, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
 		fieldVals := extractIndexFieldValues(doc, idx)
@@ -1617,6 +1698,24 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 
 	state.indexes[c.name] = kept
 
+	// Drop the in-memory secondary maps for the removed indexes too, so a
+	// subsequent persistIndexes call doesn't re-emit them.
+	if secMaps := state.secIndexMaps[c.name]; secMaps != nil {
+		for name := range drop {
+			delete(secMaps, name)
+		}
+		if len(secMaps) == 0 {
+			delete(state.secIndexMaps, c.name)
+		}
+	}
+
+	if err := state.persistIndexes(ctx, c.name); err != nil {
+		return nil, fmt.Errorf("dolt: persisting secondary indexes after drop: %w", err)
+	}
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state); err != nil {
+		return nil, fmt.Errorf("dolt: rewriting DTBL after drop for %q: %w", c.name, err)
+	}
+
 	return &backends.DropIndexesResult{}, nil
 }
 
@@ -1643,7 +1742,7 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return prolly.Map{}, err
 	}
 
-	dtblHash, err := state.dtblHashForMap(ctx, emptyMap)
+	dtblHash, err := state.dtblHashForCollection(ctx, c.name, emptyMap, hash.Hash{})
 	if err != nil {
 		return prolly.Map{}, err
 	}
