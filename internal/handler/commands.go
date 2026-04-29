@@ -289,7 +289,7 @@ func (h *Handler) initCommands() {
 		"hello": {
 			Handler:   h.MsgHello,
 			anonymous: true,
-			Help:      "Returns the role of the FerretDB instance.",
+			Help:      "Returns the role of the DumboDB instance.",
 		},
 		"hostInfo": {
 			Handler: h.MsgHostInfo,
@@ -302,7 +302,7 @@ func (h *Handler) initCommands() {
 		"isMaster": {
 			Handler:   h.MsgIsMaster,
 			anonymous: true,
-			Help:      "Returns the role of the FerretDB instance.",
+			Help:      "Returns the role of the DumboDB instance.",
 		},
 		"ismaster": { // old lowercase variant
 			Handler:   h.MsgIsMaster,

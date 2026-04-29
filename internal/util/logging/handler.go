@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -52,9 +51,6 @@ type NewHandlerOpts struct {
 
 	// When set, causes handler to panic on messages with leading/trailing spaces or ending punctuation.
 	// It must not be set unconditionally because we don't control messages from third-party packages.
-	//
-	// But we can enable it in our tests and when [debugbuild.Enabled] is true.
-	// TODO https://github.com/dolthub/dumbodb/issues/4511
 	CheckMessages bool
 }
 
@@ -153,10 +149,6 @@ func (h *Handler) Enabled(ctx context.Context, l slog.Level) bool {
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	err := h.base.Handle(ctx, r)
 
-	if debugbuild.Enabled {
-		must.NoError(err)
-	}
-
 	if h.checkMessages {
 		if strings.TrimSpace(r.Message) != r.Message {
 			panic(fmt.Sprintf("message %q has leading/trailing spaces", r.Message))
@@ -182,10 +174,6 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	//nolint:exhaustive // levels smaller than LevelDPanic are handled above
 	switch r.Level {
 	case LevelDPanic:
-		if debugbuild.Enabled {
-			panic(r.Message)
-		}
-
 		return err
 
 	case LevelPanic:

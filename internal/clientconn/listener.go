@@ -26,9 +26,7 @@ import (
 	"time"
 
 	"github.com/FerretDB/wire"
-	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
 	"github.com/dolthub/dumbodb/internal/handler"
 	"github.com/dolthub/dumbodb/internal/util/ctxutil"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -70,7 +68,6 @@ type NewListenerOpts struct {
 	ProxyTLSCAFile   string
 
 	Mode           Mode
-	Metrics        *connmetrics.ListenerMetrics
 	Handler        *handler.Handler
 	Logger         *slog.Logger
 	TestRecordsDir string // if empty, no records are created
@@ -215,8 +212,6 @@ func acceptLoop(ctx context.Context, listener net.Listener, wg *sync.WaitGroup, 
 				return
 			}
 
-			l.Metrics.Accepts.WithLabelValues("1").Inc()
-
 			l.ll.WarnContext(ctx, "Failed to accept connection", logging.Error(err))
 			if !errors.Is(err, net.ErrClosed) {
 				retry++
@@ -226,19 +221,11 @@ func acceptLoop(ctx context.Context, listener net.Listener, wg *sync.WaitGroup, 
 		}
 
 		wg.Add(1)
-		l.Metrics.Accepts.WithLabelValues("0").Inc()
 
 		go func() {
 			var connErr error
-			start := time.Now()
 
 			defer func() {
-				lv := "0"
-				if connErr != nil {
-					lv = "1"
-				}
-
-				l.Metrics.Durations.WithLabelValues(lv).Observe(time.Since(start).Seconds())
 				netConn.Close()
 				wg.Done()
 			}()
@@ -256,11 +243,10 @@ func acceptLoop(ctx context.Context, listener net.Listener, wg *sync.WaitGroup, 
 			connID := fmt.Sprintf("%s -> %s", remoteAddr, netConn.LocalAddr())
 
 			opts := &newConnOpts{
-				netConn:     netConn,
-				mode:        l.Mode,
-				l:           logging.WithName(l.Logger, "// "+connID+" "), // derive from the original unnamed logger
-				handler:     l.Handler,
-				connMetrics: l.Metrics.ConnMetrics, // share between all conns
+				netConn: netConn,
+				mode:    l.Mode,
+				l:       logging.WithName(l.Logger, "// "+connID+" "), // derive from the original unnamed logger
+				handler: l.Handler,
 
 				proxyAddr:        l.ProxyAddr,
 				proxyTLSCertFile: l.ProxyTLSCertFile,
@@ -313,19 +299,3 @@ func (l *Listener) TLSAddr() net.Addr {
 	return l.tlsListener.Addr()
 }
 
-// Describe implements [prometheus.Collector].
-func (l *Listener) Describe(ch chan<- *prometheus.Desc) {
-	l.Metrics.Describe(ch)
-	l.Handler.Describe(ch)
-}
-
-// Collect implements [prometheus.Collector].
-func (l *Listener) Collect(ch chan<- prometheus.Metric) {
-	l.Metrics.Collect(ch)
-	l.Handler.Collect(ch)
-}
-
-// check interfaces
-var (
-	_ prometheus.Collector = (*Listener)(nil)
-)

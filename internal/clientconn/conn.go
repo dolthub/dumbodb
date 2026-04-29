@@ -34,25 +34,20 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/pmezard/go-difflib/difflib"
 	"go.opentelemetry.io/otel"
-	otelattribute "go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
-	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
 	"github.com/dolthub/dumbodb/internal/handler"
-	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/proxy"
-	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
-	"github.com/dolthub/dumbodb/internal/util/observability"
 )
 
-// Mode represents FerretDB mode of operation.
+// Mode represents DumboDB mode of operation.
 type Mode string
 
 const (
@@ -61,7 +56,7 @@ const (
 	// ProxyMode only proxies requests to another wire protocol compatible service.
 	ProxyMode Mode = "proxy"
 	// DiffNormalMode both handles requests and proxies them, then logs the diff.
-	// Only the FerretDB response is sent to the client.
+	// Only the DumboDB response is sent to the client.
 	DiffNormalMode Mode = "diff-normal"
 	// DiffProxyMode both handles requests and proxies them, then logs the diff.
 	// Only the proxy response is sent to the client.
@@ -82,7 +77,6 @@ type conn struct {
 	mode           Mode
 	l              *slog.Logger
 	h              *handler.Handler
-	m              *connmetrics.ConnMetrics
 	proxy          *proxy.Router
 	lastRequestID  atomic.Int32
 	testRecordsDir string // if empty, no records are created
@@ -90,11 +84,10 @@ type conn struct {
 
 // newConnOpts represents newConn options.
 type newConnOpts struct {
-	netConn     net.Conn
-	mode        Mode
-	l           *slog.Logger
-	handler     *handler.Handler
-	connMetrics *connmetrics.ConnMetrics
+	netConn net.Conn
+	mode    Mode
+	l       *slog.Logger
+	handler *handler.Handler
 
 	proxyAddr        string
 	proxyTLSCertFile string
@@ -126,7 +119,6 @@ func newConn(opts *newConnOpts) (*conn, error) {
 		mode:           opts.mode,
 		l:              opts.l,
 		h:              opts.handler,
-		m:              opts.connMetrics,
 		proxy:          p,
 		testRecordsDir: opts.testRecordsDir,
 	}, nil
@@ -271,7 +263,7 @@ func (c *conn) run(ctx context.Context) (err error) {
 		diffLogLevel := slog.LevelDebug
 
 		// send request to proxy first (unless we are in normal mode)
-		// because FerretDB's handling could modify reqBody's documents,
+		// because DumboDB's handling could modify reqBody's documents,
 		// creating a data race
 		var proxyHeader *wire.MsgHeader
 		var proxyBody wire.MsgBody
@@ -401,8 +393,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			argument = "unknown"
 		}
 
-		c.m.Responses.WithLabelValues(resHeader.OpCode.String(), command, argument, result).Inc()
-
 		must.NotBeZero(span)
 
 		if result != "ok" {
@@ -410,11 +400,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		}
 
 		span.SetName(command)
-		span.SetAttributes(
-			otelattribute.String("db.ferretdb.opcode", resHeader.OpCode.String()),
-			otelattribute.Int("db.ferretdb.request_id", int(resHeader.ResponseTo)),
-			otelattribute.String("db.ferretdb.argument", argument),
-		)
 		span.End()
 	}()
 
@@ -422,7 +407,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	var err error
 	switch reqHeader.OpCode {
 	case wire.OpCodeMsg:
-		var document *types.Document
 		msg := reqBody.(*wire.OpMsg)
 
 		resHeader.OpCode = wire.OpCodeMsg
@@ -430,18 +414,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		// decoded successfully already in [run] [wire.ReadMessage] [UnmarshalBinaryNocopy] [check]
 		doc := must.NotFail(msg.RawSection0().Decode())
 
-		document, err = bson.ToDocument(doc)
-
-		if err == nil {
-			comment, _ := common.GetOptionalParam(document, "comment", "")
-
-			spanCtx, e := observability.SpanContextFromComment(comment)
-			if e == nil {
-				connCtx = trace.ContextWithRemoteSpanContext(connCtx, spanCtx)
-			} else {
-				c.l.DebugContext(connCtx, "Failed to extract span context from comment", logging.Error(e))
-			}
-		}
+		_, err = bson.ToDocument(doc)
 
 		connCtx, span = otel.Tracer("").Start(connCtx, "")
 
@@ -499,8 +472,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	if command == "" {
 		command = "unknown"
 	}
-
-	c.m.Requests.WithLabelValues(reqHeader.OpCode.String(), command).Inc()
 
 	// set body for error
 	if err != nil {

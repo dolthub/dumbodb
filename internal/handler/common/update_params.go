@@ -28,56 +28,56 @@ import (
 //
 //nolint:vet // for readability
 type UpdateParams struct {
-	DB         string `ferretdb:"$db"`
-	Collection string `ferretdb:"update,collection"`
+	DB         string `dumbo:"$db"`
+	Collection string `dumbo:"update,collection"`
 
-	Updates []Update `ferretdb:"updates"`
+	Updates []Update `dumbo:"updates"`
 
-	Comment   string `ferretdb:"comment,opt"`
-	MaxTimeMS int64  `ferretdb:"maxTimeMS,ignored"`
+	Comment   string `dumbo:"comment,opt"`
+	MaxTimeMS int64  `dumbo:"maxTimeMS,ignored"`
 
-	Let *types.Document `ferretdb:"let,unimplemented"`
+	Let *types.Document `dumbo:"let,unimplemented"`
 
-	Ordered                  bool            `ferretdb:"ordered,ignored"`
-	BypassDocumentValidation bool            `ferretdb:"bypassDocumentValidation,ignored"`
-	BypassEmptyTsReplacement bool            `ferretdb:"bypassEmptyTsReplacement,ignored"`
-	WriteConcern             *types.Document `ferretdb:"writeConcern,opt"`
-	LSID                     any             `ferretdb:"lsid,ignored"`
-	TxnNumber                int64           `ferretdb:"txnNumber,ignored"`
-	Autocommit               bool            `ferretdb:"autocommit,ignored"`
-	ClusterTime              any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference           *types.Document `ferretdb:"$readPreference,ignored"`
+	Ordered                  bool            `dumbo:"ordered,ignored"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
+	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
+	LSID                     any             `dumbo:"lsid,ignored"`
+	TxnNumber                int64           `dumbo:"txnNumber,ignored"`
+	Autocommit               bool            `dumbo:"autocommit,ignored"`
+	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 
 	// SkipDurableSync is derived from WriteConcern in GetUpdateParams and
 	// propagated into backend params so the storage layer can skip the
 	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `ferretdb:"-"`
+	SkipDurableSync bool `dumbo:"-"`
 }
 
 // Update represents a single update operation parameters.
 //
 //nolint:vet // for readability
 type Update struct {
-	Filter    *types.Document `ferretdb:"q,opt"`
-	UpdateRaw any             `ferretdb:"u,opt"` // *types.Document or *types.Array (pipeline)
-	Multi     bool            `ferretdb:"multi,opt"`
-	Upsert    bool            `ferretdb:"upsert,opt,numericBool"`
+	Filter    *types.Document `dumbo:"q,opt"`
+	UpdateRaw any             `dumbo:"u,opt"` // *types.Document or *types.Array (pipeline)
+	Multi     bool            `dumbo:"multi,opt"`
+	Upsert    bool            `dumbo:"upsert,opt,numericBool"`
 
 	// Populated by GetUpdateParams from UpdateRaw.
-	Update             *types.Document `ferretdb:"-"`
-	Pipeline           *types.Array    `ferretdb:"-"`
-	HasUpdateOperators bool            `ferretdb:"-"`
-	IsPipeline         bool            `ferretdb:"-"`
+	Update             *types.Document `dumbo:"-"`
+	Pipeline           *types.Array    `dumbo:"-"`
+	HasUpdateOperators bool            `dumbo:"-"`
+	IsPipeline         bool            `dumbo:"-"`
 
-	C            *types.Document `ferretdb:"c,unimplemented"`
-	Collation    *types.Document `ferretdb:"collation,unimplemented"`
-	ArrayFilters *types.Array    `ferretdb:"arrayFilters,opt"`
+	C            *types.Document `dumbo:"c,unimplemented"`
+	Collation    *types.Document `dumbo:"collation,unimplemented"`
+	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
-	Hint string `ferretdb:"hint,ignored"`
+	Hint string `dumbo:"hint,ignored"`
 }
 
 // UpdateResult is the result type returned from common.UpdateDocument.

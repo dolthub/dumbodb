@@ -47,23 +47,6 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 	metricsDoc := types.MakeDocument(0)
 
-	metrics := h.ConnMetrics.GetResponses()
-	for _, commands := range metrics {
-		for command, arguments := range commands {
-			var total, failed int
-			for _, m := range arguments {
-				total += m.Total
-
-				for _, v := range m.Failures {
-					failed += v
-				}
-			}
-
-			d := must.NotFail(types.NewDocument("total", int64(total), "failed", int64(failed)))
-			metricsDoc.Set(command, d)
-		}
-	}
-
 	stats, err := h.b.Status(connCtx, new(backends.StatusParams))
 	if err != nil {
 		return nil, lazyerrors.Error(err)

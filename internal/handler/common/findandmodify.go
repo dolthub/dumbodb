@@ -27,45 +27,45 @@ import (
 //
 //nolint:vet // for readability
 type FindAndModifyParams struct {
-	DB                string          `ferretdb:"$db"`
-	Collection        string          `ferretdb:"findAndModify,collection"`
-	Comment           string          `ferretdb:"comment,opt"`
-	Query             *types.Document `ferretdb:"query,opt"`
-	Sort              *types.Document `ferretdb:"sort,opt"`
-	UpdateValue       any             `ferretdb:"update,opt"`
-	Remove            bool            `ferretdb:"remove,opt"`
-	Upsert            bool            `ferretdb:"upsert,opt"`
-	ReturnNewDocument bool            `ferretdb:"new,opt,numericBool"`
-	MaxTimeMS         int64           `ferretdb:"maxTimeMS,opt,wholePositiveNumber"`
+	DB                string          `dumbo:"$db"`
+	Collection        string          `dumbo:"findAndModify,collection"`
+	Comment           string          `dumbo:"comment,opt"`
+	Query             *types.Document `dumbo:"query,opt"`
+	Sort              *types.Document `dumbo:"sort,opt"`
+	UpdateValue       any             `dumbo:"update,opt"`
+	Remove            bool            `dumbo:"remove,opt"`
+	Upsert            bool            `dumbo:"upsert,opt"`
+	ReturnNewDocument bool            `dumbo:"new,opt,numericBool"`
+	MaxTimeMS         int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
-	Update      *types.Document `ferretdb:"-"`
-	Aggregation *types.Array    `ferretdb:"-"`
+	Update      *types.Document `dumbo:"-"`
+	Aggregation *types.Array    `dumbo:"-"`
 
-	HasUpdateOperators bool `ferretdb:"-"`
+	HasUpdateOperators bool `dumbo:"-"`
 
-	Fields *types.Document `ferretdb:"fields,opt"`
+	Fields *types.Document `dumbo:"fields,opt"`
 
-	Let          *types.Document `ferretdb:"let,unimplemented"`
-	Collation    *types.Document `ferretdb:"collation,unimplemented"`
-	ArrayFilters *types.Array    `ferretdb:"arrayFilters,opt"`
+	Let          *types.Document `dumbo:"let,unimplemented"`
+	Collation    *types.Document `dumbo:"collation,unimplemented"`
+	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
-	Hint                     string          `ferretdb:"hint,ignored"`
-	WriteConcern             *types.Document `ferretdb:"writeConcern,opt"`
-	BypassDocumentValidation bool            `ferretdb:"bypassDocumentValidation,ignored"`
-	BypassEmptyTsReplacement bool            `ferretdb:"bypassEmptyTsReplacement,ignored"`
-	LSID                     any             `ferretdb:"lsid,ignored"`
-	TxnNumber                int64           `ferretdb:"txnNumber,ignored"`
-	ClusterTime              any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference           *types.Document `ferretdb:"$readPreference,ignored"`
+	Hint                     string          `dumbo:"hint,ignored"`
+	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
+	LSID                     any             `dumbo:"lsid,ignored"`
+	TxnNumber                int64           `dumbo:"txnNumber,ignored"`
+	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 
 	// SkipDurableSync is derived from WriteConcern in GetFindAndModifyParams and
 	// propagated into backend params so the storage layer can skip the
 	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `ferretdb:"-"`
+	SkipDurableSync bool `dumbo:"-"`
 }
 
 // GetFindAndModifyParams returns `findAndModifyParams` command parameters.

@@ -26,13 +26,13 @@ var databaseNameRe = regexp.MustCompile(`^[^\x00 /\\.$]{1,63}$`)
 var collectionNameRe = regexp.MustCompile("^[^\\.$\x00][^$\x00]{0,234}$")
 
 // ReservedPrefix for names: databases, collections, schemas, tables, indexes, columns, etc.
-const ReservedPrefix = "_ferretdb_"
+const ReservedPrefix = "_dumbodb_"
 
-// validateDatabaseName checks that database name is valid for FerretDB.
+// validateDatabaseName checks that database name is valid for DumboDB.
 //
 // It follows MongoDB restrictions plus
 //   - allows only basic latin letters, digits, and basic punctuation;
-//   - disallows `_ferretdb_` prefix.
+//   - disallows `_dumbodb_` prefix.
 //
 // That validation is quite restrictive because
 // we expect it to be easy for users to change database names in their software/configuration if needed.
@@ -50,13 +50,13 @@ func validateDatabaseName(name string) error {
 	return nil
 }
 
-// validateCollectionName checks that collection name is valid for FerretDB.
+// validateCollectionName checks that collection name is valid for DumboDB.
 //
 // It follows MongoDB restrictions plus:
 //   - allows only UTF-8 characters;
 //   - allows `system.` prefix ("system" collections are just regular collections);
 //   - disallows `.` prefix (MongoDB fails to work with such collections correctly too);
-//   - disallows `_ferretdb_` prefix.
+//   - disallows `_dumbodb_` prefix.
 //
 // That validation is quite lax because
 // we expect it to be hard for users to change collection names in their software.

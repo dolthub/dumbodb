@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
 	"github.com/dolthub/dumbodb/internal/handler"
 	"github.com/dolthub/dumbodb/internal/util/password"
 	"github.com/dolthub/dumbodb/internal/util/state"
@@ -42,7 +41,6 @@ var registry = map[string]newHandlerFunc{}
 type NewHandlerOpts struct {
 	// for all backends
 	Logger        *slog.Logger
-	ConnMetrics   *connmetrics.ConnMetrics
 	StateProvider *state.Provider
 	TCPHost       string
 	ReplSetName   string

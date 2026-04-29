@@ -17,7 +17,6 @@ package version
 
 import (
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -59,7 +58,7 @@ var info = &Info{
 	Branch:              "unknown",
 	Dirty:               false,
 	Package:             "unknown",
-	DebugBuild:          debugbuild.Enabled,
+	DebugBuild:          false,
 	BuildEnvironment:    must.NotFail(types.NewDocument()),
 	MongoDBVersion:      MongoDBVersion,
 	MongoDBVersionArray: must.NotFail(types.NewArray(int32(8), int32(0), int32(0), int32(0))),

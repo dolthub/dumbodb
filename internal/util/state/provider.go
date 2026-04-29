@@ -22,7 +22,7 @@ import (
 	"sync"
 )
 
-// Provider provides access to FerretDB process state.
+// Provider provides access to DumboDB process state.
 type Provider struct {
 	filename string
 

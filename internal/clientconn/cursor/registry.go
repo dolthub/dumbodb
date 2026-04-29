@@ -22,27 +22,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/exp/maps"
 
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/debugbuild"
-)
-
-// Parts of Prometheus metric names.
-const (
-	namespace = "ferretdb"
-	subsystem = "cursors"
 )
 
 // Global last cursor ID.
 var lastCursorID atomic.Uint32
 
 func init() {
-	// to make debugging easier
-	if !debugbuild.Enabled {
-		lastCursorID.Store(rand.Uint32())
-	}
+	lastCursorID.Store(rand.Uint32())
 }
 
 // Registry stores cursors.
@@ -54,9 +43,6 @@ type Registry struct {
 
 	l  *slog.Logger
 	wg sync.WaitGroup
-
-	created  *prometheus.CounterVec
-	duration *prometheus.HistogramVec
 }
 
 // NewRegistry creates a new Registry.
@@ -64,38 +50,6 @@ func NewRegistry(l *slog.Logger) *Registry {
 	return &Registry{
 		m: map[int64]*Cursor{},
 		l: l,
-		created: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: namespace,
-				Subsystem: subsystem,
-				Name:      "created_total",
-				Help:      "Total number of cursors created.",
-			},
-			[]string{"type", "db", "collection", "username"},
-		),
-		duration: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Namespace: namespace,
-				Subsystem: subsystem,
-				Name:      "duration_seconds",
-				Help:      "Cursors lifetime in seconds.",
-				Buckets: []float64{
-					(1 * time.Millisecond).Seconds(),
-					(5 * time.Millisecond).Seconds(),
-					(10 * time.Millisecond).Seconds(),
-					(25 * time.Millisecond).Seconds(),
-					(50 * time.Millisecond).Seconds(),
-					(100 * time.Millisecond).Seconds(),
-					(250 * time.Millisecond).Seconds(),
-					(500 * time.Millisecond).Seconds(),
-					(1000 * time.Millisecond).Seconds(),
-					(2500 * time.Millisecond).Seconds(),
-					(5000 * time.Millisecond).Seconds(),
-					(10000 * time.Millisecond).Seconds(),
-				},
-			},
-			[]string{"type", "db", "collection", "username"},
-		),
 	}
 }
 
@@ -146,8 +100,6 @@ func (r *Registry) NewCursor(ctx context.Context, iter types.DocumentsIterator, 
 		slog.String("collection", params.Collection),
 		slog.String("username", params.Username),
 	)
-
-	r.created.WithLabelValues(params.Type.String(), params.DB, params.Collection, params.Username).Inc()
 
 	c := newCursor(id, iter, params, r)
 	r.m[id] = c
@@ -204,25 +156,6 @@ func (r *Registry) CloseAndRemove(c *Cursor) {
 		slog.Duration("duration", d),
 	)
 
-	r.duration.WithLabelValues(c.Type.String(), c.DB, c.Collection, c.Username).Observe(d.Seconds())
-
 	delete(r.m, c.ID)
 	close(c.removed)
 }
-
-// Describe implements [prometheus.Collector].
-func (r *Registry) Describe(ch chan<- *prometheus.Desc) {
-	r.created.Describe(ch)
-	r.duration.Describe(ch)
-}
-
-// Collect implements [prometheus.Collector].
-func (r *Registry) Collect(ch chan<- prometheus.Metric) {
-	r.created.Collect(ch)
-	r.duration.Collect(ch)
-}
-
-// check interfaces
-var (
-	_ prometheus.Collector = (*Registry)(nil)
-)

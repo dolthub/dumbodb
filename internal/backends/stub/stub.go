@@ -22,8 +22,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
@@ -60,12 +58,6 @@ func (b *Backend) ListDatabases(_ context.Context, _ *backends.ListDatabasesPara
 func (b *Backend) DropDatabase(_ context.Context, params *backends.DropDatabaseParams) error {
 	return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist, fmt.Errorf("stub: DropDatabase %q not implemented", params.Name))
 }
-
-// Describe implements prometheus.Collector interface.
-func (b *Backend) Describe(ch chan<- *prometheus.Desc) {}
-
-// Collect implements prometheus.Collector interface.
-func (b *Backend) Collect(ch chan<- prometheus.Metric) {}
 
 // database implements backends.Database interface.
 type database struct {

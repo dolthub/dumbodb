@@ -34,24 +34,24 @@ import (
 //
 //nolint:vet // for readability
 type DistinctParams struct {
-	DB         string          `ferretdb:"$db"`
-	Collection string          `ferretdb:"distinct,collection"`
-	Key        string          `ferretdb:"key"`
-	Filter     *types.Document `ferretdb:"-"`
-	Comment    string          `ferretdb:"comment,opt"`
+	DB         string          `dumbo:"$db"`
+	Collection string          `dumbo:"distinct,collection"`
+	Key        string          `dumbo:"key"`
+	Filter     *types.Document `dumbo:"-"`
+	Comment    string          `dumbo:"comment,opt"`
 
-	Query any `ferretdb:"query,opt"`
+	Query any `dumbo:"query,opt"`
 
-	Collation *types.Document `ferretdb:"collation,unimplemented"`
+	Collation *types.Document `dumbo:"collation,unimplemented"`
 
-	ReadConcern    *types.Document `ferretdb:"readConcern,ignored"`
-	LSID           any             `ferretdb:"lsid,ignored"`
-	ClusterTime    any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference *types.Document `ferretdb:"$readPreference,ignored"`
+	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
+	LSID           any             `dumbo:"lsid,ignored"`
+	ClusterTime    any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference *types.Document `dumbo:"$readPreference,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
 // GetDistinctParams returns `distinct` command parameters.

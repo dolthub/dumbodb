@@ -28,7 +28,6 @@ import (
 	"syscall"
 
 	"github.com/dolthub/dumbodb/internal/clientconn"
-	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
@@ -85,11 +84,8 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	metrics := connmetrics.NewListenerMetrics()
-
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
 		Logger:        logger,
-		ConnMetrics:   metrics.ConnMetrics,
 		StateProvider: stateProvider,
 		TCPHost:       *addr,
 		ReplSetName:   "",
@@ -104,7 +100,6 @@ func run(logger *slog.Logger) error {
 	listener, err := clientconn.Listen(&clientconn.NewListenerOpts{
 		TCP:     *addr,
 		Mode:    clientconn.NormalMode,
-		Metrics: metrics,
 		Handler: h,
 		Logger:  logger,
 	})

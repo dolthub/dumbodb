@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package state stores FerretDB process state.
+// Package state stores DumboDB process state.
 package state
 
 import (
@@ -22,7 +22,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// State represents FerretDB process state.
+// State represents DumboDB process state.
 type State struct {
 	UUID      string `json:"uuid"`
 	Telemetry *bool  `json:"telemetry,omitempty"` // nil for undecided
@@ -32,7 +32,7 @@ type State struct {
 	TelemetryLocked bool      `json:"-"`
 	Start           time.Time `json:"-"`
 
-	// may be empty if FerretDB did not connect to the backend yet
+	// may be empty if DumboDB did not connect to the backend yet
 	BackendName    string `json:"-"`
 	BackendVersion string `json:"-"`
 

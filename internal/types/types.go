@@ -14,7 +14,7 @@
 
 // Package types provides Go types matching BSON types that don't have built-in Go equivalents.
 //
-// All BSON types have three representations in FerretDB:
+// All BSON types have three representations in DumboDB:
 //
 //  1. As they are used in "business logic" / handlers - `types` package.
 //  2. As they are used in the wire protocol implementation and for logging - `bson` package.

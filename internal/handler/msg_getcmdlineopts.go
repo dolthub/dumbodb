@@ -29,7 +29,7 @@ import (
 func (h *Handler) MsgGetCmdLineOpts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"argv", must.NotFail(types.NewArray("ferretdb")),
+			"argv", must.NotFail(types.NewArray("dumbodb")),
 			"parsed", must.NotFail(types.NewDocument()),
 			"ok", float64(1),
 		)),

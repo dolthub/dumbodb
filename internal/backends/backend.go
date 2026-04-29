@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
 
@@ -46,8 +45,6 @@ type Backend interface {
 	Database(string) (Database, error)
 	ListDatabases(context.Context, *ListDatabasesParams) (*ListDatabasesResult, error)
 	DropDatabase(context.Context, *DropDatabaseParams) error
-
-	prometheus.Collector
 
 	// There is no interface method to create a database; see package documentation.
 }
@@ -196,16 +193,6 @@ func (bc *backendContract) DropDatabase(ctx context.Context, params *DropDatabas
 	checkError(err, ErrorCodeDatabaseNameIsInvalid, ErrorCodeDatabaseDoesNotExist)
 
 	return err
-}
-
-// Describe implements prometheus.Collector.
-func (bc *backendContract) Describe(ch chan<- *prometheus.Desc) {
-	bc.b.Describe(ch)
-}
-
-// Collect implements prometheus.Collector.
-func (bc *backendContract) Collect(ch chan<- prometheus.Metric) {
-	bc.b.Collect(ch)
 }
 
 // DumboDBCommit implements VersioningBackend if the wrapped backend supports it.

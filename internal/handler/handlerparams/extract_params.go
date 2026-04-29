@@ -31,7 +31,7 @@ import (
 
 // ExtractParams fill passed value structure with parameters from the document.
 // If the passed value is not a pointer to the structure it panics.
-// Parameters are extracted by the field name or by the `ferretdb` tag.
+// Parameters are extracted by the field name or by the `dumbo` tag.
 //
 // Possible tags:
 //   - `opt` - field is optional, the field value would not be set if it's not present in the document;
@@ -172,7 +172,7 @@ func lookupFieldTag(key string, value *reflect.Value) (*int, *tagOptions, error)
 	for ; i < value.NumField(); i++ {
 		field := value.Type().Field(i)
 
-		tag := field.Tag.Get("ferretdb")
+		tag := field.Tag.Get("dumbo")
 
 		if tag == "" {
 			return nil, nil, lazyerrors.Errorf("no tag provided for %s", field.Name)
@@ -429,7 +429,7 @@ func checkAllRequiredFieldsPopulated(v *reflect.Value, command string, keys []st
 	for i := 0; i < v.NumField(); i++ {
 		field := v.Type().Field(i)
 
-		tag := field.Tag.Get("ferretdb")
+		tag := field.Tag.Get("dumbo")
 
 		optionsList := strings.Split(tag, ",")
 

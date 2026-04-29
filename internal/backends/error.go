@@ -15,11 +15,8 @@
 package backends
 
 import (
-	"errors"
 	"fmt"
 	"slices"
-
-	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 )
 
 //go:generate ../../bin/stringer -linecomment -type ErrorCode
@@ -88,44 +85,10 @@ func ErrorCodeIs(err error, code ErrorCode, codes ...ErrorCode) bool {
 	return e.code == code || slices.Contains(codes, e.code)
 }
 
-// checkError enforces backend interfaces contracts.
+// checkError is a no-op retained for API compatibility.
 //
-// Err must be nil, *Error, or some other opaque error.
-// *Error values can't be wrapped or be present anywhere in the error chain.
-// If err is *Error, it must have one of the given error codes.
-// If that's not the case, checkError panics in debug builds.
-//
-// It does nothing in non-debug builds.
-func checkError(err error, codes ...ErrorCode) {
-	if !debugbuild.Enabled {
-		return
-	}
-
-	if err == nil {
-		return
-	}
-
-	e, ok := err.(*Error) //nolint:errorlint // do not inspect error chain
-	if !ok {
-		if errors.As(err, &e) {
-			panic(fmt.Sprintf("error should not be wrapped: %v", err))
-		}
-
-		return
-	}
-
-	if e.code == 0 {
-		panic(fmt.Sprintf("error code is 0: %v", err))
-	}
-
-	if len(codes) == 0 {
-		panic(fmt.Sprintf("no allowed error codes: %v", err))
-	}
-
-	if !slices.Contains(codes, e.code) {
-		panic(fmt.Sprintf("error code is not in %v: %v", codes, err))
-	}
-}
+// It previously enforced backend error contracts in debug builds; production builds always skipped it.
+func checkError(err error, codes ...ErrorCode) {}
 
 // check interfaces
 var (

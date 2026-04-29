@@ -28,31 +28,31 @@ import (
 //
 //nolint:vet // for readability
 type InsertParams struct {
-	Docs       *types.Array `ferretdb:"documents,opt"`
-	DB         string       `ferretdb:"$db"`
-	Collection string       `ferretdb:"insert,collection"`
-	Ordered    bool         `ferretdb:"ordered,opt"`
+	Docs       *types.Array `dumbo:"documents,opt"`
+	DB         string       `dumbo:"$db"`
+	Collection string       `dumbo:"insert,collection"`
+	Ordered    bool         `dumbo:"ordered,opt"`
 
-	MaxTimeMS                int64           `ferretdb:"maxTimeMS,ignored"`
-	WriteConcern             *types.Document `ferretdb:"writeConcern,opt"`
-	BypassDocumentValidation bool            `ferretdb:"bypassDocumentValidation,ignored"`
-	BypassEmptyTsReplacement bool            `ferretdb:"bypassEmptyTsReplacement,ignored"`
-	Comment                  string          `ferretdb:"comment,ignored"`
-	LSID                     any             `ferretdb:"lsid,ignored"`
-	TxnNumber                int64           `ferretdb:"txnNumber,ignored"`
-	StartTransaction         bool            `ferretdb:"startTransaction,ignored"`
-	Autocommit               bool            `ferretdb:"autocommit,ignored"`
-	ClusterTime              any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference           *types.Document `ferretdb:"$readPreference,ignored"`
+	MaxTimeMS                int64           `dumbo:"maxTimeMS,ignored"`
+	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
+	Comment                  string          `dumbo:"comment,ignored"`
+	LSID                     any             `dumbo:"lsid,ignored"`
+	TxnNumber                int64           `dumbo:"txnNumber,ignored"`
+	StartTransaction         bool            `dumbo:"startTransaction,ignored"`
+	Autocommit               bool            `dumbo:"autocommit,ignored"`
+	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 
 	// SkipDurableSync is derived from WriteConcern in GetInsertParams and
 	// propagated into backend params so the storage layer can skip the
 	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `ferretdb:"-"`
+	SkipDurableSync bool `dumbo:"-"`
 }
 
 // GetInsertParams returns the parameters for an insert command.

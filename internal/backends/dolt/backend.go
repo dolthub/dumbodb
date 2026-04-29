@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dolt provides a Dolt-backed storage backend for FerretDB.
+// Package dolt provides a Dolt-backed storage backend for DumboDB.
 //
 // Storage hierarchy:
 //   - One nbs.GenerationalNBS per MongoDB database, stored in <dataDir>/<dbName>/
@@ -59,7 +59,6 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -462,12 +461,6 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 
 	return nil
 }
-
-// Describe implements prometheus.Collector.
-func (b *Backend) Describe(ch chan<- *prometheus.Desc) {}
-
-// Collect implements prometheus.Collector.
-func (b *Backend) Collect(ch chan<- prometheus.Metric) {}
 
 // getOrOpenDB returns the dbState for the given database name,
 // opening/creating the NBS store if needed.

@@ -45,7 +45,6 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		SetupTimeout:  opts.SetupTimeout,
 
 		L:             opts.Logger,
-		ConnMetrics:   opts.ConnMetrics,
 		StateProvider: opts.StateProvider,
 
 		DisablePushdown:         opts.TestOpts.DisablePushdown,

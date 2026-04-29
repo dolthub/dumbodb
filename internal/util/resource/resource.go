@@ -15,18 +15,6 @@
 // Package resource provides utilities for tracking resource lifetimes.
 package resource
 
-import (
-	"fmt"
-	"log/slog"
-	"reflect"
-	"runtime"
-	"runtime/pprof"
-	"sync"
-	"unsafe"
-
-	"github.com/dolthub/dumbodb/internal/util/debugbuild"
-)
-
 // Token should be a field of a tracked object.
 //
 // The underlying type is not struct{} because (from the Go spec)
@@ -39,121 +27,8 @@ func NewToken() *Token {
 	return new(Token)
 }
 
-// profilesM protects access to profiles.
-var profilesM sync.Mutex
+// Track is a no-op retained for API compatibility.
+func Track(obj any, token *Token) {}
 
-// profileName return pprof profile name for the given object.
-func profileName(obj any) string {
-	return "FerretDB/" + reflect.TypeOf(obj).Elem().String()
-}
-
-// Track tracks the lifetime of an object until Untrack is called on it.
-//
-// Obj should a pointer to a struct with a field "token" of type *Token.
-//
-// Tracking uses runtime/pprof and a finalizer to report unclosed objects;
-// the per-call cost (stack capture + finalizer registration) is ~1μs and
-// non-trivial on hot iterator paths. It is gated on [debugbuild.Enabled]
-// so production builds compile it out entirely while race and
-// `ferretdb_debug` builds still catch leaks.
-func Track(obj any, token *Token) {
-	if !debugbuild.Enabled {
-		return
-	}
-
-	checkArgs(obj, token)
-
-	name := profileName(obj)
-
-	// fast path
-
-	p := pprof.Lookup(name)
-
-	if p == nil {
-		// slow path
-
-		profilesM.Lock()
-
-		// a concurrent call might have created a profile already; check again
-		if p = pprof.Lookup(name); p == nil {
-			p = pprof.NewProfile(name)
-		}
-
-		profilesM.Unlock()
-	}
-
-	// use token instead of obj itself,
-	// because otherwise profile will hold a reference to obj and finalizer will never run
-	p.Add(token, 1)
-
-	stack := debugbuild.Stack()
-
-	// set finalizer on obj, not token
-	runtime.SetFinalizer(obj, func(obj any) {
-		// this closure has to use only obj argument and captured "stack" variable
-
-		msg := fmt.Sprintf("%T has not been finalized", obj)
-		if stack != nil {
-			msg += "\nObject created by " + string(stack)
-		}
-
-		// In debug/race builds, panic to catch resource leaks during development.
-		// In production builds, log a warning — panicking in a GC finalizer runs in
-		// goroutine 6 with no recovery and kills the entire server process.
-		if debugbuild.Enabled {
-			panic(msg)
-		}
-
-		slog.Error(msg)
-	})
-}
-
-// Untrack stops tracking the lifetime of an object.
-//
-// It is safe to call this function multiple times.
-//
-// Paired with [Track]; also gated on [debugbuild.Enabled].
-func Untrack(obj any, token *Token) {
-	if !debugbuild.Enabled {
-		return
-	}
-
-	checkArgs(obj, token)
-
-	p := pprof.Lookup(profileName(obj))
-	if p == nil {
-		panic("object is not tracked")
-	}
-
-	p.Remove(token)
-
-	runtime.SetFinalizer(obj, nil)
-}
-
-// checkArgs checks Track and Untrack arguments.
-//
-// Other creative misuses of Track should result in panics too, if less clear.
-func checkArgs(obj any, token *Token) {
-	if obj == nil {
-		panic("obj must not be nil")
-	}
-
-	if token == nil {
-		panic("token must not be nil")
-	}
-
-	pv := reflect.ValueOf(obj)
-	if pv.Kind() != reflect.Ptr {
-		panic(fmt.Sprintf("obj must be a pointer to struct, got %T", obj))
-	}
-
-	v := pv.Elem()
-	if v.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("obj must be a pointer to struct, got %T", obj))
-	}
-
-	f := v.FieldByName("token")
-	if f.Kind() != reflect.Ptr || f.UnsafePointer() != unsafe.Pointer(token) {
-		panic("token must be a pointer field of a struct")
-	}
-}
+// Untrack is a no-op retained for API compatibility.
+func Untrack(obj any, token *Token) {}

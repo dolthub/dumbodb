@@ -23,13 +23,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/backends/decorators/oplog"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
-	"github.com/dolthub/dumbodb/internal/clientconn/connmetrics"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/users"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -42,11 +40,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/state"
 )
 
-// Parts of Prometheus metric names.
 const (
-	namespace = "ferretdb"
-	subsystem = "handler"
-
 	// Maximum size of a batch for inserting data.
 	maxWriteBatchSize = int32(100000)
 
@@ -73,9 +67,7 @@ type Handler struct {
 	wg        sync.WaitGroup
 	processID types.ObjectID
 
-	cappedCleanupStop             chan struct{}
-	cleanupCappedCollectionsDocs  *prometheus.CounterVec
-	cleanupCappedCollectionsBytes *prometheus.CounterVec
+	cappedCleanupStop chan struct{}
 }
 
 // NewOpts represents handler configuration.
@@ -92,7 +84,6 @@ type NewOpts struct {
 	SetupTimeout  time.Duration
 
 	L             *slog.Logger
-	ConnMetrics   *connmetrics.ConnMetrics
 	StateProvider *state.Provider
 
 	// test options
@@ -135,24 +126,6 @@ func New(opts *NewOpts) (*Handler, error) {
 		processID: types.NewObjectID(),
 
 		cappedCleanupStop: make(chan struct{}),
-		cleanupCappedCollectionsDocs: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: namespace,
-				Subsystem: subsystem,
-				Name:      "cleanup_capped_docs",
-				Help:      "Total number of documents deleted in capped collections during cleanup.",
-			},
-			[]string{"db", "collection"},
-		),
-		cleanupCappedCollectionsBytes: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Namespace: namespace,
-				Subsystem: subsystem,
-				Name:      "cleanup_capped_bytes",
-				Help:      "Total number of bytes freed in capped collections during cleanup.",
-			},
-			[]string{"db", "collection"},
-		),
 	}
 
 	if err := h.setup(); err != nil {
@@ -286,22 +259,6 @@ func (h *Handler) Close() {
 	h.wg.Wait()
 }
 
-// Describe implements [prometheus.Collector].
-func (h *Handler) Describe(ch chan<- *prometheus.Desc) {
-	h.b.Describe(ch)
-	h.cursors.Describe(ch)
-	h.cleanupCappedCollectionsDocs.Describe(ch)
-	h.cleanupCappedCollectionsBytes.Describe(ch)
-}
-
-// Collect implements [prometheus.Collector].
-func (h *Handler) Collect(ch chan<- prometheus.Metric) {
-	h.b.Collect(ch)
-	h.cursors.Collect(ch)
-	h.cleanupCappedCollectionsDocs.Collect(ch)
-	h.cleanupCappedCollectionsBytes.Collect(ch)
-}
-
 // cleanupAllCappedCollections drops the given percent of documents from all capped collections.
 func (h *Handler) cleanupAllCappedCollections(ctx context.Context) error {
 	ctx, span := otel.Tracer("").Start(ctx, "HandlerCleanupAllCappedCollections")
@@ -358,9 +315,6 @@ func (h *Handler) cleanupAllCappedCollections(ctx context.Context) error {
 					slog.Int64("bytes_freed", bytesFreed),
 				)
 			}
-
-			h.cleanupCappedCollectionsDocs.WithLabelValues(dbInfo.Name, cInfo.Name).Add(float64(deleted))
-			h.cleanupCappedCollectionsBytes.WithLabelValues(dbInfo.Name, cInfo.Name).Add(float64(bytesFreed))
 		}
 	}
 

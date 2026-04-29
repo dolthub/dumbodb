@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/FerretDB/wire"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -42,9 +41,7 @@ func (m *versioningBackendMock) Close() {}
 func (m *versioningBackendMock) Status(_ context.Context, _ *backends.StatusParams) (*backends.StatusResult, error) {
 	return &backends.StatusResult{}, nil
 }
-func (m *versioningBackendMock) Database(_ string) (backends.Database, error)   { return nil, nil }
-func (m *versioningBackendMock) Describe(_ chan<- *prometheus.Desc)              {}
-func (m *versioningBackendMock) Collect(_ chan<- prometheus.Metric)              {}
+func (m *versioningBackendMock) Database(_ string) (backends.Database, error) { return nil, nil }
 func (m *versioningBackendMock) ListDatabases(_ context.Context, _ *backends.ListDatabasesParams) (*backends.ListDatabasesResult, error) {
 	return &backends.ListDatabasesResult{}, nil
 }

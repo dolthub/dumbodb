@@ -23,28 +23,28 @@ import (
 
 // CountParams represents parameters for the count command.
 type CountParams struct {
-	Filter     *types.Document `ferretdb:"query,opt"`
-	DB         string          `ferretdb:"$db"`
-	Collection string          `ferretdb:"count,collection"`
+	Filter     *types.Document `dumbo:"query,opt"`
+	DB         string          `dumbo:"$db"`
+	Collection string          `dumbo:"count,collection"`
 
-	Skip  int64 `ferretdb:"skip,opt,positiveNumber"`
-	Limit int64 `ferretdb:"limit,opt,positiveNumber"`
+	Skip  int64 `dumbo:"skip,opt,positiveNumber"`
+	Limit int64 `dumbo:"limit,opt,positiveNumber"`
 
-	Collation *types.Document `ferretdb:"collation,unimplemented"`
+	Collation *types.Document `dumbo:"collation,unimplemented"`
 
-	Fields any `ferretdb:"fields,ignored"` // legacy MongoDB shell adds it, but it is never actually used
+	Fields any `dumbo:"fields,ignored"` // legacy MongoDB shell adds it, but it is never actually used
 
-	MaxTimeMS      int64           `ferretdb:"maxTimeMS,ignored"`
-	Hint           any             `ferretdb:"hint,ignored"`
-	ReadConcern    *types.Document `ferretdb:"readConcern,ignored"`
-	Comment        string          `ferretdb:"comment,ignored"`
-	LSID           any             `ferretdb:"lsid,ignored"`
-	ClusterTime    any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference *types.Document `ferretdb:"$readPreference,ignored"`
+	MaxTimeMS      int64           `dumbo:"maxTimeMS,ignored"`
+	Hint           any             `dumbo:"hint,ignored"`
+	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
+	Comment        string          `dumbo:"comment,ignored"`
+	LSID           any             `dumbo:"lsid,ignored"`
+	ClusterTime    any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference *types.Document `dumbo:"$readPreference,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
 // GetCountParams returns the parameters for the count command.

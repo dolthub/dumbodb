@@ -26,48 +26,48 @@ import (
 //
 //nolint:vet // for readability
 type FindParams struct {
-	DB           string          `ferretdb:"$db"`
-	Collection   string          `ferretdb:"find,collection"`
-	Filter       *types.Document `ferretdb:"filter,opt"`
-	Sort         *types.Document `ferretdb:"sort,opt"`
-	Projection   *types.Document `ferretdb:"projection,opt"`
-	Skip         int64           `ferretdb:"skip,opt,positiveNumber"`
-	Limit        int64           `ferretdb:"limit,opt,positiveNumber"`
-	BatchSize    int64           `ferretdb:"batchSize,opt,positiveNumber"`
-	SingleBatch  bool            `ferretdb:"singleBatch,opt"`
-	Comment      string          `ferretdb:"comment,opt"`
-	MaxTimeMS    int64           `ferretdb:"maxTimeMS,opt,wholePositiveNumber"`
-	ShowRecordId bool            `ferretdb:"showRecordId,opt"`
-	Tailable     bool            `ferretdb:"tailable,opt"`
-	AwaitData    bool            `ferretdb:"awaitData,opt"`
+	DB           string          `dumbo:"$db"`
+	Collection   string          `dumbo:"find,collection"`
+	Filter       *types.Document `dumbo:"filter,opt"`
+	Sort         *types.Document `dumbo:"sort,opt"`
+	Projection   *types.Document `dumbo:"projection,opt"`
+	Skip         int64           `dumbo:"skip,opt,positiveNumber"`
+	Limit        int64           `dumbo:"limit,opt,positiveNumber"`
+	BatchSize    int64           `dumbo:"batchSize,opt,positiveNumber"`
+	SingleBatch  bool            `dumbo:"singleBatch,opt"`
+	Comment      string          `dumbo:"comment,opt"`
+	MaxTimeMS    int64           `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
+	ShowRecordId bool            `dumbo:"showRecordId,opt"`
+	Tailable     bool            `dumbo:"tailable,opt"`
+	AwaitData    bool            `dumbo:"awaitData,opt"`
 
-	Collation *types.Document `ferretdb:"collation,opt"`
-	Let       *types.Document `ferretdb:"let,unimplemented"`
+	Collation *types.Document `dumbo:"collation,opt"`
+	Let       *types.Document `dumbo:"let,unimplemented"`
 
 	// ParsedCollation is derived from Collation after ExtractParams.
-	ParsedCollation *Collation `ferretdb:"-"`
+	ParsedCollation *Collation `dumbo:"-"`
 
-	AllowDiskUse     bool            `ferretdb:"allowDiskUse,ignored"`
-	ReadConcern      *types.Document `ferretdb:"readConcern,ignored"`
-	Max              *types.Document `ferretdb:"max,opt"`
-	Min              *types.Document `ferretdb:"min,opt"`
-	Hint             any             `ferretdb:"hint,opt"`
-	LSID             any             `ferretdb:"lsid,ignored"`
-	TxnNumber        int64           `ferretdb:"txnNumber,ignored"`
-	StartTransaction bool            `ferretdb:"startTransaction,ignored"`
-	Autocommit       bool            `ferretdb:"autocommit,ignored"`
-	ClusterTime      any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference   *types.Document `ferretdb:"$readPreference,ignored"`
+	AllowDiskUse     bool            `dumbo:"allowDiskUse,ignored"`
+	ReadConcern      *types.Document `dumbo:"readConcern,ignored"`
+	Max              *types.Document `dumbo:"max,opt"`
+	Min              *types.Document `dumbo:"min,opt"`
+	Hint             any             `dumbo:"hint,opt"`
+	LSID             any             `dumbo:"lsid,ignored"`
+	TxnNumber        int64           `dumbo:"txnNumber,ignored"`
+	StartTransaction bool            `dumbo:"startTransaction,ignored"`
+	Autocommit       bool            `dumbo:"autocommit,ignored"`
+	ClusterTime      any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference   *types.Document `dumbo:"$readPreference,ignored"`
 
-	ReturnKey           bool `ferretdb:"returnKey,opt"`
-	OplogReplay         bool `ferretdb:"oplogReplay,ignored"`
-	AllowPartialResults bool `ferretdb:"allowPartialResults,ignored"`
+	ReturnKey           bool `dumbo:"returnKey,opt"`
+	OplogReplay         bool `dumbo:"oplogReplay,ignored"`
+	AllowPartialResults bool `dumbo:"allowPartialResults,ignored"`
 
-	NoCursorTimeout bool `ferretdb:"noCursorTimeout,ignored"`
+	NoCursorTimeout bool `dumbo:"noCursorTimeout,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
 // GetFindParams returns `find` command parameters.

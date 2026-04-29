@@ -27,27 +27,27 @@ import (
 
 // ExplainParams represents the parameters for the explain command.
 type ExplainParams struct {
-	DB         string `ferretdb:"$db"`
-	Collection string `ferretdb:"collection"`
+	DB         string `dumbo:"$db"`
+	Collection string `dumbo:"collection"`
 
-	Explain *types.Document `ferretdb:"explain"`
+	Explain *types.Document `dumbo:"explain"`
 
-	Filter *types.Document `ferretdb:"filter,opt"`
-	Sort   *types.Document `ferretdb:"sort,opt"`
-	Skip   int64           `ferretdb:"skip,opt"`
-	Limit  int64           `ferretdb:"limit,opt"`
+	Filter *types.Document `dumbo:"filter,opt"`
+	Sort   *types.Document `dumbo:"sort,opt"`
+	Skip   int64           `dumbo:"skip,opt"`
+	Limit  int64           `dumbo:"limit,opt"`
 
-	StagesDocs []any           `ferretdb:"-"`
-	Aggregate  bool            `ferretdb:"-"`
-	Command    *types.Document `ferretdb:"-"`
+	StagesDocs []any           `dumbo:"-"`
+	Aggregate  bool            `dumbo:"-"`
+	Command    *types.Document `dumbo:"-"`
 
 	// Verbosity controls what explain returns:
 	// "queryPlanner" (default), "executionStats", or "allPlansExecution".
 	Verbosity string
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
 // GetExplainParams returns the parameters for the explain command.

@@ -731,7 +731,7 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 }
 
 // applyMetaProjection sets a $meta projection value in projected.
-// textScore returns 0.0 (FerretDB does not support text search).
+// textScore returns 0.0 (DumboDB does not support text search).
 // indexKey returns an empty document.
 func applyMetaProjection(key, metaType string, projected *types.Document) {
 	switch metaType {

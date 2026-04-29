@@ -30,7 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/debugbuild"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -106,10 +105,6 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		startupWarnings := []string{
 			fmt.Sprintf("Powered by DumboDB %s%s.", info.Version, b),
 			"Please star us on GitHub: https://github.com/dolthub/dumbodb.",
-		}
-
-		if debugbuild.Enabled {
-			startupWarnings = append(startupWarnings, "This is debug build. The performance will be affected.")
 		}
 
 		if h.L.Enabled(connCtx, slog.LevelDebug) {

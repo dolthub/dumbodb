@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
@@ -68,16 +66,6 @@ func (b *backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 // DropDatabase implements backends.Backend interface.
 func (b *backend) DropDatabase(ctx context.Context, params *backends.DropDatabaseParams) error {
 	return b.origB.DropDatabase(ctx, params)
-}
-
-// Describe implements prometheus.Collector.
-func (b *backend) Describe(ch chan<- *prometheus.Desc) {
-	b.origB.Describe(ch)
-}
-
-// Collect implements prometheus.Collector.
-func (b *backend) Collect(ch chan<- prometheus.Metric) {
-	b.origB.Collect(ch)
 }
 
 // DumboDBCommit implements backends.VersioningBackend if the wrapped backend supports it.

@@ -182,7 +182,7 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	if v == nil || types.Compare(v, int32(0)) == types.Equal {
 		// Use 16MB batchSize limit.
 		// Unlimited default batchSize is used for missing batchSize and zero values,
-		// set 250 assuming it is small enough not to crash FerretDB.
+		// set 250 assuming it is small enough not to crash DumboDB.
 		// TODO https://github.com/dolthub/dumbodb/issues/2824
 		v = int32(250)
 	}

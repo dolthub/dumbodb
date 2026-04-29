@@ -25,42 +25,42 @@ import (
 //
 //nolint:vet // for readability
 type DeleteParams struct {
-	DB         string `ferretdb:"$db"`
-	Collection string `ferretdb:"delete,collection"`
+	DB         string `dumbo:"$db"`
+	Collection string `dumbo:"delete,collection"`
 
-	Deletes []Delete `ferretdb:"deletes,opt"`
-	Comment string   `ferretdb:"comment,opt"`
-	Ordered bool     `ferretdb:"ordered,opt"`
+	Deletes []Delete `dumbo:"deletes,opt"`
+	Comment string   `dumbo:"comment,opt"`
+	Ordered bool     `dumbo:"ordered,opt"`
 
-	Let *types.Document `ferretdb:"let,unimplemented"`
+	Let *types.Document `dumbo:"let,unimplemented"`
 
-	MaxTimeMS      int64           `ferretdb:"maxTimeMS,ignored"`
-	WriteConcern   *types.Document `ferretdb:"writeConcern,opt"`
-	LSID           any             `ferretdb:"lsid,ignored"`
-	TxnNumber      int64           `ferretdb:"txnNumber,ignored"`
-	ClusterTime    any             `ferretdb:"$clusterTime,ignored"`
-	ReadPreference *types.Document `ferretdb:"$readPreference,ignored"`
+	MaxTimeMS      int64           `dumbo:"maxTimeMS,ignored"`
+	WriteConcern   *types.Document `dumbo:"writeConcern,opt"`
+	LSID           any             `dumbo:"lsid,ignored"`
+	TxnNumber      int64           `dumbo:"txnNumber,ignored"`
+	ClusterTime    any             `dumbo:"$clusterTime,ignored"`
+	ReadPreference *types.Document `dumbo:"$readPreference,ignored"`
 
-	ApiVersion           string `ferretdb:"apiVersion,ignored"`
-	ApiStrict            bool   `ferretdb:"apiStrict,ignored"`
-	ApiDeprecationErrors bool   `ferretdb:"apiDeprecationErrors,ignored"`
+	ApiVersion           string `dumbo:"apiVersion,ignored"`
+	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
+	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 
 	// SkipDurableSync is derived from WriteConcern in GetDeleteParams and
 	// propagated into backend params so the storage layer can skip the
 	// synchronous NBS journal fsync. Not populated from the wire.
-	SkipDurableSync bool `ferretdb:"-"`
+	SkipDurableSync bool `dumbo:"-"`
 }
 
 // Delete represents single delete operation parameters.
 //
 //nolint:vet // for readability
 type Delete struct {
-	Filter  *types.Document `ferretdb:"q"`
-	Limited bool            `ferretdb:"limit,zeroOrOneAsDeleteLimit"`
+	Filter  *types.Document `dumbo:"q"`
+	Limited bool            `dumbo:"limit,zeroOrOneAsDeleteLimit"`
 
-	Collation *types.Document `ferretdb:"collation,unimplemented"`
+	Collation *types.Document `dumbo:"collation,unimplemented"`
 
-	Hint string `ferretdb:"hint,ignored"`
+	Hint string `dumbo:"hint,ignored"`
 }
 
 // GetDeleteParams returns parameters for delete operation.

@@ -59,7 +59,7 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		"gitVersion", version.Get().Commit,
 
 		// our extensions
-		"ferretdb", version.Get().Version,
+		"dumbodb", version.Get().Version,
 	))
 
 	cmd := params.Command
