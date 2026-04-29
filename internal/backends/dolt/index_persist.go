@@ -97,10 +97,10 @@ func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc,
 // entryToIndexInfo decodes a stored entry back into an IndexInfo and the
 // 20-byte hash of the secondary-index prolly.Map root.
 //
-// MatchesPartialFilter is intentionally left nil — the predicate closure is
-// owned by the handler layer (which the backend cannot import without a
-// circular dependency). Callers that rely on partial-index uniqueness must
-// re-attach the closure after restart.
+// When the entry has a persisted partial filter expression, MatchesPartialFilter
+// is rebuilt to call backends.MatchPartialFilter against the decoded BSON. The
+// handler layer registers the underlying predicate (FilterDocument) at init time,
+// which keeps the backend free of a circular dependency on handler/common.
 func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 	keys := make([]backends.IndexKeyPair, len(d.Keys))
 	for i, k := range d.Keys {
@@ -133,13 +133,20 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 	}
 	var root hash.Hash
 	copy(root[:], rootBytes)
-	return backends.IndexInfo{
+	info := backends.IndexInfo{
 		Name:                    d.Name,
 		Key:                     keys,
 		Unique:                  d.Unique,
 		Sparse:                  d.Sparse,
 		PartialFilterExpression: pf,
-	}, root, nil
+	}
+	if pf != nil {
+		captured := pf
+		info.MatchesPartialFilter = func(doc *types.Document) (bool, error) {
+			return backends.MatchPartialFilter(doc, captured)
+		}
+	}
+	return info, root, nil
 }
 
 // writeIndexEntryChunk serialises an index entry as JSON, stores it in the
