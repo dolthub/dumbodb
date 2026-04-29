@@ -7,7 +7,9 @@
 DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
 
 ## What's in Version 0.1?
-Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's a great way to explore the core concepts and capabilities of a version-controlled document database. We are actively developing new features and improvements, so please join our discord server and give us feedback. See the [roadmap below](#roadmap)!
+Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's great for testing your existing applications and seeing what they are changing over time. In a test environment, you can use DumboDB just like you would use MongoDB, but with the added ability to reset to specific snapshots in time and see the changes made by your application code.
+
+We are actively developing new features, so please [join our discord server](https://discord.gg/gqr7K4VNKe) and give us feedback. See the [roadmap below](#roadmap)!
 
 ### MongoDB Compatibility
 DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity with core MongoDB operations. It functions as a drop-in replacement for [standard drivers](https://www.mongodb.com/docs/drivers/) and [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) in single-node environments.
