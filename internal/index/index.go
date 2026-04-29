@@ -100,18 +100,80 @@ func DeleteEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any,
 	return mut.Delete(ctx, keyTuple)
 }
 
-// EqualityLookup scans the secondary index for entries where the indexed field
-// has the given value. It returns the primary key bytes (encodedID) for each match.
-//
-// For each matching index entry, the primary key bytes can be used to look up the
-// document in the primary prolly.Map.
+// EqualityLookup returns the primary key bytes for each index entry where the
+// indexed field equals fieldValue. Implemented as a bounded range scan over
+// the contiguous block of entries [KeyString(v)+0x04, KeyString(v)+0x05).
 func EqualityLookup(ctx context.Context, m prolly.Map, fieldValue any) ([][]byte, error) {
-	// Build the prefix: KeyString(fieldValue) + discriminator.
-	prefix := append(EncodeValue(fieldValue), discriminator)
+	encoded := EncodeValue(fieldValue)
+	startKey := append(append([]byte(nil), encoded...), discriminator)
+	stopKey := append(append([]byte(nil), encoded...), discriminator+1)
+	return RangeLookup(ctx, m, startKey, stopKey)
+}
 
-	iter, err := m.IterAll(ctx)
+// LowerBoundInclusive returns the smallest composite-index key that has
+// fieldValue as its leading field. Suitable as the inclusive start of a
+// $gte / equality scan.
+func LowerBoundInclusive(fieldValue any) []byte {
+	out := append(EncodeValue(fieldValue), discriminator)
+	return out
+}
+
+// LowerBoundExclusive returns the smallest composite-index key that sorts
+// strictly after every entry whose leading field equals fieldValue. Suitable
+// as the inclusive start of a $gt scan.
+func LowerBoundExclusive(fieldValue any) []byte {
+	out := append(EncodeValue(fieldValue), discriminator+1)
+	return out
+}
+
+// UpperBoundExclusive returns the smallest composite-index key whose leading
+// field equals fieldValue. Suitable as the exclusive stop of a $lt scan.
+func UpperBoundExclusive(fieldValue any) []byte {
+	out := append(EncodeValue(fieldValue), discriminator)
+	return out
+}
+
+// UpperBoundInclusive returns the smallest composite-index key that sorts
+// strictly after every entry whose leading field equals fieldValue. Suitable
+// as the exclusive stop of a $lte scan.
+func UpperBoundInclusive(fieldValue any) []byte {
+	out := append(EncodeValue(fieldValue), discriminator+1)
+	return out
+}
+
+// boundTuple wraps a raw composite-key byte slice in the index's val.Tuple
+// shape so it can be passed to prolly.Map.IterKeyRange. A nil/empty slice
+// produces a nil tuple, which IterKeyRange interprets as an open bound.
+func boundTuple(key []byte) (val.Tuple, error) {
+	if len(key) == 0 {
+		return nil, nil
+	}
+	tb := val.NewTupleBuilder(idxKeyDesc, nil)
+	tb.PutByteString(0, key)
+	t, err := tb.Build(idxBufPool)
 	if err != nil {
-		return nil, fmt.Errorf("index: iterating secondary index: %w", err)
+		return nil, fmt.Errorf("index: building bound tuple: %w", err)
+	}
+	return t, nil
+}
+
+// RangeLookup returns the primary key bytes for each index entry whose
+// composite key falls in [startKey, stopKey). A nil or empty bound is open
+// on that side. Iteration uses prolly.Map.IterKeyRange so only the relevant
+// chunks of the secondary index are touched.
+func RangeLookup(ctx context.Context, m prolly.Map, startKey, stopKey []byte) ([][]byte, error) {
+	startTup, err := boundTuple(startKey)
+	if err != nil {
+		return nil, err
+	}
+	stopTup, err := boundTuple(stopKey)
+	if err != nil {
+		return nil, err
+	}
+
+	iter, err := m.IterKeyRange(ctx, startTup, stopTup)
+	if err != nil {
+		return nil, fmt.Errorf("index: iterating secondary index range: %w", err)
 	}
 
 	var results [][]byte
@@ -132,20 +194,22 @@ func EqualityLookup(ctx context.Context, m prolly.Map, fieldValue any) ([][]byte
 			continue
 		}
 
-		// Check if the key starts with our prefix.
-		if !bytes.HasPrefix(compositeKey, prefix) {
+		// The primary ID byte width is fixed at 20 (see hashID in the dolt
+		// backend), so the primary ID is unambiguously the last 20 bytes of
+		// the composite key. We can't scan from the left for the discriminator
+		// because 0x04 may legitimately appear inside KeyString-encoded
+		// values (e.g. as a single-byte integer payload).
+		const primaryIDLen = 20
+		if len(compositeKey) < primaryIDLen+1 {
+			continue
+		}
+		idStart := len(compositeKey) - primaryIDLen
+		if compositeKey[idStart-1] != discriminator {
 			continue
 		}
 
-		// Extract the primary ID bytes: everything after the prefix.
-		primaryIDBytes := compositeKey[len(prefix):]
-		if len(primaryIDBytes) == 0 {
-			continue
-		}
-
-		// Copy since the underlying buffer may be reused.
-		idCopy := make([]byte, len(primaryIDBytes))
-		copy(idCopy, primaryIDBytes)
+		idCopy := make([]byte, primaryIDLen)
+		copy(idCopy, compositeKey[idStart:])
 		results = append(results, idCopy)
 	}
 
