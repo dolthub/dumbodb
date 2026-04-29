@@ -1,11 +1,185 @@
-# DumboDB
+![Logo](./img/dolt-dumbo-logo.png)
 
-MongoDB-compatible document store backed by [Dolt](https://github.com/dolthub/dolt) — with version control built in.
+## What is DumboDB?
 
-Connect from any MongoDB client. Commit changes when ready, then query your history:
+[MongoDB](https://github.com/mongodb/mongo) and [Git](https://git-scm.com/) had a baby, and it's named **Dumbo**. It's a document database with built-in version control, so you can track changes, branch, and merge just like you would with code — but for your data.
+
+DubmoDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
+
+## What's in Version 0.1?
+Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's a great way to explore the core concepts and capabilities of a version-controlled document database. We are actively developing new features and improvements, so please join our discord server and give us feedback. See the [roadmap below](#roadmap)!
+
+### MongoDB Compatibility
+DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity with core MongoDB operations. It functions as a drop-in replacement for [standard drivers](https://www.mongodb.com/docs/drivers/) and [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) in single-node environments.
+
+#### Parity
+- BSON Engine: Full support for BSON type fidelity, including nested documents, arrays, and ObjectIDs.
+- Query & Update: Supports complex MQL operators (e.g., $elemMatch, $all, $rename) and atomic array modifiers ($push, $pull, $bit).
+- Aggregation Framework: Implementation of multi-stage pipelines including $match, $group, $unwind, and $lookup.
+- Indexing: Support for secondary indexes on top-level and nested fields to ensure query performance.
+
+#### Limitations & Scope
+- No Authentication: DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. This will be addressed in future releases, but for now, please do not expose DumboDB instances to untrusted networks.
+- Single Node: Replication (Replica Sets) and Sharding are out of scope.
+- Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported.
+
+### Version Control Features
+DumboDB's version control features are exposed via a set of custom commands (e.g. `dumboCommit`, `dumboMerge`, etc.) that you can run from any MongoDB client. These commands allow you to commit changes, create branches, merge branches, view commit history, and more.
+
+| Command | Description |
+|---------|-------------|
+| [`dumboCommit`](docs/COMMANDS.md#doltcommit) | Commit the current working set with a message and author |
+| [`dumboBranch`](docs/COMMANDS.md#doltbranch) | Create or delete a branch |
+| [`dumboMerge`](docs/COMMANDS.md#doltmerge) | Merge a source branch into the current branch |
+| [`dumboCherryPick`](docs/COMMANDS.md#doltcherrypick) | Apply one commit's diff onto the current branch |
+| [`dumboRebase`](docs/COMMANDS.md#doltrebase) | Reapply branch commits onto another branch tip, rewriting history |
+| [`dumboLog`](docs/COMMANDS.md#doltlog) | Return commit history for the current branch |
+| [`dumboStatus`](docs/COMMANDS.md#doltstatus) | Show summary of uncommitted changes on the current branch |
+| [`dumboDiff`](docs/COMMANDS.md#doltdiff) | Document-level diff between two states |
+| [`dumboReset`](docs/COMMANDS.md#doltreset) | Move branch HEAD to a target commit (soft or hard) |
+| [`dumboRevert`](docs/COMMANDS.md#doltrevert) | Revert one or more commits, creating a new inverse commit |
+| [`dumboCurrentBranch`](docs/COMMANDS.md#doltcurrentbranch) | Return the current branch name for this connection |
+| [`dumboConflicts`](docs/COMMANDS.md#doltconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
+| [`dumboResolveConflict`](docs/COMMANDS.md#doltresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
+
+All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
+
+Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md)
+
+## Build, Run, Connect
+
+```bash
+git clone https://github.com/dolthub/dumbodb
+cd dumbodb
+make build
+# Binary: .runtime/bin/dumbodb
+
+mkdir -p /tmp/dumbodb-data
+.runtime/bin/dumbodb --data-dir /tmp/dumbodb-data
+# Listens on 127.0.0.1:27017
+```
+
+Connect with any [MongoDB driver](https://www.mongodb.com/docs/drivers/), or use the
+`mongosh` [shell](https://www.mongodb.com/try/download/shell):
+
+```bash
+mongosh mongodb://localhost:27017
+```
+
+This will connect you to the `test` database by default. You can specify a different database in the connection string if you like (e.g. `mongodb://localhost:27017/mydb`)
+
+## Example Usage
+All examples below are using the `mongosh` shell, which is effectively javascript. There are equivalent operations for any MongoDB driver in your favorite language.
+
+### Specifying a Branch
+By default, all connections target the `main` branch. This is currently hard coded. Using the `getSiblingDB()` method, you can connect to a different branch by encoding the branch name in the database name. Mongo is fairly strict in what characters are allowed in database names, so we use a special encoding: `<db>__d_<branch>`. `__d_` is the delimiter between the database name and the branch name. For example, to connect to a branch named `mybranch`, you would connect to the database `mydb__d_mybranch`:
 
 ```js
-db.runCommand({ doltLog: 1, limit: 3 })
+var db = db.getSiblingDB("mydb__d_mybranch")
+```
+
+If you specify a revision rather than a branch name, then the database returned with be read-only and reflect the state of the database at that revision. For example, if you'd like to perform reads against the parent commit of the `main` branch, you can connect to `mydb__d_main~1`:
+
+```js
+var db = db.getSiblingDB("mydb__d_main~1")
+```
+
+Alternatively you can use a commit hash to create a read-only connection to that commit:
+
+```js
+var db = db.getSiblingDB("mydb__d_v9ra3pmi0f6kotj5k3fganpmb3oi9t1k")
+```
+
+### Committing Changes
+Say you want to stick to documents into the "items" collection, then commit them:
+
+```js
+var db = db.getSiblingDB("mydb__d_main")
+db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
+db.items.insertOne({ _id: 2, label: "beta",  score: 20 })
+db.runCommand({ dumboCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
+```
+
+The last command creates a new commit with the two inserted documents, and outputs the commit details:
+```json
+{
+  commitId: 'egqis00l0vqg5kd7gbje8k1k6g7dl7ja',
+  branch: 'main',
+  message: 'baseline',
+  author: 'alice <alice@dumbodb>',
+  timestamp: ISODate('2026-04-28T23:12:23.621Z'),
+  ok: 1
+}
+```
+_Note that there is no need to `add` items like you would with `git add`. DumboDB tracks all changes in the working set, and they will all be included in the next commit unless you explicitly discard them._
+
+### Seeing Uncommitted Changes
+Now let's modify those documents, and add a new one, but don't commit just yet:
+
+```js
+db.items.insertOne({ _id: 3, label: "gamma", score: 30 })
+db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
+db.items.deleteOne({ _id: 2 })
+```
+
+At this point, if we run `doltStatus`, we can see a summary of the uncommitted changes:
+
+```js
+db.runCommand({dumboStatus: 1})
+```
+Will output the summary of your changes. Specifically, it shows that in the 'items' collection, you have 1 added document, 1 modified document, and 1 deleted document:
+```json
+{
+  branch: 'main',
+  collections: [
+    {
+      name: 'items',
+      status: 'modified',
+      added: 1,
+      modified: 1,
+      deleted: 1
+    }
+  ],
+  ok: 1
+}
+```
+If you need more detail, you can run `dumboDiff`. When called with no additional arguments, it will print all of the changes in your session. Specifically everything which is not committed. These changes are the changes which will be committed when you run `doltCommit`.
+
+```js
+db.runCommand({ dumboDiff: 1 })
+```
+Will produce:
+```json
+{
+  collections: [
+    {
+      name: 'items',
+      status: 'modified',
+      added: [ { _id: 3, label: 'gamma', score: 30 } ],
+      removed: [ { _id: 2, label: 'beta', score: 20 } ],
+      modified: [
+        {
+          _id: 1,
+          diff: [ { type: 'modified', path: '$.score', from: 10, to: 99 } ]
+        }
+      ]
+    }
+  ],
+  ok: 1
+}
+```
+
+### Seeing What Changed
+You can specify the `from` and `to` arguments to `dumboDiff` to see the changes between any two commits. For example, if you want to see the changes between the current state of your session and the last commit, you can run:
+
+```js
+db.runCommand({ dumboDiff: 1, from: "HEAD~1", to: "HEAD" })
+```
+
+The `dumboLog` command will show you the commit history for the current branch, starting with the most recent commit.
+
+```js
+db.runCommand({ doltLog: 1, limit: 2 })
 {
   commits: [
     {
@@ -23,111 +197,36 @@ db.runCommand({ doltLog: 1, limit: 3 })
       timestamp: ISODate('2026-04-14T09:00:00.000Z'),
       author:   'bob <bob@acme.com>'
     },
-    {
-      commitId: '5vi6e5t3riqpgh6fq0j1pf0r0imuqhsn',
-      message:  'Initialize database',
-      timestamp: ISODate('2026-04-14T08:55:12.000Z'),
-      author:   'DumboDB'
-    }
   ],
   ok: 1
 }
 ```
 
-Or diff any two commits to see exactly what changed:
+### Branching and Merging
+You can create a new branch with `dumboBranch`. In this example, you can see that a new variable `feature` is created to represent the new branch, and you can run commands against it directly:
 
 ```js
-db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })
+// Create the branch
+db.runCommand({ doltBranch: 1, branch: "feature" })
+// "checkout"
+var feature = db.getSiblingDB("mydb__d_feature")
+
+feature.items.insertOne({ _id: 4, label: "delta", score: 40 })
+feature.runCommand({ doltCommit: 1, message: "add delta on feature branch", author: "alice <alice@acme.com>" })
+```
+
+The `dumboMerge` command will merge the changes from the `feature` branch back into whatever branch you are on. `db` is still connected to `main`, so when we run the merge command, it will merge `feature` into `main`, which in this case is a fast-forward merge, since `main` has not diverged from `feature`. The output of the merge command will show you the new commit that was created on `main` as a result of the merge.
+
+```js
+db.runCommand({ doltMerge: 1, merge_in: "feature"})
 {
-  collections: [
-    {
-      name: 'orders',
-      added:    [],
-      removed:  [],
-      modified: [
-        {
-          _id: ObjectId('507f1f77bcf86cd799439011'),
-          diff: [
-            { type: 'modified', path: 'amount', from: 100, to: 150 }
-          ]
-        }
-      ]
-    }
-  ],
+  commitId: 'gr2iofosqge0se1dcu2b1a1u42l6udd3',
+  message: 'fast-forward',
   ok: 1
 }
 ```
+There is also legitimate merges which join two commit histories, complete with conflict detection and resolution. Look at the [Commands Reference](docs/COMMANDS.md) for more details and examples.
 
-## dolt* commands
-
-Connect via an encoded database name `<db>__d_<branch>` to target a specific branch.
-
-| Command | Description |
-|---------|-------------|
-| [`doltCommit`](docs/COMMANDS.md#doltcommit) | Commit the current working set with a message and author |
-| [`doltBranch`](docs/COMMANDS.md#doltbranch) | Create or delete a branch |
-| [`doltMerge`](docs/COMMANDS.md#doltmerge) | Merge a source branch into the current branch; supports abort/continue |
-| [`doltCherryPick`](docs/COMMANDS.md#doltcherrypick) | Apply one commit's diff onto the current branch; supports abort/continue |
-| [`doltRebase`](docs/COMMANDS.md#doltrebase) | Reapply branch commits onto another branch tip, rewriting history |
-| [`doltLog`](docs/COMMANDS.md#doltlog) | Return commit history for the current branch |
-| [`doltStatus`](docs/COMMANDS.md#doltstatus) | Show uncommitted changes on the current branch |
-| [`doltDiff`](docs/COMMANDS.md#doltdiff) | Document-level diff between two states |
-| [`doltReset`](docs/COMMANDS.md#doltreset) | Move branch HEAD to a target commit (soft or hard) |
-| [`doltRevert`](docs/COMMANDS.md#doltrevert) | Revert one or more commits, creating a new inverse commit |
-| [`doltCurrentBranch`](docs/COMMANDS.md#doltcurrentbranch) | Return the current branch name for this connection |
-| [`doltConflicts`](docs/COMMANDS.md#doltconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
-| [`doltResolveConflict`](docs/COMMANDS.md#doltresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
-
-All commands have a `dumbo*` alias (e.g. `dumboCommit`, `dumboMerge`) for environments that filter unknown MongoDB commands.
-
-Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md)
-
-## Build & Run
-
-```bash
-git clone --recurse-submodules https://github.com/dolthub/dumbodb
-cd dumbodb
-make build
-# Binary: .runtime/bin/dumbodb
-
-mkdir -p /tmp/dumbodb-data
-.runtime/bin/dumbodb --data-dir /tmp/dumbodb-data
-# Listens on 127.0.0.1:27017
-```
-
-Or build manually:
-
-```bash
-go build -o /tmp/dumbodb ./cmd/dumbodb/
-```
-
-## Testing
-
-### DumboDB-specific tests
-
-```bash
-go test -v ./tests/
-
-# Single test:
-go test -v -run TestFind_CursorCleanupOnFilterError ./tests/
-
-# Bats integration tests:
-bats tests/bats/
-```
-
-The binary is cached at `.runtime/bin/dumbodb` after the first build. Pre-build with `make build`.
-
-### MongoDB parity tests (dolthub/dumbodb-parity-testing)
-
-MongoDB compatibility tests live in a separate repo: **dolthub/dumbodb-parity-testing**.
-
-That repo uses a dual-client harness (`PairTest`) that runs each operation against both a real MongoDB 8 instance and DumboDB, then compares results:
-
-| Label | Meaning |
-|-------|---------|
-| `DumboDBFull` | Both MongoDB and DumboDB exercised; divergences break CI |
-| `DumboDBXFail` | Both exercised; DumboDB divergence recorded but not fatal |
-| `DumboDBMongoOnly` | MongoDB only; DumboDB skipped (auth, sharding, GridFS, etc.) |
 
 ## Acknowledgements
 
@@ -136,16 +235,11 @@ DumboDB is built on two open-source projects:
 - **[FerretDB](https://github.com/FerretDB/FerretDB)** — The wire protocol, connection handling, type system, and handler packages were adapted from FerretDB v1.24.2 (Apache 2.0). See [ACKNOWLEDGEMENTS](ACKNOWLEDGEMENTS) for details.
 - **[Dolt](https://github.com/dolthub/dolt)** — The version-controlled storage engine powering every commit, branch, and merge.
 
-### Repo layout
+## Roadmap
+DumboDB is in active development, and we have a lot of exciting features planned. Major milestones we are planning:
 
-```
-cmd/dumbodb/          Server entry point
-internal/             DumboDB implementation
-tests/                DumboDB-specific regression tests
-  bats/               Bats shell integration tests
-docs/
-  design/             Design documents and architecture notes
-  verify/             Manual + automated verification guides
-.github/workflows/    CI: go test, bats
-```
-
+- **v0.2**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
+- **v0.3**: Add support for Replication (as a secondary backup to your existing MongoDB instance)
+- **v0.5**: Add Authentication and Authorization support.
+- **v0.8**: Visualization and operations via a custom Workbench UI.
+- **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
