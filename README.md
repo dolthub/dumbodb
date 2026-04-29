@@ -4,7 +4,7 @@
 
 [MongoDB](https://github.com/mongodb/mongo) and [Git](https://git-scm.com/) had a baby, and it's named **Dumbo**. It's a document database with built-in version control, so you can track changes, branch, and merge just like you would with code — but for your data.
 
-DubmoDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
+DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
 
 ## What's in Version 0.1?
 Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's a great way to explore the core concepts and capabilities of a version-controlled document database. We are actively developing new features and improvements, so please join our discord server and give us feedback. See the [roadmap below](#roadmap)!
@@ -91,7 +91,7 @@ var db = db.getSiblingDB("mydb__d_v9ra3pmi0f6kotj5k3fganpmb3oi9t1k")
 ```
 
 ### Committing Changes
-Say you want to stick to documents into the "items" collection, then commit them:
+Say you want to stick two documents into the "items" collection, then commit them:
 
 ```js
 var db = db.getSiblingDB("mydb__d_main")
@@ -179,7 +179,7 @@ db.runCommand({ dumboDiff: 1, from: "HEAD~1", to: "HEAD" })
 The `dumboLog` command will show you the commit history for the current branch, starting with the most recent commit.
 
 ```js
-db.runCommand({ doltLog: 1, limit: 2 })
+db.runCommand({ dumboLog: 1, limit: 2 })
 {
   commits: [
     {

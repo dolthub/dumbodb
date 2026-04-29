@@ -21,31 +21,31 @@ Use `db.getSiblingDB("mydb__d_feature")` in mongosh to connect to a branch.
 
 ## Available Commands
 
-Every `dolt*` command has an identical `dumbo*` alias for environments that filter unrecognized MongoDB commands:
+Every `dumbo*` command has an identical `dolt*` alias:
 
 | Primary | Alias |
 |---------|-------|
-| `doltCommit` | `dumboCommit` |
-| `doltBranch` | `dumboBranch` |
-| `doltMerge` | `dumboMerge` |
-| `doltCherryPick` | `dumboCherryPick` |
-| `doltRebase` | `dumboRebase` |
-| `doltLog` | `dumboLog` |
-| `doltStatus` | `dumboStatus` |
-| `doltDiff` | `dumboDiff` |
-| `doltReset` | `dumboReset` |
-| `doltRevert` | `dumboRevert` |
-| `doltCurrentBranch` | `dumboCurrentBranch` |
-| `doltConflicts` | `dumboConflicts` |
-| `doltResolveConflict` | `dumboResolveConflict` |
+| `dumboCommit` | `doltCommit` |
+| `dumboBranch` | `doltBranch` |
+| `dumboMerge` | `doltMerge` |
+| `dumboCherryPick` | `doltCherryPick` |
+| `dumboRebase` | `doltRebase` |
+| `dumboLog` | `doltLog` |
+| `dumboStatus` | `doltStatus` |
+| `dumboDiff` | `doltDiff` |
+| `dumboReset` | `doltReset` |
+| `dumboRevert` | `doltRevert` |
+| `dumboCurrentBranch` | `doltCurrentBranch` |
+| `dumboConflicts` | `doltConflicts` |
+| `dumboResolveConflict` | `doltResolveConflict` |
 
 ---
 
-## doltCommit
+## dumboCommit
 
 Commits the current working set on the branch encoded in the database name.
 
-**Alias:** `dumboCommit`
+**Alias:** `doltCommit`
 
 ### Parameters
 
@@ -99,11 +99,11 @@ db.runCommand({ doltCommit: 1, message: "add order #1", author: "alice <alice@ac
 
 ---
 
-## doltBranch
+## dumboBranch
 
 Creates or deletes a branch from the rootish encoded in the database name.
 
-**Alias:** `dumboBranch`
+**Alias:** `doltBranch`
 
 ### Parameters
 
@@ -158,11 +158,11 @@ db.getSiblingDB("orders__d_main").runCommand({ doltBranch: 1, branch: "abandoned
 
 ---
 
-## doltMerge
+## dumboMerge
 
 Merges a source branch into the branch encoded in the database name.
 
-**Alias:** `dumboMerge`
+**Alias:** `doltMerge`
 
 ### Parameters (merge initiation)
 
@@ -243,11 +243,11 @@ main.runCommand({ doltMerge: 1, abort: 1 })
 
 ---
 
-## doltCherryPick
+## dumboCherryPick
 
 Applies the diff introduced by a named commit onto the current branch, creating a new commit.
 
-**Alias:** `dumboCherryPick`
+**Alias:** `doltCherryPick`
 
 ### Parameters (cherry-pick initiation)
 
@@ -312,11 +312,11 @@ main.runCommand({ doltCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" 
 
 ---
 
-## doltRebase
+## dumboRebase
 
 Reapplies all commits on the current branch not reachable from `onto` onto the tip of `onto`, rewriting branch history.
 
-**Alias:** `dumboRebase`
+**Alias:** `doltRebase`
 
 ### Parameters (rebase initiation)
 
@@ -384,14 +384,14 @@ db.getSiblingDB("orders__d_feature").runCommand({ doltRebase: 1, abort: 1 })
 
 ---
 
-## doltLog
+## dumboLog
 
 Returns commit history for the branch encoded in the database name, walking the
 full commit graph in reverse topological order. Both parents of merge commits
 are visited; ties between commits at the same height are broken by newer
 timestamp first.
 
-**Alias:** `dumboLog`
+**Alias:** `doltLog`
 
 ### Parameters
 
@@ -458,11 +458,11 @@ None specific to this command; missing backend support returns `OperationFailed`
 
 ---
 
-## doltStatus
+## dumboStatus
 
 Returns uncommitted changes on the branch encoded in the database name.
 
-**Alias:** `dumboStatus`
+**Alias:** `doltStatus`
 
 ### Parameters
 
@@ -530,11 +530,11 @@ db.runCommand({ doltStatus: 1 })
 
 ---
 
-## doltDiff
+## dumboDiff
 
 Returns a document-level diff between two states for the branch encoded in the database name.
 
-**Alias:** `dumboDiff`
+**Alias:** `doltDiff`
 
 ### Parameters
 
@@ -624,11 +624,11 @@ db.runCommand({ doltDiff: 1, from: hashBase, to: "HEAD" })
 
 ---
 
-## doltReset
+## dumboReset
 
 Moves the branch HEAD to the specified commit. Supports soft (default) and hard modes.
 
-**Alias:** `dumboReset`
+**Alias:** `doltReset`
 
 ### Parameters
 
@@ -681,11 +681,11 @@ db.runCommand({ doltReset: 1, hard: true })
 
 ---
 
-## doltRevert
+## dumboRevert
 
 Applies the inverse diff of a named commit onto the current branch, creating a new commit that undoes those changes.
 
-**Alias:** `dumboRevert`
+**Alias:** `doltRevert`
 
 ### Parameters (revert initiation)
 
@@ -760,11 +760,11 @@ main.runCommand({ doltRevert: 1, commit: badCommitHash })
 
 ---
 
-## doltCurrentBranch
+## dumboCurrentBranch
 
 Returns the branch name for the connection encoded in the database name.
 
-**Alias:** `dumboCurrentBranch`
+**Alias:** `doltCurrentBranch`
 
 ### Parameters
 
@@ -800,11 +800,11 @@ db.getSiblingDB("orders__d_feature").runCommand({ doltCurrentBranch: 1 })
 
 ---
 
-## doltConflicts
+## dumboConflicts
 
 Returns conflict information for an in-progress merge, cherry-pick, or rebase on the branch encoded in the database name.
 
-**Alias:** `dumboConflicts`
+**Alias:** `doltConflicts`
 
 ### Parameters
 
@@ -865,11 +865,11 @@ main.runCommand({ doltConflicts: 1, collection: "orders" })
 
 ---
 
-## doltResolveConflict
+## dumboResolveConflict
 
 Resolves a single document conflict in the current in-progress merge, cherry-pick, or rebase.
 
-**Alias:** `dumboResolveConflict`
+**Alias:** `doltResolveConflict`
 
 ### Parameters
 

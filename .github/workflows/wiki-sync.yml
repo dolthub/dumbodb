@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'README.md'
+      - 'img/**'
   workflow_dispatch:
 
 jobs:
@@ -27,8 +28,13 @@ jobs:
           # Start clean (preserve .git)
           find wiki -mindepth 1 -not -path 'wiki/.git*' -delete
 
+          # Copy images
+          cp -r img/ wiki/img/ 2>/dev/null || true
+
           # Home page: README with links rewritten for wiki context
-          sed 's|docs/COMMANDS.md|Commands|g' README.md > wiki/Home.md
+          sed -e 's|docs/COMMANDS.md|Commands|g' \
+              -e 's|\./img/|img/|g' \
+              README.md > wiki/Home.md
 
           # Command reference
           cp docs/COMMANDS.md wiki/Commands.md
@@ -39,20 +45,20 @@ jobs:
           - [[Home]]
           - [[Commands]]
 
-          ### dolt* Commands
-          - [[doltCommit|Commands#doltcommit]]
-          - [[doltBranch|Commands#doltbranch]]
-          - [[doltMerge|Commands#doltmerge]]
-          - [[doltLog|Commands#doltlog]]
-          - [[doltDiff|Commands#doltdiff]]
-          - [[doltStatus|Commands#doltstatus]]
-          - [[doltReset|Commands#doltreset]]
-          - [[doltRevert|Commands#doltrevert]]
-          - [[doltCherryPick|Commands#doltcherrypick]]
-          - [[doltRebase|Commands#doltrebase]]
-          - [[doltCurrentBranch|Commands#doltcurrentbranch]]
-          - [[doltConflicts|Commands#doltconflicts]]
-          - [[doltResolveConflict|Commands#doltresolveconflict]]
+          ### Commands
+          - [[dumboCommit|Commands#dumbocommit]]
+          - [[dumboBranch|Commands#dumbobranch]]
+          - [[dumboMerge|Commands#dumbomerge]]
+          - [[dumboLog|Commands#dumbolog]]
+          - [[dumboDiff|Commands#dumbodiff]]
+          - [[dumboStatus|Commands#dumbostatus]]
+          - [[dumboReset|Commands#dumboreset]]
+          - [[dumboRevert|Commands#dumborevert]]
+          - [[dumboCherryPick|Commands#dumbocherrypick]]
+          - [[dumboRebase|Commands#dumborebase]]
+          - [[dumboCurrentBranch|Commands#dumbocurrentbranch]]
+          - [[dumboConflicts|Commands#dumboconflicts]]
+          - [[dumboResolveConflict|Commands#dumboresolveconflict]]
           SIDEBAR
 
       - name: Commit and push to wiki
