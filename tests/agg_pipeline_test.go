@@ -80,6 +80,64 @@ func TestAgg_Lookup_Basic(t *testing.T) {
 	assert.Len(t, noMatch, 0, "order with no match must have empty item_details array")
 }
 
+// TestAgg_Lookup_ForeignArray verifies that $lookup matches when the
+// foreignField holds an array, treating each array element as a candidate
+// match for a scalar localField (MongoDB equality semantics). (DumboDBFull)
+func TestAgg_Lookup_ForeignArray(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("testdb_lookup_farr_%d", rand.Int64())
+	db := env.client.Database(dbName)
+	t.Cleanup(func() { db.Drop(context.Background()) }) //nolint:errcheck
+
+	students := db.Collection("students")
+	classes := db.Collection("classes")
+
+	_, err := students.InsertMany(ctx, []interface{}{
+		bson.D{{Key: "name", Value: "Alice"}, {Key: "id", Value: int32(1)}},
+		bson.D{{Key: "name", Value: "Bob"}, {Key: "id", Value: int32(2)}},
+		bson.D{{Key: "name", Value: "Carol"}, {Key: "id", Value: int32(3)}},
+	})
+	require.NoError(t, err)
+
+	_, err = classes.InsertMany(ctx, []interface{}{
+		bson.D{{Key: "title", Value: "Math"}, {Key: "studentIds", Value: bson.A{int32(1), int32(2)}}},
+		bson.D{{Key: "title", Value: "Art"}, {Key: "studentIds", Value: bson.A{int32(3)}}},
+	})
+	require.NoError(t, err)
+
+	pipeline := bson.A{
+		bson.D{{Key: "$lookup", Value: bson.D{
+			{Key: "from", Value: "classes"},
+			{Key: "localField", Value: "id"},
+			{Key: "foreignField", Value: "studentIds"},
+			{Key: "as", Value: "myClasses"},
+		}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "id", Value: 1}}}},
+	}
+
+	cursor, err := students.Aggregate(ctx, pipeline)
+	require.NoError(t, err)
+
+	var results []bson.D
+	require.NoError(t, cursor.All(ctx, &results))
+	require.Len(t, results, 3)
+
+	alice := dmap(results[0])["myClasses"].(bson.A)
+	bob := dmap(results[1])["myClasses"].(bson.A)
+	carol := dmap(results[2])["myClasses"].(bson.A)
+
+	require.Len(t, alice, 1, "Alice (id=1) must match Math (studentIds contains 1)")
+	assert.Equal(t, "Math", alice[0].(bson.M)["title"])
+
+	require.Len(t, bob, 1, "Bob (id=2) must match Math (studentIds contains 2)")
+	assert.Equal(t, "Math", bob[0].(bson.M)["title"])
+
+	require.Len(t, carol, 1, "Carol (id=3) must match Art (studentIds contains 3)")
+	assert.Equal(t, "Art", carol[0].(bson.M)["title"])
+}
+
 // TestAgg_Lookup_Pipeline verifies $lookup with a sub-pipeline (correlated lookup). (DumboDBFull)
 func TestAgg_Lookup_Pipeline(t *testing.T) {
 	env := startDumboDB(t)
