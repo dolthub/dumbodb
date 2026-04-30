@@ -43,7 +43,7 @@ mongosh_eval() {
 # Test 1: doltMerge conflict → doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'merge conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
-    local main_db="test__d_main"
+    local main_db="test@main"
 
     # ---- Setup ---------------------------------------------------------------
     # C1: insert {_id:1, v:1} on main branch.
@@ -68,7 +68,7 @@ mongosh_eval() {
     [ "$status" -eq 0 ]
 
     # C3: advance feature — update _id:1 to v:20.
-    run mongosh_eval "test__d_feature" '
+    run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 20}});
         db.runCommand({dumbodbCommit: 1, message: "C3-feat", author: "bob <b@t>"});
     '
@@ -123,7 +123,7 @@ mongosh_eval() {
 # Test 2: doltCherryPick conflict → doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'cherry-pick conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
-    local main_db="test__d_main"
+    local main_db="test@main"
 
     # ---- Setup ---------------------------------------------------------------
     # C1: insert {_id:1, v:1} on main.
@@ -141,7 +141,7 @@ mongosh_eval() {
     echo "$output" | jq -e '.ok == 1'
 
     # C2 on feature: update _id:1 to v:feature.
-    run mongosh_eval "test__d_feature" '
+    run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 99}});
         JSON.stringify(db.runCommand({dumbodbCommit: 1, message: "C2-feat", author: "bob <b@t>"}))
     '
@@ -205,7 +205,7 @@ mongosh_eval() {
 # Test 3: doltRebase conflict → doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'rebase conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
-    local main_db="test__d_main"
+    local main_db="test@main"
 
     # ---- Setup ---------------------------------------------------------------
     # C1: insert {_id:1, v:1} on main.
@@ -223,7 +223,7 @@ mongosh_eval() {
     echo "$output" | jq -e '.ok == 1'
 
     # C2 on feature: update _id:1 to v:feature — the commit to be replayed.
-    run mongosh_eval "test__d_feature" '
+    run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 55}});
         db.runCommand({dumbodbCommit: 1, message: "C2-feat", author: "bob <b@t>"});
     '
@@ -237,14 +237,14 @@ mongosh_eval() {
     [ "$status" -eq 0 ]
 
     # ---- Trigger conflict: rebase feature onto main --------------------------
-    run mongosh_eval "test__d_feature" '
+    run mongosh_eval "test@feature" '
         try { JSON.stringify(db.runCommand({doltRebase: 1, onto: "main", author: "bob <b@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
     # ok:0 expected on conflict.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
 
     # ---- Wire: doltConflicts must report 1 conflict in "items" ---------------
-    run mongosh_eval "test__d_feature" '
+    run mongosh_eval "test@feature" '
         JSON.stringify(db.runCommand({doltConflicts: 1}))
     '
     [ "$status" -eq 0 ]
@@ -253,7 +253,7 @@ mongosh_eval() {
     [ "$wire_count" -eq 1 ]
 
     # Get the conflictId from the per-collection detail response (server still up).
-    run mongosh_eval "test__d_feature" '
+    run mongosh_eval "test@feature" '
         JSON.stringify(db.runCommand({doltConflicts: 1, collection: "items"}))
     '
     [ "$status" -eq 0 ]
@@ -289,7 +289,7 @@ mongosh_eval() {
 # Test 4: doltRevert conflict → doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'revert conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
-    local main_db="test__d_main"
+    local main_db="test@main"
 
     # ---- Setup ---------------------------------------------------------------
     # C1: insert {_id:1, v:1} on main.
