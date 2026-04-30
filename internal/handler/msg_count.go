@@ -98,6 +98,36 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		)
 	}
 
+	// Fast path: ask the backend whether it can satisfy the filtered count
+	// without fetching documents (e.g. via a covering single-field index).
+	// The backend signals success via Filtered=true; otherwise we fall
+	// through to the scan path below.
+	if !h.DisablePushdown {
+		countRes, cerr := c.Count(connCtx, &backends.CountParams{Filter: params.Filter})
+		if cerr != nil {
+			return nil, lazyerrors.Error(cerr)
+		}
+		if countRes.Filtered {
+			total := countRes.Count
+			if params.Skip > 0 {
+				total -= params.Skip
+				if total < 0 {
+					total = 0
+				}
+			}
+			if params.Limit > 0 && total > params.Limit {
+				total = params.Limit
+			}
+
+			return documentOpMsg(
+				must.NotFail(types.NewDocument(
+					"n", int32(total),
+					"ok", float64(1),
+				)),
+			)
+		}
+	}
+
 	var qp backends.QueryParams
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter

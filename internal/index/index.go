@@ -237,6 +237,44 @@ func rangeLookupCapped(ctx context.Context, m prolly.Map, startKey, stopKey []by
 	return results, false, nil
 }
 
+// RangeCount returns the number of secondary index entries whose composite
+// key falls in [startKey, stopKey). A nil or empty bound is open on that side.
+// Iteration uses prolly.Map.IterKeyRange, but unlike RangeLookup this does not
+// extract or copy the primary key bytes — it only counts entries, so the cost
+// is the index walk itself with no per-entry primary fetch.
+func RangeCount(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (int64, error) {
+	startTup, err := boundTuple(startKey)
+	if err != nil {
+		return 0, err
+	}
+	stopTup, err := boundTuple(stopKey)
+	if err != nil {
+		return 0, err
+	}
+
+	iter, err := m.IterKeyRange(ctx, startTup, stopTup)
+	if err != nil {
+		return 0, fmt.Errorf("index: iterating secondary index range: %w", err)
+	}
+
+	var n int64
+	for {
+		k, _, err := iter.Next(ctx)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, fmt.Errorf("index: reading secondary index: %w", err)
+		}
+		if k == nil {
+			break
+		}
+		n++
+	}
+
+	return n, nil
+}
+
 // KeyDescriptor returns the key tuple descriptor used for secondary index maps.
 // Exposed so the dolt backend can open persisted secondary index maps.
 func KeyDescriptor() *val.TupleDesc {

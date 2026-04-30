@@ -36,11 +36,12 @@ func TestTryCountAggregateShortcut(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		stages   []any
-		want     bool
-		wantOut  string
-		wantSkip int64
-		wantLim  int64
+		stages     []any
+		want       bool
+		wantOut    string
+		wantSkip   int64
+		wantLim    int64
+		wantFilter *types.Document
 	}{
 		"go driver v2 default": {
 			stages:  driverV2Pipeline,
@@ -69,12 +70,15 @@ func TestTryCountAggregateShortcut(t *testing.T) {
 			wantOut: "count",
 			wantLim: -1,
 		},
-		"non empty match rejects": {
+		"non empty match accepted with filter": {
 			stages: []any{
 				doc("$match", doc("a", int32(1))),
 				doc("$group", doc("_id", int32(1), "n", doc("$sum", int32(1)))),
 			},
-			want: false,
+			want:       true,
+			wantOut:    "n",
+			wantLim:    -1,
+			wantFilter: doc("a", int32(1)),
 		},
 		"sum 2 rejects": {
 			stages: []any{
@@ -171,6 +175,18 @@ func TestTryCountAggregateShortcut(t *testing.T) {
 			}
 			if info.limit != tc.wantLim {
 				t.Errorf("limit = %d, want %d", info.limit, tc.wantLim)
+			}
+			switch {
+			case tc.wantFilter == nil && info.filter != nil:
+				t.Errorf("filter = %v, want nil", info.filter)
+			case tc.wantFilter != nil && info.filter == nil:
+				t.Errorf("filter = nil, want %v", tc.wantFilter)
+			case tc.wantFilter != nil && info.filter != nil:
+				gotKeys := info.filter.Keys()
+				wantKeys := tc.wantFilter.Keys()
+				if len(gotKeys) != len(wantKeys) {
+					t.Errorf("filter keys = %v, want %v", gotKeys, wantKeys)
+				}
 			}
 		})
 	}
