@@ -26,7 +26,7 @@ const (
 
 	// MongoDBVersion is the MongoDB version DumboDB advertises to clients
 	// that gate behavior on major.minor.
-	MongoDBVersion = "8.0.0"
+	MongoDBVersion = "8.0.20"
 
 	// Commit is the source git commit. Populated as "unknown" until a real
 	// build pipeline injects it.
@@ -61,7 +61,7 @@ var info = &Info{
 	DebugBuild:          false,
 	BuildEnvironment:    must.NotFail(types.NewDocument()),
 	MongoDBVersion:      MongoDBVersion,
-	MongoDBVersionArray: must.NotFail(types.NewArray(int32(8), int32(0), int32(0), int32(0))),
+	MongoDBVersionArray: must.NotFail(types.NewArray(int32(8), int32(0), int32(20), int32(0))),
 }
 
 // Get returns current build's info.
