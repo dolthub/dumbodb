@@ -95,6 +95,8 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		qp.Filter = params.Filter
 	}
 
+	qp.Hint = params.Hint
+
 	if !h.EnableNestedPushdown && params.Filter != nil {
 		qp.Filter = params.Filter.DeepCopy()
 
@@ -168,8 +170,20 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	// Add executionStats for "executionStats" and "allPlansExecution" verbosity.
 	if params.Verbosity == "executionStats" || params.Verbosity == "allPlansExecution" {
+		// Reflect the winning plan's stage in executionStages so the two
+		// halves of the explain response agree on whether an index was used.
+		execStage := "COLLSCAN"
+		if wp, _ := res.QueryPlanner.Get("winningPlan"); wp != nil {
+			if winningPlan, ok := wp.(*types.Document); ok {
+				if s, _ := winningPlan.Get("stage"); s != nil {
+					if str, ok := s.(string); ok && str != "" {
+						execStage = str
+					}
+				}
+			}
+		}
 		executionStages := must.NotFail(types.NewDocument(
-			"stage", "COLLSCAN",
+			"stage", execStage,
 			"nReturned", int32(0),
 			"executionTimeMillisEstimate", int64(0),
 		))

@@ -177,6 +177,12 @@ type ExplainParams struct {
 	Filter *types.Document
 	Sort   *types.Document
 	Limit  int64
+
+	// Hint, when non-nil, requests that the backend plan the query using the
+	// specified index. It may be a document like {field: 1} naming a key
+	// pattern, or a single-string value naming an index by name (the latter
+	// is left to the backend to interpret).
+	Hint any
 }
 
 // ExplainResult represents the results of Collection.Explain method.

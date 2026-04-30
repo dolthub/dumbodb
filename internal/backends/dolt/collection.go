@@ -647,14 +647,117 @@ func compareScalars(a, b any) int {
 
 // Explain implements backends.Collection.
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
+	parsedQuery := types.MakeDocument(0)
+	if params != nil && params.Filter != nil {
+		parsedQuery = params.Filter.DeepCopy()
+	}
+
+	stage := "COLLSCAN"
+	var indexName string
+	var idxInfos []backends.IndexInfo
+
+	if state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false); err == nil && state != nil {
+		state.mu.RLock()
+		idxInfos = append(idxInfos, state.indexes[c.name]...)
+		hasMap := make(map[string]bool, len(state.secIndexMaps[c.name]))
+		for k := range state.secIndexMaps[c.name] {
+			hasMap[k] = true
+		}
+		state.mu.RUnlock()
+
+		// 1. Honor hint if provided.
+		if params != nil {
+			indexName = pickHintedIndex(params.Hint, idxInfos)
+		}
+
+		// 2. Otherwise pick an index that matches a simple equality filter.
+		if indexName == "" && params != nil && params.Filter != nil && params.Filter.Len() == 1 {
+			for _, k := range params.Filter.Keys() {
+				v, _ := params.Filter.Get(k)
+				if _, isDoc := v.(*types.Document); isDoc {
+					break
+				}
+				for _, idx := range idxInfos {
+					if len(idx.Key) == 1 && idx.Key[0].Field == k {
+						indexName = idx.Name
+						break
+					}
+				}
+			}
+		}
+
+		if indexName != "" && hasMap[indexName] {
+			stage = "IXSCAN"
+		} else {
+			indexName = ""
+		}
+	}
+
+	winningPlan := must.NotFail(types.NewDocument("stage", stage))
+	if indexName != "" {
+		winningPlan.Set("indexName", indexName)
+		for _, idx := range idxInfos {
+			if idx.Name != indexName {
+				continue
+			}
+			keyPattern := types.MakeDocument(len(idx.Key))
+			for _, kp := range idx.Key {
+				dir := int32(1)
+				if kp.Descending {
+					dir = -1
+				}
+				keyPattern.Set(kp.Field, dir)
+			}
+			winningPlan.Set("keyPattern", keyPattern)
+			break
+		}
+	}
+
 	qp := must.NotFail(types.NewDocument(
 		"namespace", c.db.name+"."+c.name,
-		"parsedQuery", types.MakeDocument(0),
-		"winningPlan", must.NotFail(types.NewDocument("stage", "COLLSCAN")),
+		"parsedQuery", parsedQuery,
+		"winningPlan", winningPlan,
 	))
 	return &backends.ExplainResult{
 		QueryPlanner: qp,
 	}, nil
+}
+
+// pickHintedIndex resolves a hint value (either a name string or a key-pattern
+// document) to a matching index name, or returns "" if no index matches.
+func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
+	if hint == nil {
+		return ""
+	}
+	switch h := hint.(type) {
+	case string:
+		for _, idx := range idxInfos {
+			if idx.Name == h {
+				return idx.Name
+			}
+		}
+	case *types.Document:
+		if h == nil || h.Len() == 0 {
+			return ""
+		}
+		hintKeys := h.Keys()
+		for _, idx := range idxInfos {
+			if len(idx.Key) != len(hintKeys) {
+				continue
+			}
+			match := true
+			for i, k := range hintKeys {
+				if idx.Key[i].Field != k {
+					match = false
+					break
+				}
+			}
+			if match {
+				return idx.Name
+			}
+		}
+	}
+	return ""
 }
 
 // extractIndexKey returns a composite key for the given index extracted from doc.
