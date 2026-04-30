@@ -351,6 +351,44 @@ func (e *DumboDBRevertConflictError) Error() string {
 	return fmt.Sprintf("doltRevert: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
+// TagInfo describes a single tag entry returned by VersioningBackend.DumboDBTag.
+type TagInfo struct {
+	Name      string
+	CommitID  string
+	Tagger    string // tagger name; empty when tag has no metadata
+	Email     string // tagger email; empty when tag has no metadata
+	Message   string // tag description/message; empty when tag has no metadata
+	Timestamp int64  // Unix milliseconds; zero when tag has no metadata
+}
+
+// TagParams represents the parameters of VersioningBackend.DumboDBTag method.
+//
+// Operation is selected by the combination of fields:
+//   - Name == "" and Delete == false   → list all tags (other fields ignored).
+//   - Name != "" and Delete == false   → create a tag named Name pointing at the commit
+//     that Hash resolves to (Hash is a rootish: commit hash, branch name, ancestor expr,
+//     or another tag name). If Hash == "", the connection's branch HEAD is used.
+//   - Name != "" and Delete == true    → delete the tag named Name.
+type TagParams struct {
+	DBName  string
+	Branch  string // connection's branch (used to resolve a default Hash on create)
+	Name    string // tag name; empty means list-all
+	Hash    string // rootish to tag (create only); empty means connection branch HEAD
+	Delete  bool   // if true, delete the named tag instead of creating one
+	Message string // optional: tag description (create only)
+	Author  string // optional: tagger name (create only)
+	Email   string // optional: tagger email (create only)
+}
+
+// TagResult represents the result of VersioningBackend.DumboDBTag method.
+//
+// For list operations, Tags contains every tag in the database.
+// For create/delete, Tags contains a single entry describing the affected tag
+// (delete entries have Tagger/Email/Message empty since the tag is gone).
+type TagResult struct {
+	Tags []TagInfo
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dumbodb versioning commands to return an unsupported error.
@@ -417,4 +455,10 @@ type VersioningBackend interface {
 	// resolved via DumboDBResolveConflict/DumboDBConflicts. After resolution, use Continue=true
 	// to complete the revert. Use Abort=true to abandon an in-progress revert.
 	DumboDBRevert(context.Context, *RevertParams) (*RevertResult, error)
+
+	// DumboDBTag creates, lists, or deletes tags. Tags share the same ref namespace as
+	// dolt tags (refs/tags/<name>) and use the Dolt tag flatbuffer (TagValue), so tags
+	// created here are visible to the dolt tag CLI and vice versa. Operation is selected
+	// by the combination of TagParams fields; see TagParams documentation.
+	DumboDBTag(context.Context, *TagParams) (*TagResult, error)
 }

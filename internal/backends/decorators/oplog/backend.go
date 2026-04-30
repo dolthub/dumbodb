@@ -185,6 +185,15 @@ func (b *backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	return nil, fmt.Errorf("oplog: DumboDBRevert: versioning not supported by wrapped backend")
 }
 
+// DumboDBTag implements backends.VersioningBackend if the wrapped backend supports it.
+func (b *backend) DumboDBTag(ctx context.Context, params *backends.TagParams) (*backends.TagResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBTag(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBTag: versioning not supported by wrapped backend")
+}
+
 // check interfaces
 var (
 	_ backends.Backend          = (*backend)(nil)

@@ -310,6 +310,15 @@ func (bc *backendContract) DumboDBRevert(ctx context.Context, params *RevertPara
 	return nil, newVersioningUnsupportedError("DumboDBRevert")
 }
 
+// DumboDBTag implements VersioningBackend if the wrapped backend supports it.
+func (bc *backendContract) DumboDBTag(ctx context.Context, params *TagParams) (*TagResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBTag(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBTag")
+}
+
 // newVersioningUnsupportedError returns a standard error for when a versioning operation
 // is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {

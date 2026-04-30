@@ -174,6 +174,10 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDumboDBStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
 		},
+		"doltTag": {
+			Handler: h.MsgDumboDBTag,
+			Help:    "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>).",
+		},
 		"dumboBranch": {
 			Handler: h.MsgDumboDBBranch,
 			Help:    "Creates a new DumboDB branch from the current branch encoded in the database name.",
@@ -229,6 +233,10 @@ func (h *Handler) initCommands() {
 		"dumboStatus": {
 			Handler: h.MsgDumboDBStatus,
 			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
+		},
+		"dumboTag": {
+			Handler: h.MsgDumboDBTag,
+			Help:    "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>).",
 		},
 		"delete": {
 			Handler: h.MsgDelete,

@@ -203,6 +203,18 @@ func (b *Backend) DumboDBRebase(_ context.Context, params *backends.RebaseParams
 	return &backends.RebaseResult{CommitsReplayed: 0, NewTip: "stub"}, nil
 }
 
+// DumboDBTag implements backends.VersioningBackend interface.
+func (b *Backend) DumboDBTag(_ context.Context, params *backends.TagParams) (*backends.TagResult, error) {
+	b.l.Info("stub: DumboDBTag",
+		slog.String("db", params.DBName),
+		slog.String("name", params.Name),
+		slog.String("hash", params.Hash),
+		slog.Bool("delete", params.Delete),
+	)
+
+	return &backends.TagResult{Tags: []backends.TagInfo{}}, nil
+}
+
 // collection implements backends.Collection interface.
 type collection struct {
 	dbName string

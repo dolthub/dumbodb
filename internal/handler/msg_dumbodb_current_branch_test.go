@@ -90,6 +90,9 @@ func (m *versioningBackendMock) DumboDBRebase(_ context.Context, _ *backends.Reb
 func (m *versioningBackendMock) DumboDBRevert(_ context.Context, _ *backends.RevertParams) (*backends.RevertResult, error) {
 	return nil, nil
 }
+func (m *versioningBackendMock) DumboDBTag(_ context.Context, _ *backends.TagParams) (*backends.TagResult, error) {
+	return nil, nil
+}
 
 // makeCurrentBranchMsg creates a wire.OpMsg for dumboDBCurrentBranch with the given encoded $db.
 func makeCurrentBranchMsg(encodedDB string) *wire.OpMsg {
