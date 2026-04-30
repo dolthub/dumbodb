@@ -21,7 +21,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,10 +177,8 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 	}
 
 	keys := filter.Keys()
-	// Collect one required substring per top-level field=scalar constraint.
-	// Each element of patterns is a list of alternatives — at least one must
-	// appear in the doc's JSON. Multiple fields are AND-combined.
-	var patterns [][][]byte
+	// One predicate per top-level field clause. All AND-combined.
+	preds := make([]func([]byte) bool, 0, len(keys))
 	for _, field := range keys {
 		// $and/$or/$comment/etc. — bail out and let the handler filter.
 		if strings.HasPrefix(field, "$") {
@@ -193,30 +193,50 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 		if err != nil {
 			return nil
 		}
-		alts := extJSONFieldPatterns(field, v)
-		if alts == nil {
+		pred := buildFieldPredicate(field, v)
+		if pred == nil {
 			return nil
 		}
-		patterns = append(patterns, alts)
+		preds = append(preds, pred)
 	}
-	if len(patterns) == 0 {
+	if len(preds) == 0 {
 		return nil
 	}
 
 	return func(jsonBytes []byte) bool {
-		for _, alts := range patterns {
-			found := false
-			for _, p := range alts {
-				if bytes.Contains(jsonBytes, p) {
-					found = true
-					break
-				}
-			}
-			if !found {
+		for _, pred := range preds {
+			if !pred(jsonBytes) {
 				return false
 			}
 		}
 		return true
+	}
+}
+
+// buildFieldPredicate builds a sound byte-level predicate for a single
+// top-level {field: value} clause. Returns nil when no sound predicate can
+// be expressed for this clause.
+func buildFieldPredicate(field string, value any) func([]byte) bool {
+	if opDoc, ok := value.(*types.Document); ok {
+		return buildNumericRangePredicate(field, opDoc)
+	}
+	alts := extJSONFieldPatterns(field, value)
+	if alts == nil {
+		return nil
+	}
+	return substringAltsPredicate(alts)
+}
+
+// substringAltsPredicate returns a predicate that passes when any of the
+// given byte alternatives appears as a substring of the document JSON.
+func substringAltsPredicate(alts [][]byte) func([]byte) bool {
+	return func(jsonBytes []byte) bool {
+		for _, p := range alts {
+			if bytes.Contains(jsonBytes, p) {
+				return true
+			}
+		}
+		return false
 	}
 }
 
@@ -311,6 +331,427 @@ func marshalExtJSONField(field string, value any) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected ExtJSON shape %q", extJSON)
 	}
 	return extJSON[1 : len(extJSON)-1], nil
+}
+
+// buildNumericRangePredicate inspects an operator document like
+// {$gt: 5, $lte: 10} and, if it consists exclusively of numeric range
+// operators ($gt/$gte/$lt/$lte) against scalar numeric bounds, returns a
+// predicate that walks the doc's raw canonical Extended JSON for the top-
+// level `field` and rejects documents whose stored numeric value is
+// definitely outside the combined range. Returns nil for any other shape
+// (mixed with $eq/$in/$ne/$regex/$exists/non-numeric operands/etc.) so the
+// filter falls through to a full scan.
+//
+// The predicate is sound: it never returns false for a document that could
+// match, so the FilterIterator downstream still sees every potentially-
+// matching doc. False positives (e.g. document where the field is an
+// embedded sub-document or a string) are returned permissively as true and
+// re-checked by the handler.
+func buildNumericRangePredicate(field string, opDoc *types.Document) func([]byte) bool {
+	keys := opDoc.Keys()
+	if len(keys) == 0 {
+		return nil
+	}
+	var (
+		hasLo, loIncl bool
+		lo            float64
+		hasHi, hiIncl bool
+		hi            float64
+	)
+	for _, k := range keys {
+		ov, err := opDoc.Get(k)
+		if err != nil {
+			return nil
+		}
+		fv, ok := numericBoundToFloat64(ov)
+		if !ok {
+			return nil
+		}
+		switch k {
+		case "$gt":
+			lo, loIncl, hasLo = tightenLowerBound(hasLo, lo, loIncl, fv, false)
+		case "$gte":
+			lo, loIncl, hasLo = tightenLowerBound(hasLo, lo, loIncl, fv, true)
+		case "$lt":
+			hi, hiIncl, hasHi = tightenUpperBound(hasHi, hi, hiIncl, fv, false)
+		case "$lte":
+			hi, hiIncl, hasHi = tightenUpperBound(hasHi, hi, hiIncl, fv, true)
+		default:
+			return nil
+		}
+	}
+	if !hasLo && !hasHi {
+		return nil
+	}
+	fieldBytes := []byte(field)
+	return func(jsonBytes []byte) bool {
+		v, status := scanTopLevelNumericExtJSON(jsonBytes, fieldBytes)
+		switch status {
+		case rangeProbeBail:
+			// Anomaly we don't model (e.g. field present but value is an
+			// embedded sub-document, an array, a string, or a numeric
+			// outside the float64-exact range). Permissive: let the handler
+			// validate.
+			return true
+		case rangeProbeMissing:
+			// No top-level field means the range can't match: MongoDB
+			// numeric range operators don't match docs without the field.
+			return false
+		}
+		// rangeProbeFound — compare against bounds. NaN comparisons return
+		// false, which correctly rejects (NaN never matches a range).
+		if hasLo {
+			if loIncl {
+				if !(v >= lo) {
+					return false
+				}
+			} else {
+				if !(v > lo) {
+					return false
+				}
+			}
+		}
+		if hasHi {
+			if hiIncl {
+				if !(v <= hi) {
+					return false
+				}
+			} else {
+				if !(v < hi) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+}
+
+// numericBoundToFloat64 converts a filter-side bound value to float64 only
+// when the conversion is exact and the value is finite. Returns ok=false
+// for non-numeric types, NaN/Inf, decimal128, or int64 that loses precision
+// in float64 — in those cases the prefilter must bail entirely so we don't
+// risk a false negative against a doc whose stored value can't be
+// represented exactly in float64 either.
+func numericBoundToFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int32:
+		return float64(n), true
+	case int64:
+		f := float64(n)
+		if int64(f) != n {
+			return 0, false
+		}
+		return f, true
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// tightenLowerBound merges a new "x >(=) nv" lower-bound clause into the
+// running tightest lower bound. When two clauses agree on the same value,
+// strict ($gt) wins over inclusive ($gte) because intersecting them yields
+// strict.
+func tightenLowerBound(curHas bool, curVal float64, curIncl bool, nv float64, nIncl bool) (float64, bool, bool) {
+	if !curHas || nv > curVal {
+		return nv, nIncl, true
+	}
+	if nv < curVal {
+		return curVal, curIncl, true
+	}
+	return curVal, curIncl && nIncl, true
+}
+
+// tightenUpperBound is the upper-bound counterpart of tightenLowerBound.
+func tightenUpperBound(curHas bool, curVal float64, curIncl bool, nv float64, nIncl bool) (float64, bool, bool) {
+	if !curHas || nv < curVal {
+		return nv, nIncl, true
+	}
+	if nv > curVal {
+		return curVal, curIncl, true
+	}
+	return curVal, curIncl && nIncl, true
+}
+
+// rangeProbeStatus describes the outcome of probing a stored document's
+// JSON for a top-level numeric field.
+type rangeProbeStatus int
+
+const (
+	// rangeProbeFound — top-level field located and parsed as a finite
+	// numeric. The float64 return is the parsed value.
+	rangeProbeFound rangeProbeStatus = iota
+	// rangeProbeMissing — top-level field is provably absent from the
+	// document's outer object. A range filter never matches such docs.
+	rangeProbeMissing
+	// rangeProbeBail — the JSON shape, value type, or numeric precision
+	// can't be modeled by the byte-level predicate. The caller must treat
+	// the doc as a possible match (permissive true) and let the handler's
+	// FilterIterator re-validate.
+	rangeProbeBail
+)
+
+// scanTopLevelNumericExtJSON walks the canonical Extended-JSON encoding of
+// a single document and tries to read the value of a top-level field as a
+// finite numeric. The walker:
+//
+//   - parses the outer object only (depth 1 keys); embedded sub-documents
+//     never affect the outcome, so a doc like {"a":{"i":99},"i":3} reports
+//     i=3 — never i=99.
+//   - recognises only the canonical numeric wrappers $numberInt /
+//     $numberLong / $numberDouble; any other value shape (sub-doc, array,
+//     string, null, $numberDecimal, $oid, $date, …) returns rangeProbeBail.
+//   - bails on any escape sequence inside a key, since unescaping would be
+//     needed to compare safely against the target field name.
+//
+// The walker is paranoid by design: anything it can't parse cleanly maps
+// to rangeProbeBail (permissive) so the predicate never produces a false
+// negative. Field absence is the one case where false is sound (range
+// filters don't match missing fields).
+func scanTopLevelNumericExtJSON(jsonBytes, field []byte) (float64, rangeProbeStatus) {
+	pos := skipExtJSONWhitespace(jsonBytes, 0)
+	if pos >= len(jsonBytes) || jsonBytes[pos] != '{' {
+		return 0, rangeProbeBail
+	}
+	pos++
+	pos = skipExtJSONWhitespace(jsonBytes, pos)
+	if pos < len(jsonBytes) && jsonBytes[pos] == '}' {
+		return 0, rangeProbeMissing
+	}
+	for {
+		pos = skipExtJSONWhitespace(jsonBytes, pos)
+		if pos >= len(jsonBytes) || jsonBytes[pos] != '"' {
+			return 0, rangeProbeBail
+		}
+		keyStart := pos + 1
+		keyEnd, hasEscape, ok := scanExtJSONString(jsonBytes, pos)
+		if !ok {
+			return 0, rangeProbeBail
+		}
+		// Escaped keys would need full JSON-string unescaping to compare
+		// safely (e.g. "i" decodes to "i"). That's unusual in stored
+		// docs, so bail rather than risk a false negative.
+		if hasEscape {
+			return 0, rangeProbeBail
+		}
+		match := bytes.Equal(jsonBytes[keyStart:keyEnd], field)
+		pos = keyEnd + 1
+		pos = skipExtJSONWhitespace(jsonBytes, pos)
+		if pos >= len(jsonBytes) || jsonBytes[pos] != ':' {
+			return 0, rangeProbeBail
+		}
+		pos++
+		pos = skipExtJSONWhitespace(jsonBytes, pos)
+		valStart := pos
+		valEnd, ok := scanExtJSONValueEnd(jsonBytes, pos)
+		if !ok {
+			return 0, rangeProbeBail
+		}
+		if match {
+			return parseNumericExtJSONValue(jsonBytes[valStart:valEnd])
+		}
+		pos = valEnd
+		pos = skipExtJSONWhitespace(jsonBytes, pos)
+		if pos >= len(jsonBytes) {
+			return 0, rangeProbeBail
+		}
+		if jsonBytes[pos] == '}' {
+			return 0, rangeProbeMissing
+		}
+		if jsonBytes[pos] != ',' {
+			return 0, rangeProbeBail
+		}
+		pos++
+	}
+}
+
+// skipExtJSONWhitespace advances past JSON whitespace. The mongo driver
+// emits compact canonical ExtJSON (no whitespace), but tolerating it here
+// keeps the walker robust.
+func skipExtJSONWhitespace(buf []byte, pos int) int {
+	for pos < len(buf) {
+		c := buf[pos]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			pos++
+			continue
+		}
+		break
+	}
+	return pos
+}
+
+// scanExtJSONString consumes a JSON string starting at the opening quote at
+// pos and returns the index of the matching closing quote, a flag for
+// whether any backslash-escape was seen inside, and ok=true on success.
+func scanExtJSONString(buf []byte, pos int) (endQuote int, hasEscape bool, ok bool) {
+	if pos >= len(buf) || buf[pos] != '"' {
+		return 0, false, false
+	}
+	i := pos + 1
+	for i < len(buf) {
+		c := buf[i]
+		if c == '\\' {
+			hasEscape = true
+			if i+1 >= len(buf) {
+				return 0, false, false
+			}
+			if buf[i+1] == 'u' {
+				if i+6 > len(buf) {
+					return 0, false, false
+				}
+				i += 6
+				continue
+			}
+			i += 2
+			continue
+		}
+		if c == '"' {
+			return i, hasEscape, true
+		}
+		i++
+	}
+	return 0, false, false
+}
+
+// scanExtJSONValueEnd returns the index just past the end of the JSON value
+// starting at pos. It handles strings, objects, arrays, numbers, and the
+// keywords true/false/null. Whitespace inside is tolerated.
+func scanExtJSONValueEnd(buf []byte, pos int) (int, bool) {
+	if pos >= len(buf) {
+		return 0, false
+	}
+	c := buf[pos]
+	switch {
+	case c == '"':
+		end, _, ok := scanExtJSONString(buf, pos)
+		if !ok {
+			return 0, false
+		}
+		return end + 1, true
+	case c == '{':
+		return scanExtJSONStructured(buf, pos, '{', '}')
+	case c == '[':
+		return scanExtJSONStructured(buf, pos, '[', ']')
+	case c == 't' || c == 'f' || c == 'n':
+		i := pos
+		for i < len(buf) {
+			cc := buf[i]
+			if (cc >= 'a' && cc <= 'z') || (cc >= 'A' && cc <= 'Z') {
+				i++
+				continue
+			}
+			break
+		}
+		return i, true
+	case c == '-' || (c >= '0' && c <= '9'):
+		i := pos
+		for i < len(buf) {
+			cc := buf[i]
+			if (cc >= '0' && cc <= '9') || cc == '-' || cc == '+' || cc == '.' || cc == 'e' || cc == 'E' {
+				i++
+				continue
+			}
+			break
+		}
+		return i, true
+	}
+	return 0, false
+}
+
+// scanExtJSONStructured consumes a balanced object or array starting at
+// the given opener position, properly skipping over strings (so opens and
+// closes inside string literals don't confuse the depth counter).
+func scanExtJSONStructured(buf []byte, pos int, open, close byte) (int, bool) {
+	if pos >= len(buf) || buf[pos] != open {
+		return 0, false
+	}
+	depth := 0
+	i := pos
+	for i < len(buf) {
+		c := buf[i]
+		if c == '"' {
+			end, _, ok := scanExtJSONString(buf, i)
+			if !ok {
+				return 0, false
+			}
+			i = end + 1
+			continue
+		}
+		if c == open {
+			depth++
+		} else if c == close {
+			depth--
+			if depth == 0 {
+				return i + 1, true
+			}
+		}
+		i++
+	}
+	return 0, false
+}
+
+var (
+	extJSONNumberIntPrefix    = []byte(`{"$numberInt":"`)
+	extJSONNumberLongPrefix   = []byte(`{"$numberLong":"`)
+	extJSONNumberDoublePrefix = []byte(`{"$numberDouble":"`)
+	extJSONNumberSuffix       = []byte(`"}`)
+)
+
+// parseNumericExtJSONValue interprets the value bytes of one canonical
+// Extended JSON token as a finite float64. Only the three numeric wrappers
+// $numberInt / $numberLong / $numberDouble are recognised. Anything else
+// (other ExtJSON wrappers, sub-documents, arrays, strings, …) maps to
+// rangeProbeBail so the predicate stays permissive.
+//
+// Long ints whose magnitude exceeds the float64 mantissa precision and
+// double values that are NaN/±Inf also bail — the comparison would not be
+// exact, so we let the FilterIterator validate them.
+func parseNumericExtJSONValue(b []byte) (float64, rangeProbeStatus) {
+	var prefix []byte
+	isFloat := false
+	switch {
+	case bytes.HasPrefix(b, extJSONNumberIntPrefix):
+		prefix = extJSONNumberIntPrefix
+	case bytes.HasPrefix(b, extJSONNumberLongPrefix):
+		prefix = extJSONNumberLongPrefix
+	case bytes.HasPrefix(b, extJSONNumberDoublePrefix):
+		prefix = extJSONNumberDoublePrefix
+		isFloat = true
+	default:
+		return 0, rangeProbeBail
+	}
+	if !bytes.HasSuffix(b, extJSONNumberSuffix) {
+		return 0, rangeProbeBail
+	}
+	inner := b[len(prefix) : len(b)-len(extJSONNumberSuffix)]
+	// Reject any quote inside the inner literal — canonical wrappers are
+	// {"$numberX":"<digits-or-float-literal>"} with no nested quotes.
+	if bytes.IndexByte(inner, '"') >= 0 {
+		return 0, rangeProbeBail
+	}
+	s := string(inner)
+	if isFloat {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, rangeProbeBail
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, rangeProbeBail
+		}
+		return f, rangeProbeFound
+	}
+	iv, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, rangeProbeBail
+	}
+	f := float64(iv)
+	if int64(f) != iv {
+		return 0, rangeProbeBail
+	}
+	return f, rangeProbeFound
 }
 
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
