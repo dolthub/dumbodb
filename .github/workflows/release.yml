@@ -1,0 +1,71 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to build (e.g. v0.0.9). Leave empty to build HEAD.'
+        required: false
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0  # full history for git describe
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Build linux/amd64
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+            -o dist/dumbodb-linux-amd64 \
+            ./cmd/dumbodb/
+
+      - name: Build linux/arm64
+        run: |
+          GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build \
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+            -o dist/dumbodb-linux-arm64 \
+            ./cmd/dumbodb/ || echo "⚠ arm64 cross-compile skipped (no cross-compiler)"
+
+      - name: Build darwin/arm64
+        run: |
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+            -o dist/dumbodb-darwin-arm64 \
+            ./cmd/dumbodb/ || echo "⚠ darwin/arm64 build skipped (CGO deps)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dumbodb-${{ steps.version.outputs.version }}
+          path: dist/dumbodb-*
+
+      - name: Create GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/dumbodb-*
+          generate_release_notes: true
