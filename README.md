@@ -6,6 +6,11 @@
 
 DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
 
+## Who Wrote DumboDB?
+DumboDB is a vibe-coding experiment by [DoltHub](https://dolthub.com), the creators of [Dolt](https://github.com/dolthub/dolt).
+
+Version 0.1 is a mash-up of [FerretDB's](https://github.com/FerretDB/FerretDB) MongoDB clone and Dolt's version-controlled storage engine. Both, written by humans, have a track record of stability and correctness. Dumbo's codebase was written by coding agents, specifically [Claude Code](https://code.claude.com/docs/en/overview) using [Gas Town 1.0](https://github.com/gastownhall/gastown). Dumbo is currently "write-only" code, as in no human directly reads or edits the codebase. As such, care should be taken when running DumboDB, as it is still in early development and may contain bugs. We are actively working on improving the codebase and adding new features, so please [join our discord server](https://discord.gg/gqr7K4VNKe) and give us feedback!
+
 ## What's in Version 0.1?
 Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's great for testing your existing applications and seeing what they are changing over time. In a test environment, you can use DumboDB just like you would use MongoDB, but with the added ability to reset to specific snapshots in time and see the changes made by your application code.
 
@@ -80,7 +85,7 @@ By default, all connections target the `main` branch. This is currently hard cod
 var db = db.getSiblingDB("mydb__d_mybranch")
 ```
 
-If you specify a revision rather than a branch name, then the database returned with be read-only and reflect the state of the database at that revision. For example, if you'd like to perform reads against the parent commit of the `main` branch, you can connect to `mydb__d_main~1`:
+If you specify a revision rather than a branch name, then the database returned will be read-only and reflect the state of the database at that revision. For example, if you'd like to perform reads against the parent commit of the `main` branch, you can connect to `mydb__d_main~1`:
 
 ```js
 var db = db.getSiblingDB("mydb__d_main~1")
@@ -145,7 +150,7 @@ Will output the summary of your changes. Specifically, it shows that in the 'ite
   ok: 1
 }
 ```
-If you need more detail, you can run `dumboDiff`. When called with no additional arguments, it will print all of the changes in your session. Specifically everything which is not committed. These changes are the changes which will be committed when you run `doltCommit`.
+If you need more detail, you can run `dumboDiff`. When called with no additional arguments, it will print all of the changes in your session. Specifically everything that is not committed. These are the changes that will be committed when you run `doltCommit`.
 
 ```js
 db.runCommand({ dumboDiff: 1 })
@@ -227,7 +232,7 @@ db.runCommand({ doltMerge: 1, merge_in: "feature"})
   ok: 1
 }
 ```
-There is also legitimate merges which join two commit histories, complete with conflict detection and resolution. Look at the [Commands Reference](docs/COMMANDS.md) for more details and examples.
+There are also legitimate merges which join two commit histories, complete with conflict detection and resolution. Look at the [Commands Reference](docs/COMMANDS.md) for more details and examples.
 
 
 ## Acknowledgements
