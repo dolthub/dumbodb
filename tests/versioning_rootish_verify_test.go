@@ -21,7 +21,7 @@ package tests
 //
 //   - Commit 1 (hash1): items = [ { _id:1, label:"first",  version:1 } ]
 //   - Commit 2 (hash2): items = [ { _id:1, ... }, { _id:2, label:"second", version:2 } ]
-//   - Branch "v1.0" at commit 2 (same as main HEAD); accessed via dbname__d_v1%2E0
+//   - Branch "v1.0" at commit 2 (same as main HEAD); accessed via dbname@v1%2E0
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single database
 // and the side effects of one scenario (e.g. branch creation) carry into the next.
@@ -69,9 +69,9 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 	hash2 = dumboDBCommit(t, env, dbName, "second commit", "alice <alice@dumbodb>")
 
 	// Create branch "v1.0" from main HEAD.
-	// The branch name contains a dot; access it via dbname__d_v1%2E0.
+	// The branch name contains a dot; access it via dbname@v1%2E0.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "v1.0"},
 	}).Decode(&branchResult)
@@ -91,10 +91,10 @@ func TestRootishVerify(t *testing.T) {
 	hash1, hash2 := rootishVerifySetup(t, env, dbName)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: verifydb__d_main — reads and writes work
+	// Scenario 1: verifydb@main — reads and writes work
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_MainBranch_ReadsAndWritesWork", func(t *testing.T) {
-		main := env.client.Database(dbName + "__d_main")
+		main := env.client.Database(dbName + "@main")
 		items := main.Collection("items")
 
 		// Read: should return both documents.
@@ -129,13 +129,13 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: verifydb__d_v1%2E0 — reads and writes work, isolated from main
+	// Scenario 2: verifydb@v1%2E0 — reads and writes work, isolated from main
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_BranchV1_ReadsWritesIsolated", func(t *testing.T) {
 		// Access the v1.0 branch via its percent-encoded name.
-		v1DB := env.client.Database(dbName + "__d_v1%2E0")
+		v1DB := env.client.Database(dbName + "@v1%2E0")
 		v1Items := v1DB.Collection("items")
-		mainItems := env.client.Database(dbName + "__d_main").Collection("items")
+		mainItems := env.client.Database(dbName + "@main").Collection("items")
 
 		// Read: returns both documents (same as main HEAD at setup time).
 		docs, err := v1Items.Find(ctx, bson.D{})
@@ -174,12 +174,12 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: verifydb__d_<hash> — correct snapshot, writes blocked, branch OK
+	// Scenario 3: verifydb@<hash> — correct snapshot, writes blocked, branch OK
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_CommitHash", func(t *testing.T) {
-		snap1DB := env.client.Database(dbName + "__d_" + hash1)
+		snap1DB := env.client.Database(dbName + "@" + hash1)
 		snap1Items := snap1DB.Collection("items")
-		snap2Items := env.client.Database(dbName + "__d_" + hash2).Collection("items")
+		snap2Items := env.client.Database(dbName + "@" + hash2).Collection("items")
 
 		// hash1: one document only.
 		n1, err := snap1Items.CountDocuments(ctx, bson.D{})
@@ -217,16 +217,16 @@ func TestRootishVerify(t *testing.T) {
 		assert.Equal(t, "from-hash1", branchResult["branch"])
 
 		// Verify the new branch sees the hash1 state (one document).
-		nNew, err := env.client.Database(dbName+"__d_from-hash1").Collection("items").CountDocuments(ctx, bson.D{})
+		nNew, err := env.client.Database(dbName+"@from-hash1").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), nNew, "from-hash1 branch: expected 1 doc (hash1 state)")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: verifydb__d_main~1 — ancestor data, writes blocked, branch OK
+	// Scenario 4: verifydb@main~1 — ancestor data, writes blocked, branch OK
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AncestorExpression", func(t *testing.T) {
-		parentDB := env.client.Database(dbName + "__d_main~1")
+		parentDB := env.client.Database(dbName + "@main~1")
 		parentItems := parentDB.Collection("items")
 
 		// main~1 is the parent of HEAD (commit 1: one document).
@@ -242,7 +242,7 @@ func TestRootishVerify(t *testing.T) {
 		assert.Equal(t, int32(1), parentRows[0]["_id"])
 
 		// main~0 is main itself (same as current HEAD): two documents.
-		nSame, err := env.client.Database(dbName+"__d_main~0").Collection("items").CountDocuments(ctx, bson.D{})
+		nSame, err := env.client.Database(dbName+"@main~0").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), nSame, "main~0: expected 2 docs (same as HEAD)")
 
@@ -265,17 +265,17 @@ func TestRootishVerify(t *testing.T) {
 		assert.Equal(t, "back-one", branchResult["branch"])
 
 		// Verify back-one is at the main~1 state (one document).
-		nNew, err := env.client.Database(dbName+"__d_back-one").Collection("items").CountDocuments(ctx, bson.D{})
+		nNew, err := env.client.Database(dbName+"@back-one").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), nNew, "back-one branch: expected 1 doc (main~1 state)")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: verifydb__d_HEAD — aliases main; HEAD~N aliases main~N.
+	// Scenario 5: verifydb@HEAD — aliases main; HEAD~N aliases main~N.
 	// HEAD^ and other caret forms are still rejected with code 96.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HEAD_AliasesMain", func(t *testing.T) {
-		headDB := env.client.Database(dbName + "__d_HEAD")
+		headDB := env.client.Database(dbName + "@HEAD")
 		headItems := headDB.Collection("items")
 
 		// Read via HEAD returns the same two docs main has at HEAD.
@@ -298,7 +298,7 @@ func TestRootishVerify(t *testing.T) {
 		})
 		require.NoError(t, err, "write via HEAD must succeed (HEAD aliases main)")
 
-		mainItems := env.client.Database(dbName + "__d_main").Collection("items")
+		mainItems := env.client.Database(dbName + "@main").Collection("items")
 		nMain, err := mainItems.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), nMain, "HEAD write must be visible on main — same working set")
@@ -308,7 +308,7 @@ func TestRootishVerify(t *testing.T) {
 
 		// HEAD~1 aliases main~1 — read returns commit 1 state (one document),
 		// writes blocked with code 96.
-		prevDB := env.client.Database(dbName + "__d_HEAD~1")
+		prevDB := env.client.Database(dbName + "@HEAD~1")
 		prevItems := prevDB.Collection("items")
 
 		nPrev, err := prevItems.CountDocuments(ctx, bson.D{})
@@ -319,7 +319,7 @@ func TestRootishVerify(t *testing.T) {
 		assertWriteBlockedOperationFailed(t, err, "insert on HEAD~1")
 
 		// HEAD caret forms (HEAD^, HEAD^N) are still rejected at parse time.
-		assertRootishRejected(t, env.client.Database(dbName+"__d_HEAD^"), "HEAD^ find")
+		assertRootishRejected(t, env.client.Database(dbName+"@HEAD^"), "HEAD^ find")
 	})
 
 	// -------------------------------------------------------------------------
@@ -330,9 +330,9 @@ func TestRootishVerify(t *testing.T) {
 	// the doc actually reaches the server-side parser.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_Reflog_AnyCommandFails", func(t *testing.T) {
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main%40%7Byesterday%7D"), "reflog_yesterday")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main%40%7B5%20minutes%20ago%7D"), "reflog_minutes_ago")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_%40%7B1%7D"), "reflog_bare")
+		assertRootishRejected(t, env.client.Database(dbName+"@main%40%7Byesterday%7D"), "reflog_yesterday")
+		assertRootishRejected(t, env.client.Database(dbName+"@main%40%7B5%20minutes%20ago%7D"), "reflog_minutes_ago")
+		assertRootishRejected(t, env.client.Database(dbName+"@%40%7B1%7D"), "reflog_bare")
 	})
 
 	// -------------------------------------------------------------------------
@@ -341,8 +341,8 @@ func TestRootishVerify(t *testing.T) {
 	// MongoDB DB names and rejected by mongosh client-side.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_Range_AnyCommandFails", func(t *testing.T) {
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main%2E%2Efeature"), "range_two_dot")
-		assertRootishRejected(t, env.client.Database(dbName+"__d_main%2E%2E%2Efeature"), "range_three_dot")
+		assertRootishRejected(t, env.client.Database(dbName+"@main%2E%2Efeature"), "range_two_dot")
+		assertRootishRejected(t, env.client.Database(dbName+"@main%2E%2E%2Efeature"), "range_three_dot")
 	})
 }
 

@@ -59,7 +59,7 @@ Revert C2 (which added `_id:2`) onto main. Since C2's parent is C1 (current base
 this applies cleanly by removing `_id:2`.
 
 ```js
-const rRevert1 = db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, commit: hashC2 })
+const rRevert1 = db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashC2 })
 printjson(rRevert1)
 // Expected: {
 //   commitId: "<hashC3>",
@@ -84,7 +84,7 @@ db.items.find({}).toArray()
 Verify the revert commit is a single-parent commit (not a merge commit):
 
 ```js
-const log = db.getSiblingDB("revertdb__d_main").runCommand({ doltLog: 1, limit: 1 })
+const log = db.getSiblingDB("revertdb@main").runCommand({ doltLog: 1, limit: 1 })
 printjson(log.commits[0])
 // Expected: no "parent2" field (single parent commit)
 ```
@@ -102,7 +102,7 @@ const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "carol <
 const hashC3 = r3.commitId
 
 // Revert with custom message and author.
-const rRevert2 = db.getSiblingDB("revertdb__d_main").runCommand({
+const rRevert2 = db.getSiblingDB("revertdb@main").runCommand({
   doltRevert: 1,
   commit: hashC3,
   message: "undo: add item three",
@@ -138,7 +138,7 @@ db.runCommand({ doltCommit: 1, message: "modify-ten", author: "alice <alice@dumb
 // Revert hashAddTen — expect conflict.
 // In mongosh, runCommand throws a MongoServerError when ok:0.
 try {
-  db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, commit: hashAddTen })
+  db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashAddTen })
 } catch (e) {
   print(e)
   // MongoServerError: doltRevert: unresolved conflicts in 1 collection(s)
@@ -164,12 +164,12 @@ Continuing from Scenario 3 (revert with conflicts in progress).
 
 ```js
 // Step 1: Summary — list which collections have unresolved conflicts.
-const rSummary = db.getSiblingDB("revertdb__d_main").runCommand({ doltConflicts: 1 })
+const rSummary = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
 // Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
 
 // Step 2: Per-collection detail — list individual document conflicts.
-const rConflicts = db.getSiblingDB("revertdb__d_main").runCommand({ doltConflicts: 1, collection: "items" })
+const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1, collection: "items" })
 printjson(rConflicts)
 // Expected: { conflicts: [ { conflictId: "c0", base: {...},
 //             ours: { _id: 10, v: 99 }, theirs: null (or deleted),
@@ -179,7 +179,7 @@ printjson(rConflicts)
 const conflictId = rConflicts.conflicts[0].conflictId
 
 // Step 3: Resolve — accept "ours" (keep main's modified version of _id:10).
-const rResolve = db.getSiblingDB("revertdb__d_main").runCommand({
+const rResolve = db.getSiblingDB("revertdb@main").runCommand({
   doltResolveConflict: 1,
   collection: "items",
   conflictId: conflictId,
@@ -189,12 +189,12 @@ printjson(rResolve)
 // Expected: { ok: 1 }
 
 // Step 4: After resolution, doltConflicts summary returns an empty collections array.
-const rAfter = db.getSiblingDB("revertdb__d_main").runCommand({ doltConflicts: 1 })
+const rAfter = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
 printjson(rAfter)
 // Expected: { collections: [], ok: 1 }
 
 // Step 5: Continue the revert.
-const rContinue = db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, continue: 1 })
+const rContinue = db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, continue: 1 })
 printjson(rContinue)
 // Expected: { commitId: "<hash>", message: "Revert \"add-ten\"\n\nThis reverts commit <hashAddTen>.", ok: 1 }
 ```
@@ -222,13 +222,13 @@ db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "alice <alice@d
 
 // Revert — expect conflict (throws in mongosh).
 try {
-  db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, commit: hashAdd20 })
+  db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashAdd20 })
 } catch (e) {
   // MongoServerError: doltRevert: unresolved conflicts in 1 collection(s)
 }
 
 // Abort: restore pre-revert state.
-const rAbort = db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, abort: 1 })
+const rAbort = db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, abort: 1 })
 printjson(rAbort)
 // Expected: { message: "revert aborted", ok: 1 }
 ```
@@ -245,18 +245,18 @@ Key checks:
 
 **Missing commit parameter:**
 ```js
-db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1 })
+db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1 })
 // Expected: ok: 0, errmsg mentions "commit" or "required"
 ```
 
 **Abort when no revert in progress:**
 ```js
-db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, abort: 1 })
+db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, abort: 1 })
 // Expected: ok: 0, errmsg: "no revert in progress to abort"
 ```
 
 **Continue when no revert in progress:**
 ```js
-db.getSiblingDB("revertdb__d_main").runCommand({ doltRevert: 1, continue: 1 })
+db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, continue: 1 })
 // Expected: ok: 0, errmsg mentions "no revert in progress"
 ```

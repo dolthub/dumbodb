@@ -67,7 +67,7 @@ func TestRootish_ParseRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			encoded := dbName + "__d_" + tc.rootish
+			encoded := dbName + "@" + tc.rootish
 			assertRootishRejected(t, env.client.Database(encoded), tc.rootish)
 		})
 	}
@@ -102,7 +102,7 @@ func TestRootish_DumboDBCurrentBranch_EndToEnd(t *testing.T) {
 		t.Parallel()
 
 		var result bson.M
-		err := env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestRootish_DumboDBCurrentBranch_EndToEnd(t *testing.T) {
 	t.Run("commit_hash_returns_code96", func(t *testing.T) {
 		t.Parallel()
 
-		err := env.client.Database(dbName+"__d_"+hash1).RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"@"+hash1).RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on hash rootish")
@@ -121,7 +121,7 @@ func TestRootish_DumboDBCurrentBranch_EndToEnd(t *testing.T) {
 	t.Run("ancestor_expr_returns_code96", func(t *testing.T) {
 		t.Parallel()
 
-		err := env.client.Database(dbName+"__d_main~1").RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor rootish")
@@ -129,18 +129,18 @@ func TestRootish_DumboDBCurrentBranch_EndToEnd(t *testing.T) {
 }
 
 // TestRootish_AllDigitSuffix_TreatedAsPlainDB verifies that a database name whose
-// __d_ suffix is an all-digit string (e.g. a UnixNano timestamp from test harnesses)
+// @ suffix is an all-digit string (e.g. a UnixNano timestamp from test harnesses)
 // is treated as a plain database name rather than failing with "not found as branch
 // or tag". This guards against clients accidentally producing database names like
-// "prefix__d_1775505756999075683" that would otherwise be misinterpreted as a branch.
+// "prefix@1775505756999075683" that would otherwise be misinterpreted as a branch.
 func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
 	ctx := context.Background()
 
-	// Simulate a database name containing __d_ followed by an all-digit timestamp.
-	dbName := "parityreg_sometest__d_1775505756999075683"
+	// Simulate a database name containing @ followed by an all-digit timestamp.
+	dbName := "parityreg_sometest@1775505756999075683"
 	coll := env.client.Database(dbName).Collection("col")
 
 	// Insert must succeed — the numeric suffix must NOT be misinterpreted as a branch.
@@ -170,7 +170,7 @@ func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	// hash1 has 1 doc; HEAD (after setup) has 2 docs.
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
-	snapColl := env.client.Database(dbName + "__d_" + hash1).Collection(collName)
+	snapColl := env.client.Database(dbName + "@" + hash1).Collection(collName)
 	mainColl := env.client.Database(dbName).Collection(collName)
 
 	// Main has 2 docs.

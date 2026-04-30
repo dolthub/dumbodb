@@ -113,7 +113,7 @@ func TestCommitVerify(t *testing.T) {
 	t.Run("Scenario2_NamedBranch_CommitGoesToBranch", func(t *testing.T) {
 		// Create a "feature" branch from main HEAD.
 		var branchResult bson.M
-		err := env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Decode(&branchResult)
@@ -121,7 +121,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, "feature", branchResult["branch"])
 
 		// Insert a document on the feature branch.
-		featureDB := env.client.Database(dbName + "__d_feature")
+		featureDB := env.client.Database(dbName + "@feature")
 		_, err = featureDB.Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "label", Value: "gamma"},
@@ -150,7 +150,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(4), featureCount, "feature branch must have 4 documents after commit")
 
-		mainCount, err := env.client.Database(dbName+"__d_main").Collection("items").CountDocuments(ctx, bson.D{})
+		mainCount, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), mainCount, "main must still have 3 documents (feature commit must not affect main)")
 	})

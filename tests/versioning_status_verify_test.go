@@ -342,7 +342,7 @@ func TestStatusVerify(t *testing.T) {
 		// Commit current state so we have a stable commit hash to point at.
 		commitHash := dumboDBCommit(t, env, dbName, "commit for read-only status", "alice <alice@dumbodb>")
 
-		readOnlyDB := dbName + "__d_" + commitHash
+		readOnlyDB := dbName + "@" + commitHash
 		err := env.client.Database(readOnlyDB).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Err()
@@ -355,7 +355,7 @@ func TestStatusVerify(t *testing.T) {
 			"error must mention no working set so callers know why doltStatus doesn't apply")
 
 		// Ancestor expressions (~N) are also read-only and must error the same way.
-		parentDB := dbName + "__d_main~1"
+		parentDB := dbName + "@main~1"
 		err = env.client.Database(parentDB).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Err()

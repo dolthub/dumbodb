@@ -564,12 +564,12 @@ func TestDiffVerify(t *testing.T) {
 		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario9", "alice <alice@dumbodb>")
 
 		// Create a feature branch that starts at current main HEAD.
-		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "rootishtest"},
 		}).Err(), "doltBranch to create 'rootishtest'")
 
-		rootish := env.client.Database(dbName + "__d_rootishtest")
+		rootish := env.client.Database(dbName + "@rootishtest")
 
 		// Two commits on main — feature branch stays behind. hashC1 is empty
 		// (no working changes), hashC2 adds _id:1.

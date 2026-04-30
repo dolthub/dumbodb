@@ -201,7 +201,7 @@ no `refs` field.
 
 ```js
 // Create a second branch pointing at the current main HEAD.
-db.getSiblingDB("logdb__d_main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("logdb@main").runCommand({ doltBranch: 1, branch: "feature" })
 
 // Query from main — hash3 is tip of both "main" and "feature".
 db.runCommand({ doltLog: 1, limit: 2 })
@@ -236,7 +236,7 @@ Key checks:
 - `commits[0].refs` contains `"HEAD"` and `"main"` (connection branch gets HEAD + bare name)
 - `commits[0].refs` also contains `"feature"` (bare name for the other branch)
 - `commits[1]` has no `refs` field (non-head commit)
-- When the same command runs against `logdb__d_feature`, `commits[0].refs` becomes
+- When the same command runs against `logdb@feature`, `commits[0].refs` becomes
   `["HEAD", "feature", "main"]`
 
 ---
@@ -256,7 +256,7 @@ const rA = mdb.runCommand({ doltCommit: 1, message: "add-one", author: "alice <a
 const hashA = rA.commitId
 
 // Create "feat" branch from main HEAD (hashA).
-mdb.getSiblingDB("logmerge__d_main").runCommand({ doltBranch: 1, branch: "feat" })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltBranch: 1, branch: "feat" })
 
 // Advance main: _id:2 → hashB.
 mdb.items.insertOne({ _id: 2, v: 2 })
@@ -264,13 +264,13 @@ const rB = mdb.runCommand({ doltCommit: 1, message: "add-two", author: "alice <a
 const hashB = rB.commitId
 
 // Advance feat independently: _id:3 → hashC.
-const featdb = db.getSiblingDB("logmerge__d_feat")
+const featdb = db.getSiblingDB("logmerge@feat")
 featdb.items.insertOne({ _id: 3, v: 3 })
 const rC = featdb.runCommand({ doltCommit: 1, message: "add-three-feat", author: "alice <alice@dumbodb>" })
 const hashC = rC.commitId
 
 // Merge feat into main → hashM.
-const rM = mdb.getSiblingDB("logmerge__d_main").runCommand({ doltMerge: 1, merge_in: "feat" })
+const rM = mdb.getSiblingDB("logmerge@main").runCommand({ doltMerge: 1, merge_in: "feat" })
 const hashM = rM.commitId
 
 print("hashA =", hashA, "hashB =", hashB, "hashC =", hashC, "hashM =", hashM)
@@ -300,7 +300,7 @@ newer-timestamp tie-breaker.)
 ## Scenario 6: Merge commit appears in doltLog with parent1 and parent2
 
 ```js
-mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1, limit: 1 })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltLog: 1, limit: 1 })
 ```
 
 Expected:
@@ -337,7 +337,7 @@ Starting traversal at `hashC` reaches only commits reachable from that tip:
 (the merge commit) must **not** appear.
 
 ```js
-mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1, from: hashC })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltLog: 1, from: hashC })
 ```
 
 Expected:
@@ -363,12 +363,12 @@ Key checks:
 
 ## Scenario 7b: doltLog on the feat branch connection
 
-Running `doltLog` against `logmerge__d_feat` must walk feat's HEAD, not main's.
+Running `doltLog` against `logmerge@feat` must walk feat's HEAD, not main's.
 The walk is `hashC → hashA → init`; `hashB` and `hashM` are unreachable from
 feat's tip. The tip commit (`hashC`) carries both `"HEAD"` and `"feat"` refs.
 
 ```js
-mdb.getSiblingDB("logmerge__d_feat").runCommand({ doltLog: 1 })
+mdb.getSiblingDB("logmerge@feat").runCommand({ doltLog: 1 })
 ```
 
 Expected:
@@ -398,7 +398,7 @@ From main HEAD the walk reaches every commit transitively reachable via **both**
 parents of `hashM`, ordered by commit height then newer-timestamp-first.
 
 ```js
-mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1 })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltLog: 1 })
 ```
 
 Expected:
@@ -431,7 +431,7 @@ order. `hashC` still wins the height-2 tie over `hashB`, so it appears in the
 result and `hashB` does not.
 
 ```js
-mdb.getSiblingDB("logmerge__d_main").runCommand({ doltLog: 1, limit: 2 })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltLog: 1, limit: 2 })
 ```
 
 Expected:

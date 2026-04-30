@@ -30,7 +30,7 @@
 // write; WRST.staged_root_addr stays equal to HEAD's rootValue until an explicit
 // stage operation. `dolt status` shows "Changes not staged for commit" after writes.
 //
-// Branch parsing: the database name may contain a __d_ separator (e.g. mydb__d_main)
+// Branch parsing: the database name may contain an '@' separator (e.g. mydb@main)
 // to specify the branch, but currently all data lives in a single NBS store per
 // logical database name.
 package dolt
@@ -78,10 +78,10 @@ const (
 	workingSetDataset = "workingSets/heads/main"
 
 	// dbBranchSep is the separator between the database name and rootish in an
-	// encoded database name (e.g. "mydb__d_main", "mydb__d_feature/foo").
-	// The __d_ prefix distinguishes branch-encoded names from plain database names
-	// that happen to contain double underscores.
-	dbBranchSep = "__d_"
+	// encoded database name (e.g. "mydb@main", "mydb@feature/foo"). The '@'
+	// character is reserved as the delimiter and is forbidden in raw database
+	// and raw branch names.
+	dbBranchSep = "@"
 )
 
 // collectionValidator holds schema validation options for a single collection (in-memory only).
@@ -313,7 +313,7 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 
 // Database implements backends.Backend.
 //
-// name may be an encoded database name of the form "dbname__d_rootish" where
+// name may be an encoded database name of the form "dbname@rootish" where
 // rootish is a branch name, commit hash, tag name, or ancestor expression.
 // The base db name and rootish are parsed here; collection reads use the
 // rootish to load the historical RTVL when it is a commit hash or tag.
@@ -326,8 +326,8 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 	}), nil
 }
 
-// splitEncodedDBName splits an encoded database name "dbname__d_rootish" into
-// the base database name and rootish. If no __d_ separator is present, the
+// splitEncodedDBName splits an encoded database name "dbname@rootish" into
+// the base database name and rootish. If no '@' separator is present, the
 // rootish defaults to "main" (the default branch).
 //
 // The rootish component is percent-decoded (RFC 3986 path encoding) so that
@@ -340,10 +340,10 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // "current branch" concept per connection, so HEAD aliases the default branch.
 // Downstream resolvers never see the literal "HEAD".
 //
-// All-digit strings after __d_ (e.g. Unix nanosecond timestamps) are not valid
+// All-digit strings after '@' (e.g. Unix nanosecond timestamps) are not valid
 // rootish expressions and cause the whole encoded name to be treated as a plain
 // database name. This prevents spurious "not found as branch or tag" errors when
-// client code accidentally produces database names like "prefix__d_1775505756999075683".
+// client code accidentally produces database names like "prefix@1775505756999075683".
 func splitEncodedDBName(encoded string) (dbName, rootish string) {
 	if idx := strings.Index(encoded, dbBranchSep); idx > 0 {
 		raw := encoded[idx+len(dbBranchSep):]

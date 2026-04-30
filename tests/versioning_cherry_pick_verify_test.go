@@ -58,7 +58,7 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
@@ -66,13 +66,13 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 	assert.Equal(t, "feature", branchResult["branch"])
 
 	// Advance feature with a commit that adds _id:2.
-	_, err = env.client.Database(dbName+"__d_feature").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
 
-	hashC2 = dumboDBCommit(t, env, dbName+"__d_feature", "add-two", "bob <bob@dumbodb>")
+	hashC2 = dumboDBCommit(t, env, dbName+"@feature", "add-two", "bob <bob@dumbodb>")
 	require.NotEmpty(t, hashC2, "feature commit hash must not be empty")
 
 	return hashC1, hashC2
@@ -87,7 +87,7 @@ func TestCherryPickVerify(t *testing.T) {
 	hashC1, hashC2 := cherryPickVerifySetup(t, env, dbName)
 	_ = hashC1
 
-	mainDB := env.client.Database(dbName + "__d_main")
+	mainDB := env.client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Clean cherry-pick — response shape and commit annotation
@@ -142,13 +142,13 @@ func TestCherryPickVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_CustomMessageAndAuthor", func(t *testing.T) {
 		// Add a new commit on feature to cherry-pick.
-		_, err := env.client.Database(dbName+"__d_feature").Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
 
-		hashC3feat := dumboDBCommit(t, env, dbName+"__d_feature", "add-three", "carol <carol@dumbodb>")
+		hashC3feat := dumboDBCommit(t, env, dbName+"@feature", "add-three", "carol <carol@dumbodb>")
 
 		// Cherry-pick with custom message and author.
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -172,12 +172,12 @@ func TestCherryPickVerify(t *testing.T) {
 	var hashConflictFeat string
 	t.Run("Scenario3_ConflictResponse", func(t *testing.T) {
 		// Modify _id:1 on feature (will conflict with main's version).
-		_, err := env.client.Database(dbName+"__d_feature").Collection("items").UpdateOne(ctx,
+		_, err := env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
 		require.NoError(t, err)
-		hashConflictFeat = dumboDBCommit(t, env, dbName+"__d_feature", "conflict-source", "alice <alice@dumbodb>")
+		hashConflictFeat = dumboDBCommit(t, env, dbName+"@feature", "conflict-source", "alice <alice@dumbodb>")
 
 		// Modify _id:1 on main too (independent change to create conflict).
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -185,7 +185,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"__d_main", "conflict-target", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName+"@main", "conflict-target", "alice <alice@dumbodb>")
 
 		// Cherry-pick — expect conflict.
 		// In mongosh this throws a MongoServerError (ok:0 surfaces as an exception).
@@ -309,12 +309,12 @@ func TestCherryPickVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AbortCherryPick", func(t *testing.T) {
 		// Create another conflicting commit on feature.
-		_, err := env.client.Database(dbName+"__d_feature").Collection("items").UpdateOne(ctx,
+		_, err := env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		hashConflict2 := dumboDBCommit(t, env, dbName+"__d_feature", "another-conflict", "alice <alice@dumbodb>")
+		hashConflict2 := dumboDBCommit(t, env, dbName+"@feature", "another-conflict", "alice <alice@dumbodb>")
 
 		// Create conflicting change on main.
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -322,7 +322,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
 		)
 		require.NoError(t, err)
-		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"__d_main", "another-conflict-target", "alice <alice@dumbodb>")
+		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "another-conflict-target", "alice <alice@dumbodb>")
 
 		// Start cherry-pick — expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{

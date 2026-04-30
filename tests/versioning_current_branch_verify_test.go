@@ -66,7 +66,7 @@ func currentBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) 
 
 	// Create branch "feature" from main HEAD.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
@@ -97,11 +97,11 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: branchdb__d_main — returns "main"
+	// Scenario 2: branchdb@main — returns "main"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_ExplicitMain_ReturnsMain", func(t *testing.T) {
 		var result bson.M
-		require.NoError(t, env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "main", result["branch"])
@@ -109,11 +109,11 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: branchdb__d_feature — returns "feature"
+	// Scenario 3: branchdb@feature — returns "feature"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_FeatureBranch_ReturnsFeature", func(t *testing.T) {
 		var result bson.M
-		require.NoError(t, env.client.Database(dbName+"__d_feature").RunCommand(ctx, bson.D{
+		require.NoError(t, env.client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Decode(&result))
 		assert.Equal(t, "feature", result["branch"])
@@ -121,20 +121,20 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: branchdb__d_<hash> — error (code 96)
+	// Scenario 4: branchdb@<hash> — error (code 96)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_CommitHash_ReturnsError96", func(t *testing.T) {
-		err := env.client.Database(dbName+"__d_"+hash1).RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"@"+hash1).RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on commit hash rootish")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: branchdb__d_main~1 — error (code 96)
+	// Scenario 5: branchdb@main~1 — error (code 96)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AncestorExpression_ReturnsError96", func(t *testing.T) {
-		err := env.client.Database(dbName+"__d_main~1").RunCommand(ctx, bson.D{
+		err := env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
 			{Key: "doltCurrentBranch", Value: int32(1)},
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor expression rootish")

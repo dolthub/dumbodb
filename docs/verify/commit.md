@@ -96,10 +96,10 @@ data is visible on the branch but not on main (isolation check).
 
 ```js
 // Create branch "feature" from main HEAD
-db.getSiblingDB("commitdb__d_main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
-var feature = db.getSiblingDB("commitdb__d_feature")
+var feature = db.getSiblingDB("commitdb@feature")
 feature.items.insertOne({ _id: 3, label: "gamma", v: 3 })
 
 const r2 = feature.runCommand({ doltCommit: 1, message: "feature commit", author: "alice <alice@dumbodb>" })
@@ -110,7 +110,7 @@ printjson(r2)
 feature.items.countDocuments({})
 // Expected: 4 (three from setup + Scenario 1 + _id:3)
 
-db.getSiblingDB("commitdb__d_main").items.countDocuments({})
+db.getSiblingDB("commitdb@main").items.countDocuments({})
 // Expected: 3 (feature commit must not affect main)
 ```
 

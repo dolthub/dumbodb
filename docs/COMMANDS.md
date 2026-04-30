@@ -7,17 +7,17 @@ DumboDB extends MongoDB's wire protocol with version-control commands that expos
 All versioning commands target a specific branch by encoding the branch name in the database name:
 
 ```
-<db>__d_<rootish>
+<db>@<rootish>
 ```
 
 | Form | Example | Writable? |
 |------|---------|-----------|
 | Plain name (defaults to `main`) | `mydb` | Yes |
-| Branch name | `mydb__d_feature` | Yes |
-| Commit hash (32-char base32) | `mydb__d_na7kfra98...` | No |
-| Ancestor expression | `mydb__d_main~2` | No |
+| Branch name | `mydb@feature` | Yes |
+| Commit hash (32-char base32) | `mydb@na7kfra98...` | No |
+| Ancestor expression | `mydb@main~2` | No |
 
-Use `db.getSiblingDB("mydb__d_feature")` in mongosh to connect to a branch.
+Use `db.getSiblingDB("mydb@feature")` in mongosh to connect to a branch.
 
 ## Available Commands
 
@@ -70,7 +70,7 @@ Commits the current working set on the branch encoded in the database name.
 
 ```js
 // Connect to the "orders" database on branch "main"
-var db = db.getSiblingDB("orders__d_main")
+var db = db.getSiblingDB("orders@main")
 
 db.orders.insertOne({ _id: 1, amount: 100, status: "pending" })
 
@@ -126,19 +126,19 @@ Creates or deletes a branch from the rootish encoded in the database name.
 
 ```js
 // Create a "feature" branch from main HEAD
-db.getSiblingDB("orders__d_main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "feature" })
 // { branch: "feature", ok: 1 }
 
 // Create a branch from an ancestor commit
-db.getSiblingDB("orders__d_main~2").runCommand({ doltBranch: 1, branch: "rollback-point" })
+db.getSiblingDB("orders@main~2").runCommand({ doltBranch: 1, branch: "rollback-point" })
 // { branch: "rollback-point", ok: 1 }
 
 // Safe-delete a merged branch
-db.getSiblingDB("orders__d_main").runCommand({ doltBranch: 1, branch: "feature", delete: 1 })
+db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "feature", delete: 1 })
 // { branch: "feature", ok: 1 }
 
 // Force-delete a branch with unmerged commits
-db.getSiblingDB("orders__d_main").runCommand({ doltBranch: 1, branch: "abandoned", forceDelete: 1 })
+db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "abandoned", forceDelete: 1 })
 // { branch: "abandoned", ok: 1 }
 ```
 
@@ -202,7 +202,7 @@ For `continue`, `message` and `author` are optional overrides.
 ### Example
 
 ```js
-var main = db.getSiblingDB("orders__d_main")
+var main = db.getSiblingDB("orders@main")
 
 // Standard merge
 main.runCommand({ doltMerge: 1, merge_in: "feature" })
@@ -292,7 +292,7 @@ For `continue`, `message` and `author` are optional overrides.
 ### Example
 
 ```js
-var main = db.getSiblingDB("orders__d_main")
+var main = db.getSiblingDB("orders@main")
 
 // Cherry-pick a commit from another branch onto main
 main.runCommand({ doltCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
@@ -359,14 +359,14 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 
 ```js
 // Rebase feature onto main
-db.getSiblingDB("orders__d_feature").runCommand({ doltRebase: 1, onto: "main" })
+db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, onto: "main" })
 // { commitsReplayed: 3, newTip: "abc123...", ok: 1 }
 
 // If conflicts arise — resolve them, then continue
-db.getSiblingDB("orders__d_feature").runCommand({ doltRebase: 1, continue: 1 })
+db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, continue: 1 })
 
 // Abort
-db.getSiblingDB("orders__d_feature").runCommand({ doltRebase: 1, abort: 1 })
+db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, abort: 1 })
 // { newTip: "original-tip...", ok: 1 }
 ```
 
@@ -422,7 +422,7 @@ timestamp first.
 ### Example
 
 ```js
-db.getSiblingDB("orders__d_main").runCommand({ doltLog: 1, limit: 2 })
+db.getSiblingDB("orders@main").runCommand({ doltLog: 1, limit: 2 })
 // {
 //   commits: [
 //     {
@@ -497,7 +497,7 @@ None (beyond the implicit `$db` connection).
 ### Example
 
 ```js
-var db = db.getSiblingDB("orders__d_main")
+var db = db.getSiblingDB("orders@main")
 
 db.orders.insertOne({ _id: 99, amount: 500 })
 
@@ -578,7 +578,7 @@ Returns a document-level diff between two states for the branch encoded in the d
 ### Example
 
 ```js
-var db = db.getSiblingDB("orders__d_main")
+var db = db.getSiblingDB("orders@main")
 
 // Insert baseline and commit
 db.orders.insertOne({ _id: 1, amount: 100 })
@@ -654,7 +654,7 @@ Moves the branch HEAD to the specified commit. Supports soft (default) and hard 
 ### Example
 
 ```js
-var db = db.getSiblingDB("orders__d_main")
+var db = db.getSiblingDB("orders@main")
 
 // Soft reset to one commit back — uncommitted changes preserved
 const log = db.runCommand({ doltLog: 1, limit: 2 })
@@ -730,7 +730,7 @@ For `continue`, `message` and `author` are optional overrides.
 ### Example
 
 ```js
-var main = db.getSiblingDB("orders__d_main")
+var main = db.getSiblingDB("orders@main")
 
 // View history to find the commit to revert
 const log = main.runCommand({ doltLog: 1, limit: 3 })
@@ -783,7 +783,7 @@ None (beyond the implicit `$db` connection).
 db.getSiblingDB("orders").runCommand({ doltCurrentBranch: 1 })
 // { branch: "main", ok: 1 }
 
-db.getSiblingDB("orders__d_feature").runCommand({ doltCurrentBranch: 1 })
+db.getSiblingDB("orders@feature").runCommand({ doltCurrentBranch: 1 })
 // { branch: "feature", ok: 1 }
 ```
 
@@ -840,7 +840,7 @@ Returns conflict information for an in-progress merge, cherry-pick, or rebase on
 ### Example
 
 ```js
-var main = db.getSiblingDB("orders__d_main")
+var main = db.getSiblingDB("orders@main")
 
 // After a merge conflict:
 main.runCommand({ doltConflicts: 1 })
@@ -897,7 +897,7 @@ Resolves a single document conflict in the current in-progress merge, cherry-pic
 ### Example
 
 ```js
-var main = db.getSiblingDB("orders__d_main")
+var main = db.getSiblingDB("orders@main")
 
 // Resolve using our version
 main.runCommand({
@@ -950,7 +950,7 @@ main.runCommand({ doltMerge: 1, continue: 1 })
 The same three-step pattern applies to `doltMerge`, `doltCherryPick`, and `doltRebase` when they produce conflicts:
 
 ```js
-var main = db.getSiblingDB("orders__d_main")
+var main = db.getSiblingDB("orders@main")
 
 // Step 1: Operation returns ok: 0 with conflict summary
 main.runCommand({ doltMerge: 1, merge_in: "feature" })

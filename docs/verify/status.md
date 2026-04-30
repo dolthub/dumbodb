@@ -282,7 +282,7 @@ Key checks:
 ## Scenario 8: Status on a read-only rootish — clear error
 
 `doltStatus` compares the working set against HEAD, but a connection pinned to a
-commit hash or ancestor expression (e.g. `mydb__d_<hash>` or `mydb__d_main~1`)
+commit hash or ancestor expression (e.g. `mydb@<hash>` or `mydb@main~1`)
 is a read-only snapshot with no working set. The command returns a clear error
 rather than silent empty output.
 
@@ -292,14 +292,14 @@ const r = db.runCommand({ doltCommit: 1, message: "commit for read-only status",
 const hash = r.commitId
 
 // Attach to the commit snapshot (read-only rootish).
-const snap = db.getSiblingDB("statusdb__d_" + hash)
+const snap = db.getSiblingDB("statusdb@" + hash)
 snap.runCommand({ doltStatus: 1 })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: doltStatus: no working set
 //   (connection is at a specific commit, not a named branch)
 
 // Ancestor expressions are also read-only and produce the same error.
-db.getSiblingDB("statusdb__d_main~1").runCommand({ doltStatus: 1 })
+db.getSiblingDB("statusdb@main~1").runCommand({ doltStatus: 1 })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: doltStatus: no working set
 //   (connection is at a specific commit, not a named branch)
@@ -345,8 +345,8 @@ Key checks:
 
 | Rootish form | Example | `doltStatus` |
 |---|---|---|
-| Branch name | `mydb__d_main`, `mydb__d_feature` | ✅ works |
-| Commit hash | `mydb__d_<32-char hash>` | ❌ code 96 "no working set" |
-| Ancestor expression | `mydb__d_main~1` | ❌ code 96 "no working set" |
+| Branch name | `mydb@main`, `mydb@feature` | ✅ works |
+| Commit hash | `mydb@<32-char hash>` | ❌ code 96 "no working set" |
+| Ancestor expression | `mydb@main~1` | ❌ code 96 "no working set" |
 
 `doltStatus` is a working-set concept — only writable rootish forms have one.

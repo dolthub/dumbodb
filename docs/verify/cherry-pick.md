@@ -38,12 +38,12 @@ printjson(r1)
 const hashC1 = r1.commitId
 
 // Create "feature" branch from main HEAD.
-db.getSiblingDB("pickdb__d_main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("pickdb@main").runCommand({ doltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 // Advance feature with a commit we will cherry-pick onto main.
-db.getSiblingDB("pickdb__d_feature").items.insertOne({ _id: 2, v: 2 })
-const r2 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@dumbodb>" })
+db.getSiblingDB("pickdb@feature").items.insertOne({ _id: 2, v: 2 })
+const r2 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@dumbodb>" })
 printjson(r2)
 // Expected: { commitId: "<hashC2>", branch: "feature", message: "add-two", ok: 1 }
 const hashC2 = r2.commitId
@@ -64,7 +64,7 @@ Cherry-pick the feature commit (adds `_id:2`) onto main. Since main doesn't have
 and feature's parent (C1 = main HEAD) is the common base, this applies cleanly.
 
 ```js
-const rPick1 = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashC2 })
+const rPick1 = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashC2 })
 printjson(rPick1)
 // Expected: { commitId: "<hashC3>", message: "add-two\n\n(cherry picked from commit <hashC2>)", ok: 1 }
 ```
@@ -84,7 +84,7 @@ db.items.find({}, { _id: 1, v: 1 }).sort({ _id: 1 }).toArray()
 Verify the cherry-pick commit is a single-parent commit (not a merge commit):
 
 ```js
-const log = db.getSiblingDB("pickdb__d_main").runCommand({ doltLog: 1, limit: 2 })
+const log = db.getSiblingDB("pickdb@main").runCommand({ doltLog: 1, limit: 2 })
 printjson(log.commits[0])
 // Expected: no "parent2" field (single parent commit)
 ```
@@ -98,12 +98,12 @@ To re-test from a clean state without re-running setup, advance feature with ano
 
 ```js
 // Add a third document on feature for this scenario.
-db.getSiblingDB("pickdb__d_feature").items.insertOne({ _id: 3, v: 3 })
-const r3 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
+db.getSiblingDB("pickdb@feature").items.insertOne({ _id: 3, v: 3 })
+const r3 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
 const hashC3feat = r3.commitId
 
 // Cherry-pick C3 onto main with a custom message and author.
-const rPick2 = db.getSiblingDB("pickdb__d_main").runCommand({
+const rPick2 = db.getSiblingDB("pickdb@main").runCommand({
   doltCherryPick: 1,
   commit: hashC3feat,
   message: "port: add item three",
@@ -125,8 +125,8 @@ Create conflicting changes on both branches so cherry-pick cannot apply cleanly.
 
 ```js
 // Modify _id:1 on feature (conflicting with main's version).
-db.getSiblingDB("pickdb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 99 } })
-const r4 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "alice <alice@dumbodb>" })
+db.getSiblingDB("pickdb@feature").items.updateOne({ _id: 1 }, { $set: { v: 99 } })
+const r4 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "alice <alice@dumbodb>" })
 const hashC4feat = r4.commitId
 
 // Modify _id:1 on main too (independently).
@@ -136,7 +136,7 @@ db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice
 // Cherry-pick the conflicting feature commit onto main.
 // In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
 try {
-  db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
+  db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
 } catch (e) {
   print(e)
   // MongoServerError: doltCherryPick: unresolved conflicts in 1 collection(s)
@@ -163,12 +163,12 @@ Continuing from Scenario 3 (cherry-pick with conflicts in progress).
 
 ```js
 // Step 1: Summary — list which collections have unresolved conflicts.
-const rSummary = db.getSiblingDB("pickdb__d_main").runCommand({ doltConflicts: 1 })
+const rSummary = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
 // Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
 
 // Step 2: Per-collection detail — list individual document conflicts.
-const rConflicts = db.getSiblingDB("pickdb__d_main").runCommand({ doltConflicts: 1, collection: "items" })
+const rConflicts = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1, collection: "items" })
 printjson(rConflicts)
 // Expected: { conflicts: [ { conflictId: "c0", base: {...},
 //             ours: { _id: 1, v: 100 }, theirs: { _id: 1, v: 99 },
@@ -178,7 +178,7 @@ printjson(rConflicts)
 const conflictId = rConflicts.conflicts[0].conflictId
 
 // Step 3: Resolve — accept "theirs" (the cherry-picked value v:99).
-const rResolve = db.getSiblingDB("pickdb__d_main").runCommand({
+const rResolve = db.getSiblingDB("pickdb@main").runCommand({
   doltResolveConflict: 1,
   collection: "items",
   conflictId: conflictId,
@@ -188,12 +188,12 @@ printjson(rResolve)
 // Expected: { ok: 1 }
 
 // Step 4: After resolution, doltConflicts summary returns an empty collections array.
-const rAfter = db.getSiblingDB("pickdb__d_main").runCommand({ doltConflicts: 1 })
+const rAfter = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rAfter)
 // Expected: { collections: [], ok: 1 }
 
 // Step 5: Continue the cherry-pick (equivalent to doltMerge continue:1 for merges).
-const rContinue = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, continue: 1 })
+const rContinue = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, continue: 1 })
 printjson(rContinue)
 // Expected: { commitId: "<hash>", message: "conflict-source\n\n(cherry picked from commit <hashC4feat>)", ok: 1 }
 ```
@@ -213,8 +213,8 @@ Start another conflicting cherry-pick and then abort it.
 
 ```js
 // Create another conflicting commit on feature.
-db.getSiblingDB("pickdb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 200 } })
-const r5 = db.getSiblingDB("pickdb__d_feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "alice <alice@dumbodb>" })
+db.getSiblingDB("pickdb@feature").items.updateOne({ _id: 1 }, { $set: { v: 200 } })
+const r5 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "alice <alice@dumbodb>" })
 const hashConflict2 = r5.commitId
 
 // Modify _id:1 on main to create conflict.
@@ -223,13 +223,13 @@ db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alic
 
 // Cherry-pick — expect conflict (throws in mongosh).
 try {
-  db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })
+  db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })
 } catch (e) {
   // MongoServerError: doltCherryPick: unresolved conflicts in 1 collection(s)
 }
 
 // Abort: restore pre-cherry-pick state.
-const rAbort = db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, abort: 1 })
+const rAbort = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, abort: 1 })
 printjson(rAbort)
 // Expected: { message: "cherry-pick aborted", ok: 1 }
 ```
@@ -246,18 +246,18 @@ Key checks:
 
 **Missing commit parameter:**
 ```js
-db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1 })
+db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1 })
 // Expected: ok: 0, errmsg mentions "commit" or "required"
 ```
 
 **Abort when no cherry-pick in progress:**
 ```js
-db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, abort: 1 })
+db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, abort: 1 })
 // Expected: ok: 0, errmsg: "no cherry-pick in progress to abort"
 ```
 
 **Continue when no cherry-pick in progress:**
 ```js
-db.getSiblingDB("pickdb__d_main").runCommand({ doltCherryPick: 1, continue: 1 })
+db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, continue: 1 })
 // Expected: ok: 0, errmsg mentions "no cherry-pick in progress"
 ```

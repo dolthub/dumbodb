@@ -261,8 +261,8 @@ above that commit. Bare branch names are also accepted.
 
 ```js
 // Create a feature branch from main, then connect to it.
-db.getSiblingDB("diffdb__d_main").runCommand({ doltBranch: 1, branch: "feature" })
-var featureDB = db.getSiblingDB("diffdb__d_feature")
+db.getSiblingDB("diffdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+var featureDB = db.getSiblingDB("diffdb@feature")
 
 // Make two commits on main.
 var r3 = db.runCommand({ doltCommit: 1, message: "c3", author: "alice <alice@dumbodb>" })

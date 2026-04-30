@@ -79,29 +79,29 @@ This will connect you to the `test` database by default. You can specify a diffe
 All examples below are using the `mongosh` shell, which is effectively javascript. There are equivalent operations for any MongoDB driver in your favorite language.
 
 ### Specifying a Branch
-By default, all connections target the `main` branch. This is currently hard coded. Using the `getSiblingDB()` method, you can connect to a different branch by encoding the branch name in the database name. Mongo is fairly strict in what characters are allowed in database names, so we use a special encoding: `<db>__d_<branch>`. `__d_` is the delimiter between the database name and the branch name. For example, to connect to a branch named `mybranch`, you would connect to the database `mydb__d_mybranch`:
+By default, all connections target the `main` branch. This is currently hard coded. Using the `getSiblingDB()` method, you can connect to a different branch by encoding the branch name in the database name. Mongo is fairly strict in what characters are allowed in database names, so we use a special encoding: `<db>@<branch>`. `@` is the delimiter between the database name and the branch name. For example, to connect to a branch named `mybranch`, you would connect to the database `mydb@mybranch`:
 
 ```js
-var db = db.getSiblingDB("mydb__d_mybranch")
+var db = db.getSiblingDB("mydb@mybranch")
 ```
 
-If you specify a revision rather than a branch name, then the database returned will be read-only and reflect the state of the database at that revision. For example, if you'd like to perform reads against the parent commit of the `main` branch, you can connect to `mydb__d_main~1`:
+If you specify a revision rather than a branch name, then the database returned will be read-only and reflect the state of the database at that revision. For example, if you'd like to perform reads against the parent commit of the `main` branch, you can connect to `mydb@main~1`:
 
 ```js
-var db = db.getSiblingDB("mydb__d_main~1")
+var db = db.getSiblingDB("mydb@main~1")
 ```
 
 Alternatively you can use a commit hash to create a read-only connection to that commit:
 
 ```js
-var db = db.getSiblingDB("mydb__d_v9ra3pmi0f6kotj5k3fganpmb3oi9t1k")
+var db = db.getSiblingDB("mydb@v9ra3pmi0f6kotj5k3fganpmb3oi9t1k")
 ```
 
 ### Committing Changes
 Say you want to stick two documents into the "items" collection, then commit them:
 
 ```js
-var db = db.getSiblingDB("mydb__d_main")
+var db = db.getSiblingDB("mydb@main")
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
 db.items.insertOne({ _id: 2, label: "beta",  score: 20 })
 db.runCommand({ dumboCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
@@ -216,7 +216,7 @@ You can create a new branch with `dumboBranch`. In this example, you can see tha
 // Create the branch
 db.runCommand({ doltBranch: 1, branch: "feature" })
 // "checkout"
-var feature = db.getSiblingDB("mydb__d_feature")
+var feature = db.getSiblingDB("mydb@feature")
 
 feature.items.insertOne({ _id: 4, label: "delta", score: 40 })
 feature.runCommand({ doltCommit: 1, message: "add delta on feature branch", author: "alice <alice@acme.com>" })

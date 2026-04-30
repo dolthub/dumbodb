@@ -174,7 +174,7 @@ DumboDB already implements these commands (all behind the `doltXxx` namespace):
 | `doltReset`     | Move HEAD (soft or hard)                        | Implemented |
 | `doltStatus`    | Show uncommitted collection changes             | Implemented |
 
-Branch access is via the `dbname__d_rootish` naming convention, where the
+Branch access is via the `dbname@rootish` naming convention, where the
 rootish resolves to a commit (see Section 6 for the full specification).
 
 ### What's Missing (Gap Analysis)
@@ -228,8 +228,8 @@ Dolt executes. No VC logic should be reimplemented in DumboDB.
 **What**: Read any collection as of any historical commit, tag, or relative
 ancestor — without modifying state.
 
-**Wire protocol**: Generalize the existing `dbname__d_branchname` convention so
-that anything after `__d_` is a **rootish** — a string that resolves to a specific
+**Wire protocol**: Generalize the existing `dbname@branchname` convention so
+that anything after `@` is a **rootish** — a string that resolves to a specific
 commit in Dolt's DAG. This is a strict superset of the current branch-name
 behaviour; existing connection strings are unaffected.
 
@@ -238,12 +238,12 @@ Supported rootish forms:
 | Connection string | Resolves to | Writable? |
 |---|---|---|
 | `mydb` | default branch, working set | ✅ yes |
-| `mydb__d_main` | branch `main` tip | ✅ yes |
-| `mydb__d_feature-x` | branch `feature-x` tip | ✅ yes |
-| `mydb__d_v1.0` | tag `v1.0` | ❌ read-only |
-| `mydb__d_abc123` | bare commit hash | ❌ read-only |
-| `mydb__d_main~1` | parent of `main` | ❌ read-only |
-| `mydb__d_main~3` | 3rd ancestor of `main` | ❌ read-only |
+| `mydb@main` | branch `main` tip | ✅ yes |
+| `mydb@feature-x` | branch `feature-x` tip | ✅ yes |
+| `mydb@v1.0` | tag `v1.0` | ❌ read-only |
+| `mydb@abc123` | bare commit hash | ❌ read-only |
+| `mydb@main~1` | parent of `main` | ❌ read-only |
+| `mydb@main~3` | 3rd ancestor of `main` | ❌ read-only |
 
 **Write semantics**: writable if and only if the rootish is a bare branch name
 (or omitted). Tags, hashes, and relative expressions are always read-only.
@@ -263,16 +263,16 @@ context or are ambiguous outside a working directory):
 db.users.find({active: true})
 
 // Specific branch
-db.getSiblingDB("mydb__d_feature-x").users.find({active: true})
+db.getSiblingDB("mydb@feature-x").users.find({active: true})
 
 // Tagged release snapshot
-db.getSiblingDB("mydb__d_v1.0").users.find({active: true})
+db.getSiblingDB("mydb@v1.0").users.find({active: true})
 
 // Bare commit hash
-db.getSiblingDB("mydb__d_abc123f").users.find({active: true})
+db.getSiblingDB("mydb@abc123f").users.find({active: true})
 
 // One commit behind main (parent)
-db.getSiblingDB("mydb__d_main~1").users.find({active: true})
+db.getSiblingDB("mydb@main~1").users.find({active: true})
 ```
 
 **Dolt primitive**: Parse the rootish out of the db name. Resolve it to a commit
@@ -323,7 +323,7 @@ commit hash. Tags are readable in the same pass as branches.
 **Point-in-time reads with tags**: Tags integrate naturally with P1-A — tag
 names are valid rootish values:
 ```javascript
-db.getSiblingDB("mydb__d_v1.0").users.find()  // reads at the v1.0 tag
+db.getSiblingDB("mydb@v1.0").users.find()  // reads at the v1.0 tag
 ```
 
 **Feasibility**: High. Same infrastructure as branches; just a different ref prefix.
@@ -380,7 +380,7 @@ not O(all commits). This is Dolt's core design — DumboDB gets it for free.
 
 **Wire protocol**:
 ```javascript
-db.getSiblingDB("mydb__d_main").runCommand({doltConflicts: 1, collection: "users"})
+db.getSiblingDB("mydb@main").runCommand({doltConflicts: 1, collection: "users"})
 // Returns: {conflicts: [{_id: ..., base: {...}, ours: {...}, theirs: {...}}, ...], ok: 1}
 ```
 
@@ -466,7 +466,7 @@ format is already Dolt-compatible — the protocol work is the main cost.
 
 **Wire protocol**:
 ```javascript
-db.getSiblingDB("mydb__d_main").runCommand({doltCherryPick: 1, commit: "abc123"})
+db.getSiblingDB("mydb@main").runCommand({doltCherryPick: 1, commit: "abc123"})
 ```
 
 **Dolt primitive**: Compute the diff between `commit`'s parent and `commit`.
@@ -544,24 +544,24 @@ Worth designing but not implementing soon.
 
 ## 6. Implementation Notes
 
-### The `dbname__d_rootish` Convention
+### The `dbname@rootish` Convention
 
-The `__d_` separator distinguishes branch-encoded names from plain database names
-that happen to contain double underscores. Anything after `__d_` is a **rootish**:
+The `@` separator distinguishes branch-encoded names from plain database names
+that happen to contain double underscores. Anything after `@` is a **rootish**:
 a string that resolves to a specific commit in Dolt's DAG.
 
 ```
 mydb                    → default branch, working set (writable)
-mydb__d_main            → branch main tip             (writable)
-mydb__d_feature-x       → branch feature-x tip        (writable)
-mydb__d_v1.0            → tag v1.0                    (read-only)
-mydb__d_abc123          → bare commit hash             (read-only)
-mydb__d_main~1          → parent of main              (read-only)
-mydb__d_main~3          → 3rd ancestor of main        (read-only)
+mydb@main            → branch main tip             (writable)
+mydb@feature-x       → branch feature-x tip        (writable)
+mydb@v1.0            → tag v1.0                    (read-only)
+mydb@abc123          → bare commit hash             (read-only)
+mydb@main~1          → parent of main              (read-only)
+mydb@main~3          → 3rd ancestor of main        (read-only)
 ```
 
-**Parsing rule**: split on the first `__d_`. The right-hand side is the rootish.
-If no `__d_` is present, use the default branch working set.
+**Parsing rule**: split on the first `@`. The right-hand side is the rootish.
+If no `@` is present, use the default branch working set.
 
 **Rootish resolution order** (mirrors Dolt/Git ref lookup):
 1. Branch name (`refs/heads/<rootish>`)
@@ -618,10 +618,10 @@ A user-facing story for each tier of features:
 > diff to verify my changes, then merge to main. If something goes wrong, I can
 > reset to a known-good tag."
 ```javascript
-db.getSiblingDB("mydb__d_migration").runCommand({doltBranch: 1, branch: "migration-v2"})
+db.getSiblingDB("mydb@migration").runCommand({doltBranch: 1, branch: "migration-v2"})
 // ... run migration ...
-db.getSiblingDB("mydb__d_main").runCommand({doltDiff: 1, from: "abc123"})
-db.getSiblingDB("mydb__d_main").runCommand({doltMerge: 1, from: "migration-v2"})
+db.getSiblingDB("mydb@main").runCommand({doltDiff: 1, from: "abc123"})
+db.getSiblingDB("mydb@main").runCommand({doltMerge: 1, from: "migration-v2"})
 db.runCommand({doltTag: 1, name: "pre-migration"})  // before the merge
 ```
 
@@ -651,7 +651,7 @@ provides the primitives for all features described above. The work is primarily
 in exposing these capabilities through the MongoDB wire protocol.
 
 The highest-leverage near-term features are:
-1. **Point-in-time reads** (rootish `__d_` suffix) — one parsing change, zero new
+1. **Point-in-time reads** (rootish `@` suffix) — one parsing change, zero new
    backend logic, immediate user value.
 2. **List/delete branches + tags** — simple refsAM operations, complete the
    branch management workflow.

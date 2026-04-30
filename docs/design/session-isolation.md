@@ -156,7 +156,7 @@ databases. In DumboDB, databases map to branches via rootish connection strings:
 
 ```js
 const main = db.getSiblingDB("mydb")              // mydb on default branch
-const feat = db.getSiblingDB("mydb__d_feat")       // mydb on feat branch
+const feat = db.getSiblingDB("mydb@feat")       // mydb on feat branch
 ```
 
 From the driver's perspective, these are two separate databases. Both commands
@@ -239,7 +239,7 @@ type Backend struct {
 
 1. **First request with new lsid** → create sessionState with empty branches map.
 
-2. **First write to a specific branch** (e.g., `mydb__d_feat`) → create a
+2. **First write to a specific branch** (e.g., `mydb@feat`) → create a
    branchSession, fork the current branch AM (`state.am`) and record
    `forkHash = cs.Root()`. Subsequent reads/writes on that branch in this
    session use this forked AM.
@@ -419,8 +419,8 @@ point to the new HEAD, and continues. The branchSession stays alive with a
 fresh fork point — no need to reconnect.
 
 **doltCommit on one branch, dirty state on another:**
-Each branchSession is independent. Committing `mydb__d_feat` does not affect
-the dirty state on `mydb__d_main`. The client can commit branches independently.
+Each branchSession is independent. Committing `mydb@feat` does not affect
+the dirty state on `mydb@main`. The client can commit branches independently.
 
 **doltBranch/doltCheckout within a session:**
 Creating a new branch doesn't affect existing branchSessions. "Checking out"
@@ -580,10 +580,10 @@ its own branchSession. Commits are independent.
 
 ```
 Client A on mydb (main): insert {_id: 1, x: "main write"}    ← forks main branchSession
-Client A on mydb__d_feat: insert {_id: 2, x: "feat write"}   ← forks feat branchSession
-Client A on mydb__d_feat: doltCommit → succeeds (only feat)
+Client A on mydb@feat: insert {_id: 2, x: "feat write"}   ← forks feat branchSession
+Client A on mydb@feat: doltCommit → succeeds (only feat)
 Client B on mydb (main): find {} → should NOT see {_id: 1}    ← B reads main HEAD (unchanged)
-Client B on mydb__d_feat: find {} → should see {_id: 2}       ← B reads feat HEAD (updated by A's commit)
+Client B on mydb@feat: find {} → should see {_id: 2}       ← B reads feat HEAD (updated by A's commit)
 Client A on mydb (main): doltCommit → succeeds
 Client B on mydb (main): find {} → now sees {_id: 1}          ← B reads updated main HEAD
 ```

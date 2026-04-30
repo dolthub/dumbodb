@@ -24,7 +24,7 @@ import (
 )
 
 // TestRTVLLoad_CommitHash_Query verifies that connecting with a commit-hash rootish
-// (mydb__d_<hash>) reads the collection as it existed at that commit, not the current
+// (mydb@<hash>) reads the collection as it existed at that commit, not the current
 // working set.
 func TestRTVLLoad_CommitHash_Query(t *testing.T) {
 	b := newTestBackend(t)
@@ -40,16 +40,16 @@ func TestRTVLLoad_CommitHash_Query(t *testing.T) {
 	// Insert doc3 into working set (not committed).
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "v", int64(30)))
 
-	// Reading from hash1 (encoded: "testdb__d_<hash1>") should see only doc1.
-	n1 := countDocs(t, b, "testdb__d_"+hash1, "col")
+	// Reading from hash1 (encoded: "testdb@<hash1>") should see only doc1.
+	n1 := countDocs(t, b, "testdb@"+hash1, "col")
 	if n1 != 1 {
-		t.Errorf("mydb__d_%s: want 1 doc (only doc1), got %d", hash1, n1)
+		t.Errorf("mydb@%s: want 1 doc (only doc1), got %d", hash1, n1)
 	}
 
 	// Reading from hash2 should see doc1 + doc2.
-	n2 := countDocs(t, b, "testdb__d_"+hash2, "col")
+	n2 := countDocs(t, b, "testdb@"+hash2, "col")
 	if n2 != 2 {
-		t.Errorf("mydb__d_%s: want 2 docs (doc1+doc2), got %d", hash2, n2)
+		t.Errorf("mydb@%s: want 2 docs (doc1+doc2), got %d", hash2, n2)
 	}
 
 	// Reading from plain "testdb" (working set) should see all 3 docs.
@@ -74,9 +74,9 @@ func TestRTVLLoad_CommitHash_ListCollections(t *testing.T) {
 	_ = commitDB(t, b, "testdb", "add col2")
 
 	// ListCollections at hash1 should list only col1.
-	db1, err := b.Database("testdb__d_" + hash1)
+	db1, err := b.Database("testdb@" + hash1)
 	if err != nil {
-		t.Fatalf("Database(testdb__d_%s): %v", hash1, err)
+		t.Fatalf("Database(testdb@%s): %v", hash1, err)
 	}
 
 	res1, err := db1.ListCollections(ctx, nil)
@@ -124,7 +124,7 @@ func TestRTVLLoad_CommitHash_UnknownHash(t *testing.T) {
 	unknown := "00000000000000000000000000000000"
 
 	// Query via commit hash should return an error.
-	db, err := b.Database("testdb__d_" + unknown)
+	db, err := b.Database("testdb@" + unknown)
 	if err != nil {
 		t.Fatalf("Database: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestRTVLLoad_CommitHash_UnknownHash(t *testing.T) {
 }
 
 // TestRTVLLoad_CommitHash_MainBranchUnchanged verifies that the plain "main" rootish
-// (no __d_ suffix) continues to read from the current working set, not affected by the
+// (no @ suffix) continues to read from the current working set, not affected by the
 // encoded-name changes.
 func TestRTVLLoad_CommitHash_MainBranchUnchanged(t *testing.T) {
 	b := newTestBackend(t)
@@ -152,15 +152,15 @@ func TestRTVLLoad_CommitHash_MainBranchUnchanged(t *testing.T) {
 	// Add a second doc to the working set (not committed).
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2)))
 
-	// Reading from plain "testdb" (or "testdb__d_main") should see both docs.
+	// Reading from plain "testdb" (or "testdb@main") should see both docs.
 	nPlain := countDocs(t, b, "testdb", "col")
 	if nPlain != 2 {
 		t.Errorf("plain testdb: want 2 docs (working set), got %d", nPlain)
 	}
 
-	nMain := countDocs(t, b, "testdb__d_main", "col")
+	nMain := countDocs(t, b, "testdb@main", "col")
 	if nMain != 2 {
-		t.Errorf("testdb__d_main: want 2 docs (working set), got %d", nMain)
+		t.Errorf("testdb@main: want 2 docs (working set), got %d", nMain)
 	}
 }
 
@@ -172,22 +172,22 @@ func TestSplitEncodedDBName(t *testing.T) {
 		wantRootish  string
 	}{
 		{"mydb", "mydb", "main"},
-		{"mydb__d_main", "mydb", "main"},
-		{"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61"},
-		{"mydb__d_feature-branch", "mydb", "feature-branch"},
-		{"mydb__d_main~3", "mydb", "main~3"},
-		{"a__d_b__d_c", "a", "b__d_c"},
+		{"mydb@main", "mydb", "main"},
+		{"mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61"},
+		{"mydb@feature-branch", "mydb", "feature-branch"},
+		{"mydb@main~3", "mydb", "main~3"},
+		{"a@b@c", "a", "b@c"},
 		// Percent-encoded rootish: dots and slashes in branch names must be encoded
 		// because '.' and '/' are invalid in MongoDB database names.
-		{"mydb__d_v1%2E0", "mydb", "v1.0"},
-		{"mydb__d_feature%2Ffoo", "mydb", "feature/foo"},
-		{"mydb__d_main%7E1", "mydb", "main~1"}, // ~1 encoded (passthrough — still ancestor expr)
+		{"mydb@v1%2E0", "mydb", "v1.0"},
+		{"mydb@feature%2Ffoo", "mydb", "feature/foo"},
+		{"mydb@main%7E1", "mydb", "main~1"}, // ~1 encoded (passthrough — still ancestor expr)
 		// Invalid percent sequence: falls back to raw value.
-		{"mydb__d_%ZZ", "mydb", "%ZZ"},
-		// All-digit suffix after __d_ (e.g. UnixNano timestamp): treated as plain DB name to
+		{"mydb@%ZZ", "mydb", "%ZZ"},
+		// All-digit suffix after @ (e.g. UnixNano timestamp): treated as plain DB name to
 		// prevent "not found as branch or tag" errors from parity test harnesses.
-		{"parity_sometest__d_1775505756999075683", "parity_sometest__d_1775505756999075683", "main"},
-		{"mydb__d_12345", "mydb__d_12345", "main"},
+		{"parity_sometest@1775505756999075683", "parity_sometest@1775505756999075683", "main"},
+		{"mydb@12345", "mydb@12345", "main"},
 	}
 
 	for _, tc := range cases {
@@ -201,7 +201,7 @@ func TestSplitEncodedDBName(t *testing.T) {
 	}
 }
 
-// TestRTVLLoad_AncestorExpr_Query verifies that mydb__d_main~N returns the correct
+// TestRTVLLoad_AncestorExpr_Query verifies that mydb@main~N returns the correct
 // historical document set for each ancestor depth.
 //
 // Setup: 3 commits, each adding one document.
@@ -228,10 +228,10 @@ func TestRTVLLoad_AncestorExpr_Query(t *testing.T) {
 		rootish  string
 		wantDocs int
 	}{
-		{"testdb__d_main~0", 3},
-		{"testdb__d_main~1", 2},
-		{"testdb__d_main~2", 1},
-		{"testdb__d_main~3", 0},
+		{"testdb@main~0", 3},
+		{"testdb@main~1", 2},
+		{"testdb@main~2", 1},
+		{"testdb@main~3", 0},
 	}
 
 	for _, tc := range cases {
@@ -258,26 +258,26 @@ func TestRTVLLoad_AncestorExpr_IsolatedFromMain(t *testing.T) {
 	commitDB(t, b, "testdb", "add doc3")
 
 	// main~1 should see 2 docs at this point.
-	nBefore := countDocs(t, b, "testdb__d_main~1", "col")
+	nBefore := countDocs(t, b, "testdb@main~1", "col")
 	if nBefore != 2 {
-		t.Fatalf("testdb__d_main~1 before new insert: want 2, got %d", nBefore)
+		t.Fatalf("testdb@main~1 before new insert: want 2, got %d", nBefore)
 	}
 
 	// Insert a new doc (uncommitted) on main — the ~N view must remain unchanged.
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(4)))
 
-	nAfter := countDocs(t, b, "testdb__d_main~1", "col")
+	nAfter := countDocs(t, b, "testdb@main~1", "col")
 	if nAfter != 2 {
-		t.Errorf("testdb__d_main~1 after uncommitted insert: want 2, got %d", nAfter)
+		t.Errorf("testdb@main~1 after uncommitted insert: want 2, got %d", nAfter)
 	}
 
 	// Commit the new doc and verify ~1 still points to the same snapshot.
 	commitDB(t, b, "testdb", "add doc4")
 
-	nCommitted := countDocs(t, b, "testdb__d_main~1", "col")
+	nCommitted := countDocs(t, b, "testdb@main~1", "col")
 	if nCommitted != 3 {
 		// After a 4th commit, main~1 now points to the 3-doc snapshot.
-		t.Errorf("testdb__d_main~1 after 4th commit: want 3, got %d", nCommitted)
+		t.Errorf("testdb@main~1 after 4th commit: want 3, got %d", nCommitted)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestRTVLLoad_AncestorExpr_TooDeep(t *testing.T) {
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1)))
 	commitDB(t, b, "testdb", "only commit")
 
-	db, err := b.Database("testdb__d_main~2")
+	db, err := b.Database("testdb@main~2")
 	if err != nil {
 		t.Fatalf("Database: %v", err)
 	}
@@ -355,9 +355,9 @@ func TestRTVLLoad_Tag_Query(t *testing.T) {
 	state.mu.Unlock()
 
 	// Reading from tag "v1.0" should see only doc1 (as at hash1).
-	n := countDocs(t, b, "testdb__d_v1.0", "col")
+	n := countDocs(t, b, "testdb@v1.0", "col")
 	if n != 1 {
-		t.Errorf("testdb__d_v1.0: want 1 doc, got %d", n)
+		t.Errorf("testdb@v1.0: want 1 doc, got %d", n)
 	}
 }
 
@@ -386,9 +386,9 @@ func TestRTVLLoad_DumboDBBranch_FromHash(t *testing.T) {
 	}
 
 	// Reading from the new branch should see only doc1 (the state at hash1).
-	n := countDocs(t, b, "testdb__d_snap", "col")
+	n := countDocs(t, b, "testdb@snap", "col")
 	if n != 1 {
-		t.Errorf("testdb__d_snap: want 1 doc (at hash1), got %d", n)
+		t.Errorf("testdb@snap: want 1 doc (at hash1), got %d", n)
 	}
 }
 
@@ -417,24 +417,24 @@ func TestRTVLLoad_DumboDBBranch_FromAncestor(t *testing.T) {
 	}
 
 	// back1 should see 2 docs (state at main~1 = second commit).
-	n := countDocs(t, b, "testdb__d_back1", "col")
+	n := countDocs(t, b, "testdb@back1", "col")
 	if n != 2 {
-		t.Errorf("testdb__d_back1: want 2 docs (at main~1), got %d", n)
+		t.Errorf("testdb@back1: want 2 docs (at main~1), got %d", n)
 	}
 }
 
 // TestRTVLLoad_BranchWrite_Isolation verifies that writes via a non-main branch
-// rootish (mydb__d_feature) go to that branch's working set and are isolated from main.
+// rootish (mydb@feature) go to that branch's working set and are isolated from main.
 //
 // Setup:
 //   - Commit one doc on main → main has 1 doc committed.
 //   - Create branch "feature" from main HEAD.
-//   - Write a second doc via "testdb__d_feature" (into feature's working set, uncommitted).
-//   - Write a third doc via "testdb" / "testdb__d_main" (into main's working set).
+//   - Write a second doc via "testdb@feature" (into feature's working set, uncommitted).
+//   - Write a third doc via "testdb" / "testdb@main" (into main's working set).
 //
 // Expected:
-//   - testdb__d_feature sees 2 docs (inherited committed doc + feature working-set write).
-//   - testdb / testdb__d_main sees 2 docs (committed doc + main working-set write).
+//   - testdb@feature sees 2 docs (inherited committed doc + feature working-set write).
+//   - testdb / testdb@main sees 2 docs (committed doc + main working-set write).
 //   - The two branches see different second documents (isolated writes).
 func TestRTVLLoad_BranchWrite_Isolation(t *testing.T) {
 	ctx := context.Background()
@@ -455,15 +455,15 @@ func TestRTVLLoad_BranchWrite_Isolation(t *testing.T) {
 	}
 
 	// Write to feature branch working set (not committed).
-	insertDoc(t, b, "testdb__d_feature", "col", mustDoc(t, "_id", int64(2), "v", "feature-only"))
+	insertDoc(t, b, "testdb@feature", "col", mustDoc(t, "_id", int64(2), "v", "feature-only"))
 
 	// Write to main working set (not committed).
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(3), "v", "main-only"))
 
 	// feature branch should see doc1 (committed) + doc2 (feature write) = 2.
-	nFeature := countDocs(t, b, "testdb__d_feature", "col")
+	nFeature := countDocs(t, b, "testdb@feature", "col")
 	if nFeature != 2 {
-		t.Errorf("testdb__d_feature: want 2 docs, got %d", nFeature)
+		t.Errorf("testdb@feature: want 2 docs, got %d", nFeature)
 	}
 
 	// main should see doc1 (committed) + doc3 (main write) = 2.

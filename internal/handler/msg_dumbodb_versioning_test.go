@@ -114,20 +114,20 @@ func TestBranchFromDBName(t *testing.T) {
 		wantReadOnly bool
 	}{
 		{"no separator defaults to main writable", "mydb", "mydb", "main", false},
-		{"branch separator main", "mydb__d_main", "mydb", "main", false},
-		{"feature branch writable", "mydb__d_feature-x", "mydb", "feature-x", false},
-		{"tag name not all-base32 writable", "mydb__d_v1.0", "mydb", "v1.0", false},
-		{"commit hash read-only", "mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61", true},
-		{"relative ancestor read-only", "mydb__d_main~3", "mydb", "main~3", true},
-		{"HEAD alias rewrites to main", "mydb__d_HEAD", "mydb", "main", false},
-		{"HEAD tilde-1 rewrites to main tilde-1", "mydb__d_HEAD~1", "mydb", "main~1", true},
-		{"HEAD tilde-0 rewrites to main tilde-0", "mydb__d_HEAD~0", "mydb", "main~0", true},
-		{"db name with underscore", "my_db__d_main", "my_db", "main", false},
+		{"branch separator main", "mydb@main", "mydb", "main", false},
+		{"feature branch writable", "mydb@feature-x", "mydb", "feature-x", false},
+		{"tag name not all-base32 writable", "mydb@v1.0", "mydb", "v1.0", false},
+		{"commit hash read-only", "mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61", "mydb", "na7kfra98h45fr2u5qtr30o2ggm7vh61", true},
+		{"relative ancestor read-only", "mydb@main~3", "mydb", "main~3", true},
+		{"HEAD alias rewrites to main", "mydb@HEAD", "mydb", "main", false},
+		{"HEAD tilde-1 rewrites to main tilde-1", "mydb@HEAD~1", "mydb", "main~1", true},
+		{"HEAD tilde-0 rewrites to main tilde-0", "mydb@HEAD~0", "mydb", "main~0", true},
+		{"db name with underscore", "my_db@main", "my_db", "main", false},
 		{"double underscore db name treated as plain", "__", "__", "main", false},
 		{"leading double underscore treated as plain", "__main", "__main", "main", false},
-		// All-digit suffix after __d_ (e.g. UnixNano timestamp): whole name treated as plain DB.
-		{"all-digit suffix treated as plain DB", "parity_sometest__d_1775505756999075683", "parity_sometest__d_1775505756999075683", "main", false},
-		{"short all-digit suffix treated as plain DB", "mydb__d_12345", "mydb__d_12345", "main", false},
+		// All-digit suffix after @ (e.g. UnixNano timestamp): whole name treated as plain DB.
+		{"all-digit suffix treated as plain DB", "parity_sometest@1775505756999075683", "parity_sometest@1775505756999075683", "main", false},
+		{"short all-digit suffix treated as plain DB", "mydb@12345", "mydb@12345", "main", false},
 	}
 
 	for _, tc := range validCases {
@@ -154,12 +154,12 @@ func TestBranchFromDBName(t *testing.T) {
 		name    string
 		encoded string
 	}{
-		{"HEAD caret", "mydb__d_HEAD^"},
-		{"reflog syntax", "mydb__d_main@{yesterday}"},
-		{"range syntax", "mydb__d_main..feature"},
-		{"regex search", "mydb__d_:/fix bug"},
-		{"caret deref", "mydb__d_v1.0^{commit}"},
-		{"empty rootish", "mydb__d_"},
+		{"HEAD caret", "mydb@HEAD^"},
+		{"reflog syntax", "mydb@main@{yesterday}"},
+		{"range syntax", "mydb@main..feature"},
+		{"regex search", "mydb@:/fix bug"},
+		{"caret deref", "mydb@v1.0^{commit}"},
+		{"empty rootish", "mydb@"},
 	}
 
 	for _, tc := range invalidCases {
@@ -242,14 +242,14 @@ func TestEnforceWritableRootish(t *testing.T) {
 		errMsg    string
 	}{
 		{"mydb", false, ""},
-		{"mydb__d_main", false, ""},
-		{"mydb__d_feature", false, ""},
-		{"mydb__d_HEAD", false, ""},
-		{"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61", true, "cannot write to a read-only database snapshot"},
-		{"mydb__d_main~1", true, "cannot write to a read-only database snapshot"},
-		{"mydb__d_HEAD~1", true, "cannot write to a read-only database snapshot"},
-		{"mydb__d_HEAD~0", true, "cannot write to a read-only database snapshot"},
-		{"mydb__d_00000000000000000000000000000000", true, "cannot write to a read-only database snapshot"},
+		{"mydb@main", false, ""},
+		{"mydb@feature", false, ""},
+		{"mydb@HEAD", false, ""},
+		{"mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61", true, "cannot write to a read-only database snapshot"},
+		{"mydb@main~1", true, "cannot write to a read-only database snapshot"},
+		{"mydb@HEAD~1", true, "cannot write to a read-only database snapshot"},
+		{"mydb@HEAD~0", true, "cannot write to a read-only database snapshot"},
+		{"mydb@00000000000000000000000000000000", true, "cannot write to a read-only database snapshot"},
 	}
 
 	for _, tt := range tests {

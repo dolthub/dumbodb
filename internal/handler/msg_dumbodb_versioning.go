@@ -33,9 +33,9 @@ import (
 )
 
 // dbBranchSep is the separator between the database name and rootish in an
-// encoded database name (e.g. "mydb__d_main", "mydb__d_feature/foo").
+// encoded database name (e.g. "mydb@main", "mydb@feature/foo").
 // Must match the value in internal/backends/dolt/backend.go.
-const dbBranchSep = "__d_"
+const dbBranchSep = "@"
 
 // MsgDumboDBDiff implements the `dumboDBDiff` command.
 //
@@ -145,13 +145,13 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 // branchFromDBName parses the real database name and rootish from an encoded db name.
 //
-// DumboDB encodes version information in the database name using the __d_ separator:
+// DumboDB encodes version information in the database name using the '@' separator:
 //
-//	"mydb__d_branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
-//	"mydb__d_na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
-//	"mydb__d_main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
-//	"mydb__d_HEAD"                              → dbName="mydb", rootish="main",                              readOnly=false (HEAD alias)
-//	"mydb__d_HEAD~2"                            → dbName="mydb", rootish="main~2",                            readOnly=true  (HEAD-relative alias)
+//	"mydb@branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
+//	"mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
+//	"mydb@main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
+//	"mydb@HEAD"                              → dbName="mydb", rootish="main",                              readOnly=false (HEAD alias)
+//	"mydb@HEAD~2"                            → dbName="mydb", rootish="main~2",                            readOnly=true  (HEAD-relative alias)
 //
 // If no separator is present the rootish defaults to "main" and readOnly is false.
 //
@@ -166,7 +166,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 //
 // The rootish is validated by parseRootish; an error is returned for unsupported forms.
 //
-// All-digit strings after __d_ (e.g. Unix nanosecond timestamps used as database name suffixes)
+// All-digit strings after '@' (e.g. Unix nanosecond timestamps used as database name suffixes)
 // are not valid rootish expressions and cause the whole encoded name to be treated as a plain
 // database name rather than returning an error or misinterpreting the suffix as a branch name.
 func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, err error) {
@@ -181,7 +181,7 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 		}
 		// All-digit strings (e.g. UnixNano timestamps) are not valid rootish
 		// expressions. Fall through to plain-DB treatment so that database names
-		// like "parity_test__d_1775505756999075683" work without error.
+		// like "parity_test@1775505756999075683" work without error.
 		if !rootishAllDigits(candidate) {
 			if err = parseRootish(candidate); err != nil {
 				return "", "", false, err
@@ -284,8 +284,8 @@ func enforceWritableRootish(encodedDB string) error {
 //   - HEAD-relative ancestor expression (HEAD~N, rewritten to main~N)
 //
 // Rejected forms (returned as ErrOperationFailed):
+//   - Any '@' (reserved as the database/branch delimiter; covers reflog <ref>@{...} too)
 //   - HEAD caret forms (HEAD^, HEAD^N)
-//   - Reflog syntax (<ref>@{<spec>})
 //   - Range syntax (<ref>..<ref>)
 //   - Regex commit search (:/<pattern>)
 //   - Type dereferencing (<ref>^{<type>})
@@ -298,11 +298,12 @@ func parseRootish(s string) error {
 		)
 	}
 
-	// Reject reflog syntax (<ref>@{...}).
-	if strings.Contains(s, "@{") {
+	// Reject any '@' — it is reserved as the database/branch delimiter and
+	// is forbidden in raw branch names. This also covers reflog syntax (<ref>@{...}).
+	if strings.Contains(s, "@") {
 		return handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			fmt.Sprintf("rootish %q: reflog syntax is not supported", s),
+			fmt.Sprintf("rootish %q: '@' is reserved as the database/branch delimiter", s),
 		)
 	}
 
@@ -372,7 +373,7 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 // MsgDumboDBCurrentBranch implements the `dumboDBCurrentBranch` command.
 //
 // It returns the branch name for the connection encoded in $db.
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBCurrentBranch: 1})
+// Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBCurrentBranch: 1})
 //
 // Returns an OperationFailed error if the connection is read-only (commit hash or ancestor expression).
 //
@@ -426,8 +427,8 @@ func (h *Handler) MsgDumboDBCurrentBranch(connCtx context.Context, msg *wire.OpM
 
 // MsgDumboDBCommit implements the `dumboDBCommit` command.
 //
-// It commits the current working set on the branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBCommit: 1, message: "my commit"})
+// It commits the current working set on the branch encoded in $db (format: "dbname@branch").
+// Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBCommit: 1, message: "my commit"})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -509,8 +510,8 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 
 // MsgDumboDBBranch implements the `dumboDBBranch` command.
 //
-// It creates a new branch from the current branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_main").runCommand({dumboDBBranch: 1, branch: "feature"})
+// It creates a new branch from the current branch encoded in $db (format: "dbname@branch").
+// Usage: db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature"})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -538,6 +539,14 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
 			"doltBranch: branch name must not be empty",
+			"branch",
+		)
+	}
+
+	if strings.Contains(newBranch, "@") {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"doltBranch: branch name must not contain '@' (reserved as the database/branch delimiter)",
 			"branch",
 		)
 	}
@@ -589,14 +598,14 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 
 // MsgDumboDBMerge implements the `dumboDBMerge` command.
 //
-// Merges a source branch into the current branch encoded in $db (format: "dbname__d_branch").
+// Merges a source branch into the current branch encoded in $db (format: "dbname@branch").
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, merge_in: "feature", noFF: true})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, merge_in: "feature", ffOnly: true})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, continue: true})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBMerge: 1, abort: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature", noFF: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, continue: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, abort: true})
 //
 // Optional parameters for merge initiation:
 //   - message (string): custom merge commit message (ignored on fast-forward / already-up-to-date)
@@ -779,8 +788,8 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 // Returns conflict information for the current in-progress merge on the branch encoded in $db.
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBConflicts: 1})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBConflicts: 1, collection: "items"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBConflicts: 1})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBConflicts: 1, collection: "items"})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -886,9 +895,9 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 // Resolves a single document conflict in the current in-progress merge.
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -967,8 +976,8 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 
 // MsgDumboDBLog implements the `dumboDBLog` command.
 //
-// It returns the commit history for the branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBLog: 1, limit: 10})
+// It returns the commit history for the branch encoded in $db (format: "dbname@branch").
+// Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBLog: 1, limit: 10})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -1148,8 +1157,8 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // MsgDumboDBStatus implements the `dumboDBStatus` command.
 //
-// It returns the uncommitted changes on the branch encoded in $db (format: "dbname__d_branch").
-// Usage: db.getSiblingDB("mydb__d_feature").runCommand({dumboDBStatus: 1})
+// It returns the uncommitted changes on the branch encoded in $db (format: "dbname@branch").
+// Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBStatus: 1})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -1222,9 +1231,9 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 //
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBCherryPick: 1, commit: "<hash>"})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBCherryPick: 1, abort: 1})
-//	db.getSiblingDB("mydb__d_main").runCommand({dumboDBCherryPick: 1, continue: 1})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, abort: 1})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, continue: 1})
 //
 // Optional parameters for cherry-pick initiation:
 //   - message (string): custom commit message (default: original message + annotation)
@@ -1383,9 +1392,9 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 //
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, onto: "main"})
-//	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, abort: 1})
-//	db.getSiblingDB("mydb__d_feature").runCommand({doltRebase: 1, continue: 1})
+//	db.getSiblingDB("mydb@feature").runCommand({doltRebase: 1, onto: "main"})
+//	db.getSiblingDB("mydb@feature").runCommand({doltRebase: 1, abort: 1})
+//	db.getSiblingDB("mydb@feature").runCommand({doltRebase: 1, continue: 1})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -1538,9 +1547,9 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 //
 // Usage:
 //
-//	db.getSiblingDB("mydb__d_main").runCommand({doltRevert: 1, commit: "<hash>"})
-//	db.getSiblingDB("mydb__d_main").runCommand({doltRevert: 1, abort: 1})
-//	db.getSiblingDB("mydb__d_main").runCommand({doltRevert: 1, continue: 1})
+//	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, abort: 1})
+//	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, continue: 1})
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {

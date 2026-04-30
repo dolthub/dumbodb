@@ -60,19 +60,19 @@ func rebaseVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 
 	// Create "feature" branch at C1.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"__d_main").RunCommand(ctx, bson.D{
+	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
 	require.NoError(t, err, "doltBranch to create 'feature'")
 
 	// C2: feature adds _id:2.
-	_, err = env.client.Database(dbName+"__d_feature").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashC2 = dumboDBCommit(t, env, dbName+"__d_feature", "feature-adds-2", "test <test@example.com>")
+	hashC2 = dumboDBCommit(t, env, dbName+"@feature", "feature-adds-2", "test <test@example.com>")
 
 	// C3: main advances (feature diverges from main).
 	_, err = db.Collection("items").InsertOne(ctx, bson.D{
@@ -94,8 +94,8 @@ func TestRebaseVerify(t *testing.T) {
 	hashC1, hashC2, hashC3 := rebaseVerifySetup(t, env, dbName)
 	_, _ = hashC1, hashC2
 
-	featureDB := env.client.Database(dbName + "__d_feature")
-	mainDB := env.client.Database(dbName + "__d_main")
+	featureDB := env.client.Database(dbName + "@feature")
+	mainDB := env.client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Clean rebase — response shape
@@ -187,7 +187,7 @@ func TestRebaseVerify(t *testing.T) {
 			{Key: "v", Value: int32(4)},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"__d_main", "main-adds-4", "test <test@example.com>")
+		dumboDBCommit(t, env, dbName+"@main", "main-adds-4", "test <test@example.com>")
 
 		// Add a commit on feature that doesn't conflict.
 		_, err = featureDB.Collection("items").InsertOne(ctx, bson.D{
@@ -195,7 +195,7 @@ func TestRebaseVerify(t *testing.T) {
 			{Key: "v", Value: int32(5)},
 		})
 		require.NoError(t, err)
-		beforeAbortHash := dumboDBCommit(t, env, dbName+"__d_feature", "feature-adds-5", "test <test@example.com>")
+		beforeAbortHash := dumboDBCommit(t, env, dbName+"@feature", "feature-adds-5", "test <test@example.com>")
 
 		// Trigger rebase (should succeed cleanly, but we abort it artificially
 		// by starting a conflicting rebase scenario).
@@ -227,16 +227,16 @@ func TestRebaseVerify(t *testing.T) {
 		_, hashC2c, _ := rebaseVerifySetup(t, env, conflictDB)
 		_ = hashC2c
 
-		conflictFeatureDB := env.client.Database(conflictDB + "__d_feature")
+		conflictFeatureDB := env.client.Database(conflictDB + "@feature")
 
 		// Modify _id:1 on main (will conflict with a modification on feature).
-		conflictMainDB := env.client.Database(conflictDB + "__d_main")
+		conflictMainDB := env.client.Database(conflictDB + "@main")
 		_, err := conflictMainDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, conflictDB+"__d_main", "main-changes-1", "test <test@example.com>")
+		dumboDBCommit(t, env, conflictDB+"@main", "main-changes-1", "test <test@example.com>")
 
 		// Modify _id:1 on feature (same doc → conflict on rebase).
 		_, err = conflictFeatureDB.Collection("items").UpdateOne(ctx,
@@ -244,7 +244,7 @@ func TestRebaseVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, conflictDB+"__d_feature", "feature-changes-1", "test <test@example.com>")
+		dumboDBCommit(t, env, conflictDB+"@feature", "feature-changes-1", "test <test@example.com>")
 
 		// Rebase feature onto main — expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{
@@ -285,8 +285,8 @@ func TestRebaseVerify(t *testing.T) {
 		conflictDB := fmt.Sprintf("rebaseresol%d", rand.Int64N(1_000_000))
 		_, _, _ = rebaseVerifySetup(t, env, conflictDB)
 
-		conflictFeatureDB := env.client.Database(conflictDB + "__d_feature")
-		conflictMainDB := env.client.Database(conflictDB + "__d_main")
+		conflictFeatureDB := env.client.Database(conflictDB + "@feature")
+		conflictMainDB := env.client.Database(conflictDB + "@main")
 
 		// Create conflict: both branches modify _id:1.
 		_, err := conflictMainDB.Collection("items").UpdateOne(ctx,
@@ -294,14 +294,14 @@ func TestRebaseVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, conflictDB+"__d_main", "main-modifies-1", "test <test@example.com>")
+		dumboDBCommit(t, env, conflictDB+"@main", "main-modifies-1", "test <test@example.com>")
 
 		_, err = conflictFeatureDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, conflictDB+"__d_feature", "feature-modifies-1", "test <test@example.com>")
+		dumboDBCommit(t, env, conflictDB+"@feature", "feature-modifies-1", "test <test@example.com>")
 
 		// Start rebase — expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{

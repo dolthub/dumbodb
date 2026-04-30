@@ -38,7 +38,7 @@ printjson(r1)
 const hashC1 = r1.commitId
 
 // Create "feature" branch from main HEAD.
-db.getSiblingDB("mergedb__d_main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("mergedb@main").runCommand({ doltBranch: 1, branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 print("hashC1 =", hashC1)
@@ -63,7 +63,7 @@ const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "alice <al
 const hashC2 = r2.commitId
 
 // Merge feature (at C1) into main (at C2).
-const rMerge1 = db.getSiblingDB("mergedb__d_main").runCommand({ doltMerge: 1, merge_in: "feature" })
+const rMerge1 = db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
 printjson(rMerge1)
 // Expected: { commitId: "<hashC2>", message: "already up-to-date", ok: 1 }
 ```
@@ -83,7 +83,7 @@ merge commit — a fast-forward.
 
 ```js
 // Merge main (at C2) into feature (at C1) — feature fast-forwards.
-const rMerge2 = db.getSiblingDB("mergedb__d_feature").runCommand({ doltMerge: 1, merge_in: "main" })
+const rMerge2 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, merge_in: "main" })
 printjson(rMerge2)
 // Expected: { commitId: "<hashC2>", message: "fast-forward", ok: 1 }
 ```
@@ -95,7 +95,7 @@ Key checks:
 Verify that `feature` now contains both documents:
 
 ```js
-db.getSiblingDB("mergedb__d_feature").items.countDocuments({})
+db.getSiblingDB("mergedb@feature").items.countDocuments({})
 // Expected: 2
 ```
 
@@ -108,7 +108,7 @@ Merging either direction produces "already up-to-date".
 
 ```js
 // feature and main are now both at C2.
-const rMerge3 = db.getSiblingDB("mergedb__d_feature").runCommand({ doltMerge: 1, merge_in: "main" })
+const rMerge3 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, merge_in: "main" })
 printjson(rMerge3)
 // Expected: { commitId: "<hashC2>", message: "already up-to-date", ok: 1 }
 ```
@@ -134,12 +134,12 @@ const hashC3 = r3.commitId
 
 // Commit _id:4 on feature independently → C4.
 // (feature is still at C2; _id:4 is only on feature's side)
-db.getSiblingDB("mergedb__d_feature").items.insertOne({ _id: 4, v: 4 })
-const r4 = db.getSiblingDB("mergedb__d_feature").runCommand({ doltCommit: 1, message: "add-four", author: "alice <alice@dumbodb>" })
+db.getSiblingDB("mergedb@feature").items.insertOne({ _id: 4, v: 4 })
+const r4 = db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "add-four", author: "alice <alice@dumbodb>" })
 const hashC4 = r4.commitId
 
 // Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
-const rMerge4 = db.getSiblingDB("mergedb__d_main").runCommand({
+const rMerge4 = db.getSiblingDB("mergedb@main").runCommand({
     doltMerge: 1,
     merge_in: "feature",
     message: "custom merge msg",
@@ -156,7 +156,7 @@ Key checks:
 Verify the merge commit has two parents and the custom message/author via `doltLog`:
 
 ```js
-const logResult = db.getSiblingDB("mergedb__d_main").runCommand({ doltLog: 1, limit: 1 })
+const logResult = db.getSiblingDB("mergedb@main").runCommand({ doltLog: 1, limit: 1 })
 printjson(logResult)
 // Expected: commits[0].commitId === hashM,
 //           commits[0].parent1  === hashC3,
@@ -168,7 +168,7 @@ printjson(logResult)
 Verify `main` now contains all four documents:
 
 ```js
-db.getSiblingDB("mergedb__d_main").items.countDocuments({})
+db.getSiblingDB("mergedb@main").items.countDocuments({})
 // Expected: 4
 ```
 
@@ -187,14 +187,14 @@ values for conflicting documents.
 ```js
 // After setup: main modifies _id:1 to v:10, feature modifies _id:1 to v:20.
 db.items.updateOne({ _id: 1 }, { $set: { v: 10 } })
-db.getSiblingDB("mergedb__d_main").runCommand({ doltCommit: 1, message: "main-v10", author: "alice" })
+db.getSiblingDB("mergedb@main").runCommand({ doltCommit: 1, message: "main-v10", author: "alice" })
 
-db.getSiblingDB("mergedb__d_feature").items.updateOne({ _id: 1 }, { $set: { v: 20 } })
-db.getSiblingDB("mergedb__d_feature").runCommand({ doltCommit: 1, message: "feature-v20", author: "bob" })
+db.getSiblingDB("mergedb@feature").items.updateOne({ _id: 1 }, { $set: { v: 20 } })
+db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "feature-v20", author: "bob" })
 
 // In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
 try {
-  db.getSiblingDB("mergedb__d_main").runCommand({ doltMerge: 1, merge_in: "feature" })
+  db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
 } catch (e) {
   print(e)
   // MongoServerError: doltMerge: unresolved conflicts in 1 collection(s)
@@ -208,12 +208,12 @@ try {
 
 ```js
 // Summary: list which collections have conflicts
-const rSummary = db.getSiblingDB("mergedb__d_main").runCommand({ doltConflicts: 1 })
+const rSummary = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
 // Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
 
 // Detail: list individual conflicts within a collection
-const rDetail = db.getSiblingDB("mergedb__d_main").runCommand({ doltConflicts: 1, collection: "items" })
+const rDetail = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1, collection: "items" })
 printjson(rDetail)
 // Expected: { conflicts: [ { conflictId: "c0", base: { _id: 1, v: 1 }, ours: { _id: 1, v: 10 },
 //             theirs: { _id: 1, v: 20 }, ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
@@ -236,7 +236,7 @@ conflicts are resolved. Use `doltMerge: 1, continue: 1` to finalize.
 
 ```js
 // (Conflicts still unresolved from Scenario 5/6.)
-const rBlockedCommit = db.getSiblingDB("mergedb__d_main").runCommand({
+const rBlockedCommit = db.getSiblingDB("mergedb@main").runCommand({
     doltCommit: 1,
     message: "should not work",
     author: "alice <alice@dumbodb>"
@@ -255,7 +255,7 @@ Key checks:
 
 ```js
 // Resolve using our version (v:10).
-const rResolve = db.getSiblingDB("mergedb__d_main").runCommand({
+const rResolve = db.getSiblingDB("mergedb@main").runCommand({
     doltResolveConflict: 1,
     collection: "items",
     conflictId: conflictId,
@@ -274,7 +274,7 @@ After resolution, `doltConflicts` returns an empty `collections` array.
 ```js
 // (Re-create a conflict first as shown in Scenario 5.)
 // Resolve using their version (v:20).
-db.getSiblingDB("mergedb__d_main").runCommand({
+db.getSiblingDB("mergedb@main").runCommand({
     doltResolveConflict: 1,
     collection: "items",
     conflictId: conflictId,
@@ -290,7 +290,7 @@ db.getSiblingDB("mergedb__d_main").runCommand({
 ```js
 // (Re-create a conflict as in Scenario 5.)
 // Resolve with a custom merged value.
-db.getSiblingDB("mergedb__d_main").runCommand({
+db.getSiblingDB("mergedb@main").runCommand({
     doltResolveConflict: 1,
     collection: "items",
     conflictId: conflictId,
@@ -313,7 +313,7 @@ remain or not) — always use `continue` to finalize.
 
 ```js
 // (All conflicts resolved in Scenario 8/9/10.)
-const rContinue = db.getSiblingDB("mergedb__d_main").runCommand({
+const rContinue = db.getSiblingDB("mergedb@main").runCommand({
     doltMerge: 1,
     continue: 1,
     message: "Resolve merge conflicts",   // optional
@@ -326,7 +326,7 @@ printjson(rContinue)
 `doltLog` shows a merge commit with two parents and the custom message/author:
 
 ```js
-const log = db.getSiblingDB("mergedb__d_main").runCommand({ doltLog: 1, limit: 1 })
+const log = db.getSiblingDB("mergedb@main").runCommand({ doltLog: 1, limit: 1 })
 printjson(log)
 // Expected: commits[0].parent1  === <main pre-merge HEAD>,
 //           commits[0].parent2  === <feature HEAD>,
@@ -340,7 +340,7 @@ printjson(log)
 
 ```js
 // (Re-create a conflict as in Scenario 5.)
-const rAbort = db.getSiblingDB("mergedb__d_main").runCommand({ doltMerge: 1, abort: 1 })
+const rAbort = db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, abort: 1 })
 printjson(rAbort)
 // Expected: { message: "merge aborted", ok: 1 }
 ```
@@ -369,7 +369,7 @@ After abort the branch is back to its pre-merge state and `doltCommit` works nor
 | Both branches have diverged, conflicts exist | `ok: 0` with `conflicts` array |
 
 - `doltMerge` always operates on named branches, not raw commit hashes.
-- The target branch (`into`) is encoded in the database name: `dbname__d_branch`.
+- The target branch (`into`) is encoded in the database name: `dbname@branch`.
 - The `merge_in` parameter names the source branch to merge from.
 - Returns `{ commitId: "<result_commitId>", message: "<description>", ok: 1 }` for clean merges.
 - For conflicting merges: `{ conflicts: [...], ok: 0, code: 96, errmsg: "..." }`.
