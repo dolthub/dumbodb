@@ -36,6 +36,7 @@ type ExplainParams struct {
 	Sort   *types.Document `dumbo:"sort,opt"`
 	Skip   int64           `dumbo:"skip,opt"`
 	Limit  int64           `dumbo:"limit,opt"`
+	Hint   any             `dumbo:"hint,opt"`
 
 	StagesDocs []any           `dumbo:"-"`
 	Aggregate  bool            `dumbo:"-"`
@@ -113,6 +114,11 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		return nil, lazyerrors.Error(err)
 	}
 
+	var hint any
+	if hintVal, _ := explain.Get("hint"); hintVal != nil {
+		hint = hintVal
+	}
+
 	var limit, skip int64
 
 	if limitVal, _ := explain.Get("limit"); limitVal != nil {
@@ -182,5 +188,6 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		Aggregate:  cmd.Command() == "aggregate",
 		Command:    cmd,
 		Verbosity:  verbosity,
+		Hint:       hint,
 	}, nil
 }
