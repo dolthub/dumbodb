@@ -162,18 +162,35 @@ func boundTuple(key []byte) (val.Tuple, error) {
 // on that side. Iteration uses prolly.Map.IterKeyRange so only the relevant
 // chunks of the secondary index are touched.
 func RangeLookup(ctx context.Context, m prolly.Map, startKey, stopKey []byte) ([][]byte, error) {
+	results, _, err := rangeLookupCapped(ctx, m, startKey, stopKey, -1)
+	return results, err
+}
+
+// RangeLookupCapped is like RangeLookup but aborts as soon as the result count
+// exceeds maxResults. The caller signals "no cap" with maxResults < 0. When
+// the cap is exceeded, exceeded is true and the (partial) results slice is
+// returned for the caller to discard — no further index work is done.
+//
+// The cap exists so a low-selectivity filter (e.g. {$gte: 0} that matches
+// every document) doesn't pay the full scan-then-point-fetch cost just to
+// end up worse than a sequential primary scan.
+func RangeLookupCapped(ctx context.Context, m prolly.Map, startKey, stopKey []byte, maxResults int) (results [][]byte, exceeded bool, err error) {
+	return rangeLookupCapped(ctx, m, startKey, stopKey, maxResults)
+}
+
+func rangeLookupCapped(ctx context.Context, m prolly.Map, startKey, stopKey []byte, maxResults int) ([][]byte, bool, error) {
 	startTup, err := boundTuple(startKey)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	stopTup, err := boundTuple(stopKey)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	iter, err := m.IterKeyRange(ctx, startTup, stopTup)
 	if err != nil {
-		return nil, fmt.Errorf("index: iterating secondary index range: %w", err)
+		return nil, false, fmt.Errorf("index: iterating secondary index range: %w", err)
 	}
 
 	var results [][]byte
@@ -183,7 +200,7 @@ func RangeLookup(ctx context.Context, m prolly.Map, startKey, stopKey []byte) ([
 			if err == io.EOF {
 				break
 			}
-			return nil, fmt.Errorf("index: reading secondary index: %w", err)
+			return nil, false, fmt.Errorf("index: reading secondary index: %w", err)
 		}
 		if k == nil {
 			break
@@ -211,9 +228,13 @@ func RangeLookup(ctx context.Context, m prolly.Map, startKey, stopKey []byte) ([
 		idCopy := make([]byte, primaryIDLen)
 		copy(idCopy, compositeKey[idStart:])
 		results = append(results, idCopy)
+
+		if maxResults >= 0 && len(results) > maxResults {
+			return nil, true, nil
+		}
 	}
 
-	return results, nil
+	return results, false, nil
 }
 
 // KeyDescriptor returns the key tuple descriptor used for secondary index maps.

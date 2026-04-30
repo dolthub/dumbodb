@@ -381,4 +381,21 @@ func TestIndexLookup_RangeAndCompound(t *testing.T) {
 			t.Errorf("unindexed_field_fallback: expected ≥%d docs, got %d", n, len(got))
 		}
 	})
+
+	// --- Low-selectivity range falls back to scan -------------------------
+	// {grp: {$gte: 0}} matches every doc in the collection. The index path
+	// would still be sound but is strictly slower than the scan, so the
+	// planner abandons it once the candidate set exceeds the cap. We only
+	// check soundness here (every doc is returned); the speed delta is
+	// covered by BenchmarkIndexLookup_FullRange_10K.
+	t.Run("range_gte_zero_full_collection", func(t *testing.T) {
+		opDoc := must.NotFail(types.NewDocument("$gte", int32(0)))
+		params := &backends.QueryParams{
+			Filter: must.NotFail(types.NewDocument("grp", opDoc)),
+		}
+		got := drainQuery(t, ctx, coll, params)
+		if len(got) != n {
+			t.Errorf("full-collection range: expected %d docs, got %d", n, len(got))
+		}
+	})
 }
