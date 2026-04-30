@@ -569,7 +569,31 @@ func (cc *collectionContract) DropIndexes(ctx context.Context, params *DropIndex
 	return res, err
 }
 
+// DistinctScan forwards to the wrapped collection if it implements
+// DistinctScanner, otherwise returns (nil, nil) so the handler falls back to
+// the Query path. Without this forwarder the optional interface is hidden by
+// the contract wrapper that every backend uses.
+func (cc *collectionContract) DistinctScan(ctx context.Context, params *DistinctParams) (*DistinctResult, error) {
+	ds, ok := cc.c.(DistinctScanner)
+	if !ok {
+		return nil, nil
+	}
+
+	ctx, span := otel.Tracer("").Start(ctx, "DistinctScan")
+	defer span.End()
+
+	res, err := ds.DistinctScan(ctx, params)
+	if err != nil {
+		span.SetStatus(otelcodes.Error, "")
+	}
+
+	checkError(err)
+
+	return res, err
+}
+
 // check interfaces
 var (
-	_ Collection = (*collectionContract)(nil)
+	_ Collection      = (*collectionContract)(nil)
+	_ DistinctScanner = (*collectionContract)(nil)
 )

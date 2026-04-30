@@ -214,6 +214,17 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 	return c.origC.DropIndexes(ctx, params)
 }
 
+// DistinctScan forwards to the wrapped collection's DistinctScanner
+// implementation, if any. Returns (nil, nil) when the wrapped collection does
+// not provide the optional interface, so the handler falls back to Query.
+func (c *collection) DistinctScan(ctx context.Context, params *backends.DistinctParams) (*backends.DistinctResult, error) {
+	ds, ok := c.origC.(backends.DistinctScanner)
+	if !ok {
+		return nil, nil
+	}
+	return ds.DistinctScan(ctx, params)
+}
+
 // oplogCollection returns the OpLog collection if it exist.
 //
 // The returned collection is not wrapped with OpLog functionality to prevent recursive calls.
@@ -236,5 +247,6 @@ func (c *collection) oplogCollection(ctx context.Context) backends.Collection {
 
 // check interfaces
 var (
-	_ backends.Collection = (*collection)(nil)
+	_ backends.Collection      = (*collection)(nil)
+	_ backends.DistinctScanner = (*collection)(nil)
 )
