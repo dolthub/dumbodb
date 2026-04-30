@@ -27,11 +27,12 @@ const (
 	// MongoDBVersion is the MongoDB version DumboDB advertises to clients
 	// that gate behavior on major.minor.
 	MongoDBVersion = "8.0.20"
-
-	// Commit is the source git commit. Populated as "unknown" until a real
-	// build pipeline injects it.
-	Commit = "unknown"
 )
+
+// GitVersion is the source git commit hash. Set at build time via:
+//
+//	go build -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=$(git describe --tags --always --dirty)"
+var GitVersion = "unknown"
 
 // Info provides details about the current build.
 //
@@ -54,7 +55,7 @@ type Info struct {
 
 var info = &Info{
 	Version:             Version,
-	Commit:              Commit,
+	Commit:              GitVersion,
 	Branch:              "unknown",
 	Dirty:               false,
 	Package:             "unknown",
