@@ -6,11 +6,6 @@
 
 DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
 
-## Who Wrote DumboDB?
-DumboDB is a vibe-coding experiment by [DoltHub](https://dolthub.com), the creators of [Dolt](https://github.com/dolthub/dolt).
-
-Version 0.1 is a mash-up of [FerretDB's](https://github.com/FerretDB/FerretDB) MongoDB clone and Dolt's version-controlled storage engine. Written by humans, both projects have a track record of stability and correctness. Dumbo's codebase was written by coding agents, specifically [Claude Code](https://code.claude.com/docs/en/overview) using [Gas Town 1.0](https://github.com/gastownhall/gastown). Dumbo is currently "write-only" code, as in no human directly reads or edits the codebase. As such, care should be taken when running DumboDB, as it is still in early development and may contain bugs. We are actively working on improving the codebase and adding new features, so please [join our discord server](https://discord.gg/gqr7K4VNKe) and give us feedback!
-
 ## What's in Version 0.1?
 Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's great for testing your existing applications and seeing what they are changing over time. In a test environment, you can use DumboDB just like you would use MongoDB, but with the added ability to reset to specific snapshots in time and see the changes made by your application code.
 
@@ -79,7 +74,7 @@ This will connect you to the `test` database by default. You can specify a diffe
 All examples below are using the `mongosh` shell, which is effectively javascript. There are equivalent operations for any MongoDB driver in your favorite language.
 
 ### Specifying a Branch
-By default, all connections target the `main` branch. This is currently hard coded. Using the `getSiblingDB()` method, you can connect to a different branch by encoding the branch name in the database name. Mongo is fairly strict in what characters are allowed in database names, so we use a special encoding: `<db>@<branch>`. `@` is the delimiter between the database name and the branch name. For example, to connect to a branch named `mybranch`, you would connect to the database `mydb@mybranch`:
+By default, all connections target the `main` branch. This is currently hard coded. Using the `getSiblingDB()` method, you can connect to a different branch by encoding the branch name in the database name. `@` is the delimiter between the database name and the branch name. For example, to connect to a branch named `mybranch`, you would connect to the database `mydb@mybranch`:
 
 ```js
 var db = db.getSiblingDB("mydb@mybranch")
@@ -104,7 +99,7 @@ Say you want to stick two documents into the "items" collection, then commit the
 var db = db.getSiblingDB("mydb@main")
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
 db.items.insertOne({ _id: 2, label: "beta",  score: 20 })
-db.runCommand({ dumboCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
+db.runCommand({ dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 ```
 
 The last command creates a new commit with the two inserted documents, and outputs the commit details:
@@ -113,7 +108,7 @@ The last command creates a new commit with the two inserted documents, and outpu
   commitId: 'egqis00l0vqg5kd7gbje8k1k6g7dl7ja',
   branch: 'main',
   message: 'baseline',
-  author: 'alice <alice@dumbodb>',
+  author: 'alice <alice@acme.com>',
   timestamp: ISODate('2026-04-28T23:12:23.621Z'),
   ok: 1
 }
@@ -245,8 +240,9 @@ DumboDB is built on two open-source projects:
 ## Roadmap
 DumboDB is in active development, and we have a lot of exciting features planned. Major milestones we are planning:
 
-- **v0.2**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
-- **v0.3**: Add support for Replication (as a secondary backup to your existing MongoDB instance)
+- **v0.2**: Garbage Collection and zstd compression. Reduce the footprint of your database.
+- **v0.3**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
+- **v0.4**: Add support for Replication (as a secondary backup to your existing MongoDB instance)
 - **v0.5**: Add Authentication and Authorization support.
 - **v0.8**: Visualization and operations via a custom Workbench UI.
 - **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
