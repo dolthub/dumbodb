@@ -437,7 +437,7 @@ func TestAggStage_unsupportedErrors_search(t *testing.T) {
 }
 
 // TestAggStage_limit_LimitZeroError verifies that $limit: 0 returns error code
-// 15958 (ErrStageLimitZero) with message "the limit must be positive",
+// 5107201 (ErrStageLimitInvalidArg) with message "the limit must be positive",
 // matching MongoDB 8 behavior.
 func TestAggStage_limit_LimitZeroError(t *testing.T) {
 	t.Parallel()
@@ -454,7 +454,7 @@ func TestAggStage_limit_LimitZeroError(t *testing.T) {
 		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
 	}
 
-	if got, want := cmdErr.Code(), handlererrors.ErrStageLimitZero; got != want {
+	if got, want := cmdErr.Code(), handlererrors.ErrStageLimitInvalidArg; got != want {
 		t.Errorf("error code: got %v (%d), want %v (%d)", got, got, want, want)
 	}
 
