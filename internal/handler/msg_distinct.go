@@ -70,6 +70,30 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	// Fast path: when the request has no filter and the backend exposes a
+	// DistinctScanner, let it serve the query from a secondary index without
+	// reading every document.
+	if params.Filter.Len() == 0 {
+		if ds, ok := c.(backends.DistinctScanner); ok {
+			res, err := ds.DistinctScan(connCtx, &backends.DistinctParams{Key: params.Key})
+			if err != nil {
+				return nil, lazyerrors.Error(err)
+			}
+			if res != nil {
+				distinct, err := common.DedupDistinctValues(res.Values)
+				if err != nil {
+					return nil, lazyerrors.Error(err)
+				}
+				return documentOpMsg(
+					must.NotFail(types.NewDocument(
+						"values", distinct,
+						"ok", float64(1),
+					)),
+				)
+			}
+		}
+	}
+
 	closer := iterator.NewMultiCloser()
 	defer closer.Close()
 

@@ -1531,6 +1531,208 @@ func (c *collection) Compact(ctx context.Context, params *backends.CompactParams
 	return &backends.CompactResult{}, nil
 }
 
+// DistinctScan implements backends.DistinctScanner.
+//
+// Walks the leading-field secondary index for `key` in sorted order,
+// emitting one primary lookup per unique KeyString prefix to recover the
+// original BSON value. Avoids reading every document and the O(n) primary
+// fetches a full collection scan would do.
+//
+// Returns (nil, nil) when the request can't be served from an index — no
+// matching single-field index, partial filter that would drop rows, dotted
+// key, geospatial / text / hashed key. The handler falls back to Query in
+// that case.
+func (c *collection) DistinctScan(ctx context.Context, params *backends.DistinctParams) (*backends.DistinctResult, error) {
+	if params == nil || params.Key == "" {
+		return nil, nil
+	}
+	// Dotted paths address sub-document fields; the index is keyed on the
+	// flat top-level field, so it can't answer the request soundly.
+	if strings.ContainsRune(params.Key, '.') {
+		return nil, nil
+	}
+
+	m, exists, state, err := c.getMap(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return &backends.DistinctResult{}, nil
+	}
+
+	state.mu.RLock()
+	idxInfos := append([]backends.IndexInfo(nil), state.indexes[c.name]...)
+	secMaps := make(map[string]prolly.Map, len(state.secIndexMaps[c.name]))
+	for k, v := range state.secIndexMaps[c.name] {
+		secMaps[k] = v
+	}
+	state.mu.RUnlock()
+
+	var (
+		idxName string
+		found   bool
+	)
+	for _, idx := range idxInfos {
+		if len(idx.Key) != 1 {
+			continue
+		}
+		kp := idx.Key[0]
+		if kp.Field != params.Key {
+			continue
+		}
+		// Hashed / text / geo indexes don't store the original value's
+		// KeyString and can't drive a sorted distinct scan.
+		if kp.Hashed || kp.Text || kp.Geo2D || kp.Geo2DSphere {
+			continue
+		}
+		// Partial indexes only cover a subset of documents — a distinct
+		// scan over them would silently drop values from non-matching docs.
+		// Sparse indexes are fine because distinct already ignores missing
+		// fields.
+		if idx.PartialFilterExpression != nil {
+			continue
+		}
+		if _, mapped := secMaps[idx.Name]; !mapped {
+			continue
+		}
+		idxName = idx.Name
+		found = true
+		break
+	}
+	if !found {
+		return nil, nil
+	}
+
+	idxMap := secMaps[idxName]
+
+	values, err := scanDistinctFromIndex(ctx, idxMap, m, state.ns, params.Key)
+	if err != nil {
+		return nil, err
+	}
+
+	return &backends.DistinctResult{Values: values}, nil
+}
+
+// scanDistinctFromIndex walks idxMap in key order and emits one primary lookup
+// per unique KeyString prefix. The secondary index key layout is
+// `[KeyString(value)][0x04][primaryID(20 bytes)]`; values with the same
+// KeyString prefix share a distinct value, so a single doc fetch per group
+// suffices to recover the original typed value.
+func scanDistinctFromIndex(
+	ctx context.Context,
+	idxMap prolly.Map,
+	primary prolly.Map,
+	ns tree.NodeStore,
+	field string,
+) ([]any, error) {
+	const primaryIDLen = 20
+
+	iter, err := idxMap.IterAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: distinct scan iterating index: %w", err)
+	}
+
+	idxKeyDesc := idxpkg.KeyDescriptor()
+
+	var (
+		prevPrefix []byte
+		havePrev   bool
+		out        []any
+	)
+
+	for {
+		k, _, err := iter.Next(ctx)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("dolt: distinct scan reading index: %w", err)
+		}
+		if k == nil {
+			break
+		}
+
+		composite, ok := idxKeyDesc.GetBytes(0, k)
+		if !ok {
+			continue
+		}
+		if len(composite) < primaryIDLen+1 {
+			continue
+		}
+		idStart := len(composite) - primaryIDLen
+		if composite[idStart-1] != 0x04 {
+			continue
+		}
+		prefix := composite[:idStart-1]
+
+		if havePrev && bytes.Equal(prefix, prevPrefix) {
+			continue
+		}
+
+		idBytes := make([]byte, primaryIDLen)
+		copy(idBytes, composite[idStart:])
+
+		val, err := lookupFieldFromPrimary(ctx, primary, ns, idBytes, field)
+		if err != nil {
+			return nil, err
+		}
+		// A nil val means the document is missing the indexed field —
+		// distinct ignores that case (matching FilterDistinctValues
+		// semantics). Sparse indexes won't produce these entries; for
+		// non-sparse indexes we still skip them.
+		if val != types.Null && val != nil {
+			out = append(out, val)
+		}
+
+		prevPrefix = append(prevPrefix[:0], prefix...)
+		havePrev = true
+	}
+
+	return out, nil
+}
+
+// lookupFieldFromPrimary fetches the primary document by encoded _id bytes and
+// returns the value of `field`. Returns types.Null if the field is missing.
+func lookupFieldFromPrimary(
+	ctx context.Context,
+	primary prolly.Map,
+	ns tree.NodeStore,
+	idBytes []byte,
+	field string,
+) (any, error) {
+	key, err := buildKey(idBytes)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: distinct scan building key: %w", err)
+	}
+
+	var doc *types.Document
+	if err := primary.Get(ctx, key, func(_, v val.Tuple) error {
+		if v == nil {
+			return nil
+		}
+		jsonHash, ok := valDesc.GetJSONAddr(0, v)
+		if !ok {
+			return fmt.Errorf("dolt: distinct scan primary value missing JSON addr")
+		}
+		d, decErr := readDocJSON(ctx, ns, jsonHash)
+		if decErr != nil {
+			return decErr
+		}
+		doc = d
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("dolt: distinct scan primary fetch: %w", err)
+	}
+	if doc == nil {
+		return types.Null, nil
+	}
+	v, err := doc.Get(field)
+	if err != nil {
+		return types.Null, nil
+	}
+	return v, nil
+}
+
 // ListIndexes implements backends.Collection.
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
 	_, exists, state, err := c.getMap(ctx)
