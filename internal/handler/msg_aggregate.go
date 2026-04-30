@@ -387,54 +387,60 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		// Fast path: drivers (notably the official Go driver) implement
 		// CountDocuments by issuing an aggregate pipeline of the form
-		// [{$match: {}}, optional $skip/$limit, {$group: {_id: <c>, n: {$sum: 1}}}].
-		// When the filter is empty and the target is a real collection (not a
-		// view), we can satisfy it from the backend's O(1) Count() and skip
-		// the full scan + group accumulator entirely.
+		// [{$match: <filter>}, optional $skip/$limit, {$group: {_id: <c>, n: {$sum: 1}}}].
+		// When the target is a real collection (not a view), the backend can
+		// satisfy this from a covering index (filtered) or O(1) tree count
+		// (unfiltered) and skip the full scan + group accumulator entirely.
+		// Filtered counts where the backend cannot answer from an index fall
+		// through to the regular pipeline path.
 		if !cInfo.IsView {
 			if info, ok := tryCountAggregateShortcut(aggregationStages); ok {
-				countRes, cerr := c.Count(ctx, &backends.CountParams{})
+				countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: info.filter})
 				if cerr != nil {
 					closer.Close()
 					return nil, handleMaxTimeMSError(cerr, maxTimeMS, "aggregate")
 				}
 
-				n := countRes.Count
-				if info.skip > 0 {
-					n -= info.skip
-					if n < 0 {
-						n = 0
+				// Skip to the regular pipeline if the backend declined a
+				// filtered count it couldn't answer from an index.
+				if info.filter == nil || countRes.Filtered {
+					n := countRes.Count
+					if info.skip > 0 {
+						n -= info.skip
+						if n < 0 {
+							n = 0
+						}
 					}
-				}
-				if info.limit >= 0 && n > info.limit {
-					n = info.limit
-				}
+					if info.limit >= 0 && n > info.limit {
+						n = info.limit
+					}
 
-				closer.Close()
+					closer.Close()
 
-				// Match the type $sum returns: int32 when the value fits, else int64.
-				var nVal any
-				if n <= math.MaxInt32 && n >= math.MinInt32 {
-					nVal = int32(n)
-				} else {
-					nVal = n
-				}
+					// Match the type $sum returns: int32 when the value fits, else int64.
+					var nVal any
+					if n <= math.MaxInt32 && n >= math.MinInt32 {
+						nVal = int32(n)
+					} else {
+						nVal = n
+					}
 
-				return documentOpMsg(
-					must.NotFail(types.NewDocument(
-						"cursor", must.NotFail(types.NewDocument(
-							"firstBatch", must.NotFail(types.NewArray(
-								must.NotFail(types.NewDocument(
-									"_id", info.idValue,
-									info.outField, nVal,
+					return documentOpMsg(
+						must.NotFail(types.NewDocument(
+							"cursor", must.NotFail(types.NewDocument(
+								"firstBatch", must.NotFail(types.NewArray(
+									must.NotFail(types.NewDocument(
+										"_id", info.idValue,
+										info.outField, nVal,
+									)),
 								)),
+								"id", int64(0),
+								"ns", dbName+"."+cName,
 							)),
-							"id", int64(0),
-							"ns", dbName+"."+cName,
+							"ok", float64(1),
 						)),
-						"ok", float64(1),
-					)),
-				)
+					)
+				}
 			}
 		}
 

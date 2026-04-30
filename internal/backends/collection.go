@@ -139,19 +139,37 @@ func (cc *collectionContract) Query(ctx context.Context, params *QueryParams) (*
 }
 
 // CountParams represents the parameters of Collection.Count method.
-type CountParams struct{}
+type CountParams struct {
+	// Filter, when non-nil and non-empty, asks the backend to return the
+	// count of matching documents instead of the full collection size.
+	// Backends may decline (signaled via CountResult.Filtered=false) when
+	// the filter cannot be answered cheaply (no covering index, complex
+	// operators, etc.); the handler then falls back to a scan.
+	Filter *types.Document
+}
 
 // CountResult represents the results of Collection.Count method.
 type CountResult struct {
-	// Count is the total number of documents in the collection.
+	// Count is the document count. When Filtered is true, this is the
+	// number of documents matching CountParams.Filter; otherwise it is
+	// the unfiltered collection size (or 0 if the backend declined to
+	// answer a filtered count).
 	Count int64
+
+	// Filtered is true when the backend honored a non-empty
+	// CountParams.Filter. False means the handler must apply the filter
+	// itself via Query+FilterIterator. Always true (or moot) for
+	// unfiltered calls.
+	Filtered bool
 }
 
 // Count returns the total number of documents in the collection.
 //
 // Backends are expected to implement this in O(1) when possible (e.g. via
-// tree metadata) — the handler only calls Count for unfiltered counts where
-// a full scan would otherwise be needed solely to count entries.
+// tree metadata) for unfiltered calls. When CountParams.Filter is set, the
+// backend may attempt an index-only count and signal success via
+// CountResult.Filtered=true; otherwise it returns the unfiltered count with
+// Filtered=false and the handler falls back to a scan.
 //
 // If database or collection does not exist, returns Count=0 and no error.
 func (cc *collectionContract) Count(ctx context.Context, params *CountParams) (*CountResult, error) {

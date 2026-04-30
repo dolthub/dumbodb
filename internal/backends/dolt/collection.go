@@ -1437,19 +1437,43 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	return &backends.DeleteAllResult{Deleted: deleted}, nil
 }
 
-// Stats implements backends.Collection.
 // Count implements backends.Collection.
 //
-// Returns the entry count from prolly tree metadata in O(1). The handler only
-// calls this for unfiltered counts; filtered counts still go through Query.
-func (c *collection) Count(ctx context.Context, _ *backends.CountParams) (*backends.CountResult, error) {
-	m, exists, _, err := c.getMap(ctx)
+// Unfiltered (params.Filter empty/nil) returns the entry count from prolly
+// tree metadata in O(1).
+//
+// Filtered counts attempt an index-only path: when the filter is exactly one
+// top-level field whose value shape produces sound index bounds (equality or
+// supported range), and that field has a single-field secondary index, the
+// count is the size of the index range — no documents are fetched or
+// decoded. Filtered=true is set on the result. Any other shape (compound
+// filter, dotted paths, $and/$or, no covering index, …) is declined with
+// Filtered=false and Count=0; the handler must scan.
+func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*backends.CountResult, error) {
+	m, exists, state, err := c.getMap(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	if !exists {
+		// Honor a filter on a missing collection by reporting 0 matches —
+		// avoids an unnecessary fallback scan in the handler.
+		if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
+			return &backends.CountResult{Count: 0, Filtered: true}, nil
+		}
 		return &backends.CountResult{Count: 0}, nil
+	}
+
+	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
+		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter)
+		if ferr != nil {
+			return nil, ferr
+		}
+		if used {
+			return &backends.CountResult{Count: n, Filtered: true}, nil
+		}
+		// Decline: handler will scan.
+		return &backends.CountResult{Count: 0, Filtered: false}, nil
 	}
 
 	n, err := m.Count()
@@ -1457,7 +1481,77 @@ func (c *collection) Count(ctx context.Context, _ *backends.CountParams) (*backe
 		return nil, err
 	}
 
-	return &backends.CountResult{Count: int64(n)}, nil
+	return &backends.CountResult{Count: int64(n), Filtered: true}, nil
+}
+
+// tryIndexedCount attempts to satisfy a filtered count from a single
+// secondary index without fetching any documents. It returns (n, true, nil)
+// only when the filter is exactly one top-level field with a value shape that
+// produces sound bounds, and that field has a covering single-field index;
+// any false positive in the bounds would corrupt the count, so the
+// requirements are stricter than tryIndexLookup (which can rely on the
+// handler's FilterIterator for re-validation).
+//
+// Returns (0, false, nil) when the filter shape is unsupported — caller
+// falls back to the scan path.
+func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document) (int64, bool, error) {
+	if filter == nil || filter.Len() != 1 {
+		return 0, false, nil
+	}
+
+	field := filter.Keys()[0]
+	if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
+		return 0, false, nil
+	}
+
+	state.mu.RLock()
+	secMaps := state.secIndexMaps[c.name]
+	idxInfos := state.indexes[c.name]
+	state.mu.RUnlock()
+
+	if len(secMaps) == 0 || len(idxInfos) == 0 {
+		return 0, false, nil
+	}
+
+	var idxName string
+	for _, idx := range idxInfos {
+		if len(idx.Key) == 1 && idx.Key[0].Field == field {
+			idxName = idx.Name
+			break
+		}
+	}
+	if idxName == "" {
+		return 0, false, nil
+	}
+
+	idxMap, ok := secMaps[idxName]
+	if !ok {
+		return 0, false, nil
+	}
+
+	v, err := filter.Get(field)
+	if err != nil {
+		return 0, false, nil
+	}
+
+	startKey, stopKey, ok := indexBoundsForFilterValue(v)
+	if !ok {
+		return 0, false, nil
+	}
+
+	// indexBoundsForFilterValue admits operator docs that combine bounds
+	// like {$gte: 1, $lt: 10}. For a count those are still sound — the
+	// returned range is exactly the matching index entries. But it also
+	// admits the bare-scalar case where the index range may include
+	// false positives if the index encoding loses information. Today
+	// indexBoundsForFilterValue's bare-scalar path defers to
+	// idxpkg.LowerBoundInclusive / UpperBoundInclusive which produce a
+	// tight equality range, so the count is exact.
+	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
+	if err != nil {
+		return 0, false, err
+	}
+	return n, true, nil
 }
 
 func (c *collection) Stats(ctx context.Context, params *backends.CollectionStatsParams) (*backends.CollectionStatsResult, error) {

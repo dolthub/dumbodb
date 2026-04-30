@@ -201,6 +201,177 @@ func BenchmarkIndexLookup_Range_10K(b *testing.B) {
 	})
 }
 
+// BenchmarkCount_Equality_10K mirrors the parity CountDocuments_10K_Indexed
+// benchmark: a single-equality filter on an indexed field, returning ~1K of
+// 10K rows.
+//
+// The old path (query_and_drain) is what the handler did before the indexed
+// count fast path: index lookup fetches every primary value tuple and
+// decodes the JSON, then the iterator-driven CountIterator counts them. The
+// new path (count_fastpath) walks just the secondary-index range.
+func BenchmarkCount_Equality_10K(b *testing.B) {
+	const n = 10_000
+
+	b.Run("query_and_drain_indexed", func(b *testing.B) {
+		coll, ctx := seedBenchCollection(b, n)
+		if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+			Indexes: []backends.IndexInfo{
+				{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
+			},
+		}); err != nil {
+			b.Fatalf("CreateIndexes: %v", err)
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			res, err := coll.Query(ctx, &backends.QueryParams{
+				Filter: must.NotFail(types.NewDocument("grp", int32(i%10))),
+			})
+			if err != nil {
+				b.Fatalf("Query: %v", err)
+			}
+			drainIter(b, res.Iter)
+		}
+	})
+
+	b.Run("count_fastpath_indexed", func(b *testing.B) {
+		coll, ctx := seedBenchCollection(b, n)
+		if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+			Indexes: []backends.IndexInfo{
+				{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
+			},
+		}); err != nil {
+			b.Fatalf("CreateIndexes: %v", err)
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			res, err := coll.Count(ctx, &backends.CountParams{
+				Filter: must.NotFail(types.NewDocument("grp", int32(i%10))),
+			})
+			if err != nil {
+				b.Fatalf("Count: %v", err)
+			}
+			if !res.Filtered {
+				b.Fatalf("expected Filtered=true on indexed path")
+			}
+		}
+	})
+}
+
+// TestCount_FilteredFastPath verifies the indexed count short-circuit:
+// equality and range filters return correct counts when the field has a
+// covering single-field index, and the backend declines (Filtered=false)
+// otherwise so the handler falls back to the scan path.
+func TestCount_FilteredFastPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	bk := newTestBackend(t)
+	db, err := bk.Database("countfast")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	coll, err := db.Collection("c")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+
+	const n = 1000
+	docs := make([]*types.Document, 0, n)
+	for i := 0; i < n; i++ {
+		docs = append(docs, must.NotFail(types.NewDocument(
+			"_id", int32(i),
+			"i", int32(i),
+			"grp", int32(i%10),
+			"tag", "row",
+		)))
+	}
+	if _, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+
+	// No index yet: filtered count must decline.
+	res, err := coll.Count(ctx, &backends.CountParams{
+		Filter: must.NotFail(types.NewDocument("grp", int32(3))),
+	})
+	if err != nil {
+		t.Fatalf("Count pre-index: %v", err)
+	}
+	if res.Filtered {
+		t.Fatalf("expected Filtered=false without index, got true")
+	}
+
+	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+		Indexes: []backends.IndexInfo{
+			{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
+			{Name: "i_1", Key: []backends.IndexKeyPair{{Field: "i"}}},
+		},
+	}); err != nil {
+		t.Fatalf("CreateIndexes: %v", err)
+	}
+
+	// Equality on indexed field → Filtered=true, count = 100.
+	eqRes, err := coll.Count(ctx, &backends.CountParams{
+		Filter: must.NotFail(types.NewDocument("grp", int32(3))),
+	})
+	if err != nil {
+		t.Fatalf("Count equality: %v", err)
+	}
+	if !eqRes.Filtered {
+		t.Errorf("expected Filtered=true for indexed equality")
+	}
+	if eqRes.Count != 100 {
+		t.Errorf("equality count: want 100, got %d", eqRes.Count)
+	}
+
+	// Range on indexed field → Filtered=true, count = 100 ([100, 200)).
+	rangeRes, err := coll.Count(ctx, &backends.CountParams{
+		Filter: must.NotFail(types.NewDocument("i",
+			must.NotFail(types.NewDocument("$gte", int32(100), "$lt", int32(200))))),
+	})
+	if err != nil {
+		t.Fatalf("Count range: %v", err)
+	}
+	if !rangeRes.Filtered {
+		t.Errorf("expected Filtered=true for indexed range")
+	}
+	if rangeRes.Count != 100 {
+		t.Errorf("range count: want 100, got %d", rangeRes.Count)
+	}
+
+	// Compound filter (only one field indexed) → decline.
+	compoundRes, err := coll.Count(ctx, &backends.CountParams{
+		Filter: must.NotFail(types.NewDocument("grp", int32(3), "tag", "row")),
+	})
+	if err != nil {
+		t.Fatalf("Count compound: %v", err)
+	}
+	if compoundRes.Filtered {
+		t.Errorf("expected Filtered=false for compound filter, got true")
+	}
+
+	// Empty filter → unfiltered count, Filtered=true (and Count=n).
+	emptyRes, err := coll.Count(ctx, &backends.CountParams{
+		Filter: must.NotFail(types.NewDocument()),
+	})
+	if err != nil {
+		t.Fatalf("Count empty: %v", err)
+	}
+	if !emptyRes.Filtered || emptyRes.Count != int64(n) {
+		t.Errorf("empty filter: Filtered=%v Count=%d, want true/%d", emptyRes.Filtered, emptyRes.Count, n)
+	}
+
+	// Filter on non-indexed field → decline.
+	tagRes, err := coll.Count(ctx, &backends.CountParams{
+		Filter: must.NotFail(types.NewDocument("tag", "row")),
+	})
+	if err != nil {
+		t.Fatalf("Count tag: %v", err)
+	}
+	if tagRes.Filtered {
+		t.Errorf("expected Filtered=false for non-indexed field, got true")
+	}
+}
+
 // Sanity-check that the benchmarks see the docs they expect. Goes through
 // the same code paths as the benchmark loop body but inspects the count.
 func TestIndexLookup_Bench_Sanity(t *testing.T) {

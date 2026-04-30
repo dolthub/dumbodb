@@ -25,21 +25,23 @@ import (
 // CountDocuments aggregation. The handler can satisfy it via the backend's
 // O(1) Count() rather than a full scan.
 type countShortcutInfo struct {
-	outField string // name of the count output field, e.g. "n"
-	idValue  any    // literal value used for $group _id (echoed back to the client)
-	skip     int64  // number of documents to skip; 0 if absent
-	limit    int64  // maximum documents to return; -1 if absent
+	outField string           // name of the count output field, e.g. "n"
+	idValue  any              // literal value used for $group _id (echoed back to the client)
+	skip     int64            // number of documents to skip; 0 if absent
+	limit    int64            // maximum documents to return; -1 if absent
+	filter   *types.Document  // $match filter; non-nil only when non-empty
 }
 
 // tryCountAggregateShortcut detects the exact aggregate pipeline shape that
-// the MongoDB drivers emit for CountDocuments with an empty filter:
+// the MongoDB drivers emit for CountDocuments:
 //
-//	[{$match: <empty>}, optional {$skip: N}, optional {$limit: N},
+//	[{$match: <filter>}, optional {$skip: N}, optional {$limit: N},
 //	 {$group: {_id: <const>, <field>: {$sum: 1}}}]
 //
-// Returns ok=true and a countShortcutInfo when the pipeline matches and the
-// $match filter is empty (so the result is the full collection size adjusted
-// by skip/limit). Pipelines with a non-empty $match still need the scan path.
+// Returns ok=true and a countShortcutInfo describing the pipeline. When the
+// $match filter is non-empty, info.filter is set; the caller may then ask
+// the backend to satisfy the filtered count from an index. If the backend
+// declines, the caller must fall back to the scan path.
 func tryCountAggregateShortcut(stages []any) (countShortcutInfo, bool) {
 	var info countShortcutInfo
 	info.limit = -1
@@ -67,8 +69,11 @@ func tryCountAggregateShortcut(stages []any) (countShortcutInfo, bool) {
 			}
 			v, _ := d.Get("$match")
 			md, mok := v.(*types.Document)
-			if !mok || md.Len() != 0 {
+			if !mok {
 				return countShortcutInfo{}, false
+			}
+			if md.Len() > 0 {
+				info.filter = md
 			}
 
 		case "$skip":
