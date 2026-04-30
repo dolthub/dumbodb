@@ -633,6 +633,63 @@ func TestCRUD_Distinct_WithFilter(t *testing.T) {
 	require.NoError(t, coll.Distinct(ctx, "val", bson.D{{Key: "group", Value: "x"}}).Decode(&vals))
 	assert.Len(t, vals, 2)
 }
+
+// TestCRUD_Distinct_Indexed exercises the index-driven fast path: the field is
+// indexed and the distinct request has no filter, so the backend should serve
+// the query from a sorted secondary index walk rather than a full scan.
+// (DumboDBFull)
+func TestCRUD_Distinct_Indexed(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "cat", Value: 1}},
+	})
+	require.NoError(t, err)
+
+	// Insert duplicates of three values plus one document missing the field.
+	insertDocs(t, coll,
+		bson.D{{Key: "cat", Value: "A"}},
+		bson.D{{Key: "cat", Value: "A"}},
+		bson.D{{Key: "cat", Value: "B"}},
+		bson.D{{Key: "cat", Value: "C"}},
+		bson.D{{Key: "cat", Value: "C"}},
+		bson.D{{Key: "cat", Value: "C"}},
+		bson.D{{Key: "other", Value: "no-cat"}},
+	)
+
+	var values []any
+	require.NoError(t, coll.Distinct(ctx, "cat", bson.D{}).Decode(&values))
+	require.Len(t, values, 3)
+	got := map[string]bool{}
+	for _, v := range values {
+		got[v.(string)] = true
+	}
+	assert.True(t, got["A"] && got["B"] && got["C"])
+}
+
+// TestCRUD_Distinct_NumericTypes verifies that numerically-equal values
+// across int32/int64/double dedup to a single distinct entry, matching
+// MongoDB semantics. (DumboDBFull)
+func TestCRUD_Distinct_NumericTypes(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "n", Value: int32(5)}},
+		bson.D{{Key: "n", Value: int64(5)}},
+		bson.D{{Key: "n", Value: float64(5.0)}},
+		bson.D{{Key: "n", Value: float64(5.5)}},
+		bson.D{{Key: "n", Value: int32(7)}},
+	)
+
+	var values []any
+	require.NoError(t, coll.Distinct(ctx, "n", bson.D{}).Decode(&values))
+	// 5, 5.5, 7 — three distinct numeric values regardless of source type.
+	assert.Len(t, values, 3)
+}
 func TestUpdateMany_upsert(t *testing.T) {
 	t.Parallel()
 
