@@ -154,6 +154,55 @@ func BenchmarkIndexLookup_Equality_10K(b *testing.B) {
 	})
 }
 
+// BenchmarkIndexLookup_FullRange_10K mirrors the parity Agg_MatchGroup_Indexed
+// shape where the $match filter ($gte:0) is satisfied by every document. The
+// raw index path here materialises every primary id and then point-fetches
+// each document — strictly worse than the sequential scan path. The intent of
+// the benchmark is to expose that gap so the planner gate that abandons the
+// index when the range covers ~all of the collection can be tuned.
+func BenchmarkIndexLookup_FullRange_10K(b *testing.B) {
+	const n = 10_000
+
+	rangeOp := func() *types.Document {
+		return must.NotFail(types.NewDocument("$gte", int32(0)))
+	}
+
+	b.Run("unindexed_scan", func(b *testing.B) {
+		coll, ctx := seedBenchCollection(b, n)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			res, err := coll.Query(ctx, &backends.QueryParams{
+				Filter: must.NotFail(types.NewDocument("grp", rangeOp())),
+			})
+			if err != nil {
+				b.Fatalf("Query: %v", err)
+			}
+			drainIter(b, res.Iter)
+		}
+	})
+
+	b.Run("indexed", func(b *testing.B) {
+		coll, ctx := seedBenchCollection(b, n)
+		if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+			Indexes: []backends.IndexInfo{
+				{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
+			},
+		}); err != nil {
+			b.Fatalf("CreateIndexes: %v", err)
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			res, err := coll.Query(ctx, &backends.QueryParams{
+				Filter: must.NotFail(types.NewDocument("grp", rangeOp())),
+			})
+			if err != nil {
+				b.Fatalf("Query: %v", err)
+			}
+			drainIter(b, res.Iter)
+		}
+	})
+}
+
 // BenchmarkIndexLookup_Range_10K mirrors the parity FilterRange_10K_Indexed
 // benchmark: a 1%-selectivity numeric range. The selectivity is what makes
 // the index path interesting — the un-indexed scan still touches every doc.

@@ -493,9 +493,29 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 
 	idxMap := secMaps[chosenIdxName]
-	primaryIDBytesList, err := idxpkg.RangeLookup(ctx, idxMap, startKey, stopKey)
+
+	// Cap the index range scan at half the collection. The point-fetch cost
+	// per matching id (one prolly tree traversal) dominates the scan path's
+	// per-doc cost (sequential leaf walk), so once a filter would route more
+	// than ~50% of the collection through the index path it is strictly
+	// slower than a full scan. m.Count is O(1) (prolly tree metadata), so
+	// the gate is essentially free for the cases where the index does win.
+	primaryCount, err := primary.Count()
+	if err != nil {
+		return nil, false, fmt.Errorf("dolt: index lookup counting primary: %w", err)
+	}
+	maxResults := -1
+	if primaryCount > 0 {
+		maxResults = int(primaryCount) / 2
+	}
+	primaryIDBytesList, exceeded, err := idxpkg.RangeLookupCapped(ctx, idxMap, startKey, stopKey, maxResults)
 	if err != nil {
 		return nil, false, err
+	}
+	if exceeded {
+		// Caller will fall through to the sequential primary scan, which is
+		// faster than per-id point lookups for low-selectivity ranges.
+		return nil, false, nil
 	}
 
 	// Fetch the actual documents from the primary map. Errors propagate so
