@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Git tag to build (e.g. v0.0.9). Leave empty to build HEAD.'
-        required: false
+        description: 'Git tag to build (e.g. v0.0.9)'
+        required: true
         type: string
 
 jobs:
@@ -22,6 +22,14 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0  # full history for git describe
+
+      - name: Verify tag exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if ! git tag -l "${{ inputs.tag }}" | grep -q .; then
+            echo "::error::Tag '${{ inputs.tag }}' does not exist. Push the tag first: git tag ${{ inputs.tag }} && git push origin ${{ inputs.tag }}"
+            exit 1
+          fi
 
       - uses: actions/setup-go@v5
         with:
