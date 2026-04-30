@@ -14,180 +14,171 @@
 
 package dolt
 
+// Profile-only benchmarks that mirror the parity-suite shapes that are
+// currently 4-10x slower than MongoDB on the unindexed read path:
+//
+//   parity bench                            this profile bench
+//   ---------------------------------       --------------------------------
+//   BenchmarkFind_FilterEq_50K               BenchmarkProfile_FindFilterEq_50K
+//   BenchmarkAgg_Sort                        BenchmarkProfile_AggSort
+//   BenchmarkAgg_MatchGroup                  BenchmarkProfile_AggMatchGroup
+//
+// Where the parity benches dial a running DumboDB over the wire, these run
+// in-process against the dolt backend and chain the same handler-side
+// iterators (FilterIterator / aggregation stages) the real handler builds.
+// That keeps the same dominant code paths but lets `go test -cpuprofile` see
+// them under their real symbols, without going through the wire bridge or
+// the test harness DB lifecycle.
+//
+// The intent is to find where time goes — not to set or beat any baseline.
+// Use:
+//
+//   go test -run=__nope__ -bench=BenchmarkProfile_FindFilterEq_50K \
+//     -benchtime=10x -cpuprofile=/tmp/findeq.cpu -memprofile=/tmp/findeq.mem \
+//     ./internal/backends/dolt/
+//   go tool pprof -top -cum /tmp/findeq.cpu
+
 import (
+	"context"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// Profiling benchmarks for do-upta. Each benchmark isolates one operation at
-// the backend layer so cpuprofile output attributes time to DumboDB code
-// rather than wire-protocol/driver framing.
-//
-// Run individual benchmarks with:
-//
-//   go test -run=^$ -bench=BenchmarkProfile_FindFilterEq_50K_Indexed \
-//     -benchtime=20x -cpuprofile=cpu.out -memprofile=mem.out \
-//     ./internal/backends/dolt
-//
-// Then:
-//   go tool pprof -top -cum cpu.out
-
-// BenchmarkProfile_FindFilterEq_50K_Indexed mirrors the parity benchmark
-// find_filter_eq_50k_indexed: a single equality on the indexed `grp` field
-// over a 50K-doc collection. With `grp = i%10` each query returns ~5K of
-// 50K rows. The 50% range gate in tryIndexLookup admits this (~10% of the
-// collection), so the index path runs.
-func BenchmarkProfile_FindFilterEq_50K_Indexed(b *testing.B) {
-	const n = 50_000
-	coll, ctx := seedBenchCollection(b, n)
-	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
-		Indexes: []backends.IndexInfo{
-			{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
-		},
-	}); err != nil {
-		b.Fatalf("CreateIndexes: %v", err)
+// drainAndDiscard pulls every doc out of the iterator. The benchmark needs
+// the per-iter cost including decode of the final document; it doesn't care
+// about the values.
+func drainAndDiscard(it types.DocumentsIterator) {
+	for {
+		_, _, err := it.Next()
+		if err != nil {
+			return
+		}
 	}
+}
+
+// BenchmarkProfile_FindFilterEq_50K mirrors the wire-level
+// BenchmarkFind_FilterEq_50K from the parity suite: 50K small docs, equality
+// filter on the 10-bucketed `grp` field, no index. Each iteration drains the
+// full result set (~5K docs).
+//
+// What runs per iteration:
+//   - collection.Query — opens a prolly map iterator, attaches the byte-level
+//     prefilter built from the equality filter
+//   - mapIter.Next — for each row: tree walk, JSON bytes fetch, prefilter
+//     check, BSON-via-ExtJSON decode
+//   - common.FilterIterator — re-validates each candidate against the
+//     types.Document filter (catches false positives from the prefilter)
+//
+// This is the same iterator stack the wire-level Find handler builds.
+func BenchmarkProfile_FindFilterEq_50K(b *testing.B) {
+	coll, ctx := seedBenchCollection(b, 50_000)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		res, err := coll.Query(ctx, &backends.QueryParams{
-			Filter: must.NotFail(types.NewDocument("grp", int32(i%10))),
-		})
+		filter := must.NotFail(types.NewDocument("grp", int32(i%10)))
+		res, err := coll.Query(ctx, &backends.QueryParams{Filter: filter})
 		if err != nil {
 			b.Fatalf("Query: %v", err)
 		}
-		drainIter(b, res.Iter)
+		closer := iterator.NewMultiCloser()
+		filtered := common.FilterIterator(res.Iter, closer, filter)
+		drainAndDiscard(filtered)
+		closer.Close()
 	}
 }
 
-// BenchmarkProfile_CountDocuments_10K_Indexed mirrors count_documents_10k:
-// CountDocuments({grp: x}) on an indexed field. Routes through Count, which
-// should hit the indexed-count fast path (RangeCount over the secondary
-// index, no document fetches).
-func BenchmarkProfile_CountDocuments_10K_Indexed(b *testing.B) {
-	const n = 10_000
-	coll, ctx := seedBenchCollection(b, n)
-	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
-		Indexes: []backends.IndexInfo{
-			{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
-		},
-	}); err != nil {
-		b.Fatalf("CreateIndexes: %v", err)
+// BenchmarkProfile_AggSort mirrors the wire-level BenchmarkAgg_Sort. Pipeline
+// is [{$sort:{i:-1}}, {$limit:100}] over 1K small docs. The sort buffers all
+// 1K rows; the $limit cuts to 100 after.
+//
+// What runs per iteration:
+//   - collection.Query — full scan, no filter pushdown (no $match before sort)
+//   - sortStage.Process — slurp + slices.SortFunc
+//   - limitStage.Process — head 100
+func BenchmarkProfile_AggSort(b *testing.B) {
+	coll, ctx := seedBenchCollection(b, 1000)
+	sortStage, err := stages.NewStage(must.NotFail(types.NewDocument(
+		"$sort", must.NotFail(types.NewDocument("i", int32(-1))))))
+	if err != nil {
+		b.Fatalf("NewStage($sort): %v", err)
+	}
+	limitStage, err := stages.NewStage(must.NotFail(types.NewDocument(
+		"$limit", int32(100))))
+	if err != nil {
+		b.Fatalf("NewStage($limit): %v", err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		res, err := coll.Count(ctx, &backends.CountParams{
-			Filter: must.NotFail(types.NewDocument("grp", int32(i%10))),
-		})
-		if err != nil {
-			b.Fatalf("Count: %v", err)
-		}
-		if !res.Filtered {
-			b.Fatalf("expected indexed count fast path (Filtered=true)")
-		}
-	}
-}
-
-// BenchmarkProfile_CountDocuments_50K_Indexed mirrors count_documents_50k.
-func BenchmarkProfile_CountDocuments_50K_Indexed(b *testing.B) {
-	const n = 50_000
-	coll, ctx := seedBenchCollection(b, n)
-	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
-		Indexes: []backends.IndexInfo{
-			{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
-		},
-	}); err != nil {
-		b.Fatalf("CreateIndexes: %v", err)
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		res, err := coll.Count(ctx, &backends.CountParams{
-			Filter: must.NotFail(types.NewDocument("grp", int32(i%10))),
-		})
-		if err != nil {
-			b.Fatalf("Count: %v", err)
-		}
-		if !res.Filtered {
-			b.Fatalf("expected indexed count fast path (Filtered=true)")
-		}
-	}
-}
-
-// BenchmarkProfile_AggMatchGroup_50K_Indexed mirrors agg_match_group_indexed.
-// Pattern: [{$match: {grp: x}}, {$group: {_id: "$grp", c: {$sum: 1}}}].
-// The handler runs $match through Query and $group as in-memory aggregation,
-// so the backend cost of this benchmark is identical to FindFilterEq above —
-// the per-doc deserialisation work is what feeds the group stage. Profiling
-// the Query path captures the dominant cost.
-func BenchmarkProfile_AggMatchGroup_50K_Indexed(b *testing.B) {
-	const n = 50_000
-	coll, ctx := seedBenchCollection(b, n)
-	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
-		Indexes: []backends.IndexInfo{
-			{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
-		},
-	}); err != nil {
-		b.Fatalf("CreateIndexes: %v", err)
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		res, err := coll.Query(ctx, &backends.QueryParams{
-			Filter: must.NotFail(types.NewDocument("grp", int32(i%10))),
-		})
+		res, err := coll.Query(ctx, &backends.QueryParams{})
 		if err != nil {
 			b.Fatalf("Query: %v", err)
 		}
-		// Simulate $group {_id: "$grp", c: {$sum: 1}} — read every doc the
-		// match produced, look up grp, count it. Mirrors the handler's
-		// stage processing without the full pipeline plumbing.
-		count := int64(0)
-		for {
-			_, doc, err := res.Iter.Next()
-			if err != nil {
-				break
-			}
-			if _, gerr := doc.Get("grp"); gerr != nil {
-				b.Fatalf("doc missing grp: %v", gerr)
-			}
-			count++
+		closer := iterator.NewMultiCloser()
+		out, err := sortStage.Process(ctx, res.Iter, closer)
+		if err != nil {
+			b.Fatalf("$sort.Process: %v", err)
 		}
-		res.Iter.Close()
-		if count == 0 {
-			b.Fatalf("group received zero docs")
+		out, err = limitStage.Process(ctx, out, closer)
+		if err != nil {
+			b.Fatalf("$limit.Process: %v", err)
 		}
+		drainAndDiscard(out)
+		closer.Close()
 	}
 }
 
-// BenchmarkProfile_Distinct_50K_Indexed mirrors distinct (indexed). Calls
-// the DistinctScan fast path directly. The seed has only 10 unique `grp`
-// values so the index walk emits 10 primary lookups out of 50K index keys.
-func BenchmarkProfile_Distinct_50K_Indexed(b *testing.B) {
-	const n = 50_000
-	coll, ctx := seedBenchCollection(b, n)
-	if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
-		Indexes: []backends.IndexInfo{
-			{Name: "grp_1", Key: []backends.IndexKeyPair{{Field: "grp"}}},
-		},
-	}); err != nil {
-		b.Fatalf("CreateIndexes: %v", err)
+// BenchmarkProfile_AggMatchGroup mirrors the wire-level
+// BenchmarkAgg_MatchGroup. Pipeline:
+//
+//	[{$match:{grp:{$gte:0}}}, {$group:{_id:"$grp", n:{$sum:1}}}]
+//
+// over 1K small docs. Every doc matches; group reduces to 10 buckets.
+//
+// What runs per iteration:
+//   - collection.Query — full scan, no pushdown (operator-doc filter on grp)
+//   - matchStage.Process — re-checks every doc against the $match filter
+//   - groupStage.Process — buckets and sums
+func BenchmarkProfile_AggMatchGroup(b *testing.B) {
+	coll, ctx := seedBenchCollection(b, 1000)
+	matchStage, err := stages.NewStage(must.NotFail(types.NewDocument(
+		"$match", must.NotFail(types.NewDocument(
+			"grp", must.NotFail(types.NewDocument("$gte", int32(0))))))))
+	if err != nil {
+		b.Fatalf("NewStage($match): %v", err)
 	}
-	ds, ok := coll.(backends.DistinctScanner)
-	if !ok {
-		b.Fatalf("collection is not a DistinctScanner — index path unavailable")
+	groupStage, err := stages.NewStage(must.NotFail(types.NewDocument(
+		"$group", must.NotFail(types.NewDocument(
+			"_id", "$grp",
+			"n", must.NotFail(types.NewDocument("$sum", int32(1))),
+		)))))
+	if err != nil {
+		b.Fatalf("NewStage($group): %v", err)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		res, err := ds.DistinctScan(ctx, &backends.DistinctParams{Key: "grp"})
+		res, err := coll.Query(ctx, &backends.QueryParams{})
 		if err != nil {
-			b.Fatalf("DistinctScan: %v", err)
+			b.Fatalf("Query: %v", err)
 		}
-		if res == nil {
-			b.Fatalf("DistinctScan declined — index path not used")
+		closer := iterator.NewMultiCloser()
+		out, err := matchStage.Process(ctx, res.Iter, closer)
+		if err != nil {
+			b.Fatalf("$match.Process: %v", err)
 		}
-		if len(res.Values) != 10 {
-			b.Fatalf("DistinctScan: want 10 values, got %d", len(res.Values))
+		out, err = groupStage.Process(ctx, out, closer)
+		if err != nil {
+			b.Fatalf("$group.Process: %v", err)
 		}
+		drainAndDiscard(out)
+		closer.Close()
 	}
 }
+
+// Compile-time assertion that the iterator types we touch satisfy the
+// interface — keeps the benchmark file honest if signatures change.
+var _ context.Context = context.Background()
