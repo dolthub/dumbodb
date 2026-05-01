@@ -805,7 +805,7 @@ func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.
 		name = authorName
 		email = authorName + "@dumbodb"
 	}
-	meta, err := datas.NewCommitMetaWithUserTS(name, email, desc, ts)
+	meta, err := datas.NewCommitMetaWithAuthor(name, email, desc, ts)
 	if err != nil {
 		return datas.Dataset{}, am, err
 	}
@@ -1098,7 +1098,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		name = params.Author
 		email = params.Author + "@dumbodb"
 	}
-	meta, err := datas.NewCommitMetaWithUserTS(name, email, message, ts)
+	meta, err := datas.NewCommitMetaWithAuthor(name, email, message, ts)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DumboDBCommit: building commit meta for branch %q: %w", branch, err)
 	}
@@ -1959,9 +1959,9 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 
 		info := backends.CommitInfo{
 			CommitID:  ci.Hash.String(),
-			Author:    ci.Meta.Name + " <" + ci.Meta.Email + ">",
+			Author:    ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">",
 			Message:   ci.Meta.Description,
-			Timestamp: ci.Meta.UserTimestamp,
+			Timestamp: ci.Meta.UserTimestampMillis(),
 			Refs:      refsForCommit[ci.Hash.String()],
 		}
 		if len(ci.Parents) >= 1 {
@@ -2657,7 +2657,7 @@ func (b *Backend) commitRebasedPick(
 	pickedAM prolly.AddressMap,
 	pickMeta *datas.CommitMeta,
 ) (hash.Hash, error) {
-	meta, err := datas.NewCommitMeta(pickMeta.Name, pickMeta.Email, pickMeta.Description)
+	meta, err := datas.NewCommitMeta(pickMeta.Author.Name, pickMeta.Author.Email, pickMeta.Description)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: building commit meta: %w", err)
 	}

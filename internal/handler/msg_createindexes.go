@@ -495,7 +495,7 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrNotImplemented,
-				fmt.Sprintf("Index key value %q is not implemented yet", orderParam),
+				fmt.Sprintf("Index key value %d is not implemented yet", orderParam),
 				command,
 			)
 		}
