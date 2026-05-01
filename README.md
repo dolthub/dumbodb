@@ -21,9 +21,10 @@ DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity
 - Indexing: Support for secondary indexes on top-level and nested fields to ensure query performance.
 
 #### Limitations & Scope
-- No Authentication: DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. This will be addressed in future releases, but for now, please do not expose DumboDB instances to untrusted networks.
-- Single Node: Replication (Replica Sets) and Sharding are out of scope.
-- Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported.
+- No transaction or session support: Every update is immediately visible to all clients. Planned for v0.5.
+- No Authentication. DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. Do not expose DumboDB instances to untrusted networks. Planned for v0.6.
+- Single Node: Replication (Replica Sets) and Sharding are out of scope. Support not planned.
+- Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 
 ### Version Control Features
 DumboDB's version control features are exposed via a set of custom commands (e.g. `dumboCommit`, `dumboMerge`, etc.) that you can run from any MongoDB client. These commands allow you to commit changes, create branches, merge branches, view commit history, and more.
@@ -48,8 +49,9 @@ All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whicheve
 
 Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md)
 
-## Build, Run, Connect
+## Install, Run, Connect
 
+### Build From Source
 ```bash
 git clone https://github.com/dolthub/dumbodb
 cd dumbodb
@@ -61,6 +63,14 @@ mkdir -p /tmp/dumbodb-data
 # Listens on 127.0.0.1:27017
 ```
 
+### Released Binaries
+We publish pre-built binaries for Linux, MacOS, and Windows on our [GitHub Releases page](https://github.com/dolthub/dumbodb/releases). Download the appropriate binary for your platform, put it somewhere in your `PATH`, and run it with the `--data-dir` flag to specify where you want your data to be stored. The specifics will depend on your operating system, as they have protections against running arbitrary binaries from the internet, so please refer to your OS documentation for how to run downloaded binaries. We are working on getting signed binaries published to make this easier!
+
+```bash
+$ dumbodb --data-dir /tmp/dumbodb-data
+```
+
+### Connect
 Connect with any [MongoDB driver](https://www.mongodb.com/docs/drivers/), or use the
 `mongosh` [shell](https://www.mongodb.com/try/download/shell):
 
@@ -240,9 +250,10 @@ DumboDB is built on two open-source projects:
 ## Roadmap
 DumboDB is in active development, and we have a lot of exciting features planned. Major milestones we are planning:
 
-- **v0.2**: Garbage Collection and zstd compression. Reduce the footprint of your database.
+- **v0.2**: Garbage Collection and zstd compression. Reduce the footprint of your database. Simplified configuration for user details (name and email) so you don't have to specify them on every commit.
 - **v0.3**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
 - **v0.4**: Add support for Replication (as a secondary backup to your existing MongoDB instance)
-- **v0.5**: Add Authentication and Authorization support.
+- **v0.5**: Isolated Session and Transaction support.
+- **v0.6**: Add Authentication and Authorization support.
 - **v0.8**: Visualization and operations via a custom Workbench UI.
 - **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
