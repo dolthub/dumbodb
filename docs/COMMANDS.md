@@ -38,6 +38,7 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboCurrentBranch` | `doltCurrentBranch` |
 | `dumboConflicts` | `doltConflicts` |
 | `dumboResolveConflict` | `doltResolveConflict` |
+| `dumboTag` | `doltTag` |
 
 ---
 
@@ -972,4 +973,76 @@ main.runCommand({ doltMerge: 1, continue: 1 })
 // { commitId: "...", message: "Merge branch 'feature' into 'main'", ok: 1 }
 ```
 
+---
 
+## dumboTag
+
+Create, list, or delete tags at specific commits. Tags are stored using Dolt's `refs/tags/<name>` refspec and are interoperable with the `dolt tag` CLI.
+
+**Alias:** `doltTag`
+
+> **Note:** `dumboTag` is an admin command — use `db.adminCommand()`.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | no | — | Tag name. Required for create/delete. Must not contain `@` or whitespace. Omit to list all tags. |
+| `hash` | string | no | current branch HEAD | Rootish (commit hash, branch, tag, or ancestor expression) to tag |
+| `delete` | bool | no | `false` | Set to `true` to delete the named tag |
+| `message` | string | no | `""` | Tag description |
+| `author` | string | no | `"dumbodb"` | Tagger name |
+| `email` | string | no | `"dumbodb@dumbodb"` | Tagger email |
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tags` | array | List of tag objects (always returned) |
+| `tags[].name` | string | Tag name |
+| `tags[].commitId` | string | Commit hash the tag points to |
+| `tags[].tagger` | string | Author name |
+| `tags[].email` | string | Author email |
+| `tags[].message` | string | Tag description |
+| `tags[].timestamp` | Date | Creation time |
+| `ok` | number | `1` on success |
+
+### Examples
+
+**List all tags:**
+
+```js
+db.adminCommand({ dumboTag: 1 })
+// { tags: [ { name: "v1.0", commitId: "abc123...", ... } ], ok: 1 }
+```
+
+**Create a tag at the current branch HEAD:**
+
+```js
+db.adminCommand({ dumboTag: 1, name: "v1.0" })
+```
+
+**Create a tag at a specific commit with metadata:**
+
+```js
+db.adminCommand({
+  dumboTag: 1,
+  name: "v2.0",
+  hash: "na7kfra98h45fr2u5qtr30o2ggm7vh61",
+  message: "Production release",
+  author: "alice",
+  email: "alice@acme.com"
+})
+```
+
+**Tag a relative ancestor:**
+
+```js
+db.adminCommand({ dumboTag: 1, name: "before-refactor", hash: "main~3" })
+```
+
+**Delete a tag:**
+
+```js
+db.adminCommand({ dumboTag: 1, name: "v1.0", delete: true })
+```

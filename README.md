@@ -44,6 +44,7 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 | [`dumboCurrentBranch`](docs/COMMANDS.md#doltcurrentbranch) | Return the current branch name for this connection |
 | [`dumboConflicts`](docs/COMMANDS.md#doltconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
 | [`dumboResolveConflict`](docs/COMMANDS.md#doltresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
+| [`dumboTag`](docs/COMMANDS.md#dumbotag) | Create, list, or delete tags at specific commits |
 
 All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
 
