@@ -104,7 +104,7 @@ func TestRebaseVerify(t *testing.T) {
 		raw := runCommandRaw(t, featureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
-			{Key: "committer", Value: "rebaser <rebaser@dumbodb>"},
+			{Key: "committer", Value: "rebaser <rebaser@acme.com>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for a clean rebase")
@@ -140,7 +140,7 @@ func TestRebaseVerify(t *testing.T) {
 		assert.Equal(t, "test <test@example.com>", head["author"],
 			"rebased commit must preserve original author")
 		// Committer is the rebaser identity passed via the author param.
-		assert.Equal(t, "rebaser <rebaser@dumbodb>", head["committer"],
+		assert.Equal(t, "rebaser <rebaser@acme.com>", head["committer"],
 			"rebased commit committer must be the rebaser, not the original author")
 		assert.NotEqual(t, head["author"], head["committer"],
 			"committer must differ from author for rebased commits")

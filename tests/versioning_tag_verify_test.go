@@ -53,7 +53,7 @@ func tagVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1, ha
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 = dumboDBCommit(t, env, dbName, "commit one", "alice <alice@dumbodb>")
+	hash1 = dumboDBCommit(t, env, dbName, "commit one", "alice <alice@acme.com>")
 
 	// Commit 2: second document added.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -61,7 +61,7 @@ func tagVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1, ha
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 = dumboDBCommit(t, env, dbName, "commit two", "alice <alice@dumbodb>")
+	hash2 = dumboDBCommit(t, env, dbName, "commit two", "alice <alice@acme.com>")
 
 	return hash1, hash2
 }

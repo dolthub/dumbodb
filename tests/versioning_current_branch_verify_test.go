@@ -54,7 +54,7 @@ func currentBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) 
 		{Key: "v", Value: "first"},
 	})
 	require.NoError(t, err)
-	hash1 = dumboDBCommit(t, env, dbName, "first commit", "alice <alice@dumbodb>")
+	hash1 = dumboDBCommit(t, env, dbName, "first commit", "alice <alice@acme.com>")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -62,7 +62,7 @@ func currentBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) 
 		{Key: "v", Value: "second"},
 	})
 	require.NoError(t, err)
-	hash2 = dumboDBCommit(t, env, dbName, "second commit", "alice <alice@dumbodb>")
+	hash2 = dumboDBCommit(t, env, dbName, "second commit", "alice <alice@acme.com>")
 
 	// Create branch "feature" from main HEAD.
 	var branchResult bson.M

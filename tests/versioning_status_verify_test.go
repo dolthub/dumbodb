@@ -142,7 +142,7 @@ func TestStatusVerify(t *testing.T) {
 		{Key: "score", Value: int32(10)},
 	})
 	require.NoError(t, err)
-	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@dumbodb>")
+	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Status on clean repo — empty tables
@@ -182,7 +182,7 @@ func TestStatusVerify(t *testing.T) {
 	// Scenario 3: Status after update — modified collection appears as "modified"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_AfterUpdate", func(t *testing.T) {
-		dumboDBCommit(t, env, dbName, "add newcoll", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "add newcoll", "alice <alice@acme.com>")
 
 		_, err := env.client.Database(dbName).Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
@@ -206,7 +206,7 @@ func TestStatusVerify(t *testing.T) {
 	// Scenario 4: Status after delete — removed collection appears as "deleted"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AfterDelete", func(t *testing.T) {
-		dumboDBCommit(t, env, dbName, "modify items", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "modify items", "alice <alice@acme.com>")
 
 		require.NoError(t, env.client.Database(dbName).Collection("items").Drop(ctx))
 
@@ -226,7 +226,7 @@ func TestStatusVerify(t *testing.T) {
 	// Scenario 5: Status after commit — clean again
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AfterCommit", func(t *testing.T) {
-		dumboDBCommit(t, env, dbName, "delete items", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "delete items", "alice <alice@acme.com>")
 
 		sr := runStatus(t, env, dbName)
 		assert.Empty(t, sr.Tables, "expected empty collections after committing all changes")
@@ -252,7 +252,7 @@ func TestStatusVerify(t *testing.T) {
 			{Key: "note", Value: "old"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "baseline for multi-collection", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "baseline for multi-collection", "alice <alice@acme.com>")
 
 		// Now modify all three collections in one working set.
 
@@ -315,7 +315,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_MultiFieldDocModification", func(t *testing.T) {
 		// Commit Scenario 6's state to get a fresh baseline.
-		dumboDBCommit(t, env, dbName, "checkpoint before multi-field", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "checkpoint before multi-field", "alice <alice@acme.com>")
 
 		// Modify one doc in "users" with changes spanning several fields:
 		// - set a new field   (age)
@@ -347,7 +347,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_ReadOnlyRootish", func(t *testing.T) {
 		// Commit current state so we have a stable commit hash to point at.
-		commitHash := dumboDBCommit(t, env, dbName, "commit for read-only status", "alice <alice@dumbodb>")
+		commitHash := dumboDBCommit(t, env, dbName, "commit for read-only status", "alice <alice@acme.com>")
 
 		readOnlyDB := dbName + "@" + commitHash
 		err := env.client.Database(readOnlyDB).RunCommand(ctx, bson.D{

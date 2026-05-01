@@ -32,14 +32,14 @@ db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@dumbodb>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
 const hash1 = r1.commitId
 
 // Commit 2: second document added
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@dumbodb>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
 const hash2 = r2.commitId
@@ -106,7 +106,7 @@ var feature = db.getSiblingDB("branchvdb@feature")
 
 // Add a document on the feature branch and commit it
 feature.items.insertOne({ _id: 3, label: "gamma" })
-feature.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "alice <alice@dumbodb>" })
+feature.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "carol <carol@startup.dev>" })
 
 // main must not see _id:3
 db.getSiblingDB("branchvdb@main").items.countDocuments({})
@@ -152,9 +152,9 @@ correct document count at the ancestor state.
 var db2 = db.getSiblingDB("branchvdb2")
 db2.dropDatabase()
 db2.items.insertOne({ _id: 1, label: "alpha" })
-db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@dumbodb>" })
+db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
 db2.items.insertOne({ _id: 2, label: "beta" })
-db2.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@dumbodb>" })
+db2.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
 
 // main~1 resolves to commit 1 (one document)
 db2.getSiblingDB("branchvdb2@main~1").runCommand({
@@ -199,7 +199,7 @@ safe delete must fail with an error.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "unmerged-branch" })
 var ub = db.getSiblingDB("branchvdb@unmerged-branch")
 ub.items.insertOne({ _id: 99, label: "extra" })
-ub.runCommand({ doltCommit: 1, message: "extra commit", author: "alice <alice@dumbodb>" })
+ub.runCommand({ doltCommit: 1, message: "extra commit", author: "carol <carol@startup.dev>" })
 
 // Safe delete must fail.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "unmerged-branch", delete: 1 })
@@ -220,7 +220,7 @@ commits that are not reachable from any other branch.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "force-branch" })
 var fb = db.getSiblingDB("branchvdb@force-branch")
 fb.items.insertOne({ _id: 77, label: "gone" })
-fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "alice <alice@dumbodb>" })
+fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "bob <bob@widgets.io>" })
 
 // Force delete succeeds regardless of merge status.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "force-branch", forceDelete: 1 })

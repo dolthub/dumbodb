@@ -48,13 +48,13 @@ db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "alpha" })
-const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@dumbodb>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
 printjson(r1)
 const hash1 = r1.commitId
 
 // Commit 2: second document added
 db.items.insertOne({ _id: 2, label: "beta" })
-const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "alice <alice@dumbodb>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 const hash2 = r2.commitId
 

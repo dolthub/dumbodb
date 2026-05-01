@@ -32,14 +32,14 @@ db.dropDatabase()
 
 // C1: insert {_id:1, v:1} on main.
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@dumbodb>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
 
 // C2: add {_id:2, v:2} — this is the commit we will revert.
 db.items.insertOne({ _id: 2, v: 2 })
-const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@dumbodb>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { commitId: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
 const hashC2 = r2.commitId
@@ -102,7 +102,7 @@ Revert another commit with a custom message and author override.
 ```js
 // Add another commit to revert.
 db.items.insertOne({ _id: 3, v: 3 })
-const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
+const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@startup.dev>" })
 const hashC3 = r3.commitId
 
 // Revert with custom message and author.
@@ -110,16 +110,16 @@ const rRevert2 = db.getSiblingDB("revertdb@main").runCommand({
   doltRevert: 1,
   commit: hashC3,
   message: "undo: add item three",
-  author: "alice <alice@dumbodb>"
+  author: "alice <alice@acme.com>"
 })
 printjson(rRevert2)
-// Expected: { commitId: "<hash>", message: "undo: add item three", committer: "alice <alice@dumbodb>", committerTimestamp: ISODate("..."), ok: 1 }
+// Expected: { commitId: "<hash>", message: "undo: add item three", committer: "alice <alice@acme.com>", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
 - `message` equals the custom override (`"undo: add item three"`) — no annotation appended
 - `commitId` is a fresh hash
-- `committer` equals `"alice <alice@dumbodb>"` (same as author for revert commits)
+- `committer` equals `"alice <alice@acme.com>"` (same as author for revert commits)
 - `committerTimestamp` records when the revert was applied
 
 ---
@@ -133,13 +133,13 @@ conflicts with the modification.
 ```js
 // Add a document that will be the conflict target.
 db.items.insertOne({ _id: 10, v: 10 })
-const rAdd = db.runCommand({ doltCommit: 1, message: "add-ten", author: "alice <alice@dumbodb>" })
+const rAdd = db.runCommand({ doltCommit: 1, message: "add-ten", author: "alice <alice@acme.com>" })
 const hashAddTen = rAdd.commitId
 
 // Now modify _id:10 on main — this creates a conflict if we revert hashAddTen
 // (revert would delete _id:10, but main has since modified it).
 db.items.updateOne({ _id: 10 }, { $set: { v: 99 } })
-db.runCommand({ doltCommit: 1, message: "modify-ten", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "modify-ten", author: "bob <bob@widgets.io>" })
 
 // Revert hashAddTen — expect conflict.
 // In mongosh, runCommand throws a MongoServerError when ok:0.
@@ -220,11 +220,11 @@ Start another conflicting revert and then abort it.
 ```js
 // Add a document and then modify it to set up a conflict.
 db.items.insertOne({ _id: 20, v: 20 })
-const rAdd20 = db.runCommand({ doltCommit: 1, message: "add-twenty", author: "alice <alice@dumbodb>" })
+const rAdd20 = db.runCommand({ doltCommit: 1, message: "add-twenty", author: "alice <alice@acme.com>" })
 const hashAdd20 = rAdd20.commitId
 
 db.items.updateOne({ _id: 20 }, { $set: { v: 201 } })
-db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "bob <bob@widgets.io>" })
 
 // Revert — expect conflict (throws in mongosh).
 try {

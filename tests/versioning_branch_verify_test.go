@@ -53,7 +53,7 @@ func branchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1,
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 = dumboDBCommit(t, env, dbName, "commit one", "alice <alice@dumbodb>")
+	hash1 = dumboDBCommit(t, env, dbName, "commit one", "alice <alice@acme.com>")
 
 	// Commit 2: second document added.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -61,7 +61,7 @@ func branchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1,
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 = dumboDBCommit(t, env, dbName, "commit two", "alice <alice@dumbodb>")
+	hash2 = dumboDBCommit(t, env, dbName, "commit two", "alice <alice@acme.com>")
 
 	return hash1, hash2
 }
@@ -124,7 +124,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "gamma"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"@feature", "feature adds gamma", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName+"@feature", "feature adds gamma", "alice <alice@acme.com>")
 
 		// main must still have exactly 2 documents.
 		mainCount, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
@@ -247,7 +247,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "extra"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, delDbName+"@unmerged-branch", "extra commit", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, delDbName+"@unmerged-branch", "extra commit", "alice <alice@acme.com>")
 
 		// Safe delete must be rejected because unmerged-branch has a commit not in main.
 		err = env.client.Database(delDbName+"@main").RunCommand(ctx, bson.D{
@@ -276,7 +276,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "label", Value: "gone"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, delDbName+"@force-branch", "unmerged commit", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, delDbName+"@force-branch", "unmerged commit", "alice <alice@acme.com>")
 
 		// Force delete must succeed regardless of merge status.
 		var result bson.M

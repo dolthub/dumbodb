@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document on main.
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@dumbodb>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
@@ -43,7 +43,7 @@ db.getSiblingDB("pickdb@main").runCommand({ doltBranch: 1, branch: "feature" })
 
 // Advance feature with a commit we will cherry-pick onto main.
 db.getSiblingDB("pickdb@feature").items.insertOne({ _id: 2, v: 2 })
-const r2 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@dumbodb>" })
+const r2 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { commitId: "<hashC2>", branch: "feature", message: "add-two", ok: 1 }
 const hashC2 = r2.commitId
@@ -105,7 +105,7 @@ To re-test from a clean state without re-running setup, advance feature with ano
 ```js
 // Add a third document on feature for this scenario.
 db.getSiblingDB("pickdb@feature").items.insertOne({ _id: 3, v: 3 })
-const r3 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
+const r3 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@startup.dev>" })
 const hashC3feat = r3.commitId
 
 // Cherry-pick C3 onto main with a custom message and explicit committer.
@@ -113,18 +113,18 @@ const rPick2 = db.getSiblingDB("pickdb@main").runCommand({
   doltCherryPick: 1,
   commit: hashC3feat,
   message: "port: add item three",
-  committer: "alice <alice@dumbodb>"
+  committer: "alice <alice@acme.com>"
 })
 printjson(rPick2)
 // Expected: { commitId: "<hashC4>", message: "port: add item three",
-//            author: "carol <carol@dumbodb>", committer: "alice <alice@dumbodb>",
+//            author: "carol <carol@startup.dev>", committer: "alice <alice@acme.com>",
 //            committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
 - `message` equals the custom override (`"port: add item three"`)
-- `author` is preserved from the original commit (`"carol <carol@dumbodb>"`)
-- `committer` is `"alice <alice@dumbodb>"` (the explicit committer identity)
+- `author` is preserved from the original commit (`"carol <carol@startup.dev>"`)
+- `committer` is `"alice <alice@acme.com>"` (the explicit committer identity)
 - `committer` differs from `author`
 - `committerTimestamp` records when the cherry-pick was applied
 
@@ -137,12 +137,12 @@ Create conflicting changes on both branches so cherry-pick cannot apply cleanly.
 ```js
 // Modify _id:1 on feature (conflicting with main's version).
 db.getSiblingDB("pickdb@feature").items.updateOne({ _id: 1 }, { $set: { v: 99 } })
-const r4 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "alice <alice@dumbodb>" })
+const r4 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "conflict-source", author: "bob <bob@widgets.io>" })
 const hashC4feat = r4.commitId
 
 // Modify _id:1 on main too (independently).
 db.items.updateOne({ _id: 1 }, { $set: { v: 100 } })
-db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@acme.com>" })
 
 // Cherry-pick the conflicting feature commit onto main.
 // In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
@@ -225,12 +225,12 @@ Start another conflicting cherry-pick and then abort it.
 ```js
 // Create another conflicting commit on feature.
 db.getSiblingDB("pickdb@feature").items.updateOne({ _id: 1 }, { $set: { v: 200 } })
-const r5 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "alice <alice@dumbodb>" })
+const r5 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "another-conflict", author: "bob <bob@widgets.io>" })
 const hashConflict2 = r5.commitId
 
 // Modify _id:1 on main to create conflict.
 db.items.updateOne({ _id: 1 }, { $set: { v: 201 } })
-db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@acme.com>" })
 
 // Cherry-pick — expect conflict (throws in mongosh).
 try {

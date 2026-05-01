@@ -81,7 +81,7 @@ func mergeVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1 
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
@@ -117,7 +117,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		hashC2 = dumboDBCommit(t, env, dbName, "add-two", "alice <alice@dumbodb>")
+		hashC2 = dumboDBCommit(t, env, dbName, "add-two", "alice <alice@acme.com>")
 
 		// Merge feature (at C1, behind) into main (at C2).
 		var raw bson.M
@@ -190,7 +190,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		hashC3 := dumboDBCommit(t, env, dbName, "add-three", "alice <alice@dumbodb>")
+		hashC3 := dumboDBCommit(t, env, dbName, "add-three", "alice <alice@acme.com>")
 
 		// Commit _id:4 on feature independently → C4.
 		_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
@@ -198,7 +198,7 @@ func TestMergeVerify(t *testing.T) {
 			{Key: "v", Value: int32(4)},
 		})
 		require.NoError(t, err)
-		hashC4 := dumboDBCommit(t, env, dbName+"@feature", "add-four", "alice <alice@dumbodb>")
+		hashC4 := dumboDBCommit(t, env, dbName+"@feature", "add-four", "alice <alice@acme.com>")
 
 		// Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
 		var raw bson.M
@@ -266,14 +266,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"@main", "add-two", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName+"@main", "add-two", "alice <alice@acme.com>")
 
 		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"@feature", "add-three", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName+"@feature", "add-three", "alice <alice@acme.com>")
 
 		// Three-way merge with custom message and author.
 		var raw bson.M
@@ -363,7 +363,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 			{Key: "doltMerge", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 			{Key: "message", Value: "Resolve merge conflicts"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&continueRaw))
 		assert.EqualValues(t, 1, continueRaw["ok"])
 		assert.Equal(t, "Resolve merge conflicts", continueRaw["message"], "continue response message must match custom message")
@@ -389,7 +389,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.Equal(t, hashMain, head.Parent1, "parent1 must be main's pre-merge HEAD")
 		assert.Equal(t, hashFeat, head.Parent2, "parent2 must be feature's HEAD")
 		assert.Equal(t, "Resolve merge conflicts", head.Message, "doltLog must show the custom message")
-		assert.Equal(t, "alice <alice@dumbodb>", head.Author, "doltLog must show the custom author")
+		assert.Equal(t, "alice <alice@acme.com>", head.Author, "doltLog must show the custom author")
 		assert.Equal(t, head.Author, head.Committer, "merge commit committer must equal author in log")
 		assert.NotNil(t, head.CommitterTimestamp, "merge commit committerTimestamp must be present in log")
 	})

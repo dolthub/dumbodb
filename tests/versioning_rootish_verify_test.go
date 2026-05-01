@@ -57,7 +57,7 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 		{Key: "version", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hash1 = dumboDBCommit(t, env, dbName, "first commit", "alice <alice@dumbodb>")
+	hash1 = dumboDBCommit(t, env, dbName, "first commit", "alice <alice@acme.com>")
 
 	// Insert second document and commit.
 	_, err = items.InsertOne(ctx, bson.D{
@@ -66,7 +66,7 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 		{Key: "version", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hash2 = dumboDBCommit(t, env, dbName, "second commit", "alice <alice@dumbodb>")
+	hash2 = dumboDBCommit(t, env, dbName, "second commit", "alice <alice@acme.com>")
 
 	// Create branch "v1.0" from main HEAD.
 	// The branch name contains a dot; access it via dbname@v1%2E0.

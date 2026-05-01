@@ -31,13 +31,13 @@ var db = db.getSiblingDB("resetdb")
 db.dropDatabase()
 
 db.items.insertOne({ _id: 1, v: 1 })
-const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@dumbodb>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
 
 db.items.insertOne({ _id: 2, v: 2 })
-const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "alice <alice@dumbodb>" })
+const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { hash: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
 const hashC2 = r2.commitId
@@ -91,7 +91,7 @@ to C1. Both HEAD and the working set return to the C1 state.
 
 ```js
 // Commit the current working set (creates C3 with _id:1, 2, 3).
-const r3 = db.runCommand({ doltCommit: 1, message: "snapshot", author: "alice <alice@dumbodb>" })
+const r3 = db.runCommand({ doltCommit: 1, message: "snapshot", author: "alice <alice@acme.com>" })
 const hashC3 = r3.commitId
 
 // Add _id:4 to the working set (uncommitted).
@@ -132,7 +132,7 @@ so the previously committed changes are now visible as uncommitted.
 // After Scenario 2: HEAD=C1, working set is clean.
 // Insert _id:2 again and commit (creates C4).
 db.items.insertOne({ _id: 2, v: 2 })
-const r4 = db.runCommand({ doltCommit: 1, message: "re-add-two", author: "alice <alice@dumbodb>" })
+const r4 = db.runCommand({ doltCommit: 1, message: "re-add-two", author: "bob <bob@widgets.io>" })
 const hashC4 = r4.commitId
 
 // Soft reset to C1 — this "undoes" the C4 commit.

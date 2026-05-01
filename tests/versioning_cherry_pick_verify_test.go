@@ -54,7 +54,7 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
@@ -72,7 +72,7 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 	})
 	require.NoError(t, err)
 
-	hashC2 = dumboDBCommit(t, env, dbName+"@feature", "add-two", "bob <bob@dumbodb>")
+	hashC2 = dumboDBCommit(t, env, dbName+"@feature", "add-two", "bob <bob@widgets.io>")
 	require.NotEmpty(t, hashC2, "feature commit hash must not be empty")
 
 	return hashC1, hashC2
@@ -112,7 +112,7 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.Contains(t, msg, hashC2, "message must contain the source commit hash")
 
 		// Cherry-pick without explicit committer: committer equals the original author.
-		assert.Equal(t, "bob <bob@dumbodb>", raw["author"], "cherry-pick must preserve original commit author")
+		assert.Equal(t, "bob <bob@widgets.io>", raw["author"], "cherry-pick must preserve original commit author")
 		assert.Equal(t, raw["author"], raw["committer"],
 			"without committer param, committer must equal original author")
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
@@ -154,14 +154,14 @@ func TestCherryPickVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC3feat := dumboDBCommit(t, env, dbName+"@feature", "add-three", "carol <carol@dumbodb>")
+		hashC3feat := dumboDBCommit(t, env, dbName+"@feature", "add-three", "carol <carol@startup.dev>")
 
 		// Cherry-pick with custom message and explicit committer.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashC3feat},
 			{Key: "message", Value: "port: add item three"},
-			{Key: "committer", Value: "alice <alice@dumbodb>"},
+			{Key: "committer", Value: "alice <alice@acme.com>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1")
@@ -171,12 +171,12 @@ func TestCherryPickVerify(t *testing.T) {
 		msg := raw["message"].(string)
 		assert.False(t, strings.Contains(msg, "cherry picked from"), "custom message must NOT include the default annotation")
 
-		// The original commit was by "carol <carol@dumbodb>"; the cherry-pick
+		// The original commit was by "carol <carol@startup.dev>"; the cherry-pick
 		// committer parameter ("alice") becomes the committer identity. The original
 		// author ("carol") is preserved.
-		assert.Equal(t, "carol <carol@dumbodb>", raw["author"],
+		assert.Equal(t, "carol <carol@startup.dev>", raw["author"],
 			"cherry-pick must preserve original commit author (carol)")
-		assert.Equal(t, "alice <alice@dumbodb>", raw["committer"],
+		assert.Equal(t, "alice <alice@acme.com>", raw["committer"],
 			"committer must be the cherry-picker (alice, from the committer param)")
 		assert.NotEqual(t, raw["author"], raw["committer"],
 			"committer must differ from author when explicit committer is provided")
@@ -194,7 +194,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
 		require.NoError(t, err)
-		hashConflictFeat = dumboDBCommit(t, env, dbName+"@feature", "conflict-source", "alice <alice@dumbodb>")
+		hashConflictFeat = dumboDBCommit(t, env, dbName+"@feature", "conflict-source", "alice <alice@acme.com>")
 
 		// Modify _id:1 on main too (independent change to create conflict).
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -202,7 +202,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"@main", "conflict-target", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName+"@main", "conflict-target", "alice <alice@acme.com>")
 
 		// Cherry-pick — expect conflict.
 		// In mongosh this throws a MongoServerError (ok:0 surfaces as an exception).
@@ -335,7 +335,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		hashConflict2 := dumboDBCommit(t, env, dbName+"@feature", "another-conflict", "alice <alice@dumbodb>")
+		hashConflict2 := dumboDBCommit(t, env, dbName+"@feature", "another-conflict", "alice <alice@acme.com>")
 
 		// Create conflicting change on main.
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -343,7 +343,7 @@ func TestCherryPickVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
 		)
 		require.NoError(t, err)
-		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "another-conflict-target", "alice <alice@dumbodb>")
+		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "another-conflict-target", "alice <alice@acme.com>")
 
 		// Start cherry-pick — expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{

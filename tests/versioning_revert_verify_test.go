@@ -52,7 +52,7 @@ func revertVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
 	// C2: add _id:2 — this is the commit we will revert.
 	_, err = db.Collection("items").InsertOne(ctx, bson.D{
@@ -60,7 +60,7 @@ func revertVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashC2 = dumboDBCommit(t, env, dbName, "add-two", "bob <bob@dumbodb>")
+	hashC2 = dumboDBCommit(t, env, dbName, "add-two", "bob <bob@widgets.io>")
 	require.NotEmpty(t, hashC2, "C2 commit hash must not be empty")
 
 	return hashC1, hashC2
@@ -144,14 +144,14 @@ func TestRevertVerify(t *testing.T) {
 			{Key: "v", Value: int32(3)},
 		})
 		require.NoError(t, err)
-		hashC3 := dumboDBCommit(t, env, dbName+"@main", "add-three", "carol <carol@dumbodb>")
+		hashC3 := dumboDBCommit(t, env, dbName+"@main", "add-three", "carol <carol@startup.dev>")
 
 		// Revert with custom message and author.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltRevert", Value: int32(1)},
 			{Key: "commit", Value: hashC3},
 			{Key: "message", Value: "undo: add item three"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1")
@@ -187,7 +187,7 @@ func TestRevertVerify(t *testing.T) {
 			{Key: "v", Value: int32(10)},
 		})
 		require.NoError(t, err)
-		hashConflictCommit = dumboDBCommit(t, env, dbName+"@conflict-feat", "add-ten", "alice <alice@dumbodb>")
+		hashConflictCommit = dumboDBCommit(t, env, dbName+"@conflict-feat", "add-ten", "alice <alice@acme.com>")
 
 		// Advance main independently: also modify _id:1 to create a conflict scenario.
 		// We now revert hashConflictCommit (which added _id:10) while also having
@@ -198,7 +198,7 @@ func TestRevertVerify(t *testing.T) {
 			{Key: "doltMerge", Value: int32(1)},
 			{Key: "merge_in", Value: "conflict-feat"},
 			{Key: "message", Value: "merge conflict-feat"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&mergeResult)
 		require.NoError(t, err, "merge must succeed cleanly")
 		require.EqualValues(t, 1, mergeResult["ok"])
@@ -211,7 +211,7 @@ func TestRevertVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"@main", "modify-ten", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName+"@main", "modify-ten", "alice <alice@acme.com>")
 
 		// Revert hashConflictCommit — expect conflict because _id:10 was modified after it was added.
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -320,7 +320,7 @@ func TestRevertVerify(t *testing.T) {
 			{Key: "v", Value: int32(20)},
 		})
 		require.NoError(t, err)
-		hashNew := dumboDBCommit(t, env, dbName+"@main", "add-twenty", "alice <alice@dumbodb>")
+		hashNew := dumboDBCommit(t, env, dbName+"@main", "add-twenty", "alice <alice@acme.com>")
 
 		// Modify _id:20 to create a conflict when we revert the add.
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
@@ -328,7 +328,7 @@ func TestRevertVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
 		)
 		require.NoError(t, err)
-		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "modify-twenty", "alice <alice@dumbodb>")
+		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "modify-twenty", "alice <alice@acme.com>")
 
 		// Start revert — expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{

@@ -63,7 +63,7 @@ func commitVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBa
 	})
 	require.NoError(t, err)
 
-	hashBase = dumboDBCommit(t, env, dbName, "baseline", "alice <alice@dumbodb>")
+	hashBase = dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
 	return hashBase
 }
 
@@ -93,7 +93,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "shape check"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&result))
 
 		hash, ok := result["commitId"].(string)
@@ -102,9 +102,9 @@ func TestCommitVerify(t *testing.T) {
 
 		assert.Equal(t, "main", result["branch"], "branch must be 'main' for plain db name")
 		assert.Equal(t, "shape check", result["message"], "message must echo the provided string")
-		assert.Equal(t, "alice <alice@dumbodb>", result["author"], "author must echo the provided value")
+		assert.Equal(t, "alice <alice@acme.com>", result["author"], "author must echo the provided value")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present")
-		assert.Equal(t, "alice <alice@dumbodb>", result["committer"], "committer must echo the provided value (same as author for regular commit)")
+		assert.Equal(t, "alice <alice@acme.com>", result["committer"], "committer must echo the provided value (same as author for regular commit)")
 		assert.NotNil(t, result["committerTimestamp"], "committerTimestamp must be present")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
 	})
@@ -136,7 +136,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "feature commit"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&commitResult))
 
 		hash, ok := commitResult["commitId"].(string)
@@ -173,7 +173,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit A"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&resultA))
 		hashA, _ := resultA["commitId"].(string)
 		require.NotEmpty(t, hashA)
@@ -190,7 +190,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit B"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&resultB))
 		hashB, _ := resultB["commitId"].(string)
 		require.NotEmpty(t, hashB)
@@ -227,7 +227,7 @@ func TestCommitVerify(t *testing.T) {
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&rejected)
 		require.Error(t, err, "doltCommit with no changes and no allowEmpty must fail")
 		cmdErr, ok := err.(mongo.CommandError)
@@ -254,7 +254,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty allowed"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 			{Key: "allowEmpty", Value: true},
 		}).Decode(&allowed))
 		assert.EqualValues(t, 1, allowed["ok"], "allowEmpty commit must succeed")
@@ -270,7 +270,7 @@ func TestCommitVerify(t *testing.T) {
 		err2 := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "still empty"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&rejected2)
 		require.Error(t, err2, "second bare empty commit must also fail")
 		cmdErr2, ok := err2.(mongo.CommandError)
@@ -292,7 +292,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		// Commit current state and save hashBefore.
-		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@dumbodb>")
+		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@acme.com>")
 
 		// Insert _id:99 and commit — save hashAfter.
 		_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
@@ -302,7 +302,7 @@ func TestCommitVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashAfter := dumboDBCommit(t, env, dbName, "post-change", "alice <alice@dumbodb>")
+		hashAfter := dumboDBCommit(t, env, dbName, "post-change", "alice <alice@acme.com>")
 
 		// Diff from hashBefore to hashAfter must show _id:99 as added.
 		var raw bson.M
@@ -359,7 +359,7 @@ func TestCommitVerify(t *testing.T) {
 
 		entry, ok := commits[0].(bson.M)
 		require.True(t, ok)
-		assert.Equal(t, "bob <bob@dumbodb>", entry["author"], "doltLog must reflect the commit author (Name <email>)")
+		assert.Equal(t, "bob <bob@dumbodb>", entry["author"], "doltLog must reflect the commit author (bare name gets default email)")
 	})
 
 	// -------------------------------------------------------------------------

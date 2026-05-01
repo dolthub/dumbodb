@@ -185,7 +185,7 @@ func diffVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBase
 	})
 	require.NoError(t, err)
 
-	hashBase = dumboDBCommit(t, env, dbName, "baseline", "alice <alice@dumbodb>")
+	hashBase = dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
 
 	// Three working-set changes (NOT committed):
 	//   _id:3 added
@@ -276,7 +276,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_DiffTwoHashes", func(t *testing.T) {
 		// Commit the working-set changes.
-		hashNew = dumboDBCommit(t, env, dbName, "three changes", "alice <alice@dumbodb>")
+		hashNew = dumboDBCommit(t, env, dbName, "three changes", "alice <alice@acme.com>")
 		require.NotEmpty(t, hashNew)
 
 		var raw bson.M
@@ -387,7 +387,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 		_, err = multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "name", Value: "gamma"}, {Key: "v", Value: int32(3)}})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "multi baseline", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "multi baseline", "alice <alice@acme.com>")
 
 		// Working set: delete _id:1, modify _id:2 (v only), leave _id:3, add _id:4.
 		_, err = multi.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
@@ -434,7 +434,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_SingleDocMixedFieldOps", func(t *testing.T) {
 		// Commit the working set from Scenario 5 first so HEAD is clean.
-		dumboDBCommit(t, env, dbName, "pre-scenario6", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "pre-scenario6", "alice <alice@acme.com>")
 
 		mf := env.client.Database(dbName).Collection("mixedfields")
 
@@ -445,7 +445,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "y", Value: "remove-me"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "mixedfields baseline", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "mixedfields baseline", "alice <alice@acme.com>")
 
 		// Replace: x modified, y removed, z added.
 		_, err = mf.ReplaceOne(ctx,
@@ -503,7 +503,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FieldTypeChange", func(t *testing.T) {
 		// Commit working set from Scenario 6 for a clean HEAD.
-		dumboDBCommit(t, env, dbName, "pre-scenario7", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "pre-scenario7", "alice <alice@acme.com>")
 
 		tc := env.client.Database(dbName).Collection("typechg")
 
@@ -514,7 +514,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "stable", Value: "unchanged"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "typechg baseline", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "typechg baseline", "alice <alice@acme.com>")
 
 		// Replace: val changes from number to string.
 		_, err = tc.ReplaceOne(ctx,
@@ -561,7 +561,7 @@ func TestDiffVerify(t *testing.T) {
 	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
 		// Commit any pending working set (allowEmpty so we don't depend on
 		// whether prior scenarios left changes) to land on a clean HEAD.
-		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario9", "alice <alice@dumbodb>")
+		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario9", "alice <alice@acme.com>")
 
 		// Create a feature branch that starts at current main HEAD.
 		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
@@ -573,7 +573,7 @@ func TestDiffVerify(t *testing.T) {
 
 		// Two commits on main — feature branch stays behind. hashC1 is empty
 		// (no working changes), hashC2 adds _id:1.
-		hashC1 := dumboDBCommitAllowEmpty(t, env, dbName, "scenario9-c1", "alice <alice@dumbodb>")
+		hashC1 := dumboDBCommitAllowEmpty(t, env, dbName, "scenario9-c1", "alice <alice@acme.com>")
 
 		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
@@ -581,7 +581,7 @@ func TestDiffVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		hashC2 := dumboDBCommit(t, env, dbName, "scenario9-c2", "alice <alice@dumbodb>")
+		hashC2 := dumboDBCommit(t, env, dbName, "scenario9-c2", "alice <alice@acme.com>")
 
 		// 9a: from=HEAD~1, to=HEAD on main connection — HEAD resolves to c2.
 		// Expect _id:1 added (delta between c1 and c2).
@@ -698,7 +698,7 @@ func TestDiffVerify(t *testing.T) {
 	t.Run("Scenario8_NestedDocFieldChange", func(t *testing.T) {
 		// Commit working set from Scenario 7 for a clean HEAD (allowEmpty so
 		// this passes even when no prior changes are pending).
-		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario8", "alice <alice@dumbodb>")
+		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario8", "alice <alice@acme.com>")
 
 		nested := env.client.Database(dbName).Collection("nested")
 
@@ -712,7 +712,7 @@ func TestDiffVerify(t *testing.T) {
 			{Key: "name", Value: "alice"},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "nested baseline", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "nested baseline", "alice <alice@acme.com>")
 
 		// Update: only address.city changes.
 		_, err = nested.UpdateOne(ctx,
@@ -758,7 +758,7 @@ func TestDiffVerify(t *testing.T) {
 	t.Run("Scenario10_CollectionStatus", func(t *testing.T) {
 		// Pre-stage: clean any pending working-set changes so we can reason about
 		// a fresh baseline commit.
-		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario10", "alice <alice@dumbodb>")
+		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario10", "alice <alice@acme.com>")
 
 		db := env.client.Database(dbName)
 
@@ -771,7 +771,7 @@ func TestDiffVerify(t *testing.T) {
 		_, err = gone.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 		require.NoError(t, err)
 
-		hashBaseline := dumboDBCommit(t, env, dbName, "scen10 baseline", "alice <alice@dumbodb>")
+		hashBaseline := dumboDBCommit(t, env, dbName, "scen10 baseline", "alice <alice@acme.com>")
 
 		// Working-set lifecycle:
 		//   - scen10_staying: modify a doc                → status: "modified"

@@ -32,7 +32,7 @@ db.dropDatabase()
 
 // Baseline: one document in "items", committed.
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
-db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 ```
 
 After setup, the working set matches HEAD — no uncommitted changes.
@@ -97,7 +97,7 @@ marks it as `"modified"` with `modified: 1`.
 
 ```js
 // Commit the "newcoll" addition first.
-db.runCommand({ doltCommit: 1, message: "add newcoll", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "add newcoll", author: "alice <alice@acme.com>" })
 
 // Now modify an existing committed collection.
 db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
@@ -131,7 +131,7 @@ reported under `deleted`.
 
 ```js
 // Commit the items modification first.
-db.runCommand({ doltCommit: 1, message: "modify items", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "modify items", author: "bob <bob@widgets.io>" })
 
 // Delete the entire "items" collection.
 db.items.drop()
@@ -163,7 +163,7 @@ After committing the deletion, the working set matches HEAD and `doltStatus`
 reports no changes.
 
 ```js
-db.runCommand({ doltCommit: 1, message: "delete items", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "delete items", author: "bob <bob@widgets.io>" })
 
 db.runCommand({ doltStatus: 1 })
 ```
@@ -192,7 +192,7 @@ db.orders.insertMany([
   { _id: 3, total: 30 }
 ])
 db.archive.insertOne({ _id: 1, note: "old" })
-db.runCommand({ doltCommit: 1, message: "baseline for multi-collection", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "baseline for multi-collection", author: "alice <alice@acme.com>" })
 
 // Now mutate all three in one working set:
 //   orders:  insert 3 new, modify 1, delete 2
@@ -247,7 +247,7 @@ doltStatus counts docs, not fields; for field-level detail, use `doltDiff`.
 
 ```js
 // Commit Scenario 6's state so we have a stable baseline.
-db.runCommand({ doltCommit: 1, message: "checkpoint before multi-field", author: "alice <alice@dumbodb>" })
+db.runCommand({ doltCommit: 1, message: "checkpoint before multi-field", author: "carol <carol@startup.dev>" })
 
 // Modify one "users" doc with changes across several fields.
 db.users.updateOne(
@@ -289,7 +289,7 @@ rather than silent empty output.
 
 ```js
 // Commit the previous working set so we have a hash to point at.
-const r = db.runCommand({ doltCommit: 1, message: "commit for read-only status", author: "alice <alice@dumbodb>" })
+const r = db.runCommand({ doltCommit: 1, message: "commit for read-only status", author: "alice <alice@acme.com>" })
 const hash = r.commitId
 
 // Attach to the commit snapshot (read-only rootish).

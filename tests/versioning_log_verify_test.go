@@ -140,21 +140,21 @@ func TestLogVerify(t *testing.T) {
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
-	hash1 := dumboDBCommit(t, env, dbName, "first", "alice <alice@dumbodb>")
+	hash1 := dumboDBCommit(t, env, dbName, "first", "alice <alice@acme.com>")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
-	hash2 := dumboDBCommit(t, env, dbName, "second", "alice <alice@dumbodb>")
+	hash2 := dumboDBCommit(t, env, dbName, "second", "alice <alice@acme.com>")
 
 	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "label", Value: "gamma"},
 	})
 	require.NoError(t, err)
-	hash3 := dumboDBCommit(t, env, dbName, "third", "alice <alice@dumbodb>")
+	hash3 := dumboDBCommit(t, env, dbName, "third", "alice <alice@acme.com>")
 
 	// -------------------------------------------------------------------------
 	// Scenario 2: Log after multiple commits — parent chain, newest-first
@@ -335,7 +335,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashA := dumboDBCommit(t, env, mergeDBName, "add-one", "alice <alice@dumbodb>")
+	hashA := dumboDBCommit(t, env, mergeDBName, "add-one", "alice <alice@acme.com>")
 
 	// Create "feat" branch from main HEAD (hashA).
 	require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
@@ -349,7 +349,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashB := dumboDBCommit(t, env, mergeDBName, "add-two", "alice <alice@dumbodb>")
+	hashB := dumboDBCommit(t, env, mergeDBName, "add-two", "alice <alice@acme.com>")
 
 	// Advance feat independently: _id:3 → hashC (diverges from hashA).
 	_, err = env.client.Database(mergeDBName+"@feat").Collection("items").InsertOne(ctx, bson.D{
@@ -357,7 +357,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "v", Value: int32(3)},
 	})
 	require.NoError(t, err)
-	hashC := dumboDBCommit(t, env, mergeDBName+"@feat", "add-three-feat", "alice <alice@dumbodb>")
+	hashC := dumboDBCommit(t, env, mergeDBName+"@feat", "add-three-feat", "alice <alice@acme.com>")
 
 	// Merge feat into main → three-way merge commit hashM.
 	var mergeRaw bson.M

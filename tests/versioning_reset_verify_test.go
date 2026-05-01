@@ -52,14 +52,14 @@ func resetVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1,
 		{Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
-	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@dumbodb>")
+	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
 	_, err = items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
 	require.NoError(t, err)
-	hashC2 = dumboDBCommit(t, env, dbName, "add-two", "alice <alice@dumbodb>")
+	hashC2 = dumboDBCommit(t, env, dbName, "add-two", "alice <alice@acme.com>")
 
 	return hashC1, hashC2
 }
@@ -127,7 +127,7 @@ func TestResetVerify(t *testing.T) {
 		items := env.client.Database(dbName).Collection("items")
 
 		// Commit the working set from Scenario 1 to create a new snapshot (C3).
-		dumboDBCommit(t, env, dbName, "snapshot", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "snapshot", "alice <alice@acme.com>")
 
 		// Add _id:4 to the working set (uncommitted).
 		_, err := items.InsertOne(ctx, bson.D{
@@ -178,7 +178,7 @@ func TestResetVerify(t *testing.T) {
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "re-add-two", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "re-add-two", "alice <alice@acme.com>")
 
 		// Soft reset to hashC1 — "undoes" the re-add-two commit.
 		var raw bson.M
@@ -271,15 +271,15 @@ func TestResetVerify(t *testing.T) {
 		//   C7: add _id:8 -> HEAD       (after this commit)
 		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(6)}, {Key: "v", Value: int32(6)}})
 		require.NoError(t, err)
-		hashC5 := dumboDBCommit(t, env, dbName, "add-six", "alice <alice@dumbodb>")
+		hashC5 := dumboDBCommit(t, env, dbName, "add-six", "alice <alice@acme.com>")
 
 		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(7)}, {Key: "v", Value: int32(7)}})
 		require.NoError(t, err)
-		hashC6 := dumboDBCommit(t, env, dbName, "add-seven", "alice <alice@dumbodb>")
+		hashC6 := dumboDBCommit(t, env, dbName, "add-seven", "alice <alice@acme.com>")
 
 		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(8)}, {Key: "v", Value: int32(8)}})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "add-eight", "alice <alice@dumbodb>")
+		dumboDBCommit(t, env, dbName, "add-eight", "alice <alice@acme.com>")
 
 		// Hard reset to HEAD~1 — should land on C6 (only _id:1, _id:6, _id:7).
 		var raw bson.M

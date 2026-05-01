@@ -42,9 +42,9 @@ db.dropDatabase()
 // Baseline: two documents, committed
 db.items.insertOne({ _id: 1, label: "alpha", v: 1 })
 db.items.insertOne({ _id: 2, label: "beta",  v: 2 })
-const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
+const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 printjson(r1)
-// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), committer: "alice <alice@dumbodb>", committerTimestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@acme.com>", timestamp: ISODate("..."), committer: "alice <alice@acme.com>", committerTimestamp: ISODate("..."), ok: 1 }
 const hashBase = r1.commitId
 
 print("hashBase =", hashBase)
@@ -62,7 +62,7 @@ The response from setup already demonstrates the shape. Verify each field after 
 
 ```js
 db.items.insertOne({ _id: 100, label: "shape", v: 100 })
-const r = db.runCommand({ doltCommit: 1, message: "shape check", author: "alice <alice@dumbodb>" })
+const r = db.runCommand({ doltCommit: 1, message: "shape check", author: "alice <alice@acme.com>" })
 printjson(r)
 ```
 
@@ -73,9 +73,9 @@ Expected result structure:
   "commitId":           "<non-empty hex string>",
   "branch":             "main",
   "message":            "shape check",
-  "author":             "alice <alice@dumbodb>",
+  "author":             "alice <alice@acme.com>",
   "timestamp":          ISODate("..."),
-  "committer":          "alice <alice@dumbodb>",
+  "committer":          "alice <alice@acme.com>",
   "committerTimestamp": ISODate("..."),
   "ok":                 1
 }
@@ -106,9 +106,9 @@ db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, branch: "feature" }
 var feature = db.getSiblingDB("commitdb@feature")
 feature.items.insertOne({ _id: 3, label: "gamma", v: 3 })
 
-const r2 = feature.runCommand({ doltCommit: 1, message: "feature commit", author: "alice <alice@dumbodb>" })
+const r2 = feature.runCommand({ doltCommit: 1, message: "feature commit", author: "bob <bob@widgets.io>" })
 printjson(r2)
-// Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "bob <bob@widgets.io>", timestamp: ISODate("..."), ok: 1 }
 
 // Verify isolation: feature has the new doc, main does not
 feature.items.countDocuments({})
@@ -133,11 +133,11 @@ to the same database must return different hash values.
 ```js
 // Make a change and commit
 db.items.insertOne({ _id: 10, label: "ten", v: 10 })
-const r3a = db.runCommand({ doltCommit: 1, message: "commit A", author: "alice <alice@dumbodb>" })
+const r3a = db.runCommand({ doltCommit: 1, message: "commit A", author: "alice <alice@acme.com>" })
 print("hashA =", r3a.commitId)
 
 db.items.insertOne({ _id: 11, label: "eleven", v: 11 })
-const r3b = db.runCommand({ doltCommit: 1, message: "commit B", author: "alice <alice@dumbodb>" })
+const r3b = db.runCommand({ doltCommit: 1, message: "commit B", author: "bob <bob@widgets.io>" })
 print("hashB =", r3b.commitId)
 
 print("hashes differ:", r3a.commitId !== r3b.commitId)
@@ -157,7 +157,7 @@ By default, `doltCommit` rejects an empty commit (no changes since the last comm
 
 ```js
 // No changes since last commit
-const r4a = db.runCommand({ doltCommit: 1, message: "empty", author: "alice <alice@dumbodb>" })
+const r4a = db.runCommand({ doltCommit: 1, message: "empty", author: "alice <alice@acme.com>" })
 printjson(r4a)
 ```
 
@@ -177,7 +177,7 @@ const headBefore = db.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
 const r4b = db.runCommand({
   doltCommit: 1,
   message:    "empty allowed",
-  author:     "alice <alice@dumbodb>",
+  author:     "alice <alice@acme.com>",
   allowEmpty: true,
 })
 printjson(r4b)
@@ -197,7 +197,7 @@ Key checks:
 ### 4c — Repeated bare empty commits keep failing the same way
 
 ```js
-const r4c = db.runCommand({ doltCommit: 1, message: "still empty", author: "alice <alice@dumbodb>" })
+const r4c = db.runCommand({ doltCommit: 1, message: "still empty", author: "alice <alice@acme.com>" })
 printjson(r4c)
 ```
 
@@ -215,11 +215,11 @@ argument in `doltDiff`.
 ```js
 // Insert a doc and commit so hashBefore captures a real change.
 db.items.insertOne({ _id: 50, label: "pre", v: 50 })
-const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author: "alice <alice@dumbodb>" }).commitId
+const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author: "alice <alice@acme.com>" }).commitId
 
 // Make another change and commit
 db.items.insertOne({ _id: 99, label: "new", v: 99 })
-const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "alice <alice@dumbodb>" }).commitId
+const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "bob <bob@widgets.io>" }).commitId
 
 // Diff between the two commits — must show _id:99 as added
 db.runCommand({ doltDiff: 1, from: hashBefore, to: hashAfter })
@@ -285,8 +285,8 @@ Key checks:
 
 | Scenario | Command | Key outcome |
 |---|---|---|
-| Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@dumbodb>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
-| Commit on branch | `featureDB.runCommand({ doltCommit: 1, ..., author: "alice <alice@dumbodb>" })` | Data committed to branch; isolation verified via count |
+| Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@acme.com>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
+| Commit on branch | `featureDB.runCommand({ doltCommit: 1, ..., author: "bob <bob@widgets.io>" })` | Data committed to branch; isolation verified via count |
 | Two sequential commits | Call twice with same author | Hashes are different |
 | Empty working set, no flag | Commit with no pending changes | Fails with `ok:0` and "nothing to commit" |
 | Empty working set, `allowEmpty:true` | Commit with no pending changes plus the flag | Succeeds with `ok:1` and a new hash |
