@@ -113,8 +113,11 @@ func TestCherryPickVerify(t *testing.T) {
 
 		// Cherry-pick preserves the original author; committer is the cherry-picker.
 		assert.Equal(t, "bob <bob@dumbodb>", raw["author"], "cherry-pick must preserve original commit author")
-		assert.NotNil(t, raw["committer"], "committer must be present in cherry-pick response")
-		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in cherry-pick response")
+		committer, _ := raw["committer"].(string)
+		assert.NotEmpty(t, committer, "committer must be present in cherry-pick response")
+		assert.NotEqual(t, raw["author"], committer,
+			"committer must differ from author — author is the original commit's author, committer is the cherry-picker")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 
 	// Verify main now has both documents after the cherry-pick.
@@ -171,9 +174,14 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.False(t, strings.Contains(msg, "cherry picked from"), "custom message must NOT include the default annotation")
 
 		// The original commit was by "carol <carol@dumbodb>"; the cherry-pick
-		// overrides author to "alice <alice@dumbodb>". For cherry-picks, the
-		// author parameter becomes the committer and the original author is preserved.
-		assert.NotNil(t, raw["committer"], "committer must be present")
+		// author parameter ("alice") becomes the committer identity. The original
+		// author ("carol") is preserved.
+		assert.Equal(t, "carol <carol@dumbodb>", raw["author"],
+			"cherry-pick must preserve original commit author (carol)")
+		assert.Equal(t, "alice <alice@dumbodb>", raw["committer"],
+			"committer must be the cherry-picker (alice, from the author param)")
+		assert.NotEqual(t, raw["author"], raw["committer"],
+			"committer must differ from author for cherry-pick")
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 

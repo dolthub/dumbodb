@@ -104,6 +104,7 @@ func TestRebaseVerify(t *testing.T) {
 		raw := runCommandRaw(t, featureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
+			{Key: "author", Value: "rebaser <rebaser@dumbodb>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for a clean rebase")
@@ -135,11 +136,15 @@ func TestRebaseVerify(t *testing.T) {
 		require.NotEmpty(t, commits, "commits array must not be empty")
 
 		head := commits[0].(bson.M)
-		// The original commit was by "test <test@example.com>" -- author is preserved.
-		assert.Equal(t, "test <test@example.com>", head["author"], "rebased commit must preserve original author")
-		// Committer and committerTimestamp must be present.
-		assert.NotNil(t, head["committer"], "rebased commit must have committer in log")
-		assert.NotNil(t, head["committerTimestamp"], "rebased commit must have committerTimestamp in log")
+		// The original commit was by "test <test@example.com>" — author is preserved.
+		assert.Equal(t, "test <test@example.com>", head["author"],
+			"rebased commit must preserve original author")
+		// Committer is the rebaser identity passed via the author param.
+		assert.Equal(t, "rebaser <rebaser@dumbodb>", head["committer"],
+			"rebased commit committer must be the rebaser, not the original author")
+		assert.NotEqual(t, head["author"], head["committer"],
+			"committer must differ from author for rebased commits")
+		assert.NotNil(t, head["committerTimestamp"], "rebased commit must have committerTimestamp")
 	})
 
 	// -------------------------------------------------------------------------
