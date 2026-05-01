@@ -1,5 +1,8 @@
 # dumboTag Verification
 
+> **Automated equivalent:** `tests/versioning_tag_verify_test.go`
+> Run with `go test ./tests/ -run TestTagVerify -count=1 -timeout=5m`
+
 Manual verification guide for `dumboTag` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
