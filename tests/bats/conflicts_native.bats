@@ -35,8 +35,11 @@ teardown() {
 mongosh_eval() {
     local db_name="$1"
     local js="$2"
-    mongosh "mongodb://127.0.0.1:${DUMBODB_PORT}/${db_name}" \
-        --quiet --eval "$js" 2>/dev/null || true
+    # Connect without a db name in the URL to avoid '@' being mis-parsed as a
+    # userinfo separator (MongoParseError: Password contains unescaped characters).
+    # Use getSiblingDB() to select the branch-encoded database name instead.
+    mongosh "mongodb://127.0.0.1:${DUMBODB_PORT}" \
+        --quiet --eval "db = db.getSiblingDB('${db_name}'); ${js}" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
