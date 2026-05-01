@@ -106,7 +106,7 @@ teardown() {
     [[ "$output" =~ 'PRIMARY KEY (`_id`)' ]] || false
 }
 
-@test 'dumbodbCommit returns non-empty hash' {
+@test 'dumboCommit returns non-empty hash' {
   local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
   # Insert a document so there is something to commit.
@@ -115,9 +115,9 @@ teardown() {
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.acknowledged == true'
 
-  # Run dumbodbCommit and capture the result.
+  # Run dumboCommit and capture the result.
   run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({dumbodbCommit: 1, message: "my first commit"}))'
+    'JSON.stringify(db.runCommand({dumboCommit: 1, message: "my first commit"}))'
   [ "$status" -eq 0 ]
 
   # Verify ok:1 and a non-empty commitId.

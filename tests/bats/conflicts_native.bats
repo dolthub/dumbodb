@@ -52,7 +52,7 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main branch.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -66,14 +66,14 @@ mongosh_eval() {
     # C2: advance main — update _id:1 to v:10.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 10}});
-        db.runCommand({dumbodbCommit: 1, message: "C2-main", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C2-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
     # C3: advance feature — update _id:1 to v:20.
     run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 20}});
-        db.runCommand({dumbodbCommit: 1, message: "C3-feat", author: "bob <b@t>"});
+        db.runCommand({dumboCommit: 1, message: "C3-feat", author: "bob <b@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -132,7 +132,7 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -146,7 +146,7 @@ mongosh_eval() {
     # C2 on feature: update _id:1 to v:feature.
     run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 99}});
-        JSON.stringify(db.runCommand({dumbodbCommit: 1, message: "C2-feat", author: "bob <b@t>"}))
+        JSON.stringify(db.runCommand({dumboCommit: 1, message: "C2-feat", author: "bob <b@t>"}))
     '
     [ "$status" -eq 0 ]
     local hash_c2
@@ -156,7 +156,7 @@ mongosh_eval() {
     # C3 on main: update _id:1 to v:main — creates divergence.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 42}});
-        db.runCommand({dumbodbCommit: 1, message: "C3-main", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C3-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -214,7 +214,7 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -228,14 +228,14 @@ mongosh_eval() {
     # C2 on feature: update _id:1 to v:feature — the commit to be replayed.
     run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 55}});
-        db.runCommand({dumbodbCommit: 1, message: "C2-feat", author: "bob <b@t>"});
+        db.runCommand({dumboCommit: 1, message: "C2-feat", author: "bob <b@t>"});
     '
     [ "$status" -eq 0 ]
 
     # C3 on main: update _id:1 to v:main — creates conflict when C2 is replayed.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 77}});
-        db.runCommand({dumbodbCommit: 1, message: "C3-main", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C3-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
@@ -298,14 +298,14 @@ mongosh_eval() {
     # C1: insert {_id:1, v:1} on main.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 1, v: 1});
-        db.runCommand({dumbodbCommit: 1, message: "C1", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C1", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
     # C2: add {_id:2, v:2} — this is the commit we will revert.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 2, v: 2});
-        JSON.stringify(db.runCommand({dumbodbCommit: 1, message: "C2-add-two", author: "bob <b@t>"}))
+        JSON.stringify(db.runCommand({dumboCommit: 1, message: "C2-add-two", author: "bob <b@t>"}))
     '
     [ "$status" -eq 0 ]
     local hash_c2
@@ -316,7 +316,7 @@ mongosh_eval() {
     # (revert would delete _id:2, but main has since modified it, so conflict).
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 2}, {$set: {v: 99}});
-        db.runCommand({dumbodbCommit: 1, message: "C3-modify-two", author: "alice <a@t>"});
+        db.runCommand({dumboCommit: 1, message: "C3-modify-two", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
