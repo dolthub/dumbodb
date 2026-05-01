@@ -38,8 +38,9 @@ import (
 
 // statusResult holds the decoded top-level response from a dumboDBStatus command.
 type statusResult struct {
-	Branch string
-	Tables []tableStatusEntry
+	Branch   string
+	CommitID string // HEAD commit hash; present only when workspace is clean
+	Tables   []tableStatusEntry
 }
 
 // tableStatusEntry holds one entry from the "collections" array of a dumboDBStatus response.
@@ -57,6 +58,7 @@ func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 	t.Helper()
 
 	branch, _ := raw["branch"].(string)
+	commitID, _ := raw["commitId"].(string)
 
 	rawTables, ok := raw["collections"]
 	require.True(t, ok, "doltStatus result missing 'collections' field")
@@ -66,6 +68,7 @@ func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
 
 	var out statusResult
 	out.Branch = branch
+	out.CommitID = commitID
 
 	for _, tbl := range tablesArr {
 		tm, ok := tbl.(bson.M)
@@ -147,12 +150,14 @@ func TestStatusVerify(t *testing.T) {
 	t.Run("Scenario1_CleanRepo", func(t *testing.T) {
 		sr := runStatus(t, env, dbName)
 		assert.Empty(t, sr.Tables, "expected empty collections after commit with no new changes")
+		assert.NotEmpty(t, sr.CommitID, "commitId must be present when workspace is clean")
 	})
 
 	// -------------------------------------------------------------------------
 	// Scenario 2: Status after insert — new collection appears as "added" with counts
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_AfterInsert", func(t *testing.T) {
+		// First verify that dirty workspace does NOT include commitId.
 		_, err := env.client.Database(dbName).Collection("newcoll").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
 			{Key: "v", Value: "new"},
@@ -160,6 +165,8 @@ func TestStatusVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		sr := runStatus(t, env, dbName)
+
+		assert.Empty(t, sr.CommitID, "commitId must be absent when workspace is dirty")
 
 		newcoll := findTableStatus(sr, "newcoll")
 		require.NotNil(t, newcoll, "expected 'newcoll' in collections")

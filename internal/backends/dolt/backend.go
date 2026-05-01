@@ -2094,7 +2094,20 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		tables = []backends.TableStatus{}
 	}
 
-	return &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}, nil
+	result := &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}
+
+	// When the workspace is clean, include the HEAD commit hash.
+	if len(tables) == 0 {
+		branch := params.Branch
+		if branch == "" {
+			branch = "main"
+		}
+		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
+			result.CommitID = h.String()
+		}
+	}
+
+	return result, nil
 }
 
 // DumboDBReset implements backends.VersioningBackend.

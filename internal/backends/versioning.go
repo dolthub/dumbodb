@@ -229,8 +229,9 @@ type TableStatus struct {
 
 // VersioningStatusResult represents the result of VersioningBackend.DumboDBStatus method.
 type VersioningStatusResult struct {
-	Branch string
-	Tables []TableStatus
+	Branch   string
+	CommitID string // HEAD commit hash; populated only when the workspace is clean (no changes)
+	Tables   []TableStatus
 }
 
 // DiffParams represents the parameters of VersioningBackend.DumboDBDiff method.

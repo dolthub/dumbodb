@@ -1227,13 +1227,16 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		collections.Append(entry)
 	}
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"branch", res.Branch,
-			"collections", collections,
-			"ok", float64(1),
-		)),
-	)
+	statusDoc := must.NotFail(types.NewDocument(
+		"branch", res.Branch,
+	))
+	if res.CommitID != "" {
+		statusDoc.Set("commitId", res.CommitID)
+	}
+	statusDoc.Set("collections", collections)
+	statusDoc.Set("ok", float64(1))
+
+	return documentOpMsg(statusDoc)
 }
 
 // MsgDumboDBCherryPick implements the `dumboDBCherryPick` command.

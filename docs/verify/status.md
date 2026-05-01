@@ -51,11 +51,12 @@ db.runCommand({ doltStatus: 1 })
 Expected:
 
 ```json
-{ "branch": "main", "collections": [], "ok": 1 }
+{ "branch": "main", "commitId": "<hashBase>", "collections": [], "ok": 1 }
 ```
 
 Key checks:
 - `collections` is an empty array
+- `commitId` is present and equals the HEAD commit hash (only shown when workspace is clean)
 - No collection appears as changed
 
 ---
