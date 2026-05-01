@@ -1,9 +1,6 @@
 name: Release Build
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -12,7 +9,7 @@ on:
         type: string
 
 jobs:
-  release:
+  build-linux:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "1"
@@ -43,6 +40,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
+      - name: Install arm64 cross-compiler
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build linux/amd64
         run: |
           mkdir -p dist
@@ -56,24 +56,103 @@ jobs:
           GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build \
             -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
             -o dist/dumbodb-linux-arm64 \
-            ./cmd/dumbodb/ || echo "⚠ arm64 cross-compile skipped (no cross-compiler)"
+            ./cmd/dumbodb/
+
+      - name: Upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: dist/dumbodb-*
+
+  build-darwin:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
 
       - name: Build darwin/arm64
         run: |
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+          mkdir -p dist
+          GOOS=darwin GOARCH=arm64 go build \
             -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
             -o dist/dumbodb-darwin-arm64 \
-            ./cmd/dumbodb/ || echo "⚠ darwin/arm64 build skipped (CGO deps)"
+            ./cmd/dumbodb/
 
-      - name: Upload artifacts
+      - name: Upload darwin artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dumbodb-${{ steps.version.outputs.version }}
+          name: darwin-binaries
           path: dist/dumbodb-*
 
-      - name: Create GitHub Release (tag pushes only)
-        if: startsWith(github.ref, 'refs/tags/v')
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Determine version
+        id: version
+        run: |
+          $VERSION = git describe --tags --always --dirty
+          echo "version=$VERSION" >> $env:GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Build windows/amd64
+        run: |
+          mkdir -p dist
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          $env:CGO_ENABLED = "1"
+          go build `
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" `
+            -o dist/dumbodb-windows-amd64.exe `
+            ./cmd/dumbodb/
+
+      - name: Upload windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: dist/dumbodb-*
+
+  release:
+    needs: [build-linux, build-darwin, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/dumbodb-*
           generate_release_notes: true
