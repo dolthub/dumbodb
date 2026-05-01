@@ -181,6 +181,15 @@ type Backend struct {
 // many writes amortize over a single fsync.
 const deferredFlushInterval = 100 * time.Millisecond
 
+// parseAuthorString splits a "Name <email>" string into name and email.
+// If the string doesn't contain " <", the whole string is used as both name and email.
+func parseAuthorString(author string) (name, email string) {
+	if idx := strings.Index(author, " <"); idx >= 0 {
+		return author[:idx], strings.TrimSuffix(author[idx+2:], ">")
+	}
+	return author, author
+}
+
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
 // When autoCommit is true, every document write (insert/update/delete) is
 // automatically committed to Dolt history without an explicit doltCommit call.
@@ -1667,7 +1676,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: reading pick commit meta: %w", contMetaErr)
 		}
 
-		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, contPickMeta, ms.originalMsg, params.Message, params.Author)
+		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, contPickMeta, ms.originalMsg, params.Message, params.Committer)
 		if pickErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: %w", pickErr)
 		}
@@ -1800,13 +1809,14 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	}
 
 	// Clean cherry-pick — commit immediately.
-	return b.commitCherryPick(ctx, db, branch, intoBranchDS, intoHash, pickHash, mergedAM, pickMeta, originalMsg, params.Message, params.Author)
+	return b.commitCherryPick(ctx, db, branch, intoBranchDS, intoHash, pickHash, mergedAM, pickMeta, originalMsg, params.Message, params.Committer)
 }
 
 // commitCherryPick creates a single-parent commit on the branch applying the cherry-picked AM.
 // originalMsg is the cherry-picked commit's message; message (if non-empty) overrides it.
 // pickMeta is the original commit's metadata (used to preserve author identity).
-// author is optional — when set, overrides the committer identity.
+// committerOverride is optional; when set, uses it as the committer identity;
+// when empty, committer equals the original author (no distinct committer).
 func (b *Backend) commitCherryPick(
 	ctx context.Context,
 	db *dbState,
@@ -1815,7 +1825,7 @@ func (b *Backend) commitCherryPick(
 	intoHash, pickHash hash.Hash,
 	pickedAM prolly.AddressMap,
 	pickMeta *datas.CommitMeta,
-	originalMsg, message, author string,
+	originalMsg, message, committerOverride string,
 ) (*backends.CherryPickResult, error) {
 	commitMsg := message
 	if commitMsg == "" {
@@ -1826,23 +1836,19 @@ func (b *Backend) commitCherryPick(
 		}
 	}
 
-	// Committer identity: the person performing the cherry-pick.
-	commitName := "dolt"
-	commitEmail := "dolt@localhost"
-	if author != "" {
-		if idx := strings.Index(author, " <"); idx >= 0 {
-			commitName = author[:idx]
-			commitEmail = strings.TrimSuffix(author[idx+2:], ">")
-		} else {
-			commitName = author
-			commitEmail = author + "@dumbodb"
-		}
-	}
-
-	// Preserve the original author; set committer to the cherry-picker.
 	origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
-	committer := datas.CommitIdent{Name: commitName, Email: commitEmail}
-	meta, err := datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, commitMsg)
+
+	var meta *datas.CommitMeta
+	var err error
+	if committerOverride != "" {
+		// Explicit committer: preserve original author, set distinct committer.
+		commitName, commitEmail := parseAuthorString(committerOverride)
+		committer := datas.CommitIdent{Name: commitName, Email: commitEmail}
+		meta, err = datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, commitMsg)
+	} else {
+		// No committer specified: use original author as both author and committer.
+		meta, err = datas.NewCommitMetaWithAuthorCommitter(origAuthor, origAuthor, commitMsg)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dolt: commitCherryPick: building commit meta: %w", err)
 	}
@@ -1872,7 +1878,7 @@ func (b *Backend) commitCherryPick(
 	}
 
 	cpAuthor := pickMeta.Author.Name + " <" + pickMeta.Author.Email + ">"
-	cpCommitter := commitName + " <" + commitEmail + ">"
+	cpCommitter := meta.Committer.Name + " <" + meta.Committer.Email + ">"
 	return &backends.CherryPickResult{
 		CommitID:           newHash.String(),
 		Message:            commitMsg,
@@ -2402,16 +2408,15 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	}
 
 	// Parse committer identity for replayed commits.
-	rebaserName := "dolt"
-	rebaserEmail := "dolt@localhost"
-	if params.Author != "" {
-		if idx := strings.Index(params.Author, " <"); idx >= 0 {
-			rebaserName = params.Author[:idx]
-			rebaserEmail = strings.TrimSuffix(params.Author[idx+2:], ">")
-		} else {
-			rebaserName = params.Author
-			rebaserEmail = params.Author + "@dumbodb"
-		}
+	// Prefer Committer param; fall back to Author for backward compat.
+	// When neither is set, committer defaults to the original author per commit.
+	committerStr := params.Committer
+	if committerStr == "" {
+		committerStr = params.Author
+	}
+	var rebaserName, rebaserEmail string
+	if committerStr != "" {
+		rebaserName, rebaserEmail = parseAuthorString(committerStr)
 	}
 
 	// Handle abort: discard in-progress rebase and restore pre-rebase state.
@@ -2718,7 +2723,12 @@ func (b *Backend) commitRebasedPick(
 	rebaserName, rebaserEmail string,
 ) (hash.Hash, error) {
 	origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
-	committer := datas.CommitIdent{Name: rebaserName, Email: rebaserEmail}
+	var committer datas.CommitIdent
+	if rebaserName != "" {
+		committer = datas.CommitIdent{Name: rebaserName, Email: rebaserEmail}
+	} else {
+		committer = origAuthor
+	}
 	meta, err := datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, pickMeta.Description)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: building commit meta: %w", err)

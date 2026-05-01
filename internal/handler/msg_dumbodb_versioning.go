@@ -1317,12 +1317,17 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		if err != nil {
 			return nil, err
 		}
+		committerParam, err := common.GetOptionalParam[string](document, "committer", "")
+		if err != nil {
+			return nil, err
+		}
 		res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
-			DBName:   dbName,
-			Branch:   branch,
-			Continue: true,
-			Message:  message,
-			Author:   author,
+			DBName:    dbName,
+			Branch:    branch,
+			Continue:  true,
+			Message:   message,
+			Author:    author,
+			Committer: committerParam,
 		})
 		if pickErr != nil {
 			return nil, lazyerrors.Error(pickErr)
@@ -1363,12 +1368,18 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		return nil, err
 	}
 
+	committerParam, err := common.GetOptionalParam[string](document, "committer", "")
+	if err != nil {
+		return nil, err
+	}
+
 	res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
-		DBName:  dbName,
-		Branch:  branch,
-		Commit:  commit,
-		Message: message,
-		Author:  author,
+		DBName:    dbName,
+		Branch:    branch,
+		Commit:    commit,
+		Message:   message,
+		Author:    author,
+		Committer: committerParam,
 	})
 
 	if pickErr != nil {
@@ -1453,6 +1464,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	rebaseCommitterEarly, err := common.GetOptionalParam[string](document, "committer", "")
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -1480,10 +1496,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	if continueParam {
 		res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
-			DBName:   dbName,
-			Branch:   branch,
-			Author:   rebaseAuthorEarly,
-			Continue: true,
+			DBName:    dbName,
+			Branch:    branch,
+			Author:    rebaseAuthorEarly,
+			Committer: rebaseCommitterEarly,
+			Continue:  true,
 		})
 		if rebaseErr != nil {
 			var conflictErr *backends.DumboDBRebaseConflictError
@@ -1531,10 +1548,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
-		DBName: dbName,
-		Branch: branch,
-		Onto:   onto,
-		Author: rebaseAuthorEarly,
+		DBName:    dbName,
+		Branch:    branch,
+		Onto:      onto,
+		Author:    rebaseAuthorEarly,
+		Committer: rebaseCommitterEarly,
 	})
 
 	if rebaseErr != nil {

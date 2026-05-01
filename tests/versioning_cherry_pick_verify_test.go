@@ -111,12 +111,10 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.Contains(t, msg, "cherry picked from commit", "message must contain cherry-pick annotation")
 		assert.Contains(t, msg, hashC2, "message must contain the source commit hash")
 
-		// Cherry-pick preserves the original author; committer is the cherry-picker.
+		// Cherry-pick without explicit committer: committer equals the original author.
 		assert.Equal(t, "bob <bob@dumbodb>", raw["author"], "cherry-pick must preserve original commit author")
-		committer, _ := raw["committer"].(string)
-		assert.NotEmpty(t, committer, "committer must be present in cherry-pick response")
-		assert.NotEqual(t, raw["author"], committer,
-			"committer must differ from author — author is the original commit's author, committer is the cherry-picker")
+		assert.Equal(t, raw["author"], raw["committer"],
+			"without committer param, committer must equal original author")
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 
@@ -158,12 +156,12 @@ func TestCherryPickVerify(t *testing.T) {
 
 		hashC3feat := dumboDBCommit(t, env, dbName+"@feature", "add-three", "carol <carol@dumbodb>")
 
-		// Cherry-pick with custom message and author.
+		// Cherry-pick with custom message and explicit committer.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashC3feat},
 			{Key: "message", Value: "port: add item three"},
-			{Key: "author", Value: "alice <alice@dumbodb>"},
+			{Key: "committer", Value: "alice <alice@dumbodb>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1")
@@ -174,14 +172,14 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.False(t, strings.Contains(msg, "cherry picked from"), "custom message must NOT include the default annotation")
 
 		// The original commit was by "carol <carol@dumbodb>"; the cherry-pick
-		// author parameter ("alice") becomes the committer identity. The original
+		// committer parameter ("alice") becomes the committer identity. The original
 		// author ("carol") is preserved.
 		assert.Equal(t, "carol <carol@dumbodb>", raw["author"],
 			"cherry-pick must preserve original commit author (carol)")
 		assert.Equal(t, "alice <alice@dumbodb>", raw["committer"],
-			"committer must be the cherry-picker (alice, from the author param)")
+			"committer must be the cherry-picker (alice, from the committer param)")
 		assert.NotEqual(t, raw["author"], raw["committer"],
-			"committer must differ from author for cherry-pick")
+			"committer must differ from author when explicit committer is provided")
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 

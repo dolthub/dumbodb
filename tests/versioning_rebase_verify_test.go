@@ -104,7 +104,7 @@ func TestRebaseVerify(t *testing.T) {
 		raw := runCommandRaw(t, featureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
-			{Key: "author", Value: "rebaser <rebaser@dumbodb>"},
+			{Key: "committer", Value: "rebaser <rebaser@dumbodb>"},
 		})
 
 		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for a clean rebase")

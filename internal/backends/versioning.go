@@ -106,13 +106,14 @@ func (e *MergeConflictError) Error() string {
 
 // CherryPickParams represents the parameters of VersioningBackend.DumboDBCherryPick method.
 type CherryPickParams struct {
-	DBName   string
-	Branch   string // current branch (the target branch to apply the cherry-pick onto)
-	Commit   string // rootish of the commit to cherry-pick (required unless Abort/Continue)
-	Abort    bool   // if true, abandon the in-progress cherry-pick and restore working set
-	Continue bool   // if true, after conflict resolution, complete the cherry-pick and create the commit
-	Message  string // optional: custom commit message override
-	Author   string // optional: 'Name <email>'
+	DBName    string
+	Branch    string // current branch (the target branch to apply the cherry-pick onto)
+	Commit    string // rootish of the commit to cherry-pick (required unless Abort/Continue)
+	Abort     bool   // if true, abandon the in-progress cherry-pick and restore working set
+	Continue  bool   // if true, after conflict resolution, complete the cherry-pick and create the commit
+	Message   string // optional: custom commit message override
+	Author    string // optional: 'Name <email>' override for commit author (legacy; prefer Committer)
+	Committer string // optional: 'Name <email>' explicit committer identity; when empty, committer equals the original author
 }
 
 // CherryPickResult represents the result of VersioningBackend.DumboDBCherryPick method.
@@ -307,12 +308,13 @@ type CurrentBranchResult struct {
 
 // RebaseParams represents the parameters of VersioningBackend.DumboDBRebase method.
 type RebaseParams struct {
-	DBName   string
-	Branch   string // current branch (the branch to rebase)
-	Onto     string // branch name or rootish to rebase onto (required unless Abort/Continue)
-	Author   string // optional: committer identity for replayed commits ("Name <email>")
-	Abort    bool   // if true, abandon the in-progress rebase and restore the pre-rebase state
-	Continue bool   // if true, after conflict resolution, complete the current commit and proceed
+	DBName    string
+	Branch    string // current branch (the branch to rebase)
+	Onto      string // branch name or rootish to rebase onto (required unless Abort/Continue)
+	Author    string // optional: legacy committer identity (prefer Committer)
+	Committer string // optional: explicit committer identity for replayed commits ("Name <email>"); when empty, committer equals original author
+	Abort     bool   // if true, abandon the in-progress rebase and restore the pre-rebase state
+	Continue  bool   // if true, after conflict resolution, complete the current commit and proceed
 }
 
 // RebaseResult represents the result of VersioningBackend.DumboDBRebase method.
