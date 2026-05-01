@@ -269,18 +269,24 @@ func TestCherryPickVerify(t *testing.T) {
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
+		// _id is promoted to top level, not repeated inside base/ours/theirs.
+		assert.EqualValues(t, int32(1), cf["_id"], "_id must be a top-level field in the conflict entry")
+
 		// ourDiffType / theirDiffType must both be "modified" (both branches changed _id:1).
 		assert.Equal(t, "modified", cf["ourDiffType"])
 		assert.Equal(t, "modified", cf["theirDiffType"])
 
 		// ours = main's version (v:100), theirs = cherry-picked version (v:99).
+		// _id must NOT appear inside these sub-documents.
 		oursDoc, ok := cf["ours"].(bson.M)
 		require.True(t, ok, "ours must be a document")
 		assert.EqualValues(t, 100, oursDoc["v"], "ours doc must have v:100 (main's version)")
+		assert.Nil(t, oursDoc["_id"], "ours must not contain _id (promoted to top level)")
 
 		theirsDoc, ok := cf["theirs"].(bson.M)
 		require.True(t, ok, "theirs must be a document")
 		assert.EqualValues(t, 99, theirsDoc["v"], "theirs doc must have v:99 (cherry-picked version)")
+		assert.Nil(t, theirsDoc["_id"], "theirs must not contain _id (promoted to top level)")
 
 		// Step 3: Resolve — accept "theirs" (the cherry-picked value v:99).
 		var resolveRes bson.M

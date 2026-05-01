@@ -489,15 +489,20 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
+		// _id is promoted to top level.
+		assert.EqualValues(t, int32(1), cf["_id"], "_id must be a top-level field in the conflict entry")
+
 		assert.Equal(t, "modified", cf["ourDiffType"])
 		assert.Equal(t, "modified", cf["theirDiffType"])
 
-		// base, ours, theirs must be present
+		// base, ours, theirs must be present; _id must not appear inside them.
 		oursDoc := cf["ours"].(bson.M)
 		assert.EqualValues(t, 10, oursDoc["v"], "ours doc must have v:10 (main's version)")
+		assert.Nil(t, oursDoc["_id"], "ours must not contain _id")
 
 		theirsDoc := cf["theirs"].(bson.M)
 		assert.EqualValues(t, 20, theirsDoc["v"], "theirs doc must have v:20 (feature's version)")
+		assert.Nil(t, theirsDoc["_id"], "theirs must not contain _id")
 	})
 
 	// Scenario 7: dumboDBCommit blocked while conflicts remain

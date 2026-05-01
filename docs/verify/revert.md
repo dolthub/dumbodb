@@ -177,10 +177,10 @@ printjson(rSummary)
 // Step 2: Per-collection detail — list individual document conflicts.
 const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1, collection: "records" })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", base: {...},
-//             ours: { _id: 10, v: 99 }, theirs: null (or deleted),
+// Expected: { conflicts: [ { conflictId: "c0", _id: 10, base: {...},
+//             ours: { v: 99 }, theirs: null (or deleted),
 //             ourDiffType: "modified", theirDiffType: "deleted" } ], ok: 1 }
-// ours = main's current version (v:99), theirs = revert target (deleted in parent)
+// _id promoted to top level; ours = main's current version (v:99), theirs = revert target (deleted)
 
 const conflictId = rConflicts.conflicts[0].conflictId
 

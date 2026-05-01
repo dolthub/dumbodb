@@ -296,10 +296,10 @@ const rConflicts = rdb.getSiblingDB("rebaseresolve@feature").runCommand({
     doltConflicts: 1, collection: "items"
 })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", base: { _id: 1, v: 1 },
-//             ours: { _id: 1, v: 200 }, theirs: { _id: 1, v: 100 },
+// Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: { v: 1 },
+//             ours: { v: 200 }, theirs: { v: 100 },
 //             ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
-// ours = feature's version (v:200), theirs = main's version (v:100)
+// _id promoted to top level; ours = feature's version (v:200), theirs = main's version (v:100)
 const conflictId = rConflicts.conflicts[0].conflictId
 print("conflictId =", conflictId)
 

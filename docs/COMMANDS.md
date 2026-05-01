@@ -859,9 +859,10 @@ Returns conflict information for an in-progress merge, cherry-pick, or rebase on
 | Field | Type | Description |
 |-------|------|-------------|
 | `conflictId` | string | Unique identifier for this conflict (used with `doltResolveConflict`) |
-| `base` | document or null | The common ancestor document |
-| `ours` | document or null | Our version of the document |
-| `theirs` | document or null | Their version of the document |
+| `_id` | any | The document's `_id` value (promoted to top level) |
+| `base` | document or null | The common ancestor document (without `_id`) |
+| `ours` | document or null | Our version of the document (without `_id`) |
+| `theirs` | document or null | Their version of the document (without `_id`) |
 | `ourDiffType` | string | How we changed it: `"added"`, `"modified"`, `"deleted"` |
 | `theirDiffType` | string | How they changed it |
 
@@ -880,9 +881,10 @@ main.runCommand({ doltConflicts: 1, collection: "orders" })
 //   conflicts: [
 //     {
 //       conflictId:    "c0",
-//       base:          { _id: 1, amount: 100 },
-//       ours:          { _id: 1, amount: 150 },
-//       theirs:        { _id: 1, amount: 200 },
+//       _id:           1,
+//       base:          { amount: 100 },
+//       ours:          { amount: 150 },
+//       theirs:        { amount: 200 },
 //       ourDiffType:   "modified",
 //       theirDiffType: "modified"
 //     }

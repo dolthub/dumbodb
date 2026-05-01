@@ -217,8 +217,8 @@ printjson(rSummary)
 // Detail: list individual conflicts within a collection
 const rDetail = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1, collection: "inventory" })
 printjson(rDetail)
-// Expected: { conflicts: [ { conflictId: "c0", base: { _id: 1, v: 1 }, ours: { _id: 1, v: 10 },
-//             theirs: { _id: 1, v: 20 }, ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
+// Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: { v: 1 }, ours: { v: 10 },
+//             theirs: { v: 20 }, ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
 const conflictId = rDetail.conflicts[0].conflictId
 ```
 

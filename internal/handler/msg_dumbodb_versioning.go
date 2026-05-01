@@ -867,22 +867,43 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 			"conflictId", cf.ConflictID,
 		}
 
-		if cf.Base != nil {
-			pairs = append(pairs, "base", cf.Base)
-		} else {
-			pairs = append(pairs, "base", types.Null)
+		// Extract _id from whichever document is non-nil and promote it
+		// to the top level so it isn't repeated inside base/ours/theirs.
+		var docID any
+		for _, doc := range []*types.Document{cf.Ours, cf.Theirs, cf.Base} {
+			if doc != nil {
+				if v, getErr := doc.Get("_id"); getErr == nil {
+					docID = v
+					break
+				}
+			}
+		}
+		if docID != nil {
+			pairs = append(pairs, "_id", docID)
 		}
 
-		if cf.Ours != nil {
-			pairs = append(pairs, "ours", cf.Ours)
-		} else {
-			pairs = append(pairs, "ours", types.Null)
-		}
-
-		if cf.Theirs != nil {
-			pairs = append(pairs, "theirs", cf.Theirs)
-		} else {
-			pairs = append(pairs, "theirs", types.Null)
+		// Build base/ours/theirs without the _id field.
+		for _, kv := range []struct {
+			key string
+			doc *types.Document
+		}{
+			{"base", cf.Base},
+			{"ours", cf.Ours},
+			{"theirs", cf.Theirs},
+		} {
+			if kv.doc == nil {
+				pairs = append(pairs, kv.key, types.Null)
+				continue
+			}
+			stripped := must.NotFail(types.NewDocument())
+			for _, k := range kv.doc.Keys() {
+				if k == "_id" {
+					continue
+				}
+				v, _ := kv.doc.Get(k)
+				stripped.Set(k, v)
+			}
+			pairs = append(pairs, kv.key, stripped)
 		}
 
 		pairs = append(pairs,

@@ -181,10 +181,10 @@ printjson(rSummary)
 // Step 2: Per-collection detail — list individual document conflicts.
 const rConflicts = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1, collection: "items" })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", base: {...},
-//             ours: { _id: 1, v: 100 }, theirs: { _id: 1, v: 99 },
+// Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: {...},
+//             ours: { v: 100 }, theirs: { v: 99 },
 //             ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
-// ours = main's version (v:100), theirs = cherry-picked version (v:99)
+// _id is promoted to top level; ours = main's version (v:100), theirs = cherry-picked version (v:99)
 
 const conflictId = rConflicts.conflicts[0].conflictId
 
@@ -211,7 +211,8 @@ printjson(rContinue)
 
 Key checks:
 - `doltConflicts` (no filter) returns `collections` array — same shape as for merge
-- `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- `_id` is promoted to the top level of each conflict entry; `base`/`ours`/`theirs` do not contain `_id`
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
 - After `doltCherryPick continue:1`, `ok` equals `1` and `commitId` is present
 - main HEAD reflects the resolved document state
