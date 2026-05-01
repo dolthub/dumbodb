@@ -296,7 +296,21 @@ func TestTagVerify(t *testing.T) {
 		assert.Equal(t, hash2, tag["commitId"], "main must resolve to hash2 (current HEAD)")
 	})
 
-	// Scenario 2d (tag-from-tag) is omitted: resolveRootishToCommitHash
-	// currently returns the tag object's address, not the tagged commit.
-	// This is a known limitation tracked separately.
+	// -------------------------------------------------------------------------
+	// Scenario 2d: Create tag using another tag as hash
+	// -------------------------------------------------------------------------
+	t.Run("Scenario2d_TagFromTag", func(t *testing.T) {
+		var result bson.M
+		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dumboTag", Value: int32(1)},
+			{Key: "name", Value: "v-from-tag"},
+			{Key: "hash", Value: "v1.0"},
+			{Key: "message", Value: "tagged via another tag"},
+		}).Decode(&result)
+		require.NoError(t, err, "dumboTag with another tag as hash must succeed")
+
+		tags := result["tags"].(bson.A)
+		tag := tags[0].(bson.M)
+		assert.Equal(t, hash1, tag["commitId"], "v1.0 resolves to hash1")
+	})
 }

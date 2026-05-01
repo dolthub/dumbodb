@@ -212,10 +212,11 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 		}
 	}
 
-	// Case 4: tag name.
+	// Case 4: tag name — use tagCommitAddr to dereference through the tag
+	// flatbuffer to the underlying commit hash.
 	tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if tagErr == nil && tagDS.HasHead() {
-		if h, ok := tagDS.MaybeHeadAddr(); ok {
+		if h := tagCommitAddr(tagDS); !h.IsEmpty() {
 			return h, nil
 		}
 	}
