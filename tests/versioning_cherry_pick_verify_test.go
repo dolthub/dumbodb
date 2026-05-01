@@ -313,8 +313,10 @@ func TestCherryPickVerify(t *testing.T) {
 		commitID, ok := raw["commitId"].(string)
 		require.True(t, ok, "commitId must be a string")
 		assert.NotEmpty(t, commitID, "commitId must not be empty")
-		assert.NotNil(t, raw["committer"], "committer must be present in cherry-pick continue response")
-		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in cherry-pick continue response")
+		// No committer param on continue: committer must equal the original author.
+		assert.Equal(t, raw["author"], raw["committer"],
+			"without committer param, committer must equal original author")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 
 		// Verify the resolved value is visible on main.
 		var doc bson.M

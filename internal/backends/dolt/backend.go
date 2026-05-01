@@ -1836,18 +1836,17 @@ func (b *Backend) commitCherryPick(
 		}
 	}
 
-	origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
-
 	var meta *datas.CommitMeta
 	var err error
 	if committerOverride != "" {
 		// Explicit committer: preserve original author, set distinct committer.
+		origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
 		commitName, commitEmail := parseAuthorString(committerOverride)
 		committer := datas.CommitIdent{Name: commitName, Email: commitEmail}
 		meta, err = datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, commitMsg)
 	} else {
-		// No committer specified: use original author as both author and committer.
-		meta, err = datas.NewCommitMetaWithAuthorCommitter(origAuthor, origAuthor, commitMsg)
+		// No committer override: preserve original author; committer is implicit (same identity).
+		meta, err = datas.NewCommitMetaWithAuthor(pickMeta.Author.Name, pickMeta.Author.Email, commitMsg, pickMeta.Author.Date.Time())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("dolt: commitCherryPick: building commit meta: %w", err)
@@ -1878,7 +1877,10 @@ func (b *Backend) commitCherryPick(
 	}
 
 	cpAuthor := pickMeta.Author.Name + " <" + pickMeta.Author.Email + ">"
-	cpCommitter := meta.Committer.Name + " <" + meta.Committer.Email + ">"
+	cpCommitter := cpAuthor
+	if meta.Committer.Name != "" && meta.Committer.Name != meta.Author.Name {
+		cpCommitter = meta.Committer.Name + " <" + meta.Committer.Email + ">"
+	}
 	return &backends.CherryPickResult{
 		CommitID:           newHash.String(),
 		Message:            commitMsg,
@@ -1994,13 +1996,23 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 			continue
 		}
 
+		author := ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">"
+		committer := ci.Meta.Committer.Name + " <" + ci.Meta.Committer.Email + ">"
+		if ci.Meta.Committer.Name == "" {
+			committer = author
+		}
+		committerTS := int64(ci.Meta.TimestampMillis())
+		if committerTS == 0 {
+			committerTS = ci.Meta.UserTimestampMillis()
+		}
+
 		info := backends.CommitInfo{
 			CommitID:           ci.Hash.String(),
-			Author:             ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">",
+			Author:             author,
 			Message:            ci.Meta.Description,
 			Timestamp:          ci.Meta.UserTimestampMillis(),
-			Committer:          ci.Meta.Committer.Name + " <" + ci.Meta.Committer.Email + ">",
-			CommitterTimestamp: int64(ci.Meta.TimestampMillis()),
+			Committer:          committer,
+			CommitterTimestamp: committerTS,
 			Refs:               refsForCommit[ci.Hash.String()],
 		}
 		if len(ci.Parents) >= 1 {
@@ -2408,13 +2420,9 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	}
 
 	// Parse committer identity for replayed commits.
-	// Prefer Committer param; fall back to Author for backward compat.
-	// When neither is set, committer defaults to the original author per commit.
-	committerStr := params.Committer
-	if committerStr == "" {
-		committerStr = params.Author
-	}
+	// When Committer is empty, committer defaults to the original author per commit.
 	var rebaserName, rebaserEmail string
+	committerStr := params.Committer
 	if committerStr != "" {
 		rebaserName, rebaserEmail = parseAuthorString(committerStr)
 	}
@@ -2722,14 +2730,17 @@ func (b *Backend) commitRebasedPick(
 	pickMeta *datas.CommitMeta,
 	rebaserName, rebaserEmail string,
 ) (hash.Hash, error) {
-	origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
-	var committer datas.CommitIdent
+	var meta *datas.CommitMeta
+	var err error
 	if rebaserName != "" {
-		committer = datas.CommitIdent{Name: rebaserName, Email: rebaserEmail}
+		// Explicit committer: preserve original author, set distinct committer.
+		origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
+		committer := datas.CommitIdent{Name: rebaserName, Email: rebaserEmail}
+		meta, err = datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, pickMeta.Description)
 	} else {
-		committer = origAuthor
+		// No committer override: preserve original author; committer is implicit (same identity).
+		meta, err = datas.NewCommitMetaWithAuthor(pickMeta.Author.Name, pickMeta.Author.Email, pickMeta.Description, pickMeta.Author.Date.Time())
 	}
-	meta, err := datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, pickMeta.Description)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: building commit meta: %w", err)
 	}

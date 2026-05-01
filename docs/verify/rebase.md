@@ -73,7 +73,7 @@ After setup:
 Rebase feature onto main. C2 is replayed on top of C3.
 
 ```js
-const rRebase = db.getSiblingDB("rebasedb@feature").runCommand({doltRebase: 1, onto: "main"})
+const rRebase = db.getSiblingDB("rebasedb@feature").runCommand({doltRebase: 1, onto: "main", committer: "rebaser <rebaser@dumbodb>"})
 printjson(rRebase)
 // Expected: { commitsReplayed: 1, newTip: "<hash>", ok: 1 }
 ```
@@ -111,7 +111,7 @@ db.getSiblingDB("rebasedb@feature").items.findOne({_id: 2})
 const rLog = db.getSiblingDB("rebasedb@feature").runCommand({doltLog: 1, limit: 1})
 printjson(rLog)
 // Expected: { commits: [ { commitId: "<newTip>", parent1: "<hashC3>", message: "feature-adds-2",
-//            author: "test <test@example.com>", committer: "<rebaser>", committerTimestamp: ISODate("..."), ... } ], ok: 1 }
+//            author: "test <test@example.com>", committer: "rebaser <rebaser@dumbodb>", committerTimestamp: ISODate("..."), ... } ], ok: 1 }
 
 const head = rLog.commits[0]
 print("head.parent1 =", head.parent1)
@@ -124,7 +124,7 @@ Key checks:
 - `head.parent2` is absent (rebased commit is single-parent, not a merge commit)
 - `head.parent1` equals `hashC3` (main's tip before the rebase)
 - `head.author` equals `"test <test@example.com>"` (preserved from the original commit)
-- `head.committer` is the identity of whoever performed the rebase
+- `head.committer` equals `"rebaser <rebaser@dumbodb>"` (the explicit committer from the rebase command)
 - `head.committerTimestamp` records when the replay occurred
 
 ---

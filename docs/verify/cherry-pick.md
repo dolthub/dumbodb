@@ -97,7 +97,7 @@ printjson(log.commits[0])
 
 ---
 
-## Scenario 2: Custom message and author
+## Scenario 2: Custom message and committer
 
 Cherry-pick C2 again (it was already applied but let's test message override with a fresh setup).
 To re-test from a clean state without re-running setup, advance feature with another commit:
@@ -108,21 +108,24 @@ db.getSiblingDB("pickdb@feature").items.insertOne({ _id: 3, v: 3 })
 const r3 = db.getSiblingDB("pickdb@feature").runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@dumbodb>" })
 const hashC3feat = r3.commitId
 
-// Cherry-pick C3 onto main with a custom message and author.
+// Cherry-pick C3 onto main with a custom message and explicit committer.
 const rPick2 = db.getSiblingDB("pickdb@main").runCommand({
   doltCherryPick: 1,
   commit: hashC3feat,
   message: "port: add item three",
-  author: "alice <alice@dumbodb>"
+  committer: "alice <alice@dumbodb>"
 })
 printjson(rPick2)
-// Expected: { commitId: "<hashC4>", message: "port: add item three", committer: "alice <alice@dumbodb>", committerTimestamp: ISODate("..."), ok: 1 }
+// Expected: { commitId: "<hashC4>", message: "port: add item three",
+//            author: "carol <carol@dumbodb>", committer: "alice <alice@dumbodb>",
+//            committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
-- `message` equals the custom override (`"port: add item three"`) — no annotation appended
-- `commitId` is a fresh hash
-- `committer` is `"alice <alice@dumbodb>"` (the person performing the cherry-pick)
+- `message` equals the custom override (`"port: add item three"`)
+- `author` is preserved from the original commit (`"carol <carol@dumbodb>"`)
+- `committer` is `"alice <alice@dumbodb>"` (the explicit committer identity)
+- `committer` differs from `author`
 - `committerTimestamp` records when the cherry-pick was applied
 
 ---

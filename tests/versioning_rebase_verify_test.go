@@ -148,6 +148,37 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
+	// Scenario 1c: Rebase without committer -- committer equals original author
+	// -------------------------------------------------------------------------
+	t.Run("Scenario1c_RebaseWithoutCommitter", func(t *testing.T) {
+		noCommDB := fmt.Sprintf("rebasenocomm%d", rand.Int64N(1_000_000))
+		_, _, _ = rebaseVerifySetup(t, env, noCommDB)
+
+		noCommFeatureDB := env.client.Database(noCommDB + "@feature")
+
+		raw := runCommandRaw(t, noCommFeatureDB, bson.D{
+			{Key: "doltRebase", Value: int32(1)},
+			{Key: "onto", Value: "main"},
+		})
+		assert.EqualValues(t, 1, raw["ok"])
+
+		var logRes bson.M
+		err := noCommFeatureDB.RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logRes)
+		require.NoError(t, err)
+
+		commits := logRes["commits"].(bson.A)
+		head := commits[0].(bson.M)
+		assert.Equal(t, "test <test@example.com>", head["author"],
+			"rebased commit must preserve original author")
+		assert.Equal(t, head["author"], head["committer"],
+			"without committer param, committer must equal original author")
+		assert.NotNil(t, head["committerTimestamp"])
+	})
+
+	// -------------------------------------------------------------------------
 	// Scenario 2: Data visible after rebase
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_DataVisibleAfterRebase", func(t *testing.T) {
@@ -377,7 +408,7 @@ func TestRebaseVerify(t *testing.T) {
 		assert.True(t, hasTip, "continue response must include newTip")
 		_ = newTip
 
-		// Verify rebased commits in log have committer fields.
+		// No committer param: rebased commits must have committer == author.
 		var logResult bson.M
 		err = conflictFeatureDB.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -388,8 +419,9 @@ func TestRebaseVerify(t *testing.T) {
 		require.True(t, ok && len(logCommits) > 0)
 		for _, lc := range logCommits {
 			lcm := lc.(bson.M)
-			assert.NotNil(t, lcm["committer"], "rebased commit must have committer in log")
-			assert.NotNil(t, lcm["committerTimestamp"], "rebased commit must have committerTimestamp in log")
+			assert.Equal(t, lcm["author"], lcm["committer"],
+				"without committer param, rebased commit committer must equal author")
+			assert.NotNil(t, lcm["committerTimestamp"], "rebased commit must have committerTimestamp")
 		}
 	})
 }

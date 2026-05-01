@@ -262,7 +262,7 @@ Applies the diff introduced by a named commit onto the current branch, creating 
 |-----------|------|----------|---------|-------------|
 | `commit` | string | **yes** | — | Commit hash to cherry-pick |
 | `message` | string | no | auto | Custom commit message (default: original message + annotation) |
-| `author` | string | no | `""` | `"Name <email>"` for the commit author |
+| `committer` | string | no | — | `"Name <email>"` committer identity. When omitted, committer equals the original commit's author. |
 
 ### Parameters (continue / abort)
 
@@ -270,8 +270,9 @@ Applies the diff introduced by a named commit onto the current branch, creating 
 |-----------|------|----------|---------|-------------|
 | `continue` | bool/int | no | `false` | Continue after resolving conflicts |
 | `abort` | bool/int | no | `false` | Abort the in-progress cherry-pick |
+| `committer` | string | no | — | Committer identity override (same as initiation) |
 
-For `continue`, `message` and `author` are optional overrides.
+For `continue`, `message` and `committer` are optional overrides.
 
 ### Response fields (success)
 
@@ -337,6 +338,7 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `onto` | string | **yes** | — | Branch name or rootish to rebase onto |
+| `committer` | string | no | — | `"Name <email>"` committer identity for replayed commits. When omitted, committer equals the original commit's author. |
 
 ### Parameters (continue / abort)
 
@@ -344,6 +346,7 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 |-----------|------|----------|---------|-------------|
 | `continue` | bool/int | no | `false` | Continue after resolving conflicts |
 | `abort` | bool/int | no | `false` | Abort and restore original branch state |
+| `committer` | string | no | — | Committer identity override (same as initiation) |
 
 ### Response fields (success)
 
@@ -372,12 +375,12 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 ### Example
 
 ```js
-// Rebase feature onto main
-db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, onto: "main" })
+// Rebase feature onto main with an explicit committer
+db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, onto: "main", committer: "alice <alice@acme.com>" })
 // { commitsReplayed: 3, newTip: "abc123...", ok: 1 }
 
 // If conflicts arise — resolve them, then continue
-db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, continue: 1 })
+db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, continue: 1, committer: "alice <alice@acme.com>" })
 
 // Abort
 db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, abort: 1 })

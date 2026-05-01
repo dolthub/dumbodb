@@ -112,7 +112,6 @@ type CherryPickParams struct {
 	Abort     bool   // if true, abandon the in-progress cherry-pick and restore working set
 	Continue  bool   // if true, after conflict resolution, complete the cherry-pick and create the commit
 	Message   string // optional: custom commit message override
-	Author    string // optional: 'Name <email>' override for commit author (legacy; prefer Committer)
 	Committer string // optional: 'Name <email>' explicit committer identity; when empty, committer equals the original author
 }
 
@@ -311,7 +310,6 @@ type RebaseParams struct {
 	DBName    string
 	Branch    string // current branch (the branch to rebase)
 	Onto      string // branch name or rootish to rebase onto (required unless Abort/Continue)
-	Author    string // optional: legacy committer identity (prefer Committer)
 	Committer string // optional: explicit committer identity for replayed commits ("Name <email>"); when empty, committer equals original author
 	Abort     bool   // if true, abandon the in-progress rebase and restore the pre-rebase state
 	Continue  bool   // if true, after conflict resolution, complete the current commit and proceed

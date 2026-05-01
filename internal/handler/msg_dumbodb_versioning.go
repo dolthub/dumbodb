@@ -1313,9 +1313,12 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		if err != nil {
 			return nil, err
 		}
-		author, err := common.GetOptionalParam[string](document, "author", "")
-		if err != nil {
-			return nil, err
+		if v, _ := common.GetOptionalParam[string](document, "author", ""); v != "" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"doltCherryPick: 'author' is not supported; use 'committer' to set the committer identity",
+				"author",
+			)
 		}
 		committerParam, err := common.GetOptionalParam[string](document, "committer", "")
 		if err != nil {
@@ -1326,7 +1329,6 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			Branch:    branch,
 			Continue:  true,
 			Message:   message,
-			Author:    author,
 			Committer: committerParam,
 		})
 		if pickErr != nil {
@@ -1363,9 +1365,12 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		return nil, err
 	}
 
-	author, err := common.GetOptionalParam[string](document, "author", "")
-	if err != nil {
-		return nil, err
+	if v, _ := common.GetOptionalParam[string](document, "author", ""); v != "" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"doltCherryPick: 'author' is not supported; use 'committer' to set the committer identity",
+			"author",
+		)
 	}
 
 	committerParam, err := common.GetOptionalParam[string](document, "committer", "")
@@ -1378,7 +1383,6 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		Branch:    branch,
 		Commit:    commit,
 		Message:   message,
-		Author:    author,
 		Committer: committerParam,
 	})
 
@@ -1459,9 +1463,12 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	rebaseAuthorEarly, err := common.GetOptionalParam[string](document, "author", "")
-	if err != nil {
-		return nil, err
+	if v, _ := common.GetOptionalParam[string](document, "author", ""); v != "" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"doltRebase: 'author' is not supported; use 'committer' to set the committer identity",
+			"author",
+		)
 	}
 
 	rebaseCommitterEarly, err := common.GetOptionalParam[string](document, "committer", "")
@@ -1498,7 +1505,6 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
 			DBName:    dbName,
 			Branch:    branch,
-			Author:    rebaseAuthorEarly,
 			Committer: rebaseCommitterEarly,
 			Continue:  true,
 		})
@@ -1551,7 +1557,6 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		DBName:    dbName,
 		Branch:    branch,
 		Onto:      onto,
-		Author:    rebaseAuthorEarly,
 		Committer: rebaseCommitterEarly,
 	})
 
