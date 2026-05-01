@@ -104,6 +104,8 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, "shape check", result["message"], "message must echo the provided string")
 		assert.Equal(t, "alice <alice@dumbodb>", result["author"], "author must echo the provided value")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present")
+		assert.Equal(t, "alice <alice@dumbodb>", result["committer"], "committer must echo the provided value (same as author for regular commit)")
+		assert.NotNil(t, result["committerTimestamp"], "committerTimestamp must be present")
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
 	})
 
@@ -340,6 +342,8 @@ func TestCommitVerify(t *testing.T) {
 
 		assert.Equal(t, "bob", result["author"], "author must be echoed in response")
 		assert.NotNil(t, result["timestamp"], "timestamp must be present in response")
+		assert.Equal(t, result["author"], result["committer"], "committer must equal author for regular commit")
+		assert.NotNil(t, result["committerTimestamp"], "committerTimestamp must be present in response")
 		assert.EqualValues(t, 1, result["ok"])
 
 		// Verify the author is stored and visible via dumboDBLog.
@@ -381,6 +385,8 @@ func TestCommitVerify(t *testing.T) {
 		}).Decode(&result))
 
 		assert.Equal(t, "carol", result["author"], "author must be echoed")
+		assert.Equal(t, result["author"], result["committer"], "committer must equal author for regular commit")
+		assert.NotNil(t, result["committerTimestamp"], "committerTimestamp must be present")
 		assert.EqualValues(t, 1, result["ok"])
 
 		// The echoed timestamp must equal the provided value (within millisecond precision).

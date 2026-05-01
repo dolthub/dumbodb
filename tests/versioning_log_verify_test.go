@@ -46,12 +46,14 @@ type logResult struct {
 
 // commitEntry holds one entry from the "commits" array of a dumboDBLog response.
 type commitEntry struct {
-	CommitID string
-	Parent1  string
-	Parent2  string
-	Message  string
-	Author   string
-	Refs     []string
+	CommitID           string
+	Parent1            string
+	Parent2            string
+	Message            string
+	Author             string
+	Committer          string
+	CommitterTimestamp interface{}
+	Refs               []string
 }
 
 // decodeLogResult parses the raw bson.M from a dumboDBLog RunCommand into the
@@ -78,6 +80,12 @@ func decodeLogResult(t *testing.T, raw bson.M) logResult {
 			CommitID: fmt.Sprintf("%v", cm["commitId"]),
 			Message:  fmt.Sprintf("%v", cm["message"]),
 			Author:   fmt.Sprintf("%v", cm["author"]),
+		}
+		if c, ok := cm["committer"]; ok {
+			entry.Committer = fmt.Sprintf("%v", c)
+		}
+		if ct, ok := cm["committerTimestamp"]; ok {
+			entry.CommitterTimestamp = ct
 		}
 		if p1, ok := cm["parent1"]; ok {
 			entry.Parent1 = fmt.Sprintf("%v", p1)
@@ -175,6 +183,12 @@ func TestLogVerify(t *testing.T) {
 
 		assert.Equal(t, "Initialize database", lr.Commits[3].Message)
 		assert.Empty(t, lr.Commits[3].Parent1, "Initialize commit is the root — no parent1")
+
+		// Committer fields must be present and non-empty on user commits.
+		for _, c := range lr.Commits[:3] {
+			assert.NotEmpty(t, c.Committer, "committer must be non-empty for user commit %s", c.CommitID)
+			assert.NotNil(t, c.CommitterTimestamp, "committerTimestamp must be present for user commit %s", c.CommitID)
+		}
 	})
 
 	// -------------------------------------------------------------------------

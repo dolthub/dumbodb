@@ -44,7 +44,7 @@ db.items.insertOne({ _id: 1, label: "alpha", v: 1 })
 db.items.insertOne({ _id: 2, label: "beta",  v: 2 })
 const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@dumbodb>" })
 printjson(r1)
-// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), ok: 1 }
+// Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@dumbodb>", timestamp: ISODate("..."), committer: "alice <alice@dumbodb>", committerTimestamp: ISODate("..."), ok: 1 }
 const hashBase = r1.commitId
 
 print("hashBase =", hashBase)
@@ -56,7 +56,7 @@ After setup, `commitdb` has one commit on `main` with two documents.
 
 ## Scenario 1: Response shape
 
-`doltCommit` returns `hash`, `branch`, `message`, `author`, `timestamp`, and `ok`.
+`doltCommit` returns `hash`, `branch`, `message`, `author`, `timestamp`, `committer`, `committerTimestamp`, and `ok`.
 
 The response from setup already demonstrates the shape. Verify each field after a real change:
 
@@ -70,12 +70,14 @@ Expected result structure:
 
 ```json
 {
-  "commitId":      "<non-empty hex string>",
-  "branch":    "main",
-  "message":   "shape check",
-  "author":    "alice <alice@dumbodb>",
-  "timestamp": ISODate("..."),
-  "ok":        1
+  "commitId":           "<non-empty hex string>",
+  "branch":             "main",
+  "message":            "shape check",
+  "author":             "alice <alice@dumbodb>",
+  "timestamp":          ISODate("..."),
+  "committer":          "alice <alice@dumbodb>",
+  "committerTimestamp": ISODate("..."),
+  "ok":                 1
 }
 ```
 
@@ -85,6 +87,8 @@ Key checks:
 - `message` echoes the message you provided
 - `author` echoes the author you provided
 - `timestamp` is a BSON Date (defaults to current time when not specified)
+- `committer` equals `author` for regular commits
+- `committerTimestamp` is a BSON Date (the time the commit was applied)
 - `ok` is `1`
 
 ---
@@ -295,3 +299,5 @@ Key checks:
 - `message` is echoed verbatim in the response.
 - `author` is required; it is stored and visible in `doltLog`.
 - `timestamp` is optional; omit it to use the current server time.
+- `committer` equals `author` for regular commits (differs for cherry-pick and rebase).
+- `committerTimestamp` records when the commit was applied.

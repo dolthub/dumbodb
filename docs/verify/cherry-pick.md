@@ -66,13 +66,19 @@ and feature's parent (C1 = main HEAD) is the common base, this applies cleanly.
 ```js
 const rPick1 = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashC2 })
 printjson(rPick1)
-// Expected: { commitId: "<hashC3>", message: "add-two\n\n(cherry picked from commit <hashC2>)", ok: 1 }
+// Expected: { commitId: "<hashC3>", message: "add-two\n\n(cherry picked from commit <hashC2>)",
+//            committer: "<current user>", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
 - `ok` equals `1`
 - `commitId` is a non-empty string (different from `hashC2`)
 - `message` contains the original message (`"add-two"`) and the cherry-pick annotation
+- `committer` is the person performing the cherry-pick (may differ from the original commit's `author`)
+- `committerTimestamp` records when the cherry-pick was applied
+
+> **Note:** For cherry-pick commits, `author` is preserved from the original commit while
+> `committer` identifies who applied the cherry-pick. This distinction is visible in `doltLog`.
 
 Verify main now has both documents:
 
@@ -110,12 +116,14 @@ const rPick2 = db.getSiblingDB("pickdb@main").runCommand({
   author: "alice <alice@dumbodb>"
 })
 printjson(rPick2)
-// Expected: { commitId: "<hashC4>", message: "port: add item three", ok: 1 }
+// Expected: { commitId: "<hashC4>", message: "port: add item three", committer: "alice <alice@dumbodb>", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
 - `message` equals the custom override (`"port: add item three"`) — no annotation appended
 - `commitId` is a fresh hash
+- `committer` is `"alice <alice@dumbodb>"` (the person performing the cherry-pick)
+- `committerTimestamp` records when the cherry-pick was applied
 
 ---
 
@@ -195,7 +203,7 @@ printjson(rAfter)
 // Step 5: Continue the cherry-pick (equivalent to doltMerge continue:1 for merges).
 const rContinue = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, continue: 1 })
 printjson(rContinue)
-// Expected: { commitId: "<hash>", message: "conflict-source\n\n(cherry picked from commit <hashC4feat>)", ok: 1 }
+// Expected: { commitId: "<hash>", message: "conflict-source\n\n(cherry picked from commit <hashC4feat>)", committer: "<current user>", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:

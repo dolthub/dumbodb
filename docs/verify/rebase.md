@@ -84,6 +84,10 @@ Key checks:
 - `newTip` is a non-empty string, distinct from `hashC2`
 - `newTip` is not `hashC3` (it's the rebased copy of C2, not main's tip)
 
+> **Note:** For rebased commits, `author` is preserved from the original commit while
+> `committer` identifies who performed the rebase, and `committerTimestamp` records when
+> the replay occurred. This distinction is visible in `doltLog`.
+
 ---
 
 ## Scenario 2: Data visible after rebase
@@ -106,16 +110,22 @@ db.getSiblingDB("rebasedb@feature").items.findOne({_id: 2})
 ```js
 const rLog = db.getSiblingDB("rebasedb@feature").runCommand({doltLog: 1, limit: 1})
 printjson(rLog)
-// Expected: { commits: [ { commitId: "<newTip>", parent1: "<hashC3>", message: "feature-adds-2", ... } ], ok: 1 }
+// Expected: { commits: [ { commitId: "<newTip>", parent1: "<hashC3>", message: "feature-adds-2",
+//            author: "test <test@example.com>", committer: "<rebaser>", committerTimestamp: ISODate("..."), ... } ], ok: 1 }
 
 const head = rLog.commits[0]
 print("head.parent1 =", head.parent1)
 print("head.parent2 =", head.parent2)  // should be undefined
+print("head.author =", head.author)        // original author preserved
+print("head.committer =", head.committer)  // rebaser identity
 ```
 
 Key checks:
 - `head.parent2` is absent (rebased commit is single-parent, not a merge commit)
 - `head.parent1` equals `hashC3` (main's tip before the rebase)
+- `head.author` equals `"test <test@example.com>"` (preserved from the original commit)
+- `head.committer` is the identity of whoever performed the rebase
+- `head.committerTimestamp` records when the replay occurred
 
 ---
 

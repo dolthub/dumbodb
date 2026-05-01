@@ -215,6 +215,8 @@ func TestMergeVerify(t *testing.T) {
 		assert.NotEqual(t, hashC3, mergeCommitID, "merge commitId must differ from main pre-merge HEAD (C3)")
 		assert.NotEqual(t, hashC4, mergeCommitID, "merge commitId must differ from feature HEAD (C4)")
 		assert.Equal(t, "custom merge msg", raw["message"])
+		assert.Equal(t, raw["author"], raw["committer"], "committer must equal author for merge commit")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in merge response")
 		assert.EqualValues(t, 1, raw["ok"])
 
 		// dumboDBLog must show the merge commit at HEAD with parent1=C3, parent2=C4.
@@ -231,6 +233,8 @@ func TestMergeVerify(t *testing.T) {
 		assert.Equal(t, hashC4, head.Parent2, "merge commit parent2 must be feature's HEAD (C4)")
 		assert.Equal(t, "custom merge msg", head.Message, "merge commit message must be the custom message")
 		assert.Equal(t, "bob <bob@x>", head.Author, "merge commit author must be bob <bob@x>")
+		assert.Equal(t, head.Author, head.Committer, "merge commit committer must equal author")
+		assert.NotNil(t, head.CommitterTimestamp, "merge commit committerTimestamp must be present in log")
 
 		// All four documents must be visible on main after the merge.
 		n, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
@@ -298,6 +302,8 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.Equal(t, mergeCommitID, head.CommitID)
 		assert.Equal(t, "custom msg", head.Message, "doltLog must show the custom message")
 		assert.Equal(t, "bob <bob@x>", head.Author, "doltLog must show the custom author")
+		assert.Equal(t, head.Author, head.Committer, "merge commit committer must equal author in log")
+		assert.NotNil(t, head.CommitterTimestamp, "merge commit committerTimestamp must be present in log")
 	})
 
 	// -------------------------------------------------------------------------
@@ -361,6 +367,8 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		}).Decode(&continueRaw))
 		assert.EqualValues(t, 1, continueRaw["ok"])
 		assert.Equal(t, "Resolve merge conflicts", continueRaw["message"], "continue response message must match custom message")
+		assert.Equal(t, continueRaw["author"], continueRaw["committer"], "committer must equal author for merge continue")
+		assert.NotNil(t, continueRaw["committerTimestamp"], "committerTimestamp must be present in merge continue response")
 
 		mergeCommitID, ok := continueRaw["commitId"].(string)
 		require.True(t, ok, "commitId must be a string")
@@ -382,6 +390,8 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		assert.Equal(t, hashFeat, head.Parent2, "parent2 must be feature's HEAD")
 		assert.Equal(t, "Resolve merge conflicts", head.Message, "doltLog must show the custom message")
 		assert.Equal(t, "alice <alice@dumbodb>", head.Author, "doltLog must show the custom author")
+		assert.Equal(t, head.Author, head.Committer, "merge commit committer must equal author in log")
+		assert.NotNil(t, head.CommitterTimestamp, "merge commit committerTimestamp must be present in log")
 	})
 }
 
@@ -556,6 +566,8 @@ func TestMergeConflictWorkflow(t *testing.T) {
 			{Key: "continue", Value: int32(1)},
 		}).Decode(&commitRaw))
 		assert.EqualValues(t, 1, commitRaw["ok"])
+		assert.NotNil(t, commitRaw["committer"], "committer must be present in merge continue response")
+		assert.NotNil(t, commitRaw["committerTimestamp"], "committerTimestamp must be present in merge continue response")
 
 		mergeCommitID, ok := commitRaw["commitId"].(string)
 		require.True(t, ok)

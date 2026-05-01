@@ -64,6 +64,8 @@ printjson(rRevert1)
 // Expected: {
 //   commitId: "<hashC3>",
 //   message: "Revert \"add-two\"\n\nThis reverts commit <hashC2>.",
+//   committer: "same as author",
+//   committerTimestamp: ISODate("..."),
 //   ok: 1
 // }
 ```
@@ -73,6 +75,8 @@ Key checks:
 - `commitId` is a non-empty string (different from `hashC2`)
 - `message` contains the original message (`"add-two"`) and the revert annotation
 - `message` contains the reverted commit hash
+- `committer` equals the author of the revert commit
+- `committerTimestamp` records when the revert was applied
 
 Verify main now has only `_id:1` (the revert undid the addition of `_id:2`):
 
@@ -109,12 +113,14 @@ const rRevert2 = db.getSiblingDB("revertdb@main").runCommand({
   author: "alice <alice@dumbodb>"
 })
 printjson(rRevert2)
-// Expected: { commitId: "<hash>", message: "undo: add item three", ok: 1 }
+// Expected: { commitId: "<hash>", message: "undo: add item three", committer: "alice <alice@dumbodb>", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
 - `message` equals the custom override (`"undo: add item three"`) — no annotation appended
 - `commitId` is a fresh hash
+- `committer` equals `"alice <alice@dumbodb>"` (same as author for revert commits)
+- `committerTimestamp` records when the revert was applied
 
 ---
 
@@ -196,7 +202,7 @@ printjson(rAfter)
 // Step 5: Continue the revert.
 const rContinue = db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, continue: 1 })
 printjson(rContinue)
-// Expected: { commitId: "<hash>", message: "Revert \"add-ten\"\n\nThis reverts commit <hashAddTen>.", ok: 1 }
+// Expected: { commitId: "<hash>", message: "Revert \"add-ten\"\n\nThis reverts commit <hashAddTen>.", committer: "same as author", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:

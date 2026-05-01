@@ -158,11 +158,13 @@ Verify the merge commit has two parents and the custom message/author via `doltL
 ```js
 const logResult = db.getSiblingDB("mergedb@main").runCommand({ doltLog: 1, limit: 1 })
 printjson(logResult)
-// Expected: commits[0].commitId === hashM,
-//           commits[0].parent1  === hashC3,
-//           commits[0].parent2  === hashC4,
-//           commits[0].message  === "custom merge msg",
-//           commits[0].author   === "bob <bob@x>"
+// Expected: commits[0].commitId          === hashM,
+//           commits[0].parent1           === hashC3,
+//           commits[0].parent2           === hashC4,
+//           commits[0].message           === "custom merge msg",
+//           commits[0].author            === "bob <bob@x>",
+//           commits[0].committer         === "bob <bob@x>",
+//           commits[0].committerTimestamp === ISODate("...")
 ```
 
 Verify `main` now contains all four documents:
@@ -328,10 +330,12 @@ printjson(rContinue)
 ```js
 const log = db.getSiblingDB("mergedb@main").runCommand({ doltLog: 1, limit: 1 })
 printjson(log)
-// Expected: commits[0].parent1  === <main pre-merge HEAD>,
-//           commits[0].parent2  === <feature HEAD>,
-//           commits[0].message  === "Resolve merge conflicts",
-//           commits[0].author   === "alice <alice@dumbodb>"
+// Expected: commits[0].parent1           === <main pre-merge HEAD>,
+//           commits[0].parent2           === <feature HEAD>,
+//           commits[0].message           === "Resolve merge conflicts",
+//           commits[0].author            === "alice <alice@dumbodb>",
+//           commits[0].committer         === "alice <alice@dumbodb>",
+//           commits[0].committerTimestamp === ISODate("...")
 ```
 
 ---

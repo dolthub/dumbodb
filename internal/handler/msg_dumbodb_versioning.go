@@ -503,6 +503,8 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 			"message", res.Message,
 			"author", res.Author,
 			"timestamp", time.UnixMilli(res.Timestamp),
+			"committer", res.Committer,
+			"committerTimestamp", time.UnixMilli(res.CommitterTimestamp),
 			"ok", float64(1),
 		)),
 	)
@@ -690,13 +692,18 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		if mergeErr != nil {
 			return nil, lazyerrors.Error(mergeErr)
 		}
-		return documentOpMsg(
-			must.NotFail(types.NewDocument(
-				"commitId", res.CommitID,
-				"message", res.Message,
-				"ok", float64(1),
-			)),
-		)
+		contDoc := must.NotFail(types.NewDocument(
+			"commitId", res.CommitID,
+			"message", res.Message,
+		))
+		if res.Author != "" {
+			contDoc.Set("author", res.Author)
+			contDoc.Set("timestamp", time.UnixMilli(res.Timestamp))
+			contDoc.Set("committer", res.Committer)
+			contDoc.Set("committerTimestamp", time.UnixMilli(res.CommitterTimestamp))
+		}
+		contDoc.Set("ok", float64(1))
+		return documentOpMsg(contDoc)
 	}
 
 	noFF, err := common.GetOptionalParam[bool](document, "noFF", false)
@@ -774,13 +781,18 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, lazyerrors.Error(mergeErr)
 	}
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"commitId", res.CommitID,
-			"message", res.Message,
-			"ok", float64(1),
-		)),
-	)
+	mergeDoc := must.NotFail(types.NewDocument(
+		"commitId", res.CommitID,
+		"message", res.Message,
+	))
+	if res.Author != "" {
+		mergeDoc.Set("author", res.Author)
+		mergeDoc.Set("timestamp", time.UnixMilli(res.Timestamp))
+		mergeDoc.Set("committer", res.Committer)
+		mergeDoc.Set("committerTimestamp", time.UnixMilli(res.CommitterTimestamp))
+	}
+	mergeDoc.Set("ok", float64(1))
+	return documentOpMsg(mergeDoc)
 }
 
 // MsgDumboDBConflicts implements the `dumboDBConflicts` command.
@@ -1058,6 +1070,8 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 			"message", c.Message,
 			"timestamp", time.UnixMilli(c.Timestamp),
 			"author", c.Author,
+			"committer", c.Committer,
+			"committerTimestamp", time.UnixMilli(c.CommitterTimestamp),
 		)
 		entry := must.NotFail(types.NewDocument(pairs...))
 		commits.Append(entry)
@@ -1314,6 +1328,10 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			must.NotFail(types.NewDocument(
 				"commitId", res.CommitID,
 				"message", res.Message,
+				"author", res.Author,
+				"timestamp", time.UnixMilli(res.Timestamp),
+				"committer", res.Committer,
+				"committerTimestamp", time.UnixMilli(res.CommitterTimestamp),
 				"ok", float64(1),
 			)),
 		)
@@ -1378,6 +1396,10 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		must.NotFail(types.NewDocument(
 			"commitId", res.CommitID,
 			"message", res.Message,
+			"author", res.Author,
+			"timestamp", time.UnixMilli(res.Timestamp),
+			"committer", res.Committer,
+			"committerTimestamp", time.UnixMilli(res.CommitterTimestamp),
 			"ok", float64(1),
 		)),
 	)
@@ -1423,6 +1445,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	rebaseAuthorEarly, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -1452,6 +1479,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
 			DBName:   dbName,
 			Branch:   branch,
+			Author:   rebaseAuthorEarly,
 			Continue: true,
 		})
 		if rebaseErr != nil {
@@ -1503,6 +1531,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		DBName: dbName,
 		Branch: branch,
 		Onto:   onto,
+		Author: rebaseAuthorEarly,
 	})
 
 	if rebaseErr != nil {
@@ -1626,6 +1655,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			must.NotFail(types.NewDocument(
 				"commitId", res.CommitID,
 				"message", res.Message,
+				"author", res.Author,
+				"timestamp", time.UnixMilli(res.Timestamp),
+				"committer", res.Committer,
+				"committerTimestamp", time.UnixMilli(res.CommitterTimestamp),
 				"ok", float64(1),
 			)),
 		)
@@ -1690,6 +1723,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		must.NotFail(types.NewDocument(
 			"commitId", res.CommitID,
 			"message", res.Message,
+			"author", res.Author,
+			"timestamp", time.UnixMilli(res.Timestamp),
+			"committer", res.Committer,
+			"committerTimestamp", time.UnixMilli(res.CommitterTimestamp),
 			"ok", float64(1),
 		)),
 	)

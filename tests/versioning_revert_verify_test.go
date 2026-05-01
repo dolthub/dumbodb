@@ -98,6 +98,10 @@ func TestRevertVerify(t *testing.T) {
 		assert.Contains(t, msg, "add-two", "message must reference the reverted commit's original message")
 		assert.Contains(t, msg, "This reverts commit", "message must contain the revert annotation")
 		assert.Contains(t, msg, hashC2, "message must contain the reverted commit hash")
+
+		// For reverts, committer == author.
+		assert.NotNil(t, raw["committer"], "committer must be present in revert response")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in revert response")
 	})
 
 	// Verify the revert undid the changes (only _id:1 should remain).
@@ -156,6 +160,10 @@ func TestRevertVerify(t *testing.T) {
 		// No annotation when a custom message is provided.
 		msg := raw["message"].(string)
 		assert.False(t, strings.Contains(msg, "This reverts commit"), "custom message must NOT include the default annotation")
+
+		// For reverts, committer equals author.
+		assert.Equal(t, raw["author"], raw["committer"], "committer must equal author for revert")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in revert response")
 	})
 
 	// -------------------------------------------------------------------------
@@ -298,6 +306,8 @@ func TestRevertVerify(t *testing.T) {
 		commitID, ok := raw["commitId"].(string)
 		require.True(t, ok, "commitId must be a string")
 		assert.NotEmpty(t, commitID, "commitId must not be empty")
+		assert.NotNil(t, raw["committer"], "committer must be present in revert continue response")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in revert continue response")
 	})
 
 	// -------------------------------------------------------------------------

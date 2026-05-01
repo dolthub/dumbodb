@@ -39,11 +39,13 @@ type CommitParams struct {
 
 // CommitResult represents the result of VersioningBackend.DumboDBCommit method.
 type CommitResult struct {
-	CommitID  string
-	Branch    string
-	Message   string
-	Author    string // echoes CommitParams.Author
-	Timestamp int64  // Unix milliseconds of the commit timestamp
+	CommitID           string
+	Branch             string
+	Message            string
+	Author             string // echoes CommitParams.Author
+	Timestamp          int64  // Unix milliseconds of the commit timestamp (author date)
+	Committer          string // "Name <email>" of the committer; equals Author for regular commits
+	CommitterTimestamp int64  // Unix milliseconds of the committer date
 }
 
 // BranchParams represents the parameters of VersioningBackend.DumboDBBranch method.
@@ -75,8 +77,12 @@ type MergeParams struct {
 
 // MergeResult represents the result of VersioningBackend.DumboDBMerge method.
 type MergeResult struct {
-	CommitID string
-	Message  string
+	CommitID           string
+	Message            string
+	Author             string
+	Timestamp          int64 // Unix milliseconds (author date)
+	Committer          string
+	CommitterTimestamp int64 // Unix milliseconds (committer date)
 }
 
 // ConflictSummary summarizes the number of document conflicts in one collection.
@@ -111,8 +117,12 @@ type CherryPickParams struct {
 
 // CherryPickResult represents the result of VersioningBackend.DumboDBCherryPick method.
 type CherryPickResult struct {
-	CommitID string
-	Message  string
+	CommitID           string
+	Message            string
+	Author             string
+	Timestamp          int64 // Unix milliseconds (author date)
+	Committer          string
+	CommitterTimestamp int64 // Unix milliseconds (committer date)
 }
 
 // DumboDBCherryPickConflictError is returned by DumboDBCherryPick when the cherry-pick
@@ -176,14 +186,16 @@ type LogParams struct {
 
 // CommitInfo represents a single commit entry returned by DumboDBLog.
 type CommitInfo struct {
-	CommitID  string
-	Parent1   string   // empty for root commit (no parent)
-	Parent2   string   // non-empty only for merge commits
-	Author    string
-	Email     string
-	Message   string
-	Timestamp int64    // Unix milliseconds
-	Refs      []string // branch/tag decorations; empty when commit is not a branch head
+	CommitID           string
+	Parent1            string   // empty for root commit (no parent)
+	Parent2            string   // non-empty only for merge commits
+	Author             string
+	Email              string
+	Message            string
+	Timestamp          int64    // Unix milliseconds (author date)
+	Committer          string   // "Name <email>" of the committer; equals Author when not explicitly set
+	CommitterTimestamp int64    // Unix milliseconds (committer date)
+	Refs               []string // branch/tag decorations; empty when commit is not a branch head
 }
 
 // LogResult represents the result of VersioningBackend.DumboDBLog method.
@@ -297,6 +309,7 @@ type RebaseParams struct {
 	DBName   string
 	Branch   string // current branch (the branch to rebase)
 	Onto     string // branch name or rootish to rebase onto (required unless Abort/Continue)
+	Author   string // optional: committer identity for replayed commits ("Name <email>")
 	Abort    bool   // if true, abandon the in-progress rebase and restore the pre-rebase state
 	Continue bool   // if true, after conflict resolution, complete the current commit and proceed
 }
@@ -334,8 +347,12 @@ type RevertParams struct {
 
 // RevertResult represents the result of VersioningBackend.DumboDBRevert method.
 type RevertResult struct {
-	CommitID string
-	Message  string
+	CommitID           string
+	Message            string
+	Author             string
+	Timestamp          int64 // Unix milliseconds (author date)
+	Committer          string
+	CommitterTimestamp int64 // Unix milliseconds (committer date)
 }
 
 // DumboDBRevertConflictError is returned by DumboDBRevert when the revert

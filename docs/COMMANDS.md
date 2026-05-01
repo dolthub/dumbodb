@@ -65,6 +65,8 @@ Commits the current working set on the branch encoded in the database name.
 | `message` | string | Commit message (echoed) |
 | `author` | string | Author (echoed) |
 | `timestamp` | Date | Commit timestamp |
+| `committer` | string | Committer identity (`"Name <email>"`). Equals `author` for regular commits; differs for cherry-pick and rebase. |
+| `committerTimestamp` | Date | Timestamp of when the commit was applied |
 | `ok` | number | `1` on success |
 
 ### Example
@@ -77,11 +79,13 @@ db.orders.insertOne({ _id: 1, amount: 100, status: "pending" })
 
 db.runCommand({ doltCommit: 1, message: "add order #1", author: "alice <alice@acme.com>" })
 // {
-//   commitId:  "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
-//   branch:    "main",
-//   message:   "add order #1",
-//   author:    "alice <alice@acme.com>",
-//   timestamp: ISODate("2026-04-14T20:00:00.000Z"),
+//   commitId:           "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
+//   branch:             "main",
+//   message:            "add order #1",
+//   author:             "alice <alice@acme.com>",
+//   timestamp:          ISODate("2026-04-14T20:00:00.000Z"),
+//   committer:          "alice <alice@acme.com>",
+//   committerTimestamp: ISODate("2026-04-14T20:00:00.000Z"),
 //   ok: 1
 // }
 ```
@@ -190,6 +194,8 @@ For `continue`, `message` and `author` are optional overrides.
 |-------|------|-------------|
 | `commitId` | string | Resulting commit hash |
 | `message` | string | `"fast-forward"`, `"already up-to-date"`, or custom |
+| `committer` | string | Committer identity (`"Name <email>"`). Equals `author` for merge commits. |
+| `committerTimestamp` | Date | Timestamp of when the merge commit was created |
 | `ok` | number | `1` on success |
 
 ### Response fields (conflicts — ok: 0)
@@ -273,6 +279,8 @@ For `continue`, `message` and `author` are optional overrides.
 |-------|------|-------------|
 | `commitId` | string | New commit hash on the target branch |
 | `message` | string | Commit message (original + cherry-pick annotation) |
+| `committer` | string | Committer identity (`"Name <email>"`). This is the person performing the cherry-pick; `author` is preserved from the original commit. |
+| `committerTimestamp` | Date | Timestamp of when the cherry-pick was applied |
 | `ok` | number | `1` |
 
 ### Response fields (abort)
@@ -298,11 +306,16 @@ var main = db.getSiblingDB("orders@main")
 // Cherry-pick a commit from another branch onto main
 main.runCommand({ doltCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
 // {
-//   commitId: "new-hash...",
-//   message: "add order #1\n\n(cherry picked from commit na7kfra98h45fr2u5qtr30o2ggm7vh61)",
+//   commitId:           "new-hash...",
+//   message:            "add order #1\n\n(cherry picked from commit na7kfra98h45fr2u5qtr30o2ggm7vh61)",
+//   committer:          "alice <alice@acme.com>",
+//   committerTimestamp: ISODate("2026-04-14T20:00:00.000Z"),
 //   ok: 1
 // }
 ```
+
+> **Note:** The `author` of a cherry-picked commit is preserved from the original commit.
+> The `committer` identifies who performed the cherry-pick.
 
 ### Error cases
 
@@ -382,6 +395,7 @@ db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, abort: 1 })
 
 - Rebase rewrites commit history; don't rebase branches that others have already pulled.
 - When paused on a conflict, `conflictCommit` identifies which original commit caused it.
+- Replayed commits preserve the original `author` but set `committer` to the person performing the rebase and `committerTimestamp` to the time of replay. This distinction is visible in `doltLog`.
 
 ---
 
@@ -419,6 +433,8 @@ timestamp first.
 | `message` | string | Commit message |
 | `timestamp` | Date | Commit timestamp |
 | `author` | string | Commit author |
+| `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
+| `committerTimestamp` | Date | Timestamp of when the commit was applied |
 
 ### Example
 
@@ -427,19 +443,23 @@ db.getSiblingDB("orders@main").runCommand({ doltLog: 1, limit: 2 })
 // {
 //   commits: [
 //     {
-//       commitId: "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
-//       refs:     ["HEAD", "main"],
-//       parent1:  "tqq1tn5qs0pns2j2uk5k1b2ufhqt9q3b",
-//       message:  "add order #1",
-//       timestamp: ISODate("2026-04-14T20:00:00.000Z"),
-//       author:   "alice <alice@acme.com>"
+//       commitId:           "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
+//       refs:               ["HEAD", "main"],
+//       parent1:            "tqq1tn5qs0pns2j2uk5k1b2ufhqt9q3b",
+//       message:            "add order #1",
+//       timestamp:          ISODate("2026-04-14T20:00:00.000Z"),
+//       author:             "alice <alice@acme.com>",
+//       committer:          "alice <alice@acme.com>",
+//       committerTimestamp: ISODate("2026-04-14T20:00:00.000Z")
 //     },
 //     {
-//       commitId: "tqq1tn5qs0pns2j2uk5k1b2ufhqt9q3b",
-//       parent1:  "5vi6e5t3riqpgh6fq0j1pf0r0imuqhsn",
-//       message:  "Initialize database",
-//       timestamp: ISODate("2026-04-14T08:55:12.000Z"),
-//       author:   "DumboDB"
+//       commitId:           "tqq1tn5qs0pns2j2uk5k1b2ufhqt9q3b",
+//       parent1:            "5vi6e5t3riqpgh6fq0j1pf0r0imuqhsn",
+//       message:            "Initialize database",
+//       timestamp:          ISODate("2026-04-14T08:55:12.000Z"),
+//       author:             "DumboDB",
+//       committer:          "DumboDB",
+//       committerTimestamp: ISODate("2026-04-14T08:55:12.000Z")
 //     }
 //   ],
 //   ok: 1
@@ -711,6 +731,8 @@ For `continue`, `message` and `author` are optional overrides.
 |-------|------|-------------|
 | `commitId` | string | New revert commit hash |
 | `message` | string | Auto-generated revert message |
+| `committer` | string | Committer identity (`"Name <email>"`). Equals `author` for revert commits. |
+| `committerTimestamp` | Date | Timestamp of when the revert commit was created |
 | `ok` | number | `1` |
 
 ### Response fields (abort)
@@ -740,8 +762,10 @@ const badCommitHash = log.commits[0].commitId
 // Revert it
 main.runCommand({ doltRevert: 1, commit: badCommitHash })
 // {
-//   commitId: "new-revert-hash...",
-//   message:  "Revert \"add order #1\"\n\nThis reverts commit <badCommitHash>.",
+//   commitId:           "new-revert-hash...",
+//   message:            "Revert \"add order #1\"\n\nThis reverts commit <badCommitHash>.",
+//   committer:          "alice <alice@acme.com>",
+//   committerTimestamp: ISODate("2026-04-14T20:00:00.000Z"),
 //   ok: 1
 // }
 ```

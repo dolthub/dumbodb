@@ -110,6 +110,11 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.Contains(t, msg, "add-two", "message must include original commit message")
 		assert.Contains(t, msg, "cherry picked from commit", "message must contain cherry-pick annotation")
 		assert.Contains(t, msg, hashC2, "message must contain the source commit hash")
+
+		// Cherry-pick preserves the original author; committer is the cherry-picker.
+		assert.Equal(t, "bob <bob@dumbodb>", raw["author"], "cherry-pick must preserve original commit author")
+		assert.NotNil(t, raw["committer"], "committer must be present in cherry-pick response")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in cherry-pick response")
 	})
 
 	// Verify main now has both documents after the cherry-pick.
@@ -164,6 +169,12 @@ func TestCherryPickVerify(t *testing.T) {
 		// No annotation when a custom message is provided.
 		msg := raw["message"].(string)
 		assert.False(t, strings.Contains(msg, "cherry picked from"), "custom message must NOT include the default annotation")
+
+		// The original commit was by "carol <carol@dumbodb>"; the cherry-pick
+		// overrides author to "alice <alice@dumbodb>". For cherry-picks, the
+		// author parameter becomes the committer and the original author is preserved.
+		assert.NotNil(t, raw["committer"], "committer must be present")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 
 	// -------------------------------------------------------------------------
@@ -296,6 +307,8 @@ func TestCherryPickVerify(t *testing.T) {
 		commitID, ok := raw["commitId"].(string)
 		require.True(t, ok, "commitId must be a string")
 		assert.NotEmpty(t, commitID, "commitId must not be empty")
+		assert.NotNil(t, raw["committer"], "committer must be present in cherry-pick continue response")
+		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in cherry-pick continue response")
 
 		// Verify the resolved value is visible on main.
 		var doc bson.M

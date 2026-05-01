@@ -41,7 +41,7 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<initHash>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<initHash>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -94,10 +94,10 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hash3>", "parent1": "<hash2>", "message": "third",               "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hash2>", "parent1": "<hash1>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hash1>", "parent1": "<initH>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hash3>", "parent1": "<hash2>", "message": "third",               "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hash2>", "parent1": "<hash1>", "message": "second",              "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hash1>", "parent1": "<initH>", "message": "first",               "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -125,8 +125,8 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hash3>", "message": "third",  "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hash2>", "message": "second", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hash3>", "message": "third",  "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hash2>", "message": "second", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -177,9 +177,9 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hash2>", "message": "second",              "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hash1>", "message": "first",               "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<initH>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hash2>", "message": "second",              "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hash1>", "message": "first",               "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<initH>", "message": "Initialize database", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -218,14 +218,18 @@ Expected:
       "parent1": "<hash2>",
       "message": "third",
       "timestamp": "<...>",
-      "author": "<...>"
+      "author": "<...>",
+      "committer": "<...>",
+      "committerTimestamp": "<...>"
     },
     {
       "commitId": "<hash2>",
       "parent1": "<hash1>",
       "message": "second",
       "timestamp": "<...>",
-      "author": "<...>"
+      "author": "<...>",
+      "committer": "<...>",
+      "committerTimestamp": "<...>"
     }
   ],
   "ok": 1
@@ -315,7 +319,9 @@ Expected:
       "refs": ["HEAD", "main"],
       "message": "Merge branch 'feat' into 'main'",
       "timestamp": "<...>",
-      "author": "<...>"
+      "author": "<...>",
+      "committer": "<...>",
+      "committerTimestamp": "<...>"
     }
   ],
   "ok": 1
@@ -345,9 +351,9 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -376,9 +382,9 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hashC>", "refs": ["HEAD", "feat"], "parent1": "<hashA>", "message": "add-three-feat",    "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashA>",                            "parent1": "<initH>", "message": "add-one",           "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<initH>",                                                   "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hashC>", "refs": ["HEAD", "feat"], "parent1": "<hashA>", "message": "add-three-feat",    "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hashA>",                            "parent1": "<initH>", "message": "add-one",           "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<initH>",                                                   "message": "Initialize database", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -406,11 +412,11 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashB>", "parent1": "<hashA>", "message": "add-two",        "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hashB>", "parent1": "<hashA>", "message": "add-two",        "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hashA>", "parent1": "<initH>", "message": "add-one",        "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<initH>",                        "message": "Initialize database", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -439,8 +445,8 @@ Expected:
 ```json
 {
   "commits": [
-    { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>" },
-    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>" }
+    { "commitId": "<hashM>", "parent1": "<hashB>", "parent2": "<hashC>", "message": "Merge branch 'feat' into 'main'", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" },
+    { "commitId": "<hashC>", "parent1": "<hashA>", "message": "add-three-feat", "timestamp": "<...>", "author": "<...>", "committer": "<...>", "committerTimestamp": "<...>" }
   ],
   "ok": 1
 }
@@ -467,7 +473,8 @@ Key checks:
 - Commits are returned in reverse topological order — higher commits first,
   with ties broken by newer timestamp first. Both parents of merge commits are
   visited.
-- Each entry contains `hash`, `message`, `timestamp`, and `author`.
+- Each entry contains `hash`, `message`, `timestamp`, `author`, `committer`, and `committerTimestamp`.
+- `committer` equals `author` for regular commits and merges; for cherry-pick and rebase commits, `committer` is the person who applied the commit while `author` is preserved from the original.
 - `parent1` is present on all non-root commits.
 - `parent2` is present only on merge commits.
 - The root commit has neither `parent1` nor `parent2`.

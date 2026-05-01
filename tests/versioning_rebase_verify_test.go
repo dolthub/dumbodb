@@ -120,6 +120,29 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
+	// Scenario 1b: Rebased commit preserves original author, committer is rebaser
+	// -------------------------------------------------------------------------
+	t.Run("Scenario1b_RebasedCommitCommitterIdentity", func(t *testing.T) {
+		var logResult bson.M
+		err := featureDB.RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logResult)
+		require.NoError(t, err)
+
+		commits, ok := logResult["commits"].(bson.A)
+		require.True(t, ok, "commits must be an array")
+		require.NotEmpty(t, commits, "commits array must not be empty")
+
+		head := commits[0].(bson.M)
+		// The original commit was by "test <test@example.com>" -- author is preserved.
+		assert.Equal(t, "test <test@example.com>", head["author"], "rebased commit must preserve original author")
+		// Committer and committerTimestamp must be present.
+		assert.NotNil(t, head["committer"], "rebased commit must have committer in log")
+		assert.NotNil(t, head["committerTimestamp"], "rebased commit must have committerTimestamp in log")
+	})
+
+	// -------------------------------------------------------------------------
 	// Scenario 2: Data visible after rebase
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_DataVisibleAfterRebase", func(t *testing.T) {
@@ -345,7 +368,23 @@ func TestRebaseVerify(t *testing.T) {
 		// Two commits replay: feature-adds-2 (clean) before the conflict, then
 		// feature-modifies-1 after the resolution.
 		assert.EqualValues(t, 2, continueRaw["commitsReplayed"], "two commits must have been replayed across the rebase")
-		_, hasTip := continueRaw["newTip"]
+		newTip, hasTip := continueRaw["newTip"]
 		assert.True(t, hasTip, "continue response must include newTip")
+		_ = newTip
+
+		// Verify rebased commits in log have committer fields.
+		var logResult bson.M
+		err = conflictFeatureDB.RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(2)},
+		}).Decode(&logResult)
+		require.NoError(t, err)
+		logCommits, ok := logResult["commits"].(bson.A)
+		require.True(t, ok && len(logCommits) > 0)
+		for _, lc := range logCommits {
+			lcm := lc.(bson.M)
+			assert.NotNil(t, lcm["committer"], "rebased commit must have committer in log")
+			assert.NotNil(t, lcm["committerTimestamp"], "rebased commit must have committerTimestamp in log")
+		}
 	})
 }

@@ -1058,11 +1058,13 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		}
 
 		return &backends.CommitResult{
-			CommitID:  headHash.String(),
-			Branch:    branch,
-			Message:   message,
-			Author:    params.Author,
-			Timestamp: ts.UnixMilli(),
+			CommitID:           headHash.String(),
+			Branch:             branch,
+			Message:            message,
+			Author:             params.Author,
+			Timestamp:          ts.UnixMilli(),
+			Committer:          params.Author,
+			CommitterTimestamp: ts.UnixMilli(),
 		}, nil
 	}
 
@@ -1122,11 +1124,13 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	return &backends.CommitResult{
-		CommitID:  headHash.String(),
-		Branch:    branch,
-		Message:   message,
-		Author:    params.Author,
-		Timestamp: ts.UnixMilli(),
+		CommitID:           headHash.String(),
+		Branch:             branch,
+		Message:            message,
+		Author:             params.Author,
+		Timestamp:          ts.UnixMilli(),
+		Committer:          params.Author,
+		CommitterTimestamp: ts.UnixMilli(),
 	}, nil
 }
 
@@ -1573,9 +1577,14 @@ func (b *Backend) commitMerge(
 		db.branchAMs[intoBranch] = mergedAM
 	}
 
+	mergeAuthor := commitName + " <" + commitEmail + ">"
 	return &backends.MergeResult{
-		CommitID: mergeHash.String(),
-		Message:  mergeMessage,
+		CommitID:           mergeHash.String(),
+		Message:            mergeMessage,
+		Author:             mergeAuthor,
+		Timestamp:          time.Now().UnixMilli(),
+		Committer:          mergeAuthor,
+		CommitterTimestamp: time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -1648,7 +1657,17 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: clearing artifacts: %w", clearErr)
 		}
 
-		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
+		// Load original commit metadata to preserve author identity.
+		contPickCommit, contPickErr := datas.LoadCommitAddr(ctx, db.vs, ms.pickHash)
+		if contPickErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: loading pick commit: %w", contPickErr)
+		}
+		contPickMeta, contMetaErr := datas.GetCommitMeta(ctx, contPickCommit.NomsValue())
+		if contMetaErr != nil {
+			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: reading pick commit meta: %w", contMetaErr)
+		}
+
+		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, contPickMeta, ms.originalMsg, params.Message, params.Author)
 		if pickErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: %w", pickErr)
 		}
@@ -1781,12 +1800,13 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	}
 
 	// Clean cherry-pick — commit immediately.
-	return b.commitCherryPick(ctx, db, branch, intoBranchDS, intoHash, pickHash, mergedAM, originalMsg, params.Message, params.Author)
+	return b.commitCherryPick(ctx, db, branch, intoBranchDS, intoHash, pickHash, mergedAM, pickMeta, originalMsg, params.Message, params.Author)
 }
 
 // commitCherryPick creates a single-parent commit on the branch applying the cherry-picked AM.
 // originalMsg is the cherry-picked commit's message; message (if non-empty) overrides it.
-// author is optional.
+// pickMeta is the original commit's metadata (used to preserve author identity).
+// author is optional — when set, overrides the committer identity.
 func (b *Backend) commitCherryPick(
 	ctx context.Context,
 	db *dbState,
@@ -1794,6 +1814,7 @@ func (b *Backend) commitCherryPick(
 	branchDS datas.Dataset,
 	intoHash, pickHash hash.Hash,
 	pickedAM prolly.AddressMap,
+	pickMeta *datas.CommitMeta,
 	originalMsg, message, author string,
 ) (*backends.CherryPickResult, error) {
 	commitMsg := message
@@ -1805,6 +1826,7 @@ func (b *Backend) commitCherryPick(
 		}
 	}
 
+	// Committer identity: the person performing the cherry-pick.
 	commitName := "dolt"
 	commitEmail := "dolt@localhost"
 	if author != "" {
@@ -1817,7 +1839,10 @@ func (b *Backend) commitCherryPick(
 		}
 	}
 
-	meta, err := datas.NewCommitMeta(commitName, commitEmail, commitMsg)
+	// Preserve the original author; set committer to the cherry-picker.
+	origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
+	committer := datas.CommitIdent{Name: commitName, Email: commitEmail}
+	meta, err := datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, commitMsg)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: commitCherryPick: building commit meta: %w", err)
 	}
@@ -1846,9 +1871,15 @@ func (b *Backend) commitCherryPick(
 		db.branchAMs[branch] = pickedAM
 	}
 
+	cpAuthor := pickMeta.Author.Name + " <" + pickMeta.Author.Email + ">"
+	cpCommitter := commitName + " <" + commitEmail + ">"
 	return &backends.CherryPickResult{
-		CommitID: newHash.String(),
-		Message:  commitMsg,
+		CommitID:           newHash.String(),
+		Message:            commitMsg,
+		Author:             cpAuthor,
+		Timestamp:          pickMeta.UserTimestampMillis(),
+		Committer:          cpCommitter,
+		CommitterTimestamp: time.Now().UnixMilli(),
 	}, nil
 }
 
@@ -1958,11 +1989,13 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		}
 
 		info := backends.CommitInfo{
-			CommitID:  ci.Hash.String(),
-			Author:    ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">",
-			Message:   ci.Meta.Description,
-			Timestamp: ci.Meta.UserTimestampMillis(),
-			Refs:      refsForCommit[ci.Hash.String()],
+			CommitID:           ci.Hash.String(),
+			Author:             ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">",
+			Message:            ci.Meta.Description,
+			Timestamp:          ci.Meta.UserTimestampMillis(),
+			Committer:          ci.Meta.Committer.Name + " <" + ci.Meta.Committer.Email + ">",
+			CommitterTimestamp: int64(ci.Meta.TimestampMillis()),
+			Refs:               refsForCommit[ci.Hash.String()],
 		}
 		if len(ci.Parents) >= 1 {
 			info.Parent1 = ci.Parents[0].String()
@@ -2355,6 +2388,19 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		branch = "main"
 	}
 
+	// Parse committer identity for replayed commits.
+	rebaserName := "dolt"
+	rebaserEmail := "dolt@localhost"
+	if params.Author != "" {
+		if idx := strings.Index(params.Author, " <"); idx >= 0 {
+			rebaserName = params.Author[:idx]
+			rebaserEmail = strings.TrimSuffix(params.Author[idx+2:], ">")
+		} else {
+			rebaserName = params.Author
+			rebaserEmail = params.Author + "@dumbodb"
+		}
+	}
+
 	// Handle abort: discard in-progress rebase and restore pre-rebase state.
 	if params.Abort {
 		if db.mergeState == nil || !db.mergeState.isRebase {
@@ -2411,7 +2457,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("dolt: DumboDBRebase: continue: reading meta for paused commit: %w", metaErr)
 		}
 
-		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, ms.resolvedAM, pickMeta)
+		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, ms.resolvedAM, pickMeta, rebaserName, rebaserEmail)
 		if commitErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBRebase: continue: committing paused commit: %w", commitErr)
 		}
@@ -2419,7 +2465,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		ms.rebaseCommitsReplayed++
 
 		// Continue replaying remaining commits.
-		result, rebaseErr := b.replayRemainingCommits(ctx, db, ms)
+		result, rebaseErr := b.replayRemainingCommits(ctx, db, ms, rebaserName, rebaserEmail)
 		if rebaseErr != nil {
 			return nil, rebaseErr
 		}
@@ -2528,7 +2574,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	db.mergeState = ms
 
 	// Replay all commits. replayRemainingCommits consumes from ms.rebaseRemainingHashes.
-	result, rebaseErr := b.replayRemainingCommits(ctx, db, ms)
+	result, rebaseErr := b.replayRemainingCommits(ctx, db, ms, rebaserName, rebaserEmail)
 	if rebaseErr != nil {
 		return nil, rebaseErr
 	}
@@ -2549,7 +2595,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 // On success (all replayed), updates the branch and returns a non-nil *RebaseResult.
 // On conflict, updates ms with conflict state and returns (nil, nil) — caller reads ms.
 // On hard error, returns (nil, error).
-func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *mergeInProgress) (*backends.RebaseResult, error) {
+func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *mergeInProgress, rebaserName, rebaserEmail string) (*backends.RebaseResult, error) {
 	for len(ms.rebaseRemainingHashes) > 0 {
 		pickHash := ms.rebaseRemainingHashes[0]
 		ms.rebaseRemainingHashes = ms.rebaseRemainingHashes[1:]
@@ -2619,7 +2665,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			return nil, fmt.Errorf("dolt: replayRemainingCommits: reading meta for commit %q: %w", pickHash, err)
 		}
 
-		newTipHash, err := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, pickHash, mergedAM, pickMeta)
+		newTipHash, err := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, pickHash, mergedAM, pickMeta, rebaserName, rebaserEmail)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: replayRemainingCommits: committing replayed commit %q: %w", pickHash, err)
 		}
@@ -2656,8 +2702,11 @@ func (b *Backend) commitRebasedPick(
 	pickHash hash.Hash,
 	pickedAM prolly.AddressMap,
 	pickMeta *datas.CommitMeta,
+	rebaserName, rebaserEmail string,
 ) (hash.Hash, error) {
-	meta, err := datas.NewCommitMeta(pickMeta.Author.Name, pickMeta.Author.Email, pickMeta.Description)
+	origAuthor := datas.CommitIdent{Name: pickMeta.Author.Name, Email: pickMeta.Author.Email, Date: pickMeta.Author.Date}
+	committer := datas.CommitIdent{Name: rebaserName, Email: rebaserEmail}
+	meta, err := datas.NewCommitMetaWithAuthorCommitter(origAuthor, committer, pickMeta.Description)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: building commit meta: %w", err)
 	}
@@ -3003,9 +3052,14 @@ func (b *Backend) commitRevert(
 		db.branchAMs[branch] = revertedAM
 	}
 
+	revertAuthor := commitName + " <" + commitEmail + ">"
 	return &backends.RevertResult{
-		CommitID: newHash.String(),
-		Message:  commitMsg,
+		CommitID:           newHash.String(),
+		Message:            commitMsg,
+		Author:             revertAuthor,
+		Timestamp:          time.Now().UnixMilli(),
+		Committer:          revertAuthor,
+		CommitterTimestamp: time.Now().UnixMilli(),
 	}, nil
 }
 
