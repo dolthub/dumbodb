@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"syscall"
 
 	"github.com/FerretDB/wire"
 
@@ -151,11 +150,9 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		)
 	}
 
-	var fsStat syscall.Statfs_t
 	var fsUsedSize, fsTotalSize float64
-	if (stats.CountDocuments > 0 || stats.SizeTotal > 0) && syscall.Statfs("/", &fsStat) == nil {
-		fsTotalSize = float64(fsStat.Blocks) * float64(fsStat.Bsize)
-		fsUsedSize = fsTotalSize - float64(fsStat.Bfree)*float64(fsStat.Bsize)
+	if stats.CountDocuments > 0 || stats.SizeTotal > 0 {
+		fsUsedSize, fsTotalSize = diskUsage()
 	}
 
 	pairs = append(pairs,
