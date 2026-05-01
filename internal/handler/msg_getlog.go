@@ -103,7 +103,7 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		startupWarnings := []string{
-			fmt.Sprintf("Powered by DumboDB %s%s.", info.Version, b),
+			fmt.Sprintf("Powered by DumboDB %s%s.", info.Commit, b),
 			"Please star us on GitHub: https://github.com/dolthub/dumbodb.",
 		}
 
