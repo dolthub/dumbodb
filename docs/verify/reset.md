@@ -30,13 +30,13 @@ Run this once before the scenarios below.
 var db = db.getSiblingDB("resetdb")
 db.dropDatabase()
 
-db.items.insertOne({ _id: 1, v: 1 })
+db.tasks.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
 
-db.items.insertOne({ _id: 2, v: 2 })
+db.tasks.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { hash: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
@@ -47,8 +47,8 @@ print("hashC2 =", hashC2)
 ```
 
 After setup:
-- **C1** (`hashC1`): `items` = `[ { _id: 1, v: 1 } ]`
-- **C2** (`hashC2`, HEAD): `items` = `[ { _id: 1, v: 1 }, { _id: 2, v: 2 } ]`
+- **C1** (`hashC1`): `tasks` = `[ { _id: 1, v: 1 } ]`
+- **C2** (`hashC2`, HEAD): `tasks` = `[ { _id: 1, v: 1 }, { _id: 2, v: 2 } ]`
 - Working set is clean (matches HEAD = C2)
 
 ---
@@ -60,7 +60,7 @@ is preserved; the diff shows both staged changes relative to the new HEAD.
 
 ```js
 // Add _id:3 to the working set (do NOT commit).
-db.items.insertOne({ _id: 3, v: 3 })
+db.tasks.insertOne({ _id: 3, v: 3 })
 
 // Soft reset to hashC1 (no `hard` parameter — defaults to false).
 const rReset = db.runCommand({ doltReset: 1, to: hashC1 })
@@ -79,8 +79,8 @@ working set shows two additions:
 db.runCommand({ doltDiff: 1 })
 ```
 
-Expected: `items.added` contains both `_id:2` and `_id:3`; `items.removed` and
-`items.modified` are empty.
+Expected: `tasks.added` contains both `_id:2` and `_id:3`; `tasks.removed` and
+`tasks.modified` are empty.
 
 ---
 
@@ -95,7 +95,7 @@ const r3 = db.runCommand({ doltCommit: 1, message: "snapshot", author: "alice <a
 const hashC3 = r3.commitId
 
 // Add _id:4 to the working set (uncommitted).
-db.items.insertOne({ _id: 4, v: 4 })
+db.tasks.insertOne({ _id: 4, v: 4 })
 
 // Hard reset to hashC1.
 const rHard = db.runCommand({ doltReset: 1, to: hashC1, hard: true })
@@ -114,10 +114,10 @@ db.runCommand({ doltDiff: 1 })
 ```
 
 The diff is empty — the working set matches HEAD exactly. Only `_id:1` is visible
-in the `items` collection:
+in the `tasks` collection:
 
 ```js
-db.items.find()
+db.tasks.find()
 // Expected: exactly one document: { _id: 1, v: 1 }
 ```
 
@@ -131,7 +131,7 @@ so the previously committed changes are now visible as uncommitted.
 ```js
 // After Scenario 2: HEAD=C1, working set is clean.
 // Insert _id:2 again and commit (creates C4).
-db.items.insertOne({ _id: 2, v: 2 })
+db.tasks.insertOne({ _id: 2, v: 2 })
 const r4 = db.runCommand({ doltCommit: 1, message: "re-add-two", author: "bob <bob@widgets.io>" })
 const hashC4 = r4.commitId
 
@@ -149,7 +149,7 @@ After this soft reset:
 db.runCommand({ doltDiff: 1 })
 ```
 
-Expected: `items.added` contains exactly `_id:2`; `items.removed` and `items.modified`
+Expected: `tasks.added` contains exactly `_id:2`; `tasks.removed` and `tasks.modified`
 are empty.
 
 ---
@@ -162,11 +162,11 @@ standard "discard all uncommitted changes" operation when combined with `hard: t
 ```js
 // After Scenario 3: HEAD=C1, working set is clean.
 // Insert _id:5 to the working set (do NOT commit).
-db.items.insertOne({ _id: 5, v: 5 })
+db.tasks.insertOne({ _id: 5, v: 5 })
 
 // Verify there is an uncommitted change.
 db.runCommand({ doltDiff: 1 })
-// Expected: items.added contains _id:5
+// Expected: tasks.added contains _id:5
 
 // Hard reset to HEAD (no `to` parameter).
 const rHead = db.runCommand({ doltReset: 1, hard: true })
@@ -182,7 +182,7 @@ Key checks:
 db.runCommand({ doltDiff: 1 })
 // Expected: { "collections": [], "ok": 1 }
 
-db.items.find()
+db.tasks.find()
 // Expected: only the documents present in the HEAD commit
 ```
 

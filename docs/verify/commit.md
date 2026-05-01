@@ -40,8 +40,8 @@ var db = db.getSiblingDB("commitdb")
 db.dropDatabase()
 
 // Baseline: two documents, committed
-db.items.insertOne({ _id: 1, label: "alpha", v: 1 })
-db.items.insertOne({ _id: 2, label: "beta",  v: 2 })
+db.orders.insertOne({ _id: 1, label: "alpha", v: 1 })
+db.orders.insertOne({ _id: 2, label: "beta",  v: 2 })
 const r1 = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { hash: "<hashBase>", branch: "main", message: "baseline", author: "alice <alice@acme.com>", timestamp: ISODate("..."), committer: "alice <alice@acme.com>", committerTimestamp: ISODate("..."), ok: 1 }
@@ -61,7 +61,7 @@ After setup, `commitdb` has one commit on `main` with two documents.
 The response from setup already demonstrates the shape. Verify each field after a real change:
 
 ```js
-db.items.insertOne({ _id: 100, label: "shape", v: 100 })
+db.orders.insertOne({ _id: 100, label: "shape", v: 100 })
 const r = db.runCommand({ doltCommit: 1, message: "shape check", author: "alice <alice@acme.com>" })
 printjson(r)
 ```
@@ -104,17 +104,17 @@ db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, branch: "feature" }
 // Expected: { branch: "feature", ok: 1 }
 
 var feature = db.getSiblingDB("commitdb@feature")
-feature.items.insertOne({ _id: 3, label: "gamma", v: 3 })
+feature.orders.insertOne({ _id: 3, label: "gamma", v: 3 })
 
 const r2 = feature.runCommand({ doltCommit: 1, message: "feature commit", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { hash: "<hash>", branch: "<branch>", message: "feature commit", author: "bob <bob@widgets.io>", timestamp: ISODate("..."), ok: 1 }
 
 // Verify isolation: feature has the new doc, main does not
-feature.items.countDocuments({})
+feature.orders.countDocuments({})
 // Expected: 4 (three from setup + Scenario 1 + _id:3)
 
-db.getSiblingDB("commitdb@main").items.countDocuments({})
+db.getSiblingDB("commitdb@main").orders.countDocuments({})
 // Expected: 3 (feature commit must not affect main)
 ```
 
@@ -132,11 +132,11 @@ to the same database must return different hash values.
 
 ```js
 // Make a change and commit
-db.items.insertOne({ _id: 10, label: "ten", v: 10 })
+db.orders.insertOne({ _id: 10, label: "ten", v: 10 })
 const r3a = db.runCommand({ doltCommit: 1, message: "commit A", author: "alice <alice@acme.com>" })
 print("hashA =", r3a.commitId)
 
-db.items.insertOne({ _id: 11, label: "eleven", v: 11 })
+db.orders.insertOne({ _id: 11, label: "eleven", v: 11 })
 const r3b = db.runCommand({ doltCommit: 1, message: "commit B", author: "bob <bob@widgets.io>" })
 print("hashB =", r3b.commitId)
 
@@ -214,11 +214,11 @@ argument in `doltDiff`.
 
 ```js
 // Insert a doc and commit so hashBefore captures a real change.
-db.items.insertOne({ _id: 50, label: "pre", v: 50 })
+db.orders.insertOne({ _id: 50, label: "pre", v: 50 })
 const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author: "alice <alice@acme.com>" }).commitId
 
 // Make another change and commit
-db.items.insertOne({ _id: 99, label: "new", v: 99 })
+db.orders.insertOne({ _id: 99, label: "new", v: 99 })
 const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "bob <bob@widgets.io>" }).commitId
 
 // Diff between the two commits — must show _id:99 as added
@@ -235,7 +235,7 @@ The `author` provided to `doltCommit` is echoed in the response and stored in th
 commit — it is visible via `doltLog`.
 
 ```js
-db.items.insertOne({ _id: 60, label: "author", v: 60 })
+db.orders.insertOne({ _id: 60, label: "author", v: 60 })
 const r6 = db.runCommand({ doltCommit: 1, message: "authored commit", author: "bob" })
 printjson(r6)
 // Expected: { hash: "...", branch: "main", message: "authored commit", author: "bob", timestamp: ISODate("..."), ok: 1 }
@@ -259,7 +259,7 @@ The value is echoed in the response and stored in the commit (visible via `doltL
 
 ```js
 const fixedTime = new Date("2020-06-15T12:00:00Z")
-db.items.insertOne({ _id: 70, label: "timestamp", v: 70 })
+db.orders.insertOne({ _id: 70, label: "timestamp", v: 70 })
 const r7 = db.runCommand({
   doltCommit: 1,
   message:     "fixed-time commit",

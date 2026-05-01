@@ -19,8 +19,8 @@ package tests
 // Each top-level subtest corresponds to one scenario in that document.
 // The setup reproduces the manual setup block exactly:
 //
-//   - Commit 1 (hash1): items = [ { _id:1, label:"alpha" } ]
-//   - Commit 2 (hash2, HEAD): items = [ { _id:1, ... }, { _id:2, label:"beta" } ]
+//   - Commit 1 (hash1): products = [ { _id:1, label:"alpha" } ]
+//   - Commit 2 (hash2, HEAD): products = [ { _id:1, ... }, { _id:2, label:"beta" } ]
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single
 // database and the side effects of one scenario carry into the next.
@@ -43,7 +43,7 @@ func branchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1,
 
 	ctx := context.Background()
 	db := env.client.Database(dbName)
-	items := db.Collection("items")
+	items := db.Collection("products")
 
 	require.NoError(t, db.Drop(ctx))
 
@@ -119,7 +119,7 @@ func TestBranchVerify(t *testing.T) {
 		featureDB := env.client.Database(dbName + "@feature")
 
 		// Insert _id:3 on the feature branch and commit it.
-		_, err := featureDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err := featureDB.Collection("products").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "label", Value: "gamma"},
 		})
@@ -127,13 +127,13 @@ func TestBranchVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName+"@feature", "feature adds gamma", "alice <alice@acme.com>")
 
 		// main must still have exactly 2 documents.
-		mainCount, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
+		mainCount, err := env.client.Database(dbName+"@main").Collection("products").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), mainCount,
 			"main must still have 2 documents; feature write must not leak to main")
 
 		// feature must have 3 documents.
-		featureCount, err := featureDB.Collection("items").CountDocuments(ctx, bson.D{})
+		featureCount, err := featureDB.Collection("products").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), featureCount,
 			"feature branch must have 3 documents after committing _id:3")
@@ -155,13 +155,13 @@ func TestBranchVerify(t *testing.T) {
 		assert.EqualValues(t, 1, result["ok"])
 
 		// The new branch must see only the one document from commit 1.
-		count, err := env.client.Database(dbName+"@at-commit-one").Collection("items").CountDocuments(ctx, bson.D{})
+		count, err := env.client.Database(dbName+"@at-commit-one").Collection("products").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), count,
 			"branch created from hash1 must see only 1 document (commit 1 state)")
 
 		var docs []bson.M
-		cursor, err := env.client.Database(dbName+"@at-commit-one").Collection("items").Find(ctx, bson.D{})
+		cursor, err := env.client.Database(dbName+"@at-commit-one").Collection("products").Find(ctx, bson.D{})
 		require.NoError(t, err)
 		require.NoError(t, cursor.All(ctx, &docs))
 		require.Len(t, docs, 1)
@@ -190,13 +190,13 @@ func TestBranchVerify(t *testing.T) {
 		assert.EqualValues(t, 1, result["ok"])
 
 		// back-one must see only one document (state at main~1 = commit 1).
-		count, err := env.client.Database(ancDbName+"@back-one").Collection("items").CountDocuments(ctx, bson.D{})
+		count, err := env.client.Database(ancDbName+"@back-one").Collection("products").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), count,
 			"branch created from main~1 must see only 1 document")
 
 		var docs []bson.M
-		cursor, err := env.client.Database(ancDbName+"@back-one").Collection("items").Find(ctx, bson.D{})
+		cursor, err := env.client.Database(ancDbName+"@back-one").Collection("products").Find(ctx, bson.D{})
 		require.NoError(t, err)
 		require.NoError(t, cursor.All(ctx, &docs))
 		require.Len(t, docs, 1)
@@ -242,7 +242,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "branch", Value: "unmerged-branch"},
 		}).Err(), "creating unmerged-branch must succeed")
 
-		_, err := env.client.Database(delDbName+"@unmerged-branch").Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(delDbName+"@unmerged-branch").Collection("products").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(99)},
 			{Key: "label", Value: "extra"},
 		})
@@ -271,7 +271,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "branch", Value: "force-branch"},
 		}).Err(), "creating force-branch must succeed")
 
-		_, err := env.client.Database(delDbName+"@force-branch").Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(delDbName+"@force-branch").Collection("products").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(77)},
 			{Key: "label", Value: "gone"},
 		})

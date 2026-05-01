@@ -19,7 +19,7 @@ package tests
 // Each top-level subtest corresponds to one scenario in that document.
 // The setup reproduces the manual setup block exactly:
 //
-//   - Baseline commit (hashBase): items = [ {_id:1, label:"alpha", v:1},
+//   - Baseline commit (hashBase): orders = [ {_id:1, label:"alpha", v:1},
 //     {_id:2, label:"beta", v:2} ]
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single
@@ -45,7 +45,7 @@ func commitVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBa
 
 	ctx := context.Background()
 	db := env.client.Database(dbName)
-	items := db.Collection("items")
+	items := db.Collection("orders")
 
 	require.NoError(t, db.Drop(ctx))
 
@@ -82,7 +82,7 @@ func TestCommitVerify(t *testing.T) {
 	t.Run("Scenario1_ResponseShape", func(t *testing.T) {
 		// Insert a doc so the commit has a pending change (the new doltCommit
 		// gate rejects empty working sets unless allowEmpty:true).
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(100)},
 			{Key: "label", Value: "shape"},
 			{Key: "v", Value: int32(100)},
@@ -124,7 +124,7 @@ func TestCommitVerify(t *testing.T) {
 
 		// Insert a document on the feature branch.
 		featureDB := env.client.Database(dbName + "@feature")
-		_, err = featureDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err = featureDB.Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "label", Value: "gamma"},
 			{Key: "v", Value: int32(3)},
@@ -148,11 +148,11 @@ func TestCommitVerify(t *testing.T) {
 		// Verify the commit went to the feature branch: feature has 4 docs (the
 		// 3 main carries forward at branch creation plus _id:3), main has 3
 		// (the 2 from setup + _id:100 from Scenario 1).
-		featureCount, err := featureDB.Collection("items").CountDocuments(ctx, bson.D{})
+		featureCount, err := featureDB.Collection("orders").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(4), featureCount, "feature branch must have 4 documents after commit")
 
-		mainCount, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
+		mainCount, err := env.client.Database(dbName+"@main").Collection("orders").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), mainCount, "main must still have 3 documents (feature commit must not affect main)")
 	})
@@ -162,7 +162,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_SuccessiveCommitsHaveDistinctHashes", func(t *testing.T) {
 		// Commit A: insert _id:10
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(10)},
 			{Key: "label", Value: "ten"},
 			{Key: "v", Value: int32(10)},
@@ -179,7 +179,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NotEmpty(t, hashA)
 
 		// Commit B: insert _id:11
-		_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err = env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(11)},
 			{Key: "label", Value: "eleven"},
 			{Key: "v", Value: int32(11)},
@@ -284,7 +284,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HashIsValidDiffReference", func(t *testing.T) {
 		// Insert a doc so the pre-change commit has a pending change.
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(50)},
 			{Key: "label", Value: "pre"},
 			{Key: "v", Value: int32(50)},
@@ -295,7 +295,7 @@ func TestCommitVerify(t *testing.T) {
 		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@acme.com>")
 
 		// Insert _id:99 and commit — save hashAfter.
-		_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err = env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(99)},
 			{Key: "label", Value: "new"},
 			{Key: "v", Value: int32(99)},
@@ -313,8 +313,8 @@ func TestCommitVerify(t *testing.T) {
 		}).Decode(&raw))
 
 		dr := decodeDiffResult(t, raw)
-		cd := findCollDiff(dr, "items")
-		require.NotNil(t, cd, "expected diff for 'items' collection")
+		cd := findCollDiff(dr, "orders")
+		require.NotNil(t, cd, "expected diff for 'orders' collection")
 		require.Len(t, cd.Added, 1, "expected exactly 1 added document")
 		assert.Equal(t, int32(99), cd.Added[0]["_id"], "added doc must be _id:99")
 		assert.Empty(t, cd.Removed, "no documents should be removed")
@@ -326,7 +326,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
 		// Insert a doc so the commit has a pending change.
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(60)},
 			{Key: "label", Value: "author"},
 			{Key: "v", Value: int32(60)},
@@ -369,7 +369,7 @@ func TestCommitVerify(t *testing.T) {
 		fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
 
 		// Insert a doc so the commit has a pending change.
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(70)},
 			{Key: "label", Value: "timestamp"},
 			{Key: "v", Value: int32(70)},

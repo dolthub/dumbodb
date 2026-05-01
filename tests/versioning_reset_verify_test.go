@@ -19,8 +19,8 @@ package tests
 // Each top-level subtest corresponds to one scenario in that document.
 // The setup reproduces the manual setup block exactly:
 //
-//   - Commit C1 (hashC1): items = [ {_id:1, v:1} ]
-//   - Commit C2 (hashC2, HEAD): items = [ {_id:1, v:1}, {_id:2, v:2} ]
+//   - Commit C1 (hashC1): tasks = [ {_id:1, v:1} ]
+//   - Commit C2 (hashC2, HEAD): tasks = [ {_id:1, v:1}, {_id:2, v:2} ]
 //   - Working set is clean after setup.
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single
@@ -43,7 +43,7 @@ func resetVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1,
 	t.Helper()
 
 	ctx := context.Background()
-	items := env.client.Database(dbName).Collection("items")
+	items := env.client.Database(dbName).Collection("tasks")
 
 	require.NoError(t, env.client.Database(dbName).Drop(ctx))
 
@@ -77,7 +77,7 @@ func TestResetVerify(t *testing.T) {
 	// Scenario 1: Soft reset (default) — HEAD moves back, working set preserved
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_SoftReset_WorkingSetPreserved", func(t *testing.T) {
-		items := env.client.Database(dbName).Collection("items")
+		items := env.client.Database(dbName).Collection("tasks")
 
 		// Insert _id:3 into the working set (do NOT commit).
 		_, err := items.InsertOne(ctx, bson.D{
@@ -105,8 +105,8 @@ func TestResetVerify(t *testing.T) {
 		}).Decode(&diffRaw))
 
 		dr := decodeDiffResult(t, diffRaw)
-		cd := findCollDiff(dr, "items")
-		require.NotNil(t, cd, "expected diff for 'items' collection after soft reset")
+		cd := findCollDiff(dr, "tasks")
+		require.NotNil(t, cd, "expected diff for 'tasks' collection after soft reset")
 
 		addedIDs := make(map[any]bool)
 		for _, a := range cd.Added {
@@ -124,7 +124,7 @@ func TestResetVerify(t *testing.T) {
 	// Scenario 2: Hard reset — HEAD and working set both reset to target
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_HardReset_WorkingSetDiscarded", func(t *testing.T) {
-		items := env.client.Database(dbName).Collection("items")
+		items := env.client.Database(dbName).Collection("tasks")
 
 		// Commit the working set from Scenario 1 to create a new snapshot (C3).
 		dumboDBCommit(t, env, dbName, "snapshot", "alice <alice@acme.com>")
@@ -169,7 +169,7 @@ func TestResetVerify(t *testing.T) {
 	// Scenario 3: Soft reset undoes a committed change — it becomes uncommitted
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_SoftReset_UndoCommit", func(t *testing.T) {
-		items := env.client.Database(dbName).Collection("items")
+		items := env.client.Database(dbName).Collection("tasks")
 
 		// After Scenario 2: HEAD=C1, working set is clean.
 		// Insert _id:2 again and commit (C4).
@@ -197,8 +197,8 @@ func TestResetVerify(t *testing.T) {
 		}).Decode(&diffRaw))
 
 		dr := decodeDiffResult(t, diffRaw)
-		cd := findCollDiff(dr, "items")
-		require.NotNil(t, cd, "expected diff for 'items' collection after soft undo-commit")
+		cd := findCollDiff(dr, "tasks")
+		require.NotNil(t, cd, "expected diff for 'tasks' collection after soft undo-commit")
 		require.Len(t, cd.Added, 1, "expected exactly _id:2 as the only added doc")
 		assert.Equal(t, int32(2), cd.Added[0]["_id"], "added doc must be _id:2")
 		assert.Empty(t, cd.Removed, "no removed documents")
@@ -209,7 +209,7 @@ func TestResetVerify(t *testing.T) {
 	// Scenario 4: Hard reset to HEAD (no `to`) — discards uncommitted changes
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_HardResetToHEAD_DiscardsUncommitted", func(t *testing.T) {
-		items := env.client.Database(dbName).Collection("items")
+		items := env.client.Database(dbName).Collection("tasks")
 
 		// After Scenario 3: HEAD=C1, working set is clean (only _id:1).
 		// Capture the current HEAD hash so we can assert it is returned.
@@ -262,7 +262,7 @@ func TestResetVerify(t *testing.T) {
 	// Scenario 5: Reset accepts relative rootish (HEAD~N, branch~N)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_RelativeRootish", func(t *testing.T) {
-		items := env.client.Database(dbName).Collection("items")
+		items := env.client.Database(dbName).Collection("tasks")
 
 		// After Scenario 4: HEAD=C1 (only _id:1).
 		// Build two more commits so we can walk back N steps:

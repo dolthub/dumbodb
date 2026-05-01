@@ -31,14 +31,14 @@ var db = db.getSiblingDB("branchvdb")
 db.dropDatabase()
 
 // Commit 1: one document
-db.items.insertOne({ _id: 1, label: "alpha" })
+db.products.insertOne({ _id: 1, label: "alpha" })
 const r1 = db.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { hash: "<hash1>", branch: "main", message: "commit one", ok: 1 }
 const hash1 = r1.commitId
 
 // Commit 2: second document added
-db.items.insertOne({ _id: 2, label: "beta" })
+db.products.insertOne({ _id: 2, label: "beta" })
 const r2 = db.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { hash: "<hash2>", branch: "main", message: "commit two", ok: 1 }
@@ -105,15 +105,15 @@ vice versa.
 var feature = db.getSiblingDB("branchvdb@feature")
 
 // Add a document on the feature branch and commit it
-feature.items.insertOne({ _id: 3, label: "gamma" })
+feature.products.insertOne({ _id: 3, label: "gamma" })
 feature.runCommand({ doltCommit: 1, message: "feature adds gamma", author: "carol <carol@startup.dev>" })
 
 // main must not see _id:3
-db.getSiblingDB("branchvdb@main").items.countDocuments({})
+db.getSiblingDB("branchvdb@main").products.countDocuments({})
 // Expected: 2   (_id:3 is on feature only)
 
 // feature must see all three documents
-feature.items.countDocuments({})
+feature.products.countDocuments({})
 // Expected: 3
 ```
 
@@ -133,7 +133,7 @@ db.getSiblingDB("branchvdb@" + hash1).runCommand({
 // Expected: { branch: "at-commit-one", ok: 1 }
 
 // The new branch should see only the one document from commit 1
-db.getSiblingDB("branchvdb@at-commit-one").items.find({}).toArray()
+db.getSiblingDB("branchvdb@at-commit-one").products.find({}).toArray()
 // Expected: [ { _id: 1, label: "alpha" } ]
 ```
 
@@ -151,9 +151,9 @@ correct document count at the ancestor state.
 // Fresh database: two commits (hash1 = 1 doc, hash2/HEAD = 2 docs)
 var db2 = db.getSiblingDB("branchvdb2")
 db2.dropDatabase()
-db2.items.insertOne({ _id: 1, label: "alpha" })
+db2.products.insertOne({ _id: 1, label: "alpha" })
 db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
-db2.items.insertOne({ _id: 2, label: "beta" })
+db2.products.insertOne({ _id: 2, label: "beta" })
 db2.runCommand({ doltCommit: 1, message: "commit two", author: "bob <bob@widgets.io>" })
 
 // main~1 resolves to commit 1 (one document)
@@ -164,7 +164,7 @@ db2.getSiblingDB("branchvdb2@main~1").runCommand({
 // Expected: { branch: "back-one", ok: 1 }
 
 // back-one should see only one document (the state at main~1)
-db2.getSiblingDB("branchvdb2@back-one").items.find({}).toArray()
+db2.getSiblingDB("branchvdb2@back-one").products.find({}).toArray()
 // Expected: [ { _id: 1, label: "alpha" } ]
 ```
 
@@ -198,7 +198,7 @@ safe delete must fail with an error.
 // Create "unmerged-branch" from main and add an exclusive commit.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "unmerged-branch" })
 var ub = db.getSiblingDB("branchvdb@unmerged-branch")
-ub.items.insertOne({ _id: 99, label: "extra" })
+ub.products.insertOne({ _id: 99, label: "extra" })
 ub.runCommand({ doltCommit: 1, message: "extra commit", author: "carol <carol@startup.dev>" })
 
 // Safe delete must fail.
@@ -219,7 +219,7 @@ commits that are not reachable from any other branch.
 // Create "force-branch" from main and add an exclusive commit.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "force-branch" })
 var fb = db.getSiblingDB("branchvdb@force-branch")
-fb.items.insertOne({ _id: 77, label: "gone" })
+fb.products.insertOne({ _id: 77, label: "gone" })
 fb.runCommand({ doltCommit: 1, message: "unmerged commit", author: "bob <bob@widgets.io>" })
 
 // Force delete succeeds regardless of merge status.

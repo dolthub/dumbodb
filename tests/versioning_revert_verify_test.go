@@ -19,10 +19,10 @@ package tests
 // Each top-level subtest corresponds to one scenario in that document.
 // The setup:
 //
-//   - Commit C1 on main: items = [ {_id:1, v:1} ]
-//   - Commit C2 on main: items = [ {_id:1, v:1}, {_id:2, v:2} ]  (adds _id:2)
+//   - Commit C1 on main: records = [ {_id:1, v:1} ]
+//   - Commit C2 on main: records = [ {_id:1, v:1}, {_id:2, v:2} ]  (adds _id:2)
 //
-// Reverting C2 should undo the addition of _id:2, leaving items = [ {_id:1, v:1} ].
+// Reverting C2 should undo the addition of _id:2, leaving records = [ {_id:1, v:1} ].
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func revertVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 	require.NoError(t, db.Drop(ctx))
 
 	// C1: initial commit on main.
-	_, err := db.Collection("items").InsertOne(ctx, bson.D{
+	_, err := db.Collection("records").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "v", Value: int32(1)},
 	})
@@ -55,7 +55,7 @@ func revertVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
 	// C2: add _id:2 — this is the commit we will revert.
-	_, err = db.Collection("items").InsertOne(ctx, bson.D{
+	_, err = db.Collection("records").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
@@ -106,12 +106,12 @@ func TestRevertVerify(t *testing.T) {
 
 	// Verify the revert undid the changes (only _id:1 should remain).
 	t.Run("Scenario1_CleanRevert_DataVisible", func(t *testing.T) {
-		count, err := mainDB.Collection("items").CountDocuments(ctx, bson.D{})
+		count, err := mainDB.Collection("records").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, count, "main must have 1 document after reverting the add-two commit")
 
 		var doc bson.M
-		err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc)
+		err = mainDB.Collection("records").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, doc["v"], "original document must still exist")
 	})
@@ -139,7 +139,7 @@ func TestRevertVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_CustomMessageAndAuthor", func(t *testing.T) {
 		// Add another commit to revert.
-		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err := mainDB.Collection("records").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
@@ -182,7 +182,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Add a document on feature that will be referenced in the commit to revert.
 		featDB := env.client.Database(dbName + "@conflict-feat")
-		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err = featDB.Collection("records").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(10)},
 			{Key: "v", Value: int32(10)},
 		})
@@ -206,7 +206,7 @@ func TestRevertVerify(t *testing.T) {
 		// Now modify _id:10 on main so reverting hashConflictCommit causes a conflict:
 		// reverting would delete _id:10 (it was added by hashConflictCommit) but we
 		// modified it after the merge, so there's a conflict.
-		_, err = mainDB.Collection("items").UpdateOne(ctx,
+		_, err = mainDB.Collection("records").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(10)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
@@ -226,7 +226,7 @@ func TestRevertVerify(t *testing.T) {
 		require.NotEmpty(t, conflicts, "conflicts must be non-empty")
 
 		first := conflicts[0].(bson.M)
-		assert.Equal(t, "items", first["collection"], "conflict collection must be 'items'")
+		assert.Equal(t, "records", first["collection"], "conflict collection must be 'records'")
 		count, _ := first["count"].(int32)
 		assert.Greater(t, count, int32(0), "conflict count must be > 0")
 
@@ -254,21 +254,21 @@ func TestRevertVerify(t *testing.T) {
 		require.True(t, ok, "collections must be an array, got %T", summaryRes["collections"])
 		require.Len(t, colls, 1, "one collection must have conflicts")
 		collEntry := colls[0].(bson.M)
-		assert.Equal(t, "items", collEntry["name"])
+		assert.Equal(t, "records", collEntry["name"])
 		assert.EqualValues(t, 1, collEntry["count"])
 
 		// Step 2: Per-collection detail — list individual document conflicts.
 		var conflictsRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "records"},
 		}).Decode(&conflictsRes)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, conflictsRes["ok"])
 
 		conflicts, ok := conflictsRes["conflicts"].(bson.A)
 		require.True(t, ok, "conflicts must be an array")
-		require.Len(t, conflicts, 1, "must have exactly one conflict in 'items'")
+		require.Len(t, conflicts, 1, "must have exactly one conflict in 'records'")
 
 		cf := conflicts[0].(bson.M)
 		conflictID, ok := cf["conflictId"].(string)
@@ -279,7 +279,7 @@ func TestRevertVerify(t *testing.T) {
 		var resolveRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "records"},
 			{Key: "conflictId", Value: conflictID},
 			{Key: "resolution", Value: "ours"},
 		}).Decode(&resolveRes)
@@ -315,7 +315,7 @@ func TestRevertVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AbortRevert", func(t *testing.T) {
 		// Add a new commit to revert that will conflict.
-		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err := mainDB.Collection("records").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(20)},
 			{Key: "v", Value: int32(20)},
 		})
@@ -323,7 +323,7 @@ func TestRevertVerify(t *testing.T) {
 		hashNew := dumboDBCommit(t, env, dbName+"@main", "add-twenty", "alice <alice@acme.com>")
 
 		// Modify _id:20 to create a conflict when we revert the add.
-		_, err = mainDB.Collection("items").UpdateOne(ctx,
+		_, err = mainDB.Collection("records").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(20)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
 		)

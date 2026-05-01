@@ -19,7 +19,7 @@ package tests
 // Each top-level subtest corresponds to one scenario in that document.
 // The setup reproduces the manual setup block exactly:
 //
-//   - Commit C1 on main: items = [ {_id:1, v:1} ]
+//   - Commit C1 on main: inventory = [ {_id:1, v:1} ]
 //   - Branch "feature" pointing at C1 (same as main HEAD)
 //
 // Note: dumboDBCommit always commits to the main branch. The merge test therefore
@@ -76,7 +76,7 @@ func mergeVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1 
 	require.NoError(t, db.Drop(ctx))
 
 	// Baseline: one document, committed on main.
-	_, err := db.Collection("items").InsertOne(ctx, bson.D{
+	_, err := db.Collection("inventory").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "v", Value: int32(1)},
 	})
@@ -112,7 +112,7 @@ func TestMergeVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_AlreadyUpToDate_FromBehind", func(t *testing.T) {
 		// Advance main to C2 (feature stays at C1).
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(2)},
 			{Key: "v", Value: int32(2)},
 		})
@@ -154,7 +154,7 @@ func TestMergeVerify(t *testing.T) {
 		assert.EqualValues(t, 1, raw["ok"])
 
 		// feature now has both documents.
-		n, err := env.client.Database(dbName+"@feature").Collection("items").CountDocuments(ctx, bson.D{})
+		n, err := env.client.Database(dbName+"@feature").Collection("inventory").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), n, "feature must have 2 documents after fast-forward merge")
 	})
@@ -185,7 +185,7 @@ func TestMergeVerify(t *testing.T) {
 		// After Scenario 3: both main and feature point to C2.
 
 		// Commit _id:3 on main → C3.
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.client.Database(dbName).Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
@@ -193,7 +193,7 @@ func TestMergeVerify(t *testing.T) {
 		hashC3 := dumboDBCommit(t, env, dbName, "add-three", "alice <alice@acme.com>")
 
 		// Commit _id:4 on feature independently → C4.
-		_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
+		_, err = env.client.Database(dbName+"@feature").Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(4)},
 			{Key: "v", Value: int32(4)},
 		})
@@ -237,7 +237,7 @@ func TestMergeVerify(t *testing.T) {
 		assert.NotNil(t, head.CommitterTimestamp, "merge commit committerTimestamp must be present in log")
 
 		// All four documents must be visible on main after the merge.
-		n, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
+		n, err := env.client.Database(dbName+"@main").Collection("inventory").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(4), n, "main must have all 4 documents after three-way merge")
 	})
@@ -261,14 +261,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		featDB := env.client.Database(dbName + "@feature")
 
 		// Advance main and feature independently so they diverge.
-		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err := mainDB.Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(2)},
 			{Key: "v", Value: int32(2)},
 		})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName+"@main", "add-two", "alice <alice@acme.com>")
 
-		_, err = featDB.Collection("items").InsertOne(ctx, bson.D{
+		_, err = featDB.Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
@@ -317,14 +317,14 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		featDB := env.client.Database(dbName + "@feature")
 
 		// Both branches modify _id:1 to create a conflict.
-		_, err := mainDB.Collection("items").UpdateOne(ctx,
+		_, err := mainDB.Collection("inventory").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 		)
 		require.NoError(t, err)
 		hashMain := dumboDBCommit(t, env, dbName+"@main", "main-v10", "alice")
 
-		_, err = featDB.Collection("items").UpdateOne(ctx,
+		_, err = featDB.Collection("inventory").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 		)
@@ -342,7 +342,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "inventory"},
 		}).Decode(&detailRaw))
 		conflicts := detailRaw["conflicts"].(bson.A)
 		cf := conflicts[0].(bson.M)
@@ -351,7 +351,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		var resolveRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "inventory"},
 			{Key: "conflictId", Value: conflictID},
 			{Key: "resolution", Value: "ours"},
 		}).Decode(&resolveRaw))
@@ -422,14 +422,14 @@ func TestMergeConflictWorkflow(t *testing.T) {
 	featDB := env.client.Database(dbName + "@feature")
 
 	// Advance both branches: main modifies _id:1 to v:10, feature modifies _id:1 to v:20.
-	_, err := mainDB.Collection("items").UpdateOne(ctx,
+	_, err := mainDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(10)}}}},
 	)
 	require.NoError(t, err)
 	hashMain := dumboDBCommit(t, env, dbName+"@main", "main-v10", "alice")
 
-	_, err = featDB.Collection("items").UpdateOne(ctx,
+	_, err = featDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(20)}}}},
 	)
@@ -454,8 +454,8 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.Len(t, conflictsArr, 1, "one collection must have conflicts")
 
 		entry := conflictsArr[0].(bson.M)
-		assert.Equal(t, "items", entry["collection"], "conflicting collection must be 'items'")
-		assert.EqualValues(t, 1, entry["count"], "one conflict in 'items'")
+		assert.Equal(t, "inventory", entry["collection"], "conflicting collection must be 'inventory'")
+		assert.EqualValues(t, 1, entry["count"], "one conflict in 'inventory'")
 	})
 
 	// Scenario 6: dumboDBConflicts lists the conflict
@@ -470,19 +470,19 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		colls := summaryRaw["collections"].(bson.A)
 		require.Len(t, colls, 1, "one collection with conflicts")
 		collEntry := colls[0].(bson.M)
-		assert.Equal(t, "items", collEntry["name"])
+		assert.Equal(t, "inventory", collEntry["name"])
 		assert.EqualValues(t, 1, collEntry["count"])
 
 		// Per-collection detail
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "inventory"},
 		}).Decode(&detailRaw))
 		assert.EqualValues(t, 1, detailRaw["ok"])
 
 		conflicts := detailRaw["conflicts"].(bson.A)
-		require.Len(t, conflicts, 1, "one conflict in 'items'")
+		require.Len(t, conflicts, 1, "one conflict in 'inventory'")
 
 		cf := conflicts[0].(bson.M)
 		conflictID, ok := cf["conflictId"].(string)
@@ -526,7 +526,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "inventory"},
 		}).Decode(&detailRaw))
 		conflicts := detailRaw["conflicts"].(bson.A)
 		cf := conflicts[0].(bson.M)
@@ -536,7 +536,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		var resolveRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
-			{Key: "collection", Value: "items"},
+			{Key: "collection", Value: "inventory"},
 			{Key: "conflictId", Value: conflictID},
 			{Key: "resolution", Value: "ours"},
 		}).Decode(&resolveRaw))
@@ -590,7 +590,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 
 		// Document _id:1 must have v:10 (ours resolution)
 		var doc bson.M
-		require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+		require.NoError(t, mainDB.Collection("inventory").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 		assert.EqualValues(t, 10, doc["v"], "ours resolution: v must be 10")
 	})
 }
@@ -606,14 +606,14 @@ func TestMergeConflictAbort(t *testing.T) {
 	mainDB := env.client.Database(dbName + "@main")
 
 	// Create a conflict: both branches modify _id:1.
-	_, err := mainDB.Collection("items").UpdateOne(ctx,
+	_, err := mainDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
 	)
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName+"@main", "main-100", "alice")
 
-	_, err = env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
+	_, err = env.client.Database(dbName+"@feature").Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 	)
@@ -651,7 +651,7 @@ func TestMergeConflictAbort(t *testing.T) {
 
 	// Document must have the pre-merge value (v:100).
 	var doc bson.M
-	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+	require.NoError(t, mainDB.Collection("inventory").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 	assert.EqualValues(t, 100, doc["v"], "after abort, document must be back to pre-merge value")
 }
 
@@ -667,14 +667,14 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	featDB := env.client.Database(dbName + "@feature")
 
 	// Both branches modify _id:1.
-	_, err := mainDB.Collection("items").UpdateOne(ctx,
+	_, err := mainDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(11)}}}},
 	)
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName+"@main", "main-11", "alice")
 
-	_, err = featDB.Collection("items").UpdateOne(ctx,
+	_, err = featDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(22)}}}},
 	)
@@ -692,7 +692,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	var detailRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltConflicts", Value: int32(1)},
-		{Key: "collection", Value: "items"},
+		{Key: "collection", Value: "inventory"},
 	}).Decode(&detailRaw))
 	conflicts := detailRaw["conflicts"].(bson.A)
 	cf := conflicts[0].(bson.M)
@@ -702,7 +702,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	var resolveRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltResolveConflict", Value: int32(1)},
-		{Key: "collection", Value: "items"},
+		{Key: "collection", Value: "inventory"},
 		{Key: "conflictId", Value: conflictID},
 		{Key: "resolution", Value: "theirs"},
 	}).Decode(&resolveRaw))
@@ -718,7 +718,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 
 	// Document must have theirs value (v:22).
 	var doc bson.M
-	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+	require.NoError(t, mainDB.Collection("inventory").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 	assert.EqualValues(t, 22, doc["v"], "theirs resolution: v must be 22")
 }
 
@@ -734,14 +734,14 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	featDB := env.client.Database(dbName + "@feature")
 
 	// Both branches modify _id:1.
-	_, err := mainDB.Collection("items").UpdateOne(ctx,
+	_, err := mainDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(55)}}}},
 	)
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName+"@main", "main-55", "alice")
 
-	_, err = featDB.Collection("items").UpdateOne(ctx,
+	_, err = featDB.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(66)}}}},
 	)
@@ -759,7 +759,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	var detailRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltConflicts", Value: int32(1)},
-		{Key: "collection", Value: "items"},
+		{Key: "collection", Value: "inventory"},
 	}).Decode(&detailRaw))
 	conflicts := detailRaw["conflicts"].(bson.A)
 	cf := conflicts[0].(bson.M)
@@ -769,7 +769,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	var resolveRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltResolveConflict", Value: int32(1)},
-		{Key: "collection", Value: "items"},
+		{Key: "collection", Value: "inventory"},
 		{Key: "conflictId", Value: conflictID},
 		{Key: "resolution", Value: "custom"},
 		{Key: "value", Value: bson.D{
@@ -789,6 +789,6 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 
 	// Document must have custom value v:99.
 	var doc bson.M
-	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+	require.NoError(t, mainDB.Collection("inventory").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 	assert.EqualValues(t, 99, doc["v"], "custom resolution: v must be 99")
 }

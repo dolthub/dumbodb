@@ -31,14 +31,14 @@ var db = db.getSiblingDB("revertdb")
 db.dropDatabase()
 
 // C1: insert {_id:1, v:1} on main.
-db.items.insertOne({ _id: 1, v: 1 })
+db.records.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
 
 // C2: add {_id:2, v:2} — this is the commit we will revert.
-db.items.insertOne({ _id: 2, v: 2 })
+db.records.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
 // Expected: { commitId: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
@@ -49,7 +49,7 @@ print("hashC2 =", hashC2)
 ```
 
 After setup:
-- **main** (HEAD = C2): `items` = `[ { _id: 1, v: 1 }, { _id: 2, v: 2 } ]`
+- **main** (HEAD = C2): `records` = `[ { _id: 1, v: 1 }, { _id: 2, v: 2 } ]`
 
 ---
 
@@ -81,7 +81,7 @@ Key checks:
 Verify main now has only `_id:1` (the revert undid the addition of `_id:2`):
 
 ```js
-db.items.find({}).toArray()
+db.records.find({}).toArray()
 // Expected: [ { _id: 1, v: 1 } ]
 ```
 
@@ -101,7 +101,7 @@ Revert another commit with a custom message and author override.
 
 ```js
 // Add another commit to revert.
-db.items.insertOne({ _id: 3, v: 3 })
+db.records.insertOne({ _id: 3, v: 3 })
 const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "carol <carol@startup.dev>" })
 const hashC3 = r3.commitId
 
@@ -132,13 +132,13 @@ conflicts with the modification.
 
 ```js
 // Add a document that will be the conflict target.
-db.items.insertOne({ _id: 10, v: 10 })
+db.records.insertOne({ _id: 10, v: 10 })
 const rAdd = db.runCommand({ doltCommit: 1, message: "add-ten", author: "alice <alice@acme.com>" })
 const hashAddTen = rAdd.commitId
 
 // Now modify _id:10 on main — this creates a conflict if we revert hashAddTen
 // (revert would delete _id:10, but main has since modified it).
-db.items.updateOne({ _id: 10 }, { $set: { v: 99 } })
+db.records.updateOne({ _id: 10 }, { $set: { v: 99 } })
 db.runCommand({ doltCommit: 1, message: "modify-ten", author: "bob <bob@widgets.io>" })
 
 // Revert hashAddTen — expect conflict.
@@ -172,10 +172,10 @@ Continuing from Scenario 3 (revert with conflicts in progress).
 // Step 1: Summary — list which collections have unresolved conflicts.
 const rSummary = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
-// Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
+// Expected: { collections: [ { name: "records", count: 1 } ], ok: 1 }
 
 // Step 2: Per-collection detail — list individual document conflicts.
-const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1, collection: "items" })
+const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1, collection: "records" })
 printjson(rConflicts)
 // Expected: { conflicts: [ { conflictId: "c0", base: {...},
 //             ours: { _id: 10, v: 99 }, theirs: null (or deleted),
@@ -187,7 +187,7 @@ const conflictId = rConflicts.conflicts[0].conflictId
 // Step 3: Resolve — accept "ours" (keep main's modified version of _id:10).
 const rResolve = db.getSiblingDB("revertdb@main").runCommand({
   doltResolveConflict: 1,
-  collection: "items",
+  collection: "records",
   conflictId: conflictId,
   resolution: "ours"
 })
@@ -219,11 +219,11 @@ Start another conflicting revert and then abort it.
 
 ```js
 // Add a document and then modify it to set up a conflict.
-db.items.insertOne({ _id: 20, v: 20 })
+db.records.insertOne({ _id: 20, v: 20 })
 const rAdd20 = db.runCommand({ doltCommit: 1, message: "add-twenty", author: "alice <alice@acme.com>" })
 const hashAdd20 = rAdd20.commitId
 
-db.items.updateOne({ _id: 20 }, { $set: { v: 201 } })
+db.records.updateOne({ _id: 20 }, { $set: { v: 201 } })
 db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "bob <bob@widgets.io>" })
 
 // Revert — expect conflict (throws in mongosh).

@@ -114,7 +114,7 @@ func TestLogVerify(t *testing.T) {
 
 	// Start fresh.
 	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+	_, err := env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(0)},
 	})
 	require.NoError(t, err)
@@ -135,21 +135,21 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// Setup: three sequential commits on the same database.
-	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
 	hash1 := dumboDBCommit(t, env, dbName, "first", "alice <alice@acme.com>")
 
-	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
 	hash2 := dumboDBCommit(t, env, dbName, "second", "alice <alice@acme.com>")
 
-	_, err = env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "label", Value: "gamma"},
 	})
@@ -330,7 +330,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	mergeDBName := fmt.Sprintf("logmerge%d", rand.Int64N(1_000_000))
 	require.NoError(t, env.client.Database(mergeDBName).Drop(ctx))
-	_, err = env.client.Database(mergeDBName).Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "v", Value: int32(1)},
 	})
@@ -344,7 +344,7 @@ func TestLogVerify(t *testing.T) {
 	}).Err())
 
 	// Advance main: _id:2 → hashB (diverges from hashA).
-	_, err = env.client.Database(mergeDBName).Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
@@ -352,7 +352,7 @@ func TestLogVerify(t *testing.T) {
 	hashB := dumboDBCommit(t, env, mergeDBName, "add-two", "alice <alice@acme.com>")
 
 	// Advance feat independently: _id:3 → hashC (diverges from hashA).
-	_, err = env.client.Database(mergeDBName+"@feat").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.client.Database(mergeDBName+"@feat").Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "v", Value: int32(3)},
 	})

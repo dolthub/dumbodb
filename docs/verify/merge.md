@@ -31,7 +31,7 @@ var db = db.getSiblingDB("mergedb")
 db.dropDatabase()
 
 // Baseline: one document, committed on main.
-db.items.insertOne({ _id: 1, v: 1 })
+db.inventory.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
@@ -45,7 +45,7 @@ print("hashC1 =", hashC1)
 ```
 
 After setup:
-- **main** (HEAD = C1): `items` = `[ { _id: 1, v: 1 } ]`
+- **main** (HEAD = C1): `inventory` = `[ { _id: 1, v: 1 } ]`
 - **feature**: branch pointing at C1 (same as main HEAD)
 
 ---
@@ -58,7 +58,7 @@ nothing to merge — the result is "already up-to-date".
 
 ```js
 // Commit _id:2 on main (feature stays at C1, behind main).
-db.items.insertOne({ _id: 2, v: 2 })
+db.inventory.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 const hashC2 = r2.commitId
 
@@ -95,7 +95,7 @@ Key checks:
 Verify that `feature` now contains both documents:
 
 ```js
-db.getSiblingDB("mergedb@feature").items.countDocuments({})
+db.getSiblingDB("mergedb@feature").inventory.countDocuments({})
 // Expected: 2
 ```
 
@@ -128,13 +128,13 @@ parents.
 
 ```js
 // Commit _id:3 on main → C3.
-db.items.insertOne({ _id: 3, v: 3 })
+db.inventory.insertOne({ _id: 3, v: 3 })
 const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "alice <alice@acme.com>" })
 const hashC3 = r3.commitId
 
 // Commit _id:4 on feature independently → C4.
 // (feature is still at C2; _id:4 is only on feature's side)
-db.getSiblingDB("mergedb@feature").items.insertOne({ _id: 4, v: 4 })
+db.getSiblingDB("mergedb@feature").inventory.insertOne({ _id: 4, v: 4 })
 const r4 = db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "add-four", author: "carol <carol@startup.dev>" })
 const hashC4 = r4.commitId
 
@@ -170,7 +170,7 @@ printjson(logResult)
 Verify `main` now contains all four documents:
 
 ```js
-db.getSiblingDB("mergedb@main").items.countDocuments({})
+db.getSiblingDB("mergedb@main").inventory.countDocuments({})
 // Expected: 4
 ```
 
@@ -188,10 +188,10 @@ values for conflicting documents.
 
 ```js
 // After setup: main modifies _id:1 to v:10, feature modifies _id:1 to v:20.
-db.items.updateOne({ _id: 1 }, { $set: { v: 10 } })
+db.inventory.updateOne({ _id: 1 }, { $set: { v: 10 } })
 db.getSiblingDB("mergedb@main").runCommand({ doltCommit: 1, message: "main-v10", author: "alice" })
 
-db.getSiblingDB("mergedb@feature").items.updateOne({ _id: 1 }, { $set: { v: 20 } })
+db.getSiblingDB("mergedb@feature").inventory.updateOne({ _id: 1 }, { $set: { v: 20 } })
 db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "feature-v20", author: "bob" })
 
 // In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
@@ -212,10 +212,10 @@ try {
 // Summary: list which collections have conflicts
 const rSummary = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
-// Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
+// Expected: { collections: [ { name: "inventory", count: 1 } ], ok: 1 }
 
 // Detail: list individual conflicts within a collection
-const rDetail = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1, collection: "items" })
+const rDetail = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1, collection: "inventory" })
 printjson(rDetail)
 // Expected: { conflicts: [ { conflictId: "c0", base: { _id: 1, v: 1 }, ours: { _id: 1, v: 10 },
 //             theirs: { _id: 1, v: 20 }, ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
@@ -259,7 +259,7 @@ Key checks:
 // Resolve using our version (v:10).
 const rResolve = db.getSiblingDB("mergedb@main").runCommand({
     doltResolveConflict: 1,
-    collection: "items",
+    collection: "inventory",
     conflictId: conflictId,
     resolution: "ours"
 })
@@ -278,7 +278,7 @@ After resolution, `doltConflicts` returns an empty `collections` array.
 // Resolve using their version (v:20).
 db.getSiblingDB("mergedb@main").runCommand({
     doltResolveConflict: 1,
-    collection: "items",
+    collection: "inventory",
     conflictId: conflictId,
     resolution: "theirs"
 })
@@ -294,7 +294,7 @@ db.getSiblingDB("mergedb@main").runCommand({
 // Resolve with a custom merged value.
 db.getSiblingDB("mergedb@main").runCommand({
     doltResolveConflict: 1,
-    collection: "items",
+    collection: "inventory",
     conflictId: conflictId,
     resolution: "custom",
     value: { _id: 1, v: 15 }   // custom resolved value
