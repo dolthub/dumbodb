@@ -241,7 +241,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: rebase feature onto main --------------------------
     run mongosh_eval "test@feature" '
-        try { JSON.stringify(db.runCommand({doltRebase: 1, onto: "main", author: "bob <b@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
+        try { JSON.stringify(db.runCommand({doltRebase: 1, onto: "main"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
     # ok:0 expected on conflict.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
