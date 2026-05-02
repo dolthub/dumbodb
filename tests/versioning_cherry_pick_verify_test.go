@@ -226,6 +226,20 @@ func TestCherryPickVerify(t *testing.T) {
 
 		errmsg, _ := raw["errmsg"].(string)
 		assert.Contains(t, errmsg, "doltCherryPick", "errmsg must mention the command")
+
+		// doltStatus must reflect the cherry-pick-in-progress state.
+		var statusRaw bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&statusRaw)
+		require.NoError(t, err)
+		assert.Equal(t, "cherry-pick", statusRaw["mergeState"], "mergeState must indicate cherry-pick in progress")
+		statusConflicts, ok2 := statusRaw["conflicts"].(bson.A)
+		require.True(t, ok2, "conflicts must be present during cherry-pick")
+		require.Len(t, statusConflicts, 1)
+		sc := statusConflicts[0].(bson.M)
+		assert.Equal(t, "items", sc["collection"])
+		assert.EqualValues(t, 1, sc["count"])
 	})
 
 	// -------------------------------------------------------------------------
@@ -329,6 +343,15 @@ func TestCherryPickVerify(t *testing.T) {
 		err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc)
 		require.NoError(t, err)
 		assert.EqualValues(t, 99, doc["v"], "resolved value should be 99 (theirs)")
+
+		// doltStatus must no longer show cherry-pick state after continue.
+		var cleanStatus bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&cleanStatus)
+		require.NoError(t, err)
+		assert.Nil(t, cleanStatus["mergeState"], "mergeState must be absent after resolution")
+		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
 	})
 
 	// -------------------------------------------------------------------------

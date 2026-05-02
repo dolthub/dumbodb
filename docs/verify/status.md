@@ -351,3 +351,21 @@ Key checks:
 | Ancestor expression | `mydb@main~1` | ❌ code 96 "no working set" |
 
 `doltStatus` is a working-set concept  -- only writable rootish forms have one.
+
+### Conflict state fields
+
+When a merge, cherry-pick, rebase, or revert operation is in progress and has produced
+conflicts, `doltStatus` includes two additional fields:
+
+- `mergeState` (string): `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`
+- `conflicts` (array): per-collection conflict counts `[{collection, count}, ...]`, same
+  shape as the `doltConflicts` summary response
+
+These fields are **absent** on clean status and when there are only uncommitted changes
+(no in-progress operation). The scenarios in this document test clean/dirty states only.
+For conflict-state verification of `doltStatus`, see the operation-specific verify docs:
+
+- [merge.md](merge.md) -- `mergeState: "merge"`
+- [cherry-pick.md](cherry-pick.md) -- `mergeState: "cherry-pick"`
+- [rebase.md](rebase.md) -- `mergeState: "rebase"`
+- [revert.md](revert.md) -- `mergeState: "revert"`

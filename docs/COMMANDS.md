@@ -498,6 +498,8 @@ None (beyond the implicit `$db` connection).
 |-------|------|-------------|
 | `branch` | string | Active branch name |
 | `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]` |
+| `mergeState` | string | **Only present during an in-progress operation.** One of `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`. |
+| `conflicts` | array | **Only present during an in-progress operation.** Per-collection conflict counts: `[{collection, count}, ...]` (same shape as the `doltConflicts` summary response). |
 | `ok` | number | `1` |
 
 ### Collection entry
@@ -538,6 +540,21 @@ db.runCommand({ doltStatus: 1 })
 db.runCommand({ doltCommit: 1, message: "add order 99", author: "alice <alice@acme.com>" })
 db.runCommand({ doltStatus: 1 })
 // { branch: "main", collections: [], ok: 1 }
+
+// During a merge conflict  -- mergeState and conflicts appear
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// (merge returns ok:0 with conflicts)
+
+db.runCommand({ doltStatus: 1 })
+// {
+//   branch: "main",
+//   collections: [
+//     { name: "orders", status: "modified", added: 0, modified: 1, deleted: 0 }
+//   ],
+//   mergeState: "merge",
+//   conflicts: [ { collection: "orders", count: 1 } ],
+//   ok: 1
+// }
 ```
 
 ### Errors

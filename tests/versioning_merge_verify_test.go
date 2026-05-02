@@ -456,6 +456,20 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		entry := conflictsArr[0].(bson.M)
 		assert.Equal(t, "inventory", entry["collection"], "conflicting collection must be 'inventory'")
 		assert.EqualValues(t, 1, entry["count"], "one conflict in 'inventory'")
+
+		// doltStatus must reflect the merge-in-progress state.
+		var statusRaw bson.M
+		err := mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&statusRaw)
+		require.NoError(t, err)
+		assert.Equal(t, "merge", statusRaw["mergeState"], "mergeState must indicate merge in progress")
+		statusConflicts, ok2 := statusRaw["conflicts"].(bson.A)
+		require.True(t, ok2, "conflicts must be present during merge")
+		require.Len(t, statusConflicts, 1)
+		sc := statusConflicts[0].(bson.M)
+		assert.Equal(t, "inventory", sc["collection"])
+		assert.EqualValues(t, 1, sc["count"])
 	})
 
 	// Scenario 6: dumboDBConflicts lists the conflict
@@ -597,6 +611,15 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		var doc bson.M
 		require.NoError(t, mainDB.Collection("inventory").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 		assert.EqualValues(t, 10, doc["v"], "ours resolution: v must be 10")
+
+		// doltStatus must no longer show merge state after continue.
+		var cleanStatus bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&cleanStatus)
+		require.NoError(t, err)
+		assert.Nil(t, cleanStatus["mergeState"], "mergeState must be absent after resolution")
+		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
 	})
 }
 

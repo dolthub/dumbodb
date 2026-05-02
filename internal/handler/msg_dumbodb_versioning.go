@@ -1255,6 +1255,20 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		statusDoc.Set("commitId", res.CommitID)
 	}
 	statusDoc.Set("collections", collections)
+
+	if res.MergeOp != "" {
+		statusDoc.Set("mergeState", res.MergeOp)
+		conflictsArr := types.MakeArray(len(res.Conflicts))
+		for _, c := range res.Conflicts {
+			entry := must.NotFail(types.NewDocument(
+				"collection", c.Collection,
+				"count", int32(c.Count),
+			))
+			conflictsArr.Append(entry)
+		}
+		statusDoc.Set("conflicts", conflictsArr)
+	}
+
 	statusDoc.Set("ok", float64(1))
 
 	return documentOpMsg(statusDoc)

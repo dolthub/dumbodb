@@ -208,6 +208,26 @@ try {
 
 ## Scenario 6: Inspect conflicts
 
+Verify that `doltStatus` reflects the in-progress merge and its conflicts:
+
+```js
+const rStatus = db.getSiblingDB("mergedb@main").runCommand({ doltStatus: 1 })
+printjson(rStatus)
+// Expected:
+// {
+//   branch: "main",
+//   collections: [...],
+//   mergeState: "merge",
+//   conflicts: [ { collection: "inventory", count: 1 } ],
+//   ok: 1
+// }
+```
+
+Key checks:
+- `mergeState` equals `"merge"`
+- `conflicts` lists per-collection conflict counts (same shape as `doltConflicts` summary)
+- These fields are only present because a merge is in progress
+
 ```js
 // Summary: list which collections have conflicts
 const rSummary = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1 })

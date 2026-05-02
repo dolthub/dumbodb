@@ -157,6 +157,26 @@ Key checks:
 - The error message contains `"doltRevert: unresolved conflicts in 1 collection(s)"`
 - The revert state is preserved  -- use `doltConflicts` to inspect (Scenario 4)
 
+Verify that `doltStatus` reflects the in-progress revert and its conflicts:
+
+```js
+const rStatus = db.getSiblingDB("revertdb@main").runCommand({ doltStatus: 1 })
+printjson(rStatus)
+// Expected:
+// {
+//   branch: "main",
+//   collections: [...],
+//   mergeState: "revert",
+//   conflicts: [ { collection: "records", count: 1 } ],
+//   ok: 1
+// }
+```
+
+Key checks:
+- `mergeState` equals `"revert"`
+- `conflicts` lists per-collection conflict counts (same shape as `doltConflicts` summary)
+- These fields are only present because a revert is in progress
+
 ---
 
 ## Scenario 4: Inspect and resolve conflicts, then continue

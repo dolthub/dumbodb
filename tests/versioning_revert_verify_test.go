@@ -232,6 +232,20 @@ func TestRevertVerify(t *testing.T) {
 
 		errmsg, _ := raw["errmsg"].(string)
 		assert.Contains(t, errmsg, "doltRevert", "errmsg must mention the command")
+
+		// doltStatus must reflect the revert-in-progress state.
+		var statusRaw bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&statusRaw)
+		require.NoError(t, err)
+		assert.Equal(t, "revert", statusRaw["mergeState"], "mergeState must indicate revert in progress")
+		statusConflicts, ok2 := statusRaw["conflicts"].(bson.A)
+		require.True(t, ok2, "conflicts must be present during revert")
+		require.Len(t, statusConflicts, 1)
+		sc := statusConflicts[0].(bson.M)
+		assert.Equal(t, "records", sc["collection"])
+		assert.EqualValues(t, 1, sc["count"])
 	})
 
 	// -------------------------------------------------------------------------
@@ -308,6 +322,15 @@ func TestRevertVerify(t *testing.T) {
 		assert.NotEmpty(t, commitID, "commitId must not be empty")
 		assert.NotNil(t, raw["committer"], "committer must be present in revert continue response")
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present in revert continue response")
+
+		// doltStatus must no longer show revert state after continue.
+		var cleanStatus bson.M
+		err = mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&cleanStatus)
+		require.NoError(t, err)
+		assert.Nil(t, cleanStatus["mergeState"], "mergeState must be absent after resolution")
+		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
 	})
 
 	// -------------------------------------------------------------------------

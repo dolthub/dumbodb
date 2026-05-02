@@ -229,9 +229,11 @@ type TableStatus struct {
 
 // VersioningStatusResult represents the result of VersioningBackend.DumboDBStatus method.
 type VersioningStatusResult struct {
-	Branch   string
-	CommitID string // HEAD commit hash; populated only when the workspace is clean (no changes)
-	Tables   []TableStatus
+	Branch    string
+	CommitID  string // HEAD commit hash; populated only when the workspace is clean (no changes)
+	Tables    []TableStatus
+	MergeOp   string            // "merge", "cherry-pick", "rebase", or "revert"; empty when no operation in progress
+	Conflicts []ConflictSummary // per-collection conflict counts; empty when no conflicts
 }
 
 // DiffParams represents the parameters of VersioningBackend.DumboDBDiff method.

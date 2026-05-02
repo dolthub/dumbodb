@@ -160,6 +160,26 @@ Key checks:
 - The error message contains `"doltCherryPick: unresolved conflicts in 1 collection(s)"`
 - The cherry-pick state is preserved  -- use `doltConflicts` to inspect (Scenario 4)
 
+Verify that `doltStatus` reflects the in-progress cherry-pick and its conflicts:
+
+```js
+const rStatus = db.getSiblingDB("pickdb@main").runCommand({ doltStatus: 1 })
+printjson(rStatus)
+// Expected:
+// {
+//   branch: "main",
+//   collections: [...],
+//   mergeState: "cherry-pick",
+//   conflicts: [ { collection: "items", count: 1 } ],
+//   ok: 1
+// }
+```
+
+Key checks:
+- `mergeState` equals `"cherry-pick"`
+- `conflicts` lists per-collection conflict counts (same shape as `doltConflicts` summary)
+- These fields are only present because a cherry-pick is in progress
+
 ---
 
 ## Scenario 4: Inspect and resolve conflicts, then continue

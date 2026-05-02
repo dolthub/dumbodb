@@ -2125,6 +2125,24 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		}
 	}
 
+	// If a merge/cherry-pick/rebase/revert is in progress, include conflict info.
+	if ms := state.mergeState; ms != nil {
+		switch {
+		case ms.isRebase:
+			result.MergeOp = "rebase"
+		case ms.isCherryPick:
+			result.MergeOp = "cherry-pick"
+		case ms.isRevert:
+			result.MergeOp = "revert"
+		default:
+			result.MergeOp = "merge"
+		}
+		result.Conflicts = ms.summaries()
+		if result.Conflicts == nil {
+			result.Conflicts = []backends.ConflictSummary{}
+		}
+	}
+
 	return result, nil
 }
 

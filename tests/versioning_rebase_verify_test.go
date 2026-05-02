@@ -370,6 +370,20 @@ func TestRebaseVerify(t *testing.T) {
 		require.EqualValues(t, 0, raw["ok"], "rebase must conflict")
 		require.NotEmpty(t, raw["conflicts"])
 
+		// doltStatus must reflect the rebase-in-progress state.
+		var statusRaw bson.M
+		err = conflictFeatureDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&statusRaw)
+		require.NoError(t, err)
+		assert.Equal(t, "rebase", statusRaw["mergeState"], "mergeState must indicate rebase in progress")
+		statusConflicts, ok := statusRaw["conflicts"].(bson.A)
+		require.True(t, ok, "conflicts must be present during rebase")
+		require.Len(t, statusConflicts, 1)
+		sc := statusConflicts[0].(bson.M)
+		assert.Equal(t, "items", sc["collection"])
+		assert.EqualValues(t, 1, sc["count"])
+
 		// Get conflict ID.
 		var conflictsResult bson.M
 		err = conflictFeatureDB.RunCommand(ctx, bson.D{
@@ -378,8 +392,8 @@ func TestRebaseVerify(t *testing.T) {
 		}).Decode(&conflictsResult)
 		require.NoError(t, err)
 
-		conflictList, ok := conflictsResult["conflicts"].(bson.A)
-		require.True(t, ok && len(conflictList) > 0, "must have at least one conflict detail")
+		conflictList, ok2 := conflictsResult["conflicts"].(bson.A)
+		require.True(t, ok2 && len(conflictList) > 0, "must have at least one conflict detail")
 		firstConflict := conflictList[0].(bson.M)
 		conflictID, _ := firstConflict["conflictId"].(string)
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
@@ -407,6 +421,15 @@ func TestRebaseVerify(t *testing.T) {
 		newTip, hasTip := continueRaw["newTip"]
 		assert.True(t, hasTip, "continue response must include newTip")
 		_ = newTip
+
+		// doltStatus must no longer show rebase state after continue.
+		var cleanStatus bson.M
+		err = conflictFeatureDB.RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&cleanStatus)
+		require.NoError(t, err)
+		assert.Nil(t, cleanStatus["mergeState"], "mergeState must be absent after resolution")
+		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
 
 		// No committer param: rebased commits must have committer == author.
 		var logResult bson.M

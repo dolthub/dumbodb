@@ -151,6 +151,14 @@ func TestStatusVerify(t *testing.T) {
 		sr := runStatus(t, env, dbName)
 		assert.Empty(t, sr.Tables, "expected empty collections after commit with no new changes")
 		assert.NotEmpty(t, sr.CommitID, "commitId must be present when workspace is clean")
+
+		// mergeState must be absent on a clean repo (no merge/cherry-pick/rebase/revert in progress).
+		var rawStatus bson.M
+		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&rawStatus)
+		require.NoError(t, err)
+		assert.Nil(t, rawStatus["mergeState"], "mergeState must be absent on clean status")
 	})
 
 	// -------------------------------------------------------------------------

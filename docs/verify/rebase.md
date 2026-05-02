@@ -291,6 +291,22 @@ try {
   // MongoServerError: doltRebase: unresolved conflicts in 1 collection(s)
 }
 
+// Verify that doltStatus reflects the in-progress rebase and its conflicts.
+const rStatus = rdb.getSiblingDB("rebaseresolve@feature").runCommand({doltStatus: 1})
+printjson(rStatus)
+// Expected:
+// {
+//   branch: "feature",
+//   collections: [...],
+//   mergeState: "rebase",
+//   conflicts: [ { collection: "items", count: 1 } ],
+//   ok: 1
+// }
+// Key checks:
+// - mergeState equals "rebase"
+// - conflicts lists per-collection conflict counts (same shape as doltConflicts summary)
+// - These fields are only present because a rebase is in progress
+
 // Inspect conflicts.
 const rConflicts = rdb.getSiblingDB("rebaseresolve@feature").runCommand({
     doltConflicts: 1, collection: "items"
