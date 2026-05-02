@@ -358,61 +358,6 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 	return vb
 }
 
-// MsgDumboDBCurrentBranch implements the `dumboDBCurrentBranch` command.
-//
-// It returns the branch name for the connection encoded in $db.
-// Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBCurrentBranch: 1})
-//
-// Returns an OperationFailed error if the connection is read-only (commit hash or ancestor expression).
-//
-// The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDumboDBCurrentBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	document, err := opMsgDocument(msg)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	encodedDB, err := common.GetRequiredParam[string](document, "$db")
-	if err != nil {
-		return nil, err
-	}
-
-	dbName, branch, readOnly, err := branchFromDBName(encodedDB)
-	if err != nil {
-		return nil, err
-	}
-
-	if readOnly {
-		return nil, handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrOperationFailed,
-			"doltCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)",
-		)
-	}
-
-	vb := h.versioningBackend()
-	if vb == nil {
-		return nil, handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrOperationFailed,
-			"doltCurrentBranch: versioning is not supported by the current backend",
-		)
-	}
-
-	res, err := vb.DumboDBCurrentBranch(connCtx, &backends.CurrentBranchParams{
-		DBName: dbName,
-		Branch: branch,
-	})
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"branch", res.Branch,
-			"ok", float64(1),
-		)),
-	)
-}
-
 // MsgDumboDBCommit implements the `dumboDBCommit` command.
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname@branch").

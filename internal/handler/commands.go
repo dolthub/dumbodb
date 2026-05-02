@@ -150,11 +150,7 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDumboDBCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
-		"doltCurrentBranch": {
-			Handler: h.MsgDumboDBCurrentBranch,
-			Help:    "Returns the current branch name for the connection encoded in the database name.",
-		},
-		"doltLog": {
+"doltLog": {
 			Handler: h.MsgDumboDBLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",
 		},
@@ -206,11 +202,7 @@ func (h *Handler) initCommands() {
 			Handler: h.MsgDumboDBCommit,
 			Help:    "Commits the current working set on the branch encoded in the database name.",
 		},
-		"dumboCurrentBranch": {
-			Handler: h.MsgDumboDBCurrentBranch,
-			Help:    "Returns the current branch name for the connection encoded in the database name.",
-		},
-		"dumboLog": {
+"dumboLog": {
 			Handler: h.MsgDumboDBLog,
 			Help:    "Returns commit history for the branch encoded in the database name.",
 		},

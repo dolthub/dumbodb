@@ -118,13 +118,6 @@ func (b *Backend) DumboDBCommit(_ context.Context, params *backends.CommitParams
 	}, nil
 }
 
-// DumboDBCurrentBranch implements backends.VersioningBackend interface.
-func (b *Backend) DumboDBCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
-	b.l.Info("stub: DumboDBCurrentBranch", slog.String("db", params.DBName), slog.String("branch", params.Branch))
-
-	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
-}
-
 // DumboDBBranch implements backends.VersioningBackend interface.
 func (b *Backend) DumboDBBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	b.l.Info("stub: DumboDBBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))

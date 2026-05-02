@@ -122,15 +122,6 @@ func (b *backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 	return nil, fmt.Errorf("oplog: DumboDBDiff: versioning not supported by wrapped backend")
 }
 
-// DumboDBCurrentBranch implements backends.VersioningBackend if the wrapped backend supports it.
-func (b *backend) DumboDBCurrentBranch(ctx context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
-	if vb, ok := b.origB.(backends.VersioningBackend); ok {
-		return vb.DumboDBCurrentBranch(ctx, params)
-	}
-
-	return nil, fmt.Errorf("oplog: DumboDBCurrentBranch: versioning not supported by wrapped backend")
-}
-
 // DumboDBReset implements backends.VersioningBackend if the wrapped backend supports it.
 func (b *backend) DumboDBReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {

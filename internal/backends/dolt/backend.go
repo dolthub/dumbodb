@@ -1289,14 +1289,6 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
-// DumboDBCurrentBranch implements backends.VersioningBackend.
-// It returns the branch name encoded in the connection's database name.
-// The handler has already rejected read-only rootishes before reaching here,
-// so params.Branch is always a branch name.
-func (b *Backend) DumboDBCurrentBranch(_ context.Context, params *backends.CurrentBranchParams) (*backends.CurrentBranchResult, error) {
-	return &backends.CurrentBranchResult{Branch: params.Branch}, nil
-}
-
 // DumboDBMerge implements backends.VersioningBackend.
 //
 // It merges the From branch into the Into branch of the specified database.

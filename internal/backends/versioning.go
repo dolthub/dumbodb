@@ -300,17 +300,6 @@ type ResetResult struct {
 	CommitID string
 }
 
-// CurrentBranchParams represents the parameters of VersioningBackend.DumboDBCurrentBranch method.
-type CurrentBranchParams struct {
-	DBName string
-	Branch string
-}
-
-// CurrentBranchResult represents the result of VersioningBackend.DumboDBCurrentBranch method.
-type CurrentBranchResult struct {
-	Branch string
-}
-
 // RebaseParams represents the parameters of VersioningBackend.DumboDBRebase method.
 type RebaseParams struct {
 	DBName    string
@@ -422,9 +411,6 @@ type VersioningBackend interface {
 
 	// DumboDBBranch creates a new branch starting from the given source branch.
 	DumboDBBranch(context.Context, *BranchParams) (*BranchResult, error)
-
-	// DumboDBCurrentBranch returns the current branch name for the connection.
-	DumboDBCurrentBranch(context.Context, *CurrentBranchParams) (*CurrentBranchResult, error)
 
 	// DumboDBMerge merges the source branch (From) into the target branch (Into).
 	DumboDBMerge(context.Context, *MergeParams) (*MergeResult, error)

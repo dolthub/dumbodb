@@ -119,13 +119,6 @@ func TestRootishVerify(t *testing.T) {
 		_, err = items.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
 		require.NoError(t, err, "delete from main must succeed")
 
-		// dumboDBCurrentBranch returns "main".
-		var result bson.M
-		require.NoError(t, main.RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Decode(&result))
-		assert.Equal(t, "main", result["branch"])
-		assert.EqualValues(t, 1, result["ok"])
 	})
 
 	// -------------------------------------------------------------------------
@@ -161,13 +154,6 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), nMain, "main items: must still be 2 (v1.0 write must not leak)")
 
-		// dumboDBCurrentBranch on v1.0 returns the decoded branch name "v1.0".
-		var result bson.M
-		require.NoError(t, v1DB.RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Decode(&result))
-		assert.Equal(t, "v1.0", result["branch"])
-
 		// Clean up the test write.
 		_, err = v1Items.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(10)}})
 		require.NoError(t, err, "cleanup delete from v1.0 must succeed")
@@ -201,12 +187,6 @@ func TestRootishVerify(t *testing.T) {
 		// Write on commit hash: must fail (code 96).
 		_, err = snap1Items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on hash1 snapshot")
-
-		// dumboDBCurrentBranch: no branch name to return (code 96).
-		err = snap1DB.RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on hash rootish")
 
 		// dumboDBBranch: works  -- branch creation needs only a resolved commit address.
 		var branchResult bson.M
@@ -250,12 +230,6 @@ func TestRootishVerify(t *testing.T) {
 		_, err = parentItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on main~1")
 
-		// dumboDBCurrentBranch: no branch name to return (code 96).
-		err = parentDB.RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor rootish")
-
 		// dumboDBBranch: works  -- ancestor expression resolves to a commit.
 		var branchResult bson.M
 		require.NoError(t, parentDB.RunCommand(ctx, bson.D{
@@ -282,13 +256,6 @@ func TestRootishVerify(t *testing.T) {
 		nHead, err := headItems.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err, "find on HEAD must succeed")
 		assert.Equal(t, int64(2), nHead, "HEAD: expected 2 docs (same as main HEAD)")
-
-		// doltCurrentBranch reports "main" because HEAD was rewritten.
-		var branchResult bson.M
-		require.NoError(t, headDB.RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Decode(&branchResult))
-		assert.Equal(t, "main", branchResult["branch"], "HEAD resolves to main")
 
 		// Write via HEAD goes to main's working set. Insert, verify visible on main,
 		// then clean up to keep state stable for later scenarios.

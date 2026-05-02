@@ -249,14 +249,6 @@ func (bc *backendContract) DumboDBDiff(ctx context.Context, params *DiffParams) 
 	return nil, newVersioningUnsupportedError("DumboDBDiff")
 }
 
-func (bc *backendContract) DumboDBCurrentBranch(ctx context.Context, params *CurrentBranchParams) (*CurrentBranchResult, error) {
-	if vb, ok := bc.b.(VersioningBackend); ok {
-		return vb.DumboDBCurrentBranch(ctx, params)
-	}
-
-	return nil, newVersioningUnsupportedError("DumboDBCurrentBranch")
-}
-
 func (bc *backendContract) DumboDBReset(ctx context.Context, params *ResetParams) (*ResetResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBReset(ctx, params)

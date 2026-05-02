@@ -35,7 +35,6 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboDiff` | `doltDiff` |
 | `dumboReset` | `doltReset` |
 | `dumboRevert` | `doltRevert` |
-| `dumboCurrentBranch` | `doltCurrentBranch` |
 | `dumboConflicts` | `doltConflicts` |
 | `dumboResolveConflict` | `doltResolveConflict` |
 | `dumboTag` | `doltTag` |
@@ -806,46 +805,6 @@ main.runCommand({ doltRevert: 1, commit: badCommitHash })
 - The revert creates a new commit; it does not alter history.
 - Unlike `doltReset`, reverting is safe to use on shared branches.
 - The auto-generated message includes the original commit message and hash.
-
----
-
-## dumboCurrentBranch
-
-Returns the branch name for the connection encoded in the database name.
-
-**Alias:** `doltCurrentBranch`
-
-### Parameters
-
-None (beyond the implicit `$db` connection).
-
-### Response fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `branch` | string | Current branch name |
-| `ok` | number | `1` |
-
-### Example
-
-```js
-db.getSiblingDB("orders").runCommand({ doltCurrentBranch: 1 })
-// { branch: "main", ok: 1 }
-
-db.getSiblingDB("orders@feature").runCommand({ doltCurrentBranch: 1 })
-// { branch: "feature", ok: 1 }
-```
-
-### Error cases
-
-| Condition | Error |
-|-----------|-------|
-| Connection is a read-only rootish (commit hash or ancestor expression) | `OperationFailed: doltCurrentBranch: no current branch name (connection is at a specific commit, not a named branch)` |
-
-### Notes
-
-- Read-only rootishes (commit hashes, `branch~N`) have no "current branch" and return an error.
-- Use this to confirm which branch a connection is targeting, particularly in scripts that build the encoded DB name dynamically.
 
 ---
 

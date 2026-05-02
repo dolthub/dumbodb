@@ -72,61 +72,6 @@ func TestRootish_ParseRejection(t *testing.T) {
 	}
 }
 
-// TestRootish_DumboDBCurrentBranch_EndToEnd verifies that dumboDBCurrentBranch
-// returns the correct branch on branch connections and code 96 on read-only ones.
-func TestRootish_DumboDBCurrentBranch_EndToEnd(t *testing.T) {
-	t.Parallel()
-
-	env := startDumboDB(t)
-	ctx := context.Background()
-	dbName := fmt.Sprintf("dcbtest%d", rand.Int64N(1_000_000))
-	collName := "col"
-
-	// Create two commits so we have a real hash and a non-trivial ancestor.
-	hash1 := setupVersioningDB(t, env, dbName, collName)
-
-	t.Run("plain_db_returns_main", func(t *testing.T) {
-		t.Parallel()
-
-		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Decode(&result)
-		require.NoError(t, err)
-		assert.Equal(t, "main", result["branch"])
-		assert.EqualValues(t, 1, result["ok"])
-	})
-
-	t.Run("explicit_main_returns_main", func(t *testing.T) {
-		t.Parallel()
-
-		var result bson.M
-		err := env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Decode(&result)
-		require.NoError(t, err)
-		assert.Equal(t, "main", result["branch"])
-	})
-
-	t.Run("commit_hash_returns_code96", func(t *testing.T) {
-		t.Parallel()
-
-		err := env.client.Database(dbName+"@"+hash1).RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on hash rootish")
-	})
-
-	t.Run("ancestor_expr_returns_code96", func(t *testing.T) {
-		t.Parallel()
-
-		err := env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
-			{Key: "doltCurrentBranch", Value: int32(1)},
-		}).Err()
-		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor rootish")
-	})
-}
-
 // TestRootish_AllDigitSuffix_TreatedAsPlainDB verifies that a database name whose
 // @ suffix is an all-digit string (e.g. a UnixNano timestamp from test harnesses)
 // is treated as a plain database name rather than failing with "not found as branch

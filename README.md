@@ -41,7 +41,6 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 | [`dumboDiff`](docs/COMMANDS.md#doltdiff) | Document-level diff between two states |
 | [`dumboReset`](docs/COMMANDS.md#doltreset) | Move branch HEAD to a target commit (soft or hard) |
 | [`dumboRevert`](docs/COMMANDS.md#doltrevert) | Revert one or more commits, creating a new inverse commit |
-| [`dumboCurrentBranch`](docs/COMMANDS.md#doltcurrentbranch) | Return the current branch name for this connection |
 | [`dumboConflicts`](docs/COMMANDS.md#doltconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
 | [`dumboResolveConflict`](docs/COMMANDS.md#doltresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
 | [`dumboTag`](docs/COMMANDS.md#dumbotag) | Create, list, or delete tags at specific commits |

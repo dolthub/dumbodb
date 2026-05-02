@@ -90,9 +90,6 @@ main.items.find({}).toArray()
 main.items.deleteOne({ _id: 3 })
 // Expected: { acknowledged: true, deletedCount: 1 }
 
-// doltCurrentBranch works on branch rootish
-main.runCommand({ doltCurrentBranch: 1 })
-// Expected: { branch: "main", ok: 1 }
 ```
 
 ---
@@ -129,10 +126,6 @@ main.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
 // (_id:10 does NOT appear here)
 
-// doltCurrentBranch works on branch rootish
-v1.runCommand({ doltCurrentBranch: 1 })
-// Expected: { branch: "v1.0", ok: 1 }
-
 // Clean up the test write so subsequent scenarios start from a known state.
 v1.items.deleteOne({ _id: 10 })
 // Expected: { acknowledged: true, deletedCount: 1 }
@@ -167,12 +160,6 @@ snap2.items.find({}).toArray()
 snap1.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
-
-// doltCurrentBranch: no branch name to return (connection is at a specific commit)
-snap1.runCommand({ doltCurrentBranch: 1 })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: doltCurrentBranch: no current branch name
-//   (connection is at a specific commit, not a named branch)
 
 // doltBranch: works  -- branch creation only needs a resolved commit, not write access.
 // This creates a new branch "from-hash1" pointing at hash1 (one-document state).
@@ -212,12 +199,6 @@ parent.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// doltCurrentBranch: no branch name to return (connection is at a specific commit)
-parent.runCommand({ doltCurrentBranch: 1 })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: doltCurrentBranch: no current branch name
-//   (connection is at a specific commit, not a named branch)
-
 // doltBranch: works  -- the ancestor expression resolves to a commit; branch creation
 // only needs a resolved commit address. Creates "back-one" at the main~1 state.
 parent.runCommand({ doltBranch: 1, branch: "back-one" })
@@ -246,10 +227,6 @@ const head = db.getSiblingDB("verifydb@HEAD")
 // Read: returns both documents, same as connecting via @main.
 head.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
-
-// doltCurrentBranch resolves HEAD to the default branch and returns "main".
-head.runCommand({ doltCurrentBranch: 1 })
-// Expected: { branch: "main", ok: 1 }
 
 // Write via HEAD goes to main's working set. Insert then remove to keep state clean.
 head.items.insertOne({ _id: 5, label: "via-HEAD" })
