@@ -241,7 +241,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: rebase feature onto main --------------------------
     run mongosh_eval "test@feature" '
-        try { JSON.stringify(db.runCommand({doltRebase: 1, onto: "main"})) } catch(e) { JSON.stringify(e.errorResponse) }
+        try { JSON.stringify(db.runCommand({doltRebase: 1, onto: "main", committer: "rebaser <rebaser@test>"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
     # ok:0 expected on conflict.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
@@ -345,4 +345,76 @@ mongosh_eval() {
     local sql_count
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 5: rebase committer identity propagates to dolt log
+# ---------------------------------------------------------------------------
+@test 'rebase committer: dolt log shows explicit committer identity' {
+    local main_db="test@main"
+
+    # ---- Setup: two commits, feature diverges from main ---------------------
+    run mongosh_eval "$main_db" '
+        db.widgets.insertOne({_id: 1, v: 1});
+        db.runCommand({dumboCommit: 1, message: "W1", author: "alice <alice@test>"});
+    '
+    [ "$status" -eq 0 ]
+
+    run mongosh_eval "$main_db" '
+        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feat"}))
+    '
+    [ "$status" -eq 0 ]
+
+    # Advance feature with a commit (this will be replayed).
+    run mongosh_eval "test@feat" '
+        db.widgets.insertOne({_id: 2, v: 2});
+        db.runCommand({dumboCommit: 1, message: "W2-feat", author: "bob <bob@test>"});
+    '
+    [ "$status" -eq 0 ]
+
+    # Advance main so rebase actually replays.
+    run mongosh_eval "$main_db" '
+        db.widgets.insertOne({_id: 3, v: 3});
+        db.runCommand({dumboCommit: 1, message: "W3-main", author: "alice <alice@test>"});
+    '
+    [ "$status" -eq 0 ]
+
+    # ---- Rebase feature onto main with explicit committer -------------------
+    run mongosh_eval "test@feat" '
+        JSON.stringify(db.runCommand({doltRebase: 1, onto: "main", committer: "rebaser <rebaser@test>"}))
+    '
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.ok == 1'
+
+    # ---- Verify via dolt log that committer is set --------------------------
+    stop_dumbodb
+    setup_dolt_hack "$DUMBODB_DATA_DIR"
+    cd "$(dirname "$DUMBODB_DATA_DIR")"
+
+    run dolt checkout feat
+    [ "$status" -eq 0 ]
+
+    # dolt log shows the most recent commit (the rebased W2-feat).
+    # committer should be "rebaser", email should be "rebaser@test".
+    # author should be preserved as "bob" (original commit author).
+    run dolt sql -q "SELECT committer, email, author, author_email FROM dolt_log LIMIT 1" --result-format csv
+    [ "$status" -eq 0 ]
+    local log_line
+    log_line="$(echo "$output" | tail -1)"
+
+    local committer_name
+    committer_name="$(echo "$log_line" | cut -d',' -f1)"
+    [ "$committer_name" = "rebaser" ]
+
+    local committer_email
+    committer_email="$(echo "$log_line" | cut -d',' -f2)"
+    [ "$committer_email" = "rebaser@test" ]
+
+    local author_name
+    author_name="$(echo "$log_line" | cut -d',' -f3)"
+    [ "$author_name" = "bob" ]
+
+    local author_email
+    author_email="$(echo "$log_line" | cut -d',' -f4)"
+    [ "$author_email" = "bob@test" ]
 }
