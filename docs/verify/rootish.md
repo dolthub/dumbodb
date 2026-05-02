@@ -51,7 +51,7 @@ const hash2 = result2.commitId
 
 // Create a branch named "v1.0" pointing at commit 2.
 // The rootish in the db name must be percent-encoded because '.' is a
-// MongoDB namespace separator. Encode client-side: "v1.0" → "v1%2E0".
+// MongoDB namespace separator. Encode client-side: "v1.0" -> "v1%2E0".
 // DumboDB decodes it server-side before resolving the branch.
 const tagResult = db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "v1.0" })
 printjson(tagResult)
@@ -106,7 +106,7 @@ set and are isolated from main's working set.
 > must be percent-encoded in the rootish part of the db name. DumboDB decodes them
 > server-side before resolving the branch. One pass only  -- `%` itself encodes as `%25`.
 >
-> Common encodings: `.` → `%2E`, `/` → `%2F`, `$` → `%24`
+> Common encodings: `.` -> `%2E`, `/` -> `%2F`, `$` -> `%24`
 
 ```js
 const v1 = db.getSiblingDB("verifydb@v1%2E0")
@@ -273,11 +273,17 @@ prev.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// HEAD caret forms (HEAD^, HEAD^N) are still rejected  -- use HEAD~N instead.
-db.getSiblingDB("verifydb@HEAD^").items.find({}).toArray()
+// HEAD^ aliases main^ (first parent of HEAD).  Read-only, like HEAD~1.
+var caretDB = db.getSiblingDB("verifydb@HEAD^")
+caretDB.items.find({}).toArray()
+// Expected: 1 document (first parent = commit 1)
+
+caretDB.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "HEAD^": caret syntax (^, ^N, ^{type}) is not
-//   supported; use ~N for ancestor traversal
+//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+
+// HEAD^2 is only valid on merge commits (selects the second parent).
+// On a non-merge commit, it returns an error because there is no second parent.
 ```
 
 ---
@@ -288,22 +294,22 @@ Reflog syntax (`<ref>@{...}`) is not supported. The raw `@`, `{`, `}`, and space
 characters are invalid in MongoDB database names, so mongosh rejects them
 client-side with `MongoshInvalidInputError: [COMMON-10001] Invalid database name`
 before any network call is made. To reach the server-side parser, percent-encode
-the special characters: `@` → `%40`, `{` → `%7B`, `}` → `%7D`, space → `%20`.
+the special characters: `@` -> `%40`, `{` -> `%7B`, `}` -> `%7D`, space -> `%20`.
 DumboDB decodes the DB name server-side (the same mechanism Scenario 2 uses for
 `.` in branch names) and returns the documented code-96 rejection.
 
 ```js
-// main@{yesterday} → percent-encoded
+// main@{yesterday} -> percent-encoded
 db.getSiblingDB("verifydb@main%40%7Byesterday%7D").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main@{yesterday}": reflog syntax is not supported
 
-// main@{5 minutes ago} → percent-encoded (note %20 for spaces)
+// main@{5 minutes ago} -> percent-encoded (note %20 for spaces)
 db.getSiblingDB("verifydb@main%40%7B5%20minutes%20ago%7D").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main@{5 minutes ago}": reflog syntax is not supported
 
-// @{1} → percent-encoded
+// @{1} -> percent-encoded
 db.getSiblingDB("verifydb@%40%7B1%7D").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "@{1}": reflog syntax is not supported
@@ -325,12 +331,12 @@ Percent-encode `.` as `%2E` (the same encoding used for branch names like `v1.0`
 in Scenario 2) to reach the server-side rejection.
 
 ```js
-// main..feature → percent-encoded
+// main..feature -> percent-encoded
 db.getSiblingDB("verifydb@main%2E%2Efeature").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main..feature": range syntax is not supported
 
-// main...feature (three-dot range) → percent-encoded
+// main...feature (three-dot range) -> percent-encoded
 db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "main...feature": range syntax is not supported
@@ -340,20 +346,22 @@ db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 
 ## Quick Reference
 
-| Rootish form | Example | Read | Write¹ | Branch creation² | Notes |
+| Rootish form | Example | Read | Write[1] | Branch creation[2] | Notes |
 |---|---|---|---|---|---|
-| Branch name (main) | `mydb@main` | ✅ | ✅ | ✅ | Writes go to main's working set |
-| Branch name (other) | `mydb@v1%2E0` (encodes `v1.0`) | ✅ | ✅ | ✅ | Writes go to that branch's working set, isolated from main |
-| Tag name | `mydb@v1%2E0` (when `v1.0` is a tag) | ✅ | ❌ | ✅ | Collection writes blocked; branch creation resolves the tag's commit |
-| Commit hash (32 chars) | `mydb@<hash>` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation uses the hash directly |
-| Ancestor expression | `mydb@main~1` | ✅ | ❌ | ✅ | Collection writes blocked; branch creation walks to the Nth ancestor commit |
-| HEAD | `mydb@HEAD` | ✅ | ✅ | ✅ | Alias for the default branch (`main`); writes go to main's working set |
-| HEAD-relative | `mydb@HEAD~N` | ✅ | ❌ | ✅ | Alias for `main~N`; collection writes blocked, branch creation walks ancestry |
-| Reflog | `mydb@main%40%7Byesterday%7D` (encodes `main@{yesterday}`) | ❌ | ❌ | ❌ | Raw `@{}` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
-| Range | `mydb@main%2E%2Efeature` (encodes `main..feature`) | ❌ | ❌ | ❌ | Raw `.` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
+| Branch name (main) | `mydb@main` | yes | yes | yes | Writes go to main's working set |
+| Branch name (other) | `mydb@v1%2E0` (encodes `v1.0`) | yes | yes | yes | Writes go to that branch's working set, isolated from main |
+| Tag name | `mydb@v1%2E0` (when `v1.0` is a tag) | yes | no | yes | Collection writes blocked; branch creation resolves the tag's commit |
+| Commit hash (32 chars) | `mydb@<hash>` | yes | no | yes | Collection writes blocked; branch creation uses the hash directly |
+| Ancestor expression | `mydb@main~1` | yes | no | yes | Collection writes blocked; branch creation walks to the Nth ancestor commit |
+| HEAD | `mydb@HEAD` | yes | yes | yes | Alias for the default branch (`main`); writes go to main's working set |
+| HEAD-relative | `mydb@HEAD~N` | yes | no | yes | Alias for `main~N`; collection writes blocked, branch creation walks ancestry |
+| Caret parent | `mydb@main^2` | yes | no | yes | Selects Nth parent (1=first, 2=second on merge commits, 0=self) |
+| Chained | `mydb@main^1~2`, `mydb@HEAD^^` | yes | no | yes | Operators compose left to right, matching git |
+| Reflog | `mydb@main%40%7Byesterday%7D` (encodes `main@{yesterday}`) | no | no | no | Raw `@{}` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
+| Range | `mydb@main%2E%2Efeature` (encodes `main..feature`) | no | no | no | Raw `.` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
 
-¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
-² **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "newname" })`. Works whenever
+[1] **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
+[2] **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "newname" })`. Works whenever
 the rootish resolves to a commit  -- branch creation only needs a commit address, not write access.
 
 All errors use MongoDB error code **96** (`OperationFailed`).

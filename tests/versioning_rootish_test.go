@@ -41,9 +41,9 @@ func assertRootishRejected(tb testing.TB, db *mongo.Database, op string) {
 		"%s: expected OperationFailed (96), got %d: %s", op, cmdErr.Code, cmdErr.Message)
 }
 
-// TestRootish_ParseRejection verifies that reflog, range, and caret rootish
-// forms are rejected at parse time with code 96. HEAD and HEAD~N are accepted
-// (they alias to main and main~N) and therefore do NOT appear in this list.
+// TestRootish_ParseRejection verifies that reflog and range rootish
+// forms are rejected at parse time with code 96. HEAD, HEAD~N, and HEAD^N
+// are accepted and therefore do NOT appear in this list.
 func TestRootish_ParseRejection(t *testing.T) {
 	t.Parallel()
 
@@ -54,7 +54,6 @@ func TestRootish_ParseRejection(t *testing.T) {
 		name    string
 		rootish string
 	}{
-		{"HEAD_caret", "HEAD^"},
 		{"reflog_yesterday", "main@{yesterday}"},
 		{"reflog_minutes_ago", "main@{5 minutes ago}"},
 		{"reflog_bare", "@{1}"},

@@ -76,9 +76,13 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 		return amFromCommitHash(ctx, state, rootish)
 	}
 
-	// Case 2: relative ancestor expression <branch>~<N>.
-	if strings.Contains(rootish, "~") {
-		return amFromAncestorExpr(ctx, state, rootish)
+	// Case 2: traversal expressions containing ^ or ~ (possibly chained).
+	if strings.ContainsAny(rootish, "^~") {
+		h, err := resolveRootishToCommitHash(ctx, state, rootish)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
+		return amFromCommitHash(ctx, state, h.String())
 	}
 
 	// Case 3: branch name  -- try refs/heads/<rootish>.
@@ -157,9 +161,10 @@ func amFromAncestorExpr(ctx context.Context, state *dbState, rootish string) (pr
 // resolveRootishToCommitHash resolves any rootish expression to the Dolt commit hash
 // it points to. Resolution order mirrors amFromRootish:
 //  1. Bare 32-char commit hash  -- parsed and returned directly.
-//  2. Ancestor expression <branch>~<N>  -- branch HEAD resolved, then N first-parents walked.
-//  3. Branch name  -- resolved via refs/heads/<rootish>.
-//  4. Tag name  -- resolved via refs/tags/<rootish>.
+//  2. Caret parent selection <ref>^N  -- selects Nth parent (1=first, 2=second, 0=self).
+//  3. Ancestor expression <branch>~<N>  -- branch HEAD resolved, then N first-parents walked.
+//  4. Branch name  -- resolved via refs/heads/<rootish>.
+//  5. Tag name  -- resolved via refs/tags/<rootish>.
 //
 // This is used for branch creation (DumboDBBranch) which needs the commit hash, not the AM.
 func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish string) (hash.Hash, error) {
@@ -168,43 +173,14 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 		return h, nil
 	}
 
-	// Case 2: ancestor expression <branch>~<N>.
-	if idx := strings.LastIndex(rootish, "~"); idx >= 0 {
-		branch := rootish[:idx]
-		nStr := rootish[idx+1:]
-		n, err := strconv.Atoi(nStr)
-		if err != nil || n < 0 {
-			return hash.Hash{}, fmt.Errorf("rootish %q: invalid ancestor count %q", rootish, nStr)
-		}
-		branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+branch)
-		if err != nil {
-			return hash.Hash{}, fmt.Errorf("rootish %q: resolving branch %q: %w", rootish, branch, err)
-		}
-		if !branchDS.HasHead() {
-			return hash.Hash{}, fmt.Errorf("rootish %q: branch %q has no commits", rootish, branch)
-		}
-		currentHash, ok := branchDS.MaybeHeadAddr()
-		if !ok {
-			return hash.Hash{}, fmt.Errorf("rootish %q: branch %q has no head address", rootish, branch)
-		}
-		for i := 0; i < n; i++ {
-			commit, loadErr := datas.LoadCommitAddr(ctx, state.vs, currentHash)
-			if loadErr != nil {
-				return hash.Hash{}, fmt.Errorf("rootish %q: loading commit at depth %d: %w", rootish, i, loadErr)
-			}
-			parentAddrs, parErr := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
-			if parErr != nil {
-				return hash.Hash{}, fmt.Errorf("rootish %q: reading parents at depth %d: %w", rootish, i, parErr)
-			}
-			if len(parentAddrs) == 0 {
-				return hash.Hash{}, fmt.Errorf("rootish %q: commit at depth %d has no parent (only %d ancestors exist)", rootish, i, i)
-			}
-			currentHash = parentAddrs[0]
-		}
-		return currentHash, nil
+	// Case 2: chained traversal expressions containing ^ or ~.
+	// Parse from right to left, peeling off one ^N or ~N suffix at a time,
+	// matching git's behavior for chains like HEAD^2~3 or main~1^2.
+	if strings.ContainsAny(rootish, "^~") {
+		return resolveTraversalChain(ctx, state, rootish)
 	}
 
-	// Case 3: branch name.
+	// Case 4: branch name.
 	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+rootish)
 	if err == nil && branchDS.HasHead() {
 		if h, ok := branchDS.MaybeHeadAddr(); ok {
@@ -212,7 +188,7 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 		}
 	}
 
-	// Case 4: tag name  -- use tagCommitAddr to dereference through the tag
+	// Case 5: tag name  -- use tagCommitAddr to dereference through the tag
 	// flatbuffer to the underlying commit hash.
 	tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if tagErr == nil && tagDS.HasHead() {
@@ -222,6 +198,81 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 	}
 
 	return hash.Hash{}, fmt.Errorf("rootish %q: not found as commit hash, branch, or tag", rootish)
+}
+
+// resolveTraversalChain resolves rootish expressions that contain ^ and/or ~
+// operators, possibly chained (e.g. "main~1^2", "HEAD^2~3", "main^^").
+//
+// It peels off the rightmost operator suffix, resolves the base recursively,
+// then applies the operator. This matches git's left-to-right evaluation:
+// "HEAD^2~3" means: second parent of HEAD, then walk 3 first-parent ancestors.
+func resolveTraversalChain(ctx context.Context, state *dbState, rootish string) (hash.Hash, error) {
+	// Find the rightmost ^ or ~ operator.
+	lastCaret := strings.LastIndex(rootish, "^")
+	lastTilde := strings.LastIndex(rootish, "~")
+
+	// Pick whichever is further right.
+	splitIdx := lastCaret
+	if lastTilde > splitIdx {
+		splitIdx = lastTilde
+	}
+
+	op := rootish[splitIdx]
+	ref := rootish[:splitIdx]
+	nStr := rootish[splitIdx+1:]
+
+	// Resolve the base ref recursively.
+	refHash, err := resolveRootishToCommitHash(ctx, state, ref)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("rootish %q: resolving %q: %w", rootish, ref, err)
+	}
+
+	if op == '^' {
+		n := 1 // bare ^ means ^1
+		if nStr != "" {
+			n, err = strconv.Atoi(nStr)
+			if err != nil || n < 0 || n > 2 {
+				return hash.Hash{}, fmt.Errorf("rootish %q: invalid caret index %q (must be 0, 1, or 2)", rootish, nStr)
+			}
+		}
+		if n == 0 {
+			return refHash, nil
+		}
+		commit, loadErr := datas.LoadCommitAddr(ctx, state.vs, refHash)
+		if loadErr != nil {
+			return hash.Hash{}, fmt.Errorf("rootish %q: loading commit: %w", rootish, loadErr)
+		}
+		parentAddrs, parErr := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if parErr != nil {
+			return hash.Hash{}, fmt.Errorf("rootish %q: reading parents: %w", rootish, parErr)
+		}
+		if n > len(parentAddrs) {
+			return hash.Hash{}, fmt.Errorf("rootish %q: commit has %d parent(s), cannot access parent %d", rootish, len(parentAddrs), n)
+		}
+		return parentAddrs[n-1], nil
+	}
+
+	// op == '~'
+	n, err := strconv.Atoi(nStr)
+	if err != nil || n < 0 {
+		return hash.Hash{}, fmt.Errorf("rootish %q: invalid ancestor count %q", rootish, nStr)
+	}
+	currentHash := refHash
+	for i := 0; i < n; i++ {
+		commit, loadErr := datas.LoadCommitAddr(ctx, state.vs, currentHash)
+		if loadErr != nil {
+			return hash.Hash{}, fmt.Errorf("rootish %q: loading commit at depth %d: %w", rootish, i, loadErr)
+		}
+		parentAddrs, parErr := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, commit.NomsValue().(dolttypes.SerialMessage))
+		if parErr != nil {
+			return hash.Hash{}, fmt.Errorf("rootish %q: reading parents at depth %d: %w", rootish, i, parErr)
+		}
+		if len(parentAddrs) == 0 {
+			return hash.Hash{}, fmt.Errorf("rootish %q: commit at depth %d has no parent (only %d ancestors exist)", rootish, i, i)
+		}
+		currentHash = parentAddrs[0]
+	}
+	return currentHash, nil
 }
 
 // amFromHEADExpr resolves a "HEAD" or "HEAD~N" rootish to a collections AddressMap.
@@ -524,9 +575,9 @@ func diffArrayPaths(path string, arrA, arrB *types.Array) ([]backends.FieldDiff,
 // the rest of the dolt backend.
 //
 // It iterates both sorted maps in parallel (merge-join) to find:
-//   - Documents only in aMap → removed
-//   - Documents only in bMap → added
-//   - Documents in both with different values → modified (path-based field diff)
+//   - Documents only in aMap -> removed
+//   - Documents only in bMap -> added
+//   - Documents in both with different values -> modified (path-based field diff)
 //
 // Documents present in both with identical values are not included in any list.
 // For modified documents, the prolly-map content-hash comparison detects changes
@@ -591,7 +642,7 @@ func diffCollectionMaps(
 
 			switch {
 			case cmp < 0:
-				// kA is not in B → removed.
+				// kA is not in B -> removed.
 				doc, readErr := readDocFromEntry(ctx, ns, kA, vA)
 				if readErr != nil {
 					return nil, nil, nil, readErr
@@ -601,7 +652,7 @@ func diffCollectionMaps(
 				kA, vA, errA = iterA.Next(ctx)
 
 			case cmp > 0:
-				// kB is not in A → added.
+				// kB is not in A -> added.
 				doc, readErr := readDocFromEntry(ctx, ns, kB, vB)
 				if readErr != nil {
 					return nil, nil, nil, readErr

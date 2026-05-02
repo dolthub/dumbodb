@@ -45,6 +45,13 @@ func TestParseRootish(t *testing.T) {
 		{"HEAD tilde-1", "HEAD~1"},
 		{"HEAD tilde-0", "HEAD~0"},
 		{"HEAD tilde-5", "HEAD~5"},
+		{"bare caret", "main^"},
+		{"caret 0", "main^0"},
+		{"caret 1", "main^1"},
+		{"caret 2", "main^2"},
+		{"HEAD caret", "HEAD^"},
+		{"HEAD caret 1", "HEAD^1"},
+		{"HEAD caret 2", "HEAD^2"},
 	}
 
 	for _, tc := range validCases {
@@ -61,8 +68,6 @@ func TestParseRootish(t *testing.T) {
 		name    string
 		rootish string
 	}{
-		{"HEAD caret", "HEAD^"},
-		{"HEAD caret N", "HEAD^2"},
 		{"reflog yesterday", "main@{yesterday}"},
 		{"reflog 5 minutes ago", "@{5 minutes ago}"},
 		{"range double-dot", "main..feature"},
@@ -70,8 +75,6 @@ func TestParseRootish(t *testing.T) {
 		{"regex commit search", ":/fix bug"},
 		{"type deref commit", "v1.0^{commit}"},
 		{"type deref empty", "v1.0^{}"},
-		{"caret parent N", "main^2"},
-		{"bare caret", "main^"},
 		{"empty string", ""},
 	}
 
@@ -128,6 +131,9 @@ func TestBranchFromDBName(t *testing.T) {
 		// All-digit suffix after @ (e.g. UnixNano timestamp): whole name treated as plain DB.
 		{"all-digit suffix treated as plain DB", "parity_sometest@1775505756999075683", "parity_sometest@1775505756999075683", "main", false},
 		{"short all-digit suffix treated as plain DB", "mydb@12345", "mydb@12345", "main", false},
+		{"HEAD caret read-only", "mydb@HEAD^", "mydb", "main^", true},
+		{"caret parent 2 read-only", "mydb@main^2", "mydb", "main^2", true},
+		{"caret parent 0 read-only", "mydb@main^0", "mydb", "main^0", true},
 	}
 
 	for _, tc := range validCases {
@@ -154,7 +160,6 @@ func TestBranchFromDBName(t *testing.T) {
 		name    string
 		encoded string
 	}{
-		{"HEAD caret", "mydb@HEAD^"},
 		{"reflog syntax", "mydb@main@{yesterday}"},
 		{"range syntax", "mydb@main..feature"},
 		{"regex search", "mydb@:/fix bug"},

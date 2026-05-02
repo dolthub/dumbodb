@@ -17,8 +17,8 @@
 // Storage hierarchy:
 //   - One nbs.GenerationalNBS per MongoDB database, stored in <dataDir>/<dbName>/
 //   - The NBS store root chunk is a StoreRoot flatbuffer (STRT)
-//   - STRT embeds a refsAM inline: AddressMap mapping "heads/main" → commitHash
-//   - commitHash → Commit (DCMT) with rootValue = RTVL (RootValue) chunk
+//   - STRT embeds a refsAM inline: AddressMap mapping "heads/main" -> commitHash
+//   - commitHash -> Commit (DCMT) with rootValue = RTVL (RootValue) chunk
 //   - RTVL.tables wraps the collections AddressMap (ADRM) bytes inline
 //   - Collections AddressMap (ADRM) maps collection names to prolly.Map root hashes
 //   - Each prolly.Map uses key=ByteString(encoded MongoDB _id) and value=JSONAddr(JSON prolly tree hash)
@@ -119,24 +119,24 @@ type dbState struct {
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
 	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
 	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
-	am         prolly.AddressMap               // current collections address map (name → DTBL hash) for main
-	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name → AM)
-	uuids      map[string]string               // collection name → UUID string (in-memory)
-	indexes    map[string][]backends.IndexInfo // collection name → secondary indexes (in-memory)
+	am         prolly.AddressMap               // current collections address map (name -> DTBL hash) for main
+	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name -> AM)
+	uuids      map[string]string               // collection name -> UUID string (in-memory)
+	indexes    map[string][]backends.IndexInfo // collection name -> secondary indexes (in-memory)
 	// secIndexMaps holds the secondary-index prolly.Maps for each collection.
 	// Keyed by collection name, then by index name. Hydrated on db open from
 	// each DTBL's SecondaryIndexes AM and kept in sync with collIndexAMs.
 	secIndexMaps map[string]map[string]prolly.Map
 	// collIndexAMs holds the per-collection secondary-index AddressMap that gets
 	// inlined into the DTBL's secondary_indexes field. Keyed by collection name.
-	// Each AM maps index name → IndexEntry chunk hash.
+	// Each AM maps index name -> IndexEntry chunk hash.
 	collIndexAMs map[string]prolly.AddressMap
-	validators map[string]*collectionValidator // collection name → validator (in-memory)
-	capped     map[string]*cappedCollectionMeta // collection name → capped config (in-memory)
+	validators map[string]*collectionValidator // collection name -> validator (in-memory)
+	capped     map[string]*cappedCollectionMeta // collection name -> capped config (in-memory)
 	// insertionOrder tracks document _id values in insertion order for FIFO eviction in capped collections.
 	insertionOrder map[string][]any
-	views          map[string]*viewMeta         // collection name → view definition (in-memory)
-	timeSeries     map[string]*timeSeriesMeta   // collection name → time series config (in-memory)
+	views          map[string]*viewMeta         // collection name -> view definition (in-memory)
+	timeSeries     map[string]*timeSeriesMeta   // collection name -> time series config (in-memory)
 
 	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
 	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
@@ -365,7 +365,7 @@ func splitEncodedDBName(encoded string) (dbName, rootish string) {
 		if !splitAllDigits(candidate) {
 			if candidate == "HEAD" {
 				candidate = "main"
-			} else if strings.HasPrefix(candidate, "HEAD~") {
+			} else if strings.HasPrefix(candidate, "HEAD~") || strings.HasPrefix(candidate, "HEAD^") {
 				candidate = "main" + candidate[len("HEAD"):]
 			}
 			return encoded[:idx], candidate
@@ -865,7 +865,7 @@ func migrateADRMtoSTRT(ctx context.Context, cs *nbs.GenerationalNBS, vs *dolttyp
 		return fmt.Errorf("writing commit: %w", err)
 	}
 
-	// Build a refsAM mapping "heads/main" → commit hash.
+	// Build a refsAM mapping "heads/main" -> commit hash.
 	refsAM, err := prolly.NewEmptyAddressMap(ns)
 	if err != nil {
 		return fmt.Errorf("creating refs address map: %w", err)
@@ -1770,7 +1770,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading into AM for branch %q: %w", branch, err)
 	}
 
-	// Perform the 3-way merge: apply cherry-pick diff (base→from) onto current HEAD (into).
+	// Perform the 3-way merge: apply cherry-pick diff (base->from) onto current HEAD (into).
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash)
 	if err != nil {
 		return nil, fmt.Errorf("dolt: DumboDBCherryPick: %w", err)
@@ -1949,7 +1949,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		startHash = h
 	}
 
-	// Build a map from commit hash string → ref labels by iterating over all
+	// Build a map from commit hash string -> ref labels by iterating over all
 	// branch datasets.  The connection branch (ConnBranch) gets "HEAD -> <name>",
 	// every other branch gets its bare name.
 	refsForCommit := make(map[string][]string)
@@ -2684,7 +2684,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading into AM for tip %q: %w", ms.intoHash, err)
 		}
 
-		// 3-way merge: apply pick's diff (base→from) onto the current rebased tip (into).
+		// 3-way merge: apply pick's diff (base->from) onto the current rebased tip (into).
 		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: replayRemainingCommits: merging commit %q: %w", pickHash, err)
@@ -2842,7 +2842,7 @@ func findCommitsToReplay(ctx context.Context, state *dbState, branchHead, ontoHe
 // branch's working set and creates a new commit that undoes those changes.
 //
 // The 3-way merge for revert uses the commit being reverted as the "base" and its parent
-// as the "from" side, so the diff applied is (commit → parent), i.e. the inverse.
+// as the "from" side, so the diff applied is (commit -> parent), i.e. the inverse.
 func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertParams) (*backends.RevertResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {

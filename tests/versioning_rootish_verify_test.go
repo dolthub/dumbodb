@@ -272,7 +272,7 @@ func TestRootishVerify(t *testing.T) {
 
 	// -------------------------------------------------------------------------
 	// Scenario 5: verifydb@HEAD  -- aliases main; HEAD~N aliases main~N.
-	// HEAD^ and other caret forms are still rejected with code 96.
+	// HEAD^ aliases main^ (first parent); HEAD^2 selects second parent on merge commits.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HEAD_AliasesMain", func(t *testing.T) {
 		headDB := env.client.Database(dbName + "@HEAD")
@@ -318,8 +318,14 @@ func TestRootishVerify(t *testing.T) {
 		_, err = prevItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on HEAD~1")
 
-		// HEAD caret forms (HEAD^, HEAD^N) are still rejected at parse time.
-		assertRootishRejected(t, env.client.Database(dbName+"@HEAD^"), "HEAD^ find")
+		// HEAD^ is read-only (first parent of HEAD). Reads succeed, writes are blocked.
+		caretDB := env.client.Database(dbName + "@HEAD^")
+		nCaret, err := caretDB.Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err, "find on HEAD^ must succeed")
+		assert.Equal(t, int64(1), nCaret, "HEAD^: expected 1 doc (first parent = commit 1)")
+
+		_, err = caretDB.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
+		assertWriteBlockedOperationFailed(t, err, "insert on HEAD^")
 	})
 
 	// -------------------------------------------------------------------------
@@ -343,6 +349,98 @@ func TestRootishVerify(t *testing.T) {
 	t.Run("Scenario7_Range_AnyCommandFails", func(t *testing.T) {
 		assertRootishRejected(t, env.client.Database(dbName+"@main%2E%2Efeature"), "range_two_dot")
 		assertRootishRejected(t, env.client.Database(dbName+"@main%2E%2E%2Efeature"), "range_three_dot")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: Chained traversal expressions (^N, ~N combined)
+	// Create a merge commit so we can test ^2, then chain operators.
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_ChainedTraversal", func(t *testing.T) {
+		chainDB := fmt.Sprintf("chainvrfy%d", rand.Int64N(1_000_000))
+
+		mainCol := env.client.Database(chainDB + "@main").Collection("items")
+
+		// C1: root commit
+		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "root"}})
+		require.NoError(t, err)
+		hashC1 := dumboDBCommit(t, env, chainDB+"@main", "C1-root", "alice <alice@acme.com>")
+
+		// Create feature branch, add a commit
+		require.NoError(t, env.client.Database(chainDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "feature"},
+		}).Err())
+
+		featCol := env.client.Database(chainDB + "@feature").Collection("items")
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "feat"}})
+		require.NoError(t, err)
+		hashC2 := dumboDBCommit(t, env, chainDB+"@feature", "C2-feature", "bob <bob@widgets.io>")
+
+		// Advance main independently
+		_, err = mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "v", Value: "main-adv"}})
+		require.NoError(t, err)
+		hashC3 := dumboDBCommit(t, env, chainDB+"@main", "C3-main", "alice <alice@acme.com>")
+
+		// Merge feature into main (3-way merge)
+		mergeRaw := runCommandRaw(t, env.client.Database(chainDB+"@main"), bson.D{
+			{Key: "doltMerge", Value: int32(1)},
+			{Key: "merge_in", Value: "feature"},
+		})
+		require.EqualValues(t, 1, mergeRaw["ok"], "merge must succeed")
+		_ = hashC1
+
+		// Now main HEAD is the merge commit M with:
+		//   M^1 = C3 (main's pre-merge tip)
+		//   M^2 = C2 (feature's tip)
+		//   M^1~1 = C1 (root)
+
+		// Test main^1 = C3
+		var logP1 bson.M
+		require.NoError(t, env.client.Database(chainDB+"@main^1").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&logP1))
+		p1Head := logP1["commits"].(bson.A)[0].(bson.M)
+		assert.Equal(t, hashC3, p1Head["commitId"], "main^1 must be C3")
+
+		// Test main^2 = C2
+		var logP2 bson.M
+		require.NoError(t, env.client.Database(chainDB+"@main^2").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&logP2))
+		p2Head := logP2["commits"].(bson.A)[0].(bson.M)
+		assert.Equal(t, hashC2, p2Head["commitId"], "main^2 must be C2")
+
+		// Test chained: main^1~1 = C1 (parent of C3 = root)
+		var logChain bson.M
+		require.NoError(t, env.client.Database(chainDB+"@main^1~1").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&logChain))
+		chainHead := logChain["commits"].(bson.A)[0].(bson.M)
+		assert.Equal(t, hashC1, chainHead["commitId"], "main^1~1 must be C1 (root)")
+
+		// Test main^0 = the merge commit itself
+		var logP0 bson.M
+		require.NoError(t, env.client.Database(chainDB+"@main^0").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&logP0))
+		p0Head := logP0["commits"].(bson.A)[0].(bson.M)
+		assert.Equal(t, mergeRaw["commitId"], p0Head["commitId"], "main^0 must be the merge commit")
+
+		// Test main~1^1 = C1 (first parent of main's first parent)
+		var logTildeCaret bson.M
+		require.NoError(t, env.client.Database(chainDB+"@main~1^1").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&logTildeCaret))
+		tcHead := logTildeCaret["commits"].(bson.A)[0].(bson.M)
+		assert.Equal(t, hashC1, tcHead["commitId"], "main~1^1 must be C1")
+
+		// Test main^^ = C1 (first parent of first parent)
+		var logDoubleCaret bson.M
+		require.NoError(t, env.client.Database(chainDB+"@main^^").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&logDoubleCaret))
+		dcHead := logDoubleCaret["commits"].(bson.A)[0].(bson.M)
+		assert.Equal(t, hashC1, dcHead["commitId"], "main^^ must be C1")
 	})
 }
 

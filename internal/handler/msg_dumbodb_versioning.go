@@ -147,11 +147,11 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 //
 // DumboDB encodes version information in the database name using the '@' separator:
 //
-//	"mydb@branchname"                        → dbName="mydb", rootish="branchname",                        readOnly=false
-//	"mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61" → dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
-//	"mydb@main~3"                            → dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
-//	"mydb@HEAD"                              → dbName="mydb", rootish="main",                              readOnly=false (HEAD alias)
-//	"mydb@HEAD~2"                            → dbName="mydb", rootish="main~2",                            readOnly=true  (HEAD-relative alias)
+//	"mydb@branchname"                        -> dbName="mydb", rootish="branchname",                        readOnly=false
+//	"mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61" -> dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
+//	"mydb@main~3"                            -> dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
+//	"mydb@HEAD"                              -> dbName="mydb", rootish="main",                              readOnly=false (HEAD alias)
+//	"mydb@HEAD~2"                            -> dbName="mydb", rootish="main~2",                            readOnly=true  (HEAD-relative alias)
 //
 // If no separator is present the rootish defaults to "main" and readOnly is false.
 //
@@ -206,6 +206,9 @@ func resolveHEADAlias(rootish string) string {
 	if strings.HasPrefix(rootish, "HEAD~") {
 		return "main" + rootish[len("HEAD"):]
 	}
+	if strings.HasPrefix(rootish, "HEAD^") {
+		return "main" + rootish[len("HEAD"):]
+	}
 	return rootish
 }
 
@@ -240,6 +243,11 @@ func rootishAllDigits(s string) bool {
 func rootishIsReadOnly(rootish string) bool {
 	// Ancestor expression: <branch>~<N>
 	if strings.Contains(rootish, "~") {
+		return true
+	}
+
+	// Caret parent selection: <ref>^, <ref>^N
+	if strings.Contains(rootish, "^") {
 		return true
 	}
 
@@ -285,11 +293,14 @@ func enforceWritableRootish(encodedDB string) error {
 //
 // Rejected forms (returned as ErrOperationFailed):
 //   - Any '@' (reserved as the database/branch delimiter; covers reflog <ref>@{...} too)
-//   - HEAD caret forms (HEAD^, HEAD^N)
 //   - Range syntax (<ref>..<ref>)
 //   - Regex commit search (:/<pattern>)
 //   - Type dereferencing (<ref>^{<type>})
-//   - Caret parent selection (<ref>^, <ref>^N)
+//
+// Supported caret forms:
+//   - <ref>^ or <ref>^1 -- first parent
+//   - <ref>^2 -- second parent (merge commits only)
+//   - <ref>^0 -- the commit itself
 func parseRootish(s string) error {
 	if s == "" {
 		return handlererrors.NewCommandErrorMsg(
@@ -323,39 +334,16 @@ func parseRootish(s string) error {
 		)
 	}
 
-	// Reject caret forms: type dereferencing (^{...}) and caret parent selection (^, ^N).
-	if strings.Contains(s, "^") {
+	// Reject type dereferencing (^{...}) but allow caret parent selection (^, ^N).
+	if strings.Contains(s, "^{") {
 		return handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			fmt.Sprintf("rootish %q: caret syntax (^, ^N, ^{type}) is not supported; use ~N for ancestor traversal", s),
+			fmt.Sprintf("rootish %q: type dereferencing (^{type}) is not supported", s),
 		)
 	}
 
-	// Validate relative ancestor expression <branch>~<N>.
-	if idx := strings.LastIndex(s, "~"); idx >= 0 {
-		branch := s[:idx]
-		nStr := s[idx+1:]
-		if branch == "" {
-			return handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrOperationFailed,
-				fmt.Sprintf("rootish %q: branch name must not be empty in relative ancestor expression", s),
-			)
-		}
-		if nStr == "" {
-			return handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrOperationFailed,
-				fmt.Sprintf("rootish %q: ancestor count must not be empty in <branch>~<N>", s),
-			)
-		}
-		for _, c := range nStr {
-			if c < '0' || c > '9' {
-				return handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrOperationFailed,
-					fmt.Sprintf("rootish %q: ancestor count must be a non-negative integer in <branch>~<N>", s),
-				)
-			}
-		}
-	}
+	// Traversal operators (~ and ^) are validated at resolution time,
+	// not here, because they can be chained (e.g. main~1^2, HEAD^^).
 
 	return nil
 }
