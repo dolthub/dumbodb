@@ -114,10 +114,10 @@ func TestMsgDumboDBCurrentBranch_ReadOnly(t *testing.T) {
 		name      string
 		encodedDB string
 	}{
-		// Exactly 32 lowercase base32 chars → Dolt commit hash → read-only.
+		// Exactly 32 lowercase base32 chars -> Dolt commit hash -> read-only.
 		{"commit_hash", "mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61"},
 		{"all_zeros_hash", "mydb@00000000000000000000000000000000"},
-		// <branch>~<N> ancestor expression → read-only.
+		// <branch>~<N> ancestor expression -> read-only.
 		{"ancestor_tilde1", "mydb@main~1"},
 		{"ancestor_tilde3", "mydb@feature~3"},
 	}

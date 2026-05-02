@@ -22,7 +22,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// ── $literal ─────────────────────────────────────────────────────────────────
+// -- $literal -----------------------------------------------------------------
 
 // literalOp represents { $literal: <value> }.
 // Returns the value without evaluating it as an expression.
@@ -43,7 +43,7 @@ func (op *literalOp) Process(_ *types.Document) (any, error) {
 
 var _ Operator = (*literalOp)(nil)
 
-// ── $let ─────────────────────────────────────────────────────────────────────
+// -- $let ---------------------------------------------------------------------
 
 // letOp represents { $let: { vars: { <name>: <expr>, ... }, in: <expr> } }.
 // Binds variables (as $$name keys in a temporary document) and evaluates `in`.
@@ -105,7 +105,7 @@ func (op *letOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*letOp)(nil)
 
-// ── $isNumber ─────────────────────────────────────────────────────────────────
+// -- $isNumber -----------------------------------------------------------------
 
 // isNumberOp represents { $isNumber: <expr> }.
 // Returns true if the value is a numeric type (double, int, long, decimal).
@@ -136,7 +136,7 @@ func (op *isNumberOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*isNumberOp)(nil)
 
-// ── $isString ─────────────────────────────────────────────────────────────────
+// -- $isString -----------------------------------------------------------------
 
 type isStringOp struct{ arg any }
 
@@ -162,7 +162,7 @@ func (op *isStringOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*isStringOp)(nil)
 
-// ── $isObjectId ───────────────────────────────────────────────────────────────
+// -- $isObjectId ---------------------------------------------------------------
 
 type isObjectIdOp struct{ arg any }
 
@@ -188,7 +188,7 @@ func (op *isObjectIdOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*isObjectIdOp)(nil)
 
-// ── $isDate ───────────────────────────────────────────────────────────────────
+// -- $isDate -------------------------------------------------------------------
 
 type isDateOp struct{ arg any }
 

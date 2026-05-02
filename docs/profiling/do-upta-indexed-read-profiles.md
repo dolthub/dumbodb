@@ -15,9 +15,9 @@ The performance gap to MongoDB has **two distinct shapes**:
    round-trips through ExtJSON.
 
 2. **Count-style ops (`count_documents_*`)**  -- the backend `Count` finishes in
-   53 µs (10K) / 207 µs (50K). Parity reports 17 ms / 98 ms. The 99% gap is
+   53 us (10K) / 207 us (50K). Parity reports 17 ms / 98 ms. The 99% gap is
    **above the backend, not inside it**  -- handler / aggregate-shortcut /
-   wire-marshal overhead. Backend Count already hits `tryIndexedCount` →
+   wire-marshal overhead. Backend Count already hits `tryIndexedCount` ->
    `RangeCount` (single index walk, no doc fetches).
 
 Distinct scans every index entry (50K) for what is structurally a 10-group
@@ -44,7 +44,7 @@ go tool pprof -top -cum cpu.out
 ### find_filter_eq_50k_indexed  -- 105 ms/op (parity: 81 ms vs Mongo 14.78 ms)
 
 Index path is used. `tryIndexLookup` runs the index-range walk, capped at 50%
-of the collection (5K matches out of 50K → admitted), and point-fetches each
+of the collection (5K matches out of 50K -> admitted), and point-fetches each
 primary id.
 
 Top-3 cumulative CPU under `BenchmarkProfile_FindFilterEq_50K_Indexed`:
@@ -52,7 +52,7 @@ Top-3 cumulative CPU under `BenchmarkProfile_FindFilterEq_50K_Indexed`:
 | Rank | Function | Cum % | Role |
 |------|----------|-------|------|
 | 1 | `dolt.readDocJSON` | **48.19%** | Per-id primary doc fetch + decode |
-| 2 | `bson.UnmarshalExtJSON` | **34.06%** | ExtJSON → raw BSON |
+| 2 | `bson.UnmarshalExtJSON` | **34.06%** | ExtJSON -> raw BSON |
 | 3 | `bson.copyDocument` / `copyDocumentCore` | **27.45%** | BSON re-encoding inside the unmarshal path |
 
 Inside `readDocJSON` the split is 88% decode, 12% chunk-store fetch:
@@ -62,7 +62,7 @@ readDocJSON                       11.87s  (cum)
   readDocJSONBytes                 1.45s   (chunk read + JSON marshal)
   decodeDocFromJSON               10.42s
     bson.UnmarshalExtJSON          8.40s   (ExtJSON parser)
-    decodeDocument                 1.94s   (BSON → types.Document)
+    decodeDocument                 1.94s   (BSON -> types.Document)
 ```
 
 **Pattern: 80% of decode time is the ExtJSON parser.** The collection stores
@@ -73,9 +73,9 @@ is closer to a memcpy.
 `runtime.mallocgc` reaches 24% from the same path (every parsed doc allocates
 new BSON structures).
 
-### count_documents_10k  -- 53 µs/op backend (parity: 17 ms vs Mongo 1.94 ms)
+### count_documents_10k  -- 53 us/op backend (parity: 17 ms vs Mongo 1.94 ms)
 
-Index path is used. `Count` → `tryIndexedCount` → `idx.RangeCount` walks the
+Index path is used. `Count` -> `tryIndexedCount` -> `idx.RangeCount` walks the
 secondary-index range and counts entries without primary fetches.
 
 Top backend functions inside `Count`:
@@ -86,8 +86,8 @@ Top backend functions inside `Count`:
 | 2 | `prolly/tree.OrderedTreeIter.Next` | inside RangeCount | Per-entry advance |
 | 3 | `(*collection).tryIndexedCount` | thin wrapper | Index/bounds setup |
 
-**The backend is not the bottleneck  -- it is 327× faster than the parity
-number reports.** With backend Count at 53 µs and parity at 17 ms, ~99% of
+**The backend is not the bottleneck  -- it is 327x faster than the parity
+number reports.** With backend Count at 53 us and parity at 17 ms, ~99% of
 end-to-end time lives above the backend: in `MsgAggregate` (the v2 driver's
 `CountDocuments` sends an aggregate pipeline) or `MsgCount`, in the
 shortcut-pattern match, in OpMsg framing, or in the cursor reply assembly.
@@ -95,10 +95,10 @@ The aggregate-count shortcut wired in commit `2f6969d` (do-37r9) does the
 right thing once it fires; the open question is whether it fires for the
 exact pipeline shape the v2 driver emits in this benchmark.
 
-### count_documents_50k  -- 207 µs/op backend (parity: 97.83 ms vs Mongo 7.93 ms)
+### count_documents_50k  -- 207 us/op backend (parity: 97.83 ms vs Mongo 7.93 ms)
 
 Same shape as the 10K case. RangeCount scales linearly with the matched
-range (5K entries here vs 1K), 207 µs / 5K ≈ 41 ns per index step  -- that is
+range (5K entries here vs 1K), 207 us / 5K ~= 41 ns per index step  -- that is
 near the prolly cursor's structural lower bound. No hot-spot to address at
 this layer. Same handler/wire gap conclusion as the 10K case.
 
@@ -159,8 +159,8 @@ the per-doc decode cost that hurts find-eq is irrelevant here.
    to collection scan, no missing index, no 50%-range gate kicking in.
    The plumbing is right.
 
-2. **Storage format penalty: ExtJSON ↔ BSON.** Every read of a primary
-   document goes through `readDocJSON → decodeDocFromJSON →
+2. **Storage format penalty: ExtJSON <-> BSON.** Every read of a primary
+   document goes through `readDocJSON -> decodeDocFromJSON ->
    bson.UnmarshalExtJSON`, which dominates `find_filter_eq_50k` (~35% of
    total CPU) and `agg_match_group_indexed` (~32%). MongoDB's native BSON
    storage skips this entirely. This is the highest-leverage fix-point for
@@ -178,7 +178,7 @@ the per-doc decode cost that hurts find-eq is irrelevant here.
    above don't apply to them.
 
 5. **`count_documents_*` is bottlenecked above the backend.** Backend
-   Count is 53 µs / 207 µs but parity reports 17 ms / 98 ms. ~99% of the
+   Count is 53 us / 207 us but parity reports 17 ms / 98 ms. ~99% of the
    reported wall-time is in the handler / aggregate-shortcut / wire path.
    The follow-up question: does `tryCountAggregateShortcut` actually fire
    for the exact pipeline the Go v2 driver emits? An end-to-end trace

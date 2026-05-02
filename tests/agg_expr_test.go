@@ -747,7 +747,7 @@ func TestExpr_mod_nan_divisor(t *testing.T) {
 		d(e("_id", int32(1)), e("v", float64(10))),
 	)
 
-	// $mod with a literal NaN divisor: {$mod: [10, NaN]} → NaN (no error)
+	// $mod with a literal NaN divisor: {$mod: [10, NaN]} -> NaN (no error)
 	cursor, err := coll.Aggregate(ctx, bson.A{
 		bson.D{{"$project", bson.D{
 			{"_id", false},

@@ -48,7 +48,7 @@ type facet struct {
 // newFacet creates a new $facet stage.
 //
 // Note: stage parsing (calling NewStage) is deferred to Process() to avoid the
-// initialization cycle: Stages → newFacet → parsePipeline → NewStage → Stages.
+// initialization cycle: Stages -> newFacet -> parsePipeline -> NewStage -> Stages.
 func newFacet(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$facet")
 	if err != nil {

@@ -84,7 +84,7 @@ func contains(slice []string, elem string) bool {
 	return false
 }
 
-// ── Soft reset tests ──────────────────────────────────────────────────────────
+// -- Soft reset tests ----------------------------------------------------------
 
 // TestDumboDBReset_Soft_HeadMovesToTarget verifies that after a soft reset, HEAD is
 // the target commit and the working tree still contains both docs.
@@ -199,7 +199,7 @@ func TestDumboDBReset_Soft_DiffShowsUncommittedChange(t *testing.T) {
 	}
 }
 
-// ── Hard reset tests ──────────────────────────────────────────────────────────
+// -- Hard reset tests ----------------------------------------------------------
 
 // TestDumboDBReset_Hard_WorkingTreeMatchesTarget verifies that after a hard reset,
 // the working tree contains only the documents present at the target commit.
@@ -302,7 +302,7 @@ func TestDumboDBReset_Hard_DiffIsClean(t *testing.T) {
 	}
 }
 
-// ── Error case tests ──────────────────────────────────────────────────────────
+// -- Error case tests ----------------------------------------------------------
 
 // TestDumboDBReset_InvalidHash verifies that resetting to a nonexistent hash returns an error.
 func TestDumboDBReset_InvalidHash(t *testing.T) {

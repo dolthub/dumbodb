@@ -292,7 +292,7 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 			return nil
 		})
 
-		// Theirs: navigate to theirH commit → collection map → look up key.
+		// Theirs: navigate to theirH commit -> collection map -> look up key.
 		var theirsVal val.Tuple
 		if !theirH.IsEmpty() {
 			theirAM, amErr := amFromCommitHash(ctx, state, theirH.String())
@@ -307,7 +307,7 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 			}
 		}
 
-		// Base: navigate to baseH commit → collection map → look up key.
+		// Base: navigate to baseH commit -> collection map -> look up key.
 		var baseVal val.Tuple
 		if !baseH.IsEmpty() {
 			baseAM, amErr := amFromCommitHash(ctx, state, baseH.String())

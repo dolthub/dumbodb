@@ -32,15 +32,15 @@ import (
 //
 // Supported fields:
 //
-//	near               – the query point; GeoJSON Point or [lon,lat] array
-//	distanceField      – output field that receives the computed distance
-//	spherical          – if true (or field is 2dsphere), use Haversine distance
-//	maxDistance        – maximum distance in metres (spherical) or degrees (planar)
-//	minDistance        – minimum distance in metres (spherical) or degrees (planar)
-//	query              – additional filter document applied before distance check
-//	key                – field name to use for distance computation (optional)
-//	includeLocs        – output field that receives the matched location value
-//	distanceMultiplier – scalar multiplier applied to the computed distance
+//	near                -- the query point; GeoJSON Point or [lon,lat] array
+//	distanceField       -- output field that receives the computed distance
+//	spherical           -- if true (or field is 2dsphere), use Haversine distance
+//	maxDistance         -- maximum distance in metres (spherical) or degrees (planar)
+//	minDistance         -- minimum distance in metres (spherical) or degrees (planar)
+//	query               -- additional filter document applied before distance check
+//	key                 -- field name to use for distance computation (optional)
+//	includeLocs         -- output field that receives the matched location value
+//	distanceMultiplier  -- scalar multiplier applied to the computed distance
 type geoNear struct {
 	nearLon            float64
 	nearLat            float64
@@ -362,9 +362,9 @@ func (g *geoNear) computeDistance(fieldVal any) float64 {
 	return math.MaxFloat64
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // Local helpers (avoid import cycle with common)
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 const earthRadiusM = 6378137.0
 

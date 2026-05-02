@@ -23,7 +23,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ── $strLenBytes ─────────────────────────────────────────────────────────────
+// -- $strLenBytes -------------------------------------------------------------
 
 type strLenBytesOp struct{ arg any }
 
@@ -57,7 +57,7 @@ func (op *strLenBytesOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*strLenBytesOp)(nil)
 
-// ── $strLenCP ─────────────────────────────────────────────────────────────────
+// -- $strLenCP -----------------------------------------------------------------
 
 type strLenCPOp struct{ arg any }
 
@@ -91,7 +91,7 @@ func (op *strLenCPOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*strLenCPOp)(nil)
 
-// ── $substr (alias for $substrBytes) ─────────────────────────────────────────
+// -- $substr (alias for $substrBytes) -----------------------------------------
 
 // substrOp represents { $substr: [ <string>, <start>, <length> ] }.
 type substrOp struct {
@@ -162,7 +162,7 @@ func (op *substrOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*substrOp)(nil)
 
-// ── $substrCP ─────────────────────────────────────────────────────────────────
+// -- $substrCP -----------------------------------------------------------------
 
 // substrCPOp represents { $substrCP: [ <string>, <start>, <length> ] } (Unicode code points).
 type substrCPOp struct {
@@ -233,7 +233,7 @@ func (op *substrCPOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*substrCPOp)(nil)
 
-// ── $trim ─────────────────────────────────────────────────────────────────────
+// -- $trim ---------------------------------------------------------------------
 
 // trimOp represents { $trim: { input: <expr>, chars: <chars-expr> } }.
 type trimOp struct {
@@ -327,7 +327,7 @@ func (op *trimOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*trimOp)(nil)
 
-// ── $split ────────────────────────────────────────────────────────────────────
+// -- $split --------------------------------------------------------------------
 
 // splitOp represents { $split: [ <string-expr>, <delimiter-expr> ] }.
 type splitOp struct {
@@ -387,7 +387,7 @@ func (op *splitOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*splitOp)(nil)
 
-// ── $indexOfBytes ─────────────────────────────────────────────────────────────
+// -- $indexOfBytes -------------------------------------------------------------
 
 // indexOfBytesOp represents { $indexOfBytes: [ <string>, <substring>, <start>, <end> ] }.
 type indexOfBytesOp struct {
@@ -486,7 +486,7 @@ func (op *indexOfBytesOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*indexOfBytesOp)(nil)
 
-// ── $indexOfCP ────────────────────────────────────────────────────────────────
+// -- $indexOfCP ----------------------------------------------------------------
 
 // indexOfCPOp represents { $indexOfCP: [ <string>, <substring>, <start>, <end> ] } (code points).
 type indexOfCPOp struct {
@@ -589,7 +589,7 @@ func (op *indexOfCPOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*indexOfCPOp)(nil)
 
-// ── $regexMatch ───────────────────────────────────────────────────────────────
+// -- $regexMatch ---------------------------------------------------------------
 
 // regexMatchOp represents { $regexMatch: { input: <expr>, regex: <regex>, options: <opts> } }.
 type regexMatchOp struct {
@@ -701,7 +701,7 @@ func (op *regexMatchOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*regexMatchOp)(nil)
 
-// ── $regexFind ────────────────────────────────────────────────────────────────
+// -- $regexFind ----------------------------------------------------------------
 
 // regexFindOp represents { $regexFind: { input: <expr>, regex: <regex>, options: <opts> } }.
 type regexFindOp struct {

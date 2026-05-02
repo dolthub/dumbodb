@@ -220,8 +220,8 @@ func buildNestedDoc(path string, value any) *types.Document {
 //
 // The arrayFilters array contains filter documents keyed by identifier, e.g.:
 //
-//	[{elem.grade: "B"}]  →  matches elements where .grade == "B" for identifier "elem"
-//	[{x: {$lt: 65}}]    →  matches elements where element < 65 for identifier "x"
+//	[{elem.grade: "B"}]  ->  matches elements where .grade == "B" for identifier "elem"
+//	[{x: {$lt: 65}}]    ->  matches elements where element < 65 for identifier "x"
 func findFilteredIndices(arr *types.Array, identifier string, arrayFilters *types.Array) ([]int, error) {
 	if arrayFilters == nil {
 		return nil, fmt.Errorf("no array filter found for identifier $[%s]", identifier)

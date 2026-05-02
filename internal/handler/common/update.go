@@ -57,7 +57,7 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 	// the end of iteration. Each UpdateAll triggers a full prolly-tree flush
 	// and NBS journal sync, so calling it once per doc turns UpdateMany over
 	// N matches into N synchronous fsyncs  -- this is the bulk of update_many's
-	// historic 74–97x gap vs. MongoDB.
+	// historic 74 --97x gap vs. MongoDB.
 	var pending []*types.Document
 
 	// pendingMutations runs parallel to pending: entry i, if non-nil, gives

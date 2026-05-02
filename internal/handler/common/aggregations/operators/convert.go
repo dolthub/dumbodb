@@ -24,7 +24,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ── $toInt ────────────────────────────────────────────────────────────────────
+// -- $toInt --------------------------------------------------------------------
 
 // toIntOp represents the $toInt expression operator.
 //
@@ -94,7 +94,7 @@ func (op *toIntOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*toIntOp)(nil)
 
-// ── $toString ─────────────────────────────────────────────────────────────────
+// -- $toString -----------------------------------------------------------------
 
 // toStringOp represents the $toString expression operator.
 //
@@ -155,7 +155,7 @@ func (op *toStringOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*toStringOp)(nil)
 
-// ── $toDouble ─────────────────────────────────────────────────────────────────
+// -- $toDouble -----------------------------------------------------------------
 
 // toDoubleOp represents the $toDouble expression operator.
 //
@@ -225,7 +225,7 @@ func (op *toDoubleOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*toDoubleOp)(nil)
 
-// ── $toDate ───────────────────────────────────────────────────────────────────
+// -- $toDate -------------------------------------------------------------------
 
 // toDateOp represents the $toDate expression operator.
 //
@@ -304,7 +304,7 @@ func (op *toDateOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*toDateOp)(nil)
 
-// ── $toLong ───────────────────────────────────────────────────────────────────
+// -- $toLong -------------------------------------------------------------------
 
 type toLongOp struct{ arg any }
 
@@ -356,7 +356,7 @@ func (op *toLongOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*toLongOp)(nil)
 
-// ── $toDecimal ────────────────────────────────────────────────────────────────
+// -- $toDecimal ----------------------------------------------------------------
 
 // toDecimalOp converts to float64 (DumboDB uses float64 for Decimal128 approximation).
 type toDecimalOp struct{ arg any }
@@ -409,7 +409,7 @@ func (op *toDecimalOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*toDecimalOp)(nil)
 
-// ── $toBool ───────────────────────────────────────────────────────────────────
+// -- $toBool -------------------------------------------------------------------
 
 type toBoolOp struct{ arg any }
 
@@ -451,7 +451,7 @@ func (op *toBoolOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*toBoolOp)(nil)
 
-// ── $convert ──────────────────────────────────────────────────────────────────
+// -- $convert ------------------------------------------------------------------
 
 // convertOp represents { $convert: { input: <expr>, to: <type>, onError: <expr>, onNull: <expr> } }.
 // Converts input to the specified type. Uses onError result on conversion failure,

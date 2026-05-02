@@ -43,7 +43,7 @@ mongosh_eval() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 1: doltMerge conflict → doltConflicts wire == dolt_conflicts SQL
+# Test 1: doltMerge conflict -> doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'merge conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
     local main_db="test@main"
@@ -123,7 +123,7 @@ mongosh_eval() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 2: doltCherryPick conflict → doltConflicts wire == dolt_conflicts SQL
+# Test 2: doltCherryPick conflict -> doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'cherry-pick conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
     local main_db="test@main"
@@ -205,7 +205,7 @@ mongosh_eval() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 3: doltRebase conflict → doltConflicts wire == dolt_conflicts SQL
+# Test 3: doltRebase conflict -> doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'rebase conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
     local main_db="test@main"
@@ -289,7 +289,7 @@ mongosh_eval() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 4: doltRevert conflict → doltConflicts wire == dolt_conflicts SQL
+# Test 4: doltRevert conflict -> doltConflicts wire == dolt_conflicts SQL
 # ---------------------------------------------------------------------------
 @test 'revert conflict: doltConflicts wire count matches dolt_conflicts SQL count' {
     local main_db="test@main"

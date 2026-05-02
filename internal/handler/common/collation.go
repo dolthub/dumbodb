@@ -118,7 +118,7 @@ func transformCollationDoc(doc *types.Document) {
 				continue
 			}
 
-			// Simple field equality: {field: "value"} → {field: /^value$/i}
+			// Simple field equality: {field: "value"} -> {field: /^value$/i}
 			if s, ok := val.(string); ok {
 				doc.Set(key, stringToInsensitiveRegex(s))
 			}

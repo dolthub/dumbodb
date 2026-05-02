@@ -573,7 +573,7 @@ func TestLookup_ArrayLocalFieldNoMatch(t *testing.T) {
 
 // TestGraphLookup_BasicTraversal verifies simple recursive graph traversal.
 //
-// Graph: alice → bob → carol  (each employee's reportsTo field points to their manager's name).
+// Graph: alice -> bob -> carol  (each employee's reportsTo field points to their manager's name).
 // Starting from alice, we expect to find bob and carol in the result.
 func TestGraphLookup_BasicTraversal(t *testing.T) {
 	t.Parallel()
@@ -854,7 +854,7 @@ func TestGraphLookup_RestrictSearchWithMatch(t *testing.T) {
 
 // TestGraphLookup_CycleDetection verifies that cyclic graphs do not cause infinite loops.
 //
-// Graph: a ↔ b (a.reportsTo=b, b.reportsTo=a). The traversal should terminate
+// Graph: a <-> b (a.reportsTo=b, b.reportsTo=a). The traversal should terminate
 // after visiting each node once.
 func TestGraphLookup_CycleDetection(t *testing.T) {
 	t.Parallel()
@@ -911,7 +911,7 @@ func TestGraphLookup_CycleDetection(t *testing.T) {
 	// "a" was the search value that started it all  -- actually "b" was searched first,
 	// then "a" is queued. "a" has not been searched yet, so we look for connectToField=a
 	// and find employee "a". But then a.reportsTo=b which was already searched, so we stop.
-	// Result: b and a → 2 documents.
+	// Result: b and a -> 2 documents.
 	if related.Len() != 2 {
 		t.Errorf("expected 2 related docs (a and b, cycle terminates), got %d", related.Len())
 	}
@@ -974,7 +974,7 @@ func TestGraphLookup_StartWithMissingField(t *testing.T) {
 }
 
 // TestAggComplex_matchGroupProject_addToSet verifies that a pipeline of
-// $match → $group (with $addToSet) → $project preserves encounter order,
+// $match -> $group (with $addToSet) -> $project preserves encounter order,
 // matching MongoDB's behavior where $addToSet retains first-seen order.
 func TestAggComplex_matchGroupProject_addToSet(t *testing.T) {
 	t.Parallel()
@@ -1269,7 +1269,7 @@ func TestAggComplex_matchUnwindGroupSort(t *testing.T) {
 // TestAggStage_graphLookup_MaxDepthLimitsTraversal verifies that maxDepth correctly
 // limits traversal and that depthField values are returned as int32 (matching MongoDB).
 //
-// Graph: alice → bob → carol → dave → eve (5-node chain)
+// Graph: alice -> bob -> carol -> dave -> eve (5-node chain)
 // With maxDepth=2, only bob (depth 0), carol (depth 1), and dave (depth 2) should
 // appear. eve at depth 3 must NOT be included.
 func TestAggStage_graphLookup_MaxDepthLimitsTraversal(t *testing.T) {
@@ -1556,12 +1556,12 @@ func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
 //
 // Graph (upward reporting chain from a leaf):
 //
-//	jr → mgr → [vp, ceo]   (mgr.reportsTo is an array ["vp","ceo"])
+//	jr -> mgr -> [vp, ceo]   (mgr.reportsTo is an array ["vp","ceo"])
 //	ceo and vp are both terminal (no further reportsTo)
 //
 // Starting from jr (startWith = "$reportsTo" = "mgr"), the BFS discovers:
 //   - depth 0: mgr   (name matches "mgr")
-//   - depth 1: ceo, vp  (both names are in mgr.reportsTo; _id "ceo" < "vp" → ceo first)
+//   - depth 1: ceo, vp  (both names are in mgr.reportsTo; _id "ceo" < "vp" -> ceo first)
 //
 // MongoDB scans the collection once per depth level (collection-scan order), so it
 // emits ceo before vp at depth 1. The prior implementation iterated frontier values
@@ -1638,7 +1638,7 @@ func TestAggStage_graphLookup_TraverseHierarchyFromLeaf(t *testing.T) {
 
 	// MongoDB emits within-level results in collection-scan (_id asc) order:
 	//   depth 0: [mgr]
-	//   depth 1: [ceo, vp]   ← "ceo" < "vp" alphabetically by _id
+	//   depth 1: [ceo, vp]   <- "ceo" < "vp" alphabetically by _id
 	wantNames := []string{"mgr", "ceo", "vp"}
 
 	for i := 0; i < chain.Len(); i++ {
@@ -1667,13 +1667,13 @@ func TestAggStage_graphLookup_TraverseHierarchyFromLeaf(t *testing.T) {
 //
 // Graph structure (org-chart with two branches):
 //
-//	root → {A(_id=1), B(_id=2)}           depth 0
-//	A    → {C(_id=3)}                     depth 1
-//	B    → {D(_id=4)}                     depth 1
-//	C    → {E(_id=5)}                     depth 2
+//	root -> {A(_id=1), B(_id=2)}           depth 0
+//	A    -> {C(_id=3)}                     depth 1
+//	B    -> {D(_id=4)}                     depth 1
+//	C    -> {E(_id=5)}                     depth 2
 //
 // Expected BFS visit order: A(d0), B(d0), C(d1), D(d1), E(d2)
-// MongoDB output order: [d0...] then [dN, dN-1, ..., d1] ⟹ [A, B, E, C, D]
+// MongoDB output order: [d0...] then [dN, dN-1, ..., d1] ==> [A, B, E, C, D]
 func TestAggComplex_graphLookup_bfsOrder(t *testing.T) {
 	t.Parallel()
 
@@ -1733,9 +1733,9 @@ func TestAggComplex_graphLookup_bfsOrder(t *testing.T) {
 	}
 
 	// MongoDB output ordering: depth-0 first, then remaining levels deepest-first.
-	//   L0 = [A, B]    → first
-	//   L1 = [C, D]    → last (after deeper levels)
-	//   L2 = [E]       → second (deepest non-zero level)
+	//   L0 = [A, B]    -> first
+	//   L1 = [C, D]    -> last (after deeper levels)
+	//   L2 = [E]       -> second (deepest non-zero level)
 	// Final: [A, B, E, C, D]
 	wantNames := []string{"A", "B", "E", "C", "D"}
 
@@ -1761,12 +1761,12 @@ func TestAggComplex_graphLookup_bfsOrder(t *testing.T) {
 
 // TestAgg_sortByCount_after_unwind verifies that $unwind followed by $sortByCount
 // correctly counts unwound array elements and sorts the results by count descending,
-// with _id ascending as the tiebreaker per spec: $sortByCount ≡ $group + $sort{count:-1, _id:1}.
+// with _id ascending as the tiebreaker per spec: $sortByCount === $group + $sort{count:-1, _id:1}.
 func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	t.Parallel()
 
 	// Three docs with tag arrays. Tag frequencies: x=2, y=2, z=1.
-	// After $unwind: x,y from doc1; x from doc2; y,z from doc3 → [x,y,x,y,z]
+	// After $unwind: x,y from doc1; x from doc2; y,z from doc3 -> [x,y,x,y,z]
 	doc1Tags := types.MakeArray(2)
 	doc1Tags.Append("x")
 	doc1Tags.Append("y")
@@ -1814,7 +1814,7 @@ func TestAgg_sortByCount_after_unwind(t *testing.T) {
 	results := collectResults(t, out, closer)
 
 	// "x" count=2, "y" count=2, "z" count=1.
-	// Tie at count=2: sorted by _id ascending → "x" < "y".
+	// Tie at count=2: sorted by _id ascending -> "x" < "y".
 	// Expected: [{_id:"x",count:2}, {_id:"y",count:2}, {_id:"z",count:1}]
 	if len(results) != 3 {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
@@ -1926,9 +1926,9 @@ func TestAggComplex_matchUnwindGroupSort_SameTotalQty(t *testing.T) {
 // TestAggComplex_sortByCount verifies the full $sortByCount behavior:
 // primary sort by count descending, tiebreaker by _id ascending per spec.
 //
-// Input: 5 docs with tags a(×3), b(×2), c(×2), d(×1).
+// Input: 5 docs with tags a(x3), b(x2), c(x2), d(x1).
 // Expected: [{_id:"a",count:3}, {_id:"b",count:2}, {_id:"c",count:2}, {_id:"d",count:1}]
-// b and c have the same count=2; ascending _id → "b" before "c".
+// b and c have the same count=2; ascending _id -> "b" before "c".
 func TestAggComplex_sortByCount(t *testing.T) {
 	t.Parallel()
 
@@ -2001,7 +2001,7 @@ func TestAggComplex_sortByCount(t *testing.T) {
 
 // TestAggComplex_sortByCount_TieBreaking verifies that $sortByCount uses _id ascending
 // as a tiebreaker when multiple groups share the same count, per spec:
-// $sortByCount ≡ $group + $sort{count:-1, _id:1}.
+// $sortByCount === $group + $sort{count:-1, _id:1}.
 //
 // Input: 3 docs each with a unique tag: "z", "m", "a".
 // Expected: [{_id:"a",count:1}, {_id:"m",count:1}, {_id:"z",count:1}]  -- ascending _id.
@@ -2034,7 +2034,7 @@ func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
-	// All counts are 1  -- tiebreaker: _id ascending → a, m, z.
+	// All counts are 1  -- tiebreaker: _id ascending -> a, m, z.
 	wantIDs := []string{"a", "m", "z"}
 
 	for i, wantID := range wantIDs {

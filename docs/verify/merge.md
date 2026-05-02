@@ -127,12 +127,12 @@ branch is an ancestor of the other, a real merge commit is created with two
 parents.
 
 ```js
-// Commit _id:3 on main → C3.
+// Commit _id:3 on main -> C3.
 db.inventory.insertOne({ _id: 3, v: 3 })
 const r3 = db.runCommand({ doltCommit: 1, message: "add-three", author: "alice <alice@acme.com>" })
 const hashC3 = r3.commitId
 
-// Commit _id:4 on feature independently → C4.
+// Commit _id:4 on feature independently -> C4.
 // (feature is still at C2; _id:4 is only on feature's side)
 db.getSiblingDB("mergedb@feature").inventory.insertOne({ _id: 4, v: 4 })
 const r4 = db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "add-four", author: "carol <carol@startup.dev>" })

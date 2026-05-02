@@ -29,11 +29,11 @@ import (
 func TestRTVLLoad_CommitHash_Query(t *testing.T) {
 	b := newTestBackend(t)
 
-	// Insert doc1 and commit → hash1 contains only doc1.
+	// Insert doc1 and commit -> hash1 contains only doc1.
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(10)))
 	hash1 := commitDB(t, b, "testdb", "first commit")
 
-	// Insert doc2 and commit → hash2 contains doc1 + doc2.
+	// Insert doc2 and commit -> hash2 contains doc1 + doc2.
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(2), "v", int64(20)))
 	hash2 := commitDB(t, b, "testdb", "second commit")
 
@@ -65,11 +65,11 @@ func TestRTVLLoad_CommitHash_ListCollections(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
-	// Create "col1" and commit → hash1 has col1.
+	// Create "col1" and commit -> hash1 has col1.
 	insertDoc(t, b, "testdb", "col1", mustDoc(t, "_id", int64(1)))
 	hash1 := commitDB(t, b, "testdb", "add col1")
 
-	// Create "col2" and commit → hash2 has col1 + col2.
+	// Create "col2" and commit -> hash2 has col1 + col2.
 	insertDoc(t, b, "testdb", "col2", mustDoc(t, "_id", int64(1)))
 	_ = commitDB(t, b, "testdb", "add col2")
 
@@ -205,10 +205,10 @@ func TestSplitEncodedDBName(t *testing.T) {
 // historical document set for each ancestor depth.
 //
 // Setup: 3 commits, each adding one document.
-//   - main~0 (or main) → all 3 docs
-//   - main~1           → 2 docs (third commit not visible)
-//   - main~2           → 1 doc
-//   - main~3           → 0 docs (initial empty commit)
+//   - main~0 (or main) -> all 3 docs
+//   - main~1           -> 2 docs (third commit not visible)
+//   - main~2           -> 1 doc
+//   - main~3           -> 0 docs (initial empty commit)
 func TestRTVLLoad_AncestorExpr_Query(t *testing.T) {
 	b := newTestBackend(t)
 
@@ -349,7 +349,7 @@ func TestRTVLLoad_Tag_Query(t *testing.T) {
 	tagDS, err = state.doltDB.SetHead(ctx, tagDS, tagHash, "")
 	if err != nil {
 		state.mu.Unlock()
-		t.Fatalf("SetHead(tag v1.0 → %s): %v", hash1, err)
+		t.Fatalf("SetHead(tag v1.0 -> %s): %v", hash1, err)
 	}
 	_ = tagDS
 	state.mu.Unlock()
@@ -367,7 +367,7 @@ func TestRTVLLoad_DumboDBBranch_FromHash(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 
-	// Commit doc1 → hash1. This is the commit the new branch will point at.
+	// Commit doc1 -> hash1. This is the commit the new branch will point at.
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
 	hash1 := commitDB(t, b, "testdb", "first commit")
 
@@ -427,7 +427,7 @@ func TestRTVLLoad_DumboDBBranch_FromAncestor(t *testing.T) {
 // rootish (mydb@feature) go to that branch's working set and are isolated from main.
 //
 // Setup:
-//   - Commit one doc on main → main has 1 doc committed.
+//   - Commit one doc on main -> main has 1 doc committed.
 //   - Create branch "feature" from main HEAD.
 //   - Write a second doc via "testdb@feature" (into feature's working set, uncommitted).
 //   - Write a third doc via "testdb" / "testdb@main" (into main's working set).

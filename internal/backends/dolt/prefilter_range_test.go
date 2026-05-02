@@ -126,7 +126,7 @@ func TestRangePrefilter_EmbeddedSameName(t *testing.T) {
 		t.Fatal("nil predicate")
 	}
 	// Outer i=10 (would fail), embedded {x.i:99} (would pass if naive
-	// substring check). Outer wins → expect false.
+	// substring check). Outer wins -> expect false.
 	doc := canonicalDoc(t, mongobson.D{
 		{Key: "x", Value: mongobson.D{{Key: "i", Value: int32(99)}}},
 		{Key: "i", Value: int32(10)},
@@ -315,7 +315,7 @@ func TestRangePrefilter_BoundIntersection(t *testing.T) {
 		}
 	}
 
-	// Same value, mixed strictness: gt:5 + gte:5 → effectively gt:5.
+	// Same value, mixed strictness: gt:5 + gte:5 -> effectively gt:5.
 	pf2 := buildScanPrefilter(rangeOp(t, "i", "$gt", int32(5), "$gte", int32(5)))
 	if pf2 == nil {
 		t.Fatal("nil predicate")

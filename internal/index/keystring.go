@@ -25,7 +25,7 @@
 // and relative sort position:
 //
 //	Null/Missing = 0x14 (20)
-//	Numbers      = 0x1E–0x33 (30–51)
+//	Numbers      = 0x1E --0x33 (30 --51)
 //	String       = 0x3C (60)
 //	Object       = 0x46 (70)
 //	Array        = 0x50 (80)
@@ -53,11 +53,11 @@ import (
 // CType constants for the first byte of a KeyString-encoded value.
 const (
 	ctypeNull      = byte(0x14) // Null / missing field
-	ctypeNegLarge  = byte(0x1E) // Negative, magnitude ≥ 2^56
+	ctypeNegLarge  = byte(0x1E) // Negative, magnitude >= 2^56
 	ctypeNegMedium = byte(0x22) // Negative, smaller magnitudes (see numeric encoding)
 	ctypeZero      = byte(0x29) // Numeric zero
 	ctypePosMedium = byte(0x2B) // Positive, smaller magnitudes
-	ctypePosLarge  = byte(0x33) // Positive, magnitude ≥ 2^56
+	ctypePosLarge  = byte(0x33) // Positive, magnitude >= 2^56
 	ctypeString    = byte(0x3C) // UTF-8 string
 	ctypeObject    = byte(0x46) // Embedded document
 	ctypeArray     = byte(0x50) // Array
@@ -136,7 +136,7 @@ func EncodeValue(v any) []byte {
 }
 
 // encodeString encodes a UTF-8 string with 0x00 bytes escaped as 0x00 0xFF.
-// Format: [0x3C][bytes, 0x00→0x00 0xFF][0x00 terminator]
+// Format: [0x3C][bytes, 0x00->0x00 0xFF][0x00 terminator]
 func encodeString(s string) []byte {
 	raw := []byte(s)
 	// Pre-calculate output size (each 0x00 becomes 2 bytes).
@@ -198,7 +198,7 @@ func encodePosInt(n uint64) []byte {
 }
 
 // encodeNegInt encodes a negative integer.
-// We encode abs(n)-1 (so -1 → 0, -256 → 255, etc.), then bit-flip all value bytes.
+// We encode abs(n)-1 (so -1 -> 0, -256 -> 255, etc.), then bit-flip all value bytes.
 // The CType encodes magnitude so larger magnitudes sort first (more negative = smaller).
 // CType = ctypeNegMedium - (byteCount-1) ensures descending ctype order.
 // Actually: for negative numbers, ctype = ctypeNegMedium + (8 - byteCount) and
@@ -230,7 +230,7 @@ func encodeNegInt(n int64) []byte {
 	// within the same ctype bucket.
 	// Since ctype already handles cross-magnitude ordering, within same ctype
 	// we need the bytes to sort in value order (more negative = smaller).
-	// Bit-flipping achieves this: larger mag → larger bytes before flip → smaller after flip.
+	// Bit-flipping achieves this: larger mag -> larger bytes before flip -> smaller after flip.
 	for i := byteCount - 1; i >= 0; i-- {
 		out[1+i] = ^byte(mag)
 		mag >>= 8
@@ -238,7 +238,7 @@ func encodeNegInt(n int64) []byte {
 	return out
 }
 
-// encodeFloat64 encodes a float64. NaN and ±Inf are treated as null.
+// encodeFloat64 encodes a float64. NaN and +/-Inf are treated as null.
 func encodeFloat64(f float64) []byte {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return []byte{ctypeNull}

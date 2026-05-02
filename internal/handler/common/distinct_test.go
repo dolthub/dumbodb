@@ -102,7 +102,7 @@ func TestDistinctSet_Composite(t *testing.T) {
 
 // BenchmarkDistinctSet_HighDup exercises the hot path the bead targets: a
 // large stream of values where most repeat. Validates that the new
-// hash-keyed accumulator scales linearly rather than the prior O(n²) growth.
+// hash-keyed accumulator scales linearly rather than the prior O(n^2) growth.
 func BenchmarkDistinctSet_HighDup(b *testing.B) {
 	for _, n := range []int{1000, 10000, 100000} {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
@@ -139,7 +139,7 @@ func BenchmarkDistinctSet_Strings(b *testing.B) {
 	}
 }
 
-// BenchmarkDistinctSet_AllUnique stresses the worst case for the prior O(n²)
+// BenchmarkDistinctSet_AllUnique stresses the worst case for the prior O(n^2)
 // linear-scan accumulator: every value is unique so the prior code paid
 // arr.Contains(v) over every prior entry. Linear-scaling time here is the
 // real win the bead is after.

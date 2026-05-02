@@ -95,8 +95,8 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 // chunk is written once to the value store and its hash is stored in every DTBL.
 //
 // The physical encodings match our prolly.Map descriptors:
-//   - _id VARBINARY PK → ByteStringEnc (key tuple)
-//   - doc JSON         → JSONAddrEnc (value tuple, stores hash to JSON prolly tree)
+//   - _id VARBINARY PK -> ByteStringEnc (key tuple)
+//   - doc JSON         -> JSONAddrEnc (value tuple, stores hash to JSON prolly tree)
 func buildCollectionTableSchema() serial.Message {
 	b := fb.NewBuilder(512)
 
@@ -185,7 +185,7 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 	// Primary index: inline TUPM bytes (prolly.Map root node).
 	rowBytes := []byte(tree.ValueFromNode(m.Node()).(dolttypes.SerialMessage))
 
-	// Secondary indexes: per-collection ADRM (name → IndexEntry chunk hash).
+	// Secondary indexes: per-collection ADRM (name -> IndexEntry chunk hash).
 	idxBytes := []byte(tree.ValueFromNode(indexAM.Node()).(dolttypes.SerialMessage))
 
 	// Conflict struct fields (legacy format) and violations are always zero hashes.

@@ -24,8 +24,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// TestMongoDB_GroupAndTotalTutorial verifies the $match → $sort → $group ($first, $sum, $push)
-// → $sort → $set → $unset pipeline from the MongoDB group-and-total tutorial. (DumboDBFull)
+// TestMongoDB_GroupAndTotalTutorial verifies the $match -> $sort -> $group ($first, $sum, $push)
+// -> $sort -> $set -> $unset pipeline from the MongoDB group-and-total tutorial. (DumboDBFull)
 //
 // https://www.mongodb.com/docs/manual/tutorial/aggregation-examples/group-and-total/
 //

@@ -31,7 +31,7 @@ import (
 const earthRadiusMeters = 6378137.0
 
 // geoFormatBSON formats a float64 like MongoDB's BSON coordinate representation:
-// whole numbers show ".0" suffix (e.g. 200.0 → "200.0"), others as-is (e.g. 40.7 → "40.7").
+// whole numbers show ".0" suffix (e.g. 200.0 -> "200.0"), others as-is (e.g. 40.7 -> "40.7").
 func geoFormatBSON(f float64) string {
 	if f == math.Trunc(f) && !math.IsInf(f, 0) {
 		return fmt.Sprintf("%.1f", f)
@@ -40,7 +40,7 @@ func geoFormatBSON(f float64) string {
 }
 
 // geoFormatCoord formats a float64 like MongoDB's lng/lat display in geo error messages:
-// whole numbers show as integers (e.g. 200.0 → "200"), others as-is (e.g. 40.7 → "40.7").
+// whole numbers show as integers (e.g. 200.0 -> "200"), others as-is (e.g. 40.7 -> "40.7").
 func geoFormatCoord(f float64) string {
 	if f == math.Trunc(f) && !math.IsInf(f, 0) {
 		return fmt.Sprintf("%d", int64(f))
@@ -63,7 +63,7 @@ type GeoSortKey struct {
 	Field     string  // document field that contains the geometry
 	Lon       float64 // query-point longitude
 	Lat       float64 // query-point latitude
-	Spherical bool    // true ⇒ haversine; false ⇒ Euclidean (2d index)
+	Spherical bool    // true => haversine; false => Euclidean (2d index)
 }
 
 // FindGeoSortKey scans a filter document for a top-level $near or $nearSphere
@@ -273,9 +273,9 @@ func docDistanceFromField(doc *types.Document, field string, lon, lat float64, s
 	return math.MaxFloat64
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // Filter operators
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 // filterFieldGeoWithin handles {field: {$geoWithin: spec}}.
 func filterFieldGeoWithin(fieldValue any, spec *types.Document) (bool, error) {
@@ -498,9 +498,9 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 	return dist >= minDist && dist <= maxDist, nil
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // Geometry containment / intersection
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 // geometryWithinGeometry reports whether docGeom (from the document) is entirely
 // within queryGeom.
@@ -816,9 +816,9 @@ func segmentsIntersect(a1, a2, b1, b2 [2]float64) bool {
 	return t >= 0 && t <= 1 && u >= 0 && u <= 1
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // GeoJSON parsing helpers
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 // geoJSONType returns the "type" field of a GeoJSON document.
 func geoJSONType(doc *types.Document) (string, error) {
@@ -1066,9 +1066,9 @@ func extractAllPoints(val any) [][2]float64 {
 	return nil
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // Geometric predicates
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 // pointInRing returns true if the point (px, py) is inside the ring using the
 // even-odd (ray casting) algorithm.
@@ -1090,9 +1090,9 @@ func pointInRing(px, py float64, ring [][2]float64) bool {
 	return inside
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // Distance functions
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 // haversineMeters computes the great-circle distance in metres between two
 // [lon, lat] points using the Haversine formula.
@@ -1113,9 +1113,9 @@ func euclidean(x1, y1, x2, y2 float64) float64 {
 	return math.Sqrt(dx*dx + dy*dy)
 }
 
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 // Array conversion helpers
-// ──────────────────────────────────────────────
+// ----------------------------------------------
 
 // arrToPoint converts a BSON array [x, y] to [2]float64.
 func arrToPoint(val any) ([2]float64, error) {

@@ -297,7 +297,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, conflictDB+"@main", "main-changes-1", "test <test@example.com>")
 
-		// Modify _id:1 on feature (same doc → conflict on rebase).
+		// Modify _id:1 on feature (same doc -> conflict on rebase).
 		_, err = conflictFeatureDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},

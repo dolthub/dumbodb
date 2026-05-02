@@ -209,7 +209,7 @@ func avgDecimal128(vs []any) types.Decimal128 {
 	resultExp := exp - precisionDigits
 
 	// Normalize: strip trailing zeros from the mantissa added by the precision
-	// scaling step, so the result is compact (e.g. "20" not "20.0000…0").
+	// scaling step, so the result is compact (e.g. "20" not "20.0000...0").
 	// After stripping, re-expand if the exponent would become positive so that
 	// "20" is represented as mantissa=20/exp=0 rather than mantissa=2/exp=1
 	// (which round-trips as "2E+1" instead of the more readable "20").

@@ -521,7 +521,7 @@ func TestQuery_geo_within_centerSphere(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Center at NYC, radius ~0.1 radians ≈ 637 km  -- should include NYC but not London.
+	// Center at NYC, radius ~0.1 radians ~= 637 km  -- should include NYC but not London.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(e("$geoWithin", d(e("$centerSphere", bson.A{
 			bson.A{float64(-74), float64(40.7)},
@@ -636,7 +636,7 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// maxDistance = 0.0175 radians ≈ 111 km  -- should include doc1 and doc2, not doc3.
+	// maxDistance = 0.0175 radians ~= 111 km  -- should include doc1 and doc2, not doc3.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(
 			e("$nearSphere", bson.A{float64(1), float64(0)}),
@@ -701,7 +701,7 @@ func TestQuery_geo_intersects_polygon(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Square polygon (0,0)→(10,0)→(10,10)→(0,10)→(0,0). Point (5,5) is inside; (50,50) is outside.
+	// Square polygon (0,0)->(10,0)->(10,10)->(0,10)->(0,0). Point (5,5) is inside; (50,50) is outside.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(e("$geoIntersects", d(e("$geometry", d(
 			e("type", "Polygon"),

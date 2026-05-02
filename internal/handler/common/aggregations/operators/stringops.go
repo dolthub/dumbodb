@@ -21,7 +21,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ── $concat ───────────────────────────────────────────────────────────────────
+// -- $concat -------------------------------------------------------------------
 
 // concatOp represents the $concat expression operator.
 //
@@ -68,7 +68,7 @@ func (c *concatOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*concatOp)(nil)
 
-// ── $toLower ──────────────────────────────────────────────────────────────────
+// -- $toLower ------------------------------------------------------------------
 
 // toLowerOp represents the $toLower expression operator.
 //
@@ -114,7 +114,7 @@ func (op *toLowerOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*toLowerOp)(nil)
 
-// ── $toUpper ──────────────────────────────────────────────────────────────────
+// -- $toUpper ------------------------------------------------------------------
 
 // toUpperOp represents the $toUpper expression operator.
 //

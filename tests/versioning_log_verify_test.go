@@ -20,7 +20,7 @@ package tests
 //
 // Scenario 1 runs first on the fresh database (before any user commits).
 // The setup block then creates three commits on the same database.
-// Scenarios 2–4 use that shared three-commit history.
+// Scenarios 2 --4 use that shared three-commit history.
 //
 // Note: every DumboDB database begins with an auto-created "Initialize database"
 // root commit. Counts below include that initial commit.
@@ -315,18 +315,18 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenarios 6–8: Non-linear commit graphs (merge commits with parent1+parent2)
+	// Scenarios 6 --8: Non-linear commit graphs (merge commits with parent1+parent2)
 	//
 	// Fresh database with a true three-way merge:
 	//
-	//   init ← hashA ← hashB (main)
-	//                ↖
-	//                 hashC (feat)  →  hashM (merge, parent1=hashB, parent2=hashC)
+	//   init <- hashA <- hashB (main)
+	//                \
+	//                 hashC (feat)  ->  hashM (merge, parent1=hashB, parent2=hashC)
 	//
 	// DumboDBLog follows parent1 linearly, so the walk from main is:
-	//   hashM → hashB → hashA → init
+	//   hashM -> hashB -> hashA -> init
 	// The walk from hashC (feat tip) is:
-	//   hashC → hashA → init  (hashB and hashM are unreachable)
+	//   hashC -> hashA -> init  (hashB and hashM are unreachable)
 	// -------------------------------------------------------------------------
 	mergeDBName := fmt.Sprintf("logmerge%d", rand.Int64N(1_000_000))
 	require.NoError(t, env.client.Database(mergeDBName).Drop(ctx))
@@ -343,7 +343,7 @@ func TestLogVerify(t *testing.T) {
 		{Key: "branch", Value: "feat"},
 	}).Err())
 
-	// Advance main: _id:2 → hashB (diverges from hashA).
+	// Advance main: _id:2 -> hashB (diverges from hashA).
 	_, err = env.client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
@@ -351,7 +351,7 @@ func TestLogVerify(t *testing.T) {
 	require.NoError(t, err)
 	hashB := dumboDBCommit(t, env, mergeDBName, "add-two", "alice <alice@acme.com>")
 
-	// Advance feat independently: _id:3 → hashC (diverges from hashA).
+	// Advance feat independently: _id:3 -> hashC (diverges from hashA).
 	_, err = env.client.Database(mergeDBName+"@feat").Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "v", Value: int32(3)},
@@ -359,7 +359,7 @@ func TestLogVerify(t *testing.T) {
 	require.NoError(t, err)
 	hashC := dumboDBCommit(t, env, mergeDBName+"@feat", "add-three-feat", "alice <alice@acme.com>")
 
-	// Merge feat into main → three-way merge commit hashM.
+	// Merge feat into main -> three-way merge commit hashM.
 	var mergeRaw bson.M
 	require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
@@ -394,7 +394,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FromFeatureTip", func(t *testing.T) {
 		// Starting at hashC (feat tip) the reachable commits via the topological
-		// walk are hashC → hashA → "Initialize database". hashB (reachable only
+		// walk are hashC -> hashA -> "Initialize database". hashB (reachable only
 		// via main) and hashM (the merge commit) must not appear.
 		var raw bson.M
 		require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
@@ -422,9 +422,9 @@ func TestLogVerify(t *testing.T) {
 	//
 	// Regression test for do-h7np: previously the handler resolved HEAD from
 	// main's dataset regardless of the connection branch, so the walk from
-	// @feat returned main's history (hashM → hashB → hashA → init) and
+	// @feat returned main's history (hashM -> hashB -> hashA -> init) and
 	// refs only decorated main. The correct walk from feat's HEAD is
-	// hashC → hashA → init, and hashC must be decorated with HEAD + feat.
+	// hashC -> hashA -> init, and hashC must be decorated with HEAD + feat.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7b_FromFeatBranchConnection", func(t *testing.T) {
 		var raw bson.M
@@ -433,7 +433,7 @@ func TestLogVerify(t *testing.T) {
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
-		require.Len(t, lr.Commits, 3, "walk from feat HEAD must be hashC → hashA → Initialize")
+		require.Len(t, lr.Commits, 3, "walk from feat HEAD must be hashC -> hashA -> Initialize")
 		assert.Equal(t, hashC, lr.Commits[0].CommitID, "commits[0] must be hashC (feat tip)")
 		assert.Equal(t, "add-three-feat", lr.Commits[0].Message)
 		assert.Equal(t, hashA, lr.Commits[1].CommitID, "commits[1] must be hashA (common ancestor)")

@@ -384,11 +384,11 @@ type TagInfo struct {
 // TagParams represents the parameters of VersioningBackend.DumboDBTag method.
 //
 // Operation is selected by the combination of fields:
-//   - Name == "" and Delete == false   → list all tags (other fields ignored).
-//   - Name != "" and Delete == false   → create a tag named Name pointing at the commit
+//   - Name == "" and Delete == false   -> list all tags (other fields ignored).
+//   - Name != "" and Delete == false   -> create a tag named Name pointing at the commit
 //     that Hash resolves to (Hash is a rootish: commit hash, branch name, ancestor expr,
 //     or another tag name). If Hash == "", the connection's branch HEAD is used.
-//   - Name != "" and Delete == true    → delete the tag named Name.
+//   - Name != "" and Delete == true    -> delete the tag named Name.
 type TagParams struct {
 	DBName  string
 	Branch  string // connection's branch (used to resolve a default Hash on create)

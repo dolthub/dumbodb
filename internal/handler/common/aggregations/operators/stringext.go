@@ -21,7 +21,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ── $strcasecmp ───────────────────────────────────────────────────────────────
+// -- $strcasecmp ---------------------------------------------------------------
 
 // strcasecmpOp represents $strcasecmp.
 //
@@ -87,7 +87,7 @@ func (op *strcasecmpOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*strcasecmpOp)(nil)
 
-// ── $substrBytes ─────────────────────────────────────────────────────────────
+// -- $substrBytes -------------------------------------------------------------
 
 // substrBytesOp represents $substrBytes.
 //

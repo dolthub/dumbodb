@@ -33,12 +33,12 @@ const tagRefPrefix = "refs/tags/"
 // DumboDBTag implements backends.VersioningBackend.
 //
 // Operation is selected by params:
-//   - Name == "" and Delete == false   → list all tags in the database.
-//   - Name != "" and Delete == false   → create a tag pointing at the commit that
+//   - Name == "" and Delete == false   -> list all tags in the database.
+//   - Name != "" and Delete == false   -> create a tag pointing at the commit that
 //     params.Hash resolves to. params.Hash may be a commit hash, branch name,
 //     ancestor expression (e.g. "main~3"), or another tag name. If params.Hash
 //     is empty, the connection's branch HEAD (params.Branch) is used.
-//   - Name != "" and Delete == true    → delete the named tag.
+//   - Name != "" and Delete == true    -> delete the named tag.
 //
 // Tags are stored as Dolt TagValue flatbuffers via datas.Database.Tag, sharing
 // the refs/tags/<name> namespace with `dolt tag`.

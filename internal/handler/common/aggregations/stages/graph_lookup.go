@@ -32,7 +32,7 @@ import (
 // graphLookup represents the $graphLookup aggregation stage.
 //
 // It performs a recursive graph traversal, starting from the values produced by
-// startWith and following the connectFromField → connectToField edges in the
+// startWith and following the connectFromField -> connectToField edges in the
 // "from" collection until no new documents are discovered or maxDepth is reached.
 //
 // Syntax:
@@ -238,7 +238,7 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 //
 // Ordering: MongoDB returns depth-0 results first, then the remaining depth levels in
 // reverse order (deepest first). Within each depth level, results appear in _id-ascending
-// order (collection-scan proxy). Concretely, for a chain a(d0)→b(d1)→c(d2), MongoDB
+// order (collection-scan proxy). Concretely, for a chain a(d0)->b(d1)->c(d2), MongoDB
 // returns [a, c, b]  -- depth-0 first, then d2 before d1.
 func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document) ([]*types.Document, error) {
 	// Sort fromDocs by _id ascending once. All per-level scans then proceed in this

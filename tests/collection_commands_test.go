@@ -672,7 +672,7 @@ func TestDbStats_ScaleOption(t *testing.T) {
 	assert.Equal(t, um["avgObjSize"], sm["avgObjSize"], "avgObjSize must not change with scale")
 
 	// Size fields must be divided by scale.  We verify by checking that
-	// scaledValue * 1024 ≈ unscaledValue (within 1.0 due to float truncation).
+	// scaledValue * 1024 ~= unscaledValue (within 1.0 due to float truncation).
 	for _, field := range []string{"dataSize", "storageSize", "indexSize", "totalSize"} {
 		uv, ok := um[field].(float64)
 		require.True(t, ok, "unscaled %s must be float64, got %T", field, um[field])

@@ -12,23 +12,23 @@ DumboDB uses Dolt's NBS (Noms Block Store) as its storage engine, structured as 
 Dolt-compatible repository layout. As of this writing, the layout is:
 
 ```
-NBS root → STRT (StoreRoot)
-│
-├── STRT.refsAM (inline AddressMap)
-│   ├── "refs/heads/main"       → DCMT hash
-│   └── "workingSets/heads/main" → WRST hash
-│
-├── DCMT (Commit flatbuffer, file ID "DCMT")
-│   ├── rootValue               → hash(ADRM)  ← BUG: should be hash(RTVL)
-│   └── parents                 → []
-│
-├── WRST (WorkingSet flatbuffer, file ID "WRST")
-│   ├── working_root_addr       → hash(ADRM)  ← BUG: should be hash(RTVL)
-│   └── staged_root_addr        → hash(ADRM)  ← BUG: should be hash(RTVL)
-│
-└── ADRM (collections AddressMap, file ID "ADRM")
-    ├── "myCollection"          → hash(PRLM)
-    └── "otherCollection"       → hash(PRLM)
+NBS root -> STRT (StoreRoot)
+|
+|-- STRT.refsAM (inline AddressMap)
+|   |-- "refs/heads/main"       -> DCMT hash
+|   \-- "workingSets/heads/main" -> WRST hash
+|
+|-- DCMT (Commit flatbuffer, file ID "DCMT")
+|   |-- rootValue               -> hash(ADRM)  <- BUG: should be hash(RTVL)
+|   \-- parents                 -> []
+|
+|-- WRST (WorkingSet flatbuffer, file ID "WRST")
+|   |-- working_root_addr       -> hash(ADRM)  <- BUG: should be hash(RTVL)
+|   \-- staged_root_addr        -> hash(ADRM)  <- BUG: should be hash(RTVL)
+|
+\-- ADRM (collections AddressMap, file ID "ADRM")
+    |-- "myCollection"          -> hash(PRLM)
+    \-- "otherCollection"       -> hash(PRLM)
 
 PRLM (prolly.Map, file ID "PRLM")
     key:   Int64(recordID)
@@ -42,7 +42,7 @@ BSON chunk (raw BSON document bytes)
 - `dolt fsck` passes  -- all chunks are reachable
 - `dolt log` shows commit history
 - Persistence across restarts works
-- ADRM → STRT migration works
+- ADRM -> STRT migration works
 
 ### What Fails Today
 
@@ -71,16 +71,16 @@ dumbodb stores an ADRM chunk directly.
 | StoreRoot     | `STRT`  | NBS root; embeds refsAM inline      |
 | Commit        | `DCMT`  | Commit metadata + parent refs       |
 | WorkingSet    | `WRST`  | Working/staged root addresses       |
-| **RootValue** | `RTVL`  | Dolt database state (tables, FK, …) |
-| AddressMap    | `ADRM`  | Prolly tree of name → hash entries  |
-| ProllyMap     | `PRLM`  | Prolly tree of key → value entries  |
+| **RootValue** | `RTVL`  | Dolt database state (tables, FK, ...) |
+| AddressMap    | `ADRM`  | Prolly tree of name -> hash entries  |
+| ProllyMap     | `PRLM`  | Prolly tree of key -> value entries  |
 
 ### RootValue Flatbuffer Schema (`serial/rootvalue.fbs`)
 
 ```
 table RootValue {
-  feature_version: int64;       // must be ≤ DoltFeatureVersion (currently 7)
-  tables: [ubyte];              // serialized ADRM: table_name → table_root_hash
+  feature_version: int64;       // must be <= DoltFeatureVersion (currently 7)
+  tables: [ubyte];              // serialized ADRM: table_name -> table_root_hash
   foreign_key_addr: [ubyte];    // 20-byte hash (zero = no foreign keys)
   collation: Collation;         // e.g. utf8mb4_0900_bin
   schemas: [DatabaseSchema];    // optional schema entries
@@ -99,14 +99,14 @@ file_identifier "RTVL";
 // schemas         = absent
 ```
 
-Size: approximately 120–160 bytes.
+Size: approximately 120 --160 bytes.
 
 ### WorkingSet Flatbuffer Schema (`serial/workingset.fbs`)
 
 ```
 table WorkingSet {
-  working_root_addr: [ubyte] (required); // 20-byte hash → RTVL chunk
-  staged_root_addr:  [ubyte];            // 20-byte hash → RTVL chunk
+  working_root_addr: [ubyte] (required); // 20-byte hash -> RTVL chunk
+  staged_root_addr:  [ubyte];            // 20-byte hash -> RTVL chunk
   name:    string;
   email:   string;
   desc:    string;
@@ -121,16 +121,16 @@ file_identifier "WRST";
 
 ```
 dolt status
-  → datas.Database.GetDataset("workingSets/heads/main")  → WRST
-  → LoadRootNomsValueFromRootIshAddr(ws.WorkingAddr)
-      → vr.ReadValue(ws.WorkingAddr)                     → must be RTVL
-      → decodeRootNomsValue → isRootValue                → checks "RTVL"
-  → NewRootValue(rtvl bytes)
-      → serial.TryGetRootAsRootValue                     → validates
-      → checks feature_version ≤ DoltFeatureVersion
-  → compares HEAD RTVL.tables vs working RTVL.tables
-      → if same hash → "nothing to commit"
-      → if different → lists modified table names
+  -> datas.Database.GetDataset("workingSets/heads/main")  -> WRST
+  -> LoadRootNomsValueFromRootIshAddr(ws.WorkingAddr)
+      -> vr.ReadValue(ws.WorkingAddr)                     -> must be RTVL
+      -> decodeRootNomsValue -> isRootValue                -> checks "RTVL"
+  -> NewRootValue(rtvl bytes)
+      -> serial.TryGetRootAsRootValue                     -> validates
+      -> checks feature_version <= DoltFeatureVersion
+  -> compares HEAD RTVL.tables vs working RTVL.tables
+      -> if same hash -> "nothing to commit"
+      -> if different -> lists modified table names
 ```
 
 `dolt status` only compares the ADRM hashes embedded in the RTVL.tables field.
@@ -143,17 +143,17 @@ It does **not** decode individual table entries for a clean-state check.
 ### Option A: Collections ADRM directly as RTVL.tables
 
 Use the collections AddressMap as the `tables` byte vector inside the RTVL. Each
-entry maps `collection_name → prolly.Map_root_hash`.
+entry maps `collection_name -> prolly.Map_root_hash`.
 
 ```
-RTVL.tables → ADRM
-    "users"     → hash(users_PRLM)
-    "orders"    → hash(orders_PRLM)
+RTVL.tables -> ADRM
+    "users"     -> hash(users_PRLM)
+    "orders"    -> hash(orders_PRLM)
 ```
 
 **Pros:**
 - Single source of truth for the collections map
-- `dolt status` works (same ADRM hash → clean; different ADRM hash → dirty)
+- `dolt status` works (same ADRM hash -> clean; different ADRM hash -> dirty)
 - Minimal code change: build RTVL wrapper around existing ADRM bytes
 
 **Cons:**
@@ -163,8 +163,8 @@ RTVL.tables → ADRM
 - `dolt checkout` and `dolt merge` fail
 
 **When `dolt status` is safe:**
-- Working/staged/HEAD all point to the same RTVL → "nothing to commit" ✓
-- After a write, dumbodb updates all three to the new RTVL → remains clean ✓
+- Working/staged/HEAD all point to the same RTVL -> "nothing to commit" ok
+- After a write, dumbodb updates all three to the new RTVL -> remains clean ok
 
 ### Option B: Stub RTVL (empty tables) + collections ADRM stored separately
 
@@ -226,30 +226,30 @@ working set RTVL == staged RTVL, `dolt status` will show "nothing to commit".
 After the change, each dumbodb database has this chunk graph:
 
 ```
-NBS root → STRT (StoreRoot, "STRT")
-│
-├── STRT.refsAM (inline ADRM)
-│   ├── "refs/heads/main"        → hash(DCMT_n)
-│   └── "workingSets/heads/main" → hash(WRST_n)
-│
-├── DCMT_n (Commit, "DCMT")
-│   ├── rootValue                → hash(RTVL_n)   ← NEW: was hash(ADRM)
-│   ├── parents                  → [hash(DCMT_n-1)]
-│   └── meta                     → {author, email, desc, timestamp}
-│
-├── RTVL_n (RootValue, "RTVL")                    ← NEW chunk type
-│   ├── feature_version          = 7
-│   ├── tables                   → bytes(ADRM_n)  ← collections ADRM embedded inline
-│   ├── foreign_key_addr         = [0; 20]
-│   └── collation                = utf8mb4_0900_bin
-│
-├── WRST_n (WorkingSet, "WRST")
-│   ├── working_root_addr        → hash(RTVL_n)   ← NEW: was hash(ADRM)
-│   └── staged_root_addr         → hash(RTVL_n)   ← NEW: was hash(ADRM)
-│
-└── ADRM_n (collections AddressMap, "ADRM")
-    ├── "myCollection"           → hash(PRLM_a)
-    └── "otherCollection"        → hash(PRLM_b)
+NBS root -> STRT (StoreRoot, "STRT")
+|
+|-- STRT.refsAM (inline ADRM)
+|   |-- "refs/heads/main"        -> hash(DCMT_n)
+|   \-- "workingSets/heads/main" -> hash(WRST_n)
+|
+|-- DCMT_n (Commit, "DCMT")
+|   |-- rootValue                -> hash(RTVL_n)   <- NEW: was hash(ADRM)
+|   |-- parents                  -> [hash(DCMT_n-1)]
+|   \-- meta                     -> {author, email, desc, timestamp}
+|
+|-- RTVL_n (RootValue, "RTVL")                    <- NEW chunk type
+|   |-- feature_version          = 7
+|   |-- tables                   -> bytes(ADRM_n)  <- collections ADRM embedded inline
+|   |-- foreign_key_addr         = [0; 20]
+|   \-- collation                = utf8mb4_0900_bin
+|
+|-- WRST_n (WorkingSet, "WRST")
+|   |-- working_root_addr        -> hash(RTVL_n)   <- NEW: was hash(ADRM)
+|   \-- staged_root_addr         -> hash(RTVL_n)   <- NEW: was hash(ADRM)
+|
+\-- ADRM_n (collections AddressMap, "ADRM")
+    |-- "myCollection"           -> hash(PRLM_a)
+    \-- "otherCollection"        -> hash(PRLM_b)
 
 PRLM_a (prolly.Map, "PRLM")
     key:   Int64(recordID)
@@ -267,7 +267,7 @@ At all times: `DCMT_n.rootValue == WRST_n.working_root_addr == WRST_n.staged_roo
 To reconstruct the collections ADRM from a commit:
 
 ```
-commit → RTVL.tables (bytes) → parse as ADRM → collection_name → PRLM root hash
+commit -> RTVL.tables (bytes) -> parse as ADRM -> collection_name -> PRLM root hash
 ```
 
 ---
@@ -302,7 +302,7 @@ case serial.StoreRootFileID:
             // OLD format: rootValue is ADRM  -- migrate in-place
             migrateADRMCommitToRTVL(ctx, doltDB, vs, ns, ds)
         }
-        // else fileID == serial.RootValueFileID → new format, nothing to do
+        // else fileID == serial.RootValueFileID -> new format, nothing to do
     }
 ```
 
@@ -316,14 +316,14 @@ No migration needed; `getOrOpenDB` builds an RTVL from the start.
 
 | Command               | Works? | Notes                                              |
 |-----------------------|--------|----------------------------------------------------|
-| `dolt fsck`           | ✓      | All chunks reachable                               |
-| `dolt log`            | ✓      | Reads commit metadata and parent chain             |
-| `dolt status`         | ✓      | Compares RTVL hashes; shows "nothing to commit"    |
-| `dolt diff`           | ✗      | Tries to decode collections as SQL tables; fails   |
-| `dolt sql`            | ✗      | No SQL schema defined; returns empty table list    |
-| `dolt checkout`       | ✗      | Not applicable (single branch)                     |
-| `dolt clone`          | ✗      | Requires remote push support (not yet implemented) |
-| `dolt branch`         | ✓      | Branch listing reads STRT refsAM                   |
+| `dolt fsck`           | ok      | All chunks reachable                               |
+| `dolt log`            | ok      | Reads commit metadata and parent chain             |
+| `dolt status`         | ok      | Compares RTVL hashes; shows "nothing to commit"    |
+| `dolt diff`           | FAIL      | Tries to decode collections as SQL tables; fails   |
+| `dolt sql`            | FAIL      | No SQL schema defined; returns empty table list    |
+| `dolt checkout`       | FAIL      | Not applicable (single branch)                     |
+| `dolt clone`          | FAIL      | Requires remote push support (not yet implemented) |
+| `dolt branch`         | ok      | Branch listing reads STRT refsAM                   |
 
 `dolt diff` fails because, when comparing two commits with different collections
 AMs, it reads the hash values (prolly.Map roots) and tries to open them as dolt
@@ -402,7 +402,7 @@ case serial.RootValueFileID:
 
 case serial.AddressMapFileID:
     // Legacy format: rootValue is a raw ADRM
-    // → trigger migration (write new commit with RTVL wrapper)
+    // -> trigger migration (write new commit with RTVL wrapper)
 ```
 
 ### Step 5: Migration for existing ADRM-valued commits

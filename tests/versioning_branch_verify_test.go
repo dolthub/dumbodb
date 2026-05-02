@@ -99,7 +99,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "branch", Value: "snapshot"},
 		}).Err(), "doltBranch to create 'snapshot'")
 
-		// Diff main vs snapshot  -- identical commits → empty collections.
+		// Diff main vs snapshot  -- identical commits -> empty collections.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},

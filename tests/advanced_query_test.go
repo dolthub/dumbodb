@@ -162,11 +162,11 @@ func TestAdvancedQuery_JsonSchema_OneOf(t *testing.T) {
 	coll := env.collection(t)
 
 	insertDocs(t, coll,
-		// Matches only the int schema (bsonType int only) → oneOf passes (exactly 1 match).
+		// Matches only the int schema (bsonType int only) -> oneOf passes (exactly 1 match).
 		d(e("_id", int32(1)), e("val", int32(42))),
-		// Matches only the string schema → oneOf passes.
+		// Matches only the string schema -> oneOf passes.
 		d(e("_id", int32(2)), e("val", "hello")),
-		// float64 matches neither int nor string → oneOf fails.
+		// float64 matches neither int nor string -> oneOf fails.
 		d(e("_id", int32(3)), e("val", float64(3.14))),
 	)
 

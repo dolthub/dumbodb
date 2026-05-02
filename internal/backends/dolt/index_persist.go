@@ -189,7 +189,7 @@ func readIndexEntryChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (i
 // For each registered index it:
 //  1. Writes the prolly.Map root node so cs.Get(mapRoot) works on reopen.
 //  2. Writes a JSON IndexEntry chunk pairing IndexInfo metadata with the map root.
-//  3. Adds (index name → IndexEntry hash) to a fresh AddressMap.
+//  3. Adds (index name -> IndexEntry hash) to a fresh AddressMap.
 //
 // The resulting AddressMap is cached so the next dtblHashForCollection call
 // inlines the up-to-date secondary_indexes bytes into the DTBL.

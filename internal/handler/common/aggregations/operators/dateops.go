@@ -38,7 +38,7 @@ func toTime(v any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// ── date part operators ($year, $month, $dayOfMonth, etc.) ──────────────────
+// -- date part operators ($year, $month, $dayOfMonth, etc.) ------------------
 
 // datePartOp is a generic date component extractor.
 type datePartOp struct {
@@ -125,7 +125,7 @@ func (op *datePartOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*datePartOp)(nil)
 
-// ── $dateToString ─────────────────────────────────────────────────────────────
+// -- $dateToString -------------------------------------------------------------
 
 // dateToStringOp represents { $dateToString: { date: <expr>, format: <format>, timezone: <tz>, onNull: <val> } }.
 type dateToStringOp struct {
@@ -223,7 +223,7 @@ func formatDate(format string, t time.Time) string {
 
 var _ Operator = (*dateToStringOp)(nil)
 
-// ── $dateAdd ──────────────────────────────────────────────────────────────────
+// -- $dateAdd ------------------------------------------------------------------
 
 // dateAddOp represents { $dateAdd: { startDate: <expr>, unit: <string>, amount: <number> } }.
 type dateAddOp struct {
@@ -345,7 +345,7 @@ func toInt64(v any) int64 {
 
 var _ Operator = (*dateAddOp)(nil)
 
-// ── $dateDiff ─────────────────────────────────────────────────────────────────
+// -- $dateDiff -----------------------------------------------------------------
 
 // dateDiffOp represents { $dateDiff: { startDate: <expr>, endDate: <expr>, unit: <string> } }.
 type dateDiffOp struct {
@@ -490,7 +490,7 @@ func diffDateUnit(start, end time.Time, unit string) (int64, error) {
 
 var _ Operator = (*dateDiffOp)(nil)
 
-// ── $dateTrunc ────────────────────────────────────────────────────────────────
+// -- $dateTrunc ----------------------------------------------------------------
 
 // dateTruncOp represents { $dateTrunc: { date: <expr>, unit: <string>, binSize: <number> } }.
 // Truncates a date to the start of the specified time unit.
@@ -592,7 +592,7 @@ func (op *dateTruncOp) Process(doc *types.Document) (any, error) {
 	case "week":
 		weekday := int(t.Weekday())
 		if weekday == 0 {
-			weekday = 7 // Sunday → 7 for ISO week
+			weekday = 7 // Sunday -> 7 for ISO week
 		}
 		truncated = time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
 	case "day":

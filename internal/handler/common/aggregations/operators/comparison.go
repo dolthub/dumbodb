@@ -97,7 +97,7 @@ func (c *cmpOperator) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*cmpOperator)(nil)
 
-// ── $cmp ─────────────────────────────────────────────────────────────────────
+// -- $cmp ---------------------------------------------------------------------
 
 // cmpOp represents { $cmp: [ <expr1>, <expr2> ] }.
 // Returns -1 if expr1 < expr2, 0 if equal, 1 if expr1 > expr2.

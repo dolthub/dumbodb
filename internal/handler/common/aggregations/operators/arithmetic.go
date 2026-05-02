@@ -21,7 +21,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ── $add ─────────────────────────────────────────────────────────────────────
+// -- $add ---------------------------------------------------------------------
 
 // addOp represents the $add expression operator.
 //
@@ -60,7 +60,7 @@ func (a *addOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*addOp)(nil)
 
-// ── $subtract ────────────────────────────────────────────────────────────────
+// -- $subtract ----------------------------------------------------------------
 
 // subtractOp represents the $subtract expression operator.
 //
@@ -138,7 +138,7 @@ func subtractValues(a, b any) any {
 	return toFloat64(a) - toFloat64(b)
 }
 
-// ── $divide ──────────────────────────────────────────────────────────────────
+// -- $divide ------------------------------------------------------------------
 
 // divideOp represents the $divide expression operator.
 //

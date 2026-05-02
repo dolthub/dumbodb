@@ -1074,8 +1074,8 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 
 	if hasElemMatch {
 		// For $all with $elemMatch elements, process each query element:
-		// - {$elemMatch: expr} → field array must contain an element matching expr
-		// - other values → not supported in mixed mode; treat as no-match
+		// - {$elemMatch: expr} -> field array must contain an element matching expr
+		// - other values -> not supported in mixed mode; treat as no-match
 		for i := 0; i < query.Len(); i++ {
 			elem := must.NotFail(query.Get(i))
 			elemDoc, ok := elem.(*types.Document)

@@ -95,7 +95,7 @@ func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator,
 			return ci > cj
 		}
 
-		// Break ties by _id ascending per spec: $sortByCount ≡ $group + $sort{count:-1, _id:1}.
+		// Break ties by _id ascending per spec: $sortByCount === $group + $sort{count:-1, _id:1}.
 		idi := must.NotFail(res[i].Get("_id"))
 		idj := must.NotFail(res[j].Get("_id"))
 

@@ -109,7 +109,7 @@ make ferretdb-scorecard
 The scorecard builds DumboDB, starts it, runs the FerretDB integration suite
 against it, and writes results to `.runtime/ferretdb-scorecard.txt`.
 
-## Critical: Local Runs ≠ CI  -- Do Not Remove from Skiplist Without CI Confirmation
+## Critical: Local Runs != CI  -- Do Not Remove from Skiplist Without CI Confirmation
 
 **Never remove a test from `scripts/ferretdb-scorecard-skiplist.txt` based solely on a local run.**
 
@@ -121,7 +121,7 @@ skiplist breaks CI even when local runs look clean.
 1. Fix the underlying issue and run locally  -- test must pass
 2. Push the fix to main (keep the test in the skiplist for now)
 3. Check the GitHub Actions `DumboDB FerretDB Scorecard` run for that push
-4. Only if CI shows no unexpected failures for that test → then remove it from the skiplist
+4. Only if CI shows no unexpected failures for that test -> then remove it from the skiplist
 5. Push the skiplist change and confirm CI stays green
 
 Report to mayor in completion mail whether CI was verified or not.

@@ -346,9 +346,9 @@ Key checks:
 
 | Rootish form | Example | `doltStatus` |
 |---|---|---|
-| Branch name | `mydb@main`, `mydb@feature` | ✅ works |
-| Commit hash | `mydb@<32-char hash>` | ❌ code 96 "no working set" |
-| Ancestor expression | `mydb@main~1` | ❌ code 96 "no working set" |
+| Branch name | `mydb@main`, `mydb@feature` | yes works |
+| Commit hash | `mydb@<32-char hash>` | no code 96 "no working set" |
+| Ancestor expression | `mydb@main~1` | no code 96 "no working set" |
 
 `doltStatus` is a working-set concept  -- only writable rootish forms have one.
 

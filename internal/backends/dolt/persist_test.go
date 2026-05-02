@@ -446,7 +446,7 @@ func TestWritesNoNewCommits(t *testing.T) {
 		t.Fatal("no HEAD after writes")
 	}
 	if headAddr != initAddr {
-		t.Errorf("HEAD moved after %d writes (addr %v → %v): writes must not create dolt commits", N, initAddr, headAddr)
+		t.Errorf("HEAD moved after %d writes (addr %v -> %v): writes must not create dolt commits", N, initAddr, headAddr)
 	}
 }
 

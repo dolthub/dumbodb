@@ -47,7 +47,7 @@ type mergeInProgress struct {
 	premergeAM  prolly.AddressMap // ours branch AM before the operation started (used to abort)
 	fromHash    hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)
 	intoHash    hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
-	// conflicts: collection name → ordered list of conflict entries.
+	// conflicts: collection name -> ordered list of conflict entries.
 	// Entries are never removed; resolved ones have resolved==true.
 	conflicts map[string][]*conflictEntry
 	// resolvedAM is the working AddressMap being built as conflicts are resolved.

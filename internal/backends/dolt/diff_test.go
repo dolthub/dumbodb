@@ -114,7 +114,7 @@ func findFieldDiff(t *testing.T, m backends.ModifiedDoc, path string) backends.F
 	return backends.FieldDiff{}
 }
 
-// ── Backend DumboDBDiff tests ────────────────────────────────────────────────────
+// -- Backend DumboDBDiff tests ----------------------------------------------------
 
 // TestDumboDBDiff_NoChanges verifies that diffing HEAD vs working set with no writes
 // returns empty collections.
@@ -957,7 +957,7 @@ func TestDumboDBDiff_SingleDocMixedFieldOps(t *testing.T) {
 		t.Fatalf("Collection: %v", err)
 	}
 
-	// Update: x modified (10→99), y removed, z added.
+	// Update: x modified (10->99), y removed, z added.
 	if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: []*types.Document{
 		mustDoc(t, "_id", int64(1), "x", int64(99), "z", "new-field"),
 	}}); err != nil {
@@ -1018,7 +1018,7 @@ func TestDumboDBDiff_SingleDocMixedFieldOps(t *testing.T) {
 	}
 }
 
-// TestDumboDBDiff_FieldTypeChange verifies that changing a field's type (e.g. int64 → string)
+// TestDumboDBDiff_FieldTypeChange verifies that changing a field's type (e.g. int64 -> string)
 // is reported as "modified" with the correct old and new values.
 func TestDumboDBDiff_FieldTypeChange(t *testing.T) {
 	ctx := context.Background()
@@ -1077,7 +1077,7 @@ func TestDumboDBDiff_FieldTypeChange(t *testing.T) {
 	}
 }
 
-// ── Rootish expression tests ──────────────────────────────────────────────────
+// -- Rootish expression tests --------------------------------------------------
 
 // TestDumboDBDiff_HeadFromTo verifies that from="HEAD" and to="HEAD" resolve to the
 // committed tip of the connection's branch (ConnRootish="main").
@@ -1179,7 +1179,7 @@ func TestDumboDBDiff_HeadTilde(t *testing.T) {
 
 	commitDB(t, b, "testdb", "c3")
 
-	// HEAD~2 → c1, HEAD → c3: should see v=1→3.
+	// HEAD~2 -> c1, HEAD -> c3: should see v=1->3.
 	res, err := b.DumboDBDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
@@ -1205,7 +1205,7 @@ func TestDumboDBDiff_HeadTilde(t *testing.T) {
 		t.Errorf("expected to=3, got %v", vDiff.To)
 	}
 
-	// HEAD~1 → c2, HEAD~0 → c3: should see v=2→3.
+	// HEAD~1 -> c2, HEAD~0 -> c3: should see v=2->3.
 	res2, err := b.DumboDBDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
@@ -1270,7 +1270,7 @@ func TestDumboDBDiff_BranchNameRootish(t *testing.T) {
 
 	commitDB(t, b, "testdb", "c2")
 
-	// Diff from="feature" (c1) to="main" (c2): should see v=1→2.
+	// Diff from="feature" (c1) to="main" (c2): should see v=1->2.
 	res, err := b.DumboDBDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
@@ -1363,7 +1363,7 @@ func TestDumboDBDiff_HeadOnNonMainBranch(t *testing.T) {
 
 	// from=hash1, to="HEAD" with ConnRootish="feature":
 	// HEAD should resolve to feature branch tip (c1), NOT main (c2).
-	// So hash1 == feature HEAD → diff should be empty.
+	// So hash1 == feature HEAD -> diff should be empty.
 	res, err := b.DumboDBDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "feature",

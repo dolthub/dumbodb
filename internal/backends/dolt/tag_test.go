@@ -68,7 +68,7 @@ func TestDumboDBTag_CreateListDelete(t *testing.T) {
 		t.Fatalf("list: want 1 tag, got %d", len(listRes.Tags))
 	}
 	if listRes.Tags[0].Name != "v1.0" || listRes.Tags[0].CommitID != hash1 {
-		t.Errorf("list: want v1.0 → %s, got %s → %s", hash1, listRes.Tags[0].Name, listRes.Tags[0].CommitID)
+		t.Errorf("list: want v1.0 -> %s, got %s -> %s", hash1, listRes.Tags[0].Name, listRes.Tags[0].CommitID)
 	}
 	if listRes.Tags[0].Message != "first release" {
 		t.Errorf("list: want message %q, got %q", "first release", listRes.Tags[0].Message)

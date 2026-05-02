@@ -47,7 +47,7 @@ func toSet(arr *types.Array) ([]any, error) {
 	return result, nil
 }
 
-// ── $setUnion ─────────────────────────────────────────────────────────────────
+// -- $setUnion -----------------------------------------------------------------
 
 type setUnionOp struct{ args []any }
 
@@ -94,7 +94,7 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setUnionOp)(nil)
 
-// ── $setIntersection ──────────────────────────────────────────────────────────
+// -- $setIntersection ----------------------------------------------------------
 
 type setIntersectionOp struct{ args []any }
 
@@ -155,7 +155,7 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setIntersectionOp)(nil)
 
-// ── $setDifference ────────────────────────────────────────────────────────────
+// -- $setDifference ------------------------------------------------------------
 
 // setDifferenceOp represents { $setDifference: [ <set1>, <set2> ] }.
 type setDifferenceOp struct {
@@ -223,7 +223,7 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setDifferenceOp)(nil)
 
-// ── $setEquals ────────────────────────────────────────────────────────────────
+// -- $setEquals ----------------------------------------------------------------
 
 type setEqualsOp struct{ args []any }
 
@@ -285,7 +285,7 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setEqualsOp)(nil)
 
-// ── $setIsSubset ──────────────────────────────────────────────────────────────
+// -- $setIsSubset --------------------------------------------------------------
 
 // setIsSubsetOp represents { $setIsSubset: [ <set1>, <set2> ] }.
 type setIsSubsetOp struct {
@@ -351,7 +351,7 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setIsSubsetOp)(nil)
 
-// ── $anyElementTrue ───────────────────────────────────────────────────────────
+// -- $anyElementTrue -----------------------------------------------------------
 
 type anyElementTrueOp struct{ arg any }
 
@@ -390,7 +390,7 @@ func (op *anyElementTrueOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*anyElementTrueOp)(nil)
 
-// ── $allElementsTrue ──────────────────────────────────────────────────────────
+// -- $allElementsTrue ----------------------------------------------------------
 
 type allElementsTrueOp struct{ arg any }
 

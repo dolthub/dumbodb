@@ -184,7 +184,7 @@ func TestMergeVerify(t *testing.T) {
 	t.Run("Scenario4_ThreeWayMerge", func(t *testing.T) {
 		// After Scenario 3: both main and feature point to C2.
 
-		// Commit _id:3 on main → C3.
+		// Commit _id:3 on main -> C3.
 		_, err := env.client.Database(dbName).Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
@@ -192,7 +192,7 @@ func TestMergeVerify(t *testing.T) {
 		require.NoError(t, err)
 		hashC3 := dumboDBCommit(t, env, dbName, "add-three", "alice <alice@acme.com>")
 
-		// Commit _id:4 on feature independently → C4.
+		// Commit _id:4 on feature independently -> C4.
 		_, err = env.client.Database(dbName+"@feature").Collection("inventory").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(4)},
 			{Key: "v", Value: int32(4)},

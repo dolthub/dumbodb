@@ -306,7 +306,7 @@ func TestAgg_UnwindPreserveNullAndEmpty(t *testing.T) {
 
 	var results []bson.D
 	require.NoError(t, cursor.All(ctx, &results))
-	// has-tags → 1 doc, empty-tags → 1 doc (preserved), no-tags → 1 doc (preserved)
+	// has-tags -> 1 doc, empty-tags -> 1 doc (preserved), no-tags -> 1 doc (preserved)
 	assert.Len(t, results, 3, "preserveNullAndEmptyArrays must keep docs with missing/empty arrays")
 }
 
@@ -935,13 +935,13 @@ func TestAgg_SetWindowFields_Avg(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 4)
 
-	// day 1: only itself → avg 10
+	// day 1: only itself -> avg 10
 	assert.InDelta(t, float64(10), dmap(results[0])["moving_avg"], 0.001)
-	// day 2: days 1+2 → avg 15
+	// day 2: days 1+2 -> avg 15
 	assert.InDelta(t, float64(15), dmap(results[1])["moving_avg"], 0.001)
-	// day 3: days 2+3 → avg 25
+	// day 3: days 2+3 -> avg 25
 	assert.InDelta(t, float64(25), dmap(results[2])["moving_avg"], 0.001)
-	// day 4: days 3+4 → avg 35
+	// day 4: days 3+4 -> avg 35
 	assert.InDelta(t, float64(35), dmap(results[3])["moving_avg"], 0.001)
 }
 

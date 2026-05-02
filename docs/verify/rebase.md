@@ -148,7 +148,7 @@ Key checks:
 ## Scenario 5: Abort rebase
 
 Advance main and feature with a non-conflicting commit, then start a clean rebase and
-attempt to abort it (no rebase in progress → error).
+attempt to abort it (no rebase in progress -> error).
 
 ```js
 // Advance main.

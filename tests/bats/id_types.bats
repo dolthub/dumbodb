@@ -64,7 +64,7 @@ assert_id_roundtrip() {
 @test '_id as int64' {
     # JSON.stringify encodes NumberLong as {low, high, unsigned} since JS
     # cannot represent int64 natively.
-    # 9007199254740993 = 0x0020000000000001 → low=1, high=2097152
+    # 9007199254740993 = 0x0020000000000001 -> low=1, high=2097152
     assert_id_roundtrip \
         "mongodb://127.0.0.1:${DUMBODB_PORT}/test" \
         "col_int64" \

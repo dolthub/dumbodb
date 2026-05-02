@@ -34,7 +34,7 @@ func isBoolFalsy(v any) bool {
 	}
 }
 
-// ── $and ─────────────────────────────────────────────────────────────────────
+// -- $and ---------------------------------------------------------------------
 
 // andOp represents { $and: [ <expr1>, <expr2>, ... ] }.
 // Returns true if all expressions are truthy (non-false, non-null).
@@ -61,7 +61,7 @@ func (op *andOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*andOp)(nil)
 
-// ── $or ──────────────────────────────────────────────────────────────────────
+// -- $or ----------------------------------------------------------------------
 
 // orOp represents { $or: [ <expr1>, <expr2>, ... ] }.
 // Returns true if any expression is truthy.
@@ -88,7 +88,7 @@ func (op *orOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*orOp)(nil)
 
-// ── $not ─────────────────────────────────────────────────────────────────────
+// -- $not ---------------------------------------------------------------------
 
 // notOp represents { $not: [ <expr> ] }.
 // Returns true if the single expression is falsy.

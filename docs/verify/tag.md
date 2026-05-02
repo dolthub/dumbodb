@@ -206,7 +206,7 @@ Tags are durable  -- they survive a server restart because they live in Dolt's
 `refs/tags/` namespace on disk.
 
 ```js
-// 1. Confirm v1.0 → hash1 before restart
+// 1. Confirm v1.0 -> hash1 before restart
 db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1 })
 // Expected: tags includes { name: "v1.0", commitId: <hash1>, ... }
 ```
@@ -217,7 +217,7 @@ and re-list:
 
 ```js
 db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1 })
-// Expected: tags still includes v1.0 → hash1 with the original metadata.
+// Expected: tags still includes v1.0 -> hash1 with the original metadata.
 ```
 
 Key check: `v1.0` appears with the same `commitId`, `tagger`, `email`, and

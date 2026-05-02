@@ -76,7 +76,7 @@ const hash3 = r3.commitId
 print("hash1 =", hash1, "hash2 =", hash2, "hash3 =", hash3)
 ```
 
-After setup, the branch has four commits: `"Initialize database"` ← `first` ← `second` ← `third` (HEAD).
+After setup, the branch has four commits: `"Initialize database"` <- `first` <- `second` <- `third` (HEAD).
 
 ---
 
@@ -262,18 +262,18 @@ const hashA = rA.commitId
 // Create "feat" branch from main HEAD (hashA).
 mdb.getSiblingDB("logmerge@main").runCommand({ doltBranch: 1, branch: "feat" })
 
-// Advance main: _id:2 → hashB.
+// Advance main: _id:2 -> hashB.
 mdb.events.insertOne({ _id: 2, v: 2 })
 const rB = mdb.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 const hashB = rB.commitId
 
-// Advance feat independently: _id:3 → hashC.
+// Advance feat independently: _id:3 -> hashC.
 const featdb = db.getSiblingDB("logmerge@feat")
 featdb.events.insertOne({ _id: 3, v: 3 })
 const rC = featdb.runCommand({ doltCommit: 1, message: "add-three-feat", author: "carol <carol@startup.dev>" })
 const hashC = rC.commitId
 
-// Merge feat into main → hashM.
+// Merge feat into main -> hashM.
 const rM = mdb.getSiblingDB("logmerge@main").runCommand({ doltMerge: 1, merge_in: "feat" })
 const hashM = rM.commitId
 
@@ -283,9 +283,9 @@ print("hashA =", hashA, "hashB =", hashB, "hashC =", hashC, "hashM =", hashM)
 After setup the commit graph looks like this:
 
 ```
-init ← hashA ← hashB (main)
-             ↖
-              hashC (feat)  →  hashM (HEAD on main, parent1=hashB, parent2=hashC)
+init <- hashA <- hashB (main)
+             \
+              hashC (feat)  ->  hashM (HEAD on main, parent1=hashB, parent2=hashC)
 ```
 
 `doltLog` walks the commit graph in reverse topological order, visiting **both**
@@ -293,7 +293,7 @@ parents of a merge commit. Ties between commits at the same height are broken
 by timestamp (newer first), so the walk from main HEAD is:
 
 ```
-hashM → hashC → hashB → hashA → init
+hashM -> hashC -> hashB -> hashA -> init
 ```
 
 (hashC is committed later than hashB, so it sorts before hashB under the
@@ -339,7 +339,7 @@ Key checks:
 ## Scenario 7: doltLog from feature tip shows only feature branch history
 
 Starting traversal at `hashC` reaches only commits reachable from that tip:
-`hashC → hashA → init`. `hashB` (reachable only via main's tip) and `hashM`
+`hashC -> hashA -> init`. `hashB` (reachable only via main's tip) and `hashM`
 (the merge commit) must **not** appear.
 
 ```js
@@ -370,7 +370,7 @@ Key checks:
 ## Scenario 7b: doltLog on the feat branch connection
 
 Running `doltLog` against `logmerge@feat` must walk feat's HEAD, not main's.
-The walk is `hashC → hashA → init`; `hashB` and `hashM` are unreachable from
+The walk is `hashC -> hashA -> init`; `hashB` and `hashM` are unreachable from
 feat's tip. The tip commit (`hashC`) carries both `"HEAD"` and `"feat"` refs.
 
 ```js

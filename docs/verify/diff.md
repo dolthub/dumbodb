@@ -40,7 +40,7 @@ const hashBase = r1.commitId
 
 // Make three working-set changes (NOT committed):
 //   _id:3 added
-//   _id:1 modified (score 10 → 99)
+//   _id:1 modified (score 10 -> 99)
 //   _id:2 deleted
 db.items.insertOne({ _id: 3, label: "gamma", score: 30 })
 db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
@@ -51,7 +51,7 @@ print("hashBase =", hashBase)
 
 After setup, the working set differs from `hashBase` in three ways:
 - `_id:3` added
-- `_id:1` modified (`score`: 10 → 99)
+- `_id:1` modified (`score`: 10 -> 99)
 - `_id:2` removed
 
 ---
@@ -146,7 +146,7 @@ Expected: the diff includes all changes relative to `hashBase`:
 - `_id:3` added (committed in Scenario 2)
 - `_id:4` added (in working set, not committed)
 - `_id:2` removed (committed in Scenario 2)
-- `_id:1` modified with `score` 10 → 99 (committed in Scenario 2)
+- `_id:1` modified with `score` 10 -> 99 (committed in Scenario 2)
 
 ---
 
@@ -205,7 +205,7 @@ Expected for `_id:1` in the `mixedfields` collection:
 
 ## Scenario 7: Field type change
 
-Changing a field's value type (e.g. number → string) is reported as `modified`
+Changing a field's value type (e.g. number -> string) is reported as `modified`
 with the old typed value in `a` and the new typed value in `b`.
 
 ```js
@@ -301,11 +301,11 @@ Expected: `_id:5` in `removed` (not `added`)  -- the inverse of case 1.
 
 ```js
 // 5. REVERSE via branch names: from="main", to="feature".
-//    Going main→feature reverses the forward feature→main diff.
+//    Going main->feature reverses the forward feature->main diff.
 db.runCommand({ doltDiff: 1, from: "main", to: "feature" })
 ```
 
-Expected: `_id:5` in `removed`  -- the inverse of a forward feature→main diff.
+Expected: `_id:5` in `removed`  -- the inverse of a forward feature->main diff.
 
 Key checks:
 - `HEAD` on a main connection resolves to the latest main commit.

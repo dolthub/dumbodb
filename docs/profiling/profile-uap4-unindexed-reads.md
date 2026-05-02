@@ -1,6 +1,6 @@
 # Profile: unindexed read benchmarks (do-uap4)
 
-PROFILE ONLY. No fix. The bead asked: where does the 4–10x slowdown vs MongoDB
+PROFILE ONLY. No fix. The bead asked: where does the 4 --10x slowdown vs MongoDB
 come from on these three parity benchmarks?
 
 | Parity bench               | DumboDB    | MongoDB | Ratio |
@@ -48,8 +48,8 @@ filter (loop, post-`b.ResetTimer`).
 | ----- | -------- | ----- |
 | 49.5% | `dolt.(*mapIter).Next`           | sequential prolly-map walk + decode |
 | 21.9% | `dolt.readDocJSONBytes`          | chunk-store fetch + JSON serialize  |
-| 18.2% | `dolt.decodeDocFromJSON`         | ExtJSON → BSON → types.Document     |
-| 15.0% | `bson.UnmarshalExtJSON` (driver) | ExtJSON → BSON Raw                  |
+| 18.2% | `dolt.decodeDocFromJSON`         | ExtJSON -> BSON -> types.Document     |
+| 15.0% | `bson.UnmarshalExtJSON` (driver) | ExtJSON -> BSON Raw                  |
 | 21.2% | `runtime.mallocgc` (flat 3.0%)   | GC/alloc churn                      |
 
 Read-side prefilter (`buildScanPrefilter`) is active here  -- it skips full
@@ -68,7 +68,7 @@ docs survive the prefilter and pay full decode cost.
 | 29.6% | `runtime.mallocgc`               | GC/alloc churn |
 
 Sort algorithm itself accounts for ~9% of the stage's time
-(`SortIterator` 84% − upstream `ConsumeValues` 76% = ~8%). The slurp+decode
+(`SortIterator` 84% - upstream `ConsumeValues` 76% = ~8%). The slurp+decode
 of all 1000 input docs dominates; the sort and the $limit:100 truncation
 are negligible.
 
@@ -80,7 +80,7 @@ are negligible.
 | 80.4% | `common.(*filterIterator).Next`  | $match implemented as FilterIterator |
 | 76.6% | `dolt.(*mapIter).Next`           | upstream scan/decode |
 | 74.8% | `dolt.readDocJSON`               | full read+decode |
-| 65.9% | `dolt.decodeDocFromJSON`         | ExtJSON → BSON → Document |
+| 65.9% | `dolt.decodeDocFromJSON`         | ExtJSON -> BSON -> Document |
 | 52.8% | `bson.UnmarshalExtJSON` (driver) | as above |
 | 31.2% | `runtime.mallocgc`               | GC/alloc churn |
 
@@ -88,36 +88,36 @@ The $match has an operator-doc value (`{$gte:0}`), so the
 `buildScanPrefilter` path bails out  -- every doc is fully decoded. The
 `{$gte:0}` predicate matches every doc, so $match passes 1000/1000 docs to
 $group. Group's hash bucketing is ~1% of stage time
-(`group.Process` 82% − upstream filterIterator 80% = ~1.5%).
+(`group.Process` 82% - upstream filterIterator 80% = ~1.5%).
 
 ## Common pattern
 
 Every benchmark looks like the same picture rotated:
 
 ```
-unindexed scan ─┬─ readDocJSONBytes  ──── prolly chunk fetch + json marshal
-                │                            │
-                └─ decodeDocFromJSON ──── mongobson.UnmarshalExtJSON ──┐
-                                            │                          │
-                                            └─ extJSONParser.advanceState
-                                                                       │
-                                            decodeDocument ←───────────┘
-                                            (BSON → types.Document)
+unindexed scan -+- readDocJSONBytes  ---- prolly chunk fetch + json marshal
+                |                            |
+                \- decodeDocFromJSON ---- mongobson.UnmarshalExtJSON --\
+                                            |                          |
+                                            \- extJSONParser.advanceState
+                                                                       |
+                                            decodeDocument <------------/
+                                            (BSON -> types.Document)
 ```
 
 The downstream stage (filter / sort / group) is consistently <10% of
-the stage's CPU time. The expensive step is **ExtJSON → BSON → Document
+the stage's CPU time. The expensive step is **ExtJSON -> BSON -> Document
 double-conversion**, applied to every doc that survives any byte prefilter.
 
 Two compounding costs:
 
 1. **JSON encoding round-trip.** Docs are stored as JSON in dolt prolly tree
    (`tree.JSONDoc.ToIndexedJSONDocument` + `sqltypes.MarshallJson`), then
-   converted JSON → ExtJSON-aware BSON (`mongobson.UnmarshalExtJSON`), then
-   BSON → `types.Document` (`bson.ToDocument`). Two parse phases per doc.
-   `bson.UnmarshalExtJSON` alone is 53–56% of the agg benches.
+   converted JSON -> ExtJSON-aware BSON (`mongobson.UnmarshalExtJSON`), then
+   BSON -> `types.Document` (`bson.ToDocument`). Two parse phases per doc.
+   `bson.UnmarshalExtJSON` alone is 53 --56% of the agg benches.
 
-2. **GC/alloc churn.** `runtime.mallocgc` consumes 21–31% of CPU across all
+2. **GC/alloc churn.** `runtime.mallocgc` consumes 21 --31% of CPU across all
    three. Top flat hotspots are `mallocgcSmallScanNoHeader`,
    `nextFreeFast`, `mallocgcSmallNoscan`, `writeHeapBitsSmall`. The
    ExtJSON parser and the document builders allocate per-field; nothing in
@@ -126,10 +126,10 @@ Two compounding costs:
 ## Where the gap to MongoDB lives (inferred, not measured)
 
 MongoDB stores docs natively as BSON; it doesn't transit ExtJSON. So the
-`UnmarshalExtJSON` half of `decodeDocFromJSON` (≈half the per-doc cost)
+`UnmarshalExtJSON` half of `decodeDocFromJSON` (~=half the per-doc cost)
 has no analogue. That alone plausibly accounts for a 2x gap. Combine with
 allocation overhead and the lack of a per-iteration buffer reuse strategy
-and the observed 4–10x is consistent with a decode-bound pipeline against a
+and the observed 4 --10x is consistent with a decode-bound pipeline against a
 storage-native one.
 
 ## Files added on this branch

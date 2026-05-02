@@ -104,8 +104,8 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 	}
 
 	// Expected order: A(3), B(3), C(2), D(2)
-	// A and B both have count=3  -- sorted by _id asc → A before B.
-	// C and D both have count=2  -- sorted by _id asc → C before D.
+	// A and B both have count=3  -- sorted by _id asc -> A before B.
+	// C and D both have count=2  -- sorted by _id asc -> C before D.
 	type want struct {
 		id    string
 		count int32
@@ -125,7 +125,7 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 }
 
 // TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder verifies that a
-// $unwind → $group → $sort pipeline produces deterministic output when $sort
+// $unwind -> $group -> $sort pipeline produces deterministic output when $sort
 // keys are tied.
 //
 // Three documents each carry a two-element "tags" array:
@@ -133,7 +133,7 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 //	{_id:1, tags:["a","b"]}, {_id:2, tags:["a","c"]}, {_id:3, tags:["b","d"]}
 //
 // After $unwind "$tags" the stream is: a, b, a, c, b, d.
-// After $group by "$tags" (count=$sum:1): a→2, b→2, c→1, d→1.
+// After $group by "$tags" (count=$sum:1): a->2, b->2, c->1, d->1.
 // After $sort {count:-1, _id:1}: a(2), b(2) first (tied on count, _id asc keeps
 // a before b), then c(1), d(1) (insertion order via stable sort).
 func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
@@ -244,7 +244,7 @@ func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
 
 // TestAggStage_sortByCount_TieBreakingOrder verifies that $sortByCount applies an
 // implicit secondary sort by _id ascending when counts are equal, per spec:
-// $sortByCount ≡ $group + $sort{count:-1, _id:1}.
+// $sortByCount === $group + $sort{count:-1, _id:1}.
 //
 // Six documents produce three groups with counts 2, 2, 2 (all tied).
 // Ascending _id tiebreaker must produce: p, q, r.
@@ -280,7 +280,7 @@ func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
-	// All counts are equal (2). Tiebreaker: _id ascending → p, q, r.
+	// All counts are equal (2). Tiebreaker: _id ascending -> p, q, r.
 	wantIDs := []string{"p", "q", "r"}
 
 	for i, wantID := range wantIDs {

@@ -27,7 +27,7 @@ import (
 )
 
 // idxKeyDesc describes the secondary index key tuple: one varbinary field
-// holding [KeyString(fieldValue…)][0x04][encodedPrimaryID bytes].
+// holding [KeyString(fieldValue...)][0x04][encodedPrimaryID bytes].
 var idxKeyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
 // idxValDesc describes the secondary index value tuple: a single dummy byte

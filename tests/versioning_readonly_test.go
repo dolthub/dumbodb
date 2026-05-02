@@ -132,7 +132,7 @@ func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 
-	// Base name must be ≤ 29 chars so that "dbname@<32-char-hash>" fits within the 63-char limit.
+	// Base name must be <= 29 chars so that "dbname@<32-char-hash>" fits within the 63-char limit.
 	dbName := fmt.Sprintf("roh%d", rand.Int64N(1_000_000))
 	collName := "col"
 
@@ -191,7 +191,7 @@ func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 
-	// Base name must be ≤ 29 chars so that "dbname@<32-char-hash>" fits within the 63-char limit.
+	// Base name must be <= 29 chars so that "dbname@<32-char-hash>" fits within the 63-char limit.
 	dbName := fmt.Sprintf("rhr%d", rand.Int64N(1_000_000))
 	collName := "col"
 

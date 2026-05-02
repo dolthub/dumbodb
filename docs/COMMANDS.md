@@ -153,7 +153,7 @@ db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "abandoned", 
 |-----------|-------|
 | `branch` is empty | `BadValue: doltBranch: branch name must not be empty` |
 | `delete` and `forceDelete` both set | `BadValue: doltBranch: delete and forceDelete are mutually exclusive` |
-| Safe-delete on branch with unmerged commits | `OperationFailed: … unmerged commits` |
+| Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
 
@@ -322,7 +322,7 @@ main.runCommand({ doltCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" 
 
 | Condition | Error |
 |-----------|-------|
-| `commit` is an unsupported rootish form (HEAD, reflog, range, caret) | `BadValue: doltCherryPick: …` |
+| `commit` is an unsupported rootish form (HEAD, reflog, range, caret) | `BadValue: doltCherryPick: ...` |
 | Cherry-pick produces conflicts | `ok: 0` response with `conflicts` array |
 
 ---
@@ -391,7 +391,7 @@ db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, abort: 1 })
 
 | Condition | Error |
 |-----------|-------|
-| `onto` is an unsupported rootish form | `BadValue: doltRebase: …` |
+| `onto` is an unsupported rootish form | `BadValue: doltRebase: ...` |
 | Conflict during replay | `ok: 0` response with `conflicts` and `conflictCommit` |
 
 ### Notes
@@ -653,7 +653,7 @@ db.runCommand({ doltDiff: 1, from: hashBase, to: "HEAD" })
 
 | Condition | Error |
 |-----------|-------|
-| Unsupported rootish form in `from` or `to` | `OperationFailed: rootish …` |
+| Unsupported rootish form in `from` or `to` | `OperationFailed: rootish ...` |
 
 ### Notes
 
@@ -713,7 +713,7 @@ db.runCommand({ doltReset: 1, hard: true })
 
 | Condition | Error |
 |-----------|-------|
-| `to` is not a valid commit hash | `OperationFailed: …` |
+| `to` is not a valid commit hash | `OperationFailed: ...` |
 
 ### Notes
 
@@ -794,7 +794,7 @@ main.runCommand({ doltRevert: 1, commit: badCommitHash })
 
 | Condition | Error |
 |-----------|-------|
-| `commit` is an unsupported rootish form | `BadValue: doltRevert: …` |
+| `commit` is an unsupported rootish form | `BadValue: doltRevert: ...` |
 | Revert produces conflicts | `ok: 0` response with `conflicts` array |
 
 ### Notes
@@ -983,7 +983,7 @@ main.runCommand({ doltMerge: 1, continue: 1 })
 | Condition | Error |
 |-----------|-------|
 | `resolution` is `"custom"` but `value` is missing | `BadValue: doltResolveConflict: resolution 'custom' requires a 'value' document` |
-| Unknown `conflictId` | `OperationFailed: …` |
+| Unknown `conflictId` | `OperationFailed: ...` |
 
 ### Notes
 

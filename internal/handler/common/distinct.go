@@ -337,7 +337,7 @@ func DedupDistinctValues(values []any) (*types.Array, error) {
 //
 // Hashable scalars are deduped through a map keyed on distinctKey; composites
 // (Document, Array) and any other unkeyable types fall back to linear scan
-// against a smaller "complex" slice. The fast path turns the previous O(n²)
+// against a smaller "complex" slice. The fast path turns the previous O(n^2)
 // distinct accumulator into O(n) for the common case of scalar fields.
 type distinctSet struct {
 	seen     map[string]struct{}

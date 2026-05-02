@@ -474,7 +474,7 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 
 	opts := options.UpdateOne().SetUpsert(true)
 
-	// First call: no match → upsert insert. $setOnInsert must apply.
+	// First call: no match -> upsert insert. $setOnInsert must apply.
 	result, err := coll.UpdateOne(ctx,
 		bson.D{{Key: "key", Value: "soi-test"}},
 		bson.D{
@@ -490,7 +490,7 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "key", Value: "soi-test"}}).Decode(&doc))
 	assert.Equal(t, true, dmap(doc)["created"], "$setOnInsert must set 'created' on upsert insert")
 
-	// Second call: now a document exists → update (not insert). $setOnInsert must NOT change 'created'.
+	// Second call: now a document exists -> update (not insert). $setOnInsert must NOT change 'created'.
 	result, err = coll.UpdateOne(ctx,
 		bson.D{{Key: "key", Value: "soi-test"}},
 		bson.D{

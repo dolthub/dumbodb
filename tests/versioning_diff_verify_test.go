@@ -22,7 +22,7 @@ package tests
 //   - Baseline commit (hashBase): items = [ {_id:1, label:"alpha", score:10},
 //     {_id:2, label:"beta", score:20} ]
 //   - Working-set changes (not committed after setup):
-//     _id:3 added, _id:1 score modified (10→99), _id:2 deleted
+//     _id:3 added, _id:1 score modified (10->99), _id:2 deleted
 //
 // Subtests run sequentially (no t.Parallel inside) so they share a single
 // database and the side effects of one scenario carry into the next.
@@ -189,7 +189,7 @@ func diffVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBase
 
 	// Three working-set changes (NOT committed):
 	//   _id:3 added
-	//   _id:1 modified (score 10 → 99)
+	//   _id:1 modified (score 10 -> 99)
 	//   _id:2 deleted
 	_, err = items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
@@ -243,7 +243,7 @@ func TestDiffVerify(t *testing.T) {
 				return names
 			}())
 
-		// items existed in both sides with doc-level changes → status: "modified"
+		// items existed in both sides with doc-level changes -> status: "modified"
 		assert.Equal(t, "modified", cd.Status, "items collection should have status 'modified'")
 
 		// added: exactly _id:3
@@ -361,7 +361,7 @@ func TestDiffVerify(t *testing.T) {
 		require.Len(t, cd.Removed, 1, "expected 1 removed doc (_id:2)")
 		assert.Equal(t, int32(2), cd.Removed[0]["_id"])
 
-		// One modified document: _id:1 score 10→99 (committed in Scenario 2).
+		// One modified document: _id:1 score 10->99 (committed in Scenario 2).
 		require.Len(t, cd.Modified, 1, "expected 1 modified doc (_id:1)")
 		mod := cd.Modified[0]
 		assert.Equal(t, int32(1), mod.ID)
@@ -499,7 +499,7 @@ func TestDiffVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: Field type change (number → string)
+	// Scenario 7: Field type change (number -> string)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_FieldTypeChange", func(t *testing.T) {
 		// Commit working set from Scenario 6 for a clean HEAD.
@@ -615,7 +615,7 @@ func TestDiffVerify(t *testing.T) {
 
 		// 9c: from=hashC2, to="HEAD" on rootishtest branch connection.
 		// HEAD resolves to rootishtest tip = c1 (branch was created before c2),
-		// so hashC2 != rootishtest HEAD → expect an error or at least a non-empty diff.
+		// so hashC2 != rootishtest HEAD -> expect an error or at least a non-empty diff.
 		// Actually hashC2 is AFTER rootishtest was branched, so rootishtest HEAD == hashC1.
 		// Diff from hashC2 to rootishtest HEAD: rootishtest has _id:1 absent, hashC2 has it.
 		// So _id:1 should appear as removed.
@@ -633,7 +633,7 @@ func TestDiffVerify(t *testing.T) {
 		assert.Equal(t, int32(1), cd9c.Removed[0]["_id"], "9c: removed doc must be _id:1")
 
 		// 9d: from=hashC1, to="HEAD" on rootishtest branch connection.
-		// rootishtest HEAD == c1 == hashC1 → identical → empty diff.
+		// rootishtest HEAD == c1 == hashC1 -> identical -> empty diff.
 		var raw9d bson.M
 		require.NoError(t, rootish.RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -677,7 +677,7 @@ func TestDiffVerify(t *testing.T) {
 		assert.Equal(t, int32(1), cd9f.Removed[0]["_id"], "9f: removed doc must be _id:1")
 
 		// 9g: REVERSE  -- from="main", to="rootishtest" (bare branch names, reverse of 9e).
-		// 9e showed _id:1 added going rootishtest→main; reversed: _id:1 is removed.
+		// 9e showed _id:1 added going rootishtest->main; reversed: _id:1 is removed.
 		var raw9g bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -774,9 +774,9 @@ func TestDiffVerify(t *testing.T) {
 		hashBaseline := dumboDBCommit(t, env, dbName, "scen10 baseline", "alice <alice@acme.com>")
 
 		// Working-set lifecycle:
-		//   - scen10_staying: modify a doc                → status: "modified"
-		//   - scen10_going:   drop the collection         → status: "deleted"
-		//   - scen10_arrival: create a new collection     → status: "added"
+		//   - scen10_staying: modify a doc                -> status: "modified"
+		//   - scen10_going:   drop the collection         -> status: "deleted"
+		//   - scen10_arrival: create a new collection     -> status: "added"
 		_, err = stay.UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}},
@@ -789,7 +789,7 @@ func TestDiffVerify(t *testing.T) {
 		_, err = newColl.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(42)}, {Key: "label", Value: "new"}})
 		require.NoError(t, err)
 
-		// Diff baseline → working set; assert each collection has the expected status.
+		// Diff baseline -> working set; assert each collection has the expected status.
 		var raw bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},

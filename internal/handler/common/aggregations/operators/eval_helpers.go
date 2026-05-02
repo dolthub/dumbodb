@@ -25,12 +25,12 @@ import (
 
 // evalArgValue resolves an operator argument to its concrete value against the document.
 // Supports:
-//   - *types.Document with operator → evaluates nested operator
-//   - *types.Document without operator → returns doc as-is
-//   - string starting with "$$" → variable reference (looked up as "$$name" key in doc)
-//   - string starting with "$" → field path expression
-//   - string not starting with "$" → literal string value
-//   - any other value → literal value
+//   - *types.Document with operator -> evaluates nested operator
+//   - *types.Document without operator -> returns doc as-is
+//   - string starting with "$$" -> variable reference (looked up as "$$name" key in doc)
+//   - string starting with "$" -> field path expression
+//   - string not starting with "$" -> literal string value
+//   - any other value -> literal value
 //
 // Missing field paths return types.Null.
 func evalArgValue(arg any, doc *types.Document) (any, error) {
@@ -51,7 +51,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	case string:
 		if strings.HasPrefix(v, "$$") {
 			// Variable reference: look up "$$name" key stored in the document by $filter/$map/$reduce/$let.
-			// Handle dotted paths: "$$varname.field.sub" → resolve $$varname then traverse field.sub.
+			// Handle dotted paths: "$$varname.field.sub" -> resolve $$varname then traverse field.sub.
 			withoutPrefix := strings.TrimPrefix(v, "$$")
 			if dotIdx := strings.Index(withoutPrefix, "."); dotIdx >= 0 {
 				varKey := "$$" + withoutPrefix[:dotIdx]

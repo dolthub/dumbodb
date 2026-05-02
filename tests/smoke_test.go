@@ -27,7 +27,7 @@ import (
 )
 
 // TestTransactionSmoke verifies the basic session and transaction lifecycle:
-// startSession → StartTransaction → insert documents → CommitTransaction → EndSession.
+// startSession -> StartTransaction -> insert documents -> CommitTransaction -> EndSession.
 // (DumboDBFull)
 //
 // DumboDB does not provide multi-document ACID isolation, but the driver-level

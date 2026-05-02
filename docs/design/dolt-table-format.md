@@ -37,7 +37,7 @@ if id != serial.TableFileID {
 
 ```flatbuffers
 table Table {
-  schema:[ubyte] (required);         // 20-byte hash → DSCH chunk (TableSchema)
+  schema:[ubyte] (required);         // 20-byte hash -> DSCH chunk (TableSchema)
   primary_index:[ubyte] (required);  // inline TUPM bytes (prolly.Map root node)
   secondary_indexes:[ubyte];         // inline ADRM bytes (empty AM for no indexes)
   auto_increment_value:uint64;
@@ -140,8 +140,8 @@ These map directly to `BIGINT NOT NULL PK` (Int64Enc) and `LONGBLOB NOT NULL`
 ### 1.6 How `dolt sql SHOW TABLES` Works
 
 Dolt reads:
-1. Working set → RTVL.tables (ADRM bytes)
-2. Parse ADRM → collection names as table names
+1. Working set -> RTVL.tables (ADRM bytes)
+2. Parse ADRM -> collection names as table names
 3. For each name, optionally reads the DTBL to get schema for column info
 
 The table name comes from the ADRM key (the collection name string), not from
@@ -152,8 +152,8 @@ inside the DTBL. So `SHOW TABLES` works once ADRM entries point to valid DTBLs.
 Dolt compares two RTVLs (HEAD and working):
 1. Parses both AMs from RTVL.tables
 2. Finds differing entries (by hash comparison)
-3. For each differing entry, calls `TableFromAddr` → expects DTBL file ID
-4. Reads primary_index bytes from DTBL → constructs prolly.Map
+3. For each differing entry, calls `TableFromAddr` -> expects DTBL file ID
+4. Reads primary_index bytes from DTBL -> constructs prolly.Map
 5. Diffs the two maps row-by-row
 
 This works with proper DTBL format.
@@ -164,12 +164,12 @@ This works with proper DTBL format.
 
 After the change, each ADRM entry maps:
 ```
-collection_name → hash(DTBL chunk)
+collection_name -> hash(DTBL chunk)
 ```
 
 Where the DTBL chunk contains:
 ```
-DTBL.schema        = 20-byte hash → DSCH chunk
+DTBL.schema        = 20-byte hash -> DSCH chunk
 DTBL.primary_index = inline TUPM bytes (prolly.Map root node)
 DTBL.secondary_indexes = inline ADRM bytes (empty)
 ```
@@ -180,22 +180,22 @@ for `_id BIGINT NOT NULL PK, doc LONGBLOB NOT NULL`.
 Full chunk graph after Option C:
 
 ```
-NBS root → STRT
-│
-├── STRT.refsAM → "refs/heads/main" → DCMT
-├── DCMT.rootValue → RTVL
-├── WRST.working_root_addr → RTVL (latest working state)
-│
-├── RTVL.tables (inline ADRM bytes)
-│   └── ADRM: "myCollection" → hash(DTBL)
-│                              "otherCollection" → hash(DTBL2)
-│
-├── DTBL.schema = hash(DSCH)        ← NEW
-├── DTBL.primary_index = TUPM bytes ← primary index is our prolly.Map
-│
-├── DSCH.columns = [_id BIGINT PK, doc LONGBLOB]  ← shared schema chunk
-│
-└── TUPM (prolly.Map nodes, written to chunk store during mutations)
+NBS root -> STRT
+|
+|-- STRT.refsAM -> "refs/heads/main" -> DCMT
+|-- DCMT.rootValue -> RTVL
+|-- WRST.working_root_addr -> RTVL (latest working state)
+|
+|-- RTVL.tables (inline ADRM bytes)
+|   \-- ADRM: "myCollection" -> hash(DTBL)
+|                              "otherCollection" -> hash(DTBL2)
+|
+|-- DTBL.schema = hash(DSCH)        <- NEW
+|-- DTBL.primary_index = TUPM bytes <- primary index is our prolly.Map
+|
+|-- DSCH.columns = [_id BIGINT PK, doc LONGBLOB]  <- shared schema chunk
+|
+\-- TUPM (prolly.Map nodes, written to chunk store during mutations)
 ```
 
 ---
@@ -204,11 +204,11 @@ NBS root → STRT
 
 | Command               | Works? | Notes                                              |
 |-----------------------|--------|----------------------------------------------------|
-| `dolt fsck`           | ✓      | All chunks reachable                               |
-| `dolt log`            | ✓      | Reads commit metadata                              |
-| `dolt status`         | ✓      | ADRM → DTBL (file ID check passes)                |
-| `dolt diff`           | ✓      | DTBL primary_index → valid prolly.Map rows        |
-| `dolt sql SHOW TABLES`| ✓      | Table names from ADRM keys                         |
-| `dolt sql DESCRIBE t` | ✓      | Reads DSCH for column info                         |
+| `dolt fsck`           | ok      | All chunks reachable                               |
+| `dolt log`            | ok      | Reads commit metadata                              |
+| `dolt status`         | ok      | ADRM -> DTBL (file ID check passes)                |
+| `dolt diff`           | ok      | DTBL primary_index -> valid prolly.Map rows        |
+| `dolt sql SHOW TABLES`| ok      | Table names from ADRM keys                         |
+| `dolt sql DESCRIBE t` | ok      | Reads DSCH for column info                         |
 | `dolt checkout`       | ~      | Single branch only (no branch switching)           |
-| `dolt clone`          | ✗      | Remote push not yet implemented                    |
+| `dolt clone`          | FAIL      | Remote push not yet implemented                    |

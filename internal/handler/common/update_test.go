@@ -120,7 +120,7 @@ func TestPipelineUpdate_replaceWith(t *testing.T) {
 
 		// Document: {x: 1, y: 2}
 		// Pipeline: [{$replaceWith: {x: "$x", y: "$y"}}]
-		// Result has same keys/values → changed should be false.
+		// Result has same keys/values -> changed should be false.
 		doc := must.NotFail(types.NewDocument("x", int32(1), "y", int32(2)))
 
 		exprDoc := must.NotFail(types.NewDocument("x", "$x", "y", "$y"))

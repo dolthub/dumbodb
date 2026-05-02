@@ -261,7 +261,7 @@ func extJSONFieldPatterns(field string, value any) [][]byte {
 	case int64:
 		return numericFieldPatterns(field, v, float64(v), false)
 	case float64:
-		if v != v || v-v != 0 { // NaN or ±Inf  -- ExtJSON has special forms.
+		if v != v || v-v != 0 { // NaN or +/-Inf  -- ExtJSON has special forms.
 			return nil
 		}
 		asInt := int64(v)
@@ -503,7 +503,7 @@ const (
 //     i=3  -- never i=99.
 //   - recognises only the canonical numeric wrappers $numberInt /
 //     $numberLong / $numberDouble; any other value shape (sub-doc, array,
-//     string, null, $numberDecimal, $oid, $date, …) returns rangeProbeBail.
+//     string, null, $numberDecimal, $oid, $date, ...) returns rangeProbeBail.
 //   - bails on any escape sequence inside a key, since unescaping would be
 //     needed to compare safely against the target field name.
 //
@@ -703,11 +703,11 @@ var (
 // parseNumericExtJSONValue interprets the value bytes of one canonical
 // Extended JSON token as a finite float64. Only the three numeric wrappers
 // $numberInt / $numberLong / $numberDouble are recognised. Anything else
-// (other ExtJSON wrappers, sub-documents, arrays, strings, …) maps to
+// (other ExtJSON wrappers, sub-documents, arrays, strings, ...) maps to
 // rangeProbeBail so the predicate stays permissive.
 //
 // Long ints whose magnitude exceeds the float64 mantissa precision and
-// double values that are NaN/±Inf also bail  -- the comparison would not be
+// double values that are NaN/+/-Inf also bail  -- the comparison would not be
 // exact, so we let the FilterIterator validate them.
 func parseNumericExtJSONValue(b []byte) (float64, rangeProbeStatus) {
 	var prefix []byte
@@ -877,7 +877,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		return nil, false, nil
 	}
 
-	// Map indexed-leading-field → IndexInfo. Only single-field indexes are
+	// Map indexed-leading-field -> IndexInfo. Only single-field indexes are
 	// usable here; compound indexes require key-prefix matching that the
 	// planner doesn't yet do.
 	indexedField := make(map[string]string, len(idxInfos))
@@ -998,13 +998,13 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 // include false positives (the handler will filter them out).
 //
 // Supported value shapes:
-//   - bare scalar v                          → [KS(v)+0x04, KS(v)+0x05)
+//   - bare scalar v                          -> [KS(v)+0x04, KS(v)+0x05)
 //   - operator doc using only $eq / $gt /
-//     $gte / $lt / $lte                      → bounds derived from the
+//     $gte / $lt / $lte                      -> bounds derived from the
 //                                              tightest clause on each side.
 //
 // Returns ok=false for value shapes the index path can't handle (regex,
-// $in, $ne, nested operators, mixed comparisons against arrays, …); the
+// $in, $ne, nested operators, mixed comparisons against arrays, ...); the
 // caller falls back to the full-scan path.
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	opDoc, isOp := v.(*types.Document)
@@ -1094,7 +1094,7 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 }
 
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
-// multiple bounds on the same side ($gte:1, $gte:5 → keep the tighter 5).
+// multiple bounds on the same side ($gte:1, $gte:5 -> keep the tighter 5).
 func compareScalars(a, b any) int {
 	switch types.Compare(a, b) {
 	case types.Less:
@@ -1908,7 +1908,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 // supported range), and that field has a single-field secondary index, the
 // count is the size of the index range  -- no documents are fetched or
 // decoded. Filtered=true is set on the result. Any other shape (compound
-// filter, dotted paths, $and/$or, no covering index, …) is declined with
+// filter, dotted paths, $and/$or, no covering index, ...) is declined with
 // Filtered=false and Count=0; the handler must scan.
 func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*backends.CountResult, error) {
 	m, exists, state, err := c.getMap(ctx)
@@ -2043,10 +2043,10 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 		// Kept small so that for tiny test collections size/1000 rounds down to 0.
 		avgDocSize = 64
 		// avgIndexEntSize is the estimated bytes per index entry.
-		// Must be ≥ 250 so that for 4-doc test collections totalIndexSize/1000 ≥ 1.
+		// Must be >= 250 so that for 4-doc test collections totalIndexSize/1000 >= 1.
 		avgIndexEntSize = 256
 		// minStoragePage is the minimum allocated storage for a non-empty collection,
-		// matching MongoDB's page-granular allocation behavior (typically ≥ 4KB).
+		// matching MongoDB's page-granular allocation behavior (typically >= 4KB).
 		minStoragePage = 4096
 	)
 
@@ -2667,7 +2667,7 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 			return hash.Hash{}, fmt.Errorf("dolt: encoding document with MinKey/MaxKey to BSON: %w", err)
 		}
 	} else {
-		// Step 1: Convert types.Document → wirebson.Document → BSON bytes.
+		// Step 1: Convert types.Document -> wirebson.Document -> BSON bytes.
 		wdoc, err := bson.FromDocument(doc)
 		if err != nil {
 			return hash.Hash{}, fmt.Errorf("dolt: encoding document to wirebson: %w", err)
@@ -2679,7 +2679,7 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 		}
 	}
 
-	// Step 2: Convert BSON bytes → Canonical Extended JSON bytes.
+	// Step 2: Convert BSON bytes -> Canonical Extended JSON bytes.
 	// Must use canonical=true to preserve BSON type distinctions (int32 vs int64,
 	// double vs decimal128, etc.) through the JSON roundtrip.
 	jsonBytes, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)

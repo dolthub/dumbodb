@@ -245,9 +245,9 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_MultipleCollections", func(t *testing.T) {
 		// Reset to a known baseline: commit three starter collections, then mutate all three.
-		// - "orders":   committed baseline → will be modified (3 adds, 1 mod, 2 deletes)
-		// - "users":    not in HEAD → will be "added" (5 inserts)
-		// - "archive":  committed baseline → will be "deleted" (Drop)
+		// - "orders":   committed baseline -> will be modified (3 adds, 1 mod, 2 deletes)
+		// - "users":    not in HEAD -> will be "added" (5 inserts)
+		// - "archive":  committed baseline -> will be "deleted" (Drop)
 		for i := int32(1); i <= 3; i++ {
 			_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 				{Key: "_id", Value: i},

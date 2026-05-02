@@ -202,7 +202,7 @@ func idsInDocs(t *testing.T, docs []*types.Document) []int32 {
 	return out
 }
 
-// containsAll returns true if needles ⊆ haystack. Used for "the index path
+// containsAll returns true if needles <= haystack. Used for "the index path
 // returned at least every matching doc" checks  -- false positives are allowed
 // because the handler re-filters above the backend.
 func containsAll(haystack, needles []int32) bool {
@@ -282,7 +282,7 @@ func TestIndexLookup_RangeAndCompound(t *testing.T) {
 	})
 
 	// --- Range with $gte / $lt --------------------------------------------
-	// 50 ≤ i < 60 → ten matches. The bounded scan should not return docs
+	// 50 <= i < 60 -> ten matches. The bounded scan should not return docs
 	// outside this window.
 	t.Run("range_gte_lt", func(t *testing.T) {
 		opDoc := must.NotFail(types.NewDocument("$gte", int32(50), "$lt", int32(60)))
@@ -352,7 +352,7 @@ func TestIndexLookup_RangeAndCompound(t *testing.T) {
 		}
 		got := drainQuery(t, ctx, coll, params)
 		if len(got) > 20 {
-			t.Errorf("compound: expected backend to narrow via grp index (≤20 docs); got %d", len(got))
+			t.Errorf("compound: expected backend to narrow via grp index (<=20 docs); got %d", len(got))
 		}
 		// Soundness: every doc with grp==2 must be in the candidate set.
 		var expected []int32
@@ -378,7 +378,7 @@ func TestIndexLookup_RangeAndCompound(t *testing.T) {
 			// All seeded docs have tag="row"; the scan should yield all of
 			// them. (False negatives here would mean the index path
 			// silently dropped docs.)
-			t.Errorf("unindexed_field_fallback: expected ≥%d docs, got %d", n, len(got))
+			t.Errorf("unindexed_field_fallback: expected >=%d docs, got %d", n, len(got))
 		}
 	})
 

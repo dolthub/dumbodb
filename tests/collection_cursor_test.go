@@ -94,7 +94,7 @@ func TestCollection_ListCollectionsIdIndex(t *testing.T) {
 }
 
 // TestCursor_CollationCaseInsensitive verifies that find with a case-insensitive
-// collation (strength ≤ 2) returns both exact-case and differently-cased documents.
+// collation (strength <= 2) returns both exact-case and differently-cased documents.
 // Parity test for do-7133: collation case-insensitive find returns empty results. (DumboDBFull)
 func TestCursor_CollationCaseInsensitive(t *testing.T) {
 	env := startDumboDB(t)

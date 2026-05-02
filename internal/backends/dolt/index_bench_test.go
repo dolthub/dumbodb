@@ -358,7 +358,7 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Fatalf("CreateIndexes: %v", err)
 	}
 
-	// Equality on indexed field → Filtered=true, count = 100.
+	// Equality on indexed field -> Filtered=true, count = 100.
 	eqRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("grp", int32(3))),
 	})
@@ -372,7 +372,7 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("equality count: want 100, got %d", eqRes.Count)
 	}
 
-	// Range on indexed field → Filtered=true, count = 100 ([100, 200)).
+	// Range on indexed field -> Filtered=true, count = 100 ([100, 200)).
 	rangeRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("i",
 			must.NotFail(types.NewDocument("$gte", int32(100), "$lt", int32(200))))),
@@ -387,7 +387,7 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("range count: want 100, got %d", rangeRes.Count)
 	}
 
-	// Compound filter (only one field indexed) → decline.
+	// Compound filter (only one field indexed) -> decline.
 	compoundRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("grp", int32(3), "tag", "row")),
 	})
@@ -398,7 +398,7 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("expected Filtered=false for compound filter, got true")
 	}
 
-	// Empty filter → unfiltered count, Filtered=true (and Count=n).
+	// Empty filter -> unfiltered count, Filtered=true (and Count=n).
 	emptyRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument()),
 	})
@@ -409,7 +409,7 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("empty filter: Filtered=%v Count=%d, want true/%d", emptyRes.Filtered, emptyRes.Count, n)
 	}
 
-	// Filter on non-indexed field → decline.
+	// Filter on non-indexed field -> decline.
 	tagRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("tag", "row")),
 	})
@@ -479,7 +479,7 @@ func TestIndexLookup_Bench_Sanity(t *testing.T) {
 		t.Errorf("equality candidate count: want 100, got %d", got)
 	}
 
-	// Range: 100..200 → 100 matches.
+	// Range: 100..200 -> 100 matches.
 	rangeRes, err := coll.Query(ctx, &backends.QueryParams{
 		Filter: must.NotFail(types.NewDocument("i",
 			must.NotFail(types.NewDocument("$gte", int32(100), "$lt", int32(200))))),

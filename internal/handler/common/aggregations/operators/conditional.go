@@ -21,7 +21,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// ── $cond ────────────────────────────────────────────────────────────────────
+// -- $cond --------------------------------------------------------------------
 
 // condOp represents the $cond expression operator.
 //
@@ -111,7 +111,7 @@ func (c *condOp) Process(doc *types.Document) (any, error) {
 // check interfaces
 var _ Operator = (*condOp)(nil)
 
-// ── $ifNull ───────────────────────────────────────────────────────────────────
+// -- $ifNull -------------------------------------------------------------------
 
 // ifNullOp represents the $ifNull expression operator.
 //
