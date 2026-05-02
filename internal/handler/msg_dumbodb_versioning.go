@@ -1027,6 +1027,16 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
+	stat, err := common.GetOptionalBoolOrIntParam(document, "stat", false)
+	if err != nil {
+		return nil, err
+	}
+
+	patch, err := common.GetOptionalBoolOrIntParam(document, "patch", false)
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -1051,6 +1061,8 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		ConnBranch: branch,
 		Limit:      limit,
 		From:       from,
+		Stat:       stat,
+		Patch:      patch,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -1083,6 +1095,61 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 			"committerTimestamp", time.UnixMilli(c.CommitterTimestamp),
 		)
 		entry := must.NotFail(types.NewDocument(pairs...))
+
+		if len(c.Stat) > 0 {
+			statArr := types.MakeArray(len(c.Stat))
+			for _, s := range c.Stat {
+				statArr.Append(must.NotFail(types.NewDocument(
+					"name", s.Name,
+					"status", s.Status,
+					"added", int32(s.Added),
+					"modified", int32(s.Modified),
+					"deleted", int32(s.Deleted),
+				)))
+			}
+			entry.Set("stat", statArr)
+		}
+
+		if len(c.Diff) > 0 {
+			diffArr := types.MakeArray(len(c.Diff))
+			for _, cd := range c.Diff {
+				addedDocs := types.MakeArray(len(cd.Added))
+				for _, doc := range cd.Added {
+					addedDocs.Append(doc)
+				}
+				removedDocs := types.MakeArray(len(cd.Removed))
+				for _, doc := range cd.Removed {
+					removedDocs.Append(doc)
+				}
+				modifiedDocs := types.MakeArray(len(cd.Modified))
+				for _, m := range cd.Modified {
+					fieldDiffs := types.MakeArray(len(m.Diff))
+					for _, fd := range m.Diff {
+						fdPairs := []any{"type", fd.Type, "path", fd.Path}
+						if fd.Type != "added" {
+							fdPairs = append(fdPairs, "from", fd.From)
+						}
+						if fd.Type != "removed" {
+							fdPairs = append(fdPairs, "to", fd.To)
+						}
+						fieldDiffs.Append(must.NotFail(types.NewDocument(fdPairs...)))
+					}
+					modifiedDocs.Append(must.NotFail(types.NewDocument(
+						"_id", m.ID,
+						"diff", fieldDiffs,
+					)))
+				}
+				diffArr.Append(must.NotFail(types.NewDocument(
+					"name", cd.Name,
+					"status", cd.Status,
+					"added", addedDocs,
+					"removed", removedDocs,
+					"modified", modifiedDocs,
+				)))
+			}
+			entry.Set("diff", diffArr)
+		}
+
 		commits.Append(entry)
 	}
 

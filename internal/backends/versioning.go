@@ -182,6 +182,8 @@ type LogParams struct {
 	ConnBranch string // branch name from the connection's encoded db name (used for HEAD -> decoration)
 	Limit      int32
 	From       string // optional: start traversal from this commit hash instead of HEAD
+	Stat       bool   // when true, include per-collection change counts for each commit
+	Patch      bool   // when true, include full document-level diffs for each commit
 }
 
 // CommitInfo represents a single commit entry returned by DumboDBLog.
@@ -196,6 +198,8 @@ type CommitInfo struct {
 	Committer          string   // "Name <email>" of the committer; equals Author when not explicitly set
 	CommitterTimestamp int64    // Unix milliseconds (committer date)
 	Refs               []string // branch/tag decorations; empty when commit is not a branch head
+	Stat               []TableStatus    // per-collection change summary (only when LogParams.Stat is true)
+	Diff               []CollectionDiff // full document diffs (only when LogParams.Patch is true)
 }
 
 // LogResult represents the result of VersioningBackend.DumboDBLog method.

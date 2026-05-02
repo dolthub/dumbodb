@@ -469,6 +469,8 @@ Key checks:
 | `{ doltLog: 1, limit: 0 }` | Empty `commits` array |
 | `{ doltLog: 1, from: "<hash>" }` | All commits from `<hash>` backwards |
 | `{ doltLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` (empty when N=0) |
+| `{ doltLog: 1, stat: true }` | Include per-collection change counts for each commit |
+| `{ doltLog: 1, patch: true }` | Include full document-level diffs for each commit |
 
 - Commits are returned in reverse topological order  -- higher commits first,
   with ties broken by newer timestamp first. Both parents of merge commits are
@@ -478,3 +480,6 @@ Key checks:
 - `parent1` is present on all non-root commits.
 - `parent2` is present only on merge commits.
 - The root commit has neither `parent1` nor `parent2`.
+- When `stat: true`, each commit includes a `stat` array with `{name, status, added, modified, deleted}` per changed collection (analogous to `git log --stat`).
+- When `patch: true`, each commit includes a `diff` array with full document diffs per collection in the same shape as `doltDiff` (analogous to `git log --patch`).
+- `stat` and `diff` are only present on commits that have changes; absent when the commit introduced no changes relative to its first parent.

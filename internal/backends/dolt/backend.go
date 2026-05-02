@@ -2022,6 +2022,72 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 			info.Parent2 = ci.Parents[1].String()
 		}
 
+		// When stat or patch is requested, diff this commit against its first parent.
+		if params.Stat || params.Patch {
+			commitAM, amErr := amFromCommitHash(ctx, db, ci.Hash.String())
+			if amErr != nil {
+				return nil, fmt.Errorf("dolt: DumboDBLog: loading AM for commit %q: %w", ci.Hash.String(), amErr)
+			}
+			var parentAM prolly.AddressMap
+			if len(ci.Parents) > 0 {
+				parentAM, amErr = amFromCommitHash(ctx, db, ci.Parents[0].String())
+				if amErr != nil {
+					return nil, fmt.Errorf("dolt: DumboDBLog: loading parent AM for commit %q: %w", ci.Hash.String(), amErr)
+				}
+			} else {
+				parentAM, amErr = prolly.NewEmptyAddressMap(db.ns)
+				if amErr != nil {
+					return nil, fmt.Errorf("dolt: DumboDBLog: creating empty AM: %w", amErr)
+				}
+			}
+
+			names, nameErr := unionCollectionNames(ctx, parentAM, commitAM)
+			if nameErr != nil {
+				return nil, fmt.Errorf("dolt: DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
+			}
+
+			for _, name := range names {
+				aHash, _ := parentAM.Get(ctx, name)
+				bHash, _ := commitAM.Get(ctx, name)
+
+				if aHash == bHash {
+					continue
+				}
+
+				var status string
+				switch {
+				case aHash.IsEmpty():
+					status = "added"
+				case bHash.IsEmpty():
+					status = "deleted"
+				default:
+					status = "modified"
+				}
+
+				if params.Stat {
+					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
+					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
+					added, modified, deleted, _ := countCollectionMapDiffs(ctx, aMap, bMap)
+					info.Stat = append(info.Stat, backends.TableStatus{
+						Name: name, Status: status,
+						Added: added, Modified: modified, Deleted: deleted,
+					})
+				}
+
+				if params.Patch {
+					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
+					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
+					addedDocs, removedDocs, modifiedDocs, _ := diffCollectionMaps(ctx, db.ns, aMap, bMap)
+					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 {
+						info.Diff = append(info.Diff, backends.CollectionDiff{
+							Name: name, Status: status,
+							Added: addedDocs, Removed: removedDocs, Modified: modifiedDocs,
+						})
+					}
+				}
+			}
+		}
+
 		commits = append(commits, info)
 	}
 

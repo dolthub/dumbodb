@@ -502,4 +502,76 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	_ = hash3 // referenced in subtests above
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: stat flag -- per-collection change counts for each commit
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_StatFlag", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+			{Key: "stat", Value: true},
+		}).Decode(&raw))
+
+		commits := raw["commits"].(bson.A)
+		require.Len(t, commits, 1)
+
+		head := commits[0].(bson.M)
+		statArr, ok := head["stat"].(bson.A)
+		require.True(t, ok, "stat must be present when stat:true")
+		require.NotEmpty(t, statArr, "stat must contain at least one collection entry")
+
+		// Each stat entry must have name, status, added, modified, deleted.
+		entry := statArr[0].(bson.M)
+		assert.NotEmpty(t, entry["name"], "stat entry must have a collection name")
+		assert.NotEmpty(t, entry["status"], "stat entry must have a status")
+		assert.NotNil(t, entry["added"], "stat entry must have added count")
+		assert.NotNil(t, entry["modified"], "stat entry must have modified count")
+		assert.NotNil(t, entry["deleted"], "stat entry must have deleted count")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 11: patch flag -- full document diffs for each commit
+	// -------------------------------------------------------------------------
+	t.Run("Scenario11_PatchFlag", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+			{Key: "patch", Value: true},
+		}).Decode(&raw))
+
+		commits := raw["commits"].(bson.A)
+		require.Len(t, commits, 1)
+
+		head := commits[0].(bson.M)
+		diffArr, ok := head["diff"].(bson.A)
+		require.True(t, ok, "diff must be present when patch:true")
+		require.NotEmpty(t, diffArr, "diff must contain at least one collection entry")
+
+		// Each diff entry must have name, status, added, removed, modified.
+		entry := diffArr[0].(bson.M)
+		assert.NotEmpty(t, entry["name"], "diff entry must have a collection name")
+		assert.NotEmpty(t, entry["status"], "diff entry must have a status")
+		assert.NotNil(t, entry["added"], "diff entry must have added array")
+		assert.NotNil(t, entry["removed"], "diff entry must have removed array")
+		assert.NotNil(t, entry["modified"], "diff entry must have modified array")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 12: neither stat nor patch -- no stat/diff fields present
+	// -------------------------------------------------------------------------
+	t.Run("Scenario12_NoStatNoPatch", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&raw))
+
+		commits := raw["commits"].(bson.A)
+		head := commits[0].(bson.M)
+		assert.Nil(t, head["stat"], "stat must be absent when stat flag is not set")
+		assert.Nil(t, head["diff"], "diff must be absent when patch flag is not set")
+	})
 }

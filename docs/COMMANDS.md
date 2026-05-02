@@ -417,6 +417,8 @@ timestamp first.
 |-----------|------|----------|---------|-------------|
 | `limit` | int32 | no | unset (default 20) | Maximum number of commits to return. `0` explicitly requests an empty list. |
 | `from` | string | no | HEAD | Start traversal from this commit hash instead of HEAD |
+| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`) |
+| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`) |
 
 ### Response fields
 
@@ -438,6 +440,8 @@ timestamp first.
 | `author` | string | Commit author |
 | `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
 | `committerTimestamp` | Date | Timestamp of when the commit was applied |
+| `stat` | array | **Only when `stat: true`.** Per-collection change counts: `[{name, status, added, modified, deleted}, ...]` |
+| `diff` | array | **Only when `patch: true`.** Full document diffs per collection (same shape as `doltDiff` collections). |
 
 ### Example
 
