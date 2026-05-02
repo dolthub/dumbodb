@@ -239,10 +239,10 @@ func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator
 // Ordering: MongoDB returns depth-0 results first, then the remaining depth levels in
 // reverse order (deepest first). Within each depth level, results appear in _id-ascending
 // order (collection-scan proxy). Concretely, for a chain a(d0)→b(d1)→c(d2), MongoDB
-// returns [a, c, b] — depth-0 first, then d2 before d1.
+// returns [a, c, b]  -- depth-0 first, then d2 before d1.
 func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document) ([]*types.Document, error) {
 	// Sort fromDocs by _id ascending once. All per-level scans then proceed in this
-	// fixed order, so within-level results always appear in _id order — matching
+	// fixed order, so within-level results always appear in _id order  -- matching
 	// MongoDB's collection-scan ordering guarantee.
 	sorted := make([]*types.Document, len(fromDocs))
 	copy(sorted, fromDocs)
@@ -297,7 +297,7 @@ func (gl *graphLookup) traverse(doc *types.Document, fromDocs []*types.Document)
 
 		var levelDocs []*types.Document
 
-		// Scan fromDocs in sorted order — the outer loop is the collection, not the
+		// Scan fromDocs in sorted order  -- the outer loop is the collection, not the
 		// frontier. This matches MongoDB's per-level collection scan: all frontier values
 		// are checked against each document as it is encountered, so within a depth level
 		// documents are emitted in _id order regardless of which frontier value they match.

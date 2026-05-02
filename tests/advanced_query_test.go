@@ -111,7 +111,7 @@ func TestAdvancedQuery_JsonSchema_NoMatch(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Schema requires field "missing" to be present — no doc has it.
+	// Schema requires field "missing" to be present  -- no doc has it.
 	cursor, err := coll.Find(ctx,
 		d(e("$jsonSchema", d(
 			e("required", bson.A{"missing"}),
@@ -242,7 +242,7 @@ func TestAdvancedQuery_Regex_LookaheadSupported(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// "(?=foo)" is a PCRE lookahead — matches strings where "foo" follows at the current position.
+	// "(?=foo)" is a PCRE lookahead  -- matches strings where "foo" follows at the current position.
 	// "foobar" matches (lookahead succeeds at position 0); "bazqux" does not.
 	cursor, err := coll.Find(ctx,
 		d(e("name", d(e("$regex", "(?=foo)")))),
@@ -339,7 +339,7 @@ func TestAdvancedQuery_TextSearch_MultipleTerms(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Search for "fox" OR "dog" — should match docs 1 and 2.
+	// Search for "fox" OR "dog"  -- should match docs 1 and 2.
 	cursor, err := coll.Find(ctx,
 		d(e("$text", d(e("$search", "fox dog")))),
 		options.Find().SetSort(d(e("_id", int32(1)))),
@@ -370,7 +370,7 @@ func TestAdvancedQuery_TextSearch_WithAdditionalFilter(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Text search for "apple" AND category == "food" — only doc 1 qualifies.
+	// Text search for "apple" AND category == "food"  -- only doc 1 qualifies.
 	cursor, err := coll.Find(ctx,
 		d(e("$text", d(e("$search", "apple"))), e("category", "food")),
 	)

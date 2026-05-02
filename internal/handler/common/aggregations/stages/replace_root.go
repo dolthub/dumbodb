@@ -136,7 +136,7 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 		return result.DeepCopy(), nil
 
 	case *types.Document:
-		// Operator expression like {$mergeObjects: [...]} — evaluate as operator.
+		// Operator expression like {$mergeObjects: [...]}  -- evaluate as operator.
 		if operators.IsOperator(e) {
 			op, opErr := operators.NewOperator(e)
 			if opErr != nil {
@@ -171,7 +171,7 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 			return result, nil
 		}
 
-		// Literal document template — evaluate field path expressions in values.
+		// Literal document template  -- evaluate field path expressions in values.
 		return evaluateDocumentExpression(e, doc)
 
 	default:
@@ -225,7 +225,7 @@ func evaluateDocumentExpression(templateDoc *types.Document, doc *types.Document
 			}
 
 		case *types.Document:
-			// Operator expression (e.g. {$mergeObjects: [...]}) — evaluate it.
+			// Operator expression (e.g. {$mergeObjects: [...]})  -- evaluate it.
 			if operators.IsOperator(val) {
 				op, opErr := operators.NewOperator(val)
 				if opErr != nil {

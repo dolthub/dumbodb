@@ -32,7 +32,7 @@ type DistinctResult struct {
 }
 
 // DistinctScanner is an optional capability a backend may implement to compute
-// `distinct` without a full collection scan — e.g. by walking a secondary
+// `distinct` without a full collection scan  -- e.g. by walking a secondary
 // index in sorted order and emitting one primary lookup per unique key.
 //
 // Implementations should return (nil, nil) when they cannot handle the request

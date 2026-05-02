@@ -98,7 +98,7 @@ func TestRebaseVerify(t *testing.T) {
 	mainDB := env.client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Clean rebase — response shape
+	// Scenario 1: Clean rebase  -- response shape
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanRebase_ResponseShape", func(t *testing.T) {
 		raw := runCommandRaw(t, featureDB, bson.D{
@@ -136,7 +136,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NotEmpty(t, commits, "commits array must not be empty")
 
 		head := commits[0].(bson.M)
-		// The original commit was by "test <test@example.com>" — author is preserved.
+		// The original commit was by "test <test@example.com>"  -- author is preserved.
 		assert.Equal(t, "test <test@example.com>", head["author"],
 			"rebased commit must preserve original author")
 		// Committer is the rebaser identity passed via the author param.
@@ -226,7 +226,7 @@ func TestRebaseVerify(t *testing.T) {
 	t.Run("Scenario4_AlreadyUpToDate", func(t *testing.T) {
 		// After Scenario 1, feature = C2' (parent = C3, main tip = C3). feature
 		// is still one commit ahead of main, so a second rebase replays that
-		// commit onto main — matching git's behavior.
+		// commit onto main  -- matching git's behavior.
 		raw := runCommandRaw(t, featureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
@@ -278,7 +278,7 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Conflict during rebase — structured error response
+	// Scenario 6: Conflict during rebase  -- structured error response
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_ConflictResponse", func(t *testing.T) {
 		// Set up a fresh database for this scenario.
@@ -305,7 +305,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, conflictDB+"@feature", "feature-changes-1", "test <test@example.com>")
 
-		// Rebase feature onto main — expect conflict.
+		// Rebase feature onto main  -- expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
@@ -338,7 +338,7 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: Conflict during rebase — resolve and continue
+	// Scenario 7: Conflict during rebase  -- resolve and continue
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_ConflictResolveAndContinue", func(t *testing.T) {
 		conflictDB := fmt.Sprintf("rebaseresol%d", rand.Int64N(1_000_000))
@@ -362,7 +362,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, conflictDB+"@feature", "feature-modifies-1", "test <test@example.com>")
 
-		// Start rebase — expect conflict.
+		// Start rebase  -- expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{
 			{Key: "doltRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},

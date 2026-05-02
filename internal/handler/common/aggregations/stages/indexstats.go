@@ -38,7 +38,7 @@ func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.C
 	res, err := c.ListIndexes(ctx, nil)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
-			// Collection with no documents — only the _id_ index exists.
+			// Collection with no documents  -- only the _id_ index exists.
 			res = &backends.ListIndexesResult{
 				Indexes: []backends.IndexInfo{
 					{

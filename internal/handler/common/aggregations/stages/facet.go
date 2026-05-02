@@ -170,7 +170,7 @@ func runSubPipeline(ctx context.Context, inputDocs []*types.Document, stages []a
 
 // Process implements Stage interface.
 func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	// Collect all input documents — each sub-pipeline gets the same set.
+	// Collect all input documents  -- each sub-pipeline gets the same set.
 	inputDocs, err := iterator.ConsumeValues(iter)
 	if err != nil {
 		return nil, lazyerrors.Error(err)

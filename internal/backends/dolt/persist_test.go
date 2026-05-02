@@ -235,7 +235,7 @@ func TestWorkingSetDivergesAfterWrite(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	// Record HEAD's rootValue hash before any writes — this is the expected staged addr.
+	// Record HEAD's rootValue hash before any writes  -- this is the expected staged addr.
 	headValue, _, err := state.ds.MaybeHeadValue()
 	if err != nil {
 		t.Fatalf("MaybeHeadValue: %v", err)
@@ -378,7 +378,7 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	}
 
 	if count != 1 {
-		t.Errorf("expected 1 document after restart, got %d — persistence is broken", count)
+		t.Errorf("expected 1 document after restart, got %d  -- persistence is broken", count)
 	}
 }
 
@@ -677,7 +677,7 @@ func TestDumboDBCommitEmptyRejected(t *testing.T) {
 		t.Fatalf("DumboDBCommit (no changes after empty, no flag): err = %v, want ErrEmptyCommit", err)
 	}
 
-	// AllowEmpty again — new empty commit with a different hash.
+	// AllowEmpty again  -- new empty commit with a different hash.
 	res2, err := b.DumboDBCommit(ctx, &backends.CommitParams{DBName: "testdb", Message: "empty2", Author: "testuser", AllowEmpty: true})
 	if err != nil {
 		t.Fatalf("DumboDBCommit (AllowEmpty 2): %v", err)
@@ -903,7 +903,7 @@ func insertDocForTest(t *testing.T, ctx context.Context, b *Backend, dbName stri
 }
 
 // TestDumboDBLogFreshDatabase verifies that DumboDBLog on a brand-new database returns exactly
-// one commit — the "Initialize database" root commit — and that the root commit has no Parent1.
+// one commit  -- the "Initialize database" root commit  -- and that the root commit has no Parent1.
 func TestDumboDBLogFreshDatabase(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -982,7 +982,7 @@ func TestDumboDBLogAfterOneCommit(t *testing.T) {
 		t.Errorf("user commit Parent1 = %q, want init hash %q", res.Commits[0].Parent1, res.Commits[1].CommitID)
 	}
 
-	// index 1 is the init commit (root — no parent).
+	// index 1 is the init commit (root  -- no parent).
 	if res.Commits[1].Message != "Initialize database" {
 		t.Errorf("Commits[1].Message = %q, want %q", res.Commits[1].Message, "Initialize database")
 	}

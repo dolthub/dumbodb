@@ -450,7 +450,7 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 	}
 
 	// Handle legacy array form: {$near: [lon, lat], $maxDistance: n}
-	// In that case opDoc won't have $geometry but also won't have $geometry key at all —
+	// In that case opDoc won't have $geometry but also won't have $geometry key at all  --
 	// the entire opDoc IS what $near points to.  If it has $geometry it was handled above.
 	// If it doesn't have $geometry, it must be a legacy coord array embedded as if a doc
 	// with no $geometry.  But legacy $near looks like:
@@ -467,7 +467,7 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 	case *types.Document:
 		dlon, dlat, err := extractPointCoords(v)
 		if err != nil {
-			return false, nil // non-point geometry — skip
+			return false, nil // non-point geometry  -- skip
 		}
 		if spherical {
 			dist = haversineMeters(queryLon, queryLat, dlon, dlat)
@@ -773,7 +773,7 @@ func pointOnSegment(p, a, b [2]float64) bool {
 	if cross != 0 {
 		return false
 	}
-	// p is collinear — check it falls within the bounding box of [a, b].
+	// p is collinear  -- check it falls within the bounding box of [a, b].
 	minX, maxX := a[0], b[0]
 	if minX > maxX {
 		minX, maxX = maxX, minX

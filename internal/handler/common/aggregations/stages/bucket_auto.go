@@ -117,7 +117,7 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 		buckets: numBuckets,
 	}
 
-	// granularity is optional — not yet implemented, ignore it.
+	// granularity is optional  -- not yet implemented, ignore it.
 
 	// output is optional.
 	if outputVal, getErr := spec.Get("output"); getErr == nil {

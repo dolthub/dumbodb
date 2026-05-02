@@ -116,7 +116,7 @@ func EncodeValue(v any) []byte {
 		return b
 
 	case *types.Document:
-		// Object: minimal encoding for PoC — just mark type, no nested sort.
+		// Object: minimal encoding for PoC  -- just mark type, no nested sort.
 		return []byte{ctypeObject}
 
 	case *types.Array:

@@ -303,7 +303,7 @@ func TestLookup_ArrayLocalField(t *testing.T) {
 		t.Fatalf("NewLookupStage: %v", err)
 	}
 
-	// Local doc has colorRefs: ["red", "green"] — should match items 1 and 3.
+	// Local doc has colorRefs: ["red", "green"]  -- should match items 1 and 3.
 	colorRefs := must.NotFail(types.NewArray("red", "green"))
 	localDoc := must.NotFail(types.NewDocument("_id", int32(100), "colorRefs", colorRefs))
 
@@ -372,7 +372,7 @@ func TestLookup_NestedLookup(t *testing.T) {
 	outerPipeline := must.NotFail(types.NewArray(innerLookupStage))
 
 	// Outer $lookup: join customers with orders via pipeline.
-	// No let needed — this is an uncorrelated sub-pipeline that fetches all orders
+	// No let needed  -- this is an uncorrelated sub-pipeline that fetches all orders
 	// and enriches them with their details via nested $lookup.
 	outerSpec := must.NotFail(types.NewDocument(
 		"from", "orders",
@@ -537,7 +537,7 @@ func TestLookup_ArrayLocalFieldNoMatch(t *testing.T) {
 		t.Fatalf("NewLookupStage: %v", err)
 	}
 
-	// colorRefs: ["blue", "green"] — no intersection with items collection.
+	// colorRefs: ["blue", "green"]  -- no intersection with items collection.
 	colorRefs := must.NotFail(types.NewArray("blue", "green"))
 	localDoc := must.NotFail(types.NewDocument("_id", int32(100), "colorRefs", colorRefs))
 
@@ -908,7 +908,7 @@ func TestGraphLookup_CycleDetection(t *testing.T) {
 	}
 
 	// Should find b (from reportsTo=b), then attempt a (from b.reportsTo=a) but
-	// "a" was the search value that started it all — actually "b" was searched first,
+	// "a" was the search value that started it all  -- actually "b" was searched first,
 	// then "a" is queued. "a" has not been searched yet, so we look for connectToField=a
 	// and find employee "a". But then a.reportsTo=b which was already searched, so we stop.
 	// Result: b and a → 2 documents.
@@ -1467,7 +1467,7 @@ func TestAggStage_bucketAuto_MissingBucketsError(t *testing.T) {
 func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
 	t.Parallel()
 
-	// Two subordinates both report to "ceo" — they match in the same BFS pass.
+	// Two subordinates both report to "ceo"  -- they match in the same BFS pass.
 	// vp has _id=1, mgr has _id=2; expected result order is vp first (lower _id).
 	employees := []*types.Document{
 		must.NotFail(types.NewDocument("_id", int32(1), "name", "vp", "reportsTo", "ceo")),
@@ -1572,7 +1572,7 @@ func TestAggStage_graphLookup_DeterministicOrdering(t *testing.T) {
 func TestAggStage_graphLookup_TraverseHierarchyFromLeaf(t *testing.T) {
 	t.Parallel()
 
-	// mgr.reportsTo is an array with "vp" listed BEFORE "ceo" — this is intentional.
+	// mgr.reportsTo is an array with "vp" listed BEFORE "ceo"  -- this is intentional.
 	// It ensures that naive frontier-first iteration yields the wrong order [mgr,vp,ceo]
 	// while the correct collection-scan-first iteration yields [mgr,ceo,vp].
 	mgrReportsTo := types.MakeArray(2)
@@ -1857,7 +1857,7 @@ func TestAgg_sortByCount_after_unwind(t *testing.T) {
 // insertion order produced by the preceding $group stage, which itself preserves the
 // order in which groups were first seen.
 //
-// Three docs: C, B, A — each with qty=5. After $group by category (sum of qty),
+// Three docs: C, B, A  -- each with qty=5. After $group by category (sum of qty),
 // all groups have totalQty=5. After $sort by totalQty desc (fully tied), stable sort
 // must preserve group-creation order: C, B, A.
 func TestAggComplex_matchUnwindGroupSort_SameTotalQty(t *testing.T) {
@@ -2004,7 +2004,7 @@ func TestAggComplex_sortByCount(t *testing.T) {
 // $sortByCount ≡ $group + $sort{count:-1, _id:1}.
 //
 // Input: 3 docs each with a unique tag: "z", "m", "a".
-// Expected: [{_id:"a",count:1}, {_id:"m",count:1}, {_id:"z",count:1}] — ascending _id.
+// Expected: [{_id:"a",count:1}, {_id:"m",count:1}, {_id:"z",count:1}]  -- ascending _id.
 func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
 	t.Parallel()
 
@@ -2034,7 +2034,7 @@ func TestAggComplex_sortByCount_TieBreaking(t *testing.T) {
 		t.Fatalf("expected 3 result docs, got %d", len(results))
 	}
 
-	// All counts are 1 — tiebreaker: _id ascending → a, m, z.
+	// All counts are 1  -- tiebreaker: _id ascending → a, m, z.
 	wantIDs := []string{"a", "m", "z"}
 
 	for i, wantID := range wantIDs {

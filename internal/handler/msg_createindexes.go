@@ -379,7 +379,7 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 
 		case "weights", "default_language", "language_override", "textIndexVersion",
 			"2dsphereIndexVersion":
-			// Index options — accepted but not stored in the backend for now.
+			// Index options  -- accepted but not stored in the backend for now.
 
 		case "partialFilterExpression":
 			// Store the partial filter expression so that unique enforcement can
@@ -395,7 +395,7 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 
 		case "expireAfterSeconds", "hidden", "storageEngine",
 			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
-			// Accepted but not enforced — stored index behaves as a regular index.
+			// Accepted but not enforced  -- stored index behaves as a regular index.
 			// TTL expiry, collation enforcement, etc. are not yet implemented.
 
 		default:

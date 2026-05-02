@@ -15,7 +15,7 @@ scenario top to bottom. Each section builds on the previous setup.
 | Parameter    | Type     | Required | Default      | Description                                                                  |
 |--------------|----------|----------|--------------|------------------------------------------------------------------------------|
 | `message`    | string   | no       | `""`         | Commit message                                                               |
-| `author`     | string   | **yes**  | —            | Name of the commit author                                                    |
+| `author`     | string   | **yes**  |  --            | Name of the commit author                                                    |
 | `timestamp`  | datetime | no       | current time | Commit timestamp (BSON Date)                                                 |
 | `allowEmpty` | bool     | no       | `false`      | When true, create a commit even if the working set has no changes vs HEAD    |
 
@@ -93,7 +93,7 @@ Key checks:
 
 ---
 
-## Scenario 2: Commit on a named branch — data is committed to that branch
+## Scenario 2: Commit on a named branch  -- data is committed to that branch
 
 Create a branch, connect to it, insert a document, commit. Verify that the committed
 data is visible on the branch but not on main (isolation check).
@@ -121,7 +121,7 @@ db.getSiblingDB("commitdb@main").orders.countDocuments({})
 Key checks:
 - `hash` is non-empty, `message` echoes `"feature commit"`, `ok` is `1`
 - `feature` branch has 4 documents after the commit
-- `main` branch still has 3 documents — the feature commit did not affect main
+- `main` branch still has 3 documents  -- the feature commit did not affect main
 
 ---
 
@@ -153,7 +153,7 @@ Key check: `r3a.commitId !== r3b.commitId`.
 By default, `doltCommit` rejects an empty commit (no changes since the last commit). Pass
 `allowEmpty: true` to opt in to creating an empty commit.
 
-### 4a — Empty without flag returns an error
+### 4a  -- Empty without flag returns an error
 
 ```js
 // No changes since last commit
@@ -169,7 +169,7 @@ Key checks:
 - no `commitId` is returned
 - HEAD is unchanged (verify with `db.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId` before and after)
 
-### 4b — Empty with `allowEmpty: true` succeeds and advances HEAD
+### 4b  -- Empty with `allowEmpty: true` succeeds and advances HEAD
 
 ```js
 const headBefore = db.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
@@ -194,7 +194,7 @@ Key checks:
 - `commitId` is non-empty
 - `commitId` differs from `headBefore` (a new commit was created even though no data changed)
 
-### 4c — Repeated bare empty commits keep failing the same way
+### 4c  -- Repeated bare empty commits keep failing the same way
 
 ```js
 const r4c = db.runCommand({ doltCommit: 1, message: "still empty", author: "alice <alice@acme.com>" })
@@ -221,7 +221,7 @@ const hashBefore = db.runCommand({ doltCommit: 1, message: "pre-change", author:
 db.orders.insertOne({ _id: 99, label: "new", v: 99 })
 const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author: "bob <bob@widgets.io>" }).commitId
 
-// Diff between the two commits — must show _id:99 as added
+// Diff between the two commits  -- must show _id:99 as added
 db.runCommand({ doltDiff: 1, from: hashBefore, to: hashAfter })
 ```
 
@@ -232,7 +232,7 @@ Expected: `added` contains exactly `_id:99`; `collections` is non-empty.
 ## Scenario 6: Author is echoed and visible in doltLog
 
 The `author` provided to `doltCommit` is echoed in the response and stored in the
-commit — it is visible via `doltLog`.
+commit  -- it is visible via `doltLog`.
 
 ```js
 db.orders.insertOne({ _id: 60, label: "author", v: 60 })

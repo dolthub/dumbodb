@@ -153,7 +153,7 @@ func TestDropIndexes_Single(t *testing.T) {
 
 // drainQuery runs a Query and returns every document the backend's iterator
 // yields. It is the test equivalent of the handler's "consume the cursor"
-// step — the index-aware planner is allowed to return a superset of matches,
+// step  -- the index-aware planner is allowed to return a superset of matches,
 // so callers must do their own re-checking when verifying exact-match
 // semantics.
 func drainQuery(t *testing.T, ctx context.Context, coll backends.Collection, params *backends.QueryParams) []*types.Document {
@@ -203,7 +203,7 @@ func idsInDocs(t *testing.T, docs []*types.Document) []int32 {
 }
 
 // containsAll returns true if needles ⊆ haystack. Used for "the index path
-// returned at least every matching doc" checks — false positives are allowed
+// returned at least every matching doc" checks  -- false positives are allowed
 // because the handler re-filters above the backend.
 func containsAll(haystack, needles []int32) bool {
 	set := make(map[int32]struct{}, len(haystack))
@@ -342,7 +342,7 @@ func TestIndexLookup_RangeAndCompound(t *testing.T) {
 	// --- Compound filter (indexed grp + non-indexed tag) ------------------
 	// The index on grp narrows to 20 candidates (i%5 == 2 over 100 docs);
 	// the handler then applies the tag predicate. The backend should
-	// return at most the 20 grp=2 docs — i.e. the index path was used.
+	// return at most the 20 grp=2 docs  -- i.e. the index path was used.
 	t.Run("compound_indexed_plus_unindexed", func(t *testing.T) {
 		params := &backends.QueryParams{
 			Filter: must.NotFail(types.NewDocument(

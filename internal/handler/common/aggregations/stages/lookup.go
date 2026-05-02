@@ -371,7 +371,7 @@ func evaluateLetExpr(expr any, localDoc *types.Document) any {
 		return s
 	}
 
-	// $$ prefix would be a variable reference — not valid in let values.
+	// $$ prefix would be a variable reference  -- not valid in let values.
 	if strings.HasPrefix(s, "$$") {
 		return types.Null
 	}

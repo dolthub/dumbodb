@@ -120,7 +120,7 @@ func TestLogVerify(t *testing.T) {
 	require.NoError(t, err)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Log before any user commits — only the "Initialize database" root
+	// Scenario 1: Log before any user commits  -- only the "Initialize database" root
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_NoUserCommits", func(t *testing.T) {
 		var raw bson.M
@@ -131,7 +131,7 @@ func TestLogVerify(t *testing.T) {
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 1, "expected exactly 1 commit (Initialize database)")
 		assert.Equal(t, "Initialize database", lr.Commits[0].Message)
-		assert.Empty(t, lr.Commits[0].Parent1, "Initialize commit is the root — no parent1")
+		assert.Empty(t, lr.Commits[0].Parent1, "Initialize commit is the root  -- no parent1")
 	})
 
 	// Setup: three sequential commits on the same database.
@@ -157,7 +157,7 @@ func TestLogVerify(t *testing.T) {
 	hash3 := dumboDBCommit(t, env, dbName, "third", "alice <alice@acme.com>")
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: Log after multiple commits — parent chain, newest-first
+	// Scenario 2: Log after multiple commits  -- parent chain, newest-first
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_MultipleCommits", func(t *testing.T) {
 		var raw bson.M
@@ -182,7 +182,7 @@ func TestLogVerify(t *testing.T) {
 		assert.NotEmpty(t, lr.Commits[2].Parent1, "hash1 must have a parent1 (the Initialize root)")
 
 		assert.Equal(t, "Initialize database", lr.Commits[3].Message)
-		assert.Empty(t, lr.Commits[3].Parent1, "Initialize commit is the root — no parent1")
+		assert.Empty(t, lr.Commits[3].Parent1, "Initialize commit is the root  -- no parent1")
 
 		// Committer fields must be present and non-empty on user commits.
 		for _, c := range lr.Commits[:3] {
@@ -192,7 +192,7 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: Log with limit — truncates at the specified count
+	// Scenario 3: Log with limit  -- truncates at the specified count
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_WithLimit", func(t *testing.T) {
 		var raw bson.M
@@ -241,7 +241,7 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Log from a specific hash — start traversal at that commit
+	// Scenario 4: Log from a specific hash  -- start traversal at that commit
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_FromHash", func(t *testing.T) {
 		var raw bson.M
@@ -257,7 +257,7 @@ func TestLogVerify(t *testing.T) {
 		assert.Equal(t, hash1, lr.Commits[1].CommitID, "second entry must be hash1")
 		assert.Equal(t, "first", lr.Commits[1].Message)
 		assert.Equal(t, "Initialize database", lr.Commits[2].Message, "third entry must be Initialize root")
-		assert.Empty(t, lr.Commits[2].Parent1, "Initialize commit is the root — no parent1")
+		assert.Empty(t, lr.Commits[2].Parent1, "Initialize commit is the root  -- no parent1")
 
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hash3, c.CommitID, "hash3 must not appear when from=hash2")
@@ -265,7 +265,7 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Refs annotation — branch heads are decorated (git --decorate)
+	// Scenario 5: Refs annotation  -- branch heads are decorated (git --decorate)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_RefsAnnotation", func(t *testing.T) {
 		// Create a second branch "logvrfy-refs" pointing at the current main HEAD
@@ -467,7 +467,7 @@ func TestLogVerify(t *testing.T) {
 		}).Decode(&raw))
 
 		lr := decodeLogResult(t, raw)
-		// hashM, hashC, hashB, hashA, Initialize — all 5 commits reachable from hashM.
+		// hashM, hashC, hashB, hashA, Initialize  -- all 5 commits reachable from hashM.
 		require.Len(t, lr.Commits, 5, "topological walk from hashM must return all 5 commits")
 		assert.Equal(t, hashM, lr.Commits[0].CommitID, "commits[0] must be hashM (merge tip)")
 		assert.Equal(t, hashC, lr.Commits[1].CommitID, "commits[1] must be hashC (newer of the two height-2 parents)")
@@ -493,7 +493,7 @@ func TestLogVerify(t *testing.T) {
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 2, "limit=2 must return exactly 2 commits")
 		assert.Equal(t, hashM, lr.Commits[0].CommitID, "commits[0] must be hashM (HEAD/merge)")
-		assert.Equal(t, hashC, lr.Commits[1].CommitID, "commits[1] must be hashC — newer timestamp wins the height-2 tie")
+		assert.Equal(t, hashC, lr.Commits[1].CommitID, "commits[1] must be hashC  -- newer timestamp wins the height-2 tie")
 
 		for _, c := range lr.Commits {
 			assert.NotEqual(t, hashA, c.CommitID, "hashA must not appear with limit=2")

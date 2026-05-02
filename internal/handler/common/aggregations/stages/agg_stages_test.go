@@ -14,7 +14,7 @@
 
 package stages_test
 
-// Tests for multi-stage aggregation pipeline behaviour — $group, $unwind, $sort
+// Tests for multi-stage aggregation pipeline behaviour  -- $group, $unwind, $sort
 // ordering and tie-breaking.
 
 import (
@@ -33,7 +33,7 @@ import (
 // correctly breaks ties using secondary sort fields after a $group stage.
 //
 // Four groups (A, B, C, D) have counts of 3, 3, 2, 2 respectively.
-// Sorting by {count: -1, _id: 1} should produce: A(3), B(3), C(2), D(2) —
+// Sorting by {count: -1, _id: 1} should produce: A(3), B(3), C(2), D(2)  --
 // ties in count are broken by _id ascending.
 func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 	t.Parallel()
@@ -62,7 +62,7 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 		t.Fatalf("NewStage($group): %v", err)
 	}
 
-	// $sort: {count: -1, _id: 1}  — primary by count desc, tiebreak by _id asc
+	// $sort: {count: -1, _id: 1}   -- primary by count desc, tiebreak by _id asc
 	sortSpec := must.NotFail(types.NewDocument("count", int32(-1), "_id", int32(1)))
 	sortDoc := must.NotFail(types.NewDocument("$sort", sortSpec))
 	sortStage, err := stages.NewStage(sortDoc)
@@ -104,8 +104,8 @@ func TestAggPipeline_sort_TieBreakingAfterGroup(t *testing.T) {
 	}
 
 	// Expected order: A(3), B(3), C(2), D(2)
-	// A and B both have count=3 — sorted by _id asc → A before B.
-	// C and D both have count=2 — sorted by _id asc → C before D.
+	// A and B both have count=3  -- sorted by _id asc → A before B.
+	// C and D both have count=2  -- sorted by _id asc → C before D.
 	type want struct {
 		id    string
 		count int32
@@ -175,7 +175,7 @@ func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
 		t.Fatalf("NewStage($group): %v", err)
 	}
 
-	// $sort: {count: -1, _id: 1} — primary by count desc, tiebreak by _id asc
+	// $sort: {count: -1, _id: 1}  -- primary by count desc, tiebreak by _id asc
 	sortSpec := must.NotFail(types.NewDocument("count", int32(-1), "_id", int32(1)))
 	sortDoc := must.NotFail(types.NewDocument("$sort", sortSpec))
 	sortStage, err := stages.NewStage(sortDoc)
@@ -222,8 +222,8 @@ func TestAggPipeline_multiStage_UnwindThenGroup_tiebreakOrder(t *testing.T) {
 	}
 
 	// Expected: a(2), b(2), c(1), d(1)
-	// a and b tied at 2 — _id asc puts "a" before "b".
-	// c and d tied at 1 — _id asc puts "c" before "d".
+	// a and b tied at 2  -- _id asc puts "a" before "b".
+	// c and d tied at 1  -- _id asc puts "c" before "d".
 	type want struct {
 		id    string
 		count int32
@@ -313,7 +313,7 @@ func TestAggStage_sortByCount_TieBreakingOrder(t *testing.T) {
 }
 
 // TestAggStage_unsupportedErrors_changeStream verifies that $changeStream returns
-// ErrChangeStreamNotSupported (code 40573) — standalone servers do not support
+// ErrChangeStreamNotSupported (code 40573)  -- standalone servers do not support
 // change streams.
 func TestAggStage_unsupportedErrors_changeStream(t *testing.T) {
 	t.Parallel()
@@ -336,7 +336,7 @@ func TestAggStage_unsupportedErrors_changeStream(t *testing.T) {
 }
 
 // TestAggStage_unsupportedErrors_densify verifies that $densify with the required
-// 'field' field returns ErrNotImplemented (238) — $densify is not yet implemented.
+// 'field' field returns ErrNotImplemented (238)  -- $densify is not yet implemented.
 func TestAggStage_unsupportedErrors_densify(t *testing.T) {
 	t.Parallel()
 
@@ -362,7 +362,7 @@ func TestAggStage_unsupportedErrors_densify(t *testing.T) {
 }
 
 // TestAggStage_unsupportedErrors_fill verifies that $fill with the required 'output'
-// field returns ErrNotImplemented (238) — $fill is not yet implemented.
+// field returns ErrNotImplemented (238)  -- $fill is not yet implemented.
 func TestAggStage_unsupportedErrors_fill(t *testing.T) {
 	t.Parallel()
 
@@ -412,7 +412,7 @@ func TestAggStage_unsupportedErrors_indexStats(t *testing.T) {
 }
 
 // TestAggStage_unsupportedErrors_search verifies that $search returns
-// ErrSearchNotEnabled (code 31082) — Atlas Search is not available in this deployment.
+// ErrSearchNotEnabled (code 31082)  -- Atlas Search is not available in this deployment.
 func TestAggStage_unsupportedErrors_search(t *testing.T) {
 	t.Parallel()
 

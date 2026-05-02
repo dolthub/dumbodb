@@ -55,10 +55,10 @@ After setup, `branchvdb` has:
 
 ---
 
-## Scenario 1: Create branch from main HEAD — response shape
+## Scenario 1: Create branch from main HEAD  -- response shape
 
 `doltBranch` creates a new branch and returns `{ branch: "<name>", ok: 1 }`.
-The connection must be a branch rootish (writable or hash — see Scenario 3).
+The connection must be a branch rootish (writable or hash  -- see Scenario 3).
 
 ```js
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "feature" })
@@ -85,7 +85,7 @@ Immediately after branching, the new branch HEAD equals the source branch HEAD.
 // Create "snapshot" branch from current main HEAD
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "snapshot" })
 
-// Diff main vs snapshot — must be empty (identical commits)
+// Diff main vs snapshot  -- must be empty (identical commits)
 db.getSiblingDB("branchvdb@main").runCommand({
   doltDiff: 1,
   from: "snapshot",
@@ -96,7 +96,7 @@ db.getSiblingDB("branchvdb@main").runCommand({
 
 ---
 
-## Scenario 3: Branch isolation — writes on branch do not affect source
+## Scenario 3: Branch isolation  -- writes on branch do not affect source
 
 After branching, writes committed to the new branch are invisible from main, and
 vice versa.
@@ -172,7 +172,7 @@ Key check: branch created successfully and sees only commit-1 state.
 
 ---
 
-## Scenario 6: Safe delete (delete) — branch already merged into main
+## Scenario 6: Safe delete (delete)  -- branch already merged into main
 
 `doltBranch` with `delete: 1` deletes a branch only if its HEAD is reachable from
 another branch (i.e. no data would be lost).  A branch whose HEAD equals the
@@ -189,7 +189,7 @@ Key check: `branch` echoes the name, `ok` is `1`.
 
 ---
 
-## Scenario 7: Safe delete (delete) — branch has unmerged commits, rejected
+## Scenario 7: Safe delete (delete)  -- branch has unmerged commits, rejected
 
 If the branch to delete has commits that are not reachable from any other branch,
 safe delete must fail with an error.
@@ -203,14 +203,14 @@ ub.runCommand({ doltCommit: 1, message: "extra commit", author: "carol <carol@st
 
 // Safe delete must fail.
 db.getSiblingDB("branchvdb@main").runCommand({ doltBranch: 1, branch: "unmerged-branch", delete: 1 })
-// Expected: error response — ok: 0, errmsg contains "unmerged commits"
+// Expected: error response  -- ok: 0, errmsg contains "unmerged commits"
 ```
 
 Key check: command returns an error; `unmerged-branch` still exists afterwards.
 
 ---
 
-## Scenario 8: Force delete (forceDelete) — branch has unmerged commits, succeeds
+## Scenario 8: Force delete (forceDelete)  -- branch has unmerged commits, succeeds
 
 `doltBranch` with `forceDelete: 1` deletes a branch unconditionally, even if it has
 commits that are not reachable from any other branch.

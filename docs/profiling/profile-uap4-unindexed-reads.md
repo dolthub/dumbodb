@@ -52,8 +52,8 @@ filter (loop, post-`b.ResetTimer`).
 | 15.0% | `bson.UnmarshalExtJSON` (driver) | ExtJSON → BSON Raw                  |
 | 21.2% | `runtime.mallocgc` (flat 3.0%)   | GC/alloc churn                      |
 
-Read-side prefilter (`buildScanPrefilter`) is active here — it skips full
-decode for misses — but with grp equality at 1/10 selectivity, ~5K of 50K
+Read-side prefilter (`buildScanPrefilter`) is active here  -- it skips full
+decode for misses  -- but with grp equality at 1/10 selectivity, ~5K of 50K
 docs survive the prefilter and pay full decode cost.
 
 ### Agg_Sort (1K docs, $sort{i:-1} + $limit:100)
@@ -85,7 +85,7 @@ are negligible.
 | 31.2% | `runtime.mallocgc`               | GC/alloc churn |
 
 The $match has an operator-doc value (`{$gte:0}`), so the
-`buildScanPrefilter` path bails out — every doc is fully decoded. The
+`buildScanPrefilter` path bails out  -- every doc is fully decoded. The
 `{$gte:0}` predicate matches every doc, so $match passes 1000/1000 docs to
 $group. Group's hash bucketing is ~1% of stage time
 (`group.Process` 82% − upstream filterIterator 80% = ~1.5%).
@@ -134,9 +134,9 @@ storage-native one.
 
 ## Files added on this branch
 
-- `internal/backends/dolt/profile_bench_test.go` — three
+- `internal/backends/dolt/profile_bench_test.go`  -- three
   `BenchmarkProfile_*` functions wired through the same handler iterators
   that the wire path uses, suitable for `-cpuprofile`.
-- `docs/design/profile-uap4-unindexed-reads.md` — this report.
+- `docs/design/profile-uap4-unindexed-reads.md`  -- this report.
 
 No production code touched.

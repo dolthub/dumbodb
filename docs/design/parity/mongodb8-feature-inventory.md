@@ -1,6 +1,6 @@
 # MongoDB 8 Feature Inventory for Parity Test Suite
 
-*Scraped from official MongoDB 8.0 documentation — 2026-03-26*
+*Scraped from official MongoDB 8.0 documentation  -- 2026-03-26*
 
 ## Scope Exclusions (Pre-decided)
 Auth/AuthZ (SCRAM, x.509, LDAP, RBAC), Atlas features, Sharding, Replica set internals, Change streams, GridFS.

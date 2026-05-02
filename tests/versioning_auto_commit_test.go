@@ -39,7 +39,7 @@ func TestAutoCommit(t *testing.T) {
 
 	coll := env.client.Database(dbName).Collection("items")
 
-	// Insert a document — should auto-commit.
+	// Insert a document  -- should auto-commit.
 	_, err := coll.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "val", Value: "alpha"},
@@ -57,7 +57,7 @@ func TestAutoCommit(t *testing.T) {
 		assert.Equal(t, "Initialize database", lr.Commits[1].Message)
 	})
 
-	// Update the document — should auto-commit.
+	// Update the document  -- should auto-commit.
 	_, err = coll.UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "val", Value: "beta"}}}},
@@ -76,7 +76,7 @@ func TestAutoCommit(t *testing.T) {
 		assert.Equal(t, "Initialize database", lr.Commits[2].Message)
 	})
 
-	// Delete the document — should auto-commit.
+	// Delete the document  -- should auto-commit.
 	_, err = coll.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 

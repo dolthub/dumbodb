@@ -146,7 +146,7 @@ func buildCollectionTableSchema() serial.Message {
 	serial.IndexAddUniqueKey(b, true)
 	clusteredIdx := serial.IndexEnd(b)
 
-	// Columns vector [col0, col1] — prepend in reverse order.
+	// Columns vector [col0, col1]  -- prepend in reverse order.
 	serial.TableSchemaStartColumnsVector(b, 2)
 	b.PrependUOffsetT(col1)
 	b.PrependUOffsetT(col0)
@@ -440,7 +440,7 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 		return fmt.Errorf("dolt: updating working set: %w", err)
 	}
 
-	// The working set is now current — clear any prior deferred dirty flag.
+	// The working set is now current  -- clear any prior deferred dirty flag.
 	if state.dirtyBranches != nil {
 		delete(state.dirtyBranches, branch)
 	}

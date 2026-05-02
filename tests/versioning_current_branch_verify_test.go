@@ -85,7 +85,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	hash1, _ := currentBranchVerifySetup(t, env, dbName)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Plain db name — returns "main"
+	// Scenario 1: Plain db name  -- returns "main"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_PlainDbName_ReturnsMain", func(t *testing.T) {
 		var result bson.M
@@ -97,7 +97,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: branchdb@main — returns "main"
+	// Scenario 2: branchdb@main  -- returns "main"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_ExplicitMain_ReturnsMain", func(t *testing.T) {
 		var result bson.M
@@ -109,7 +109,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: branchdb@feature — returns "feature"
+	// Scenario 3: branchdb@feature  -- returns "feature"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_FeatureBranch_ReturnsFeature", func(t *testing.T) {
 		var result bson.M
@@ -121,7 +121,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: branchdb@<hash> — error (code 96)
+	// Scenario 4: branchdb@<hash>  -- error (code 96)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_CommitHash_ReturnsError96", func(t *testing.T) {
 		err := env.client.Database(dbName+"@"+hash1).RunCommand(ctx, bson.D{
@@ -131,7 +131,7 @@ func TestCurrentBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: branchdb@main~1 — error (code 96)
+	// Scenario 5: branchdb@main~1  -- error (code 96)
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AncestorExpression_ReturnsError96", func(t *testing.T) {
 		err := env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{

@@ -58,7 +58,7 @@ After setup:
 
 ---
 
-## Scenario 1: Clean cherry-pick — response shape
+## Scenario 1: Clean cherry-pick  -- response shape
 
 Cherry-pick the feature commit (adds `_id:2`) onto main. Since main doesn't have `_id:2`
 and feature's parent (C1 = main HEAD) is the common base, this applies cleanly.
@@ -130,7 +130,7 @@ Key checks:
 
 ---
 
-## Scenario 3: Conflict during cherry-pick — structured error response
+## Scenario 3: Conflict during cherry-pick  -- structured error response
 
 Create conflicting changes on both branches so cherry-pick cannot apply cleanly.
 
@@ -145,7 +145,7 @@ db.items.updateOne({ _id: 1 }, { $set: { v: 100 } })
 db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@acme.com>" })
 
 // Cherry-pick the conflicting feature commit onto main.
-// In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
+// In mongosh, runCommand throws a MongoServerError when ok:0  -- it does NOT return a document.
 try {
   db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
 } catch (e) {
@@ -158,7 +158,7 @@ try {
 Key checks:
 - `runCommand` throws a `MongoServerError` (mongosh surfaces `ok:0` as an exception)
 - The error message contains `"doltCherryPick: unresolved conflicts in 1 collection(s)"`
-- The cherry-pick state is preserved — use `doltConflicts` to inspect (Scenario 4)
+- The cherry-pick state is preserved  -- use `doltConflicts` to inspect (Scenario 4)
 
 ---
 
@@ -168,17 +168,17 @@ Continuing from Scenario 3 (cherry-pick with conflicts in progress).
 
 > **Same interface as merge.** Cherry-pick conflicts are stored in the same
 > `mergeState` struct as merge conflicts (with an internal `isCherryPick` flag).
-> `doltConflicts` and `doltResolveConflict` work identically for both operations —
+> `doltConflicts` and `doltResolveConflict` work identically for both operations  --
 > only the final continuation command differs (`doltCherryPick continue:1` vs
 > `doltMerge continue:1`).
 
 ```js
-// Step 1: Summary — list which collections have unresolved conflicts.
+// Step 1: Summary  -- list which collections have unresolved conflicts.
 const rSummary = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
 // Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
 
-// Step 2: Per-collection detail — list individual document conflicts.
+// Step 2: Per-collection detail  -- list individual document conflicts.
 const rConflicts = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1, collection: "items" })
 printjson(rConflicts)
 // Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: {...},
@@ -188,7 +188,7 @@ printjson(rConflicts)
 
 const conflictId = rConflicts.conflicts[0].conflictId
 
-// Step 3: Resolve — accept "theirs" (the cherry-picked value v:99).
+// Step 3: Resolve  -- accept "theirs" (the cherry-picked value v:99).
 const rResolve = db.getSiblingDB("pickdb@main").runCommand({
   doltResolveConflict: 1,
   collection: "items",
@@ -210,7 +210,7 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` (no filter) returns `collections` array — same shape as for merge
+- `doltConflicts` (no filter) returns `collections` array  -- same shape as for merge
 - `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
 - `_id` is promoted to the top level of each conflict entry; `base`/`ours`/`theirs` do not contain `_id`
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
@@ -233,7 +233,7 @@ const hashConflict2 = r5.commitId
 db.items.updateOne({ _id: 1 }, { $set: { v: 201 } })
 db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@acme.com>" })
 
-// Cherry-pick — expect conflict (throws in mongosh).
+// Cherry-pick  -- expect conflict (throws in mongosh).
 try {
   db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })
 } catch (e) {

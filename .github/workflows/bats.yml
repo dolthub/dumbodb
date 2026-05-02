@@ -27,7 +27,7 @@ jobs:
       - name: Install dolt
         run: |
           set -euo pipefail
-          # Retry the download — install.sh is hosted on GitHub releases and
+          # Retry the download  -- install.sh is hosted on GitHub releases and
           # occasionally returns 5xx. Without pipefail, a curl failure here is
           # silently masked because the piped bash exits 0 on empty input,
           # leaving CI to discover the missing binary later as "dolt: command not found".

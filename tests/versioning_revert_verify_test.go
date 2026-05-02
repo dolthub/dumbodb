@@ -54,7 +54,7 @@ func revertVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 	require.NoError(t, err)
 	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
-	// C2: add _id:2 — this is the commit we will revert.
+	// C2: add _id:2  -- this is the commit we will revert.
 	_, err = db.Collection("records").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
@@ -78,7 +78,7 @@ func TestRevertVerify(t *testing.T) {
 	mainDB := env.client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Clean revert — response shape and commit annotation
+	// Scenario 1: Clean revert  -- response shape and commit annotation
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanRevert_ResponseShape", func(t *testing.T) {
 		raw := runCommandRaw(t, mainDB, bson.D{
@@ -167,7 +167,7 @@ func TestRevertVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: Conflict during revert — structured error response
+	// Scenario 3: Conflict during revert  -- structured error response
 	// -------------------------------------------------------------------------
 	var hashConflictCommit string
 	t.Run("Scenario3_ConflictResponse", func(t *testing.T) {
@@ -191,7 +191,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Advance main independently: also modify _id:1 to create a conflict scenario.
 		// We now revert hashConflictCommit (which added _id:10) while also having
-		// modified _id:10 on main — creating a conflict.
+		// modified _id:10 on main  -- creating a conflict.
 		// First merge feature into main so main has _id:10.
 		var mergeResult bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
@@ -213,7 +213,7 @@ func TestRevertVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName+"@main", "modify-ten", "alice <alice@acme.com>")
 
-		// Revert hashConflictCommit — expect conflict because _id:10 was modified after it was added.
+		// Revert hashConflictCommit  -- expect conflict because _id:10 was modified after it was added.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltRevert", Value: int32(1)},
 			{Key: "commit", Value: hashConflictCommit},
@@ -242,7 +242,7 @@ func TestRevertVerify(t *testing.T) {
 		// merge/cherry-pick conflicts. The revert state is stored in the same
 		// mergeState struct (with isRevert=true).
 
-		// Step 1: Summary — list which collections have unresolved conflicts.
+		// Step 1: Summary  -- list which collections have unresolved conflicts.
 		var summaryRes bson.M
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -257,7 +257,7 @@ func TestRevertVerify(t *testing.T) {
 		assert.Equal(t, "records", collEntry["name"])
 		assert.EqualValues(t, 1, collEntry["count"])
 
-		// Step 2: Per-collection detail — list individual document conflicts.
+		// Step 2: Per-collection detail  -- list individual document conflicts.
 		var conflictsRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -275,7 +275,7 @@ func TestRevertVerify(t *testing.T) {
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
-		// Step 3: Resolve — accept "ours" (keep the modified main version).
+		// Step 3: Resolve  -- accept "ours" (keep the modified main version).
 		var resolveRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
@@ -330,7 +330,7 @@ func TestRevertVerify(t *testing.T) {
 		require.NoError(t, err)
 		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "modify-twenty", "alice <alice@acme.com>")
 
-		// Start revert — expect conflict.
+		// Start revert  -- expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltRevert", Value: int32(1)},
 			{Key: "commit", Value: hashNew},

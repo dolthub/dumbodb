@@ -198,7 +198,7 @@ func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, clos
 		bucketIdx := b.findBucket(val)
 
 		if bucketIdx < 0 {
-			// out of range — goes to default
+			// out of range  -- goes to default
 			if !b.hasDefault {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,

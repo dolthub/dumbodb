@@ -310,7 +310,7 @@ func TestDiffVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: No changes — diff returns an empty collections array
+	// Scenario 3: No changes  -- diff returns an empty collections array
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_NoChanges", func(t *testing.T) {
 		// After committing in Scenario 2, working set matches HEAD.
@@ -324,7 +324,7 @@ func TestDiffVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: `from` only — diff from hashBase to current working set
+	// Scenario 4: `from` only  -- diff from hashBase to current working set
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_FromOnly", func(t *testing.T) {
 		// Make one more uncommitted change.
@@ -375,7 +375,7 @@ func TestDiffVerify(t *testing.T) {
 
 	// -------------------------------------------------------------------------
 	// Scenario 5: Multiple documents with mixed changes
-	// Delete one, modify one, leave one unchanged, add one — only changed docs appear.
+	// Delete one, modify one, leave one unchanged, add one  -- only changed docs appear.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_MultipleDocsWithMixedChanges", func(t *testing.T) {
 		multi := env.client.Database(dbName).Collection("multi")
@@ -556,7 +556,7 @@ func TestDiffVerify(t *testing.T) {
 	// Only the changed leaf field ($.address.city) appears; zip and name do not.
 	// -------------------------------------------------------------------------
 	// -------------------------------------------------------------------------
-	// Scenario 9: Rootish expressions in from/to — HEAD, HEAD~N, branch name
+	// Scenario 9: Rootish expressions in from/to  -- HEAD, HEAD~N, branch name
 	// -------------------------------------------------------------------------
 	t.Run("Scenario9_RootishExpressionsInFromTo", func(t *testing.T) {
 		// Commit any pending working set (allowEmpty so we don't depend on
@@ -571,7 +571,7 @@ func TestDiffVerify(t *testing.T) {
 
 		rootish := env.client.Database(dbName + "@rootishtest")
 
-		// Two commits on main — feature branch stays behind. hashC1 is empty
+		// Two commits on main  -- feature branch stays behind. hashC1 is empty
 		// (no working changes), hashC2 adds _id:1.
 		hashC1 := dumboDBCommitAllowEmpty(t, env, dbName, "scenario9-c1", "alice <alice@acme.com>")
 
@@ -583,7 +583,7 @@ func TestDiffVerify(t *testing.T) {
 
 		hashC2 := dumboDBCommit(t, env, dbName, "scenario9-c2", "alice <alice@acme.com>")
 
-		// 9a: from=HEAD~1, to=HEAD on main connection — HEAD resolves to c2.
+		// 9a: from=HEAD~1, to=HEAD on main connection  -- HEAD resolves to c2.
 		// Expect _id:1 added (delta between c1 and c2).
 		var raw9a bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -598,7 +598,7 @@ func TestDiffVerify(t *testing.T) {
 		require.Len(t, cd9a.Added, 1, "9a: expected 1 added doc")
 		assert.Equal(t, int32(1), cd9a.Added[0]["_id"], "9a: added doc must be _id:1")
 
-		// 9b: from=hashC1, to="HEAD" on main connection — HEAD = c2.
+		// 9b: from=hashC1, to="HEAD" on main connection  -- HEAD = c2.
 		// Same result as 9a.
 		var raw9b bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -645,7 +645,7 @@ func TestDiffVerify(t *testing.T) {
 		cd9d := findCollDiff(dr9d, "scenario9")
 		assert.Nil(t, cd9d, "9d: HEAD on rootishtest resolves to hashC1; diff must be empty, got collection diff")
 
-		// 9e: from="rootishtest" (bare branch name), to="main" — branch name rootish.
+		// 9e: from="rootishtest" (bare branch name), to="main"  -- branch name rootish.
 		// rootishtest = c1, main = c2: expect _id:1 added.
 		var raw9e bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -660,7 +660,7 @@ func TestDiffVerify(t *testing.T) {
 		require.Len(t, cd9e.Added, 1, "9e: expected 1 added doc")
 		assert.Equal(t, int32(1), cd9e.Added[0]["_id"], "9e: added doc must be _id:1")
 
-		// 9f: REVERSE — from=HEAD, to=HEAD~1 on main connection.
+		// 9f: REVERSE  -- from=HEAD, to=HEAD~1 on main connection.
 		// Inverts 9a: _id:1 was added going forward, so going backward it appears as removed.
 		var raw9f bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -676,7 +676,7 @@ func TestDiffVerify(t *testing.T) {
 		require.Len(t, cd9f.Removed, 1, "9f: reverse diff must have 1 removed doc (_id:1 absent in HEAD~1)")
 		assert.Equal(t, int32(1), cd9f.Removed[0]["_id"], "9f: removed doc must be _id:1")
 
-		// 9g: REVERSE — from="main", to="rootishtest" (bare branch names, reverse of 9e).
+		// 9g: REVERSE  -- from="main", to="rootishtest" (bare branch names, reverse of 9e).
 		// 9e showed _id:1 added going rootishtest→main; reversed: _id:1 is removed.
 		var raw9g bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -751,9 +751,9 @@ func TestDiffVerify(t *testing.T) {
 	//
 	// Each collection entry in the diff carries a `status` field that says what
 	// happened to the collection itself, independent of its document-level diffs:
-	//   - "added"    — collection exists only in "to"
-	//   - "deleted"  — collection exists only in "from"
-	//   - "modified" — collection exists in both with at least one doc change
+	//   - "added"     -- collection exists only in "to"
+	//   - "deleted"   -- collection exists only in "from"
+	//   - "modified"  -- collection exists in both with at least one doc change
 	// -------------------------------------------------------------------------
 	t.Run("Scenario10_CollectionStatus", func(t *testing.T) {
 		// Pre-stage: clean any pending working-set changes so we can reason about

@@ -181,7 +181,7 @@ func TestSplitEncodedDBName(t *testing.T) {
 		// because '.' and '/' are invalid in MongoDB database names.
 		{"mydb@v1%2E0", "mydb", "v1.0"},
 		{"mydb@feature%2Ffoo", "mydb", "feature/foo"},
-		{"mydb@main%7E1", "mydb", "main~1"}, // ~1 encoded (passthrough — still ancestor expr)
+		{"mydb@main%7E1", "mydb", "main~1"}, // ~1 encoded (passthrough  -- still ancestor expr)
 		// Invalid percent sequence: falls back to raw value.
 		{"mydb@%ZZ", "mydb", "%ZZ"},
 		// All-digit suffix after @ (e.g. UnixNano timestamp): treated as plain DB name to
@@ -263,7 +263,7 @@ func TestRTVLLoad_AncestorExpr_IsolatedFromMain(t *testing.T) {
 		t.Fatalf("testdb@main~1 before new insert: want 2, got %d", nBefore)
 	}
 
-	// Insert a new doc (uncommitted) on main — the ~N view must remain unchanged.
+	// Insert a new doc (uncommitted) on main  -- the ~N view must remain unchanged.
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(4)))
 
 	nAfter := countDocs(t, b, "testdb@main~1", "col")
@@ -290,7 +290,7 @@ func TestRTVLLoad_AncestorExpr_IsolatedFromMain(t *testing.T) {
 //   - "only commit"
 //
 // So main~1 resolves to the STRT commit (0 docs, no error), and main~2 tries to
-// walk past the STRT commit's non-existent parent — that is the "too deep" case.
+// walk past the STRT commit's non-existent parent  -- that is the "too deep" case.
 func TestRTVLLoad_AncestorExpr_TooDeep(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)

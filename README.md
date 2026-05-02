@@ -2,7 +2,7 @@
 
 ## What is DumboDB?
 
-[MongoDB](https://github.com/mongodb/mongo) and [Git](https://git-scm.com/) had a baby, and it's named **Dumbo**. It's a document database with built-in version control, so you can track changes, branch, and merge just like you would with code — but for your data.
+[MongoDB](https://github.com/mongodb/mongo) and [Git](https://git-scm.com/) had a baby, and it's named **Dumbo**. It's a document database with built-in version control, so you can track changes, branch, and merge just like you would with code  -- but for your data.
 
 DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
 
@@ -245,8 +245,8 @@ There are also legitimate merges which join two commit histories, complete with 
 
 DumboDB is built on two open-source projects:
 
-- **[FerretDB](https://github.com/FerretDB/FerretDB)** — The wire protocol, connection handling, type system, and handler packages were adapted from FerretDB v1.24.2 (Apache 2.0). See [ACKNOWLEDGEMENTS](ACKNOWLEDGEMENTS) for details.
-- **[Dolt](https://github.com/dolthub/dolt)** — The version-controlled storage engine powering every commit, branch, and merge.
+- **[FerretDB](https://github.com/FerretDB/FerretDB)**  -- The wire protocol, connection handling, type system, and handler packages were adapted from FerretDB v1.24.2 (Apache 2.0). See [ACKNOWLEDGEMENTS](ACKNOWLEDGEMENTS) for details.
+- **[Dolt](https://github.com/dolthub/dolt)**  -- The version-controlled storage engine powering every commit, branch, and merge.
 
 ## Roadmap
 DumboDB is in active development, and we have a lot of exciting features planned. Major milestones we are planning:

@@ -53,7 +53,7 @@ Commits the current working set on the branch encoded in the database name.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `message` | string | no | `""` | Commit message |
-| `author` | string | **yes** | — | Commit author, e.g. `"alice <alice@example.com>"` |
+| `author` | string | **yes** |  -- | Commit author, e.g. `"alice <alice@example.com>"` |
 | `timestamp` | Date | no | current time | Commit timestamp (BSON Date) |
 
 ### Response fields
@@ -114,7 +114,7 @@ Creates or deletes a branch from the rootish encoded in the database name.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `branch` | string | **yes** | — | Name of the branch to create or delete |
+| `branch` | string | **yes** |  -- | Name of the branch to create or delete |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
 
@@ -173,7 +173,7 @@ Merges a source branch into the branch encoded in the database name.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `merge_in` | string | **yes** | — | Name of the branch to merge in |
+| `merge_in` | string | **yes** |  -- | Name of the branch to merge in |
 | `message` | string | no | auto | Merge commit message (ignored on fast-forward / already-up-to-date) |
 | `author` | string | no | `""` | `"Name <email>"` for the merge commit author |
 | `noFF` | bool | no | `false` | Force a merge commit even when fast-forward is possible |
@@ -198,7 +198,7 @@ For `continue`, `message` and `author` are optional overrides.
 | `committerTimestamp` | Date | Timestamp of when the merge commit was created |
 | `ok` | number | `1` on success |
 
-### Response fields (conflicts — ok: 0)
+### Response fields (conflicts  -- ok: 0)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -260,9 +260,9 @@ Applies the diff introduced by a named commit onto the current branch, creating 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `commit` | string | **yes** | — | Commit hash to cherry-pick |
+| `commit` | string | **yes** |  -- | Commit hash to cherry-pick |
 | `message` | string | no | auto | Custom commit message (default: original message + annotation) |
-| `committer` | string | no | — | `"Name <email>"` committer identity. When omitted, committer equals the original commit's author. |
+| `committer` | string | no |  -- | `"Name <email>"` committer identity. When omitted, committer equals the original commit's author. |
 
 ### Parameters (continue / abort)
 
@@ -270,7 +270,7 @@ Applies the diff introduced by a named commit onto the current branch, creating 
 |-----------|------|----------|---------|-------------|
 | `continue` | bool/int | no | `false` | Continue after resolving conflicts |
 | `abort` | bool/int | no | `false` | Abort the in-progress cherry-pick |
-| `committer` | string | no | — | Committer identity override (same as initiation) |
+| `committer` | string | no |  -- | Committer identity override (same as initiation) |
 
 For `continue`, `message` and `committer` are optional overrides.
 
@@ -291,7 +291,7 @@ For `continue`, `message` and `committer` are optional overrides.
 | `message` | string | Confirmation message |
 | `ok` | number | `1` |
 
-### Response fields (conflicts — ok: 0)
+### Response fields (conflicts  -- ok: 0)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -337,8 +337,8 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `onto` | string | **yes** | — | Branch name or rootish to rebase onto |
-| `committer` | string | no | — | `"Name <email>"` committer identity for replayed commits. When omitted, committer equals the original commit's author. |
+| `onto` | string | **yes** |  -- | Branch name or rootish to rebase onto |
+| `committer` | string | no |  -- | `"Name <email>"` committer identity for replayed commits. When omitted, committer equals the original commit's author. |
 
 ### Parameters (continue / abort)
 
@@ -346,7 +346,7 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 |-----------|------|----------|---------|-------------|
 | `continue` | bool/int | no | `false` | Continue after resolving conflicts |
 | `abort` | bool/int | no | `false` | Abort and restore original branch state |
-| `committer` | string | no | — | Committer identity override (same as initiation) |
+| `committer` | string | no |  -- | Committer identity override (same as initiation) |
 
 ### Response fields (success)
 
@@ -363,7 +363,7 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 | `newTip` | string | Restored branch tip hash |
 | `ok` | number | `1` |
 
-### Response fields (conflicts — ok: 0)
+### Response fields (conflicts  -- ok: 0)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -379,7 +379,7 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, onto: "main", committer: "alice <alice@acme.com>" })
 // { commitsReplayed: 3, newTip: "abc123...", ok: 1 }
 
-// If conflicts arise — resolve them, then continue
+// If conflicts arise  -- resolve them, then continue
 db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, continue: 1, committer: "alice <alice@acme.com>" })
 
 // Abort
@@ -534,7 +534,7 @@ db.runCommand({ doltStatus: 1 })
 //   ok: 1
 // }
 
-// After committing — clean state
+// After committing  -- clean state
 db.runCommand({ doltCommit: 1, message: "add order 99", author: "alice <alice@acme.com>" })
 db.runCommand({ doltStatus: 1 })
 // { branch: "main", collections: [], ok: 1 }
@@ -680,14 +680,14 @@ Moves the branch HEAD to the specified commit. Supports soft (default) and hard 
 ```js
 var db = db.getSiblingDB("orders@main")
 
-// Soft reset to one commit back — uncommitted changes preserved
+// Soft reset to one commit back  -- uncommitted changes preserved
 const log = db.runCommand({ doltLog: 1, limit: 2 })
 const previousHash = log.commits[1].commitId
 
 db.runCommand({ doltReset: 1, to: previousHash })
 // { commitId: "<previousHash>", ok: 1 }
 
-// Hard reset to HEAD — discard all uncommitted changes
+// Hard reset to HEAD  -- discard all uncommitted changes
 db.runCommand({ doltReset: 1, hard: true })
 // { commitId: "<current-HEAD-hash>", ok: 1 }
 ```
@@ -715,7 +715,7 @@ Applies the inverse diff of a named commit onto the current branch, creating a n
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `commit` | string | **yes** | — | Commit hash to revert |
+| `commit` | string | **yes** |  -- | Commit hash to revert |
 | `message` | string | no | auto | Custom commit message |
 | `author` | string | no | `""` | `"Name <email>"` for the commit author |
 
@@ -745,7 +745,7 @@ For `continue`, `message` and `author` are optional overrides.
 | `message` | string | Confirmation |
 | `ok` | number | `1` |
 
-### Response fields (conflicts — ok: 0)
+### Response fields (conflicts  -- ok: 0)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -840,14 +840,14 @@ Returns conflict information for an in-progress merge, cherry-pick, or rebase on
 |-----------|------|----------|---------|-------------|
 | `collection` | string | no | `""` | If specified, return per-document conflict details for this collection |
 
-### Response fields (summary mode — no `collection`)
+### Response fields (summary mode  -- no `collection`)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `collections` | array | `[{name, count}, ...]` — per-collection conflict counts |
+| `collections` | array | `[{name, count}, ...]`  -- per-collection conflict counts |
 | `ok` | number | `1` |
 
-### Response fields (detail mode — with `collection`)
+### Response fields (detail mode  -- with `collection`)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -905,10 +905,10 @@ Resolves a single document conflict in the current in-progress merge, cherry-pic
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `collection` | string | **yes** | — | Collection containing the conflict |
-| `conflictId` | string | **yes** | — | Conflict identifier from `doltConflicts` |
-| `resolution` | string | **yes** | — | `"ours"`, `"theirs"`, or `"custom"` |
-| `value` | document | conditional | — | Required when `resolution` is `"custom"`; the document to use |
+| `collection` | string | **yes** |  -- | Collection containing the conflict |
+| `conflictId` | string | **yes** |  -- | Conflict identifier from `doltConflicts` |
+| `resolution` | string | **yes** |  -- | `"ours"`, `"theirs"`, or `"custom"` |
+| `value` | document | conditional |  -- | Required when `resolution` is `"custom"`; the document to use |
 
 ### Resolution options
 
@@ -1010,13 +1010,13 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 
 **Alias:** `doltTag`
 
-> **Note:** `dumboTag` is an admin command — use `db.adminCommand()`.
+> **Note:** `dumboTag` is an admin command  -- use `db.adminCommand()`.
 
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `name` | string | no | — | Tag name. Required for create/delete. Must not contain `@` or whitespace. Omit to list all tags. |
+| `name` | string | no |  -- | Tag name. Required for create/delete. Must not contain `@` or whitespace. Omit to list all tags. |
 | `hash` | string | no | current branch HEAD | Rootish (commit hash, branch, tag, or ancestor expression) to tag |
 | `delete` | bool | no | `false` | Set to `true` to delete the named tag |
 | `message` | string | no | `""` | Tag description |

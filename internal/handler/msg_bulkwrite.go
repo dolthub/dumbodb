@@ -35,7 +35,7 @@ import (
 //
 // Unlike the driver-side collection bulkWrite (which drivers decompose into
 // individual insert/update/delete commands), this command batches operations
-// across multiple collections — and multiple databases — in a single round
+// across multiple collections  -- and multiple databases  -- in a single round
 // trip. Ops reference their target namespace by index into a companion nsInfo
 // array, both of which arrive as OP_MSG document sequences (payload type 1).
 func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -150,7 +150,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			entry.Set("code", code)
 			entry.Set("errmsg", msg)
 			// Errors are always surfaced in firstBatch, even when errorsOnly
-			// is set — that's the whole point of errorsOnly.
+			// is set  -- that's the whole point of errorsOnly.
 			firstBatch.Append(entry)
 			if ordered {
 				break
@@ -301,7 +301,7 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 		return execBulkWriteDelete(ctx, c, op, skipDurableSync, h.DisablePushdown)
 	}
 
-	// Unreachable — kind is known to be one of the three.
+	// Unreachable  -- kind is known to be one of the three.
 	return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrFailedToParse,
 		fmt.Sprintf("unknown op kind %q", kind),
@@ -592,7 +592,7 @@ func getDocumentField(doc *types.Document, name string) (*types.Document, error)
 
 // getInt64Value normalizes numeric BSON types (int32 / int64 / float64) to
 // int64. Used to decode the nsIndex from an op's {insert: N} / {update: N} /
-// {delete: N} field — drivers may send any of the three wire forms.
+// {delete: N} field  -- drivers may send any of the three wire forms.
 func getInt64Value(v any) (int64, error) {
 	switch x := v.(type) {
 	case int32:

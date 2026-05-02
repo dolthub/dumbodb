@@ -265,9 +265,9 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	env := startDumboDB(t)
 	coll := env.collection(t)
 
-	// flags: 0b0100 (4) — bits 0 and 1 are clear, bit 2 is set.
-	// flags: 0b0001 (1) — bit 0 is set.
-	// flags: 0b0000 (0) — all bits clear.
+	// flags: 0b0100 (4)  -- bits 0 and 1 are clear, bit 2 is set.
+	// flags: 0b0001 (1)  -- bit 0 is set.
+	// flags: 0b0000 (0)  -- all bits clear.
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("flags", int32(4))), // 0b0100
 		d(e("_id", int32(2)), e("flags", int32(1))), // 0b0001
@@ -275,7 +275,7 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// $bitsAllClear: 5 (0b0101) — both bits 0 and 2 must be clear.
+	// $bitsAllClear: 5 (0b0101)  -- both bits 0 and 2 must be clear.
 	// Only flags=0 (doc3) satisfies this; doc1 has bit2 set, doc2 has bit0 set.
 	cursor, err := coll.Find(ctx, d(e("flags", d(e("$bitsAllClear", int32(5))))))
 	require.NoError(t, err)
@@ -301,10 +301,10 @@ func TestQuery_bitsAnySet_positions(t *testing.T) {
 	env := startDumboDB(t)
 	coll := env.collection(t)
 
-	// flags: 0b0001 (1) — bit 0 set.
-	// flags: 0b1000 (8) — bit 3 set.
-	// flags: 0b0100 (4) — bit 2 set.
-	// flags: 0b0000 (0) — no bits set.
+	// flags: 0b0001 (1)  -- bit 0 set.
+	// flags: 0b1000 (8)  -- bit 3 set.
+	// flags: 0b0100 (4)  -- bit 2 set.
+	// flags: 0b0000 (0)  -- no bits set.
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("flags", int32(1))),
 		d(e("_id", int32(2)), e("flags", int32(8))),
@@ -313,7 +313,7 @@ func TestQuery_bitsAnySet_positions(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// $bitsAnySet: [0, 3] — match if bit 0 OR bit 3 is set.
+	// $bitsAnySet: [0, 3]  -- match if bit 0 OR bit 3 is set.
 	// Matches doc1 (bit0) and doc2 (bit3). doc3 has only bit2; doc4 has none.
 	cursor, err := coll.Find(ctx, d(e("flags", d(e("$bitsAnySet", bson.A{int32(0), int32(3)})))),
 		options.Find().SetSort(d(e("_id", int32(1)))),
@@ -521,7 +521,7 @@ func TestQuery_geo_within_centerSphere(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Center at NYC, radius ~0.1 radians ≈ 637 km — should include NYC but not London.
+	// Center at NYC, radius ~0.1 radians ≈ 637 km  -- should include NYC but not London.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(e("$geoWithin", d(e("$centerSphere", bson.A{
 			bson.A{float64(-74), float64(40.7)},
@@ -626,9 +626,9 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	coll := env.collection(t)
 
 	// Two points near the origin.  In radians the great-circle radius of ~111 km is ~0.0175.
-	// doc1 is at (0,0) — ~111 km from query point (1,0).
-	// doc2 is at (0.5,0) — ~55 km from query point (1,0).
-	// doc3 is at (10,0) — ~1000 km from query point (1,0), well outside 0.0175 rad.
+	// doc1 is at (0,0)  -- ~111 km from query point (1,0).
+	// doc2 is at (0.5,0)  -- ~55 km from query point (1,0).
+	// doc3 is at (10,0)  -- ~1000 km from query point (1,0), well outside 0.0175 rad.
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", bson.A{float64(0), float64(0)})),
 		d(e("_id", int32(2)), e("loc", bson.A{float64(0.5), float64(0)})),
@@ -636,7 +636,7 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// maxDistance = 0.0175 radians ≈ 111 km — should include doc1 and doc2, not doc3.
+	// maxDistance = 0.0175 radians ≈ 111 km  -- should include doc1 and doc2, not doc3.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(
 			e("$nearSphere", bson.A{float64(1), float64(0)}),
@@ -665,7 +665,7 @@ func TestQuery_geo_intersects_point(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// Query for exact point [1, 1] — should match doc1 only.
+	// Query for exact point [1, 1]  -- should match doc1 only.
 	cursor, err := coll.Find(ctx,
 		d(e("loc", d(e("$geoIntersects", d(e("$geometry",
 			d(e("type", "Point"), e("coordinates", bson.A{float64(1), float64(1)})),

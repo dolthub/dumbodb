@@ -68,7 +68,7 @@ After setup:
 
 ---
 
-## Scenario 1: Clean rebase — response shape
+## Scenario 1: Clean rebase  -- response shape
 
 Rebase feature onto main. C2 is replayed on top of C3.
 
@@ -180,7 +180,7 @@ Key checks:
 
 ---
 
-## Scenario 6: Conflict during rebase — structured error response
+## Scenario 6: Conflict during rebase  -- structured error response
 
 Use a fresh database.
 
@@ -218,7 +218,7 @@ const rc4feat = cdb.getSiblingDB("rebaseconflict@feature").runCommand({doltCommi
 printjson(rc4feat)
 // Expected: { commitId: "<hash>", branch: "feature", message: "feature-changes-1", ok: 1 }
 
-// Rebase — expect conflict (throws in mongosh).
+// Rebase  -- expect conflict (throws in mongosh).
 try {
   cdb.getSiblingDB("rebaseconflict@feature").runCommand({doltRebase: 1, onto: "main"})
 } catch (e) {
@@ -231,7 +231,7 @@ try {
 Key checks:
 - `runCommand` throws a `MongoServerError` (ok:0 surfaces as an exception in mongosh)
 - Error message contains `"doltRebase"` and mentions conflicts
-- The rebase is staged — `doltConflicts` can inspect it
+- The rebase is staged  -- `doltConflicts` can inspect it
 
 ```js
 // Abort the conflicted rebase.
@@ -246,7 +246,7 @@ Key checks:
 
 ---
 
-## Scenario 7: Conflict during rebase — resolve and continue
+## Scenario 7: Conflict during rebase  -- resolve and continue
 
 Use another fresh database.
 
@@ -284,7 +284,7 @@ const rr4feat = rdb.getSiblingDB("rebaseresolve@feature").runCommand({doltCommit
 printjson(rr4feat)
 // Expected: { commitId: "<hash>", branch: "feature", message: "feature-modifies-1", ok: 1 }
 
-// Start rebase — expect conflict (throws in mongosh).
+// Start rebase  -- expect conflict (throws in mongosh).
 try {
   rdb.getSiblingDB("rebaseresolve@feature").runCommand({doltRebase: 1, onto: "main"})
 } catch (e) {

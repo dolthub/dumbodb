@@ -81,7 +81,7 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 		return amFromAncestorExpr(ctx, state, rootish)
 	}
 
-	// Case 3: branch name — try refs/heads/<rootish>.
+	// Case 3: branch name  -- try refs/heads/<rootish>.
 	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+rootish)
 	if err == nil && branchDS.HasHead() {
 		branchHead, ok := branchDS.MaybeHeadAddr()
@@ -91,7 +91,7 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 		return amFromCommitHash(ctx, state, branchHead.String())
 	}
 
-	// Case 4: tag name — try refs/tags/<rootish>.
+	// Case 4: tag name  -- try refs/tags/<rootish>.
 	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not a commit hash, branch, or tag: %w", rootish, err)
@@ -156,10 +156,10 @@ func amFromAncestorExpr(ctx context.Context, state *dbState, rootish string) (pr
 
 // resolveRootishToCommitHash resolves any rootish expression to the Dolt commit hash
 // it points to. Resolution order mirrors amFromRootish:
-//  1. Bare 32-char commit hash — parsed and returned directly.
-//  2. Ancestor expression <branch>~<N> — branch HEAD resolved, then N first-parents walked.
-//  3. Branch name — resolved via refs/heads/<rootish>.
-//  4. Tag name — resolved via refs/tags/<rootish>.
+//  1. Bare 32-char commit hash  -- parsed and returned directly.
+//  2. Ancestor expression <branch>~<N>  -- branch HEAD resolved, then N first-parents walked.
+//  3. Branch name  -- resolved via refs/heads/<rootish>.
+//  4. Tag name  -- resolved via refs/tags/<rootish>.
 //
 // This is used for branch creation (DumboDBBranch) which needs the commit hash, not the AM.
 func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish string) (hash.Hash, error) {
@@ -212,7 +212,7 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 		}
 	}
 
-	// Case 4: tag name — use tagCommitAddr to dereference through the tag
+	// Case 4: tag name  -- use tagCommitAddr to dereference through the tag
 	// flatbuffer to the underlying commit hash.
 	tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if tagErr == nil && tagDS.HasHead() {
@@ -226,7 +226,7 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 
 // amFromHEADExpr resolves a "HEAD" or "HEAD~N" rootish to a collections AddressMap.
 //
-// HEAD resolves to the committed tip of connRootish — the connection's own branch or
+// HEAD resolves to the committed tip of connRootish  -- the connection's own branch or
 // snapshot, not necessarily main. HEAD~N walks N first-parents above that commit.
 // HEAD~0 is equivalent to HEAD.
 func amFromHEADExpr(ctx context.Context, state *dbState, connRootish, rootish string) (prolly.AddressMap, error) {
@@ -415,7 +415,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 			// Field was removed.
 			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: path, From: aVal})
 		} else {
-			// Field in both — compare values recursively.
+			// Field in both  -- compare values recursively.
 			subdiffs, err := compareFieldPaths(path, aVal, bVal)
 			if err != nil {
 				return nil, err
@@ -439,7 +439,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 // compareFieldPaths compares two field values, recursing into nested documents
 // and arrays. It returns a FieldDiff for each differing leaf.
 func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error) {
-	// Nested documents — recurse.
+	// Nested documents  -- recurse.
 	aDoc, aIsDoc := aVal.(*types.Document)
 	bDoc, bIsDoc := bVal.(*types.Document)
 
@@ -447,7 +447,7 @@ func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error
 		return diffDocumentPaths(path, aDoc, bDoc)
 	}
 
-	// Arrays — compare element by element.
+	// Arrays  -- compare element by element.
 	aArr, aIsArr := aVal.(*types.Array)
 	bArr, bIsArr := bVal.(*types.Array)
 
@@ -654,7 +654,7 @@ func diffCollectionMaps(
 
 // countCollectionMapDiffs counts the document-level differences between two
 // prolly.Maps without deserializing documents. It parallels diffCollectionMaps
-// but skips the types.Document construction — callers that need only counts
+// but skips the types.Document construction  -- callers that need only counts
 // (e.g. DumboDBStatus) avoid the per-document decode cost this way.
 //
 // The prolly-map value for each document encodes its content hash, so a

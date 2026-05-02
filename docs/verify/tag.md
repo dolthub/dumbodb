@@ -14,7 +14,7 @@ underlying repository, and vice versa.
 
 | Parameter | Type   | Required | Default                | Description                                                                  |
 |-----------|--------|----------|------------------------|------------------------------------------------------------------------------|
-| `name`    | string | no\*     | —                      | Tag name. Required for create and delete. Omit to list. Must not contain `@` or whitespace. |
+| `name`    | string | no\*     |  --                      | Tag name. Required for create and delete. Omit to list. Must not contain `@` or whitespace. |
 | `hash`    | string | no       | connection branch HEAD | Rootish (commit hash, branch, ancestor expression, or another tag) to tag.   |
 | `delete`  | bool   | no       | `false`                | Delete the named tag. Mutually requires `name`.                              |
 | `message` | string | no       | `""`                   | Tag description.                                                             |
@@ -63,8 +63,8 @@ print("hash2 =", hash2)
 ```
 
 After setup, `tagvdb` has two commits on `main`:
-- **hash1** — one document (`_id:1`)
-- **hash2** — two documents (current `main` HEAD)
+- **hash1**  -- one document (`_id:1`)
+- **hash2**  -- two documents (current `main` HEAD)
 
 ---
 
@@ -110,7 +110,7 @@ Key checks:
 
 ## Scenario 2: Create a tag at a specific commit hash
 
-`hash` accepts any rootish — a commit hash, a branch name, an ancestor
+`hash` accepts any rootish  -- a commit hash, a branch name, an ancestor
 expression (e.g. `main~1`), or another tag name.
 
 ```js
@@ -202,7 +202,7 @@ db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1 })
 
 ## Scenario 5: Tag persists across server restart
 
-Tags are durable — they survive a server restart because they live in Dolt's
+Tags are durable  -- they survive a server restart because they live in Dolt's
 `refs/tags/` namespace on disk.
 
 ```js
@@ -303,11 +303,11 @@ whitespace.
 ```js
 // "@" is rejected
 db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1, name: "bad@name" })
-// Expected: error — name must not contain '@'
+// Expected: error  -- name must not contain '@'
 
 // Whitespace is rejected
 db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1, name: "bad name" })
-// Expected: error — name must not contain whitespace
+// Expected: error  -- name must not contain whitespace
 ```
 
 Key check: both calls return errors; no tag is created.

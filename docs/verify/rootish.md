@@ -28,7 +28,7 @@ Run this once before the verification scenarios below. It creates a database `ve
 with two commits so you have historical data to query.
 
 ```js
-// Start fresh — drop if it exists
+// Start fresh  -- drop if it exists
 var db = db.getSiblingDB("verifydb")
 db.dropDatabase()
 
@@ -69,7 +69,7 @@ After running setup, `verifydb` has:
 
 ---
 
-## Scenario 1: `verifydb@main` — reads and writes work
+## Scenario 1: `verifydb@main`  -- reads and writes work
 
 Branch rootish. Full read/write access.
 
@@ -97,14 +97,14 @@ main.runCommand({ doltCurrentBranch: 1 })
 
 ---
 
-## Scenario 2: `verifydb@v1%2E0` — reads and writes work, isolated from main
+## Scenario 2: `verifydb@v1%2E0`  -- reads and writes work, isolated from main
 
 Non-main branch rootish. Full read/write access; writes go to that branch's working
 set and are isolated from main's working set.
 
 > **Percent-encoding:** Characters invalid in MongoDB database names (`.`, `/`, `$`, space)
 > must be percent-encoded in the rootish part of the db name. DumboDB decodes them
-> server-side before resolving the branch. One pass only — `%` itself encodes as `%25`.
+> server-side before resolving the branch. One pass only  -- `%` itself encodes as `%25`.
 >
 > Common encodings: `.` → `%2E`, `/` → `%2F`, `$` → `%24`
 
@@ -123,7 +123,7 @@ v1.items.insertOne({ _id: 10, label: "v1-only" })
 v1.items.find({}).toArray()
 // Expected: [ { _id: 1, ... }, { _id: 2, ... }, { _id: 10, label: "v1-only" } ]
 
-// main is unchanged — the v1.0 write is isolated
+// main is unchanged  -- the v1.0 write is isolated
 const main = db.getSiblingDB("verifydb@main")
 main.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
@@ -140,10 +140,10 @@ v1.items.deleteOne({ _id: 10 })
 
 ---
 
-## Scenario 3: `verifydb@<hash>` — connects to correct snapshot, reads correct historical data
+## Scenario 3: `verifydb@<hash>`  -- connects to correct snapshot, reads correct historical data
 
 Commit hash rootish. Read-only view of the exact snapshot at that commit. Writes to
-the collection are blocked, but branch creation works — creating a branch from a commit
+the collection are blocked, but branch creation works  -- creating a branch from a commit
 hash is always valid because the hash is a fully resolved commit address.
 
 ```js
@@ -152,7 +152,7 @@ const snap1 = db.getSiblingDB("verifydb@" + hash1)
 
 snap1.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
-// (Only the document from commit 1 — _id:2 does not exist here)
+// (Only the document from commit 1  -- _id:2 does not exist here)
 
 snap1.items.countDocuments({})
 // Expected: 1
@@ -163,7 +163,7 @@ const snap2 = db.getSiblingDB("verifydb@" + hash2)
 snap2.items.find({}).toArray()
 // Expected: [ { _id: 1, ... }, { _id: 2, ... } ]
 
-// Write on commit hash: must fail — the snapshot is read-only
+// Write on commit hash: must fail  -- the snapshot is read-only
 snap1.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
@@ -174,7 +174,7 @@ snap1.runCommand({ doltCurrentBranch: 1 })
 //   MongoServerError[OperationFailed]: doltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
 
-// doltBranch: works — branch creation only needs a resolved commit, not write access.
+// doltBranch: works  -- branch creation only needs a resolved commit, not write access.
 // This creates a new branch "from-hash1" pointing at hash1 (one-document state).
 snap1.runCommand({ doltBranch: 1, branch: "from-hash1" })
 // Expected: { branch: "from-hash1", ok: 1 }
@@ -186,7 +186,7 @@ db.getSiblingDB("verifydb@from-hash1").items.find({}).toArray()
 
 ---
 
-## Scenario 4: `verifydb@main~1` — returns data as of parent commit, not current HEAD
+## Scenario 4: `verifydb@main~1`  -- returns data as of parent commit, not current HEAD
 
 Ancestor expression rootish. Read-only; resolves to the parent of the named branch's HEAD.
 As with commit hashes, writes to the collection are blocked but branch creation works.
@@ -207,7 +207,7 @@ const same = db.getSiblingDB("verifydb@main~0")
 same.items.countDocuments({})
 // Expected: 2
 
-// Write on ancestor expression: must fail — the snapshot is read-only
+// Write on ancestor expression: must fail  -- the snapshot is read-only
 parent.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
@@ -218,7 +218,7 @@ parent.runCommand({ doltCurrentBranch: 1 })
 //   MongoServerError[OperationFailed]: doltCurrentBranch: no current branch name
 //   (connection is at a specific commit, not a named branch)
 
-// doltBranch: works — the ancestor expression resolves to a commit; branch creation
+// doltBranch: works  -- the ancestor expression resolves to a commit; branch creation
 // only needs a resolved commit address. Creates "back-one" at the main~1 state.
 parent.runCommand({ doltBranch: 1, branch: "back-one" })
 // Expected: { branch: "back-one", ok: 1 }
@@ -230,7 +230,7 @@ db.getSiblingDB("verifydb@back-one").items.find({}).toArray()
 
 ---
 
-## Scenario 5: `verifydb@HEAD` — aliases the default branch (main)
+## Scenario 5: `verifydb@HEAD`  -- aliases the default branch (main)
 
 HEAD is a rootish alias for the default branch. DumboDB connections are stateless, so there
 is no per-session "current branch" the way `git` has a per-working-tree HEAD. Since the only
@@ -255,7 +255,7 @@ head.runCommand({ doltCurrentBranch: 1 })
 head.items.insertOne({ _id: 5, label: "via-HEAD" })
 // Expected: { acknowledged: true, insertedId: 5 }
 
-// The write is visible on main — they are the same working set.
+// The write is visible on main  -- they are the same working set.
 db.getSiblingDB("verifydb@main").items.countDocuments({})
 // Expected: 3
 
@@ -267,13 +267,13 @@ head.items.deleteOne({ _id: 5 })
 const prev = db.getSiblingDB("verifydb@HEAD~1")
 prev.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
-// (HEAD~1 is the parent of main's HEAD — commit 1, one document.)
+// (HEAD~1 is the parent of main's HEAD  -- commit 1, one document.)
 
 prev.items.insertOne({ _id: 99, label: "should fail" })
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
 
-// HEAD caret forms (HEAD^, HEAD^N) are still rejected — use HEAD~N instead.
+// HEAD caret forms (HEAD^, HEAD^N) are still rejected  -- use HEAD~N instead.
 db.getSiblingDB("verifydb@HEAD^").items.find({}).toArray()
 // Expected error (code 96):
 //   MongoServerError[OperationFailed]: rootish "HEAD^": caret syntax (^, ^N, ^{type}) is not
@@ -282,7 +282,7 @@ db.getSiblingDB("verifydb@HEAD^").items.find({}).toArray()
 
 ---
 
-## Scenario 6: reflog syntax — returns a clear 'not supported' error
+## Scenario 6: reflog syntax  -- returns a clear 'not supported' error
 
 Reflog syntax (`<ref>@{...}`) is not supported. The raw `@`, `{`, `}`, and space
 characters are invalid in MongoDB database names, so mongosh rejects them
@@ -317,7 +317,7 @@ db.getSiblingDB("verifydb@%40%7B1%7D").items.find({}).toArray()
 
 ---
 
-## Scenario 7: range syntax — returns a clear 'not supported' error
+## Scenario 7: range syntax  -- returns a clear 'not supported' error
 
 Range syntax (`<ref>..<ref>`) is not supported. The `.` character is forbidden in
 MongoDB database names, so mongosh rejects raw range expressions client-side.
@@ -354,7 +354,7 @@ db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 
 ¹ **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
 ² **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "newname" })`. Works whenever
-the rootish resolves to a commit — branch creation only needs a commit address, not write access.
+the rootish resolves to a commit  -- branch creation only needs a commit address, not write access.
 
 All errors use MongoDB error code **96** (`OperationFailed`).
 
@@ -362,7 +362,7 @@ All errors use MongoDB error code **96** (`OperationFailed`).
 
 ```js
 try {
-  // Reflog syntax is rejected — use percent-encoded form so it reaches the server.
+  // Reflog syntax is rejected  -- use percent-encoded form so it reaches the server.
   db.getSiblingDB("verifydb@main%40%7Byesterday%7D").items.find({}).toArray()
 } catch (e) {
   print("code:", e.code)      // 96

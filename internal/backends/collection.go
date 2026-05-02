@@ -491,7 +491,7 @@ type IndexInfo struct {
 	// filter expression. If nil, all documents are considered as matching (no partial
 	// filter). Set by the handler layer at index creation time, and reattached by
 	// backends after restart via MatchPartialFilter using the persisted
-	// PartialFilterExpression — both paths route through the predicate registered
+	// PartialFilterExpression  -- both paths route through the predicate registered
 	// by RegisterPartialFilterMatcher to avoid a circular import on handler/common.
 	MatchesPartialFilter func(doc *types.Document) (bool, error)
 }

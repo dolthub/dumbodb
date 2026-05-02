@@ -37,7 +37,7 @@ import (
 // for documents matching the filter.
 //
 // Before the fix, MatchesPartialFilter was a Go closure that vanished on
-// restart — partial unique indexes silently became full unique indexes (or
+// restart  -- partial unique indexes silently became full unique indexes (or
 // vice versa, depending on call site) once reloaded.
 func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-idx-partial-*")
@@ -87,8 +87,8 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 		t.Fatalf("CreateIndexes: %v", err)
 	}
 
-	// {_id:1, email:"a@x.com", status:"active"} — indexed (matches filter).
-	// {_id:2, email:"a@x.com", status:"inactive"} — not indexed; same email is fine.
+	// {_id:1, email:"a@x.com", status:"active"}  -- indexed (matches filter).
+	// {_id:2, email:"a@x.com", status:"inactive"}  -- not indexed; same email is fine.
 	docs := []*types.Document{
 		must.NotFail(types.NewDocument("_id", int32(1), "email", "a@x.com", "status", "active")),
 		must.NotFail(types.NewDocument("_id", int32(2), "email", "a@x.com", "status", "inactive")),
@@ -134,7 +134,7 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 		t.Fatalf("PartialFilterExpression is nil after reopen")
 	}
 	if got.MatchesPartialFilter == nil {
-		t.Fatalf("MatchesPartialFilter is nil after reopen — the do-10do bug")
+		t.Fatalf("MatchesPartialFilter is nil after reopen  -- the do-10do bug")
 	}
 
 	// Inserting a third active doc with the same email must fail: the

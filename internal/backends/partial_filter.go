@@ -27,8 +27,8 @@ import (
 // IndexInfo.MatchesPartialFilter closures (e.g. after restart from disk)
 // without importing handler/common (which would create a circular dependency).
 //
-// The registered function takes (doc, filter) — same order as
-// common.FilterDocument — so it can be passed by value without a wrapper.
+// The registered function takes (doc, filter)  -- same order as
+// common.FilterDocument  -- so it can be passed by value without a wrapper.
 var partialFilterMatcher atomic.Pointer[func(doc, filter *types.Document) (bool, error)]
 
 // RegisterPartialFilterMatcher installs fn as the global predicate used to

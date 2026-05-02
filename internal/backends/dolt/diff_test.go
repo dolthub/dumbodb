@@ -126,7 +126,7 @@ func TestDumboDBDiff_NoChanges(t *testing.T) {
 	insertDoc(t, b, "testdb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
 	commitDB(t, b, "testdb", "init")
 
-	// No writes after commit — diff should be empty.
+	// No writes after commit  -- diff should be empty.
 	res, err := b.DumboDBDiff(ctx, &backends.DiffParams{DBName: "testdb"})
 	if err != nil {
 		t.Fatalf("DumboDBDiff: %v", err)
@@ -146,7 +146,7 @@ func TestDumboDBDiff_InsertShowsAdded(t *testing.T) {
 	insertDoc(t, b, "testdb", "sentinel", mustDoc(t, "_id", int64(0)))
 	commitDB(t, b, "testdb", "baseline")
 
-	// Insert a doc into "users" (working set only — not committed yet).
+	// Insert a doc into "users" (working set only  -- not committed yet).
 	doc := mustDoc(t, "_id", int64(1), "name", "alice")
 	insertDoc(t, b, "testdb", "users", doc)
 
@@ -198,7 +198,7 @@ func TestDumboDBDiff_DeleteShowsRemoved(t *testing.T) {
 	insertDoc(t, b, "testdb", "users", doc)
 	commitDB(t, b, "testdb", "add bob")
 
-	// Delete the doc via UpdateAll — actually we need DeleteAll. Let's use the backend directly.
+	// Delete the doc via UpdateAll  -- actually we need DeleteAll. Let's use the backend directly.
 	db, err := b.Database("testdb")
 	if err != nil {
 		t.Fatalf("Database: %v", err)
@@ -937,7 +937,7 @@ func TestDumboDBDiff_MultipleDocsWithMixedChanges(t *testing.T) {
 
 // TestDumboDBDiff_SingleDocMixedFieldOps verifies that a single document update that
 // simultaneously modifies one field, adds a new field, and removes an existing field
-// produces exactly three FieldDiff entries — one per operation.
+// produces exactly three FieldDiff entries  -- one per operation.
 func TestDumboDBDiff_SingleDocMixedFieldOps(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
@@ -1108,7 +1108,7 @@ func TestDumboDBDiff_HeadFromTo(t *testing.T) {
 
 	hash2 := commitDB(t, b, "testdb", "commit two")
 
-	// from=hash1, to="HEAD" — HEAD resolves to main's committed tip (hash2).
+	// from=hash1, to="HEAD"  -- HEAD resolves to main's committed tip (hash2).
 	res, err := b.DumboDBDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",
@@ -1127,7 +1127,7 @@ func TestDumboDBDiff_HeadFromTo(t *testing.T) {
 		t.Fatalf("expected 1 modified doc, got %d", len(res.Collections[0].Modified))
 	}
 
-	// from="HEAD", to=hash2 — HEAD resolves to main's tip; result should be empty (same commit).
+	// from="HEAD", to=hash2  -- HEAD resolves to main's tip; result should be empty (same commit).
 	res2, err := b.DumboDBDiff(ctx, &backends.DiffParams{
 		DBName:      "testdb",
 		ConnRootish: "main",

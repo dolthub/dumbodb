@@ -1,22 +1,22 @@
-# do-upta — Profiling indexed read benchmarks
+# do-upta  -- Profiling indexed read benchmarks
 
-Bead: do-upta. Profile-only — no fixes, just findings.
+Bead: do-upta. Profile-only  -- no fixes, just findings.
 
 ## Summary
 
 All five operations correctly route through their backend index fast paths.
 The performance gap to MongoDB has **two distinct shapes**:
 
-1. **Find-style ops (`find_filter_eq`, `agg_match_group`)** — the index path
+1. **Find-style ops (`find_filter_eq`, `agg_match_group`)**  -- the index path
    runs but each matched document is fetched and **decoded from canonical
    Extended JSON to BSON to `types.Document`** on every Get. With ~5K matches
    per call at 50K, ExtJSON parsing alone burns ~35% of CPU. This is the
    storage-format penalty: MongoDB ships native BSON to the wire, DumboDB
    round-trips through ExtJSON.
 
-2. **Count-style ops (`count_documents_*`)** — the backend `Count` finishes in
+2. **Count-style ops (`count_documents_*`)**  -- the backend `Count` finishes in
    53 µs (10K) / 207 µs (50K). Parity reports 17 ms / 98 ms. The 99% gap is
-   **above the backend, not inside it** — handler / aggregate-shortcut /
+   **above the backend, not inside it**  -- handler / aggregate-shortcut /
    wire-marshal overhead. Backend Count already hits `tryIndexedCount` →
    `RangeCount` (single index walk, no doc fetches).
 
@@ -41,7 +41,7 @@ go tool pprof -top -cum cpu.out
 
 ## Per-test findings
 
-### find_filter_eq_50k_indexed — 105 ms/op (parity: 81 ms vs Mongo 14.78 ms)
+### find_filter_eq_50k_indexed  -- 105 ms/op (parity: 81 ms vs Mongo 14.78 ms)
 
 Index path is used. `tryIndexLookup` runs the index-range walk, capped at 50%
 of the collection (5K matches out of 50K → admitted), and point-fetches each
@@ -67,13 +67,13 @@ readDocJSON                       11.87s  (cum)
 
 **Pattern: 80% of decode time is the ExtJSON parser.** The collection stores
 canonical Extended JSON in the prolly tree's value side; every doc read pays
-the parse cost. MongoDB's native BSON storage avoids this entirely — a read
+the parse cost. MongoDB's native BSON storage avoids this entirely  -- a read
 is closer to a memcpy.
 
 `runtime.mallocgc` reaches 24% from the same path (every parsed doc allocates
 new BSON structures).
 
-### count_documents_10k — 53 µs/op backend (parity: 17 ms vs Mongo 1.94 ms)
+### count_documents_10k  -- 53 µs/op backend (parity: 17 ms vs Mongo 1.94 ms)
 
 Index path is used. `Count` → `tryIndexedCount` → `idx.RangeCount` walks the
 secondary-index range and counts entries without primary fetches.
@@ -86,7 +86,7 @@ Top backend functions inside `Count`:
 | 2 | `prolly/tree.OrderedTreeIter.Next` | inside RangeCount | Per-entry advance |
 | 3 | `(*collection).tryIndexedCount` | thin wrapper | Index/bounds setup |
 
-**The backend is not the bottleneck — it is 327× faster than the parity
+**The backend is not the bottleneck  -- it is 327× faster than the parity
 number reports.** With backend Count at 53 µs and parity at 17 ms, ~99% of
 end-to-end time lives above the backend: in `MsgAggregate` (the v2 driver's
 `CountDocuments` sends an aggregate pipeline) or `MsgCount`, in the
@@ -95,18 +95,18 @@ The aggregate-count shortcut wired in commit `2f6969d` (do-37r9) does the
 right thing once it fires; the open question is whether it fires for the
 exact pipeline shape the v2 driver emits in this benchmark.
 
-### count_documents_50k — 207 µs/op backend (parity: 97.83 ms vs Mongo 7.93 ms)
+### count_documents_50k  -- 207 µs/op backend (parity: 97.83 ms vs Mongo 7.93 ms)
 
 Same shape as the 10K case. RangeCount scales linearly with the matched
-range (5K entries here vs 1K), 207 µs / 5K ≈ 41 ns per index step — that is
+range (5K entries here vs 1K), 207 µs / 5K ≈ 41 ns per index step  -- that is
 near the prolly cursor's structural lower bound. No hot-spot to address at
 this layer. Same handler/wire gap conclusion as the 10K case.
 
-### agg_match_group_indexed — 91 ms/op backend (parity: 6.53 ms vs Mongo 0.65 ms)
+### agg_match_group_indexed  -- 91 ms/op backend (parity: 6.53 ms vs Mongo 0.65 ms)
 
 Bench shape: `[{$match: {grp: x}}, {$group: {_id: "$grp", c: {$sum: 1}}}]`.
 The benchmark's per-iteration cost equals find_filter_eq's because the
-backend work is identical — the $match feeds Query, then the $group reads
+backend work is identical  -- the $match feeds Query, then the $group reads
 every match and accumulates. The group accumulator itself is invisible in
 the profile.
 
@@ -125,10 +125,10 @@ Top-3 cumulative CPU (same as find-eq, identical hot path):
 | 2 | `bson.UnmarshalExtJSON` | 32.06% |
 | 3 | `bson.copyDocument*` | 25.69% |
 
-### distinct_50k_indexed — 4.2 ms/op backend (parity: 6.41 ms vs Mongo 0.60 ms)
+### distinct_50k_indexed  -- 4.2 ms/op backend (parity: 6.41 ms vs Mongo 0.60 ms)
 
 `DistinctScan` index-path is used. The backend already avoids the per-row
-primary fetch — only one primary lookup per *unique* value (10 in this
+primary fetch  -- only one primary lookup per *unique* value (10 in this
 seed).
 
 But the index walk **reads every one of the 50K index entries** to find
@@ -136,9 +136,9 @@ those 10 unique prefixes. Top inline cost in `scanDistinctFromIndex`:
 
 ```
 scanDistinctFromIndex                   840 ms (cum)
-  iter.Next                             470 ms   (56%)  — prolly cursor advance
-  idxKeyDesc.GetBytes                   180 ms   (21%)  — extract composite key bytes
-  bytes.Equal(prefix, prevPrefix)       110 ms   (13%)  — same-group dedup
+  iter.Next                             470 ms   (56%)   -- prolly cursor advance
+  idxKeyDesc.GetBytes                   180 ms   (21%)   -- extract composite key bytes
+  bytes.Equal(prefix, prevPrefix)       110 ms   (13%)   -- same-group dedup
   prevPrefix = append(...)               40 ms   ( 5%)
   out = append(out, val)                 30 ms   ( 4%)
   lookupFieldFromPrimary                 10 ms   ( 1%)
@@ -155,7 +155,7 @@ the per-doc decode cost that hurts find-eq is irrelevant here.
 
 ## Common patterns across tests
 
-1. **All five operations correctly hit their index fast path** — no fallback
+1. **All five operations correctly hit their index fast path**  -- no fallback
    to collection scan, no missing index, no 50%-range gate kicking in.
    The plumbing is right.
 
@@ -195,7 +195,7 @@ the per-doc decode cost that hurts find-eq is irrelevant here.
   (or cache decoded `types.Document` per chunk) to eliminate the ExtJSON
   parse on every Get. Largest single win.
 - **find / agg_match_group**: batch primary fetches when the index returns
-  ids in sorted order — single tree walk instead of K Gets.
+  ids in sorted order  -- single tree walk instead of K Gets.
 - **count_documents**: end-to-end trace of `MsgAggregate` to verify the
   count-aggregate-shortcut matches the v2 driver's CountDocuments pipeline,
   or whether the shortcut declines and the path falls through to a full

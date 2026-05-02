@@ -91,7 +91,7 @@ func TestW3S_Indexing_AtlasSearch(t *testing.T) {
 		},
 	})
 
-	// The server must return an error — not a panic or a hang.
+	// The server must return an error  -- not a panic or a hang.
 	require.Error(t, err, "createSearchIndexes must return an error on DumboDB")
 
 	// The error should be a MongoDB command error with a useful message.

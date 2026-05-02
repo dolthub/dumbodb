@@ -642,7 +642,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 				headFileID := serial.GetFileID([]byte(headMsg))
 				switch headFileID {
 				case serial.RootValueFileID:
-					// RTVL format: prefer the working set — it holds the latest state
+					// RTVL format: prefer the working set  -- it holds the latest state
 					// after writes that don't create commits (HEAD stays at last explicit
 					// commit). Fall back to HEAD rootValue if the working set is missing.
 					wsAM, wsErr := readAMFromWorkingSet(ctx, doltDB, cs, ns)
@@ -939,7 +939,7 @@ func workingSetForBranch(branch string) string {
 }
 
 // updateWorkingSet writes the working set with independent working and staged roots.
-// This is required for `dolt status` to function — without a workingSets/heads/<branch>
+// This is required for `dolt status` to function  -- without a workingSets/heads/<branch>
 // entry, dolt panics trying to read the working set.
 //
 // workingAM is the latest uncommitted state; stagedAM is what has been staged for
@@ -1524,7 +1524,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, &backends.MergeConflictError{Conflicts: summaries}
 	}
 
-	// Clean merge — commit immediately.
+	// Clean merge  -- commit immediately.
 	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM, params.Message, params.Author)
 }
 
@@ -1808,7 +1808,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		return nil, &backends.DumboDBCherryPickConflictError{Conflicts: summaries}
 	}
 
-	// Clean cherry-pick — commit immediately.
+	// Clean cherry-pick  -- commit immediately.
 	return b.commitCherryPick(ctx, db, branch, intoBranchDS, intoHash, pickHash, mergedAM, pickMeta, originalMsg, params.Message, params.Committer)
 }
 
@@ -1893,7 +1893,7 @@ func (b *Backend) commitCherryPick(
 
 // DumboDBLog implements backends.VersioningBackend.
 // It returns the commit history reachable from the starting commit (HEAD or
-// params.From) in reverse topological order — higher commits first, with ties
+// params.From) in reverse topological order  -- higher commits first, with ties
 // broken by timestamp (newer first). Both parents of merge commits are walked,
 // so feature-branch commits reachable only via parent2 are included.
 // If params.Limit <= 0 the default limit of 20 applies; a limit of 0 is
@@ -2080,7 +2080,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		case headHash != workingHash:
 			status = "modified"
 		default:
-			// unchanged — skip
+			// unchanged  -- skip
 			continue
 		}
 
@@ -2619,7 +2619,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 
 // replayRemainingCommits replays commits from ms.rebaseRemainingHashes onto ms.intoHash.
 // On success (all replayed), updates the branch and returns a non-nil *RebaseResult.
-// On conflict, updates ms with conflict state and returns (nil, nil) — caller reads ms.
+// On conflict, updates ms with conflict state and returns (nil, nil)  -- caller reads ms.
 // On hard error, returns (nil, error).
 func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *mergeInProgress, rebaserName, rebaserEmail string) (*backends.RebaseResult, error) {
 	for len(ms.rebaseRemainingHashes) > 0 {
@@ -2685,7 +2685,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			return nil, nil
 		}
 
-		// No conflict — commit it.
+		// No conflict  -- commit it.
 		pickMeta, err := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: replayRemainingCommits: reading meta for commit %q: %w", pickHash, err)
@@ -2810,7 +2810,7 @@ func findCommitsToReplay(ctx context.Context, state *dbState, branchHead, ontoHe
 			return nil, fmt.Errorf("findCommitsToReplay: reading parents of branch commit %q: %w", current, err)
 		}
 		if len(parents) == 0 {
-			break // root commit — nothing left to walk
+			break // root commit  -- nothing left to walk
 		}
 		current = parents[0]
 	}
@@ -2940,7 +2940,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		return nil, fmt.Errorf("dolt: DumboDBRevert: loading revert AM for commit %q: %w", revertHash, err)
 	}
 
-	// Load the parent AM (used as the "from" side — the state to revert to).
+	// Load the parent AM (used as the "from" side  -- the state to revert to).
 	// For a root commit with no parent, use an empty AM as the parent.
 	var parentAM prolly.AddressMap
 	var parentHash hash.Hash // parent commit hash; zero-value if revert target has no parent
@@ -2977,9 +2977,9 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	}
 
 	// Perform the 3-way merge to undo the commit:
-	//   base = revertAM  (the commit being undone — what both sides had in common)
-	//   from = parentAM  (the state before the commit — what we want "theirs" to be)
-	//   into = intoAM    (current branch HEAD — "ours")
+	//   base = revertAM  (the commit being undone  -- what both sides had in common)
+	//   from = parentAM  (the state before the commit  -- what we want "theirs" to be)
+	//   into = intoAM    (current branch HEAD  -- "ours")
 	// theirHash = parentHash (the "from" side commit hash)
 	// baseHash  = revertHash (the "base" side commit hash)
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash)
@@ -3007,7 +3007,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			resolvedAM:  mergedAM,
 			isRevert:    true,
 			pickHash:    revertHash,   // the commit being reverted
-			fromHash:    parentHash,   // parent hash — used as "their" hash in artifacts
+			fromHash:    parentHash,   // parent hash  -- used as "their" hash in artifacts
 			originalMsg: originalMsg,
 		}
 
@@ -3020,7 +3020,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		return nil, &backends.DumboDBRevertConflictError{Conflicts: summaries}
 	}
 
-	// Clean revert — commit immediately.
+	// Clean revert  -- commit immediately.
 	return b.commitRevert(ctx, db, branch, intoBranchDS, intoHash, revertHash, mergedAM, originalMsg, params.Message, params.Author)
 }
 

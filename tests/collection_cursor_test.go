@@ -106,7 +106,7 @@ func TestCursor_CollationCaseInsensitive(t *testing.T) {
 		bson.D{{Key: "name", Value: "alice"}},
 	)
 
-	// Find with case-insensitive collation — must return both variants.
+	// Find with case-insensitive collation  -- must return both variants.
 	findOpts := options.Find().SetCollation(&options.Collation{
 		Locale:   "en",
 		Strength: 2,
@@ -124,7 +124,7 @@ func TestCursor_CollationCaseInsensitive(t *testing.T) {
 // TestCursor_CollationSort verifies that a find command with both a collation
 // option and a sort directive is accepted without returning an error (do-ch3o).
 // DumboDB accepts the collation option but does not enforce locale-aware sort
-// order — all documents are still returned.
+// order  -- all documents are still returned.
 func TestCursor_CollationSort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -136,7 +136,7 @@ func TestCursor_CollationSort(t *testing.T) {
 		bson.D{{Key: "name", Value: "Bob"}},
 	)
 
-	// Find + sort with collation — must not return an error.
+	// Find + sort with collation  -- must not return an error.
 	findOpts := options.Find().
 		SetCollation(&options.Collation{Locale: "en", Strength: 2}).
 		SetSort(bson.D{{Key: "name", Value: 1}})
@@ -151,7 +151,7 @@ func TestCursor_CollationSort(t *testing.T) {
 
 // TestCursor_NoCursorTimeout verifies that the noCursorTimeout find option is
 // accepted without returning an error (do-ch3o).
-// DumboDB ignores this option — cursor timeout behaviour is unchanged.
+// DumboDB ignores this option  -- cursor timeout behaviour is unchanged.
 func TestCursor_NoCursorTimeout(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -162,7 +162,7 @@ func TestCursor_NoCursorTimeout(t *testing.T) {
 		bson.D{{Key: "x", Value: 2}},
 	)
 
-	// Find with NoCursorTimeout — must not return an error.
+	// Find with NoCursorTimeout  -- must not return an error.
 	findOpts := options.Find().SetNoCursorTimeout(true)
 	cur, err := coll.Find(ctx, bson.D{}, findOpts)
 	require.NoError(t, err, "find with NoCursorTimeout must not return an error")

@@ -75,7 +75,7 @@ func TestBranchVerify(t *testing.T) {
 	hash1, _ := branchVerifySetup(t, env, dbName)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Create branch from main HEAD — response shape
+	// Scenario 1: Create branch from main HEAD  -- response shape
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CreateBranch_ResponseShape", func(t *testing.T) {
 		var result bson.M
@@ -99,7 +99,7 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "branch", Value: "snapshot"},
 		}).Err(), "doltBranch to create 'snapshot'")
 
-		// Diff main vs snapshot — identical commits → empty collections.
+		// Diff main vs snapshot  -- identical commits → empty collections.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -113,7 +113,7 @@ func TestBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: Branch isolation — writes on branch do not affect source
+	// Scenario 3: Branch isolation  -- writes on branch do not affect source
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_BranchIsolation", func(t *testing.T) {
 		featureDB := env.client.Database(dbName + "@feature")
@@ -204,7 +204,7 @@ func TestBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Safe delete (-d) — branch already merged into main
+	// Scenario 6: Safe delete (-d)  -- branch already merged into main
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_SafeDelete_MergedBranch", func(t *testing.T) {
 		delDbName := fmt.Sprintf("branchvrfy_del%d", rand.Int64N(1_000_000))
@@ -217,7 +217,7 @@ func TestBranchVerify(t *testing.T) {
 		}).Err(), "creating merged-branch must succeed")
 
 		// Safe delete: merged-branch HEAD equals main HEAD, so it is reachable from
-		// main — delete must succeed.
+		// main  -- delete must succeed.
 		var result bson.M
 		require.NoError(t, env.client.Database(delDbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
@@ -230,7 +230,7 @@ func TestBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: Safe delete (-d) — branch has unmerged commits, rejected
+	// Scenario 7: Safe delete (-d)  -- branch has unmerged commits, rejected
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_SafeDelete_UnmergedBranch_Rejected", func(t *testing.T) {
 		delDbName := fmt.Sprintf("branchvrfy_unm%d", rand.Int64N(1_000_000))
@@ -259,7 +259,7 @@ func TestBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 8: Force delete (-D) — branch has unmerged commits, succeeds
+	// Scenario 8: Force delete (-D)  -- branch has unmerged commits, succeeds
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_ForceDelete_UnmergedBranch", func(t *testing.T) {
 		delDbName := fmt.Sprintf("branchvrfy_frc%d", rand.Int64N(1_000_000))

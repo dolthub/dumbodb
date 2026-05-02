@@ -22,12 +22,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// tsSecondOp implements $tsSecond — returns the seconds component (high 32 bits) of a Timestamp.
+// tsSecondOp implements $tsSecond  -- returns the seconds component (high 32 bits) of a Timestamp.
 type tsSecondOp struct {
 	param any
 }
 
-// tsIncrementOp implements $tsIncrement — returns the increment/ordinal component (low 32 bits) of a Timestamp.
+// tsIncrementOp implements $tsIncrement  -- returns the increment/ordinal component (low 32 bits) of a Timestamp.
 type tsIncrementOp struct {
 	param any
 }
@@ -80,7 +80,7 @@ func evaluateTimestampParam(opName string, param any, doc *types.Document) (tsRe
 
 			val, err := expr.Evaluate(doc)
 			if err != nil {
-				// Field is absent — return null without error (matches MongoDB behaviour).
+				// Field is absent  -- return null without error (matches MongoDB behaviour).
 				return tsResult{missing: true}, nil
 			}
 

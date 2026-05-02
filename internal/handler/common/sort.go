@@ -348,7 +348,7 @@ func isMetaTextScore(value any) bool {
 // getSortValue validates if the value from sort document is the proper sort field,
 // and returns it.
 func getSortValue(key string, value any) (int64, error) {
-	// {$meta: "textScore"} is a valid sort value — sort descending by text score.
+	// {$meta: "textScore"} is a valid sort value  -- sort descending by text score.
 	// DumboDB assigns score 0 to all docs so stable order is preserved.
 	if isMetaTextScore(value) {
 		return -1, nil

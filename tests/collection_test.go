@@ -385,7 +385,7 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 }
 
 // TestDB_RunCommand_ListCollections verifies that listCollections issued via
-// RunCommand returns a proper cursor response document — not a raw array —
+// RunCommand returns a proper cursor response document  -- not a raw array  --
 // matching the MongoDB wire protocol:
 //
 //	{cursor: {id: 0, ns: "<db>.$cmd.listCollections", firstBatch: [...]}, ok: 1}

@@ -280,7 +280,7 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 	if inclusion == nil {
 		// Only $slice operators were specified (possibly alongside _id).
 		// If _id was explicitly included (value true), use inclusion mode so
-		// only _id and the sliced arrays appear — matching MongoDB behaviour for
+		// only _id and the sliced arrays appear  -- matching MongoDB behaviour for
 		// projections like {_id: 1, scores: {$slice: 2}}.
 		if idVal, idErr := validated.Get("_id"); idErr == nil {
 			if b, ok := idVal.(bool); ok && b {

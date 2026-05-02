@@ -59,7 +59,7 @@ After setup, `branchdb` has:
 
 ---
 
-## Scenario 1: Plain db name — returns "main"
+## Scenario 1: Plain db name  -- returns "main"
 
 No `@` suffix; defaults to the main branch.
 
@@ -70,7 +70,7 @@ db.getSiblingDB("branchdb").runCommand({ doltCurrentBranch: 1 })
 
 ---
 
-## Scenario 2: `branchdb@main` — returns "main"
+## Scenario 2: `branchdb@main`  -- returns "main"
 
 Explicit main branch rootish.
 
@@ -81,7 +81,7 @@ db.getSiblingDB("branchdb@main").runCommand({ doltCurrentBranch: 1 })
 
 ---
 
-## Scenario 3: `branchdb@feature` — returns "feature"
+## Scenario 3: `branchdb@feature`  -- returns "feature"
 
 Non-main branch rootish. Returns the branch name.
 
@@ -92,7 +92,7 @@ db.getSiblingDB("branchdb@feature").runCommand({ doltCurrentBranch: 1 })
 
 ---
 
-## Scenario 4: `branchdb@<hash>` — returns error (no branch name at a commit)
+## Scenario 4: `branchdb@<hash>`  -- returns error (no branch name at a commit)
 
 Commit hash rootish is read-only. There is no branch name to return.
 
@@ -105,7 +105,7 @@ db.getSiblingDB("branchdb@" + hash1).runCommand({ doltCurrentBranch: 1 })
 
 ---
 
-## Scenario 5: `branchdb@main~1` — returns error (no branch name at an ancestor)
+## Scenario 5: `branchdb@main~1`  -- returns error (no branch name at an ancestor)
 
 Ancestor expression rootish is read-only. There is no branch name to return.
 

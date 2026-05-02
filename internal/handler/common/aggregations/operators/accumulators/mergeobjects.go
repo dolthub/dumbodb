@@ -68,7 +68,7 @@ func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 			accumulator.operator = op
 		}
 		// Non-operator documents (object expressions like {k: "$field"}) are not
-		// yet fully supported in the accumulator context — they would require
+		// yet fully supported in the accumulator context  -- they would require
 		// recursive expression evaluation of each field value.
 	}
 

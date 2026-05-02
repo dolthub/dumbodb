@@ -74,7 +74,7 @@ func TestResetVerify(t *testing.T) {
 	hashC1, _ := resetVerifySetup(t, env, dbName)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Soft reset (default) — HEAD moves back, working set preserved
+	// Scenario 1: Soft reset (default)  -- HEAD moves back, working set preserved
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_SoftReset_WorkingSetPreserved", func(t *testing.T) {
 		items := env.client.Database(dbName).Collection("tasks")
@@ -86,7 +86,7 @@ func TestResetVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Soft reset to hashC1 (no `hard` parameter — defaults to false).
+		// Soft reset to hashC1 (no `hard` parameter  -- defaults to false).
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -97,7 +97,7 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashC1, raw["commitId"], "soft reset response hash must equal hashC1")
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// Working set is preserved — diff shows _id:2 and _id:3 as added
+		// Working set is preserved  -- diff shows _id:2 and _id:3 as added
 		// (HEAD=C1 has only _id:1).
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -121,7 +121,7 @@ func TestResetVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: Hard reset — HEAD and working set both reset to target
+	// Scenario 2: Hard reset  -- HEAD and working set both reset to target
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_HardReset_WorkingSetDiscarded", func(t *testing.T) {
 		items := env.client.Database(dbName).Collection("tasks")
@@ -148,7 +148,7 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashC1, raw["commitId"], "hard reset response hash must equal hashC1")
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// Working set matches target — diff is empty.
+		// Working set matches target  -- diff is empty.
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -156,7 +156,7 @@ func TestResetVerify(t *testing.T) {
 
 		dr := decodeDiffResult(t, diffRaw)
 		assert.Empty(t, dr.Collections,
-			"after hard reset working set must match HEAD — diff must be empty")
+			"after hard reset working set must match HEAD  -- diff must be empty")
 
 		// Only _id:1 should be visible.
 		n, err := items.CountDocuments(ctx, bson.D{})
@@ -166,7 +166,7 @@ func TestResetVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: Soft reset undoes a committed change — it becomes uncommitted
+	// Scenario 3: Soft reset undoes a committed change  -- it becomes uncommitted
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_SoftReset_UndoCommit", func(t *testing.T) {
 		items := env.client.Database(dbName).Collection("tasks")
@@ -180,7 +180,7 @@ func TestResetVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "re-add-two", "alice <alice@acme.com>")
 
-		// Soft reset to hashC1 — "undoes" the re-add-two commit.
+		// Soft reset to hashC1  -- "undoes" the re-add-two commit.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -206,7 +206,7 @@ func TestResetVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Hard reset to HEAD (no `to`) — discards uncommitted changes
+	// Scenario 4: Hard reset to HEAD (no `to`)  -- discards uncommitted changes
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_HardResetToHEAD_DiscardsUncommitted", func(t *testing.T) {
 		items := env.client.Database(dbName).Collection("tasks")
@@ -231,7 +231,7 @@ func TestResetVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Hard reset with no `to` — should default to HEAD.
+		// Hard reset with no `to`  -- should default to HEAD.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -241,7 +241,7 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, headHash, raw["commitId"], "reset-to-HEAD response must equal current HEAD hash")
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// Uncommitted insert of _id:5 must be discarded — diff is empty.
+		// Uncommitted insert of _id:5 must be discarded  -- diff is empty.
 		var diffRaw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -249,7 +249,7 @@ func TestResetVerify(t *testing.T) {
 
 		dr := decodeDiffResult(t, diffRaw)
 		assert.Empty(t, dr.Collections,
-			"after hard reset to HEAD: working set must match HEAD — diff must be empty")
+			"after hard reset to HEAD: working set must match HEAD  -- diff must be empty")
 
 		// Only _id:1 should be visible (the HEAD=C1 state).
 		n, err := items.CountDocuments(ctx, bson.D{})
@@ -281,7 +281,7 @@ func TestResetVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "add-eight", "alice <alice@acme.com>")
 
-		// Hard reset to HEAD~1 — should land on C6 (only _id:1, _id:6, _id:7).
+		// Hard reset to HEAD~1  -- should land on C6 (only _id:1, _id:6, _id:7).
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -295,7 +295,7 @@ func TestResetVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), n, "after reset to HEAD~1: 3 docs visible (_id:1,6,7)")
 
-		// Hard reset to main~1 — should land on C5 (only _id:1, _id:6).
+		// Hard reset to main~1  -- should land on C5 (only _id:1, _id:6).
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
 			{Key: "to", Value: "main~1"},

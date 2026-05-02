@@ -37,7 +37,7 @@ printjson(r1)
 // Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1 }
 const hashC1 = r1.commitId
 
-// C2: add {_id:2, v:2} — this is the commit we will revert.
+// C2: add {_id:2, v:2}  -- this is the commit we will revert.
 db.records.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
@@ -53,7 +53,7 @@ After setup:
 
 ---
 
-## Scenario 1: Clean revert — response shape
+## Scenario 1: Clean revert  -- response shape
 
 Revert C2 (which added `_id:2`) onto main. Since C2's parent is C1 (current base),
 this applies cleanly by removing `_id:2`.
@@ -117,14 +117,14 @@ printjson(rRevert2)
 ```
 
 Key checks:
-- `message` equals the custom override (`"undo: add item three"`) — no annotation appended
+- `message` equals the custom override (`"undo: add item three"`)  -- no annotation appended
 - `commitId` is a fresh hash
 - `committer` equals `"alice <alice@acme.com>"` (same as author for revert commits)
 - `committerTimestamp` records when the revert was applied
 
 ---
 
-## Scenario 3: Conflict during revert — structured error response
+## Scenario 3: Conflict during revert  -- structured error response
 
 Create a scenario where reverting a commit causes a conflict: the commit added a document
 that was subsequently modified on the current branch, so revert (which would delete it)
@@ -136,12 +136,12 @@ db.records.insertOne({ _id: 10, v: 10 })
 const rAdd = db.runCommand({ doltCommit: 1, message: "add-ten", author: "alice <alice@acme.com>" })
 const hashAddTen = rAdd.commitId
 
-// Now modify _id:10 on main — this creates a conflict if we revert hashAddTen
+// Now modify _id:10 on main  -- this creates a conflict if we revert hashAddTen
 // (revert would delete _id:10, but main has since modified it).
 db.records.updateOne({ _id: 10 }, { $set: { v: 99 } })
 db.runCommand({ doltCommit: 1, message: "modify-ten", author: "bob <bob@widgets.io>" })
 
-// Revert hashAddTen — expect conflict.
+// Revert hashAddTen  -- expect conflict.
 // In mongosh, runCommand throws a MongoServerError when ok:0.
 try {
   db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashAddTen })
@@ -155,7 +155,7 @@ try {
 Key checks:
 - `runCommand` throws a `MongoServerError` (mongosh surfaces `ok:0` as an exception)
 - The error message contains `"doltRevert: unresolved conflicts in 1 collection(s)"`
-- The revert state is preserved — use `doltConflicts` to inspect (Scenario 4)
+- The revert state is preserved  -- use `doltConflicts` to inspect (Scenario 4)
 
 ---
 
@@ -165,16 +165,16 @@ Continuing from Scenario 3 (revert with conflicts in progress).
 
 > **Same interface as merge.** Revert conflicts are stored in the same `mergeState`
 > struct as merge/cherry-pick conflicts (with an internal `isRevert` flag).
-> `doltConflicts` and `doltResolveConflict` work identically for all operations —
+> `doltConflicts` and `doltResolveConflict` work identically for all operations  --
 > only the final continuation command differs (`doltRevert continue:1`).
 
 ```js
-// Step 1: Summary — list which collections have unresolved conflicts.
+// Step 1: Summary  -- list which collections have unresolved conflicts.
 const rSummary = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
 printjson(rSummary)
 // Expected: { collections: [ { name: "records", count: 1 } ], ok: 1 }
 
-// Step 2: Per-collection detail — list individual document conflicts.
+// Step 2: Per-collection detail  -- list individual document conflicts.
 const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1, collection: "records" })
 printjson(rConflicts)
 // Expected: { conflicts: [ { conflictId: "c0", _id: 10, base: {...},
@@ -184,7 +184,7 @@ printjson(rConflicts)
 
 const conflictId = rConflicts.conflicts[0].conflictId
 
-// Step 3: Resolve — accept "ours" (keep main's modified version of _id:10).
+// Step 3: Resolve  -- accept "ours" (keep main's modified version of _id:10).
 const rResolve = db.getSiblingDB("revertdb@main").runCommand({
   doltResolveConflict: 1,
   collection: "records",
@@ -206,7 +206,7 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` (no filter) returns `collections` array — same shape as for merge
+- `doltConflicts` (no filter) returns `collections` array  -- same shape as for merge
 - `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
 - After `doltRevert continue:1`, `ok` equals `1` and `commitId` is present
@@ -226,7 +226,7 @@ const hashAdd20 = rAdd20.commitId
 db.records.updateOne({ _id: 20 }, { $set: { v: 201 } })
 db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "bob <bob@widgets.io>" })
 
-// Revert — expect conflict (throws in mongosh).
+// Revert  -- expect conflict (throws in mongosh).
 try {
   db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashAdd20 })
 } catch (e) {

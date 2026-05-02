@@ -39,7 +39,7 @@ func TestQuery_regex_dotall(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Without "s" flag, "." does not match newline — only doc 2 matches.
+	// Without "s" flag, "." does not match newline  -- only doc 2 matches.
 	cursor, err := coll.Find(ctx,
 		d(e("text", d(e("$regex", "hello.world")))),
 	)
@@ -51,7 +51,7 @@ func TestQuery_regex_dotall(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, int32(2), results[0][0].Value)
 
-	// With "s" flag, "." matches newline — docs 1 and 2 both match.
+	// With "s" flag, "." matches newline  -- docs 1 and 2 both match.
 	cursor2, err := coll.Find(ctx,
 		d(e("text", d(e("$regex", "hello.world"), e("$options", "s")))),
 	)

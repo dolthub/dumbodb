@@ -39,7 +39,7 @@ BSON chunk (raw BSON document bytes)
 
 ### What Works Today
 
-- `dolt fsck` passes — all chunks are reachable
+- `dolt fsck` passes  -- all chunks are reachable
 - `dolt log` shows commit history
 - Persistence across restarts works
 - ADRM → STRT migration works
@@ -299,7 +299,7 @@ case serial.StoreRootFileID:
         sm := headVal.(dolttypes.SerialMessage)
         fileID := serial.GetFileID([]byte(sm))
         if fileID == serial.AddressMapFileID {
-            // OLD format: rootValue is ADRM — migrate in-place
+            // OLD format: rootValue is ADRM  -- migrate in-place
             migrateADRMCommitToRTVL(ctx, doltDB, vs, ns, ds)
         }
         // else fileID == serial.RootValueFileID → new format, nothing to do
@@ -389,7 +389,7 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, vs *dolttypes.
 }
 ```
 
-### Step 4: Update `getOrOpenDB` — reading collections AM from RTVL
+### Step 4: Update `getOrOpenDB`  -- reading collections AM from RTVL
 
 When reading an existing STRT-format database, extract the ADRM from the RTVL:
 
@@ -470,11 +470,11 @@ type dbState struct {
 
 After the change, the following should pass:
 
-1. **Unit test**: `TestInitialCommitMessage` — existing, verifies init commit.
-2. **Unit test**: `TestPersistenceAcrossRestart` — existing, verifies round-trip.
-3. **New unit test**: `TestRTVLFormat` — verifies the head commit's rootValue
+1. **Unit test**: `TestInitialCommitMessage`  -- existing, verifies init commit.
+2. **Unit test**: `TestPersistenceAcrossRestart`  -- existing, verifies round-trip.
+3. **New unit test**: `TestRTVLFormat`  -- verifies the head commit's rootValue
    has file ID `"RTVL"` and that the embedded ADRM matches the expected collections.
-4. **New unit test**: `TestWorkingSetRTVL` — verifies the working set's
+4. **New unit test**: `TestWorkingSetRTVL`  -- verifies the working set's
    `working_root_addr` and `staged_root_addr` both point to RTVL chunks.
 5. **Integration test** (manual): After inserting a document, run `dolt status`
    in the database directory; must show "On branch main, nothing to commit".

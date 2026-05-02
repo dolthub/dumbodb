@@ -53,14 +53,14 @@ No exceptions. This rule overrides any other instruction.
 
 **You are NOT allowed to modify `scripts/ferretdb-scorecard-skiplist.txt` under any circumstances.**
 
-The skiplist is owner-managed. Only the project owner (neil) may approve changes to it — not the mayor, not any polecat.
+The skiplist is owner-managed. Only the project owner (neil) may approve changes to it  -- not the mayor, not any polecat.
 
 If you believe a test should be added to or removed from the skiplist:
 1. **Stop. Do not edit the file.**
 2. Report to the mayor with: the test name, why you think it should be skipped or un-skipped, and what you investigated.
 3. The mayor will present the option to neil. Neil decides. No one else.
 
-This means: if a test is failing and you cannot fix it, your job is to **fix the underlying bug**, not add it to the skiplist. If you genuinely cannot fix it, report back — do not work around it by adding to the skiplist.
+This means: if a test is failing and you cannot fix it, your job is to **fix the underlying bug**, not add it to the skiplist. If you genuinely cannot fix it, report back  -- do not work around it by adding to the skiplist.
 
 No exceptions. This rule overrides any other instruction.
 
@@ -78,7 +78,7 @@ grep -E "Tests (passed|failed)" .runtime/ferretdb-scorecard.txt
 
 # ... do your work ...
 
-# Verify AFTER your changes — must be >= baseline passes
+# Verify AFTER your changes  -- must be >= baseline passes
 make ferretdb-scorecard
 grep -E "Tests (passed|failed)" .runtime/ferretdb-scorecard.txt
 ```
@@ -94,7 +94,7 @@ the score backwards is worse than no push at all.
 1. Check your hooked bead: `gt hook`
 2. Run baseline scorecard and record pass count
 3. Make your change
-4. Run scorecard again — confirm pass count is equal or better
+4. Run scorecard again  -- confirm pass count is equal or better
 5. Push to main only when score has not regressed
 6. Report pass count delta to mayor in your completion mail
 
@@ -109,7 +109,7 @@ make ferretdb-scorecard
 The scorecard builds DumboDB, starts it, runs the FerretDB integration suite
 against it, and writes results to `.runtime/ferretdb-scorecard.txt`.
 
-## Critical: Local Runs ≠ CI — Do Not Remove from Skiplist Without CI Confirmation
+## Critical: Local Runs ≠ CI  -- Do Not Remove from Skiplist Without CI Confirmation
 
 **Never remove a test from `scripts/ferretdb-scorecard-skiplist.txt` based solely on a local run.**
 
@@ -118,7 +118,7 @@ but fail on CI due to resource constraints on GitHub Actions runners. Removing t
 skiplist breaks CI even when local runs look clean.
 
 **Required process for skiplist removals:**
-1. Fix the underlying issue and run locally — test must pass
+1. Fix the underlying issue and run locally  -- test must pass
 2. Push the fix to main (keep the test in the skiplist for now)
 3. Check the GitHub Actions `DumboDB FerretDB Scorecard` run for that push
 4. Only if CI shows no unexpected failures for that test → then remove it from the skiplist
@@ -129,4 +129,4 @@ Report to mayor in completion mail whether CI was verified or not.
 ## Current Goal
 
 Fix failing FerretDB integration tests one at a time. Use CI (GitHub Actions) as the
-source of truth — not local runs. Small, CI-verified improvements only.
+source of truth  -- not local runs. Small, CI-verified improvements only.

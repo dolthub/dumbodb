@@ -1670,10 +1670,10 @@ func computeLocf(expr any, partition []*types.Document) []any {
 	return vals
 }
 
-// computeTopBottom computes $top or $bottom — returns the output projection of the
+// computeTopBottom computes $top or $bottom  -- returns the output projection of the
 // first document after sorting window by spec.sortBy.
 // For $top: sort descending (highest first); but we respect whatever spec.sortBy says.
-// For $bottom: sort ascending (lowest first); same — respect spec.sortBy.
+// For $bottom: sort ascending (lowest first); same  -- respect spec.sortBy.
 // Both return the first element of the sorted window's output projection.
 func computeTopBottom(op string, spec topSpec, window []*types.Document) (any, error) {
 	if len(window) == 0 {

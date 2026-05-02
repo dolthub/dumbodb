@@ -50,11 +50,11 @@ After setup:
 
 ---
 
-## Scenario 1: Already up-to-date — merge_in branch is behind into branch
+## Scenario 1: Already up-to-date  -- merge_in branch is behind into branch
 
 Advance `main` past the feature branch point, then try to merge the now-behind
 `feature` branch into `main`. Since `feature` is an ancestor of `main`, there is
-nothing to merge — the result is "already up-to-date".
+nothing to merge  -- the result is "already up-to-date".
 
 ```js
 // Commit _id:2 on main (feature stays at C1, behind main).
@@ -75,14 +75,14 @@ Key checks:
 
 ---
 
-## Scenario 2: Fast-forward merge — bring feature up to date with main
+## Scenario 2: Fast-forward merge  -- bring feature up to date with main
 
 `feature` is behind `main` (still at C1, while main is at C2). Merging `main`
 into `feature` advances the feature pointer to main's HEAD without creating a
-merge commit — a fast-forward.
+merge commit  -- a fast-forward.
 
 ```js
-// Merge main (at C2) into feature (at C1) — feature fast-forwards.
+// Merge main (at C2) into feature (at C1)  -- feature fast-forwards.
 const rMerge2 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, merge_in: "main" })
 printjson(rMerge2)
 // Expected: { commitId: "<hashC2>", message: "fast-forward", ok: 1 }
@@ -90,7 +90,7 @@ printjson(rMerge2)
 
 Key checks:
 - `message` equals `"fast-forward"`
-- `commitId` equals `hashC2` (feature's HEAD advanced to main's commit — no new commit)
+- `commitId` equals `hashC2` (feature's HEAD advanced to main's commit  -- no new commit)
 
 Verify that `feature` now contains both documents:
 
@@ -101,7 +101,7 @@ db.getSiblingDB("mergedb@feature").inventory.countDocuments({})
 
 ---
 
-## Scenario 3: Already up-to-date — branches are now equal
+## Scenario 3: Already up-to-date  -- branches are now equal
 
 After the fast-forward in Scenario 2, `feature` and `main` point to the same commit.
 Merging either direction produces "already up-to-date".
@@ -119,7 +119,7 @@ Key checks:
 
 ---
 
-## Scenario 4: True three-way merge — diverged branches produce a merge commit
+## Scenario 4: True three-way merge  -- diverged branches produce a merge commit
 
 After Scenario 3, both `main` and `feature` are at C2. Commit a new document on
 each branch independently, then merge `feature` into `main`. Because neither
@@ -138,7 +138,7 @@ db.getSiblingDB("mergedb@feature").inventory.insertOne({ _id: 4, v: 4 })
 const r4 = db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "add-four", author: "carol <carol@startup.dev>" })
 const hashC4 = r4.commitId
 
-// Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
+// Merge feature (at C4) into main (at C3)  -- true three-way merge with custom message/author.
 const rMerge4 = db.getSiblingDB("mergedb@main").runCommand({
     doltMerge: 1,
     merge_in: "feature",
@@ -151,7 +151,7 @@ printjson(rMerge4)
 
 Key checks:
 - `message` equals `"custom merge msg"` (the custom message passed to `doltMerge`)
-- `commitId` is a new hash — different from both `hashC3` and `hashC4`
+- `commitId` is a new hash  -- different from both `hashC3` and `hashC4`
 
 Verify the merge commit has two parents and the custom message/author via `doltLog`:
 
@@ -178,7 +178,7 @@ db.getSiblingDB("mergedb@main").inventory.countDocuments({})
 
 ---
 
-## Scenario 5: Conflicting merge — both branches modify the same document
+## Scenario 5: Conflicting merge  -- both branches modify the same document
 
 When both branches independently modify the same document, `doltMerge` cannot
 auto-resolve the conflict. The response has `ok: 0` and includes a `conflicts`
@@ -194,7 +194,7 @@ db.getSiblingDB("mergedb@main").runCommand({ doltCommit: 1, message: "main-v10",
 db.getSiblingDB("mergedb@feature").inventory.updateOne({ _id: 1 }, { $set: { v: 20 } })
 db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "feature-v20", author: "bob" })
 
-// In mongosh, runCommand throws a MongoServerError when ok:0 — it does NOT return a document.
+// In mongosh, runCommand throws a MongoServerError when ok:0  -- it does NOT return a document.
 try {
   db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
 } catch (e) {
@@ -233,7 +233,7 @@ Key checks:
 
 ## Scenario 7: doltCommit rejected while conflicts remain
 
-While a merge is in progress, `doltCommit` is always rejected — even once all
+While a merge is in progress, `doltCommit` is always rejected  -- even once all
 conflicts are resolved. Use `doltMerge: 1, continue: 1` to finalize.
 
 ```js
@@ -253,7 +253,7 @@ Key checks:
 
 ---
 
-## Scenario 8: Resolve conflict — ours
+## Scenario 8: Resolve conflict  -- ours
 
 ```js
 // Resolve using our version (v:10).
@@ -271,7 +271,7 @@ After resolution, `doltConflicts` returns an empty `collections` array.
 
 ---
 
-## Scenario 9: Resolve conflict — theirs
+## Scenario 9: Resolve conflict  -- theirs
 
 ```js
 // (Re-create a conflict first as shown in Scenario 5.)
@@ -287,7 +287,7 @@ db.getSiblingDB("mergedb@main").runCommand({
 
 ---
 
-## Scenario 10: Resolve conflict — custom value
+## Scenario 10: Resolve conflict  -- custom value
 
 ```js
 // (Re-create a conflict as in Scenario 5.)
@@ -311,7 +311,7 @@ commit with both branch HEADs as parents. `message` and `author` are optional;
 if omitted, DumboDB generates the standard merge message and uses the default author.
 
 `doltCommit` is rejected throughout an in-progress merge (whether conflicts
-remain or not) — always use `continue` to finalize.
+remain or not)  -- always use `continue` to finalize.
 
 ```js
 // (All conflicts resolved in Scenario 8/9/10.)

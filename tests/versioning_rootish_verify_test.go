@@ -47,7 +47,7 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 	db := env.client.Database(dbName)
 	items := db.Collection("items")
 
-	// Drop any existing data (mirrors "Start fresh — drop if it exists").
+	// Drop any existing data (mirrors "Start fresh  -- drop if it exists").
 	require.NoError(t, db.Drop(ctx))
 
 	// Insert first document and commit.
@@ -91,7 +91,7 @@ func TestRootishVerify(t *testing.T) {
 	hash1, hash2 := rootishVerifySetup(t, env, dbName)
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: verifydb@main — reads and writes work
+	// Scenario 1: verifydb@main  -- reads and writes work
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_MainBranch_ReadsAndWritesWork", func(t *testing.T) {
 		main := env.client.Database(dbName + "@main")
@@ -129,7 +129,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: verifydb@v1%2E0 — reads and writes work, isolated from main
+	// Scenario 2: verifydb@v1%2E0  -- reads and writes work, isolated from main
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_BranchV1_ReadsWritesIsolated", func(t *testing.T) {
 		// Access the v1.0 branch via its percent-encoded name.
@@ -156,7 +156,7 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), nV1, "v1.0 items: expected 3 docs after insert")
 
-		// main is unchanged — the v1.0 write is isolated.
+		// main is unchanged  -- the v1.0 write is isolated.
 		nMain, err := mainItems.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), nMain, "main items: must still be 2 (v1.0 write must not leak)")
@@ -174,7 +174,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: verifydb@<hash> — correct snapshot, writes blocked, branch OK
+	// Scenario 3: verifydb@<hash>  -- correct snapshot, writes blocked, branch OK
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_CommitHash", func(t *testing.T) {
 		snap1DB := env.client.Database(dbName + "@" + hash1)
@@ -208,7 +208,7 @@ func TestRootishVerify(t *testing.T) {
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on hash rootish")
 
-		// dumboDBBranch: works — branch creation needs only a resolved commit address.
+		// dumboDBBranch: works  -- branch creation needs only a resolved commit address.
 		var branchResult bson.M
 		require.NoError(t, snap1DB.RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
@@ -223,7 +223,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: verifydb@main~1 — ancestor data, writes blocked, branch OK
+	// Scenario 4: verifydb@main~1  -- ancestor data, writes blocked, branch OK
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AncestorExpression", func(t *testing.T) {
 		parentDB := env.client.Database(dbName + "@main~1")
@@ -256,7 +256,7 @@ func TestRootishVerify(t *testing.T) {
 		}).Err()
 		assertWriteBlockedOperationFailed(t, err, "doltCurrentBranch on ancestor rootish")
 
-		// dumboDBBranch: works — ancestor expression resolves to a commit.
+		// dumboDBBranch: works  -- ancestor expression resolves to a commit.
 		var branchResult bson.M
 		require.NoError(t, parentDB.RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
@@ -271,7 +271,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: verifydb@HEAD — aliases main; HEAD~N aliases main~N.
+	// Scenario 5: verifydb@HEAD  -- aliases main; HEAD~N aliases main~N.
 	// HEAD^ and other caret forms are still rejected with code 96.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HEAD_AliasesMain", func(t *testing.T) {
@@ -301,12 +301,12 @@ func TestRootishVerify(t *testing.T) {
 		mainItems := env.client.Database(dbName + "@main").Collection("items")
 		nMain, err := mainItems.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
-		assert.Equal(t, int64(3), nMain, "HEAD write must be visible on main — same working set")
+		assert.Equal(t, int64(3), nMain, "HEAD write must be visible on main  -- same working set")
 
 		_, err = headItems.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(5)}})
 		require.NoError(t, err, "cleanup delete via HEAD must succeed")
 
-		// HEAD~1 aliases main~1 — read returns commit 1 state (one document),
+		// HEAD~1 aliases main~1  -- read returns commit 1 state (one document),
 		// writes blocked with code 96.
 		prevDB := env.client.Database(dbName + "@HEAD~1")
 		prevItems := prevDB.Collection("items")
@@ -323,7 +323,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: reflog — rejected on first command (code 96).
+	// Scenario 6: reflog  -- rejected on first command (code 96).
 	// Uses percent-encoded DB names matching the docs: raw @, {, }, space are
 	// invalid in mongosh DB names, so the docs show percent-encoded forms.
 	// Exercising the same encoded forms here proves a mongosh user following
@@ -336,7 +336,7 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: range — rejected on first command (code 96).
+	// Scenario 7: range  -- rejected on first command (code 96).
 	// Uses percent-encoded `.` (%2E) matching the docs: raw `.` is invalid in
 	// MongoDB DB names and rejected by mongosh client-side.
 	// -------------------------------------------------------------------------

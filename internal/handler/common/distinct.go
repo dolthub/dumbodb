@@ -117,7 +117,7 @@ func decimal128ToFloat64(d types.Decimal128) (float64, bool) {
 //     equality across types).
 //   - Decimal128 hashes by numeric value when convertible to float64; NaN /
 //     Infinity fall back to bit-level equality. Decimal128 only collides with
-//     other Decimal128s — matching the prior distinctContains carve-out.
+//     other Decimal128s  -- matching the prior distinctContains carve-out.
 //   - Strings, ObjectIDs, dates, binary, regex, timestamps, bool, null,
 //     min/max keys each occupy distinct buckets via a leading tag byte.
 func distinctKey(v any) ([]byte, bool) {
@@ -199,7 +199,7 @@ func distinctKey(v any) ([]byte, bool) {
 		b[0] = tagDecimal128
 		if f, ok := decimal128ToFloat64(val); ok {
 			binary.BigEndian.PutUint64(b[1:9], math.Float64bits(f))
-			// remaining 8 bytes left zero — convertible decimals share key
+			// remaining 8 bytes left zero  -- convertible decimals share key
 		} else {
 			binary.BigEndian.PutUint64(b[1:9], val.H)
 			binary.BigEndian.PutUint64(b[9:17], val.L)

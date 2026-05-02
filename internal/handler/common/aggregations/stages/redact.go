@@ -31,9 +31,9 @@ import (
 //	{ $redact: <expression> }
 //
 // The expression must evaluate to one of:
-//   - "$$PRUNE"   — exclude this document/sub-document
-//   - "$$KEEP"    — include this document as-is (no recursion)
-//   - "$$DESCEND" — include this document and recurse into sub-documents
+//   - "$$PRUNE"    -- exclude this document/sub-document
+//   - "$$KEEP"     -- include this document as-is (no recursion)
+//   - "$$DESCEND"  -- include this document and recurse into sub-documents
 type redactStage struct {
 	expr any
 }
@@ -193,7 +193,7 @@ func evalRedactExpr(expr any, doc *types.Document) (string, error) {
 			return e, nil
 		}
 
-		// Field path expression — evaluate it.
+		// Field path expression  -- evaluate it.
 		aggExpr, err := aggregations.NewExpression(e, nil)
 		if err != nil {
 			return "", handlererrors.NewCommandErrorMsgWithArgument(

@@ -121,7 +121,7 @@ func toDecimalVal(v any) (decimalVal, bool) {
 		m, exp, err := p.BigInt()
 
 		if err != nil {
-			// NaN or Inf — skip
+			// NaN or Inf  -- skip
 			return decimalVal{}, false
 		}
 
@@ -190,7 +190,7 @@ func avgDecimal128(vs []any) types.Decimal128 {
 
 	m, exp, err := p.BigInt()
 	if err != nil {
-		// NaN or Inf — return zero.
+		// NaN or Inf  -- return zero.
 		p2, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 		h, l := p2.GetBytes()
 
@@ -400,7 +400,7 @@ func sumDecimal128(vs []any) types.Decimal128 {
 	// totalM * 10^minExp is the result.
 	p, ok := bson.ParseDecimal128FromBigInt(totalM, minExp)
 	if !ok {
-		// Overflow — return Decimal128 zero as fallback.
+		// Overflow  -- return Decimal128 zero as fallback.
 		p, _ = bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
 	}
 

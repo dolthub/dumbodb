@@ -169,7 +169,7 @@ func RangeLookup(ctx context.Context, m prolly.Map, startKey, stopKey []byte) ([
 // RangeLookupCapped is like RangeLookup but aborts as soon as the result count
 // exceeds maxResults. The caller signals "no cap" with maxResults < 0. When
 // the cap is exceeded, exceeded is true and the (partial) results slice is
-// returned for the caller to discard — no further index work is done.
+// returned for the caller to discard  -- no further index work is done.
 //
 // The cap exists so a low-selectivity filter (e.g. {$gte: 0} that matches
 // every document) doesn't pay the full scan-then-point-fetch cost just to
@@ -240,7 +240,7 @@ func rangeLookupCapped(ctx context.Context, m prolly.Map, startKey, stopKey []by
 // RangeCount returns the number of secondary index entries whose composite
 // key falls in [startKey, stopKey). A nil or empty bound is open on that side.
 // Iteration uses prolly.Map.IterKeyRange, but unlike RangeLookup this does not
-// extract or copy the primary key bytes — it only counts entries, so the cost
+// extract or copy the primary key bytes  -- it only counts entries, so the cost
 // is the index walk itself with no per-entry primary fetch.
 func RangeCount(ctx context.Context, m prolly.Map, startKey, stopKey []byte) (int64, error) {
 	startTup, err := boundTuple(startKey)

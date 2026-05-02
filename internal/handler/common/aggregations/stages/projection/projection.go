@@ -310,7 +310,7 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 // output document; exclusion starts from a single deep copy of doc (minus
 // _id) and removes excluded fields in place. A previous implementation
 // deep-copied doc, projection, and (on exclusion) the already-copied doc
-// again on every input document — a hot-path cost that dominated $project.
+// again on every input document  -- a hot-path cost that dominated $project.
 func projectDocumentWithoutID(doc *types.Document, projection *types.Document, inclusion bool) (*types.Document, error) {
 	var projected *types.Document
 	if inclusion {

@@ -52,7 +52,7 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 			arrayPath := strings.Join(parts[:i], ".")
 
 			if identifier == "" {
-				// $[] — all positional
+				// $[]  -- all positional
 				arr, err := getArrayByPath(doc, arrayPath)
 				if err != nil {
 					return nil, lazyerrors.Error(err)
@@ -70,7 +70,7 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 				return result, nil
 			}
 
-			// $[identifier] — filtered positional
+			// $[identifier]  -- filtered positional
 			arr, err := getArrayByPath(doc, arrayPath)
 			if err != nil {
 				return nil, lazyerrors.Error(err)
@@ -92,14 +92,14 @@ func expandPositionalOps(key string, doc *types.Document, filter *types.Document
 			return result, nil
 
 		case part == "$":
-			// $ — positional first match
+			// $  -- positional first match
 			arrayPath := strings.Join(parts[:i], ".")
 			idx, err := findFirstMatchingIndex(arrayPath, doc, filter)
 			if err != nil {
 				return nil, err
 			}
 			if idx < 0 {
-				// No matching element found — no update.
+				// No matching element found  -- no update.
 				return nil, nil
 			}
 			expanded := make([]string, len(parts))

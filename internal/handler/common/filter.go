@@ -884,7 +884,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 		// $maxDistance and $minDistance are consumed by $near/$nearSphere above.
 		case "$maxDistance", "$minDistance":
-			// skip — handled as sibling keys within $near / $nearSphere
+			// skip  -- handled as sibling keys within $near / $nearSphere
 
 		default:
 			return false, handlererrors.NewCommandErrorMsgWithArgument(
@@ -2023,7 +2023,7 @@ func textContainsWord(s, word string, caseSensitive, diacriticSensitive bool) bo
 		word = strings.ToLower(word)
 	}
 
-	// If the term contains spaces, it's a quoted phrase — use substring matching.
+	// If the term contains spaces, it's a quoted phrase  -- use substring matching.
 	if strings.ContainsRune(word, ' ') {
 		return strings.Contains(s, word)
 	}

@@ -177,7 +177,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 			fmt.Errorf("dolt: collection %q already exists in %q", params.Name, db.name))
 	}
 
-	// If viewOn is set, this is a view — store metadata only, no prolly map.
+	// If viewOn is set, this is a view  -- store metadata only, no prolly map.
 	if params.ViewOn != "" {
 		state.views[params.Name] = &viewMeta{
 			ViewOn:   params.ViewOn,

@@ -153,7 +153,7 @@ func rawBSONValueSize(data []byte, t byte) (int, error) {
 		return 8, nil
 	case 0x0A: // null
 		return 0, nil
-	case 0x0B: // regex — two null-terminated strings
+	case 0x0B: // regex  -- two null-terminated strings
 		n := 0
 		for n < len(data) && data[n] != 0 {
 			n++

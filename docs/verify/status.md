@@ -35,11 +35,11 @@ db.items.insertOne({ _id: 1, label: "alpha", score: 10 })
 db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 ```
 
-After setup, the working set matches HEAD — no uncommitted changes.
+After setup, the working set matches HEAD  -- no uncommitted changes.
 
 ---
 
-## Scenario 1: Status on clean repo — empty collections
+## Scenario 1: Status on clean repo  -- empty collections
 
 After committing, the working set matches HEAD. `doltStatus` reports no changed
 collections.
@@ -61,7 +61,7 @@ Key checks:
 
 ---
 
-## Scenario 2: Status after insert — new collection appears as "added" with counts
+## Scenario 2: Status after insert  -- new collection appears as "added" with counts
 
 Inserting into a collection that has no HEAD state marks it as `"added"`. The
 per-collection counts report one added document.
@@ -90,7 +90,7 @@ Key checks:
 
 ---
 
-## Scenario 3: Status after update — modified collection appears as "modified"
+## Scenario 3: Status after update  -- modified collection appears as "modified"
 
 After committing the previous working set, modifying a committed collection
 marks it as `"modified"` with `modified: 1`.
@@ -123,7 +123,7 @@ Key checks:
 
 ---
 
-## Scenario 4: Status after delete — removed collection appears as "deleted"
+## Scenario 4: Status after delete  -- removed collection appears as "deleted"
 
 Deleting all documents from a collection (effectively removing it from the
 working set) marks it as `"deleted"`. The count of removed documents is
@@ -157,7 +157,7 @@ Key checks:
 
 ---
 
-## Scenario 5: Status after commit — clean again
+## Scenario 5: Status after commit  -- clean again
 
 After committing the deletion, the working set matches HEAD and `doltStatus`
 reports no changes.
@@ -175,7 +175,7 @@ Expected:
 ```
 
 Key checks:
-- `collections` is empty — all collections are in sync with HEAD
+- `collections` is empty  -- all collections are in sync with HEAD
 
 ---
 
@@ -239,10 +239,10 @@ Key checks:
 
 ---
 
-## Scenario 7: Multi-field modification — one modified doc, not many
+## Scenario 7: Multi-field modification  -- one modified doc, not many
 
-Changing several fields in a single document — mixing added fields, modified
-fields, and unset fields — still counts as exactly **one** modified document.
+Changing several fields in a single document  -- mixing added fields, modified
+fields, and unset fields  -- still counts as exactly **one** modified document.
 doltStatus counts docs, not fields; for field-level detail, use `doltDiff`.
 
 ```js
@@ -272,7 +272,7 @@ Expected:
 
 Key checks:
 - `modified: 1`, regardless of how many fields changed in the doc
-- `added` stays 0 — a new field on an existing doc is not a new doc
+- `added` stays 0  -- a new field on an existing doc is not a new doc
 
 > **Why fields don't show up here:** `doltStatus` answers "which documents changed?"
 > A document with a new field, a renamed field, and a removed field is still the same
@@ -280,7 +280,7 @@ Key checks:
 
 ---
 
-## Scenario 8: Status on a read-only rootish — clear error
+## Scenario 8: Status on a read-only rootish  -- clear error
 
 `doltStatus` compares the working set against HEAD, but a connection pinned to a
 commit hash or ancestor expression (e.g. `mydb@<hash>` or `mydb@main~1`)
@@ -350,4 +350,4 @@ Key checks:
 | Commit hash | `mydb@<32-char hash>` | ❌ code 96 "no working set" |
 | Ancestor expression | `mydb@main~1` | ❌ code 96 "no working set" |
 
-`doltStatus` is a working-set concept — only writable rootish forms have one.
+`doltStatus` is a working-set concept  -- only writable rootish forms have one.

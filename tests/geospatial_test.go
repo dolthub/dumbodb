@@ -145,8 +145,8 @@ func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 
 	// Three cities stored as legacy [lon, lat] arrays.
 	// London [-0.12, 51.50] is the query origin (distance 0).
-	// Paris  [ 2.35, 48.85] is ~340 km from London — inside the 15° radius.
-	// Moscow [37.62, 55.75] is ~2500 km from London — outside the 15° radius.
+	// Paris  [ 2.35, 48.85] is ~340 km from London  -- inside the 15° radius.
+	// Moscow [37.62, 55.75] is ~2500 km from London  -- outside the 15° radius.
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", bson.A{float64(-0.12), float64(51.50)})), // London
 		d(e("_id", int32(2)), e("loc", bson.A{float64(2.35), float64(48.85)})),  // Paris

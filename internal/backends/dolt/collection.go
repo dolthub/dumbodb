@@ -154,7 +154,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	//
 	// Under case-insensitive collation the handler will re-check matches
 	// against a regex substitution of the filter, so byte-level equality is
-	// not a sound lower bound — skip the prefilter.
+	// not a sound lower bound  -- skip the prefilter.
 	var pf func([]byte) bool
 	if params != nil && !onlyRecordIDs && !params.CaseInsensitive {
 		pf = buildScanPrefilter(params.Filter)
@@ -166,7 +166,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 }
 
 // buildScanPrefilter returns a byte-level predicate over a document's raw
-// canonical Extended JSON bytes that is sound for the given filter — i.e. if
+// canonical Extended JSON bytes that is sound for the given filter  -- i.e. if
 // the predicate returns false, the document is guaranteed not to match.
 // Returns nil when no sound prefilter can be built (complex filter, null
 // value, unsupported type, ambiguous numeric, etc.); in that case the scan
@@ -180,7 +180,7 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 	// One predicate per top-level field clause. All AND-combined.
 	preds := make([]func([]byte) bool, 0, len(keys))
 	for _, field := range keys {
-		// $and/$or/$comment/etc. — bail out and let the handler filter.
+		// $and/$or/$comment/etc.  -- bail out and let the handler filter.
 		if strings.HasPrefix(field, "$") {
 			return nil
 		}
@@ -252,7 +252,7 @@ func substringAltsPredicate(alts [][]byte) func([]byte) bool {
 func extJSONFieldPatterns(field string, value any) [][]byte {
 	switch v := value.(type) {
 	case *types.Document:
-		// Operator form like {$eq: x} / {$gt: x} — downstream has to decide.
+		// Operator form like {$eq: x} / {$gt: x}  -- downstream has to decide.
 		return nil
 	case *types.Array, types.NullType:
 		return nil
@@ -261,7 +261,7 @@ func extJSONFieldPatterns(field string, value any) [][]byte {
 	case int64:
 		return numericFieldPatterns(field, v, float64(v), false)
 	case float64:
-		if v != v || v-v != 0 { // NaN or ±Inf — ExtJSON has special forms.
+		if v != v || v-v != 0 { // NaN or ±Inf  -- ExtJSON has special forms.
 			return nil
 		}
 		asInt := int64(v)
@@ -275,7 +275,7 @@ func extJSONFieldPatterns(field string, value any) [][]byte {
 		return [][]byte{p}
 	case types.Regex:
 		// Regex in a filter value means pattern match, not literal
-		// equality — byte-level substring check isn't sound.
+		// equality  -- byte-level substring check isn't sound.
 		return nil
 	default:
 		return nil
@@ -398,7 +398,7 @@ func buildNumericRangePredicate(field string, opDoc *types.Document) func([]byte
 			// numeric range operators don't match docs without the field.
 			return false
 		}
-		// rangeProbeFound — compare against bounds. NaN comparisons return
+		// rangeProbeFound  -- compare against bounds. NaN comparisons return
 		// false, which correctly rejects (NaN never matches a range).
 		if hasLo {
 			if loIncl {
@@ -429,7 +429,7 @@ func buildNumericRangePredicate(field string, opDoc *types.Document) func([]byte
 // numericBoundToFloat64 converts a filter-side bound value to float64 only
 // when the conversion is exact and the value is finite. Returns ok=false
 // for non-numeric types, NaN/Inf, decimal128, or int64 that loses precision
-// in float64 — in those cases the prefilter must bail entirely so we don't
+// in float64  -- in those cases the prefilter must bail entirely so we don't
 // risk a false negative against a doc whose stored value can't be
 // represented exactly in float64 either.
 func numericBoundToFloat64(v any) (float64, bool) {
@@ -481,13 +481,13 @@ func tightenUpperBound(curHas bool, curVal float64, curIncl bool, nv float64, nI
 type rangeProbeStatus int
 
 const (
-	// rangeProbeFound — top-level field located and parsed as a finite
+	// rangeProbeFound  -- top-level field located and parsed as a finite
 	// numeric. The float64 return is the parsed value.
 	rangeProbeFound rangeProbeStatus = iota
-	// rangeProbeMissing — top-level field is provably absent from the
+	// rangeProbeMissing  -- top-level field is provably absent from the
 	// document's outer object. A range filter never matches such docs.
 	rangeProbeMissing
-	// rangeProbeBail — the JSON shape, value type, or numeric precision
+	// rangeProbeBail  -- the JSON shape, value type, or numeric precision
 	// can't be modeled by the byte-level predicate. The caller must treat
 	// the doc as a possible match (permissive true) and let the handler's
 	// FilterIterator re-validate.
@@ -500,7 +500,7 @@ const (
 //
 //   - parses the outer object only (depth 1 keys); embedded sub-documents
 //     never affect the outcome, so a doc like {"a":{"i":99},"i":3} reports
-//     i=3 — never i=99.
+//     i=3  -- never i=99.
 //   - recognises only the canonical numeric wrappers $numberInt /
 //     $numberLong / $numberDouble; any other value shape (sub-doc, array,
 //     string, null, $numberDecimal, $oid, $date, …) returns rangeProbeBail.
@@ -707,7 +707,7 @@ var (
 // rangeProbeBail so the predicate stays permissive.
 //
 // Long ints whose magnitude exceeds the float64 mantissa precision and
-// double values that are NaN/±Inf also bail — the comparison would not be
+// double values that are NaN/±Inf also bail  -- the comparison would not be
 // exact, so we let the FilterIterator validate them.
 func parseNumericExtJSONValue(b []byte) (float64, rangeProbeStatus) {
 	var prefix []byte
@@ -727,7 +727,7 @@ func parseNumericExtJSONValue(b []byte) (float64, rangeProbeStatus) {
 		return 0, rangeProbeBail
 	}
 	inner := b[len(prefix) : len(b)-len(extJSONNumberSuffix)]
-	// Reject any quote inside the inner literal — canonical wrappers are
+	// Reject any quote inside the inner literal  -- canonical wrappers are
 	// {"$numberX":"<digits-or-float-literal>"} with no nested quotes.
 	if bytes.IndexByte(inner, '"') >= 0 {
 		return 0, rangeProbeBail
@@ -757,7 +757,7 @@ func parseNumericExtJSONValue(b []byte) (float64, rangeProbeStatus) {
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
 // concrete scalar value that can be hashed into a primary key. It rejects
 // operator forms ({_id: {$eq: x}}), array equality ({_id: [1,2]}), and null.
-// Other filter fields are allowed — the handler re-checks them on the result.
+// Other filter fields are allowed  -- the handler re-checks them on the result.
 func simpleIDEquality(filter *types.Document) (any, bool) {
 	v, err := filter.Get("_id")
 	if err != nil {
@@ -765,7 +765,7 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 	}
 	switch val := v.(type) {
 	case *types.Document:
-		// {$eq: x} / {$gt: x} / etc. — let the full scan handle it.
+		// {$eq: x} / {$gt: x} / etc.  -- let the full scan handle it.
 		for _, k := range val.Keys() {
 			if strings.HasPrefix(k, "$") {
 				return nil, false
@@ -858,7 +858,7 @@ func (it *singleDocIter) Close() {}
 // set. The returned docs are a superset of the matches: the handler's
 // FilterIterator re-validates every document against the full filter, so any
 // false positives the index lookup admits (e.g. compound filters where only
-// one field is indexed) are filtered out downstream. The lookup is sound — it
+// one field is indexed) are filtered out downstream. The lookup is sound  -- it
 // never drops a matching document.
 //
 // Returns (nil, false, nil) if no suitable index was found (caller should fall
@@ -899,7 +899,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 
 	for _, k := range filter.Keys() {
 		// Top-level $-operators ($and/$or/$nor/$comment/...) make the
-		// per-field analysis below unsound — bail.
+		// per-field analysis below unsound  -- bail.
 		if strings.HasPrefix(k, "$") {
 			return nil, false, nil
 		}
@@ -1011,7 +1011,7 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	if !isOp {
 		// Bare scalar equality. types.Null and array equality have semantics
 		// (e.g. matching missing fields, element-wise array match) that the
-		// byte-level index can't reproduce — skip and let the scan path
+		// byte-level index can't reproduce  -- skip and let the scan path
 		// handle them.
 		switch v.(type) {
 		case nil, types.NullType, *types.Array:
@@ -1445,11 +1445,11 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	// Wrap the updated map in a DTBL chunk and update the address map.
 	// autoCommit=true means "create a dolt commit on every write," which already
-	// triggers its own NBS journal fsync — deferring the working-set update but
+	// triggers its own NBS journal fsync  -- deferring the working-set update but
 	// still committing synchronously would leave the history and working set
 	// inconsistent, so we only honor SkipDurableSync when autoCommit is off.
 	// Maintain secondary indexes for any documents we just inserted, then
-	// persist the updated index maps before we build the DTBL — the DTBL's
+	// persist the updated index maps before we build the DTBL  -- the DTBL's
 	// SecondaryIndexes field needs to reflect the post-insert state so that a
 	// later reopen sees the inserted entries in every index.
 	if err := c.updateSecondaryIndexesOnInsert(ctx, state, params.Docs); err != nil {
@@ -1870,7 +1870,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	// Persist secondary indexes through the DTBL write so any in-memory
 	// updates survive restart (DeleteAll itself does not yet rebuild index
-	// entries — tracked separately).
+	// entries  -- tracked separately).
 	if err := state.persistIndexes(ctx, c.name); err != nil {
 		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
 	}
@@ -1906,7 +1906,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 // Filtered counts attempt an index-only path: when the filter is exactly one
 // top-level field whose value shape produces sound index bounds (equality or
 // supported range), and that field has a single-field secondary index, the
-// count is the size of the index range — no documents are fetched or
+// count is the size of the index range  -- no documents are fetched or
 // decoded. Filtered=true is set on the result. Any other shape (compound
 // filter, dotted paths, $and/$or, no covering index, …) is declined with
 // Filtered=false and Count=0; the handler must scan.
@@ -1917,7 +1917,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 	}
 
 	if !exists {
-		// Honor a filter on a missing collection by reporting 0 matches —
+		// Honor a filter on a missing collection by reporting 0 matches  --
 		// avoids an unnecessary fallback scan in the handler.
 		if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
 			return &backends.CountResult{Count: 0, Filtered: true}, nil
@@ -1953,7 +1953,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 // requirements are stricter than tryIndexLookup (which can rely on the
 // handler's FilterIterator for re-validation).
 //
-// Returns (0, false, nil) when the filter shape is unsupported — caller
+// Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
 func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document) (int64, bool, error) {
 	if filter == nil || filter.Len() != 1 {
@@ -2001,7 +2001,7 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	// indexBoundsForFilterValue admits operator docs that combine bounds
-	// like {$gte: 1, $lt: 10}. For a count those are still sound — the
+	// like {$gte: 1, $lt: 10}. For a count those are still sound  -- the
 	// returned range is exactly the matching index entries. But it also
 	// admits the bare-scalar case where the index range may include
 	// false positives if the index encoding loses information. Today
@@ -2093,7 +2093,7 @@ func (c *collection) Compact(ctx context.Context, params *backends.CompactParams
 // original BSON value. Avoids reading every document and the O(n) primary
 // fetches a full collection scan would do.
 //
-// Returns (nil, nil) when the request can't be served from an index — no
+// Returns (nil, nil) when the request can't be served from an index  -- no
 // matching single-field index, partial filter that would drop rows, dotted
 // key, geospatial / text / hashed key. The handler falls back to Query in
 // that case.
@@ -2140,7 +2140,7 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		if kp.Hashed || kp.Text || kp.Geo2D || kp.Geo2DSphere {
 			continue
 		}
-		// Partial indexes only cover a subset of documents — a distinct
+		// Partial indexes only cover a subset of documents  -- a distinct
 		// scan over them would silently drop values from non-matching docs.
 		// Sparse indexes are fine because distinct already ignores missing
 		// fields.
@@ -2231,7 +2231,7 @@ func scanDistinctFromIndex(
 		if err != nil {
 			return nil, err
 		}
-		// A nil val means the document is missing the indexed field —
+		// A nil val means the document is missing the indexed field  --
 		// distinct ignores that case (matching FilterDistinctValues
 		// semantics). Sparse indexes won't produce these entries; for
 		// non-sparse indexes we still skip them.
@@ -2384,7 +2384,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 	state.indexes[c.name] = existing
 
 	// Build prolly.Map secondary indexes for newly added indexes by scanning
-	// the primary map. Errors are returned to the caller — a half-built index
+	// the primary map. Errors are returned to the caller  -- a half-built index
 	// would silently miss matches and return wrong results from later queries.
 	for _, idx := range params.Indexes {
 		if idx.Name == backends.DefaultIndexName {
@@ -2420,7 +2420,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 // after CreateIndexes / DropIndexes so an index-only change is durable.
 //
 // If the collection has no primary map yet (no inserts have happened) it
-// uses a freshly created empty map — the same path as loadOrCreateMap.
+// uses a freshly created empty map  -- the same path as loadOrCreateMap.
 //
 // The caller must hold state.mu (write lock).
 func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState) error {
@@ -2859,7 +2859,7 @@ func decodeDocument(data []byte) (*types.Document, error) {
 		return doc, nil
 	}
 
-	// No MinKey/MaxKey — use the normal path.
+	// No MinKey/MaxKey  -- use the normal path.
 	doc, err = bson.ToDocument(wirebson.RawDocument(data))
 	if err != nil {
 		return nil, fmt.Errorf("dolt: decoding document: %w", err)
@@ -2888,7 +2888,7 @@ type mapIter struct {
 	// prefilter, if non-nil, is a cheap byte-level check applied to each
 	// document's raw canonical Extended JSON before the expensive decode.
 	// Returning false means "definitely doesn't match the filter"; returning
-	// true means "may match — run the full filter downstream." A nil
+	// true means "may match  -- run the full filter downstream." A nil
 	// prefilter keeps the unconditional full-scan behavior.
 	prefilter func([]byte) bool
 }

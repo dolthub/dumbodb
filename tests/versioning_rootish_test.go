@@ -143,7 +143,7 @@ func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 	dbName := "parityreg_sometest@1775505756999075683"
 	coll := env.client.Database(dbName).Collection("col")
 
-	// Insert must succeed — the numeric suffix must NOT be misinterpreted as a branch.
+	// Insert must succeed  -- the numeric suffix must NOT be misinterpreted as a branch.
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "hello"}})
 	require.NoError(t, err, "insert to all-digit-suffix DB must not fail with branch-not-found")
 

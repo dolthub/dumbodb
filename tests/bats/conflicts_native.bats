@@ -63,14 +63,14 @@ mongosh_eval() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    # C2: advance main — update _id:1 to v:10.
+    # C2: advance main  -- update _id:1 to v:10.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 10}});
         db.runCommand({dumboCommit: 1, message: "C2-main", author: "alice <a@t>"});
     '
     [ "$status" -eq 0 ]
 
-    # C3: advance feature — update _id:1 to v:20.
+    # C3: advance feature  -- update _id:1 to v:20.
     run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 20}});
         db.runCommand({dumboCommit: 1, message: "C3-feat", author: "bob <b@t>"});
@@ -81,7 +81,7 @@ mongosh_eval() {
     run mongosh_eval "$main_db" '
         try { JSON.stringify(db.runCommand({doltMerge: 1, merge_in: "feature", message: "merge", author: "alice <a@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
-    # ok:0 is expected; doltMerge exits non-zero on conflict — status allowed.
+    # ok:0 is expected; doltMerge exits non-zero on conflict  -- status allowed.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'
 
     # ---- Wire: doltConflicts must report 1 conflict in "items" ---------------
@@ -153,7 +153,7 @@ mongosh_eval() {
     hash_c2="$(echo "$output" | jq -r '.commitId')"
     [ -n "$hash_c2" ] && [ "$hash_c2" != "null" ]
 
-    # C3 on main: update _id:1 to v:main — creates divergence.
+    # C3 on main: update _id:1 to v:main  -- creates divergence.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 42}});
         db.runCommand({dumboCommit: 1, message: "C3-main", author: "alice <a@t>"});
@@ -225,14 +225,14 @@ mongosh_eval() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    # C2 on feature: update _id:1 to v:feature — the commit to be replayed.
+    # C2 on feature: update _id:1 to v:feature  -- the commit to be replayed.
     run mongosh_eval "test@feature" '
         db.items.updateOne({_id: 1}, {$set: {v: 55}});
         db.runCommand({dumboCommit: 1, message: "C2-feat", author: "bob <b@t>"});
     '
     [ "$status" -eq 0 ]
 
-    # C3 on main: update _id:1 to v:main — creates conflict when C2 is replayed.
+    # C3 on main: update _id:1 to v:main  -- creates conflict when C2 is replayed.
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 1}, {$set: {v: 77}});
         db.runCommand({dumboCommit: 1, message: "C3-main", author: "alice <a@t>"});
@@ -302,7 +302,7 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
 
-    # C2: add {_id:2, v:2} — this is the commit we will revert.
+    # C2: add {_id:2, v:2}  -- this is the commit we will revert.
     run mongosh_eval "$main_db" '
         db.items.insertOne({_id: 2, v: 2});
         JSON.stringify(db.runCommand({dumboCommit: 1, message: "C2-add-two", author: "bob <b@t>"}))
@@ -312,7 +312,7 @@ mongosh_eval() {
     hash_c2="$(echo "$output" | jq -r '.commitId')"
     [ -n "$hash_c2" ] && [ "$hash_c2" != "null" ]
 
-    # C3: modify {_id:2, v:99} on main — creates conflict when we revert C2
+    # C3: modify {_id:2, v:99} on main  -- creates conflict when we revert C2
     # (revert would delete _id:2, but main has since modified it, so conflict).
     run mongosh_eval "$main_db" '
         db.items.updateOne({_id: 2}, {$set: {v: 99}});

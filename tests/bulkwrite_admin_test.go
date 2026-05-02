@@ -25,7 +25,7 @@ import (
 
 // TestAdminBulkWrite_InsertUpdateDelete exercises the MongoDB 8.0 server-side
 // bulkWrite command against two collections in the same database. The driver
-// exposes this as `admin.runCommand({bulkWrite: 1, ...})` — note that this is
+// exposes this as `admin.runCommand({bulkWrite: 1, ...})`  -- note that this is
 // distinct from the driver-level Collection.BulkWrite, which decomposes into
 // individual write commands and is covered by TestCRUD_BulkWrite_*.
 func TestAdminBulkWrite_InsertUpdateDelete(t *testing.T) {
@@ -81,7 +81,7 @@ func TestAdminBulkWrite_InsertUpdateDelete(t *testing.T) {
 }
 
 // TestAdminBulkWrite_OrderedStopsOnError verifies that the ordered flag causes
-// bulkWrite to stop after the first failing op — the third op (a delete) must
+// bulkWrite to stop after the first failing op  -- the third op (a delete) must
 // not execute when the second op (duplicate insert) fails.
 func TestAdminBulkWrite_OrderedStopsOnError(t *testing.T) {
 	env := startDumboDB(t)

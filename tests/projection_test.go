@@ -173,7 +173,7 @@ func TestProjection_ElemMatch_NoMatchInDoc(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	// $elemMatch with condition {$gt: 10} — no element qualifies.
+	// $elemMatch with condition {$gt: 10}  -- no element qualifies.
 	cursor, err := coll.Find(ctx, bson.D{},
 		options.Find().SetProjection(d(
 			e("nums", d(e("$elemMatch", d(e("$gt", int32(10)))))),
@@ -224,7 +224,7 @@ func TestSort_FourFields(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &results))
 	require.Len(t, results, 4)
 
-	// Expected order: id=4 (a=1,b=1,c=1,x=40 — wait, the only doc with a=1,b=1,c=1 is id=4 so it comes before id=2 (a=1,b=1,c=2).
+	// Expected order: id=4 (a=1,b=1,c=1,x=40  -- wait, the only doc with a=1,b=1,c=1 is id=4 so it comes before id=2 (a=1,b=1,c=2).
 	// Full expected: 4 (1,1,1,40) → 2 (1,1,2,20) → 1 (1,2,1,10) → 3 (2,1,1,30).
 	expectedIDs := []int32{4, 2, 1, 3}
 	for i, doc := range results {

@@ -45,7 +45,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			return op.Process(doc)
 		}
 
-		// Non-operator document: treat as an expression object — each value is an expression.
+		// Non-operator document: treat as an expression object  -- each value is an expression.
 		return evalDocumentExpressions(v, doc)
 
 	case string:
@@ -59,7 +59,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 
 				varVal, err := doc.Get(varKey)
 				if err != nil {
-					// Unknown variable — treat as a literal string.
+					// Unknown variable  -- treat as a literal string.
 					return v, nil
 				}
 
@@ -83,7 +83,7 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 
 			val, err := doc.Get(v)
 			if err != nil {
-				// Unknown variable — treat as a literal system variable string (e.g. $$PRUNE, $$KEEP,
+				// Unknown variable  -- treat as a literal system variable string (e.g. $$PRUNE, $$KEEP,
 				// $$DESCEND, $$REMOVE) so that operators like $redact can inspect the value.
 				return v, nil
 			}

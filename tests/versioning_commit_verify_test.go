@@ -77,7 +77,7 @@ func TestCommitVerify(t *testing.T) {
 	_ = hashBase
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Response shape — hash, branch, message, author, timestamp, ok
+	// Scenario 1: Response shape  -- hash, branch, message, author, timestamp, ok
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_ResponseShape", func(t *testing.T) {
 		// Insert a doc so the commit has a pending change (the new doltCommit
@@ -110,7 +110,7 @@ func TestCommitVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: Commit on a named branch — data is committed to that branch
+	// Scenario 2: Commit on a named branch  -- data is committed to that branch
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_NamedBranch_CommitGoesToBranch", func(t *testing.T) {
 		// Create a "feature" branch from main HEAD.
@@ -131,7 +131,7 @@ func TestCommitVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Commit on feature — verify response shape.
+		// Commit on feature  -- verify response shape.
 		var commitResult bson.M
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
@@ -264,7 +264,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.NotEqual(t, headBefore, emptyHash,
 			"allowEmpty commit must advance HEAD to a new hash")
 
-		// 4c: another bare empty commit after 4b still fails — the empty commit
+		// 4c: another bare empty commit after 4b still fails  -- the empty commit
 		// did not introduce a "pending change" gate that would now be satisfied.
 		var rejected2 bson.M
 		err2 := env.client.Database(dbName).RunCommand(ctx, bson.D{
@@ -294,7 +294,7 @@ func TestCommitVerify(t *testing.T) {
 		// Commit current state and save hashBefore.
 		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@acme.com>")
 
-		// Insert _id:99 and commit — save hashAfter.
+		// Insert _id:99 and commit  -- save hashAfter.
 		_, err = env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(99)},
 			{Key: "label", Value: "new"},

@@ -59,7 +59,7 @@ func TestDistinctSet_TypeBuckets(t *testing.T) {
 	s.add(types.MaxKey)
 
 	// nil and types.Null collapse; "5" / int 5 / true / false / min / max
-	// each produce their own bucket — 7 entries total.
+	// each produce their own bucket  -- 7 entries total.
 	if got, want := s.array().Len(), 7; got != want {
 		t.Fatalf("expected %d distinct, got %d", want, got)
 	}

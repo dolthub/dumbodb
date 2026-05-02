@@ -11,7 +11,7 @@ DumboDB supports two concurrency models, selected at server startup:
 ### Default mode (no flag)
 
 MongoDB-compatible transactions via `startTransaction` / `commitTransaction` /
-`abortTransaction`. Uses **pessimistic document-level locking** — when a
+`abortTransaction`. Uses **pessimistic document-level locking**  -- when a
 transaction writes to a document, other transactions that try to write to the
 same document **block** until the first transaction commits or aborts. If the
 lock wait exceeds a timeout, the blocked transaction gets a `WriteConflict`
@@ -26,7 +26,7 @@ document-level mutex, same as MongoDB's default.
 ### `--session-isolation` mode
 
 Version-control-native isolation via `doltCommit`. Uses **optimistic concurrency
-with three-way merge** — each session works on its own forked snapshot. At
+with three-way merge**  -- each session works on its own forked snapshot. At
 `doltCommit` time, changes are merged back using the fork point as the common
 ancestor. If two sessions modified the same document, the second committer gets
 a merge conflict (surfaced via `doltConflicts`).
@@ -64,7 +64,7 @@ both modes. In default mode:
   added to a per-branch lock set. Other transactions that try to write to the
   same `_id` receive `WriteConflict` (error code 112) immediately
 - `commitTransaction` → flush the branch session's AM to the shared state
-  (no three-way merge needed — locks guarantee no conflicts). `cs.Commit()` for
+  (no three-way merge needed  -- locks guarantee no conflicts). `cs.Commit()` for
   durability. Release all document locks.
 - `abortTransaction` → discard the branch session's AM. Release all document locks.
 
@@ -74,7 +74,7 @@ Non-transactional writes (no `startTransaction`) continue to use the shared
 ### How DumboDB Implements This (`--session-isolation` Mode)
 
 - Every write implicitly forks (no `startTransaction` needed)
-- No document locking — two sessions can write to the same document concurrently
+- No document locking  -- two sessions can write to the same document concurrently
 - `doltCommit` triggers a three-way merge with conflict detection
 - Conflicts are surfaced, not prevented
 - `startTransaction` returns an error directing users to `doltCommit`
@@ -85,15 +85,15 @@ Non-transactional writes (no `startTransaction`) continue to use the shared
 
 DumboDB currently has no session isolation. Two clients connected to the same
 branch share a single `dbState.am` (AddressMap) protected by a mutex. Writes
-are immediately visible to all other clients — last-writer-wins, no isolation.
+are immediately visible to all other clients  -- last-writer-wins, no isolation.
 
 Every write calls `cs.Commit()` to update the chunk store root pointer. This
 adds per-write overhead on top of prolly tree mutation and BSON serialization.
-The exact cost breakdown has not been profiled — the overhead may come from the
+The exact cost breakdown has not been profiled  -- the overhead may come from the
 root commit, tree mutation, serialization, or a combination.
 
 For context: since MongoDB 5.0, the default write concern is `{w:"majority"}`
-which implies journal sync — MongoDB waits for the write to be flushed to the
+which implies journal sync  -- MongoDB waits for the write to be flushed to the
 on-disk journal before acknowledging. On a standalone server (non-replica-set),
 this means every write is crash-safe by default. Both MongoDB and DumboDB
 currently fsync on every write, so the benchmark performance gap is purely
@@ -107,22 +107,22 @@ semantics.
 
 For users who want MongoDB-compatible durability (every write crash-safe),
 DumboDB supports an `autoCommit` mode. When enabled, every write operation
-automatically triggers a `doltCommit` after it completes — equivalent to
+automatically triggers a `doltCommit` after it completes  -- equivalent to
 MongoDB's default behavior. This is the simplest migration path for existing
 MongoDB applications that don't use version control features and expect
 per-write durability.
 
 ## Design Goals
 
-1. **Session-scoped writes** — each client connection works on its own snapshot.
+1. **Session-scoped writes**  -- each client connection works on its own snapshot.
    Other sessions don't see uncommitted changes.
-2. **doltCommit as the durability boundary** — regular writes (insert/update/delete)
+2. **doltCommit as the durability boundary**  -- regular writes (insert/update/delete)
    are fast and memory-only. `doltCommit` is the explicit signal to merge changes
    into the branch and flush to disk.
-3. **Three-way merge on commit** — when a session commits, its changes merge into
+3. **Three-way merge on commit**  -- when a session commits, its changes merge into
    the branch HEAD using the fork point as the common ancestor. Conflicts are
    surfaced via the existing `doltConflicts` machinery.
-4. **Read-your-own-writes** — within a session, reads see the session's own
+4. **Read-your-own-writes**  -- within a session, reads see the session's own
    uncommitted changes.
 
 ## Current Architecture
@@ -151,7 +151,7 @@ to fsync. All synchronous, all blocking.
 
 ## Key Concept: Branch Sessions
 
-A MongoDB session (`lsid`) is server-scoped — one session can touch multiple
+A MongoDB session (`lsid`) is server-scoped  -- one session can touch multiple
 databases. In DumboDB, databases map to branches via rootish connection strings:
 
 ```js
@@ -163,7 +163,7 @@ From the driver's perspective, these are two separate databases. Both commands
 carry the same `lsid`. But they target different branches with different commit
 histories and different AddressMaps.
 
-This means **the isolation unit is the (session, database, branch) tuple** — not
+This means **the isolation unit is the (session, database, branch) tuple**  -- not
 the session alone. We call this a **branch session**:
 
 ```
@@ -213,7 +213,7 @@ type sessionState struct {
 }
 
 // branchLocks tracks document-level locks for the default (transaction) mode.
-// One per (db, branch) — shared across all sessions on that branch.
+// One per (db, branch)  -- shared across all sessions on that branch.
 type branchLocks struct {
     mu    sync.Mutex
     locks map[string]map[hash.Hash]string  // collection → docID hash → owning lsid
@@ -270,7 +270,7 @@ type Backend struct {
    stays dirty until conflicts are resolved.
 
 5. **Disconnect without commit** → discard session state. Uncommitted changes
-   are lost. This is intentional — `doltCommit` is the durability contract.
+   are lost. This is intentional  -- `doltCommit` is the durability contract.
 
 6. **Session timeout** → same as disconnect. Configurable timeout (e.g., 30 min).
 
@@ -310,12 +310,12 @@ The three-way merge uses Dolt's existing prolly.AddressMap diff machinery:
 
 This is the same algorithm as `doltMerge` but operating at the session level
 rather than the branch level. The merge code already exists in backend.go for
-the `doltMerge` command — extract and reuse it.
+the `doltMerge` command  -- extract and reuse it.
 
 ### WriteConcern Integration
 
 MongoDB's `writeConcern` lets clients choose per-write durability guarantees.
-With session isolation, DumboDB simplifies this — all regular writes are
+With session isolation, DumboDB simplifies this  -- all regular writes are
 memory-only, and `doltCommit` is the single durability signal:
 
 | Client request | DumboDB behavior |
@@ -323,7 +323,7 @@ memory-only, and `doltCommit` is the single durability signal:
 | Regular write (insert/update/delete) | Writes to session AM in memory. Fast, not crash-safe. |
 | `doltCommit` | Merges session into branch, flushes to disk. Crash-safe. |
 
-The MongoDB `writeConcern` parameter is accepted but effectively irrelevant —
+The MongoDB `writeConcern` parameter is accepted but effectively irrelevant  --
 individual writes are always memory-only regardless of what the client requests.
 `doltCommit` is always crash-safe regardless of what the client requests. This
 is a deliberate departure from MongoDB's model: DumboDB's durability story is
@@ -347,7 +347,7 @@ The session is tied to the `lsid`, **not the TCP connection**. This means:
 
 **Reconnection:** If a client disconnects (network glitch, process restart) and
 reconnects with the same `lsid`, DumboDB looks up the session in the registry
-and resumes where the client left off — uncommitted writes are still there.
+and resumes where the client left off  -- uncommitted writes are still there.
 
 **Session timeout:** Sessions persist for a configurable period of inactivity
 (default: 30 minutes). After timeout, the session state is discarded and
@@ -373,7 +373,7 @@ it straightforward to add later.
 Clients that don't send `lsid` (e.g., simple `mongosh` without explicit
 sessions) get an implicit session scoped to their TCP connection. DumboDB
 generates an internal session ID on connect, and discards it on disconnect.
-Behavior is identical — writes accumulate in the implicit session, `doltCommit`
+Behavior is identical  -- writes accumulate in the implicit session, `doltCommit`
 flushes.
 
 ### Session Security: Discovery and Hijacking
@@ -387,17 +387,17 @@ session discovery would allow data access.
 
 **Options (no decision required now):**
 
-1. **Don't implement `$listSessions`** — simplest first pass. Without a
+1. **Don't implement `$listSessions`**  -- simplest first pass. Without a
    discovery mechanism, the `lsid` UUID (128 bits) is effectively unguessable.
    No enumeration = no hijacking vector. This is the likely Phase 1 approach.
 
-2. **Scope sessions to authenticated users** — tie sessions to `(lsid, username)`
+2. **Scope sessions to authenticated users**  -- tie sessions to `(lsid, username)`
    so only the user who created the session can resume it. MongoDB already does
    this when auth is enabled. This is the right long-term answer, but DumboDB
    currently has **no authentication at all**, so this is deferred until auth
    lands.
 
-3. **Server-generated session IDs** — DumboDB ignores the client's `lsid` and
+3. **Server-generated session IDs**  -- DumboDB ignores the client's `lsid` and
    generates its own, returning it to the client. More secure but breaks wire
    protocol expectations. Not recommended.
 
@@ -408,7 +408,7 @@ No branchSession exists yet → reads go directly to the shared branch HEAD.
 The session only forks on first write. This keeps read-only access cheap.
 
 **Reading a branch you HAVE written to:**
-Reads come from the branchSession's AM — you see your own uncommitted changes,
+Reads come from the branchSession's AM  -- you see your own uncommitted changes,
 but not changes from other sessions that committed after your fork point. To
 pick up other sessions' committed changes, either commit (merge) or explicitly
 reset your branchSession.
@@ -416,7 +416,7 @@ reset your branchSession.
 **Multiple doltCommits in one session on the same branch:**
 Each commit merges the branchSession into the branch HEAD, advances the fork
 point to the new HEAD, and continues. The branchSession stays alive with a
-fresh fork point — no need to reconnect.
+fresh fork point  -- no need to reconnect.
 
 **doltCommit on one branch, dirty state on another:**
 Each branchSession is independent. Committing `mydb@feat` does not affect
@@ -434,15 +434,15 @@ using three-way merge. Both succeed unless they conflict on the same documents.
 **doltMerge between branches within a session:**
 If the session has dirty branchSessions on both the source and target branches,
 the merge should require both to be committed first (or error). We don't want
-to merge uncommitted state across branches — that's a recipe for confusion.
+to merge uncommitted state across branches  -- that's a recipe for confusion.
 
 ## What This Enables
 
-- **Fast writes** — no fsync per operation, just in-memory AM mutation
-- **Session isolation** — MVCC-like semantics without the complexity
-- **Explicit durability** — `doltCommit` = "I'm done, make it permanent"
-- **Conflict detection** — two sessions editing the same doc get a clean error
-- **Natural fit with version control** — every doltCommit is a versioned
+- **Fast writes**  -- no fsync per operation, just in-memory AM mutation
+- **Session isolation**  -- MVCC-like semantics without the complexity
+- **Explicit durability**  -- `doltCommit` = "I'm done, make it permanent"
+- **Conflict detection**  -- two sessions editing the same doc get a clean error
+- **Natural fit with version control**  -- every doltCommit is a versioned
   checkpoint with message, author, and parent chain
 
 ## Migration Path
@@ -464,8 +464,8 @@ running against a live DumboDB server, using multiple concurrent mongo clients.
 
 Two clients connect to the same branch. Client A inserts a document. Client B
 (read-only, has not written) reads the collection. Since A hasn't committed,
-B should not see A's document. After A commits, B — still having no dirty fork
-of its own — reads from the updated branch HEAD and sees the document.
+B should not see A's document. After A commits, B  -- still having no dirty fork
+of its own  -- reads from the updated branch HEAD and sees the document.
 
 ```
 Client A: insert {_id: 1, x: "from A"}          ← A forks, gets a dirty branchSession
@@ -478,7 +478,7 @@ Client B: find {} → should return [{_id: 1, x: "from A"}]  ← B still reads H
 
 When Client B has its own uncommitted writes, it reads from its forked AM,
 which is pinned to the branch HEAD at the time of B's first write. B does
-NOT see commits made by A after B's fork point — until B commits (merges).
+NOT see commits made by A after B's fork point  -- until B commits (merges).
 
 ```
 Client A: insert {_id: 1, x: "from A"}
@@ -505,7 +505,7 @@ Client A: find {_id: 1} → should still return [{_id: 1, x: "hello"}]
 ### Test 4: Non-conflicting concurrent writes merge cleanly
 
 Two clients write to different documents on the same branch, then both commit.
-No conflicts — three-way merge combines both sets of changes.
+No conflicts  -- three-way merge combines both sets of changes.
 
 ```
 Client A: insert {_id: 1, x: "from A"}           ← A forks from HEAD C0
@@ -523,7 +523,7 @@ Client C: find {} → [{_id: 1}, {_id: 2}]          ← C is read-only, sees HEA
 ### Test 5: After commit, session returns to read-only and sees new commits
 
 After committing, a session's branchSession is cleared. The session returns to
-read-only mode — subsequent reads go to the branch HEAD, picking up any commits
+read-only mode  -- subsequent reads go to the branch HEAD, picking up any commits
 made by other sessions in the meantime.
 
 ```
@@ -601,7 +601,7 @@ Client A: find {_id: 1} → should return [{_id: 1, x: "before disconnect"}]  �
 Client A: doltCommit → succeeds
 ```
 
-### Test 11: Concurrent commits — serialization order
+### Test 11: Concurrent commits  -- serialization order
 
 Three clients all fork from the same branch HEAD. Each commit merges against
 the result of the previous commit (the current HEAD at commit time), not
@@ -621,7 +621,7 @@ Final state: all three documents present
 ### Test 12: Delete + modify conflict
 
 One client deletes a document, another modifies it. The second committer
-should get a conflict — the base document was changed by both sides
+should get a conflict  -- the base document was changed by both sides
 (deleted vs modified).
 
 ```
@@ -656,7 +656,7 @@ Client A: abortTransaction
 Client A: find {_id: 1} → [] (changes discarded)
 ```
 
-### Test 15: Document locking — concurrent txn blocked on same doc
+### Test 15: Document locking  -- concurrent txn blocked on same doc
 
 ```
 Setup: collection has {_id: 1, x: "original"}

@@ -115,19 +115,19 @@ assert_id_roundtrip() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true'
 
-    # Insert doc2: _id with reversed key order {b, a} — this is a distinct _id
+    # Insert doc2: _id with reversed key order {b, a}  -- this is a distinct _id
     run mongosh "$uri" --quiet --eval \
         "JSON.stringify(db.col_subdoc.insertOne({_id: {b: 'x', a: 1}, v: 99}))"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true'
 
-    # findOne with key order {a, b} — must return doc1 (v == 42), not doc2
+    # findOne with key order {a, b}  -- must return doc1 (v == 42), not doc2
     run mongosh "$uri" --quiet --eval \
         "JSON.stringify(db.col_subdoc.findOne({_id: {a: 1, b: 'x'}}))"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '._id.a == 1 and ._id.b == "x" and .v == 42'
 
-    # findOne with key order {b, a} — must return doc2 (v == 99), not doc1
+    # findOne with key order {b, a}  -- must return doc2 (v == 99), not doc1
     run mongosh "$uri" --quiet --eval \
         "JSON.stringify(db.col_subdoc.findOne({_id: {b: 'x', a: 1}}))"
     [ "$status" -eq 0 ]

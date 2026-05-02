@@ -660,7 +660,7 @@ func compileRegex(regexArg, optionsArg any, doc *types.Document) (*regexp.Regexp
 	}
 
 	if strings.Contains(opts, "x") {
-		// extended — strip whitespace/comments (not supported in RE2, skip)
+		// extended  -- strip whitespace/comments (not supported in RE2, skip)
 	}
 
 	if strings.Contains(opts, "m") {

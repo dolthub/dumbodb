@@ -138,7 +138,7 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 				!backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
 				return nil, lazyerrors.Error(err)
 			}
-			// Target doesn't exist — that's fine, proceed with rename.
+			// Target doesn't exist  -- that's fine, proceed with rename.
 		}
 	}
 

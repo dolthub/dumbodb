@@ -49,7 +49,7 @@ type geoNear struct {
 	maxDistance        float64
 	minDistance        float64
 	query              *types.Document // optional additional filter
-	key                string          // geo field name (optional — auto-detected)
+	key                string          // geo field name (optional  -- auto-detected)
 	includeLocs        string          // optional output field for matched location
 	distanceMultiplier float64         // multiplier applied to distance (default 1)
 }

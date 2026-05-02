@@ -114,12 +114,12 @@ const hashNew = r2.commitId
 db.runCommand({ doltDiff: 1, from: hashBase, to: hashNew })
 ```
 
-Expected: same structure as Scenario 1 — the same three changes appear, now between
+Expected: same structure as Scenario 1  -- the same three changes appear, now between
 two committed snapshots rather than HEAD vs working set.
 
 ---
 
-## Scenario 3: No changes — diff returns an empty collections array
+## Scenario 3: No changes  -- diff returns an empty collections array
 
 After committing, the working set matches HEAD. Diffing HEAD vs working set produces
 no output.
@@ -132,7 +132,7 @@ db.runCommand({ doltDiff: 1 })
 
 ---
 
-## Scenario 4: `from` only — diff from a specific commit to current working set
+## Scenario 4: `from` only  -- diff from a specific commit to current working set
 
 Make one more change (do not commit), then diff from `hashBase` to the working set.
 
@@ -153,7 +153,7 @@ Expected: the diff includes all changes relative to `hashBase`:
 ## Scenario 5: Multiple documents with mixed changes
 
 Commit a three-document baseline, then apply different change types to different
-documents — delete one, modify one, leave one unchanged, add a new one. Only
+documents  -- delete one, modify one, leave one unchanged, add a new one. Only
 changed documents appear in the diff.
 
 ```js
@@ -175,7 +175,7 @@ Expected (for the `multi` collection):
 - `removed`: exactly `_id:1`
 - `modified`: exactly `_id:2` with `$.v` modified (`a:2`, `b:99`); `$.name` absent
 - `added`: exactly `_id:4`
-- `_id:3` does **not** appear — it was not changed
+- `_id:3` does **not** appear  -- it was not changed
 
 ---
 
@@ -197,8 +197,8 @@ db.runCommand({ doltDiff: 1 })
 
 Expected for `_id:1` in the `mixedfields` collection:
 - `$.x`: `{ type: "modified", from: 10, to: 99 }`
-- `$.y`: `{ type: "removed", from: "remove-me" }` — `to` absent
-- `$.z`: `{ type: "added", to: "new-field" }` — `from` absent
+- `$.y`: `{ type: "removed", from: "remove-me" }`  -- `to` absent
+- `$.z`: `{ type: "added", to: "new-field" }`  -- `from` absent
 - Exactly **3** diff entries total
 
 ---
@@ -220,8 +220,8 @@ db.runCommand({ doltDiff: 1 })
 ```
 
 Expected for `_id:1` in the `typechg` collection:
-- `$.val`: `{ type: "modified", from: 42, to: "forty-two" }` — note different types
-- `$.stable` does **not** appear — it was not changed
+- `$.val`: `{ type: "modified", from: 42, to: "forty-two" }`  -- note different types
+- `$.stable` does **not** appear  -- it was not changed
 
 ---
 
@@ -247,12 +247,12 @@ db.runCommand({ doltDiff: 1 })
 
 Expected for `_id:1` in the `nested` collection:
 - `$.address.city`: `{ type: "modified", from: "Seattle", to: "Portland" }`
-- `$.address.zip` does **not** appear — unchanged
-- `$.name` does **not** appear — unchanged
+- `$.address.zip` does **not** appear  -- unchanged
+- `$.name` does **not** appear  -- unchanged
 
 ---
 
-## Scenario 9: Rootish expressions in `from`/`to` — HEAD, HEAD~N, branch name
+## Scenario 9: Rootish expressions in `from`/`to`  -- HEAD, HEAD~N, branch name
 
 `from` and `to` accept any valid rootish expression, not just raw commit hashes.
 `HEAD` resolves to the committed tip of the connection's own branch (i.e. whatever
@@ -270,34 +270,34 @@ const hash3 = r3.commitId
 db.items.insertOne({ _id: 5, label: "epsilon", score: 50 })
 const hash4 = db.runCommand({ doltCommit: 1, message: "c4", author: "bob <bob@widgets.io>" }).commitId
 
-// 1. from=HEAD~1, to=HEAD on a main connection — HEAD resolves to main tip (c4)
+// 1. from=HEAD~1, to=HEAD on a main connection  -- HEAD resolves to main tip (c4)
 db.runCommand({ doltDiff: 1, from: "HEAD~1", to: "HEAD" })
 ```
 
-Expected: diff between c3 and c4 — only `_id:5` appears as added.
+Expected: diff between c3 and c4  -- only `_id:5` appears as added.
 
 ```js
-// 2. from=hash3, to="HEAD" on a main connection — HEAD = main tip = hash4
+// 2. from=hash3, to="HEAD" on a main connection  -- HEAD = main tip = hash4
 db.runCommand({ doltDiff: 1, from: hash3, to: "HEAD" })
 ```
 
-Expected: same result — `_id:5` added.
+Expected: same result  -- `_id:5` added.
 
 ```js
-// 3. from=hash3, to="HEAD" on the feature branch connection —
+// 3. from=hash3, to="HEAD" on the feature branch connection  --
 //    HEAD resolves to feature tip (= c3, before the two main commits)
 featureDB.runCommand({ doltDiff: 1, from: hash3, to: "HEAD" })
 ```
 
-Expected: `{ "collections": [], "ok": 1 }` — feature HEAD equals hash3, no diff.
+Expected: `{ "collections": [], "ok": 1 }`  -- feature HEAD equals hash3, no diff.
 
 ```js
-// 4. REVERSE: from=HEAD, to=HEAD~1 — swaps direction.
+// 4. REVERSE: from=HEAD, to=HEAD~1  -- swaps direction.
 //    _id:5 was added going forward; going backward it appears as removed.
 db.runCommand({ doltDiff: 1, from: "HEAD", to: "HEAD~1" })
 ```
 
-Expected: `_id:5` in `removed` (not `added`) — the inverse of case 1.
+Expected: `_id:5` in `removed` (not `added`)  -- the inverse of case 1.
 
 ```js
 // 5. REVERSE via branch names: from="main", to="feature".
@@ -305,7 +305,7 @@ Expected: `_id:5` in `removed` (not `added`) — the inverse of case 1.
 db.runCommand({ doltDiff: 1, from: "main", to: "feature" })
 ```
 
-Expected: `_id:5` in `removed` — the inverse of a forward feature→main diff.
+Expected: `_id:5` in `removed`  -- the inverse of a forward feature→main diff.
 
 Key checks:
 - `HEAD` on a main connection resolves to the latest main commit.
@@ -330,9 +330,9 @@ Key checks:
 - Only collections with at least one change appear in the result.
 - Each collection entry carries a `status` field describing the collection's
   lifecycle between the two sides:
-  - `"added"` — collection exists in `to` but not in `from` (newly created).
-  - `"deleted"` — collection exists in `from` but not in `to` (dropped).
-  - `"modified"` — collection exists in both sides with at least one document-level change.
+  - `"added"`  -- collection exists in `to` but not in `from` (newly created).
+  - `"deleted"`  -- collection exists in `from` but not in `to` (dropped).
+  - `"modified"`  -- collection exists in both sides with at least one document-level change.
 - `added` and `removed` contain full documents.
 - `modified` contains only the changed fields with `from` (old) and `to` (new) values.
 - Unchanged fields do not appear in `modified[].diff`.
@@ -393,6 +393,6 @@ Expected:
 ```
 
 Key checks:
-- `arrival.status == "added"` — created since baseline; all docs appear in `added`.
-- `going.status == "deleted"` — dropped since baseline; all prior docs appear in `removed`.
-- `staying.status == "modified"` — present in both sides with at least one doc-level change.
+- `arrival.status == "added"`  -- created since baseline; all docs appear in `added`.
+- `going.status == "deleted"`  -- dropped since baseline; all prior docs appear in `removed`.
+- `staying.status == "modified"`  -- present in both sides with at least one doc-level change.

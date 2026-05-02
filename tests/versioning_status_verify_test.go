@@ -145,7 +145,7 @@ func TestStatusVerify(t *testing.T) {
 	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Status on clean repo — empty tables
+	// Scenario 1: Status on clean repo  -- empty tables
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanRepo", func(t *testing.T) {
 		sr := runStatus(t, env, dbName)
@@ -154,7 +154,7 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: Status after insert — new collection appears as "added" with counts
+	// Scenario 2: Status after insert  -- new collection appears as "added" with counts
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_AfterInsert", func(t *testing.T) {
 		// First verify that dirty workspace does NOT include commitId.
@@ -179,7 +179,7 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: Status after update — modified collection appears as "modified"
+	// Scenario 3: Status after update  -- modified collection appears as "modified"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_AfterUpdate", func(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "add newcoll", "alice <alice@acme.com>")
@@ -203,7 +203,7 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Status after delete — removed collection appears as "deleted"
+	// Scenario 4: Status after delete  -- removed collection appears as "deleted"
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AfterDelete", func(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "modify items", "alice <alice@acme.com>")
@@ -223,7 +223,7 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Status after commit — clean again
+	// Scenario 5: Status after commit  -- clean again
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AfterCommit", func(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "delete items", "alice <alice@acme.com>")
@@ -311,7 +311,7 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: Multi-field modification — several fields changed in one doc
+	// Scenario 7: Multi-field modification  -- several fields changed in one doc
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_MultiFieldDocModification", func(t *testing.T) {
 		// Commit Scenario 6's state to get a fresh baseline.
@@ -343,7 +343,7 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 8: Read-only rootish — doltStatus returns a clear error
+	// Scenario 8: Read-only rootish  -- doltStatus returns a clear error
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_ReadOnlyRootish", func(t *testing.T) {
 		// Commit current state so we have a stable commit hash to point at.

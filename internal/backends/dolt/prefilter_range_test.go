@@ -102,7 +102,7 @@ func TestRangePrefilter_AllOperators(t *testing.T) {
 	}
 }
 
-// Stored field is missing from the doc — range filters should not match.
+// Stored field is missing from the doc  -- range filters should not match.
 // The prefilter must return false (proven non-match).
 func TestRangePrefilter_MissingField(t *testing.T) {
 	t.Parallel()
@@ -145,7 +145,7 @@ func TestRangePrefilter_EmbeddedSameName(t *testing.T) {
 }
 
 // When the stored value is itself an array, embedded sub-doc, or string,
-// the predicate must bail to permissive (true) — Mongo's range semantics
+// the predicate must bail to permissive (true)  -- Mongo's range semantics
 // over those types aren't modeled by the byte walker.
 func TestRangePrefilter_AnomalousValueIsPermissive(t *testing.T) {
 	t.Parallel()
@@ -207,7 +207,7 @@ func TestRangePrefilter_MixedNumericTypes(t *testing.T) {
 }
 
 // NaN-stored values get the permissive bail-out (the predicate doesn't
-// claim to know NaN semantics — the handler's FilterIterator will reject
+// claim to know NaN semantics  -- the handler's FilterIterator will reject
 // downstream because NaN doesn't satisfy any range comparison).
 func TestRangePrefilter_NaNPermissive(t *testing.T) {
 	t.Parallel()
@@ -222,7 +222,7 @@ func TestRangePrefilter_NaNPermissive(t *testing.T) {
 }
 
 // Operator docs that mix $gt with anything we don't model must cause the
-// whole prefilter to be unbuilt — we'd otherwise risk a false negative.
+// whole prefilter to be unbuilt  -- we'd otherwise risk a false negative.
 func TestRangePrefilter_BailsOnUnsupportedOperators(t *testing.T) {
 	t.Parallel()
 	cases := []*types.Document{
@@ -331,7 +331,7 @@ func TestRangePrefilter_BoundIntersection(t *testing.T) {
 }
 
 // int64 values whose magnitude doesn't fit in float64 mantissa must bail
-// to permissive — silent precision loss would otherwise risk a false
+// to permissive  -- silent precision loss would otherwise risk a false
 // negative.
 func TestRangePrefilter_HugeInt64Permissive(t *testing.T) {
 	t.Parallel()
@@ -340,14 +340,14 @@ func TestRangePrefilter_HugeInt64Permissive(t *testing.T) {
 	if pf == nil {
 		t.Fatal("nil predicate")
 	}
-	// Doc value: 2^53+1 — first int64 not exactly representable as float64.
+	// Doc value: 2^53+1  -- first int64 not exactly representable as float64.
 	huge := int64(1)<<53 + 1
 	doc := canonicalDoc(t, mongobson.D{{Key: "i", Value: huge}})
 	if !pf(doc) {
 		t.Errorf("huge int64 must be permissive (true); json=%s", doc)
 	}
 
-	// Bound itself huge — entire prefilter must bail.
+	// Bound itself huge  -- entire prefilter must bail.
 	if pf2 := buildScanPrefilter(rangeOp(t, "i", "$gt", huge)); pf2 != nil {
 		t.Errorf("huge int64 bound must produce nil prefilter")
 	}

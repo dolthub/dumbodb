@@ -27,7 +27,7 @@ type WriteConcernDecision struct {
 	//   - writeConcern.j == false (explicit opt-out of journal fsync)
 	//   - writeConcern.w == 0 (fire-and-forget: no durability guarantee at all)
 	// In either case DumboDB is free to acknowledge the write before the NBS
-	// journal is fsync'd — a background flusher makes it durable later.
+	// journal is fsync'd  -- a background flusher makes it durable later.
 	SkipDurableSync bool
 }
 
@@ -35,7 +35,7 @@ type WriteConcernDecision struct {
 // document. A nil or missing document maps to the MongoDB default of
 // {w: 1, j: true (implicit)}, which keeps the historical fsync-every-write
 // behavior. Unrecognized or malformed writeConcern shapes are treated as the
-// default — we never error out on writeConcern because a single-node store
+// default  -- we never error out on writeConcern because a single-node store
 // has no way to meaningfully reject the cluster-shaped concerns (majority, w>1).
 func DecideWriteConcern(wc any) WriteConcernDecision {
 	doc, ok := wc.(*types.Document)

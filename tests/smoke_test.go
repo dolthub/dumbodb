@@ -62,7 +62,7 @@ func TestTransactionSmoke(t *testing.T) {
 
 // TestTransactionSmoke_Abort verifies that aborting a transaction does not crash
 // the server. Because DumboDB does not provide ACID isolation, the inserted
-// documents remain visible — but the server must not panic or return an error
+// documents remain visible  -- but the server must not panic or return an error
 // on abortTransaction. (DumboDBFull)
 func TestTransactionSmoke_Abort(t *testing.T) {
 	env := startDumboDB(t)

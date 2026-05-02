@@ -107,7 +107,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			}
 		}
 	} else if sizeVal, _ := document.Get("size"); sizeVal != nil {
-		// size was provided without capped=true — still counts as explicit options.
+		// size was provided without capped=true  -- still counts as explicit options.
 		hasExplicitOptions = true
 	}
 

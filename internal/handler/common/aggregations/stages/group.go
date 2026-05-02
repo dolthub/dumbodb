@@ -369,7 +369,7 @@ type groupedDocuments struct {
 // groupMap holds groups of documents.
 //
 // Group keys can be any BSON type (including arrays and binaries) and
-// numeric types are grouped numerically regardless of int/int64/float — so
+// numeric types are grouped numerically regardless of int/int64/float  -- so
 // the general path falls back to a linear scan with types.CompareForAggregation.
 // For hashable, comparably-typed keys (strings, bools, int32/int64, ObjectID)
 // a fast path map indexes into docs, cutting O(n*k) group lookups to O(n).
@@ -395,7 +395,7 @@ func (m *groupMap) addOrAppend(groupKey any, docs ...*types.Document) {
 			return
 		}
 
-		// No entry yet — but a numeric-equal entry might already exist in
+		// No entry yet  -- but a numeric-equal entry might already exist in
 		// m.docs from a prior add with a differently-typed numeric key.
 		// Scan once to stay consistent with CompareForAggregation semantics.
 		for i, g := range m.docs {

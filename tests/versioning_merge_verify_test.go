@@ -108,7 +108,7 @@ func TestMergeVerify(t *testing.T) {
 	var hashC2 string
 
 	// -------------------------------------------------------------------------
-	// Scenario 1: Already up-to-date — from branch is behind into branch
+	// Scenario 1: Already up-to-date  -- from branch is behind into branch
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_AlreadyUpToDate_FromBehind", func(t *testing.T) {
 		// Advance main to C2 (feature stays at C1).
@@ -135,11 +135,11 @@ func TestMergeVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 2: Fast-forward merge — bring feature up to date with main
+	// Scenario 2: Fast-forward merge  -- bring feature up to date with main
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_FastForward_FeatureCatchesUp", func(t *testing.T) {
 		// feature is still at C1; main is at C2.
-		// Merge main into feature — feature fast-forwards to C2.
+		// Merge main into feature  -- feature fast-forwards to C2.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
@@ -160,7 +160,7 @@ func TestMergeVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 3: Already up-to-date — branches are now equal after fast-forward
+	// Scenario 3: Already up-to-date  -- branches are now equal after fast-forward
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_AlreadyUpToDate_EqualBranches", func(t *testing.T) {
 		// After Scenario 2: feature and main both point to C2.
@@ -179,7 +179,7 @@ func TestMergeVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: True three-way merge — diverged branches produce a merge commit
+	// Scenario 4: True three-way merge  -- diverged branches produce a merge commit
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_ThreeWayMerge", func(t *testing.T) {
 		// After Scenario 3: both main and feature point to C2.
@@ -200,7 +200,7 @@ func TestMergeVerify(t *testing.T) {
 		require.NoError(t, err)
 		hashC4 := dumboDBCommit(t, env, dbName+"@feature", "add-four", "alice <alice@acme.com>")
 
-		// Merge feature (at C4) into main (at C3) — true three-way merge with custom message/author.
+		// Merge feature (at C4) into main (at C3)  -- true three-way merge with custom message/author.
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
@@ -555,7 +555,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		colls := summaryRaw["collections"].(bson.A)
 		assert.Len(t, colls, 0, "no more conflicts after resolution")
 
-		// dumboDBCommit is blocked even when all conflicts are resolved — merge in progress
+		// dumboDBCommit is blocked even when all conflicts are resolved  -- merge in progress
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "should fail: merge in progress"},

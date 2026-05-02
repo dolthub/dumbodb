@@ -87,7 +87,7 @@ func TestDumboDBTag_CreateListDelete(t *testing.T) {
 		t.Errorf("delete: unexpected result %+v", delRes.Tags)
 	}
 
-	// List again — should be empty.
+	// List again  -- should be empty.
 	listRes2, err := b.DumboDBTag(ctx, &backends.TagParams{DBName: "testdb"})
 	if err != nil {
 		t.Fatalf("DumboDBTag list-after-delete: %v", err)

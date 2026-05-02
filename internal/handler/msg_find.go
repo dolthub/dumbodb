@@ -475,7 +475,7 @@ func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
 	for _, field := range fields {
 		docVal, err := doc.Get(field)
 		if err != nil {
-			// Field missing from document — doesn't satisfy bounds.
+			// Field missing from document  -- doesn't satisfy bounds.
 			return false
 		}
 

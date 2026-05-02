@@ -272,7 +272,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("dolt: DumboDBResolveConflict: conflict %q is already resolved", params.ConflictID)
 	}
 
-	// For "ours", the resolvedAM already has our value — just mark resolved, no AM update needed.
+	// For "ours", the resolvedAM already has our value  -- just mark resolved, no AM update needed.
 	if params.Resolution == "ours" {
 		target.resolved = true
 		return &backends.ResolveConflictResult{}, nil
@@ -561,11 +561,11 @@ func captureConflictsForCollection(
 		if left.From != nil {
 			entry.baseRawVal = val.Tuple(left.From)
 		}
-		// ours value: left.To (nil for RemovedDiff — our branch deleted the document).
+		// ours value: left.To (nil for RemovedDiff  -- our branch deleted the document).
 		if left.To != nil {
 			entry.oursRawVal = val.Tuple(left.To)
 		}
-		// theirs value: right.To (nil for RemovedDiff — their branch deleted the document).
+		// theirs value: right.To (nil for RemovedDiff  -- their branch deleted the document).
 		if right.To != nil {
 			entry.theirsRawVal = val.Tuple(right.To)
 		}
@@ -661,11 +661,11 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			continue
 		}
 		if fromH.IsEmpty() || intoH.IsEmpty() {
-			// Collection-level conflict: one side deleted, the other modified — unresolvable here.
+			// Collection-level conflict: one side deleted, the other modified  -- unresolvable here.
 			return prolly.AddressMap{}, nil, fmt.Errorf("conflict in collection %q: deleted on one branch and modified on the other", name)
 		}
 
-		// Both sides modified the collection — merge at document level, capturing conflicts.
+		// Both sides modified the collection  -- merge at document level, capturing conflicts.
 		intoMap, err := openCollection(ctx, state.cs, state.ns, intoH)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening into collection %q: %w", name, err)

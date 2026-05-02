@@ -43,7 +43,7 @@ func TestCRUD_FindOneAndUpdate_Basic(t *testing.T) {
 	).Decode(&before)
 	require.NoError(t, err, "findOneAndUpdate must not error on existing document")
 
-	// Default ReturnDocument=Before — the result is the original doc.
+	// Default ReturnDocument=Before  -- the result is the original doc.
 	m := dmap(before)
 	assert.Equal(t, "alice", m["name"])
 	assert.Equal(t, int32(10), m["score"], "default behavior returns document BEFORE update")
@@ -390,7 +390,7 @@ func TestCRUD_BulkWrite_Ordered(t *testing.T) {
 	models := []mongo.WriteModel{
 		// This will succeed.
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "key", Value: "new"}}),
-		// This will fail — duplicate key.
+		// This will fail  -- duplicate key.
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "key", Value: "exists"}}),
 		// This would succeed but must not run in ordered mode.
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "key", Value: "after-error"}}),
@@ -403,7 +403,7 @@ func TestCRUD_BulkWrite_Ordered(t *testing.T) {
 	// The first insert succeeded; the third must NOT have run.
 	count, cErr := coll.CountDocuments(ctx, bson.D{{Key: "key", Value: "after-error"}})
 	require.NoError(t, cErr)
-	assert.Equal(t, int64(0), count, "ordered BulkWrite stops after error — third op must not execute")
+	assert.Equal(t, int64(0), count, "ordered BulkWrite stops after error  -- third op must not execute")
 }
 
 // TestCRUD_BulkWrite_Unordered verifies that unordered BulkWrite continues after
@@ -424,7 +424,7 @@ func TestCRUD_BulkWrite_Unordered(t *testing.T) {
 	models := []mongo.WriteModel{
 		// Succeed.
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "key", Value: "good1"}}),
-		// Fail — duplicate.
+		// Fail  -- duplicate.
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "key", Value: "exists"}}),
 		// Should still run in unordered mode.
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "key", Value: "good2"}}),
@@ -687,7 +687,7 @@ func TestCRUD_Distinct_NumericTypes(t *testing.T) {
 
 	var values []any
 	require.NoError(t, coll.Distinct(ctx, "n", bson.D{}).Decode(&values))
-	// 5, 5.5, 7 — three distinct numeric values regardless of source type.
+	// 5, 5.5, 7  -- three distinct numeric values regardless of source type.
 	assert.Len(t, values, 3)
 }
 func TestUpdateMany_upsert(t *testing.T) {

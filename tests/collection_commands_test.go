@@ -35,7 +35,7 @@ func TestCollMod_NonExistentCollection(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 
-	// Use a collection handle that was never inserted into — neither the database
+	// Use a collection handle that was never inserted into  -- neither the database
 	// nor the collection have been created in the storage engine.
 	coll := env.collection(t)
 
@@ -78,7 +78,7 @@ func TestCollMod_InvalidOption(t *testing.T) {
 // TestCompact_EmptyCollection verifies that compact on an existing but empty
 // collection succeeds and returns bytesFreed=0 with ok=1.
 func TestCompact_EmptyCollection(t *testing.T) {
-	// Do not run in parallel — compact acquires broad locks internally.
+	// Do not run in parallel  -- compact acquires broad locks internally.
 
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -243,7 +243,7 @@ func TestValidate_Full(t *testing.T) {
 
 	assertValidateResponse(t, res, coll)
 
-	// repaired must be false — full:true is a read-only deep scan, not a repair.
+	// repaired must be false  -- full:true is a read-only deep scan, not a repair.
 	m := dmap(res)
 	assert.Equal(t, false, m["repaired"], "full:true must not set repaired:true")
 }
@@ -253,7 +253,7 @@ func TestValidate_Full(t *testing.T) {
 //
 // Parity test for do-h7a9: validate command options diverge from MongoDB. (DumboDBFull)
 func TestValidate_Repair(t *testing.T) {
-	// Do not run in parallel — repair acquires exclusive collection locks.
+	// Do not run in parallel  -- repair acquires exclusive collection locks.
 
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -273,7 +273,7 @@ func TestValidate_Repair(t *testing.T) {
 
 	assertValidateResponse(t, res, coll)
 
-	// A fresh, consistent collection requires no repairs — repaired must be false.
+	// A fresh, consistent collection requires no repairs  -- repaired must be false.
 	m := dmap(res)
 	assert.Equal(t, false, m["repaired"], "repaired must be false when no repairs were needed")
 }
@@ -374,7 +374,7 @@ func TestConvertToCapped_NonExistentCollection(t *testing.T) {
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	// Do not insert — collection was never created.
+	// Do not insert  -- collection was never created.
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{
 		{Key: "convertToCapped", Value: coll.Name()},
@@ -503,7 +503,7 @@ func TestDataSize_WithKeyRange(t *testing.T) {
 	fullNum := dmap(fullRes)["numObjects"].(int64)
 	assert.EqualValues(t, 5, fullNum, "full dataSize must count all 5 documents")
 
-	// Retrieve size for range v in [2, 4) — expects documents with v=2 and v=3.
+	// Retrieve size for range v in [2, 4)  -- expects documents with v=2 and v=3.
 	var rangeRes bson.D
 	err = coll.Database().RunCommand(ctx, bson.D{
 		{Key: "dataSize", Value: namespace},
@@ -535,7 +535,7 @@ func TestRenameCollection_NonExistentSource(t *testing.T) {
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	// coll was never inserted into — it does not exist.
+	// coll was never inserted into  -- it does not exist.
 	dbName := coll.Database().Name()
 	from := dbName + "." + coll.Name()
 	to := dbName + "." + coll.Name() + "_renamed"

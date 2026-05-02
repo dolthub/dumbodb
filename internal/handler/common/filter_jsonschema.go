@@ -50,7 +50,7 @@ func validateJSONSchemaValue(value any, schema *types.Document, isDocument bool)
 
 		switch key {
 		case "title", "description":
-			// metadata keywords — always pass
+			// metadata keywords  -- always pass
 
 		case "bsonType":
 			ok, err := validateBSONTypeKeyword(value, schemaVal)
@@ -127,7 +127,7 @@ func validateJSONSchemaValue(value any, schema *types.Document, isDocument bool)
 
 				fieldVal, err := doc.Get(propKey)
 				if err != nil {
-					// Field absent — properties only validates present fields.
+					// Field absent  -- properties only validates present fields.
 					continue
 				}
 

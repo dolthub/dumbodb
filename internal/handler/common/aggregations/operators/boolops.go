@@ -21,7 +21,7 @@ import (
 )
 
 // isBoolFalsy returns true when v is falsy in MongoDB aggregation boolean context:
-// false (bool) or null. All other values — including 0, empty string, empty array — are truthy.
+// false (bool) or null. All other values  -- including 0, empty string, empty array  -- are truthy.
 func isBoolFalsy(v any) bool {
 	switch val := v.(type) {
 	case bool:

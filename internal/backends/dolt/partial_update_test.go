@@ -208,7 +208,7 @@ func TestUpdateAll_FieldMutations_NilFallsBack(t *testing.T) {
 
 	updated := mustDoc(t, "_id", int64(1), "a", int64(2))
 
-	// No FieldMutations supplied — backend must fall back to writeDocJSON.
+	// No FieldMutations supplied  -- backend must fall back to writeDocJSON.
 	_, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{
 		Docs: []*types.Document{updated},
 	})

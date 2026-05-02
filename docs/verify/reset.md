@@ -53,7 +53,7 @@ After setup:
 
 ---
 
-## Scenario 1: Soft reset (default) — HEAD moves back, working set preserved
+## Scenario 1: Soft reset (default)  -- HEAD moves back, working set preserved
 
 Insert an uncommitted document, then soft-reset HEAD to C1. The working-set insert
 is preserved; the diff shows both staged changes relative to the new HEAD.
@@ -62,7 +62,7 @@ is preserved; the diff shows both staged changes relative to the new HEAD.
 // Add _id:3 to the working set (do NOT commit).
 db.tasks.insertOne({ _id: 3, v: 3 })
 
-// Soft reset to hashC1 (no `hard` parameter — defaults to false).
+// Soft reset to hashC1 (no `hard` parameter  -- defaults to false).
 const rReset = db.runCommand({ doltReset: 1, to: hashC1 })
 printjson(rReset)
 // Expected: { hash: "<hashC1>", ok: 1 }
@@ -84,7 +84,7 @@ Expected: `tasks.added` contains both `_id:2` and `_id:3`; `tasks.removed` and
 
 ---
 
-## Scenario 2: Hard reset — HEAD and working set both reset to target
+## Scenario 2: Hard reset  -- HEAD and working set both reset to target
 
 Commit the working set from Scenario 1, add another document, then hard-reset back
 to C1. Both HEAD and the working set return to the C1 state.
@@ -113,7 +113,7 @@ db.runCommand({ doltDiff: 1 })
 // Expected: { "collections": [], "ok": 1 }
 ```
 
-The diff is empty — the working set matches HEAD exactly. Only `_id:1` is visible
+The diff is empty  -- the working set matches HEAD exactly. Only `_id:1` is visible
 in the `tasks` collection:
 
 ```js
@@ -123,7 +123,7 @@ db.tasks.find()
 
 ---
 
-## Scenario 3: Soft reset undoes a committed change — the reverted commit becomes uncommitted
+## Scenario 3: Soft reset undoes a committed change  -- the reverted commit becomes uncommitted
 
 A soft reset can "undo" a commit: HEAD moves back, but the working tree is untouched,
 so the previously committed changes are now visible as uncommitted.
@@ -135,7 +135,7 @@ db.tasks.insertOne({ _id: 2, v: 2 })
 const r4 = db.runCommand({ doltCommit: 1, message: "re-add-two", author: "bob <bob@widgets.io>" })
 const hashC4 = r4.commitId
 
-// Soft reset to C1 — this "undoes" the C4 commit.
+// Soft reset to C1  -- this "undoes" the C4 commit.
 db.runCommand({ doltReset: 1, to: hashC1 })
 // Expected: { hash: "<hashC1>", ok: 1 }
 ```
@@ -154,7 +154,7 @@ are empty.
 
 ---
 
-## Scenario 4: Reset to HEAD — discard all uncommitted changes
+## Scenario 4: Reset to HEAD  -- discard all uncommitted changes
 
 When `to` is omitted, `doltReset` defaults to the current HEAD. This is the
 standard "discard all uncommitted changes" operation when combined with `hard: true`.

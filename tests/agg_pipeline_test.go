@@ -74,7 +74,7 @@ func TestAgg_Lookup_Basic(t *testing.T) {
 	assert.Len(t, itemDetails, 1, "order 1 must have 1 matching item")
 	assert.Equal(t, "apple", itemDetails[0].(bson.M)["name"])
 
-	// Third order has no matching item — item_details must be an empty array.
+	// Third order has no matching item  -- item_details must be an empty array.
 	third := dmap(results[2])
 	noMatch := third["item_details"].(bson.A)
 	assert.Len(t, noMatch, 0, "order with no match must have empty item_details array")

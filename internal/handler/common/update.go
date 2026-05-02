@@ -56,14 +56,14 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 	// Accumulate modified documents and apply them in a single UpdateAll at
 	// the end of iteration. Each UpdateAll triggers a full prolly-tree flush
 	// and NBS journal sync, so calling it once per doc turns UpdateMany over
-	// N matches into N synchronous fsyncs — this is the bulk of update_many's
+	// N matches into N synchronous fsyncs  -- this is the bulk of update_many's
 	// historic 74–97x gap vs. MongoDB.
 	var pending []*types.Document
 
 	// pendingMutations runs parallel to pending: entry i, if non-nil, gives
 	// the field-level mutations that recreate pending[i] from the prior
 	// stored version. Populated only when the update is a plain $set/$unset
-	// against bare top-level keys — anything more complex stays nil so the
+	// against bare top-level keys  -- anything more complex stays nil so the
 	// backend falls back to a full rewrite for that doc.
 	var pendingMutations [][]backends.FieldMutation
 
@@ -429,7 +429,7 @@ func evaluateReplaceExpr(expr any, doc *types.Document) (*types.Document, error)
 			return result, nil
 		}
 
-		// Literal document template — evaluate field path expressions in values.
+		// Literal document template  -- evaluate field path expressions in values.
 		return evaluateReplaceDocTemplate(e, doc)
 
 	default:
@@ -701,7 +701,7 @@ func processUpdateOperator(command string, doc, update *types.Document, upsert b
 }
 
 // hasAnyMutations reports whether any entry in muts is a non-empty mutation
-// list — i.e. whether the backend can exploit a partial update for at least
+// list  -- i.e. whether the backend can exploit a partial update for at least
 // one document in the batch.
 func hasAnyMutations(muts [][]backends.FieldMutation) bool {
 	for _, m := range muts {
@@ -796,7 +796,7 @@ func collectSimpleFieldMutations(update *types.Document) []backends.FieldMutatio
 }
 
 // isSimpleTopLevelKey reports whether key is a bare identifier that maps
-// cleanly to a single JSON object field — no dot-notation, no array indices,
+// cleanly to a single JSON object field  -- no dot-notation, no array indices,
 // no special characters that would need escaping in a MySQL-style JSON path.
 //
 // _id is excluded because partial updates cannot touch the primary key:

@@ -298,7 +298,7 @@ func parseRootish(s string) error {
 		)
 	}
 
-	// Reject any '@' — it is reserved as the database/branch delimiter and
+	// Reject any '@'  -- it is reserved as the database/branch delimiter and
 	// is forbidden in raw branch names. This also covers reflog syntax (<ref>@{...}).
 	if strings.Contains(s, "@") {
 		return handlererrors.NewCommandErrorMsg(

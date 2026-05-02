@@ -48,7 +48,7 @@ func newMultiply(args ...any) (Operator, error) {
 			var exErr *aggregations.ExpressionError
 			if errors.As(err, &exErr) {
 				if exErr.Code() == aggregations.ErrUndefinedVariable {
-					// Variable reference ($$var) — evaluate at process time via evalArgValue.
+					// Variable reference ($$var)  -- evaluate at process time via evalArgValue.
 					op.rawArgs = append(op.rawArgs, arg)
 				}
 

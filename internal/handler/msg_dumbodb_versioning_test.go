@@ -209,7 +209,7 @@ func TestRootishIsReadOnly(t *testing.T) {
 		{"na7kfra98h45fr2u5qtr30o2ggm7vh61", true}, // full 32-char Dolt hash
 		{"00000000000000000000000000000000", true},  // all-zero hash (edge case)
 
-		// Abbreviated hash-like strings — treated as branches at parse time (writable).
+		// Abbreviated hash-like strings  -- treated as branches at parse time (writable).
 		{"abc123", false},
 		{"deadbeef", false},
 		{"a1b2c3d4e5f6", false},
@@ -219,7 +219,7 @@ func TestRootishIsReadOnly(t *testing.T) {
 		{"main~3", true},
 		{"feature~10", true},
 
-		// Tag-like names that look like branches (writable — tags indistinguishable from branches at parse time)
+		// Tag-like names that look like branches (writable  -- tags indistinguishable from branches at parse time)
 		{"v1.0", false},
 		{"v2.3.4", false},
 	}

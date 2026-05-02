@@ -22,7 +22,7 @@ Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
-## Scenario 1: Log with no user commits — only the "Initialize database" root
+## Scenario 1: Log with no user commits  -- only the "Initialize database" root
 
 Every DumboDB database is created with an automatic `"Initialize database"` root
 commit. Before any user commits, `doltLog` returns exactly that one commit.
@@ -49,7 +49,7 @@ Expected:
 
 Key checks:
 - Exactly 1 commit: `"Initialize database"`
-- No `parent1` field — it is the root commit
+- No `parent1` field  -- it is the root commit
 - Response has no top-level `branch` field
 
 ---
@@ -80,7 +80,7 @@ After setup, the branch has four commits: `"Initialize database"` ← `first` �
 
 ---
 
-## Scenario 2: Log after multiple commits — parent chain, newest-first
+## Scenario 2: Log after multiple commits  -- parent chain, newest-first
 
 `doltLog` returns all commits newest-first. Including the `"Initialize database"`
 root, four entries appear in total.
@@ -112,7 +112,7 @@ Key checks:
 
 ---
 
-## Scenario 3: Log with limit — truncates at the specified count
+## Scenario 3: Log with limit  -- truncates at the specified count
 
 `doltLog` with `limit: 2` returns at most 2 entries starting from HEAD.
 
@@ -139,7 +139,7 @@ Key checks:
 
 ---
 
-## Scenario 3b: Log with limit=0 — returns an empty list
+## Scenario 3b: Log with limit=0  -- returns an empty list
 
 `limit: 0` explicitly requests zero commits. The response must return an empty
 `commits` array regardless of how much history exists, and the same holds when
@@ -162,11 +162,11 @@ Key checks:
 
 ---
 
-## Scenario 4: Log from a specific hash — start traversal at that commit
+## Scenario 4: Log from a specific hash  -- start traversal at that commit
 
 `doltLog` with `from: hash2` starts at `hash2` and walks backwards, skipping
 the HEAD commit (`hash3`). The walk continues through `hash1` down to the
-`"Initialize database"` root — three entries in total.
+`"Initialize database"` root  -- three entries in total.
 
 ```js
 db.runCommand({ doltLog: 1, from: hash2 })
@@ -186,13 +186,13 @@ Expected:
 ```
 
 Key checks:
-- `hash3` ("third") does **not** appear — traversal starts from `hash2`
+- `hash3` ("third") does **not** appear  -- traversal starts from `hash2`
 - Three entries: `hash2`, `hash1`, then the Initialize root
 - The Initialize root entry has no `parent1`
 
 ---
 
-## Scenario 5: Refs annotation — branch head decoration (git --decorate)
+## Scenario 5: Refs annotation  -- branch head decoration (git --decorate)
 
 When a commit is the HEAD of one or more branches its entry includes a `refs`
 array.  The connection branch gets two separate entries: `"HEAD"` and the bare
@@ -203,7 +203,7 @@ no `refs` field.
 // Create a second branch pointing at the current main HEAD.
 db.getSiblingDB("logdb@main").runCommand({ doltBranch: 1, branch: "feature" })
 
-// Query from main — hash3 is tip of both "main" and "feature".
+// Query from main  -- hash3 is tip of both "main" and "feature".
 db.runCommand({ doltLog: 1, limit: 2 })
 ```
 
@@ -391,7 +391,7 @@ Expected:
 ```
 
 Key checks:
-- `commits[0].commitId` equals `hashC` (feat tip — **not** `hashM`, the merge on main)
+- `commits[0].commitId` equals `hashC` (feat tip  -- **not** `hashM`, the merge on main)
 - `commits[0].refs` contains `"HEAD"` and `"feat"` (connection branch decoration)
 - `hashB` (main-only) and `hashM` (merge) do **not** appear
 - Non-head commits have no `refs` field
@@ -425,7 +425,7 @@ Expected:
 Key checks:
 - All five commits appear (previously `hashC` was missing because the walk
   only followed `parent1`).
-- `hashC` sorts before `hashB` — both have the same height (2), tied by
+- `hashC` sorts before `hashB`  -- both have the same height (2), tied by
   newer timestamp first.
 
 ---
@@ -455,7 +455,7 @@ Expected:
 Key checks:
 - Exactly 2 entries
 - `commits[0]` is the merge commit `hashM` with both `parent1` and `parent2`
-- `commits[1]` is `hashC` — newer timestamp wins the height-2 tie over `hashB`
+- `commits[1]` is `hashC`  -- newer timestamp wins the height-2 tie over `hashB`
 - `hashA`, `hashB`, and `init` do **not** appear
 
 ---
@@ -470,7 +470,7 @@ Key checks:
 | `{ doltLog: 1, from: "<hash>" }` | All commits from `<hash>` backwards |
 | `{ doltLog: 1, from: "<hash>", limit: N }` | At most N commits from `<hash>` (empty when N=0) |
 
-- Commits are returned in reverse topological order — higher commits first,
+- Commits are returned in reverse topological order  -- higher commits first,
   with ties broken by newer timestamp first. Both parents of merge commits are
   visited.
 - Each entry contains `hash`, `message`, `timestamp`, `author`, `committer`, and `committerTimestamp`.

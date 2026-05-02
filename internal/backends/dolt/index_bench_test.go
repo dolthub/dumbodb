@@ -93,7 +93,7 @@ func seedBenchCollection(b *testing.B, n int) (backends.Collection, context.Cont
 }
 
 // drainIter consumes the backend iterator and returns the count of documents
-// produced. Mirrors what the handler does after Query — its cost dominates
+// produced. Mirrors what the handler does after Query  -- its cost dominates
 // the indexed path, so the benchmark must include it.
 func drainIter(b *testing.B, it types.DocumentsIterator) int {
 	count := 0
@@ -157,7 +157,7 @@ func BenchmarkIndexLookup_Equality_10K(b *testing.B) {
 // BenchmarkIndexLookup_FullRange_10K mirrors the parity Agg_MatchGroup_Indexed
 // shape where the $match filter ($gte:0) is satisfied by every document. The
 // raw index path here materialises every primary id and then point-fetches
-// each document — strictly worse than the sequential scan path. The intent of
+// each document  -- strictly worse than the sequential scan path. The intent of
 // the benchmark is to expose that gap so the planner gate that abandons the
 // index when the range covers ~all of the collection can be tuned.
 func BenchmarkIndexLookup_FullRange_10K(b *testing.B) {
@@ -205,7 +205,7 @@ func BenchmarkIndexLookup_FullRange_10K(b *testing.B) {
 
 // BenchmarkIndexLookup_Range_10K mirrors the parity FilterRange_10K_Indexed
 // benchmark: a 1%-selectivity numeric range. The selectivity is what makes
-// the index path interesting — the un-indexed scan still touches every doc.
+// the index path interesting  -- the un-indexed scan still touches every doc.
 func BenchmarkIndexLookup_Range_10K(b *testing.B) {
 	const n = 10_000
 	lo, hi := int32(n/10), int32(n/10+n/100) // [1000, 1100)

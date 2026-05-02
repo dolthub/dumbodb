@@ -219,7 +219,7 @@ func TestIndex_Sparse_UniqueWithMissingField(t *testing.T) {
 	_, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
 
-	// Both docs lack the email field — sparse+unique should allow this.
+	// Both docs lack the email field  -- sparse+unique should allow this.
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "name", Value: "A"}})
 	require.NoError(t, err)
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "name", Value: "B"}})
@@ -427,7 +427,7 @@ func TestIndex_Partial_UniquePartial(t *testing.T) {
 	_, err := coll.Indexes().CreateOne(ctx, model)
 	require.NoError(t, err)
 
-	// Two inactive docs with the same email — allowed because filter not satisfied.
+	// Two inactive docs with the same email  -- allowed because filter not satisfied.
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "email", Value: "x@x.com"}, {Key: "status", Value: "inactive"}})
 	require.NoError(t, err)
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "email", Value: "x@x.com"}, {Key: "status", Value: "inactive"}})
@@ -526,7 +526,7 @@ func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "handle", Value: "alice"}})
 	require.NoError(t, err)
 
-	// Exact duplicate — must fail.
+	// Exact duplicate  -- must fail.
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "handle", Value: "alice"}})
 	require.Error(t, err, "duplicate exact-case value must be rejected")
 }
