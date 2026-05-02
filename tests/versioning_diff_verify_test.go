@@ -692,6 +692,21 @@ func TestDiffVerify(t *testing.T) {
 		require.Len(t, cd9g.Removed, 1, "9g: reverse diff must have 1 removed doc (_id:1 absent in rootishtest)")
 		assert.Equal(t, int32(1), cd9g.Removed[0]["_id"], "9g: removed doc must be _id:1")
 
+		// 9h: from=hashC2+"~1" (commit hash with tilde), to=hashC2.
+		// hashC2~1 = hashC1. Same result as 9b: _id:1 added.
+		var raw9h bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltDiff", Value: int32(1)},
+			{Key: "from", Value: hashC2 + "~1"},
+			{Key: "to", Value: hashC2},
+		}).Decode(&raw9h))
+
+		dr9h := decodeDiffResult(t, raw9h)
+		cd9h := findCollDiff(dr9h, "scenario9")
+		require.NotNil(t, cd9h, "9h: expected diff for 'scenario9' collection")
+		require.Len(t, cd9h.Added, 1, "9h: expected 1 added doc")
+		assert.Equal(t, int32(1), cd9h.Added[0]["_id"], "9h: added doc must be _id:1")
+
 		_ = hashC2 // used above
 	})
 

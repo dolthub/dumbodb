@@ -460,6 +460,106 @@ Key checks:
 
 ---
 
+## Scenario 10: stat flag -- per-collection change summary
+
+The `stat` flag adds a `stat` array to each commit showing per-collection
+change counts (added, modified, deleted). This is analogous to `git log --stat`.
+
+```js
+db.runCommand({ doltLog: 1, limit: 1, stat: true })
+```
+
+Expected (commit "third" added one document to "events"):
+
+```json
+{
+  "commits": [
+    {
+      "commitId": "<hash3>",
+      "parent1": "<hash2>",
+      "message": "third",
+      "timestamp": "<...>",
+      "author": "carol <carol@startup.dev>",
+      "committer": "<...>",
+      "committerTimestamp": "<...>",
+      "stat": [
+        { "name": "events", "status": "modified", "added": 1, "modified": 0, "deleted": 0 }
+      ]
+    }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- `stat` is present on the commit entry
+- `stat[0].name` is `"events"` (the only collection changed)
+- `stat[0].added` is `1` (one document inserted in this commit)
+- `stat[0].modified` and `stat[0].deleted` are `0`
+
+---
+
+## Scenario 11: patch flag -- full document diffs
+
+The `patch` flag adds a `diff` array to each commit showing the full
+document-level diff between the commit and its first parent. The shape
+matches `doltDiff` output. This is analogous to `git log --patch`.
+
+```js
+db.runCommand({ doltLog: 1, limit: 1, patch: true })
+```
+
+Expected (commit "third" added `{_id: 3, label: "gamma"}` to "events"):
+
+```json
+{
+  "commits": [
+    {
+      "commitId": "<hash3>",
+      "parent1": "<hash2>",
+      "message": "third",
+      "timestamp": "<...>",
+      "author": "carol <carol@startup.dev>",
+      "committer": "<...>",
+      "committerTimestamp": "<...>",
+      "diff": [
+        {
+          "name": "events",
+          "status": "modified",
+          "added": [ { "_id": 3, "label": "gamma" } ],
+          "removed": [],
+          "modified": []
+        }
+      ]
+    }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- `diff` is present on the commit entry
+- `diff[0].name` is `"events"`
+- `diff[0].added` contains the document `{_id: 3, label: "gamma"}`
+- `diff[0].removed` and `diff[0].modified` are empty arrays
+
+---
+
+## Scenario 12: stat and patch absent when not requested
+
+When neither `stat` nor `patch` is passed, commit entries do not include
+`stat` or `diff` fields.
+
+```js
+db.runCommand({ doltLog: 1, limit: 1 })
+```
+
+Key checks:
+- `stat` field is absent from the commit entry
+- `diff` field is absent from the commit entry
+
+---
+
 ## Quick Reference
 
 | Command | Behaviour |

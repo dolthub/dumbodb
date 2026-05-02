@@ -504,7 +504,9 @@ func TestLogVerify(t *testing.T) {
 	_ = hash3 // referenced in subtests above
 
 	// -------------------------------------------------------------------------
-	// Scenario 10: stat flag -- per-collection change counts for each commit
+	// Scenario 10: stat flag -- per-collection change summary
+	// Commit "third" added {_id:3, label:"gamma"} to "events".
+	// stat should show events: added=1, modified=0, deleted=0.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario10_StatFlag", func(t *testing.T) {
 		var raw bson.M
@@ -518,21 +520,27 @@ func TestLogVerify(t *testing.T) {
 		require.Len(t, commits, 1)
 
 		head := commits[0].(bson.M)
+		assert.Equal(t, hash3, head["commitId"], "must be the 'third' commit")
+
 		statArr, ok := head["stat"].(bson.A)
 		require.True(t, ok, "stat must be present when stat:true")
-		require.NotEmpty(t, statArr, "stat must contain at least one collection entry")
+		require.Len(t, statArr, 1, "exactly one collection changed in this commit")
 
-		// Each stat entry must have name, status, added, modified, deleted.
-		entry := statArr[0].(bson.M)
-		assert.NotEmpty(t, entry["name"], "stat entry must have a collection name")
-		assert.NotEmpty(t, entry["status"], "stat entry must have a status")
-		assert.NotNil(t, entry["added"], "stat entry must have added count")
-		assert.NotNil(t, entry["modified"], "stat entry must have modified count")
-		assert.NotNil(t, entry["deleted"], "stat entry must have deleted count")
+		s := statArr[0].(bson.M)
+		assert.Equal(t, "events", s["name"], "changed collection must be 'events'")
+		assert.Equal(t, "modified", s["status"], "collection status must be 'modified'")
+		assert.EqualValues(t, 1, s["added"], "one document added")
+		assert.EqualValues(t, 0, s["modified"], "no documents modified")
+		assert.EqualValues(t, 0, s["deleted"], "no documents deleted")
+
+		// diff must NOT be present when only stat is requested.
+		assert.Nil(t, head["diff"], "diff must be absent when only stat is requested")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 11: patch flag -- full document diffs for each commit
+	// Scenario 11: patch flag -- full document diffs
+	// Commit "third" added {_id:3, label:"gamma"} to "events".
+	// diff should contain the full document in the added array.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario11_PatchFlag", func(t *testing.T) {
 		var raw bson.M
@@ -546,23 +554,65 @@ func TestLogVerify(t *testing.T) {
 		require.Len(t, commits, 1)
 
 		head := commits[0].(bson.M)
+		assert.Equal(t, hash3, head["commitId"], "must be the 'third' commit")
+
 		diffArr, ok := head["diff"].(bson.A)
 		require.True(t, ok, "diff must be present when patch:true")
-		require.NotEmpty(t, diffArr, "diff must contain at least one collection entry")
+		require.Len(t, diffArr, 1, "exactly one collection changed in this commit")
 
-		// Each diff entry must have name, status, added, removed, modified.
-		entry := diffArr[0].(bson.M)
-		assert.NotEmpty(t, entry["name"], "diff entry must have a collection name")
-		assert.NotEmpty(t, entry["status"], "diff entry must have a status")
-		assert.NotNil(t, entry["added"], "diff entry must have added array")
-		assert.NotNil(t, entry["removed"], "diff entry must have removed array")
-		assert.NotNil(t, entry["modified"], "diff entry must have modified array")
+		cd := diffArr[0].(bson.M)
+		assert.Equal(t, "events", cd["name"], "changed collection must be 'events'")
+		assert.Equal(t, "modified", cd["status"], "collection status must be 'modified'")
+
+		addedDocs, ok := cd["added"].(bson.A)
+		require.True(t, ok, "added must be an array")
+		require.Len(t, addedDocs, 1, "one document added in this commit")
+
+		addedDoc := addedDocs[0].(bson.M)
+		assert.EqualValues(t, 3, addedDoc["_id"], "added doc _id must be 3")
+		assert.Equal(t, "gamma", addedDoc["label"], "added doc label must be 'gamma'")
+
+		removedDocs := cd["removed"].(bson.A)
+		assert.Empty(t, removedDocs, "no documents removed")
+		modifiedDocs := cd["modified"].(bson.A)
+		assert.Empty(t, modifiedDocs, "no documents modified")
+
+		// stat must NOT be present when only patch is requested.
+		assert.Nil(t, head["stat"], "stat must be absent when only patch is requested")
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 12: neither stat nor patch -- no stat/diff fields present
+	// Scenario 12: stat across multiple commits
+	// Request limit:3 with stat:true. Each of the three user commits should
+	// have a stat entry for "events" with at least 1 added document.
 	// -------------------------------------------------------------------------
-	t.Run("Scenario12_NoStatNoPatch", func(t *testing.T) {
+	t.Run("Scenario12_StatMultipleCommits", func(t *testing.T) {
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(3)},
+			{Key: "stat", Value: true},
+		}).Decode(&raw))
+
+		commits := raw["commits"].(bson.A)
+		require.Len(t, commits, 3, "three user commits")
+
+		for i, c := range commits {
+			cm := c.(bson.M)
+			statArr, ok := cm["stat"].(bson.A)
+			require.True(t, ok, "commit %d must have stat", i)
+			require.NotEmpty(t, statArr, "commit %d: at least one collection changed", i)
+			s := statArr[0].(bson.M)
+			assert.Equal(t, "events", s["name"], "commit %d: collection must be 'events'", i)
+			added, _ := s["added"].(int32)
+			assert.Greater(t, added, int32(0), "commit %d: at least one document added", i)
+		}
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 13: neither stat nor patch -- no stat/diff fields present
+	// -------------------------------------------------------------------------
+	t.Run("Scenario13_NoStatNoPatch", func(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
