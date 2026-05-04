@@ -857,7 +857,7 @@ main.runCommand({ doltConflicts: 1 })
 //       collection: "orders",
 //       conflicts: [
 //         {
-//           conflictId:    "1416311c762c282687d45fb6e3badb8f2fc53688",
+//           conflictId:    "2onhBAqtYZDVqr4WfXh8pA",
 //           _id:           1,
 //           base:          { amount: 100 },
 //           ours:          { amount: 150 },
@@ -912,7 +912,7 @@ var main = db.getSiblingDB("orders@main")
 main.runCommand({
   doltResolveConflict: 1,
   collection: "orders",
-  conflictId: "1416311c762c282687d45fb6e3badb8f2fc53688",
+  conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "ours"
 })
 // { ok: 1 }
@@ -921,7 +921,7 @@ main.runCommand({
 main.runCommand({
   doltResolveConflict: 1,
   collection: "orders",
-  conflictId: "1416311c762c282687d45fb6e3badb8f2fc53688",
+  conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "theirs"
 })
 // { ok: 1 }
@@ -930,7 +930,7 @@ main.runCommand({
 main.runCommand({
   doltResolveConflict: 1,
   collection: "orders",
-  conflictId: "1416311c762c282687d45fb6e3badb8f2fc53688",
+  conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "custom",
   value: { _id: 1, amount: 175, status: "reconciled" }
 })

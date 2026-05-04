@@ -326,7 +326,7 @@ func loadConflictEntriesFromArtifacts(ctx context.Context, state *dbState, resol
 		theirDiffType := computeDiffType(baseVal, theirsVal)
 
 		entries = append(entries, &conflictEntry{
-			id:            conflictIDFromKey(rawKey),
+			id:            conflictID(rawKey, theirH),
 			rawKey:        rawKey,
 			baseRawVal:    baseVal,
 			oursRawVal:    oursVal,

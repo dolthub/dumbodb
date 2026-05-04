@@ -238,7 +238,7 @@ printjson(rConflicts)
 //     {
 //       collection: "inventory",
 //       conflicts: [
-//         { conflictId: "<hex-hash>", _id: 1, base: { v: 1 }, ours: { v: 10 },
+//         { conflictId: "<base64-id>", _id: 1, base: { v: 1 }, ours: { v: 10 },
 //           theirs: { v: 20 }, ourDiffType: "modified", theirDiffType: "modified" }
 //       ]
 //     }

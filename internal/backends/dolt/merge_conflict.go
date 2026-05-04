@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
+	"github.com/zeebo/xxh3"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 )
@@ -527,16 +529,13 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 	return amEdt.Flush(ctx)
 }
 
-// conflictIDFromKey derives a stable conflict ID from a raw key tuple.
-// It extracts the ByteString field at index 0 (the SHA-512[:20] hash of the
-// MongoDB _id) and returns its hex encoding. This is the same value that
-// appears as the _id column in dolt_conflicts_{collection} SQL tables.
-func conflictIDFromKey(rawKey val.Tuple) string {
-	keyBytes, ok := keyDesc.GetBytes(0, rawKey)
-	if !ok || len(keyBytes) == 0 {
-		return fmt.Sprintf("%x", []byte(rawKey)) // fallback: hex of entire tuple
-	}
-	return fmt.Sprintf("%x", keyBytes)
+// conflictID computes a conflict ID matching dolt's dolt_conflict_id column.
+// It hashes the key tuple concatenated with the theirRootIsh commit hash using
+// XXH3-128, then base64-encodes the 16-byte result (raw standard encoding, no
+// padding). This matches dolt's GetConflictId in conflicts_tables_prolly.go.
+func conflictID(rawKey val.Tuple, theirHash hash.Hash) string {
+	b := xxh3.Hash128(append([]byte(rawKey), theirHash[:]...)).Bytes()
+	return base64.RawStdEncoding.EncodeToString(b[:])
 }
 
 // captureConflictsForCollection merges two collection maps at document level,
@@ -545,11 +544,12 @@ func conflictIDFromKey(rawKey val.Tuple) string {
 func captureConflictsForCollection(
 	ctx context.Context,
 	intoMap, fromMap, baseMap prolly.Map,
+	theirHash hash.Hash,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	collisionFn := func(left, right tree.Diff) (tree.Diff, bool) {
 		rawKey := val.Tuple(left.Key)
 		entry := &conflictEntry{
-			id:            conflictIDFromKey(rawKey),
+			id:            conflictID(rawKey, theirHash),
 			rawKey:        rawKey,
 			ourDiffType:   diffTypeString(left.Type),
 			theirDiffType: diffTypeString(right.Type),
@@ -677,7 +677,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening base collection %q: %w", name, err)
 		}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap)
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
