@@ -28,7 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -50,7 +49,7 @@ const dbBranchSep = "@"
 func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -88,7 +87,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 		To:          to,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	collections := types.MakeArray(len(res.Collections))
@@ -367,7 +366,7 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -426,7 +425,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 				"dumboCommit: "+err.Error(),
 			)
 		}
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	return documentOpMsg(
@@ -452,7 +451,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -520,7 +519,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		Force:  forceDelete,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	return documentOpMsg(
@@ -558,7 +557,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -596,7 +595,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			Abort:  true,
 		})
 		if mergeErr != nil {
-			return nil, lazyerrors.Error(mergeErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -623,7 +622,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			Author:   author,
 		})
 		if mergeErr != nil {
-			return nil, lazyerrors.Error(mergeErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
 		}
 		contDoc := must.NotFail(types.NewDocument(
 			"commitId", res.CommitID,
@@ -711,7 +710,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 				)),
 			)
 		}
-		return nil, lazyerrors.Error(mergeErr)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
 	}
 
 	mergeDoc := must.NotFail(types.NewDocument(
@@ -740,7 +739,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -766,7 +765,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		Branch: branch,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	collectionsArr := types.MakeArray(len(res.Collections))
@@ -851,7 +850,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -912,7 +911,7 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 		Value:      value,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	return documentOpMsg(
@@ -931,7 +930,7 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -992,7 +991,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Patch:      patch,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	commits := types.MakeArray(len(res.Commits))
@@ -1105,7 +1104,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1161,7 +1160,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		Hard:     hard,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	return documentOpMsg(
@@ -1181,7 +1180,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1214,7 +1213,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		Branch: branch,
 	})
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	collections := types.MakeArray(len(res.Tables))
@@ -1277,7 +1276,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1315,7 +1314,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			Abort:  true,
 		})
 		if pickErr != nil {
-			return nil, lazyerrors.Error(pickErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, pickErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1349,7 +1348,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			Committer: committerParam,
 		})
 		if pickErr != nil {
-			return nil, lazyerrors.Error(pickErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, pickErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1424,7 +1423,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 				)),
 			)
 		}
-		return nil, lazyerrors.Error(pickErr)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, pickErr.Error())
 	}
 
 	return documentOpMsg(
@@ -1457,7 +1456,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1508,7 +1507,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 			Abort:  true,
 		})
 		if rebaseErr != nil {
-			return nil, lazyerrors.Error(rebaseErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, rebaseErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1546,7 +1545,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 					)),
 				)
 			}
-			return nil, lazyerrors.Error(rebaseErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, rebaseErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1598,7 +1597,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 				)),
 			)
 		}
-		return nil, lazyerrors.Error(rebaseErr)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, rebaseErr.Error())
 	}
 
 	return documentOpMsg(
@@ -1627,7 +1626,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1665,7 +1664,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			Abort:  true,
 		})
 		if revertErr != nil {
-			return nil, lazyerrors.Error(revertErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, revertErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1692,7 +1691,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			Author:   author,
 		})
 		if revertErr != nil {
-			return nil, lazyerrors.Error(revertErr)
+			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, revertErr.Error())
 		}
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
@@ -1759,7 +1758,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 				)),
 			)
 		}
-		return nil, lazyerrors.Error(revertErr)
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, revertErr.Error())
 	}
 
 	return documentOpMsg(
@@ -1770,6 +1769,138 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			"timestamp", time.UnixMilli(res.Timestamp),
 			"committer", res.Committer,
 			"committerTimestamp", time.UnixMilli(res.CommitterTimestamp),
+			"ok", float64(1),
+		)),
+	)
+}
+// MsgDumboDBTag implements the `dumboTag` admin command.
+//
+// Tags share Dolt's tag refspec (refs/tags/<name>) and use the Dolt tag
+// flatbuffer (TagValue), so tags created here are visible to `dolt tag`
+// and tags created by `dolt tag` are listed here.
+//
+// Usage:
+//
+//	db.adminCommand({dumboTag: 1})                                       // list all tags
+//	db.adminCommand({dumboTag: 1, name: "v1.0", hash: "<rootish>"})      // create tag at rootish
+//	db.adminCommand({dumboTag: 1, name: "v1.0"})                         // create tag at current branch HEAD
+//	db.adminCommand({dumboTag: 1, name: "v1.0", delete: true})           // delete tag
+//
+// Optional metadata for create:
+//   - message (string): tag description
+//   - author  (string): tagger name
+//   - email   (string): tagger email
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	name, err := common.GetOptionalParam[string](document, "name", "")
+	if err != nil {
+		return nil, err
+	}
+
+	deleteTag, err := common.GetOptionalBoolOrIntParam(document, "delete", false)
+	if err != nil {
+		return nil, err
+	}
+
+	tagHash, err := common.GetOptionalParam[string](document, "hash", "")
+	if err != nil {
+		return nil, err
+	}
+
+	message, err := common.GetOptionalParam[string](document, "message", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
+	email, err := common.GetOptionalParam[string](document, "email", "")
+	if err != nil {
+		return nil, err
+	}
+
+	if name == "" && deleteTag {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboTag: tag name is required for delete",
+			"name",
+		)
+	}
+
+	if name != "" {
+		if strings.Contains(name, "@") {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"dumboTag: tag name must not contain '@' (reserved as the database/branch delimiter)",
+				"name",
+			)
+		}
+		if strings.ContainsAny(name, " \t\n") {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"dumboTag: tag name must not contain whitespace",
+				"name",
+			)
+		}
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboTag: versioning is not supported by the current backend",
+		)
+	}
+
+	res, err := vb.DumboDBTag(connCtx, &backends.TagParams{
+		DBName:  dbName,
+		Branch:  branch,
+		Name:    name,
+		Hash:    tagHash,
+		Delete:  deleteTag,
+		Message: message,
+		Author:  author,
+		Email:   email,
+	})
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	tagsArr := types.MakeArray(len(res.Tags))
+	for _, t := range res.Tags {
+		entry := must.NotFail(types.NewDocument(
+			"name", t.Name,
+			"commitId", t.CommitID,
+			"tagger", t.Tagger,
+			"email", t.Email,
+			"message", t.Message,
+			"timestamp", time.UnixMilli(t.Timestamp),
+		))
+		tagsArr.Append(entry)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"tags", tagsArr,
 			"ok", float64(1),
 		)),
 	)
