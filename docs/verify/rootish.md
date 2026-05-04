@@ -253,8 +253,7 @@ var cdb = db.getSiblingDB("chaindb")
 cdb.dropDatabase()
 
 cdb.items.insertOne({ _id: 1, v: "root" })
-cdb.runCommand({ doltCommit: 1, message: "C1", author: "alice <alice@acme.com>" })
-const hashC1 = cdb.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+const hashC1 = cdb.runCommand({ doltCommit: 1, message: "C1", author: "alice <alice@acme.com>" }).commitId
 
 cdb.getSiblingDB("chaindb@main").runCommand({ doltBranch: 1, branch: "feature" })
 
