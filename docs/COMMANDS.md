@@ -25,19 +25,19 @@ Every `dumbo*` command has an identical `dolt*` alias:
 
 | Primary | Alias |
 |---------|-------|
-| `dumboCommit` | `doltCommit` |
-| `dumboBranch` | `doltBranch` |
-| `dumboMerge` | `doltMerge` |
-| `dumboCherryPick` | `doltCherryPick` |
-| `dumboRebase` | `doltRebase` |
-| `dumboLog` | `doltLog` |
-| `dumboStatus` | `doltStatus` |
-| `dumboDiff` | `doltDiff` |
-| `dumboReset` | `doltReset` |
-| `dumboRevert` | `doltRevert` |
-| `dumboConflicts` | `doltConflicts` |
-| `dumboResolveConflict` | `doltResolveConflict` |
-| `dumboTag` | `doltTag` |
+| `dumboCommit` | `dumboCommit` |
+| `dumboBranch` | `dumboBranch` |
+| `dumboMerge` | `dumboMerge` |
+| `dumboCherryPick` | `dumboCherryPick` |
+| `dumboRebase` | `dumboRebase` |
+| `dumboLog` | `dumboLog` |
+| `dumboStatus` | `dumboStatus` |
+| `dumboDiff` | `dumboDiff` |
+| `dumboReset` | `dumboReset` |
+| `dumboRevert` | `dumboRevert` |
+| `dumboConflicts` | `dumboConflicts` |
+| `dumboResolveConflict` | `dumboResolveConflict` |
+| `dumboTag` | `dumboTag` |
 
 ---
 
@@ -76,7 +76,7 @@ var db = db.getSiblingDB("orders@main")
 
 db.orders.insertOne({ _id: 1, amount: 100, status: "pending" })
 
-db.runCommand({ doltCommit: 1, message: "add order #1", author: "alice <alice@acme.com>" })
+db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@acme.com>" })
 // {
 //   commitId:           "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
 //   branch:             "main",
@@ -130,19 +130,19 @@ Creates or deletes a branch from the rootish encoded in the database name.
 
 ```js
 // Create a "feature" branch from main HEAD
-db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
 // { branch: "feature", ok: 1 }
 
 // Create a branch from an ancestor commit
-db.getSiblingDB("orders@main~2").runCommand({ doltBranch: 1, branch: "rollback-point" })
+db.getSiblingDB("orders@main~2").runCommand({ dumboBranch: 1, branch: "rollback-point" })
 // { branch: "rollback-point", ok: 1 }
 
 // Safe-delete a merged branch
-db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "feature", delete: 1 })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature", delete: 1 })
 // { branch: "feature", ok: 1 }
 
 // Force-delete a branch with unmerged commits
-db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "abandoned", forceDelete: 1 })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned", forceDelete: 1 })
 // { branch: "abandoned", ok: 1 }
 ```
 
@@ -150,8 +150,8 @@ db.getSiblingDB("orders@main").runCommand({ doltBranch: 1, branch: "abandoned", 
 
 | Condition | Error |
 |-----------|-------|
-| `branch` is empty | `BadValue: doltBranch: branch name must not be empty` |
-| `delete` and `forceDelete` both set | `BadValue: doltBranch: delete and forceDelete are mutually exclusive` |
+| `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
+| `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -211,7 +211,7 @@ For `continue`, `message` and `author` are optional overrides.
 var main = db.getSiblingDB("orders@main")
 
 // Standard merge
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
+main.runCommand({ dumboMerge: 1, merge_in: "feature" })
 // { commitId: "abc123...", message: "Merge branch 'feature' into 'main'", ok: 1 }
 
 // Fast-forward merge result
@@ -225,11 +225,11 @@ main.runCommand({ doltMerge: 1, merge_in: "feature" })
 // }
 
 // After resolving conflicts:
-main.runCommand({ doltMerge: 1, continue: 1 })
+main.runCommand({ dumboMerge: 1, continue: 1 })
 // { commitId: "xyz789...", message: "Merge branch 'feature' into 'main'", ok: 1 }
 
 // Abort a conflicted merge:
-main.runCommand({ doltMerge: 1, abort: 1 })
+main.runCommand({ dumboMerge: 1, abort: 1 })
 // { message: "merge aborted", ok: 1 }
 ```
 
@@ -237,14 +237,14 @@ main.runCommand({ doltMerge: 1, abort: 1 })
 
 | Condition | Error |
 |-----------|-------|
-| `merge_in` missing or empty | `BadValue: doltMerge: from branch name must not be empty` |
-| `noFF` and `ffOnly` both set | `BadValue: doltMerge: noFF and ffOnly are mutually exclusive` |
+| `merge_in` missing or empty | `BadValue: dumboMerge: from branch name must not be empty` |
+| `noFF` and `ffOnly` both set | `BadValue: dumboMerge: noFF and ffOnly are mutually exclusive` |
 | Merge produces conflicts | `ok: 0` response with `conflicts` array |
 
 ### Notes
 
 - When conflicts occur, the branch HEAD is unchanged; the staged working set reflects partial merge with "ours" values for conflicting documents.
-- Use `doltConflicts` to inspect and `doltResolveConflict` to resolve each conflict, then call `doltMerge continue:1`.
+- Use `dumboConflicts` to inspect and `dumboResolveConflict` to resolve each conflict, then call `dumboMerge continue:1`.
 - `abort: 1` restores the branch to its pre-merge state.
 
 ---
@@ -304,7 +304,7 @@ For `continue`, `message` and `committer` are optional overrides.
 var main = db.getSiblingDB("orders@main")
 
 // Cherry-pick a commit from another branch onto main
-main.runCommand({ doltCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
+main.runCommand({ dumboCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
 // {
 //   commitId:           "new-hash...",
 //   message:            "add order #1\n\n(cherry picked from commit na7kfra98h45fr2u5qtr30o2ggm7vh61)",
@@ -321,7 +321,7 @@ main.runCommand({ doltCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61" 
 
 | Condition | Error |
 |-----------|-------|
-| `commit` is an unsupported rootish form (HEAD, reflog, range, caret) | `BadValue: doltCherryPick: ...` |
+| `commit` is an unsupported rootish form (HEAD, reflog, range, caret) | `BadValue: dumboCherryPick: ...` |
 | Cherry-pick produces conflicts | `ok: 0` response with `conflicts` array |
 
 ---
@@ -375,14 +375,14 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 
 ```js
 // Rebase feature onto main with an explicit committer
-db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, onto: "main", committer: "alice <alice@acme.com>" })
+db.getSiblingDB("orders@feature").runCommand({ dumboRebase: 1, onto: "main", committer: "alice <alice@acme.com>" })
 // { commitsReplayed: 3, newTip: "abc123...", ok: 1 }
 
 // If conflicts arise  -- resolve them, then continue
-db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, continue: 1, committer: "alice <alice@acme.com>" })
+db.getSiblingDB("orders@feature").runCommand({ dumboRebase: 1, continue: 1, committer: "alice <alice@acme.com>" })
 
 // Abort
-db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, abort: 1 })
+db.getSiblingDB("orders@feature").runCommand({ dumboRebase: 1, abort: 1 })
 // { newTip: "original-tip...", ok: 1 }
 ```
 
@@ -390,14 +390,14 @@ db.getSiblingDB("orders@feature").runCommand({ doltRebase: 1, abort: 1 })
 
 | Condition | Error |
 |-----------|-------|
-| `onto` is an unsupported rootish form | `BadValue: doltRebase: ...` |
+| `onto` is an unsupported rootish form | `BadValue: dumboRebase: ...` |
 | Conflict during replay | `ok: 0` response with `conflicts` and `conflictCommit` |
 
 ### Notes
 
 - Rebase rewrites commit history; don't rebase branches that others have already pulled.
 - When paused on a conflict, `conflictCommit` identifies which original commit caused it.
-- Replayed commits preserve the original `author` but set `committer` to the person performing the rebase and `committerTimestamp` to the time of replay. This distinction is visible in `doltLog`.
+- Replayed commits preserve the original `author` but set `committer` to the person performing the rebase and `committerTimestamp` to the time of replay. This distinction is visible in `dumboLog`.
 
 ---
 
@@ -440,12 +440,12 @@ timestamp first.
 | `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
 | `committerTimestamp` | Date | Timestamp of when the commit was applied |
 | `stat` | array | **Only when `stat: true`.** Per-collection change counts: `[{name, status, added, modified, deleted}, ...]` |
-| `diff` | array | **Only when `patch: true`.** Full document diffs per collection (same shape as `doltDiff` collections). |
+| `diff` | array | **Only when `patch: true`.** Full document diffs per collection (same shape as `dumboDiff` collections). |
 
 ### Example
 
 ```js
-db.getSiblingDB("orders@main").runCommand({ doltLog: 1, limit: 2 })
+db.getSiblingDB("orders@main").runCommand({ dumboLog: 1, limit: 2 })
 // {
 //   commits: [
 //     {
@@ -530,7 +530,7 @@ var db = db.getSiblingDB("orders@main")
 
 db.orders.insertOne({ _id: 99, amount: 500 })
 
-db.runCommand({ doltStatus: 1 })
+db.runCommand({ dumboStatus: 1 })
 // {
 //   branch: "main",
 //   collections: [
@@ -540,15 +540,15 @@ db.runCommand({ doltStatus: 1 })
 // }
 
 // After committing  -- clean state
-db.runCommand({ doltCommit: 1, message: "add order 99", author: "alice <alice@acme.com>" })
-db.runCommand({ doltStatus: 1 })
+db.runCommand({ dumboCommit: 1, message: "add order 99", author: "alice <alice@acme.com>" })
+db.runCommand({ dumboStatus: 1 })
 // { branch: "main", collections: [], ok: 1 }
 
 // During a merge conflict  -- mergeState and conflicts appear
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ dumboMerge: 1, merge_in: "feature" })
 // (merge returns ok:0 with conflicts)
 
-db.runCommand({ doltStatus: 1 })
+db.runCommand({ dumboStatus: 1 })
 // {
 //   branch: "main",
 //   collections: [
@@ -564,13 +564,13 @@ db.runCommand({ doltStatus: 1 })
 
 | Condition | Error |
 |-----------|-------|
-| Connection is a read-only rootish (commit hash or ancestor expression) | `OperationFailed: doltStatus: no working set (connection is at a specific commit, not a named branch)` |
+| Connection is a read-only rootish (commit hash or ancestor expression) | `OperationFailed: dumboStatus: no working set (connection is at a specific commit, not a named branch)` |
 
 ### Notes
 
 - Only collections with uncommitted changes appear; unchanged collections are omitted.
 - `collections` is always an array (empty when clean).
-- Counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `doltDiff` for field-level detail.
+- Counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
 
 ---
 
@@ -626,14 +626,14 @@ var db = db.getSiblingDB("orders@main")
 
 // Insert baseline and commit
 db.orders.insertOne({ _id: 1, amount: 100 })
-const r = db.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
+const r = db.runCommand({ dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 const hashBase = r.commitId
 
 // Modify the working set
 db.orders.updateOne({ _id: 1 }, { $set: { amount: 150 } })
 
 // Diff HEAD vs working set
-db.runCommand({ doltDiff: 1 })
+db.runCommand({ dumboDiff: 1 })
 // {
 //   collections: [
 //     {
@@ -649,7 +649,7 @@ db.runCommand({ doltDiff: 1 })
 // }
 
 // Diff between two commits
-db.runCommand({ doltDiff: 1, from: hashBase, to: "HEAD" })
+db.runCommand({ dumboDiff: 1, from: hashBase, to: "HEAD" })
 ```
 
 ### Error cases
@@ -701,14 +701,14 @@ Moves the branch HEAD to the specified commit. Supports soft (default) and hard 
 var db = db.getSiblingDB("orders@main")
 
 // Soft reset to one commit back  -- uncommitted changes preserved
-const log = db.runCommand({ doltLog: 1, limit: 2 })
+const log = db.runCommand({ dumboLog: 1, limit: 2 })
 const previousHash = log.commits[1].commitId
 
-db.runCommand({ doltReset: 1, to: previousHash })
+db.runCommand({ dumboReset: 1, to: previousHash })
 // { commitId: "<previousHash>", ok: 1 }
 
 // Hard reset to HEAD  -- discard all uncommitted changes
-db.runCommand({ doltReset: 1, hard: true })
+db.runCommand({ dumboReset: 1, hard: true })
 // { commitId: "<current-HEAD-hash>", ok: 1 }
 ```
 
@@ -779,11 +779,11 @@ For `continue`, `message` and `author` are optional overrides.
 var main = db.getSiblingDB("orders@main")
 
 // View history to find the commit to revert
-const log = main.runCommand({ doltLog: 1, limit: 3 })
+const log = main.runCommand({ dumboLog: 1, limit: 3 })
 const badCommitHash = log.commits[0].commitId
 
 // Revert it
-main.runCommand({ doltRevert: 1, commit: badCommitHash })
+main.runCommand({ dumboRevert: 1, commit: badCommitHash })
 // {
 //   commitId:           "new-revert-hash...",
 //   message:            "Revert \"add order #1\"\n\nThis reverts commit <badCommitHash>.",
@@ -797,13 +797,13 @@ main.runCommand({ doltRevert: 1, commit: badCommitHash })
 
 | Condition | Error |
 |-----------|-------|
-| `commit` is an unsupported rootish form | `BadValue: doltRevert: ...` |
+| `commit` is an unsupported rootish form | `BadValue: dumboRevert: ...` |
 | Revert produces conflicts | `ok: 0` response with `conflicts` array |
 
 ### Notes
 
 - The revert creates a new commit; it does not alter history.
-- Unlike `doltReset`, reverting is safe to use on shared branches.
+- Unlike `dumboReset`, reverting is safe to use on shared branches.
 - The auto-generated message includes the original commit message and hash.
 
 ---
@@ -836,7 +836,7 @@ None (beyond the implicit `$db` connection).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `conflictId` | string | Unique identifier for this conflict (used with `doltResolveConflict`) |
+| `conflictId` | string | Unique identifier for this conflict (used with `dumboResolveConflict`) |
 | `_id` | any | The document's `_id` value (promoted to top level) |
 | `base` | document or null | The common ancestor document (without `_id`) |
 | `ours` | document or null | Our version of the document (without `_id`) |
@@ -850,7 +850,7 @@ None (beyond the implicit `$db` connection).
 var main = db.getSiblingDB("orders@main")
 
 // After a merge conflict:
-main.runCommand({ doltConflicts: 1 })
+main.runCommand({ dumboConflicts: 1 })
 // {
 //   collections: [
 //     {
@@ -885,7 +885,7 @@ Resolves a single document conflict in the current in-progress merge, cherry-pic
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `collection` | string | **yes** |  -- | Collection containing the conflict |
-| `conflictId` | string | **yes** |  -- | Conflict identifier from `doltConflicts` |
+| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts` |
 | `resolution` | string | **yes** |  -- | `"ours"`, `"theirs"`, or `"custom"` |
 | `value` | document | conditional |  -- | Required when `resolution` is `"custom"`; the document to use |
 
@@ -910,7 +910,7 @@ var main = db.getSiblingDB("orders@main")
 
 // Resolve using our version
 main.runCommand({
-  doltResolveConflict: 1,
+  dumboResolveConflict: 1,
   collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "ours"
@@ -919,7 +919,7 @@ main.runCommand({
 
 // Resolve using their version
 main.runCommand({
-  doltResolveConflict: 1,
+  dumboResolveConflict: 1,
   collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "theirs"
@@ -928,7 +928,7 @@ main.runCommand({
 
 // Resolve with a custom document
 main.runCommand({
-  doltResolveConflict: 1,
+  dumboResolveConflict: 1,
   collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "custom",
@@ -937,40 +937,40 @@ main.runCommand({
 // { ok: 1 }
 
 // After resolving all conflicts, complete the merge:
-main.runCommand({ doltMerge: 1, continue: 1 })
+main.runCommand({ dumboMerge: 1, continue: 1 })
 ```
 
 ### Error cases
 
 | Condition | Error |
 |-----------|-------|
-| `resolution` is `"custom"` but `value` is missing | `BadValue: doltResolveConflict: resolution 'custom' requires a 'value' document` |
+| `resolution` is `"custom"` but `value` is missing | `BadValue: dumboResolveConflict: resolution 'custom' requires a 'value' document` |
 | Unknown `conflictId` | `OperationFailed: ...` |
 
 ### Notes
 
 - Resolve all conflicts in a collection before moving to the next.
-- After all conflicts across all collections are resolved, call the appropriate `continue` command (`doltMerge`, `doltCherryPick`, or `doltRebase`).
+- After all conflicts across all collections are resolved, call the appropriate `continue` command (`dumboMerge`, `dumboCherryPick`, or `dumboRebase`).
 
 ---
 
 ## Conflict resolution workflow
 
-The same three-step pattern applies to `doltMerge`, `doltCherryPick`, and `doltRebase` when they produce conflicts:
+The same three-step pattern applies to `dumboMerge`, `dumboCherryPick`, and `dumboRebase` when they produce conflicts:
 
 ```js
 var main = db.getSiblingDB("orders@main")
 
 // Step 1: Operation returns ok: 0 with conflict summary
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
+main.runCommand({ dumboMerge: 1, merge_in: "feature" })
 // { conflicts: [ { collection: "orders", count: 1 } ], ok: 0, errmsg: "..." }
 
 // Step 2: Inspect and resolve each conflict
-const detail = main.runCommand({ doltConflicts: 1 })
+const detail = main.runCommand({ dumboConflicts: 1 })
 detail.collections.forEach(col => {
   col.conflicts.forEach(c => {
     main.runCommand({
-      doltResolveConflict: 1,
+      dumboResolveConflict: 1,
       collection: col.collection,
       conflictId: c.conflictId,
       resolution: "ours"
@@ -979,7 +979,7 @@ detail.collections.forEach(col => {
 })
 
 // Step 3: Continue to create the final commit
-main.runCommand({ doltMerge: 1, continue: 1 })
+main.runCommand({ dumboMerge: 1, continue: 1 })
 // { commitId: "...", message: "Merge branch 'feature' into 'main'", ok: 1 }
 ```
 
