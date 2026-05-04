@@ -1881,16 +1881,17 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 	// For list (no name), return an array of all tags.
 	if name != "" && len(res.Tags) == 1 {
 		t := res.Tags[0]
-		return documentOpMsg(
-			must.NotFail(types.NewDocument(
-				"name", t.Name,
-				"commitId", t.CommitID,
-				"author", t.Author,
-				"message", t.Message,
-				"timestamp", time.UnixMilli(t.Timestamp),
-				"ok", float64(1),
-		)),
-	)
+		doc := must.NotFail(types.NewDocument(
+			"name", t.Name,
+			"commitId", t.CommitID,
+		))
+		if t.Author != "" {
+			doc.Set("author", t.Author)
+			doc.Set("message", t.Message)
+			doc.Set("timestamp", time.UnixMilli(t.Timestamp))
+		}
+		doc.Set("ok", float64(1))
+		return documentOpMsg(doc)
 	}
 
 	// List mode: return all tags as an array.
