@@ -77,7 +77,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltDiff: versioning is not supported by the current backend",
+			"dumboDiff: versioning is not supported by the current backend",
 		)
 	}
 
@@ -407,7 +407,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltCommit: versioning is not supported by the current backend",
+			"dumboCommit: versioning is not supported by the current backend",
 		)
 	}
 
@@ -423,7 +423,7 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		if errors.Is(err, backends.ErrEmptyCommit) {
 			return nil, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrOperationFailed,
-				"doltCommit: "+err.Error(),
+				"dumboCommit: "+err.Error(),
 			)
 		}
 		return nil, lazyerrors.Error(err)
@@ -473,7 +473,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	if newBranch == "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltBranch: branch name must not be empty",
+			"dumboBranch: branch name must not be empty",
 			"branch",
 		)
 	}
@@ -481,7 +481,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	if strings.Contains(newBranch, "@") {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltBranch: branch name must not contain '@' (reserved as the database/branch delimiter)",
+			"dumboBranch: branch name must not contain '@' (reserved as the database/branch delimiter)",
 			"branch",
 		)
 	}
@@ -499,7 +499,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	if safeDelete && forceDelete {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltBranch: delete and forceDelete are mutually exclusive",
+			"dumboBranch: delete and forceDelete are mutually exclusive",
 			"delete",
 		)
 	}
@@ -508,7 +508,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltBranch: versioning is not supported by the current backend",
+			"dumboBranch: versioning is not supported by the current backend",
 		)
 	}
 
@@ -585,7 +585,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltMerge: versioning is not supported by the current backend",
+			"dumboMerge: versioning is not supported by the current backend",
 		)
 	}
 
@@ -652,7 +652,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 	if noFF && ffOnly {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltMerge: noFF and ffOnly are mutually exclusive",
+			"dumboMerge: noFF and ffOnly are mutually exclusive",
 			"noFF",
 		)
 	}
@@ -665,7 +665,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 	if fromBranch == "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltMerge: from branch name must not be empty",
+			"dumboMerge: from branch name must not be empty",
 			"merge_in",
 		)
 	}
@@ -757,7 +757,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltConflicts: versioning is not supported by the current backend",
+			"dumboConflicts: versioning is not supported by the current backend",
 		)
 	}
 
@@ -888,7 +888,7 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 		if rawValue == nil {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				"doltResolveConflict: resolution 'custom' requires a 'value' document",
+				"dumboResolveConflict: resolution 'custom' requires a 'value' document",
 				"value",
 			)
 		}
@@ -899,7 +899,7 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltResolveConflict: versioning is not supported by the current backend",
+			"dumboResolveConflict: versioning is not supported by the current backend",
 		)
 	}
 
@@ -968,7 +968,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltLog: versioning is not supported by the current backend",
+			"dumboLog: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1127,7 +1127,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		if err := parseRootish(to); err != nil {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				"doltReset: "+err.Error(),
+				"dumboReset: "+err.Error(),
 				"to",
 			)
 		}
@@ -1150,7 +1150,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltReset: versioning is not supported by the current backend",
+			"dumboReset: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1197,7 +1197,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	if readOnly {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltStatus: no working set (connection is at a specific commit, not a named branch)",
+			"dumboStatus: no working set (connection is at a specific commit, not a named branch)",
 		)
 	}
 
@@ -1205,7 +1205,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltStatus: versioning is not supported by the current backend",
+			"dumboStatus: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1261,7 +1261,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 // Applies the diff introduced by the named commit onto the current branch encoded
 // in $db and creates a new commit. On conflict, the cherry-pick is staged but not
 // committed; use dumboDBConflicts / dumboDBResolveConflict to inspect and resolve
-// conflicts, then dumboDBCherryPick continue:true to complete.
+// conflicts, then dumboCherryPick continue:true to complete.
 //
 // Usage:
 //
@@ -1304,7 +1304,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltCherryPick: versioning is not supported by the current backend",
+			"dumboCherryPick: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1333,7 +1333,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		if v, _ := common.GetOptionalParam[string](document, "author", ""); v != "" {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue,
-				"doltCherryPick: 'author' is not supported; use 'committer' to set the committer identity",
+				"dumboCherryPick: 'author' is not supported; use 'committer' to set the committer identity",
 				"author",
 			)
 		}
@@ -1372,7 +1372,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	if err := parseRootish(commit); err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltCherryPick: "+err.Error(),
+			"dumboCherryPick: "+err.Error(),
 			"commit",
 		)
 	}
@@ -1385,7 +1385,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	if v, _ := common.GetOptionalParam[string](document, "author", ""); v != "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltCherryPick: 'author' is not supported; use 'committer' to set the committer identity",
+			"dumboCherryPick: 'author' is not supported; use 'committer' to set the committer identity",
 			"author",
 		)
 	}
@@ -1483,7 +1483,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 	if v, _ := common.GetOptionalParam[string](document, "author", ""); v != "" {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltRebase: 'author' is not supported; use 'committer' to set the committer identity",
+			"dumboRebase: 'author' is not supported; use 'committer' to set the committer identity",
 			"author",
 		)
 	}
@@ -1497,7 +1497,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltRebase: versioning is not supported by the current backend",
+			"dumboRebase: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1565,7 +1565,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 	if err := parseRootish(onto); err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltRebase: "+err.Error(),
+			"dumboRebase: "+err.Error(),
 			"onto",
 		)
 	}
@@ -1654,7 +1654,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"doltRevert: versioning is not supported by the current backend",
+			"dumboRevert: versioning is not supported by the current backend",
 		)
 	}
 
@@ -1715,7 +1715,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 	if err := parseRootish(commit); err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
-			"doltRevert: "+err.Error(),
+			"dumboRevert: "+err.Error(),
 			"commit",
 		)
 	}

@@ -94,7 +94,7 @@ func TestCherryPickVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanCherryPick_ResponseShape", func(t *testing.T) {
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashC2},
 		})
 
@@ -158,7 +158,7 @@ func TestCherryPickVerify(t *testing.T) {
 
 		// Cherry-pick with custom message and explicit committer.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashC3feat},
 			{Key: "message", Value: "port: add item three"},
 			{Key: "committer", Value: "alice <alice@acme.com>"},
@@ -209,7 +209,7 @@ func TestCherryPickVerify(t *testing.T) {
 		// runCommandRaw bypasses that and returns the raw wire document so we can
 		// assert the structured error fields the server actually sends.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashConflictFeat},
 		})
 
@@ -225,7 +225,7 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.Greater(t, count, int32(0), "conflict count must be > 0")
 
 		errmsg, _ := raw["errmsg"].(string)
-		assert.Contains(t, errmsg, "doltCherryPick", "errmsg must mention the command")
+		assert.Contains(t, errmsg, "dumboCherryPick", "errmsg must mention the command")
 
 		// doltStatus must reflect the cherry-pick-in-progress state.
 		var statusRaw bson.M
@@ -315,7 +315,7 @@ func TestCherryPickVerify(t *testing.T) {
 
 		// Step 5: Continue the cherry-pick  -- same as doltMerge continue:1 for merge.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 		})
 
@@ -366,7 +366,7 @@ func TestCherryPickVerify(t *testing.T) {
 
 		// Start cherry-pick  -- expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashConflict2},
 		})
 		require.EqualValues(t, 0, raw["ok"], "cherry-pick must produce conflict")
@@ -374,7 +374,7 @@ func TestCherryPickVerify(t *testing.T) {
 		// Abort.
 		var abortRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		}).Decode(&abortRes)
 		require.NoError(t, err)
@@ -400,13 +400,13 @@ func TestCherryPickVerify(t *testing.T) {
 	t.Run("Scenario6_ErrorCases", func(t *testing.T) {
 		// Missing commit parameter.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, raw["ok"], "missing commit must return ok:0")
 
 		// Abort when no cherry-pick in progress.
 		rawAbort := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, rawAbort["ok"], "abort with no in-progress must return ok:0")
@@ -415,7 +415,7 @@ func TestCherryPickVerify(t *testing.T) {
 
 		// Continue when no cherry-pick in progress.
 		rawContinue := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltCherryPick", Value: int32(1)},
+			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, rawContinue["ok"], "continue with no in-progress must return ok:0")

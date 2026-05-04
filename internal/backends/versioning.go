@@ -101,7 +101,7 @@ type MergeConflictError struct {
 
 // Error implements the error interface.
 func (e *MergeConflictError) Error() string {
-	return fmt.Sprintf("doltMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+	return fmt.Sprintf("dumboMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
 // CherryPickParams represents the parameters of VersioningBackend.DumboDBCherryPick method.
@@ -135,7 +135,7 @@ type DumboDBCherryPickConflictError struct {
 
 // Error implements the error interface.
 func (e *DumboDBCherryPickConflictError) Error() string {
-	return fmt.Sprintf("doltCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+	return fmt.Sprintf("dumboCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
 // ConflictInfo describes a single document-level conflict in an in-progress merge.
@@ -331,7 +331,7 @@ type DumboDBRebaseConflictError struct {
 
 // Error implements the error interface.
 func (e *DumboDBRebaseConflictError) Error() string {
-	return fmt.Sprintf("doltRebase: unresolved conflicts in %d collection(s) replaying commit %s", len(e.Conflicts), e.ConflictCommit)
+	return fmt.Sprintf("dumboRebase: unresolved conflicts in %d collection(s) replaying commit %s", len(e.Conflicts), e.ConflictCommit)
 }
 
 // RevertParams represents the parameters of VersioningBackend.DumboDBRevert method.
@@ -365,7 +365,7 @@ type DumboDBRevertConflictError struct {
 
 // Error implements the error interface.
 func (e *DumboDBRevertConflictError) Error() string {
-	return fmt.Sprintf("doltRevert: unresolved conflicts in %d collection(s)", len(e.Conflicts))
+	return fmt.Sprintf("dumboRevert: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
 // TagInfo describes a single tag entry returned by VersioningBackend.DumboDBTag.

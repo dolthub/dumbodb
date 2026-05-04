@@ -102,7 +102,7 @@ func TestRebaseVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanRebase_ResponseShape", func(t *testing.T) {
 		raw := runCommandRaw(t, featureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 			{Key: "committer", Value: "rebaser <rebaser@acme.com>"},
 		})
@@ -157,7 +157,7 @@ func TestRebaseVerify(t *testing.T) {
 		noCommFeatureDB := env.client.Database(noCommDB + "@feature")
 
 		raw := runCommandRaw(t, noCommFeatureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 		assert.EqualValues(t, 1, raw["ok"])
@@ -228,7 +228,7 @@ func TestRebaseVerify(t *testing.T) {
 		// is still one commit ahead of main, so a second rebase replays that
 		// commit onto main  -- matching git's behavior.
 		raw := runCommandRaw(t, featureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 
@@ -260,7 +260,7 @@ func TestRebaseVerify(t *testing.T) {
 		// by starting a conflicting rebase scenario).
 		// For the abort test, we'll start a clean rebase and then abort it.
 		raw := runCommandRaw(t, featureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 		// Rebase succeeded; now check we can't abort a non-existent rebase.
@@ -268,7 +268,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		// Attempting abort when no rebase is in progress returns an error.
 		raw = runCommandRaw(t, featureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		})
 		// The abort of a non-in-progress rebase should return an error (ok not 1 OR error response).
@@ -307,7 +307,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		// Rebase feature onto main  -- expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 
@@ -325,11 +325,11 @@ func TestRebaseVerify(t *testing.T) {
 		assert.NotEmpty(t, conflictCommit, "conflictCommit must not be empty")
 
 		errmsg, _ := raw["errmsg"].(string)
-		assert.Contains(t, errmsg, "doltRebase", "errmsg must mention the command")
+		assert.Contains(t, errmsg, "dumboRebase", "errmsg must mention the command")
 
 		// Abort the conflicted rebase.
 		abortRaw := runCommandRaw(t, conflictFeatureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		})
 		assert.EqualValues(t, 1, abortRaw["ok"], "abort must succeed")
@@ -364,7 +364,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		// Start rebase  -- expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 		require.EqualValues(t, 0, raw["ok"], "rebase must conflict")
@@ -413,7 +413,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		// Continue the rebase.
 		continueRaw := runCommandRaw(t, conflictFeatureDB, bson.D{
-			{Key: "doltRebase", Value: int32(1)},
+			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 		})
 		assert.EqualValues(t, 1, continueRaw["ok"], "continue must succeed after conflict resolution")

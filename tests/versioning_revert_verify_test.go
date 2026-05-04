@@ -82,7 +82,7 @@ func TestRevertVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanRevert_ResponseShape", func(t *testing.T) {
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "commit", Value: hashC2},
 		})
 
@@ -148,7 +148,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Revert with custom message and author.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "commit", Value: hashC3},
 			{Key: "message", Value: "undo: add item three"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -215,7 +215,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Revert hashConflictCommit  -- expect conflict because _id:10 was modified after it was added.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "commit", Value: hashConflictCommit},
 		})
 
@@ -231,7 +231,7 @@ func TestRevertVerify(t *testing.T) {
 		assert.Greater(t, count, int32(0), "conflict count must be > 0")
 
 		errmsg, _ := raw["errmsg"].(string)
-		assert.Contains(t, errmsg, "doltRevert", "errmsg must mention the command")
+		assert.Contains(t, errmsg, "dumboRevert", "errmsg must mention the command")
 
 		// doltStatus must reflect the revert-in-progress state.
 		var statusRaw bson.M
@@ -302,7 +302,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Step 5: Continue the revert.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 		})
 
@@ -345,7 +345,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Start revert  -- expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "commit", Value: hashNew},
 		})
 		require.EqualValues(t, 0, raw["ok"], "revert must produce conflict")
@@ -353,7 +353,7 @@ func TestRevertVerify(t *testing.T) {
 		// Abort.
 		var abortRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		}).Decode(&abortRes)
 		require.NoError(t, err)
@@ -379,13 +379,13 @@ func TestRevertVerify(t *testing.T) {
 	t.Run("Scenario6_ErrorCases", func(t *testing.T) {
 		// Missing commit parameter.
 		raw := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, raw["ok"], "missing commit must return ok:0")
 
 		// Abort when no revert in progress.
 		rawAbort := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, rawAbort["ok"], "abort with no in-progress must return ok:0")
@@ -394,7 +394,7 @@ func TestRevertVerify(t *testing.T) {
 
 		// Continue when no revert in progress.
 		rawContinue := runCommandRaw(t, mainDB, bson.D{
-			{Key: "doltRevert", Value: int32(1)},
+			{Key: "dumboRevert", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, rawContinue["ok"], "continue with no in-progress must return ok:0")

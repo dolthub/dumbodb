@@ -1022,26 +1022,26 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	if db.mergeState != nil && db.mergeState.intoBranch == branch {
 		if db.mergeState.hasUnresolvedConflicts() {
 			if db.mergeState.isRebase {
-				return nil, fmt.Errorf("doltCommit: unresolved rebase conflicts remain")
+				return nil, fmt.Errorf("dumboCommit: unresolved rebase conflicts remain")
 			}
 			if db.mergeState.isCherryPick {
-				return nil, fmt.Errorf("doltCommit: unresolved cherry-pick conflicts remain")
+				return nil, fmt.Errorf("dumboCommit: unresolved cherry-pick conflicts remain")
 			}
 			if db.mergeState.isRevert {
-				return nil, fmt.Errorf("doltCommit: unresolved revert conflicts remain")
+				return nil, fmt.Errorf("dumboCommit: unresolved revert conflicts remain")
 			}
-			return nil, fmt.Errorf("doltCommit: unresolved merge conflicts remain")
+			return nil, fmt.Errorf("dumboCommit: unresolved merge conflicts remain")
 		}
 		if db.mergeState.isRebase {
-			return nil, fmt.Errorf("doltCommit: rebase in progress: use doltRebase continue")
+			return nil, fmt.Errorf("dumboCommit: rebase in progress: use dumboRebase continue")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("doltCommit: cherry-pick in progress: use dumboDBCherryPick continue")
+			return nil, fmt.Errorf("dumboCommit: cherry-pick in progress: use dumboCherryPick continue")
 		}
 		if db.mergeState.isRevert {
-			return nil, fmt.Errorf("doltCommit: revert in progress: use doltRevert continue")
+			return nil, fmt.Errorf("dumboCommit: revert in progress: use dumboRevert continue")
 		}
-		return nil, fmt.Errorf("doltCommit: merge in progress: use dumboDBMerge continue")
+		return nil, fmt.Errorf("dumboCommit: merge in progress: use dumboMerge continue")
 	}
 
 	if branch == "main" {
@@ -1321,7 +1321,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("dolt: DumboDBMerge: no merge in progress to abort")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; use dumboDBCherryPick abort instead", params.Into)
+			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick abort instead", params.Into)
 		}
 		ms := db.mergeState
 		db.mergeState = nil
@@ -1340,13 +1340,13 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	// Handle continue: resume after conflict resolution and create the merge commit.
 	if params.Continue {
 		if db.mergeState == nil || db.mergeState.intoBranch != params.Into {
-			return nil, fmt.Errorf("doltMerge: no merge in progress")
+			return nil, fmt.Errorf("dumboMerge: no merge in progress")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; use dumboDBCherryPick continue instead", params.Into)
+			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick continue instead", params.Into)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("doltMerge: unresolved merge conflicts remain")
+			return nil, fmt.Errorf("dumboMerge: unresolved merge conflicts remain")
 		}
 		ms := db.mergeState
 
