@@ -388,11 +388,13 @@ func TestRebaseVerify(t *testing.T) {
 		var conflictsResult bson.M
 		err = conflictFeatureDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "items"},
 		}).Decode(&conflictsResult)
 		require.NoError(t, err)
 
-		conflictList, ok2 := conflictsResult["conflicts"].(bson.A)
+		conflictColls, ok2 := conflictsResult["collections"].(bson.A)
+		require.True(t, ok2 && len(conflictColls) > 0, "must have at least one collection with conflicts")
+		conflictCollEntry := conflictColls[0].(bson.M)
+		conflictList, ok2 := conflictCollEntry["conflicts"].(bson.A)
 		require.True(t, ok2 && len(conflictList) > 0, "must have at least one conflict detail")
 		firstConflict := conflictList[0].(bson.M)
 		conflictID, _ := firstConflict["conflictId"].(string)

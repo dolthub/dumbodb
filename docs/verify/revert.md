@@ -174,7 +174,7 @@ printjson(rStatus)
 
 Key checks:
 - `mergeState` equals `"revert"`
-- `conflicts` lists per-collection conflict counts (same shape as `doltConflicts` summary)
+- `conflicts` lists per-collection conflict counts
 - These fields are only present because a revert is in progress
 
 ---
@@ -189,22 +189,28 @@ Continuing from Scenario 3 (revert with conflicts in progress).
 > only the final continuation command differs (`doltRevert continue:1`).
 
 ```js
-// Step 1: Summary  -- list which collections have unresolved conflicts.
-const rSummary = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
-printjson(rSummary)
-// Expected: { collections: [ { name: "records", count: 1 } ], ok: 1 }
-
-// Step 2: Per-collection detail  -- list individual document conflicts.
-const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1, collection: "records" })
+// Step 1: Inspect conflicts  -- returns all conflicts grouped by collection.
+const rConflicts = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", _id: 10, base: {...},
-//             ours: { v: 99 }, theirs: null (or deleted),
-//             ourDiffType: "modified", theirDiffType: "deleted" } ], ok: 1 }
+// Expected:
+// {
+//   collections: [
+//     {
+//       collection: "records",
+//       conflicts: [
+//         { conflictId: "<hex-hash>", _id: 10, base: {...},
+//           ours: { v: 99 }, theirs: null,
+//           ourDiffType: "modified", theirDiffType: "deleted" }
+//       ]
+//     }
+//   ],
+//   ok: 1
+// }
 // _id promoted to top level; ours = main's current version (v:99), theirs = revert target (deleted)
 
-const conflictId = rConflicts.conflicts[0].conflictId
+const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
-// Step 3: Resolve  -- accept "ours" (keep main's modified version of _id:10).
+// Step 2: Resolve  -- accept "ours" (keep main's modified version of _id:10).
 const rResolve = db.getSiblingDB("revertdb@main").runCommand({
   doltResolveConflict: 1,
   collection: "records",
@@ -214,20 +220,20 @@ const rResolve = db.getSiblingDB("revertdb@main").runCommand({
 printjson(rResolve)
 // Expected: { ok: 1 }
 
-// Step 4: After resolution, doltConflicts summary returns an empty collections array.
+// Step 3: After resolution, doltConflicts returns an empty collections array.
 const rAfter = db.getSiblingDB("revertdb@main").runCommand({ doltConflicts: 1 })
 printjson(rAfter)
 // Expected: { collections: [], ok: 1 }
 
-// Step 5: Continue the revert.
+// Step 4: Continue the revert.
 const rContinue = db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, continue: 1 })
 printjson(rContinue)
 // Expected: { commitId: "<hash>", message: "Revert \"add-ten\"\n\nThis reverts commit <hashAddTen>.", committer: "same as author", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
-- `doltConflicts` (no filter) returns `collections` array  -- same shape as for merge
-- `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- `doltConflicts` returns `collections` array with per-document `conflicts` grouped by collection
+- Each conflict entry has `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
 - After `doltRevert continue:1`, `ok` equals `1` and `commitId` is present
 

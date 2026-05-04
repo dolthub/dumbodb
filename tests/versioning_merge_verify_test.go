@@ -342,9 +342,10 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "inventory"},
 		}).Decode(&detailRaw))
-		conflicts := detailRaw["conflicts"].(bson.A)
+		colls := detailRaw["collections"].(bson.A)
+		collEntry := colls[0].(bson.M)
+		conflicts := collEntry["conflicts"].(bson.A)
 		cf := conflicts[0].(bson.M)
 		conflictID := cf["conflictId"].(string)
 
@@ -474,28 +475,18 @@ func TestMergeConflictWorkflow(t *testing.T) {
 
 	// Scenario 6: dumboDBConflicts lists the conflict
 	t.Run("Scenario6_DumboDBConflicts_ListsConflict", func(t *testing.T) {
-		// Summary (no collection filter)
-		var summaryRaw bson.M
+		var conflictsRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-		}).Decode(&summaryRaw))
-		assert.EqualValues(t, 1, summaryRaw["ok"])
+		}).Decode(&conflictsRaw))
+		assert.EqualValues(t, 1, conflictsRaw["ok"])
 
-		colls := summaryRaw["collections"].(bson.A)
+		colls := conflictsRaw["collections"].(bson.A)
 		require.Len(t, colls, 1, "one collection with conflicts")
 		collEntry := colls[0].(bson.M)
-		assert.Equal(t, "inventory", collEntry["name"])
-		assert.EqualValues(t, 1, collEntry["count"])
+		assert.Equal(t, "inventory", collEntry["collection"])
 
-		// Per-collection detail
-		var detailRaw bson.M
-		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "inventory"},
-		}).Decode(&detailRaw))
-		assert.EqualValues(t, 1, detailRaw["ok"])
-
-		conflicts := detailRaw["conflicts"].(bson.A)
+		conflicts := collEntry["conflicts"].(bson.A)
 		require.Len(t, conflicts, 1, "one conflict in 'inventory'")
 
 		cf := conflicts[0].(bson.M)
@@ -545,9 +536,10 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		var detailRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "inventory"},
 		}).Decode(&detailRaw))
-		conflicts := detailRaw["conflicts"].(bson.A)
+		colls := detailRaw["collections"].(bson.A)
+		collEntry := colls[0].(bson.M)
+		conflicts := collEntry["conflicts"].(bson.A)
 		cf := conflicts[0].(bson.M)
 		conflictID := cf["conflictId"].(string)
 
@@ -562,12 +554,12 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.EqualValues(t, 1, resolveRaw["ok"])
 
 		// No more conflicts
-		var summaryRaw bson.M
+		var postResolveRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-		}).Decode(&summaryRaw))
-		colls := summaryRaw["collections"].(bson.A)
-		assert.Len(t, colls, 0, "no more conflicts after resolution")
+		}).Decode(&postResolveRaw))
+		postColls := postResolveRaw["collections"].(bson.A)
+		assert.Len(t, postColls, 0, "no more conflicts after resolution")
 
 		// dumboDBCommit is blocked even when all conflicts are resolved  -- merge in progress
 		err := mainDB.RunCommand(ctx, bson.D{
@@ -720,9 +712,10 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	var detailRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltConflicts", Value: int32(1)},
-		{Key: "collection", Value: "inventory"},
 	}).Decode(&detailRaw))
-	conflicts := detailRaw["conflicts"].(bson.A)
+	colls := detailRaw["collections"].(bson.A)
+	collEntry := colls[0].(bson.M)
+	conflicts := collEntry["conflicts"].(bson.A)
 	cf := conflicts[0].(bson.M)
 	conflictID := cf["conflictId"].(string)
 
@@ -787,9 +780,10 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	var detailRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltConflicts", Value: int32(1)},
-		{Key: "collection", Value: "inventory"},
 	}).Decode(&detailRaw))
-	conflicts := detailRaw["conflicts"].(bson.A)
+	colls := detailRaw["collections"].(bson.A)
+	collEntry := colls[0].(bson.M)
+	conflicts := collEntry["conflicts"].(bson.A)
 	cf := conflicts[0].(bson.M)
 	conflictID := cf["conflictId"].(string)
 

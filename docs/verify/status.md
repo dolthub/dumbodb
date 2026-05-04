@@ -358,8 +358,7 @@ When a merge, cherry-pick, rebase, or revert operation is in progress and has pr
 conflicts, `doltStatus` includes two additional fields:
 
 - `mergeState` (string): `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`
-- `conflicts` (array): per-collection conflict counts `[{collection, count}, ...]`, same
-  shape as the `doltConflicts` summary response
+- `conflicts` (array): per-collection conflict counts `[{collection, count}, ...]`
 
 These fields are **absent** on clean status and when there are only uncommitted changes
 (no in-progress operation). The scenarios in this document test clean/dirty states only.

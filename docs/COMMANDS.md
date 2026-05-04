@@ -502,7 +502,7 @@ None (beyond the implicit `$db` connection).
 | `branch` | string | Active branch name |
 | `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]` |
 | `mergeState` | string | **Only present during an in-progress operation.** One of `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`. |
-| `conflicts` | array | **Only present during an in-progress operation.** Per-collection conflict counts: `[{collection, count}, ...]` (same shape as the `doltConflicts` summary response). |
+| `conflicts` | array | **Only present during an in-progress operation.** Per-collection conflict counts: `[{collection, count}, ...]`. |
 | `ok` | number | `1` |
 
 ### Collection entry
@@ -816,23 +816,21 @@ Returns conflict information for an in-progress merge, cherry-pick, or rebase on
 
 ### Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `collection` | string | no | `""` | If specified, return per-document conflict details for this collection |
+None (beyond the implicit `$db` connection).
 
-### Response fields (summary mode  -- no `collection`)
+### Response fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `collections` | array | `[{name, count}, ...]`  -- per-collection conflict counts |
+| `collections` | array | Per-collection conflict groups (see below) |
 | `ok` | number | `1` |
 
-### Response fields (detail mode  -- with `collection`)
+### Collection conflict group
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `collection` | string | Collection name |
 | `conflicts` | array | Per-document conflict entries (see below) |
-| `ok` | number | `1` |
 
 ### Conflict entry fields
 
@@ -853,20 +851,21 @@ var main = db.getSiblingDB("orders@main")
 
 // After a merge conflict:
 main.runCommand({ doltConflicts: 1 })
-// { collections: [ { name: "orders", count: 2 } ], ok: 1 }
-
-// Inspect individual conflicts:
-main.runCommand({ doltConflicts: 1, collection: "orders" })
 // {
-//   conflicts: [
+//   collections: [
 //     {
-//       conflictId:    "c0",
-//       _id:           1,
-//       base:          { amount: 100 },
-//       ours:          { amount: 150 },
-//       theirs:        { amount: 200 },
-//       ourDiffType:   "modified",
-//       theirDiffType: "modified"
+//       collection: "orders",
+//       conflicts: [
+//         {
+//           conflictId:    "1416311c762c282687d45fb6e3badb8f2fc53688",
+//           _id:           1,
+//           base:          { amount: 100 },
+//           ours:          { amount: 150 },
+//           theirs:        { amount: 200 },
+//           ourDiffType:   "modified",
+//           theirDiffType: "modified"
+//         }
+//       ]
 //     }
 //   ],
 //   ok: 1
@@ -913,7 +912,7 @@ var main = db.getSiblingDB("orders@main")
 main.runCommand({
   doltResolveConflict: 1,
   collection: "orders",
-  conflictId: "c0",
+  conflictId: "1416311c762c282687d45fb6e3badb8f2fc53688",
   resolution: "ours"
 })
 // { ok: 1 }
@@ -922,7 +921,7 @@ main.runCommand({
 main.runCommand({
   doltResolveConflict: 1,
   collection: "orders",
-  conflictId: "c0",
+  conflictId: "1416311c762c282687d45fb6e3badb8f2fc53688",
   resolution: "theirs"
 })
 // { ok: 1 }
@@ -931,7 +930,7 @@ main.runCommand({
 main.runCommand({
   doltResolveConflict: 1,
   collection: "orders",
-  conflictId: "c0",
+  conflictId: "1416311c762c282687d45fb6e3badb8f2fc53688",
   resolution: "custom",
   value: { _id: 1, amount: 175, status: "reconciled" }
 })
@@ -967,13 +966,15 @@ main.runCommand({ doltMerge: 1, merge_in: "feature" })
 // { conflicts: [ { collection: "orders", count: 1 } ], ok: 0, errmsg: "..." }
 
 // Step 2: Inspect and resolve each conflict
-const detail = main.runCommand({ doltConflicts: 1, collection: "orders" })
-detail.conflicts.forEach(c => {
-  main.runCommand({
-    doltResolveConflict: 1,
-    collection: "orders",
-    conflictId: c.conflictId,
-    resolution: "ours"
+const detail = main.runCommand({ doltConflicts: 1 })
+detail.collections.forEach(col => {
+  col.conflicts.forEach(c => {
+    main.runCommand({
+      doltResolveConflict: 1,
+      collection: col.collection,
+      conflictId: c.conflictId,
+      resolution: "ours"
+    })
   })
 })
 

@@ -304,19 +304,30 @@ printjson(rStatus)
 // }
 // Key checks:
 // - mergeState equals "rebase"
-// - conflicts lists per-collection conflict counts (same shape as doltConflicts summary)
+// - conflicts lists per-collection conflict counts
 // - These fields are only present because a rebase is in progress
 
-// Inspect conflicts.
+// Inspect conflicts  -- returns all conflicts grouped by collection.
 const rConflicts = rdb.getSiblingDB("rebaseresolve@feature").runCommand({
-    doltConflicts: 1, collection: "items"
+    doltConflicts: 1
 })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: { v: 1 },
-//             ours: { v: 200 }, theirs: { v: 100 },
-//             ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
+// Expected:
+// {
+//   collections: [
+//     {
+//       collection: "items",
+//       conflicts: [
+//         { conflictId: "<hex-hash>", _id: 1, base: { v: 1 },
+//           ours: { v: 200 }, theirs: { v: 100 },
+//           ourDiffType: "modified", theirDiffType: "modified" }
+//       ]
+//     }
+//   ],
+//   ok: 1
+// }
 // _id promoted to top level; ours = feature's version (v:200), theirs = main's version (v:100)
-const conflictId = rConflicts.conflicts[0].conflictId
+const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 print("conflictId =", conflictId)
 
 // Resolve using "ours" (keep feature's value v:200).
@@ -335,6 +346,6 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` returns per-document conflict detail with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- `doltConflicts` returns `collections` array with per-document conflicts grouped by collection, each with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
 - After `doltResolveConflict`, `ok` equals `1`
 - After `doltRebase continue:1`, `ok` equals `1`, `commitsReplayed` equals `1`, `newTip` is present

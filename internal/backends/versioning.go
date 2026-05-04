@@ -150,16 +150,20 @@ type ConflictInfo struct {
 
 // ConflictsParams represents the parameters of VersioningBackend.DumboDBConflicts method.
 type ConflictsParams struct {
-	DBName     string
-	Branch     string
-	Collection string // optional: if empty, return per-collection summaries; if set, return per-conflict details
+	DBName string
+	Branch string
+}
+
+// CollectionConflicts groups conflicts for a single collection.
+type CollectionConflicts struct {
+	Collection string
+	Conflicts  []ConflictInfo
 }
 
 // ConflictsResult represents the result of VersioningBackend.DumboDBConflicts method.
-// Exactly one of Collections or Conflicts is populated depending on whether ConflictsParams.Collection is empty.
+// Returns all conflict details for all collections.
 type ConflictsResult struct {
-	Collections []ConflictSummary // per-collection conflict counts (when Collection is empty)
-	Conflicts   []ConflictInfo    // per-conflict details (when Collection is set)
+	Collections []CollectionConflicts
 }
 
 // ResolveConflictParams represents the parameters of VersioningBackend.DumboDBResolveConflict method.

@@ -250,31 +250,21 @@ func TestCherryPickVerify(t *testing.T) {
 		// conflicts. The cherry-pick state is stored in the same mergeState struct
 		// (with isCherryPick=true), so both commands work identically for cherry-picks.
 
-		// Step 1: Summary  -- list which collections have unresolved conflicts.
-		var summaryRes bson.M
+		// Step 1: List all conflicts grouped by collection.
+		var conflictsRes bson.M
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
-		}).Decode(&summaryRes)
-		require.NoError(t, err, "doltConflicts summary must succeed while cherry-pick in progress")
-		assert.EqualValues(t, 1, summaryRes["ok"])
-
-		colls, ok := summaryRes["collections"].(bson.A)
-		require.True(t, ok, "collections must be an array, got %T", summaryRes["collections"])
-		require.Len(t, colls, 1, "one collection must have conflicts")
-		collEntry := colls[0].(bson.M)
-		assert.Equal(t, "items", collEntry["name"])
-		assert.EqualValues(t, 1, collEntry["count"])
-
-		// Step 2: Per-collection detail  -- list individual document conflicts.
-		var conflictsRes bson.M
-		err = mainDB.RunCommand(ctx, bson.D{
-			{Key: "doltConflicts", Value: int32(1)},
-			{Key: "collection", Value: "items"},
 		}).Decode(&conflictsRes)
-		require.NoError(t, err, "doltConflicts detail must succeed while cherry-pick in progress")
+		require.NoError(t, err, "doltConflicts must succeed while cherry-pick in progress")
 		assert.EqualValues(t, 1, conflictsRes["ok"])
 
-		conflicts, ok := conflictsRes["conflicts"].(bson.A)
+		colls, ok := conflictsRes["collections"].(bson.A)
+		require.True(t, ok, "collections must be an array, got %T", conflictsRes["collections"])
+		require.Len(t, colls, 1, "one collection must have conflicts")
+		collEntry := colls[0].(bson.M)
+		assert.Equal(t, "items", collEntry["collection"])
+
+		conflicts, ok := collEntry["conflicts"].(bson.A)
 		require.True(t, ok, "conflicts must be an array")
 		require.Len(t, conflicts, 1, "must have exactly one conflict in 'items'")
 

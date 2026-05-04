@@ -170,63 +170,61 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 		return nil, fmt.Errorf("dolt: DumboDBConflicts: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
-	if params.Collection == "" {
-		summaries := ms.summaries()
-		if summaries == nil {
-			summaries = []backends.ConflictSummary{}
-		}
-		return &backends.ConflictsResult{Collections: summaries}, nil
-	}
+	var collections []backends.CollectionConflicts
 
-	entries, ok := ms.conflicts[params.Collection]
-	if !ok {
-		return &backends.ConflictsResult{Conflicts: []backends.ConflictInfo{}}, nil
-	}
-
-	var infos []backends.ConflictInfo
-	for _, e := range entries {
-		if e.resolved {
-			continue
-		}
-
-		info := backends.ConflictInfo{
-			ConflictID:    e.id,
-			OurDiffType:   e.ourDiffType,
-			TheirDiffType: e.theirDiffType,
-		}
-
-		if e.baseRawVal != nil {
-			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.baseRawVal)
-			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBConflicts: reading base doc for conflict %q: %w", e.id, docErr)
+	for collName, entries := range ms.conflicts {
+		var infos []backends.ConflictInfo
+		for _, e := range entries {
+			if e.resolved {
+				continue
 			}
-			info.Base = doc
-		}
 
-		if e.oursRawVal != nil {
-			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.oursRawVal)
-			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
+			info := backends.ConflictInfo{
+				ConflictID:    e.id,
+				OurDiffType:   e.ourDiffType,
+				TheirDiffType: e.theirDiffType,
 			}
-			info.Ours = doc
-		}
 
-		if e.theirsRawVal != nil {
-			doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.theirsRawVal)
-			if docErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
+			if e.baseRawVal != nil {
+				doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.baseRawVal)
+				if docErr != nil {
+					return nil, fmt.Errorf("dolt: DumboDBConflicts: reading base doc for conflict %q: %w", e.id, docErr)
+				}
+				info.Base = doc
 			}
-			info.Theirs = doc
+
+			if e.oursRawVal != nil {
+				doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.oursRawVal)
+				if docErr != nil {
+					return nil, fmt.Errorf("dolt: DumboDBConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
+				}
+				info.Ours = doc
+			}
+
+			if e.theirsRawVal != nil {
+				doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.theirsRawVal)
+				if docErr != nil {
+					return nil, fmt.Errorf("dolt: DumboDBConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
+				}
+				info.Theirs = doc
+			}
+
+			infos = append(infos, info)
 		}
 
-		infos = append(infos, info)
+		if len(infos) > 0 {
+			collections = append(collections, backends.CollectionConflicts{
+				Collection: collName,
+				Conflicts:  infos,
+			})
+		}
 	}
 
-	if infos == nil {
-		infos = []backends.ConflictInfo{}
+	if collections == nil {
+		collections = []backends.CollectionConflicts{}
 	}
 
-	return &backends.ConflictsResult{Conflicts: infos}, nil
+	return &backends.ConflictsResult{Collections: collections}, nil
 }
 
 // DumboDBResolveConflict implements backends.VersioningBackend.

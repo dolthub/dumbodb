@@ -177,7 +177,7 @@ printjson(rStatus)
 
 Key checks:
 - `mergeState` equals `"cherry-pick"`
-- `conflicts` lists per-collection conflict counts (same shape as `doltConflicts` summary)
+- `conflicts` lists per-collection conflict counts
 - These fields are only present because a cherry-pick is in progress
 
 ---
@@ -193,22 +193,28 @@ Continuing from Scenario 3 (cherry-pick with conflicts in progress).
 > `doltMerge continue:1`).
 
 ```js
-// Step 1: Summary  -- list which collections have unresolved conflicts.
-const rSummary = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
-printjson(rSummary)
-// Expected: { collections: [ { name: "items", count: 1 } ], ok: 1 }
-
-// Step 2: Per-collection detail  -- list individual document conflicts.
-const rConflicts = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1, collection: "items" })
+// Step 1: Inspect conflicts  -- returns all conflicts grouped by collection.
+const rConflicts = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
-// Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: {...},
-//             ours: { v: 100 }, theirs: { v: 99 },
-//             ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
+// Expected:
+// {
+//   collections: [
+//     {
+//       collection: "items",
+//       conflicts: [
+//         { conflictId: "<hex-hash>", _id: 1, base: {...},
+//           ours: { v: 100 }, theirs: { v: 99 },
+//           ourDiffType: "modified", theirDiffType: "modified" }
+//       ]
+//     }
+//   ],
+//   ok: 1
+// }
 // _id is promoted to top level; ours = main's version (v:100), theirs = cherry-picked version (v:99)
 
-const conflictId = rConflicts.conflicts[0].conflictId
+const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
-// Step 3: Resolve  -- accept "theirs" (the cherry-picked value v:99).
+// Step 2: Resolve  -- accept "theirs" (the cherry-picked value v:99).
 const rResolve = db.getSiblingDB("pickdb@main").runCommand({
   doltResolveConflict: 1,
   collection: "items",
@@ -218,20 +224,20 @@ const rResolve = db.getSiblingDB("pickdb@main").runCommand({
 printjson(rResolve)
 // Expected: { ok: 1 }
 
-// Step 4: After resolution, doltConflicts summary returns an empty collections array.
+// Step 3: After resolution, doltConflicts returns an empty collections array.
 const rAfter = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rAfter)
 // Expected: { collections: [], ok: 1 }
 
-// Step 5: Continue the cherry-pick (equivalent to doltMerge continue:1 for merges).
+// Step 4: Continue the cherry-pick (equivalent to doltMerge continue:1 for merges).
 const rContinue = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, continue: 1 })
 printjson(rContinue)
 // Expected: { commitId: "<hash>", message: "conflict-source\n\n(cherry picked from commit <hashC4feat>)", committer: "<current user>", committerTimestamp: ISODate("..."), ok: 1 }
 ```
 
 Key checks:
-- `doltConflicts` (no filter) returns `collections` array  -- same shape as for merge
-- `doltConflicts` with `collection` returns per-document `conflicts` with `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- `doltConflicts` returns `collections` array with per-document `conflicts` grouped by collection
+- Each conflict entry has `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
 - `_id` is promoted to the top level of each conflict entry; `base`/`ours`/`theirs` do not contain `_id`
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
 - After `doltCherryPick continue:1`, `ok` equals `1` and `commitId` is present

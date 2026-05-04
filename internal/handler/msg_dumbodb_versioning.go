@@ -753,11 +753,6 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, err
 	}
 
-	collection, err := common.GetOptionalParam[string](document, "collection", "")
-	if err != nil {
-		return nil, err
-	}
-
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -767,90 +762,77 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 	}
 
 	res, err := vb.DumboDBConflicts(connCtx, &backends.ConflictsParams{
-		DBName:     dbName,
-		Branch:     branch,
-		Collection: collection,
+		DBName: dbName,
+		Branch: branch,
 	})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	if collection == "" {
-		collectionsArr := types.MakeArray(len(res.Collections))
-		for _, c := range res.Collections {
-			entry := must.NotFail(types.NewDocument(
-				"name", c.Collection,
-				"collection", c.Collection,
-				"count", int32(c.Count),
-				"conflictCount", int32(c.Count),
-			))
-			collectionsArr.Append(entry)
-		}
-		return documentOpMsg(
-			must.NotFail(types.NewDocument(
-				"collections", collectionsArr,
-				"ok", float64(1),
-			)),
-		)
-	}
+	collectionsArr := types.MakeArray(len(res.Collections))
+	for _, cc := range res.Collections {
+		conflictsArr := types.MakeArray(len(cc.Conflicts))
+		for _, cf := range cc.Conflicts {
+			pairs := []any{
+				"conflictId", cf.ConflictID,
+			}
 
-	conflictsArr := types.MakeArray(len(res.Conflicts))
-	for _, cf := range res.Conflicts {
-		pairs := []any{
-			"conflictId", cf.ConflictID,
-		}
-
-		// Extract _id from whichever document is non-nil and promote it
-		// to the top level so it isn't repeated inside base/ours/theirs.
-		var docID any
-		for _, doc := range []*types.Document{cf.Ours, cf.Theirs, cf.Base} {
-			if doc != nil {
-				if v, getErr := doc.Get("_id"); getErr == nil {
-					docID = v
-					break
+			// Extract _id from whichever document is non-nil and promote it
+			// to the top level so it isn't repeated inside base/ours/theirs.
+			var docID any
+			for _, doc := range []*types.Document{cf.Ours, cf.Theirs, cf.Base} {
+				if doc != nil {
+					if v, getErr := doc.Get("_id"); getErr == nil {
+						docID = v
+						break
+					}
 				}
 			}
-		}
-		if docID != nil {
-			pairs = append(pairs, "_id", docID)
-		}
-
-		// Build base/ours/theirs without the _id field.
-		for _, kv := range []struct {
-			key string
-			doc *types.Document
-		}{
-			{"base", cf.Base},
-			{"ours", cf.Ours},
-			{"theirs", cf.Theirs},
-		} {
-			if kv.doc == nil {
-				pairs = append(pairs, kv.key, types.Null)
-				continue
+			if docID != nil {
+				pairs = append(pairs, "_id", docID)
 			}
-			stripped := must.NotFail(types.NewDocument())
-			for _, k := range kv.doc.Keys() {
-				if k == "_id" {
+
+			// Build base/ours/theirs without the _id field.
+			for _, kv := range []struct {
+				key string
+				doc *types.Document
+			}{
+				{"base", cf.Base},
+				{"ours", cf.Ours},
+				{"theirs", cf.Theirs},
+			} {
+				if kv.doc == nil {
+					pairs = append(pairs, kv.key, types.Null)
 					continue
 				}
-				v, _ := kv.doc.Get(k)
-				stripped.Set(k, v)
+				stripped := must.NotFail(types.NewDocument())
+				for _, k := range kv.doc.Keys() {
+					if k == "_id" {
+						continue
+					}
+					v, _ := kv.doc.Get(k)
+					stripped.Set(k, v)
+				}
+				pairs = append(pairs, kv.key, stripped)
 			}
-			pairs = append(pairs, kv.key, stripped)
+
+			pairs = append(pairs,
+				"ourDiffType", cf.OurDiffType,
+				"theirDiffType", cf.TheirDiffType,
+			)
+
+			conflictsArr.Append(must.NotFail(types.NewDocument(pairs...)))
 		}
 
-		pairs = append(pairs,
-			"ourDiffType", cf.OurDiffType,
-			"theirDiffType", cf.TheirDiffType,
-		)
-
-		entry := must.NotFail(types.NewDocument(pairs...))
-		conflictsArr.Append(entry)
+		collectionsArr.Append(must.NotFail(types.NewDocument(
+			"collection", cc.Collection,
+			"conflicts", conflictsArr,
+		)))
 	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"conflicts", conflictsArr,
+			"collections", collectionsArr,
 			"ok", float64(1),
 		)),
 	)

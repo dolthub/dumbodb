@@ -225,26 +225,32 @@ printjson(rStatus)
 
 Key checks:
 - `mergeState` equals `"merge"`
-- `conflicts` lists per-collection conflict counts (same shape as `doltConflicts` summary)
+- `conflicts` lists per-collection conflict counts
 - These fields are only present because a merge is in progress
 
 ```js
-// Summary: list which collections have conflicts
-const rSummary = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1 })
-printjson(rSummary)
-// Expected: { collections: [ { name: "inventory", count: 1 } ], ok: 1 }
-
-// Detail: list individual conflicts within a collection
-const rDetail = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1, collection: "inventory" })
-printjson(rDetail)
-// Expected: { conflicts: [ { conflictId: "c0", _id: 1, base: { v: 1 }, ours: { v: 10 },
-//             theirs: { v: 20 }, ourDiffType: "modified", theirDiffType: "modified" } ], ok: 1 }
-const conflictId = rDetail.conflicts[0].conflictId
+// Inspect conflicts  -- returns all conflicts grouped by collection.
+const rConflicts = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1 })
+printjson(rConflicts)
+// Expected:
+// {
+//   collections: [
+//     {
+//       collection: "inventory",
+//       conflicts: [
+//         { conflictId: "<hex-hash>", _id: 1, base: { v: 1 }, ours: { v: 10 },
+//           theirs: { v: 20 }, ourDiffType: "modified", theirDiffType: "modified" }
+//       ]
+//     }
+//   ],
+//   ok: 1
+// }
+const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 ```
 
 Key checks:
-- `collections` lists per-collection conflict counts.
-- `conflicts` in the per-collection view lists individual document conflicts.
+- `collections` lists per-collection conflict groups, each with a `collection` name and `conflicts` array.
+- Each conflict entry has `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`.
 - `base` is the document at the common ancestor (null for new documents).
 - `ours` / `theirs` are the two conflicting versions (null for deletions).
 - `ourDiffType` / `theirDiffType` are one of `"added"`, `"modified"`, `"deleted"`.
