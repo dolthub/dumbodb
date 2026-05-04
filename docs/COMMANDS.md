@@ -991,7 +991,6 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 
 **Alias:** `doltTag`
 
-> **Note:** `dumboTag` is an admin command  -- use `db.adminCommand()`.
 
 ### Parameters
 
@@ -1020,20 +1019,20 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 **List all tags:**
 
 ```js
-db.adminCommand({ dumboTag: 1 })
+db.runCommand({ dumboTag: 1 })
 // { tags: [ { name: "v1.0", commitId: "abc123...", ... } ], ok: 1 }
 ```
 
 **Create a tag at the current branch HEAD:**
 
 ```js
-db.adminCommand({ dumboTag: 1, name: "v1.0" })
+db.runCommand({ dumboTag: 1, name: "v1.0" })
 ```
 
 **Create a tag at a specific commit with metadata:**
 
 ```js
-db.adminCommand({
+db.runCommand({
   dumboTag: 1,
   name: "v2.0",
   hash: "na7kfra98h45fr2u5qtr30o2ggm7vh61",
@@ -1046,11 +1045,11 @@ db.adminCommand({
 **Tag a relative ancestor:**
 
 ```js
-db.adminCommand({ dumboTag: 1, name: "before-refactor", hash: "main~3" })
+db.runCommand({ dumboTag: 1, name: "before-refactor", hash: "main~3" })
 ```
 
 **Delete a tag:**
 
 ```js
-db.adminCommand({ dumboTag: 1, name: "v1.0", delete: true })
+db.runCommand({ dumboTag: 1, name: "v1.0", delete: true })
 ```

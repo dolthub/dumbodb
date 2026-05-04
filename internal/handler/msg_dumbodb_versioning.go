@@ -41,9 +41,9 @@ const dbBranchSep = "@"
 // Returns the document-level diff between two states for the branch encoded in $db.
 // Usage:
 //
-//	db.adminCommand({dumboDBDiff: 1})                          // working set vs HEAD
-//	db.adminCommand({dumboDBDiff: 1, from: "<hash>"})          // commit hash to working set
-//	db.adminCommand({dumboDBDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
+//	db.runCommand({dumboDBDiff: 1})                          // working set vs HEAD
+//	db.runCommand({dumboDBDiff: 1, from: "<hash>"})          // commit hash to working set
+//	db.runCommand({dumboDBDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -1773,7 +1773,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		)),
 	)
 }
-// MsgDumboDBTag implements the `dumboTag` admin command.
+// MsgDumboDBTag implements the `dumboTag` command.
 //
 // Tags share Dolt's tag refspec (refs/tags/<name>) and use the Dolt tag
 // flatbuffer (TagValue), so tags created here are visible to `dolt tag`
@@ -1781,10 +1781,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 //
 // Usage:
 //
-//	db.adminCommand({dumboTag: 1})                                       // list all tags
-//	db.adminCommand({dumboTag: 1, name: "v1.0", hash: "<rootish>"})      // create tag at rootish
-//	db.adminCommand({dumboTag: 1, name: "v1.0"})                         // create tag at current branch HEAD
-//	db.adminCommand({dumboTag: 1, name: "v1.0", delete: true})           // delete tag
+//	db.runCommand({dumboTag: 1})                                       // list all tags
+//	db.runCommand({dumboTag: 1, name: "v1.0", hash: "<rootish>"})      // create tag at rootish
+//	db.runCommand({dumboTag: 1, name: "v1.0"})                         // create tag at current branch HEAD
+//	db.runCommand({dumboTag: 1, name: "v1.0", delete: true})           // delete tag
 //
 // Optional metadata for create:
 //   - message (string): tag description

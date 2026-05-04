@@ -44,7 +44,7 @@ const hash2 = result2.commitId
 db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "feature" })
 
 // Create a tag "release-1" at commit 1
-db.adminCommand({ dumboTag: 1, name: "release-1", hash: hash1 })
+db.runCommand({ dumboTag: 1, name: "release-1", hash: hash1 })
 
 print("hash1 =", hash1)
 print("hash2 =", hash2)
