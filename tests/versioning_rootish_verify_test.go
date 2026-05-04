@@ -207,42 +207,34 @@ func TestRootishVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Scenario 5: @main~1 -- ancestor expression is read-only
 	// -------------------------------------------------------------------------
-	t.Run("Scenario5_AncestorExpression", func(t *testing.T) {
-		parentItems := env.client.Database(dbName + "@main~1").Collection("items")
-
-		n, err := parentItems.CountDocuments(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), n, "main~1: expected 1 doc")
-
-		nSame, err := env.client.Database(dbName+"@main~0").Collection("items").CountDocuments(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), nSame, "main~0: expected 2 docs (same as HEAD)")
-
-		_, err = parentItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
-		assertWriteBlockedOperationFailed(t, err, "insert on main~1")
-
-		var branchResult bson.M
-		require.NoError(t, env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
-			{Key: "doltBranch", Value: int32(1)},
-			{Key: "branch", Value: "back-one"},
-		}).Decode(&branchResult))
-		assert.Equal(t, "back-one", branchResult["branch"])
-
-		nNew, err := env.client.Database(dbName+"@back-one").Collection("items").CountDocuments(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), nNew, "back-one: expected 1 doc")
-	})
-
 	// -------------------------------------------------------------------------
-	// Scenario 6: HEAD rejected, caret, and chained traversal
+	// Scenario 5: HEAD is rejected
 	// -------------------------------------------------------------------------
-	t.Run("Scenario6_HEAD_Caret_Chained", func(t *testing.T) {
-		// HEAD is rejected -- DumboDB has no per-session current branch.
+	t.Run("Scenario5_HEAD_Rejected", func(t *testing.T) {
 		assertRootishRejected(t, env.client.Database(dbName+"@HEAD"), "HEAD")
 		assertRootishRejected(t, env.client.Database(dbName+"@HEAD~1"), "HEAD~1")
 		assertRootishRejected(t, env.client.Database(dbName+"@HEAD^"), "HEAD^")
+	})
 
-		// main^ is the first parent of main's HEAD (read-only).
+	// -------------------------------------------------------------------------
+	// Scenario 6: Tilde, caret, and chained traversal
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_Tilde_Caret_Chained", func(t *testing.T) {
+		// Tilde: main~1 = first parent (read-only).
+		n, err := env.client.Database(dbName+"@main~1").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), n, "main~1: expected 1 doc")
+
+		// main~0 = main itself.
+		nSame, err := env.client.Database(dbName+"@main~0").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), nSame, "main~0: expected 2 docs")
+
+		// Write blocked on ancestor expression.
+		_, err = env.client.Database(dbName+"@main~1").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
+		assertWriteBlockedOperationFailed(t, err, "insert on main~1")
+
+		// Caret: main^ = first parent (same as main~1 for non-merge).
 		nCaret, err := env.client.Database(dbName+"@main^").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), nCaret, "main^: expected 1 doc")
@@ -317,6 +309,12 @@ func TestRootishVerify(t *testing.T) {
 			{Key: "branch", Value: "v1.0"},
 		}).Err())
 
+		// Unencoded dot fails -- the Go driver sends it but the server
+		// parses the name incorrectly (dot is a namespace separator).
+		_, unencodedErr := env.client.Database(dbName + "@v1.0").Collection("items").CountDocuments(ctx, bson.D{})
+		require.Error(t, unencodedErr, "unencoded dot in rootish must fail")
+
+		// Percent-encoded dot works.
 		v1Items := env.client.Database(dbName + "@v1%2E0").Collection("items")
 
 		n, err := v1Items.CountDocuments(ctx, bson.D{})

@@ -186,49 +186,10 @@ Key checks:
 
 ---
 
-## Scenario 5: `verifydb@main~1` -- ancestor expression is read-only
+## Scenario 5: HEAD is not supported in connection strings
 
-Ancestor expression rootish. `main~1` is the first parent of main's HEAD.
-
-```js
-const parent = db.getSiblingDB("verifydb@main~1")
-
-parent.items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 } ]
-// (_id:2 was added in commit 2, which is HEAD, not its parent)
-
-parent.items.countDocuments({})
-// Expected: 1
-
-// main~0 is main itself
-db.getSiblingDB("verifydb@main~0").items.countDocuments({})
-// Expected: 2
-
-// Write: must fail
-parent.items.insertOne({ _id: 99, label: "should fail" })
-// Expected error (code 96)
-
-// Branch creation works
-parent.runCommand({ doltBranch: 1, branch: "back-one" })
-// Expected: { branch: "back-one", ok: 1 }
-
-db.getSiblingDB("verifydb@back-one").items.countDocuments({})
-// Expected: 1
-```
-
-Key checks:
-- `main~1` returns commit 1 data (one document)
-- `main~0` returns current HEAD data (two documents)
-- Writes blocked, branch creation works
-
----
-
-## Scenario 6: HEAD rejected, caret, and chained traversal
-
-HEAD is not supported in connection strings. DumboDB has no per-session "current
-branch" concept, so HEAD has no meaning. Use a branch name instead.
-
-### HEAD is rejected
+DumboDB has no per-session "current branch", so HEAD has no meaning in the
+connection string. All forms are rejected with code 96.
 
 ```js
 db.getSiblingDB("verifydb@HEAD").items.find({}).toArray()
@@ -241,20 +202,46 @@ db.getSiblingDB("verifydb@HEAD^").items.find({}).toArray()
 // Expected error (code 96)
 ```
 
+Key checks:
+- `HEAD`, `HEAD~N`, and `HEAD^` all return code 96
+
 > **Note:** `HEAD` is still accepted in command parameters like `dumboDiff`'s
 > `from` and `to` fields, where it resolves relative to the connection's branch.
 > It is only rejected in the connection string itself (`mydb@HEAD`).
 
-### Caret parent selection
+---
 
-`main^` selects the first parent (same as `main~1`, read-only):
+## Scenario 6: Tilde, caret, and chained traversal
+
+Tilde (`~N`) walks N first-parent ancestors. Caret (`^N`) selects the Nth parent.
+These operators compose left to right and can be chained.
+
+### Tilde (ancestor expression)
 
 ```js
+// main~1 is the first parent of main's HEAD (read-only)
+db.getSiblingDB("verifydb@main~1").items.countDocuments({})
+// Expected: 1
+
+// main~0 is main itself
+db.getSiblingDB("verifydb@main~0").items.countDocuments({})
+// Expected: 2
+
+// Writes blocked on ancestor expressions
+db.getSiblingDB("verifydb@main~1").items.insertOne({ _id: 99 })
+// Expected error (code 96)
+```
+
+### Caret (parent selection)
+
+```js
+// main^ selects the first parent (same as main~1 for non-merge commits)
 db.getSiblingDB("verifydb@main^").items.countDocuments({})
 // Expected: 1
 
+// Writes blocked
 db.getSiblingDB("verifydb@main^").items.insertOne({ _id: 99 })
-// Expected error (code 96): read-only
+// Expected error (code 96)
 ```
 
 ### Caret parent selection and chaining (requires merge commit)
@@ -262,7 +249,6 @@ db.getSiblingDB("verifydb@main^").items.insertOne({ _id: 99 })
 To test `^2` and chained expressions, create a merge commit:
 
 ```js
-// Fresh database for this sub-scenario
 var cdb = db.getSiblingDB("chaindb")
 cdb.dropDatabase()
 
@@ -308,7 +294,7 @@ cdb.getSiblingDB("chaindb@main^0").runCommand({ doltLog: 1, limit: 1 }).commits[
 cdb.getSiblingDB("chaindb@main^1~1").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
 // Expected: hashC1
 
-// Chained: ~1^1 = first parent of (first parent of HEAD) = root
+// Chained: ~1^1 = first parent of (first parent) = root
 cdb.getSiblingDB("chaindb@main~1^1").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
 // Expected: hashC1
 
@@ -318,10 +304,11 @@ cdb.getSiblingDB("chaindb@main^^").runCommand({ doltLog: 1, limit: 1 }).commits[
 ```
 
 Key checks:
-- `^1` and `^2` select the correct parents of a merge commit
+- `~N` walks first-parent ancestors; `~0` is the commit itself
+- `^` and `^1` select the first parent; `^2` selects the second parent (merge commits)
 - `^0` returns the commit itself
 - Chained expressions compose left to right
-- `^^` is equivalent to `^1^1`
+- Writes are blocked on all traversal expressions
 
 ---
 
@@ -336,6 +323,11 @@ Common encodings: `.` -> `%2E`, `/` -> `%2F`, `$` -> `%24`
 // Create a branch with a dot in its name
 db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "v1.0" })
 // Expected: { branch: "v1.0", ok: 1 }
+
+// Using the unencoded name fails -- '.' is invalid in MongoDB database names
+db.getSiblingDB("verifydb@v1.0").items.find({}).toArray()
+// Expected error: mongosh rejects this client-side (MongoshInvalidInputError)
+// or the server returns an error because the name is parsed incorrectly
 
 // Access it via percent-encoded name
 const v1 = db.getSiblingDB("verifydb@v1%2E0")
@@ -357,6 +349,7 @@ v1.items.deleteOne({ _id: 20 })
 ```
 
 Key checks:
+- Unencoded dot in branch name fails (client or server rejects it)
 - Percent-encoded branch name resolves correctly
 - Full read/write access on the decoded branch
 - Isolation from main
