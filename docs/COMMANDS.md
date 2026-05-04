@@ -1002,16 +1002,22 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 | `message` | string | no | `""` | Tag description |
 | `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | Tagger identity "Name <email>" |
 
-### Response fields
+### Response fields (create / delete)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `tags` | array | List of tag objects (always returned) |
-| `tags[].name` | string | Tag name |
-| `tags[].commitId` | string | Commit hash the tag points to |
-| `tags[].author` | string | Tagger identity "Name <email>" |
-| `tags[].message` | string | Tag description |
-| `tags[].timestamp` | Date | Creation time |
+| `name` | string | Tag name |
+| `commitId` | string | Commit hash the tag points to |
+| `author` | string | Tagger identity "Name <email>" |
+| `message` | string | Tag description |
+| `timestamp` | Date | Creation time |
+| `ok` | number | `1` on success |
+
+### Response fields (list)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tags` | array | List of tag objects, each with `name`, `commitId`, `author`, `message`, `timestamp` |
 | `ok` | number | `1` on success |
 
 ### Examples
@@ -1027,6 +1033,7 @@ db.runCommand({ dumboTag: 1 })
 
 ```js
 db.runCommand({ dumboTag: 1, name: "v1.0" })
+// { name: "v1.0", commitId: "...", author: "dumbodb <dumbodb@dumbodb>", message: "", timestamp: ISODate("..."), ok: 1 }
 ```
 
 **Create a tag at a specific commit with metadata:**

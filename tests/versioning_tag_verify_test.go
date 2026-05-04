@@ -102,17 +102,11 @@ func TestTagVerify(t *testing.T) {
 		require.NoError(t, err, "dumboTag create must succeed")
 
 		assert.EqualValues(t, 1, result["ok"], "ok must be 1")
-
-		tags, ok := result["tags"].(bson.A)
-		require.True(t, ok, "tags must be an array")
-		require.Len(t, tags, 1, "create returns single-element array")
-
-		tag := tags[0].(bson.M)
-		assert.Equal(t, "v-head", tag["name"], "tag name must match")
-		assert.Equal(t, hash2, tag["commitId"], "tag must point at current HEAD (hash2)")
-		assert.Equal(t, "alice <alice@example.com>", tag["author"], "author must echo provided value")
-		assert.Equal(t, "tag at current head", tag["message"], "message must echo provided value")
-		assert.NotNil(t, tag["timestamp"], "timestamp must be present")
+		assert.Equal(t, "v-head", result["name"], "tag name must match")
+		assert.Equal(t, hash2, result["commitId"], "tag must point at current HEAD (hash2)")
+		assert.Equal(t, "alice <alice@example.com>", result["author"], "author must echo provided value")
+		assert.Equal(t, "tag at current head", result["message"], "message must echo provided value")
+		assert.NotNil(t, result["timestamp"], "timestamp must be present")
 	})
 
 	// -------------------------------------------------------------------------
@@ -129,15 +123,10 @@ func TestTagVerify(t *testing.T) {
 		require.NoError(t, err, "dumboTag create at specific hash must succeed")
 
 		assert.EqualValues(t, 1, result["ok"])
-
-		tags := result["tags"].(bson.A)
-		require.Len(t, tags, 1)
-
-		tag := tags[0].(bson.M)
-		assert.Equal(t, "v1.0", tag["name"])
-		assert.Equal(t, hash1, tag["commitId"], "tag must point at hash1, not HEAD")
-		assert.Equal(t, "dumbodb <dumbodb@dumbodb>", tag["author"], "author must default to 'dumbodb'")
-		assert.Equal(t, "first release", tag["message"])
+		assert.Equal(t, "v1.0", result["name"])
+		assert.Equal(t, hash1, result["commitId"], "tag must point at hash1, not HEAD")
+		assert.Equal(t, "dumbodb <dumbodb@dumbodb>", result["author"], "author must default to 'dumbodb'")
+		assert.Equal(t, "first release", result["message"])
 	})
 
 	// -------------------------------------------------------------------------
@@ -182,11 +171,8 @@ func TestTagVerify(t *testing.T) {
 
 		assert.EqualValues(t, 1, result["ok"])
 
-		tags := result["tags"].(bson.A)
-		require.Len(t, tags, 1)
-		deleted := tags[0].(bson.M)
-		assert.Equal(t, "v-head", deleted["name"], "deleted tag name must be echoed")
-		assert.Equal(t, hash2, deleted["commitId"], "deleted tag commitId must be echoed")
+		assert.Equal(t, "v-head", result["name"], "deleted tag name must be echoed")
+		assert.Equal(t, hash2, result["commitId"], "deleted tag commitId must be echoed")
 
 		// Verify it's gone from the list.
 		var listResult bson.M
@@ -268,10 +254,10 @@ func TestTagVerify(t *testing.T) {
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag with ancestor expression must succeed")
 
-		tags := result["tags"].(bson.A)
-		tag := tags[0].(bson.M)
-		assert.Equal(t, "v-ancestor", tag["name"])
-		assert.Equal(t, hash1, tag["commitId"], "main~1 must resolve to hash1")
+		
+		
+		assert.Equal(t, "v-ancestor", result["name"])
+		assert.Equal(t, hash1, result["commitId"], "main~1 must resolve to hash1")
 	})
 
 	// -------------------------------------------------------------------------
@@ -287,9 +273,9 @@ func TestTagVerify(t *testing.T) {
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag with branch name as hash must succeed")
 
-		tags := result["tags"].(bson.A)
-		tag := tags[0].(bson.M)
-		assert.Equal(t, hash2, tag["commitId"], "main must resolve to hash2 (current HEAD)")
+		
+		
+		assert.Equal(t, hash2, result["commitId"], "main must resolve to hash2 (current HEAD)")
 	})
 
 	// -------------------------------------------------------------------------
@@ -305,8 +291,8 @@ func TestTagVerify(t *testing.T) {
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag with another tag as hash must succeed")
 
-		tags := result["tags"].(bson.A)
-		tag := tags[0].(bson.M)
-		assert.Equal(t, hash1, tag["commitId"], "v1.0 resolves to hash1")
+		
+		
+		assert.Equal(t, hash1, result["commitId"], "v1.0 resolves to hash1")
 	})
 }

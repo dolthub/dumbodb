@@ -76,7 +76,7 @@ db.getSiblingDB("tagvdb").runCommand({
   dumboTag: 1,
   name:    "v-head",
   message: "tag at current head",
-  author:  "alice",
+  author:  "alice <alice@example.com>",
 })
 ```
 
@@ -84,15 +84,11 @@ Expected:
 
 ```json
 {
-  "tags": [
-    {
-      "name":      "v-head",
-      "commitId":  "<hash2>",
-      "author":    "alice <alice@example.com>",
-      "message":   "tag at current head",
-      "timestamp": ISODate("...")
-    }
-  ],
+  "name":      "v-head",
+  "commitId":  "<hash2>",
+  "author":    "alice <alice@example.com>",
+  "message":   "tag at current head",
+  "timestamp": ISODate("..."),
   "ok": 1
 }
 ```
@@ -123,15 +119,11 @@ Expected:
 
 ```json
 {
-  "tags": [
-    {
-      "name":     "v1.0",
-      "commitId": "<hash1>",
-      "author":   "dumbodb <dumbodb@dumbodb>",
-      "message":  "first release",
-      "timestamp": ISODate("...")
-    }
-  ],
+  "name":     "v1.0",
+  "commitId": "<hash1>",
+  "author":   "dumbodb <dumbodb@dumbodb>",
+  "message":  "first release",
+  "timestamp": ISODate("..."),
   "ok": 1
 }
 ```
@@ -184,7 +176,7 @@ db.getSiblingDB("tagvdb").runCommand({
 Expected:
 
 ```json
-{ "tags": [ { "name": "v-head", "commitId": "<hash2>", ... } ], "ok": 1 }
+{ "name": "v-head", "commitId": "<hash2>", "ok": 1 }
 ```
 
 Verify it's gone by listing again:

@@ -1877,6 +1877,23 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	// For create/delete (name was provided), return a single tag object.
+	// For list (no name), return an array of all tags.
+	if name != "" && len(res.Tags) == 1 {
+		t := res.Tags[0]
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"name", t.Name,
+				"commitId", t.CommitID,
+				"author", t.Author,
+				"message", t.Message,
+				"timestamp", time.UnixMilli(t.Timestamp),
+				"ok", float64(1),
+		)),
+	)
+	}
+
+	// List mode: return all tags as an array.
 	tagsArr := types.MakeArray(len(res.Tags))
 	for _, t := range res.Tags {
 		entry := must.NotFail(types.NewDocument(
