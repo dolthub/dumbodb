@@ -36,6 +36,8 @@ const (
 	ErrorCodeCollectionAlreadyExists
 
 	ErrorCodeInsertDuplicateID
+
+	ErrorCodeReadOnlyDatabase
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.

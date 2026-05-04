@@ -1269,6 +1269,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	if c.db.isReadOnly(ctx, state) {
+		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
+	}
+
 	// Load or create the collection's prolly map.
 	m, err := c.loadOrCreateMap(ctx, state)
 	if err != nil {
@@ -1629,6 +1633,10 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	if c.db.isReadOnly(ctx, state) {
+		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
+	}
+
 	m, err := c.loadOrCreateMap(ctx, state)
 	if err != nil {
 		return nil, err
@@ -1769,6 +1777,10 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
+	if c.db.isReadOnly(ctx, state) {
+		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
+	}
 
 	m, err := c.loadOrCreateMap(ctx, state)
 	if err != nil {

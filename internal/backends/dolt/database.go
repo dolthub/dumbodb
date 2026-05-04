@@ -34,6 +34,20 @@ type database struct {
 	rootish string // rootish from encoded name (branch, commit hash, tag, or ancestor expression)
 }
 
+// isReadOnly reports whether the database's rootish resolves to a read-only
+// snapshot (commit hash, ancestor expression, caret, or tag).
+func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
+	if rootishIsReadOnly(db.rootish) {
+		return true
+	}
+	if db.rootish == "main" {
+		return false
+	}
+	// Tags look like branch names syntactically but are read-only.
+	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+db.rootish)
+	return err == nil && tagDS.HasHead()
+}
+
 // resolveAM returns the collections AddressMap for the database's rootish.
 //
 // For "main", the current working-set AM (state.am) is returned. For read-only
@@ -47,6 +61,11 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 		return state.am, nil
 	}
 	if rootishIsReadOnly(db.rootish) {
+		return amFromRootish(ctx, state, db.rootish)
+	}
+	// Check if the rootish is a tag -- tags are read-only even though
+	// they look like branch names syntactically.
+	if tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+db.rootish); tagErr == nil && tagDS.HasHead() {
 		return amFromRootish(ctx, state, db.rootish)
 	}
 	// Writable branch: prefer working-set AM if already initialized.

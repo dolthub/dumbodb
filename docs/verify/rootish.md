@@ -22,166 +22,177 @@ Replace `localhost:27017` with your DumboDB address if different.
 
 ---
 
-## Setup: Create a database with two commits
+## Setup: Create a database with two commits, a branch, and a tag
 
-Run this once before the verification scenarios below. It creates a database `verifydb`
-with two commits so you have historical data to query.
+Run this once before the verification scenarios below.
 
 ```js
-// Start fresh  -- drop if it exists
 var db = db.getSiblingDB("verifydb")
 db.dropDatabase()
 
-// Insert a document and commit (commit 1)
+// Commit 1: one document
 db.items.insertOne({ _id: 1, label: "first", version: 1 })
 const result1 = db.runCommand({ doltCommit: 1, message: "first commit", author: "alice <alice@acme.com>" })
-printjson(result1)
-// Expected:
-// { hash: "<hash1>", branch: "main", message: "first commit", ok: 1 }
-// Save hash1 for later:
 const hash1 = result1.commitId
 
-// Insert a second document and commit (commit 2)
+// Commit 2: two documents
 db.items.insertOne({ _id: 2, label: "second", version: 2 })
 const result2 = db.runCommand({ doltCommit: 1, message: "second commit", author: "bob <bob@widgets.io>" })
-printjson(result2)
-// Expected:
-// { hash: "<hash2>", branch: "main", message: "second commit", ok: 1 }
 const hash2 = result2.commitId
 
-// Create a branch named "v1.0" pointing at commit 2.
-// The rootish in the db name must be percent-encoded because '.' is a
-// MongoDB namespace separator. Encode client-side: "v1.0" -> "v1%2E0".
-// DumboDB decodes it server-side before resolving the branch.
-const tagResult = db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "v1.0" })
-printjson(tagResult)
-// Expected: { branch: "v1.0", ok: 1 }
+// Create a branch "feature" at current main HEAD
+db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// Create a tag "release-1" at commit 1
+db.adminCommand({ dumboTag: 1, name: "release-1", hash: hash1 })
 
 print("hash1 =", hash1)
 print("hash2 =", hash2)
 ```
 
-After running setup, `verifydb` has:
+After setup, `verifydb` has:
 - **main** (HEAD = commit 2): two documents (`_id: 1` and `_id: 2`)
-- **hash1**: snapshot with one document (`_id: 1` only)
-- **hash2**: snapshot identical to current main
-- **v1.0**: branch pointing to commit 2 (same as main HEAD); access via `verifydb@v1%2E0`
+- **feature**: branch pointing at commit 2 (same as main HEAD)
+- **release-1**: tag pointing at commit 1 (one document)
+- **hash1**: commit with one document
+- **hash2**: commit with two documents (same as main HEAD)
 
 ---
 
-## Scenario 1: `verifydb@main`  -- reads and writes work
+## Scenario 1: `verifydb@main` -- reads and writes work
 
 Branch rootish. Full read/write access.
 
 ```js
 const main = db.getSiblingDB("verifydb@main")
 
-// Read: should return both documents
 main.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
 
-// Write: insert a third document (then remove it to keep state clean)
+// Write: insert then remove to keep state clean
 main.items.insertOne({ _id: 3, label: "third", version: 3 })
-// Expected: { acknowledged: true, insertedId: 3 }
-
 main.items.find({}).toArray()
 // Expected: three documents
 
 main.items.deleteOne({ _id: 3 })
-// Expected: { acknowledged: true, deletedCount: 1 }
-
 ```
+
+Key checks:
+- Reads return both documents
+- Writes succeed
+- State is restored after cleanup
 
 ---
 
-## Scenario 2: `verifydb@v1%2E0`  -- reads and writes work, isolated from main
+## Scenario 2: `verifydb@feature` -- branch isolation
 
 Non-main branch rootish. Full read/write access; writes go to that branch's working
 set and are isolated from main's working set.
 
-> **Percent-encoding:** Characters invalid in MongoDB database names (`.`, `/`, `$`, space)
-> must be percent-encoded in the rootish part of the db name. DumboDB decodes them
-> server-side before resolving the branch. One pass only  -- `%` itself encodes as `%25`.
->
-> Common encodings: `.` -> `%2E`, `/` -> `%2F`, `$` -> `%24`
-
 ```js
-const v1 = db.getSiblingDB("verifydb@v1%2E0")
+const feat = db.getSiblingDB("verifydb@feature")
 
-// Read: should succeed and return both documents (same as main HEAD at setup time)
-v1.items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
+// Read: same data as main at setup time
+feat.items.find({}).toArray()
+// Expected: [ { _id: 1, ... }, { _id: 2, ... } ]
 
-// Write on v1.0 branch: inserts into the v1.0 working set, NOT main's working set
-v1.items.insertOne({ _id: 10, label: "v1-only" })
-// Expected: { acknowledged: true, insertedId: 10 }
+// Write on feature: isolated from main
+feat.items.insertOne({ _id: 10, label: "feature-only" })
 
-// v1.0 now has three documents
-v1.items.find({}).toArray()
-// Expected: [ { _id: 1, ... }, { _id: 2, ... }, { _id: 10, label: "v1-only" } ]
+feat.items.countDocuments({})
+// Expected: 3
 
-// main is unchanged  -- the v1.0 write is isolated
-const main = db.getSiblingDB("verifydb@main")
-main.items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
-// (_id:10 does NOT appear here)
+db.getSiblingDB("verifydb@main").items.countDocuments({})
+// Expected: 2 (feature write does NOT appear on main)
 
-// Clean up the test write so subsequent scenarios start from a known state.
-v1.items.deleteOne({ _id: 10 })
-// Expected: { acknowledged: true, deletedCount: 1 }
+// Clean up
+feat.items.deleteOne({ _id: 10 })
 ```
+
+Key checks:
+- Reads return the same data as main at branch creation time
+- Writes succeed on the branch
+- Writes are isolated -- main is unchanged
 
 ---
 
-## Scenario 3: `verifydb@<hash>`  -- connects to correct snapshot, reads correct historical data
+## Scenario 3: `verifydb@release-1` -- tag is read-only
 
-Commit hash rootish. Read-only view of the exact snapshot at that commit. Writes to
-the collection are blocked, but branch creation works  -- creating a branch from a commit
-hash is always valid because the hash is a fully resolved commit address.
+Tag rootish. Read-only view of the tagged commit. Writes are blocked.
 
 ```js
-// Connect to the snapshot at hash1 (one document only)
+const tagged = db.getSiblingDB("verifydb@release-1")
+
+// Read: returns data at the tagged commit (commit 1, one document)
+tagged.items.find({}).toArray()
+// Expected: [ { _id: 1, label: "first", version: 1 } ]
+
+tagged.items.countDocuments({})
+// Expected: 1
+
+// Write: must fail -- tags are read-only snapshots
+tagged.items.insertOne({ _id: 99, label: "should fail" })
+// Expected error (code 96):
+//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+
+// Branch creation from a tag works -- it resolves to the tagged commit
+tagged.runCommand({ doltBranch: 1, branch: "from-tag" })
+// Expected: { branch: "from-tag", ok: 1 }
+
+db.getSiblingDB("verifydb@from-tag").items.countDocuments({})
+// Expected: 1 (same as the tagged commit)
+```
+
+Key checks:
+- Reads return data at the tagged commit
+- Writes are blocked with code 96
+- Branch creation from a tag works
+
+---
+
+## Scenario 4: `verifydb@<hash>` -- commit hash is read-only
+
+Commit hash rootish. Read-only view of the exact snapshot at that commit.
+
+```js
 const snap1 = db.getSiblingDB("verifydb@" + hash1)
 
 snap1.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
-// (Only the document from commit 1  -- _id:2 does not exist here)
 
 snap1.items.countDocuments({})
 // Expected: 1
 
-// Connect to the snapshot at hash2 (two documents)
 const snap2 = db.getSiblingDB("verifydb@" + hash2)
+snap2.items.countDocuments({})
+// Expected: 2
 
-snap2.items.find({}).toArray()
-// Expected: [ { _id: 1, ... }, { _id: 2, ... } ]
-
-// Write on commit hash: must fail  -- the snapshot is read-only
+// Write on commit hash: must fail
 snap1.items.insertOne({ _id: 99, label: "should fail" })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+// Expected error (code 96)
 
-// doltBranch: works  -- branch creation only needs a resolved commit, not write access.
-// This creates a new branch "from-hash1" pointing at hash1 (one-document state).
+// Branch creation from a hash works
 snap1.runCommand({ doltBranch: 1, branch: "from-hash1" })
 // Expected: { branch: "from-hash1", ok: 1 }
 
-// Verify the new branch sees the one-document state at hash1.
-db.getSiblingDB("verifydb@from-hash1").items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 } ]
+db.getSiblingDB("verifydb@from-hash1").items.countDocuments({})
+// Expected: 1
 ```
+
+Key checks:
+- hash1 snapshot has 1 document, hash2 has 2
+- Writes are blocked with code 96
+- Branch creation works
 
 ---
 
-## Scenario 4: `verifydb@main~1`  -- returns data as of parent commit, not current HEAD
+## Scenario 5: `verifydb@main~1` -- ancestor expression is read-only
 
-Ancestor expression rootish. Read-only; resolves to the parent of the named branch's HEAD.
-As with commit hashes, writes to the collection are blocked but branch creation works.
+Ancestor expression rootish. `main~1` is the first parent of main's HEAD.
 
 ```js
 const parent = db.getSiblingDB("verifydb@main~1")
 
-// main~1 is the parent of main HEAD (commit 1: one document)
 parent.items.find({}).toArray()
 // Expected: [ { _id: 1, label: "first", version: 1 } ]
 // (_id:2 was added in commit 2, which is HEAD, not its parent)
@@ -189,134 +200,208 @@ parent.items.find({}).toArray()
 parent.items.countDocuments({})
 // Expected: 1
 
-// main~0 is main itself (same as current HEAD)
-const same = db.getSiblingDB("verifydb@main~0")
-same.items.countDocuments({})
+// main~0 is main itself
+db.getSiblingDB("verifydb@main~0").items.countDocuments({})
 // Expected: 2
 
-// Write on ancestor expression: must fail  -- the snapshot is read-only
+// Write: must fail
 parent.items.insertOne({ _id: 99, label: "should fail" })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
+// Expected error (code 96)
 
-// doltBranch: works  -- the ancestor expression resolves to a commit; branch creation
-// only needs a resolved commit address. Creates "back-one" at the main~1 state.
+// Branch creation works
 parent.runCommand({ doltBranch: 1, branch: "back-one" })
 // Expected: { branch: "back-one", ok: 1 }
 
-// Verify back-one is at the one-document state (main~1).
-db.getSiblingDB("verifydb@back-one").items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 } ]
+db.getSiblingDB("verifydb@back-one").items.countDocuments({})
+// Expected: 1
 ```
+
+Key checks:
+- `main~1` returns commit 1 data (one document)
+- `main~0` returns current HEAD data (two documents)
+- Writes blocked, branch creation works
 
 ---
 
-## Scenario 5: `verifydb@HEAD`  -- aliases the default branch (main)
+## Scenario 6: HEAD, caret, and chained traversal
 
-HEAD is a rootish alias for the default branch. DumboDB connections are stateless, so there
-is no per-session "current branch" the way `git` has a per-working-tree HEAD. Since the only
-default branch DumboDB knows is `main`, HEAD is rewritten to `main` before resolution.
+HEAD aliases the default branch (`main`). Caret (`^`) selects a specific parent.
+Tilde (`~`) walks first-parent ancestors. These operators compose left to right.
 
-Concretely: `verifydb@HEAD` behaves identically to `verifydb@main` (reads the working
-set, writes go to main's working set). `verifydb@HEAD~N` behaves identically to
-`verifydb@main~N` (read-only snapshot of the Nth first-parent ancestor).
+### HEAD basics
 
 ```js
 const head = db.getSiblingDB("verifydb@HEAD")
 
-// Read: returns both documents, same as connecting via @main.
 head.items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 }, { _id: 2, label: "second", version: 2 } ]
+// Expected: same as main (2 documents)
 
-// Write via HEAD goes to main's working set. Insert then remove to keep state clean.
+// Write via HEAD goes to main's working set
 head.items.insertOne({ _id: 5, label: "via-HEAD" })
-// Expected: { acknowledged: true, insertedId: 5 }
-
-// The write is visible on main  -- they are the same working set.
 db.getSiblingDB("verifydb@main").items.countDocuments({})
 // Expected: 3
 
 head.items.deleteOne({ _id: 5 })
-// Expected: { acknowledged: true, deletedCount: 1 }
-
-// HEAD~N resolves to the Nth first-parent ancestor of main. It is read-only,
-// same as main~N.
-const prev = db.getSiblingDB("verifydb@HEAD~1")
-prev.items.find({}).toArray()
-// Expected: [ { _id: 1, label: "first", version: 1 } ]
-// (HEAD~1 is the parent of main's HEAD  -- commit 1, one document.)
-
-prev.items.insertOne({ _id: 99, label: "should fail" })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
-
-// HEAD^ aliases main^ (first parent of HEAD).  Read-only, like HEAD~1.
-var caretDB = db.getSiblingDB("verifydb@HEAD^")
-caretDB.items.find({}).toArray()
-// Expected: 1 document (first parent = commit 1)
-
-caretDB.items.insertOne({ _id: 99, label: "should fail" })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: cannot write to a read-only database snapshot
-
-// HEAD^2 is only valid on merge commits (selects the second parent).
-// On a non-merge commit, it returns an error because there is no second parent.
 ```
+
+### HEAD~N and HEAD^
+
+```js
+// HEAD~1 aliases main~1 (read-only)
+db.getSiblingDB("verifydb@HEAD~1").items.countDocuments({})
+// Expected: 1
+
+// HEAD^ is the same as HEAD~1 (first parent, read-only)
+db.getSiblingDB("verifydb@HEAD^").items.countDocuments({})
+// Expected: 1
+
+// Writes blocked on both
+db.getSiblingDB("verifydb@HEAD~1").items.insertOne({ _id: 99 })
+// Expected error (code 96)
+db.getSiblingDB("verifydb@HEAD^").items.insertOne({ _id: 99 })
+// Expected error (code 96)
+```
+
+### Caret parent selection and chaining (requires merge commit)
+
+To test `^2` and chained expressions, create a merge commit:
+
+```js
+// Fresh database for this sub-scenario
+var cdb = db.getSiblingDB("chaindb")
+cdb.dropDatabase()
+
+cdb.items.insertOne({ _id: 1, v: "root" })
+cdb.runCommand({ doltCommit: 1, message: "C1", author: "alice <alice@acme.com>" })
+const hashC1 = cdb.runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+
+cdb.getSiblingDB("chaindb@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+cdb.getSiblingDB("chaindb@feature").items.insertOne({ _id: 2, v: "feat" })
+const rC2 = cdb.getSiblingDB("chaindb@feature").runCommand({ doltCommit: 1, message: "C2-feature", author: "bob <bob@widgets.io>" })
+const hashC2 = rC2.commitId
+
+cdb.items.insertOne({ _id: 3, v: "main-adv" })
+const rC3 = cdb.runCommand({ doltCommit: 1, message: "C3-main", author: "alice <alice@acme.com>" })
+const hashC3 = rC3.commitId
+
+const mergeR = cdb.getSiblingDB("chaindb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+const hashM = mergeR.commitId
+```
+
+Now the merge commit M has:
+- `M^1` = C3 (main's pre-merge tip)
+- `M^2` = C2 (feature's tip)
+- `M^0` = M itself
+- `M^1~1` = C1 (root)
+- `M^^` = C1 (first parent of first parent)
+
+```js
+// ^1 = first parent
+cdb.getSiblingDB("chaindb@main^1").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+// Expected: hashC3
+
+// ^2 = second parent (merge commits only)
+cdb.getSiblingDB("chaindb@main^2").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+// Expected: hashC2
+
+// ^0 = the commit itself
+cdb.getSiblingDB("chaindb@main^0").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+// Expected: hashM
+
+// Chained: ^1~1 = parent of first parent = root
+cdb.getSiblingDB("chaindb@main^1~1").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+// Expected: hashC1
+
+// Chained: ~1^1 = first parent of (first parent of HEAD) = root
+cdb.getSiblingDB("chaindb@main~1^1").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+// Expected: hashC1
+
+// ^^ = first parent of first parent = root
+cdb.getSiblingDB("chaindb@main^^").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+// Expected: hashC1
+```
+
+Key checks:
+- `^1` and `^2` select the correct parents of a merge commit
+- `^0` returns the commit itself
+- Chained expressions compose left to right
+- `^^` is equivalent to `^1^1`
 
 ---
 
-## Scenario 6: reflog syntax  -- returns a clear 'not supported' error
+## Scenario 7: Percent-encoding for special characters in branch names
 
-Reflog syntax (`<ref>@{...}`) is not supported. The raw `@`, `{`, `}`, and space
-characters are invalid in MongoDB database names, so mongosh rejects them
-client-side with `MongoshInvalidInputError: [COMMON-10001] Invalid database name`
-before any network call is made. To reach the server-side parser, percent-encode
-the special characters: `@` -> `%40`, `{` -> `%7B`, `}` -> `%7D`, space -> `%20`.
-DumboDB decodes the DB name server-side (the same mechanism Scenario 2 uses for
-`.` in branch names) and returns the documented code-96 rejection.
+Characters invalid in MongoDB database names (`.`, `/`, `$`, space) must be
+percent-encoded in the rootish. DumboDB decodes them server-side.
+
+Common encodings: `.` -> `%2E`, `/` -> `%2F`, `$` -> `%24`
+
+```js
+// Create a branch with a dot in its name
+db.getSiblingDB("verifydb@main").runCommand({ doltBranch: 1, branch: "v1.0" })
+// Expected: { branch: "v1.0", ok: 1 }
+
+// Access it via percent-encoded name
+const v1 = db.getSiblingDB("verifydb@v1%2E0")
+
+v1.items.find({}).toArray()
+// Expected: both documents (same as main HEAD at branch creation)
+
+// Write works -- it is a branch, not a tag
+v1.items.insertOne({ _id: 20, label: "encoded-branch" })
+v1.items.countDocuments({})
+// Expected: 3
+
+// main is unchanged
+db.getSiblingDB("verifydb@main").items.countDocuments({})
+// Expected: 2
+
+// Clean up
+v1.items.deleteOne({ _id: 20 })
+```
+
+Key checks:
+- Percent-encoded branch name resolves correctly
+- Full read/write access on the decoded branch
+- Isolation from main
+
+---
+
+## Scenario 8: reflog syntax -- not supported
+
+Reflog syntax (`<ref>@{...}`) is not supported. The raw `@`, `{`, `}` characters
+are invalid in MongoDB database names, so percent-encode them to reach the server.
 
 ```js
 // main@{yesterday} -> percent-encoded
 db.getSiblingDB("verifydb@main%40%7Byesterday%7D").items.find({}).toArray()
 // Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "main@{yesterday}": reflog syntax is not supported
+//   MongoServerError[OperationFailed]: rootish "main@{yesterday}": ...
 
-// main@{5 minutes ago} -> percent-encoded (note %20 for spaces)
+// main@{5 minutes ago} -> percent-encoded
 db.getSiblingDB("verifydb@main%40%7B5%20minutes%20ago%7D").items.find({}).toArray()
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "main@{5 minutes ago}": reflog syntax is not supported
+// Expected error (code 96)
 
 // @{1} -> percent-encoded
 db.getSiblingDB("verifydb@%40%7B1%7D").items.find({}).toArray()
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "@{1}": reflog syntax is not supported
+// Expected error (code 96)
 ```
-
-> **Why not type the raw form?** Typing `verifydb@main@{yesterday}` in mongosh
-> fails with a client-side validation error, not the server-side `reflog syntax is
-> not supported`. Percent-encoding is the only way a mongosh user can actually reach
-> the documented error path. Drivers with permissive DB-name validation (the Go
-> mongo-driver among them) accept the raw form and also reach the same server error.
 
 ---
 
-## Scenario 7: range syntax  -- returns a clear 'not supported' error
+## Scenario 9: range syntax -- not supported
 
-Range syntax (`<ref>..<ref>`) is not supported. The `.` character is forbidden in
-MongoDB database names, so mongosh rejects raw range expressions client-side.
-Percent-encode `.` as `%2E` (the same encoding used for branch names like `v1.0`
-in Scenario 2) to reach the server-side rejection.
+Range syntax (`<ref>..<ref>`) is not supported. Percent-encode `.` as `%2E`.
 
 ```js
 // main..feature -> percent-encoded
 db.getSiblingDB("verifydb@main%2E%2Efeature").items.find({}).toArray()
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "main..feature": range syntax is not supported
+// Expected error (code 96)
 
-// main...feature (three-dot range) -> percent-encoded
+// main...feature (three-dot) -> percent-encoded
 db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: rootish "main...feature": range syntax is not supported
+// Expected error (code 96)
 ```
 
 ---
@@ -326,31 +411,20 @@ db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 | Rootish form | Example | Read | Write[1] | Branch creation[2] | Notes |
 |---|---|---|---|---|---|
 | Branch name (main) | `mydb@main` | yes | yes | yes | Writes go to main's working set |
-| Branch name (other) | `mydb@v1%2E0` (encodes `v1.0`) | yes | yes | yes | Writes go to that branch's working set, isolated from main |
-| Tag name | `mydb@v1%2E0` (when `v1.0` is a tag) | yes | no | yes | Collection writes blocked; branch creation resolves the tag's commit |
-| Commit hash (32 chars) | `mydb@<hash>` | yes | no | yes | Collection writes blocked; branch creation uses the hash directly |
-| Ancestor expression | `mydb@main~1` | yes | no | yes | Collection writes blocked; branch creation walks to the Nth ancestor commit |
-| HEAD | `mydb@HEAD` | yes | yes | yes | Alias for the default branch (`main`); writes go to main's working set |
-| HEAD-relative | `mydb@HEAD~N` | yes | no | yes | Alias for `main~N`; collection writes blocked, branch creation walks ancestry |
-| Caret parent | `mydb@main^2` | yes | no | yes | Selects Nth parent (1=first, 2=second on merge commits, 0=self) |
-| Chained | `mydb@main^1~2`, `mydb@HEAD^^` | yes | no | yes | Operators compose left to right, matching git |
-| Reflog | `mydb@main%40%7Byesterday%7D` (encodes `main@{yesterday}`) | no | no | no | Raw `@{}` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
-| Range | `mydb@main%2E%2Efeature` (encodes `main..feature`) | no | no | no | Raw `.` invalid in mongosh DB names; percent-encoded form reaches server for code 96 |
+| Branch name (other) | `mydb@feature` | yes | yes | yes | Isolated working set |
+| Tag name | `mydb@release-1` | yes | no | yes | Read-only; resolves to tagged commit |
+| Commit hash (32 chars) | `mydb@<hash>` | yes | no | yes | Read-only snapshot |
+| Ancestor expression | `mydb@main~1` | yes | no | yes | Read-only; walks first-parent chain |
+| HEAD | `mydb@HEAD` | yes | yes | yes | Alias for `main` |
+| HEAD-relative | `mydb@HEAD~N`, `mydb@HEAD^` | yes | no | yes | Alias for `main~N` / `main^` |
+| Caret parent | `mydb@main^2` | yes | no | yes | Selects Nth parent (merge commits) |
+| Chained | `mydb@main^1~2`, `mydb@HEAD^^` | yes | no | yes | Operators compose left to right |
+| Percent-encoded | `mydb@v1%2E0` (encodes `v1.0`) | yes | yes | yes | Decoded server-side |
+| Reflog | `mydb@main%40%7Byesterday%7D` | no | no | no | Not supported (code 96) |
+| Range | `mydb@main%2E%2Efeature` | no | no | no | Not supported (code 96) |
 
-[1] **Write** = collection mutations (insertOne, updateOne, deleteOne, createCollection, etc.)
-[2] **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "newname" })`. Works whenever
-the rootish resolves to a commit  -- branch creation only needs a commit address, not write access.
+[1] **Write** = collection mutations (insertOne, updateOne, deleteOne, etc.)
+[2] **Branch creation** = `db.runCommand({ doltBranch: 1, branch: "name" })`. Works whenever
+the rootish resolves to a commit -- only needs a commit address, not write access.
 
 All errors use MongoDB error code **96** (`OperationFailed`).
-
-### Checking the error code in mongosh
-
-```js
-try {
-  // Reflog syntax is rejected  -- use percent-encoded form so it reaches the server.
-  db.getSiblingDB("verifydb@main%40%7Byesterday%7D").items.find({}).toArray()
-} catch (e) {
-  print("code:", e.code)      // 96
-  print("message:", e.message)
-}
-```

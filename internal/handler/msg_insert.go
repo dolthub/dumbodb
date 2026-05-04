@@ -249,6 +249,13 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				continue
 			}
 
+			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase) {
+				return nil, handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrOperationFailed,
+					"cannot write to a read-only database snapshot",
+				)
+			}
+
 			if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
 				return nil, lazyerrors.Error(err)
 			}
