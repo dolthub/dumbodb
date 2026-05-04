@@ -18,8 +18,7 @@ underlying repository, and vice versa.
 | `hash`    | string | no       | connection branch HEAD | Rootish (commit hash, branch, ancestor expression, or another tag) to tag.   |
 | `delete`  | bool   | no       | `false`                | Delete the named tag. Mutually requires `name`.                              |
 | `message` | string | no       | `""`                   | Tag description.                                                             |
-| `author`  | string | no       | `"dumbodb"`            | Tagger name.                                                                 |
-| `email`   | string | no       | `"dumbodb@dumbodb"`    | Tagger email.                                                                |
+| `author`  | string | no       | `"dumbodb <dumbodb@dumbodb>"`| Tagger identity "Name <email>".                                                                 |
 
 \* `name` is required for create and delete; omit it to list all tags.
 
@@ -78,7 +77,6 @@ db.getSiblingDB("tagvdb").runCommand({
   name:    "v-head",
   message: "tag at current head",
   author:  "alice",
-  email:   "alice@example.com"
 })
 ```
 
@@ -90,8 +88,7 @@ Expected:
     {
       "name":      "v-head",
       "commitId":  "<hash2>",
-      "tagger":    "alice",
-      "email":     "alice@example.com",
+      "author":    "alice <alice@example.com>",
       "message":   "tag at current head",
       "timestamp": ISODate("...")
     }
@@ -103,7 +100,7 @@ Expected:
 Key checks:
 - `tags[0].name` is `"v-head"`
 - `tags[0].commitId` equals `hash2` (current main HEAD)
-- `tags[0].tagger`, `email`, `message` echo what you provided
+- `tags[0].author`, `message` echo what you provided
 - `ok` is `1`
 
 ---
@@ -130,8 +127,7 @@ Expected:
     {
       "name":     "v1.0",
       "commitId": "<hash1>",
-      "tagger":   "dumbodb",
-      "email":    "dumbodb@dumbodb",
+      "author":   "dumbodb <dumbodb@dumbodb>",
       "message":  "first release",
       "timestamp": ISODate("...")
     }
@@ -142,7 +138,7 @@ Expected:
 
 Key checks:
 - `tags[0].commitId` equals `hash1` (not the current main HEAD)
-- `tagger` and `email` defaulted to `dumbodb` / `dumbodb@dumbodb` (no `author`/`email` provided)
+- `author` defaulted to `dumbodb <dumbodb@dumbodb>` (no `author` provided)
 
 ---
 
@@ -159,8 +155,8 @@ Expected:
 ```json
 {
   "tags": [
-    { "name": "v-head", "commitId": "<hash2>", "tagger": "alice",   "email": "alice@example.com", "message": "tag at current head", "timestamp": ISODate("...") },
-    { "name": "v1.0",   "commitId": "<hash1>", "tagger": "dumbodb", "email": "dumbodb@dumbodb",   "message": "first release",       "timestamp": ISODate("...") }
+    { "name": "v-head", "commitId": "<hash2>", "author": "alice <alice@example.com>", "message": "tag at current head", "timestamp": ISODate("...") },
+    { "name": "v1.0",   "commitId": "<hash1>", "author": "dumbodb <dumbodb@dumbodb>", "message": "first release",       "timestamp": ISODate("...") }
   ],
   "ok": 1
 }
@@ -220,7 +216,7 @@ db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1 })
 // Expected: tags still includes v1.0 -> hash1 with the original metadata.
 ```
 
-Key check: `v1.0` appears with the same `commitId`, `tagger`, `email`, and
+Key check: `v1.0` appears with the same `commitId`, `author`, and
 `message` as before the restart.
 
 ---
@@ -242,13 +238,13 @@ Expected output (formatting may vary):
 v1.0
 ```
 
-For more detail, including the commit and tagger metadata:
+For more detail, including the commit and author metadata:
 
 ```bash
 dolt tag -v
 ```
 
-Expected: an entry for `v1.0` with `Tagger:`, `Date:`, `first release`, and
+Expected: an entry for `v1.0` with author, date, `first release`, and
 the commit hash matching `hash1` from setup.
 
 Key check: the tag created by `dumboTag` is listed by `dolt tag`.
@@ -321,10 +317,10 @@ Key check: both calls return errors; no tag is created.
 | `{ dumboTag: 1 }`                                                | List all tags                                     |
 | `{ dumboTag: 1, name: "v" }`                                     | Create tag `v` at current branch HEAD             |
 | `{ dumboTag: 1, name: "v", hash: "<rootish>" }`                  | Create tag `v` at the resolved rootish            |
-| `{ dumboTag: 1, name: "v", message: "...", author: "...", email: "..." }` | Create tag with custom metadata          |
+| `{ dumboTag: 1, name: "v", message: "...", author: "Name <email>" }` | Create tag with custom metadata          |
 | `{ dumboTag: 1, name: "v", delete: true }`                       | Delete tag `v`                                    |
 
-- Tag entries have `name`, `commitId`, `tagger`, `email`, `message`, `timestamp`.
+- Tag entries have `name`, `commitId`, `author`, `message`, `timestamp`.
 - `hash` accepts any rootish: commit hash, branch name, ancestor expression, or another tag.
 - Omitting `hash` on create uses the connection's branch HEAD.
 - Tag names must not contain `@` or whitespace.

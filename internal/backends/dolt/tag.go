@@ -88,13 +88,9 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 		return nil, fmt.Errorf("dolt: DumboDBTag: tag %q already exists", params.Name)
 	}
 
-	taggerName := params.Author
-	if taggerName == "" {
-		taggerName = "dumbodb"
-	}
-	taggerEmail := params.Email
-	if taggerEmail == "" {
-		taggerEmail = "dumbodb@dumbodb"
+	taggerName, taggerEmail := "dumbodb", "dumbodb@dumbodb"
+	if params.Author != "" {
+		taggerName, taggerEmail = parseAuthorString(params.Author)
 	}
 	meta := datas.NewTagMeta(taggerName, taggerEmail, params.Message)
 
@@ -106,8 +102,7 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 		Tags: []backends.TagInfo{{
 			Name:      params.Name,
 			CommitID:  commitAddr.String(),
-			Tagger:    meta.Name,
-			Email:     meta.Email,
+			Author:    meta.Name + " <" + meta.Email + ">",
 			Message:   meta.Description,
 			Timestamp: int64(meta.Timestamp),
 		}},
@@ -174,8 +169,7 @@ func dumboDBTagList(ctx context.Context, db *dbState) (*backends.TagResult, erro
 			}
 			info.CommitID = commitAddr.String()
 			if meta != nil {
-				info.Tagger = meta.Name
-				info.Email = meta.Email
+				info.Author = meta.Name + " <" + meta.Email + ">"
 				info.Message = meta.Description
 				info.Timestamp = int64(meta.Timestamp)
 			}

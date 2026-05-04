@@ -1001,8 +1001,7 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 | `hash` | string | no | current branch HEAD | Rootish (commit hash, branch, tag, or ancestor expression) to tag |
 | `delete` | bool | no | `false` | Set to `true` to delete the named tag |
 | `message` | string | no | `""` | Tag description |
-| `author` | string | no | `"dumbodb"` | Tagger name |
-| `email` | string | no | `"dumbodb@dumbodb"` | Tagger email |
+| `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | Tagger identity "Name <email>" |
 
 ### Response fields
 
@@ -1011,8 +1010,7 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 | `tags` | array | List of tag objects (always returned) |
 | `tags[].name` | string | Tag name |
 | `tags[].commitId` | string | Commit hash the tag points to |
-| `tags[].tagger` | string | Author name |
-| `tags[].email` | string | Author email |
+| `tags[].author` | string | Tagger identity "Name <email>" |
 | `tags[].message` | string | Tag description |
 | `tags[].timestamp` | Date | Creation time |
 | `ok` | number | `1` on success |

@@ -1833,11 +1833,6 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	email, err := common.GetOptionalParam[string](document, "email", "")
-	if err != nil {
-		return nil, err
-	}
-
 	if name == "" && deleteTag {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
@@ -1879,7 +1874,6 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Delete:  deleteTag,
 		Message: message,
 		Author:  author,
-		Email:   email,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
@@ -1890,8 +1884,7 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		entry := must.NotFail(types.NewDocument(
 			"name", t.Name,
 			"commitId", t.CommitID,
-			"tagger", t.Tagger,
-			"email", t.Email,
+			"author", t.Author,
 			"message", t.Message,
 			"timestamp", time.UnixMilli(t.Timestamp),
 		))

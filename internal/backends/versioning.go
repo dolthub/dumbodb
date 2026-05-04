@@ -372,8 +372,7 @@ func (e *DumboDBRevertConflictError) Error() string {
 type TagInfo struct {
 	Name      string
 	CommitID  string
-	Tagger    string // tagger name; empty when tag has no metadata
-	Email     string // tagger email; empty when tag has no metadata
+	Author    string // tagger identity "Name <email>"; empty when tag has no metadata
 	Message   string // tag description/message; empty when tag has no metadata
 	Timestamp int64  // Unix milliseconds; zero when tag has no metadata
 }
@@ -393,15 +392,14 @@ type TagParams struct {
 	Hash    string // rootish to tag (create only); empty means connection branch HEAD
 	Delete  bool   // if true, delete the named tag instead of creating one
 	Message string // optional: tag description (create only)
-	Author  string // optional: tagger name (create only)
-	Email   string // optional: tagger email (create only)
+	Author  string // optional: tagger identity "Name <email>" (create only)
 }
 
 // TagResult represents the result of VersioningBackend.DumboDBTag method.
 //
 // For list operations, Tags contains every tag in the database.
 // For create/delete, Tags contains a single entry describing the affected tag
-// (delete entries have Tagger/Email/Message empty since the tag is gone).
+// (delete entries have Author/Message empty since the tag is gone).
 type TagResult struct {
 	Tags []TagInfo
 }

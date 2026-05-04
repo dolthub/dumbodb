@@ -97,8 +97,7 @@ func TestTagVerify(t *testing.T) {
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v-head"},
 			{Key: "message", Value: "tag at current head"},
-			{Key: "author", Value: "alice"},
-			{Key: "email", Value: "alice@example.com"},
+			{Key: "author", Value: "alice <alice@example.com>"},
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag create must succeed")
 
@@ -111,8 +110,7 @@ func TestTagVerify(t *testing.T) {
 		tag := tags[0].(bson.M)
 		assert.Equal(t, "v-head", tag["name"], "tag name must match")
 		assert.Equal(t, hash2, tag["commitId"], "tag must point at current HEAD (hash2)")
-		assert.Equal(t, "alice", tag["tagger"], "tagger must echo provided author")
-		assert.Equal(t, "alice@example.com", tag["email"], "email must echo provided value")
+		assert.Equal(t, "alice <alice@example.com>", tag["author"], "author must echo provided value")
 		assert.Equal(t, "tag at current head", tag["message"], "message must echo provided value")
 		assert.NotNil(t, tag["timestamp"], "timestamp must be present")
 	})
@@ -138,8 +136,7 @@ func TestTagVerify(t *testing.T) {
 		tag := tags[0].(bson.M)
 		assert.Equal(t, "v1.0", tag["name"])
 		assert.Equal(t, hash1, tag["commitId"], "tag must point at hash1, not HEAD")
-		assert.Equal(t, "dumbodb", tag["tagger"], "tagger must default to 'dumbodb'")
-		assert.Equal(t, "dumbodb@dumbodb", tag["email"], "email must default to 'dumbodb@dumbodb'")
+		assert.Equal(t, "dumbodb <dumbodb@dumbodb>", tag["author"], "author must default to 'dumbodb'")
 		assert.Equal(t, "first release", tag["message"])
 	})
 
@@ -162,13 +159,12 @@ func TestTagVerify(t *testing.T) {
 		// Find each tag by name (order not guaranteed).
 		vHead := tagFromList(t, tags, "v-head")
 		assert.Equal(t, hash2, vHead["commitId"])
-		assert.Equal(t, "alice", vHead["tagger"])
-		assert.Equal(t, "alice@example.com", vHead["email"])
+		assert.Equal(t, "alice <alice@example.com>", vHead["author"])
 		assert.Equal(t, "tag at current head", vHead["message"])
 
 		v10 := tagFromList(t, tags, "v1.0")
 		assert.Equal(t, hash1, v10["commitId"])
-		assert.Equal(t, "dumbodb", v10["tagger"])
+		assert.Equal(t, "dumbodb <dumbodb@dumbodb>", v10["author"])
 		assert.Equal(t, "first release", v10["message"])
 	})
 
