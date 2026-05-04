@@ -205,9 +205,10 @@ func TestCherryPickVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName+"@main", "conflict-target", "alice <alice@acme.com>")
 
 		// Cherry-pick  -- expect conflict.
-		// In mongosh this throws a MongoServerError (ok:0 surfaces as an exception).
-		// runCommandRaw bypasses that and returns the raw wire document so we can
-		// assert the structured error fields the server actually sends.
+		// The server returns {ok: 0, code: 96, errmsg: "..."} on conflict.
+		// The Go mongo-driver surfaces this as a mongo.CommandError (code 96,
+		// OperationFailed). runCommandRaw captures the ok:0 response document
+		// directly so we can assert the structured error fields.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashConflictFeat},

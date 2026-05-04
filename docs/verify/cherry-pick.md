@@ -145,7 +145,7 @@ db.items.updateOne({ _id: 1 }, { $set: { v: 100 } })
 db.runCommand({ doltCommit: 1, message: "conflict-target", author: "alice <alice@acme.com>" })
 
 // Cherry-pick the conflicting feature commit onto main.
-// In mongosh, runCommand throws a MongoServerError when ok:0  -- it does NOT return a document.
+// The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashC4feat })
 } catch (e) {
@@ -156,8 +156,9 @@ try {
 ```
 
 Key checks:
-- `runCommand` throws a `MongoServerError` (mongosh surfaces `ok:0` as an exception)
+- `runCommand` returns `ok:0` (mongosh throws this as `MongoServerError`)
 - The error message contains `"doltCherryPick: unresolved conflicts in 1 collection(s)"`
+- The full response document is available via `e.errorResponse` in the catch block
 - The cherry-pick state is preserved  -- use `doltConflicts` to inspect (Scenario 4)
 
 Verify that `doltStatus` reflects the in-progress cherry-pick and its conflicts:
@@ -259,7 +260,7 @@ const hashConflict2 = r5.commitId
 db.items.updateOne({ _id: 1 }, { $set: { v: 201 } })
 db.runCommand({ doltCommit: 1, message: "another-conflict-target", author: "alice <alice@acme.com>" })
 
-// Cherry-pick  -- expect conflict (throws in mongosh).
+// Cherry-pick  -- expect conflict. The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, commit: hashConflict2 })
 } catch (e) {

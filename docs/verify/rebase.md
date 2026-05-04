@@ -218,7 +218,7 @@ const rc4feat = cdb.getSiblingDB("rebaseconflict@feature").runCommand({doltCommi
 printjson(rc4feat)
 // Expected: { commitId: "<hash>", branch: "feature", message: "feature-changes-1", ok: 1 }
 
-// Rebase  -- expect conflict (throws in mongosh).
+// Rebase  -- expect conflict. The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   cdb.getSiblingDB("rebaseconflict@feature").runCommand({doltRebase: 1, onto: "main"})
 } catch (e) {
@@ -229,7 +229,7 @@ try {
 ```
 
 Key checks:
-- `runCommand` throws a `MongoServerError` (ok:0 surfaces as an exception in mongosh)
+- `runCommand` returns `ok:0` (mongosh throws this as `MongoServerError`)
 - Error message contains `"doltRebase"` and mentions conflicts
 - The rebase is staged  -- `doltConflicts` can inspect it
 
@@ -284,7 +284,7 @@ const rr4feat = rdb.getSiblingDB("rebaseresolve@feature").runCommand({doltCommit
 printjson(rr4feat)
 // Expected: { commitId: "<hash>", branch: "feature", message: "feature-modifies-1", ok: 1 }
 
-// Start rebase  -- expect conflict (throws in mongosh).
+// Start rebase  -- expect conflict. The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   rdb.getSiblingDB("rebaseresolve@feature").runCommand({doltRebase: 1, onto: "main"})
 } catch (e) {

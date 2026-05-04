@@ -194,7 +194,7 @@ db.getSiblingDB("mergedb@main").runCommand({ doltCommit: 1, message: "main-v10",
 db.getSiblingDB("mergedb@feature").inventory.updateOne({ _id: 1 }, { $set: { v: 20 } })
 db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "feature-v20", author: "bob" })
 
-// In mongosh, runCommand throws a MongoServerError when ok:0  -- it does NOT return a document.
+// The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
 } catch (e) {

@@ -142,7 +142,7 @@ db.records.updateOne({ _id: 10 }, { $set: { v: 99 } })
 db.runCommand({ doltCommit: 1, message: "modify-ten", author: "bob <bob@widgets.io>" })
 
 // Revert hashAddTen  -- expect conflict.
-// In mongosh, runCommand throws a MongoServerError when ok:0.
+// The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashAddTen })
 } catch (e) {
@@ -153,8 +153,9 @@ try {
 ```
 
 Key checks:
-- `runCommand` throws a `MongoServerError` (mongosh surfaces `ok:0` as an exception)
+- `runCommand` returns `ok:0` (mongosh throws this as `MongoServerError`)
 - The error message contains `"doltRevert: unresolved conflicts in 1 collection(s)"`
+- The full response document is available via `e.errorResponse` in the catch block
 - The revert state is preserved  -- use `doltConflicts` to inspect (Scenario 4)
 
 Verify that `doltStatus` reflects the in-progress revert and its conflicts:
@@ -252,7 +253,7 @@ const hashAdd20 = rAdd20.commitId
 db.records.updateOne({ _id: 20 }, { $set: { v: 201 } })
 db.runCommand({ doltCommit: 1, message: "modify-twenty", author: "bob <bob@widgets.io>" })
 
-// Revert  -- expect conflict (throws in mongosh).
+// Revert  -- expect conflict. The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
   db.getSiblingDB("revertdb@main").runCommand({ doltRevert: 1, commit: hashAdd20 })
 } catch (e) {

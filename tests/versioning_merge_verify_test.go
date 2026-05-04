@@ -43,9 +43,11 @@ import (
 )
 
 // runCommandRaw runs a command and returns the raw BSON response as bson.M,
-// even when the response contains ok:0. The MongoDB driver normally converts ok:0
-// into a CommandError and does not expose the raw document; this helper works
-// around that by calling DecodeBytes on the SingleResult and unmarshaling manually.
+// even when the response contains ok:0. The server returns ok:0 responses as
+// {ok: 0, code: 96, errmsg: "..."} documents. The Go mongo-driver normally
+// converts these into a mongo.CommandError (code 96, OperationFailed) and does
+// not expose the raw document; this helper captures the ok:0 response document
+// directly by calling DecodeBytes on the SingleResult and unmarshaling manually.
 func runCommandRaw(t *testing.T, db *mongo.Database, cmd interface{}) bson.M {
 	t.Helper()
 
