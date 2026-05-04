@@ -137,3 +137,67 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" =~ 'my first commit' ]] || false
 }
+
+@test 'dumboBranch creates branch visible to dolt branch' {
+  local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
+
+  # Insert and commit so we have a non-empty repo.
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.col.insertOne({x:1}))'
+  [ "$status" -eq 0 ]
+
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.runCommand({dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>"}))'
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.ok == 1'
+
+  # Create a branch via dumboDB.
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature-x"}))'
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.ok == 1'
+
+  stop_dumbodb
+  setup_dolt_hack "$DUMBODB_DATA_DIR"
+  cd "$(dirname "$DUMBODB_DATA_DIR")"
+
+  # dolt branch must list the new branch.
+  run dolt branch
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ 'feature-x' ]] || false
+}
+
+@test 'dumboTag creates tag visible to dolt tag' {
+  local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
+
+  # Insert and commit so we have a non-empty repo.
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.col.insertOne({x:1}))'
+  [ "$status" -eq 0 ]
+
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.runCommand({dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>"}))'
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.ok == 1'
+
+  # Create a tag via dumboDB.
+  run mongosh "$mongo_uri" --quiet --eval \
+    'JSON.stringify(db.runCommand({dumboTag: 1, name: "v1.0", message: "first release", author: "alice <alice@acme.com>"}))'
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.ok == 1'
+
+  stop_dumbodb
+  setup_dolt_hack "$DUMBODB_DATA_DIR"
+  cd "$(dirname "$DUMBODB_DATA_DIR")"
+
+  # dolt tag must list the new tag.
+  run dolt tag
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ 'v1.0' ]] || false
+
+  # dolt tag -v shows metadata.
+  run dolt tag -v
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ 'v1.0' ]] || false
+  [[ "$output" =~ 'first release' ]] || false
+}

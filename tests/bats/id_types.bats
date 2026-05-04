@@ -135,7 +135,7 @@ assert_id_roundtrip() {
 
     # Collection must contain exactly 2 documents
     run mongosh "$uri" --quiet --eval \
-        "db.col_subdoc.find({}).count()"
+        "db.col_subdoc.countDocuments({})"
     [ "$status" -eq 0 ]
     [ "$output" -eq 2 ]
 }
