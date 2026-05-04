@@ -149,8 +149,8 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 //	"mydb@branchname"                        -> dbName="mydb", rootish="branchname",                        readOnly=false
 //	"mydb@na7kfra98h45fr2u5qtr30o2ggm7vh61" -> dbName="mydb", rootish="na7kfra98h45fr2u5qtr30o2ggm7vh61", readOnly=true  (commit hash)
 //	"mydb@main~3"                            -> dbName="mydb", rootish="main~3",                            readOnly=true  (ancestor expression)
-//	"mydb@HEAD"                              -> dbName="mydb", rootish="main",                              readOnly=false (HEAD alias)
-//	"mydb@HEAD~2"                            -> dbName="mydb", rootish="main~2",                            readOnly=true  (HEAD-relative alias)
+//	"mydb@HEAD"                              -> error: HEAD is not supported in connection strings
+//	"mydb@HEAD~2"                            -> error: HEAD is not supported in connection strings
 //
 // If no separator is present the rootish defaults to "main" and readOnly is false.
 //
@@ -158,7 +158,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 // Bare names are assumed to be branch names (writable); tag detection requires a backend call
 // not performed here.
 //
-// HEAD and HEAD~N are rewritten to main and main~N respectively: DumboDB connections are
+// HEAD and HEAD~N are rejected: DumboDB connections are
 // stateless, so the only meaningful "current branch" is the default branch (main). Writing
 // via "HEAD" therefore mutates main's working set, same as writing via "main". Callers of
 // branchFromDBName never see the literal "HEAD".
@@ -185,7 +185,9 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 			if err = parseRootish(candidate); err != nil {
 				return "", "", false, err
 			}
-			candidate = resolveHEADAlias(candidate)
+			if err = rejectHEAD(candidate); err != nil {
+				return "", "", false, err
+			}
 			return encoded[:idx], candidate, rootishIsReadOnly(candidate), nil
 		}
 	}
@@ -193,22 +195,17 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 	return encoded, "main", false, nil
 }
 
-// resolveHEADAlias rewrites HEAD and HEAD~N to main and main~N.
-//
-// DumboDB connections are stateless, so the only "current branch" is the default branch.
-// HEAD is therefore an alias for main; downstream resolution sees a regular branch or
-// ancestor expression and never the literal "HEAD".
-func resolveHEADAlias(rootish string) string {
-	if rootish == "HEAD" {
-		return "main"
+// rejectHEAD returns an error if the rootish is HEAD or starts with HEAD~ / HEAD^.
+// DumboDB connections are stateless -- there is no per-session "current branch",
+// so HEAD has no meaning in the connection string. Use a branch name instead.
+func rejectHEAD(rootish string) error {
+	if rootish == "HEAD" || strings.HasPrefix(rootish, "HEAD~") || strings.HasPrefix(rootish, "HEAD^") {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish %q: HEAD is not supported in connection strings; use a branch name instead", rootish),
+		)
 	}
-	if strings.HasPrefix(rootish, "HEAD~") {
-		return "main" + rootish[len("HEAD"):]
-	}
-	if strings.HasPrefix(rootish, "HEAD^") {
-		return "main" + rootish[len("HEAD"):]
-	}
-	return rootish
+	return nil
 }
 
 // rootishAllDigits reports whether s consists entirely of ASCII decimal digits
@@ -287,8 +284,9 @@ func enforceWritableRootish(encodedDB string) error {
 //   - Tag name (resolved as refs/tags/<rootish>)
 //   - Bare commit hash (full 32-char lowercase base32, i.e. 0-9a-v)
 //   - Relative ancestor expression (<branch>~<N>)
-//   - HEAD (alias for the default branch, rewritten to main by resolveHEADAlias)
-//   - HEAD-relative ancestor expression (HEAD~N, rewritten to main~N)
+//
+// Rejected by rejectHEAD (called separately after parseRootish):
+//   - HEAD, HEAD~N, HEAD^N (no per-session current branch in DumboDB)
 //
 // Rejected forms (returned as ErrOperationFailed):
 //   - Any '@' (reserved as the database/branch delimiter; covers reflog <ref>@{...} too)

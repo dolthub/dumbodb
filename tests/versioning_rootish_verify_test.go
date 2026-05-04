@@ -234,41 +234,21 @@ func TestRootishVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: HEAD, caret, and chained traversal
+	// Scenario 6: HEAD rejected, caret, and chained traversal
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_HEAD_Caret_Chained", func(t *testing.T) {
-		// HEAD basics: aliases main, writable.
-		headItems := env.client.Database(dbName + "@HEAD").Collection("items")
+		// HEAD is rejected -- DumboDB has no per-session current branch.
+		assertRootishRejected(t, env.client.Database(dbName+"@HEAD"), "HEAD")
+		assertRootishRejected(t, env.client.Database(dbName+"@HEAD~1"), "HEAD~1")
+		assertRootishRejected(t, env.client.Database(dbName+"@HEAD^"), "HEAD^")
 
-		nHead, err := headItems.CountDocuments(ctx, bson.D{})
+		// main^ is the first parent of main's HEAD (read-only).
+		nCaret, err := env.client.Database(dbName+"@main^").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
-		assert.Equal(t, int64(2), nHead, "HEAD: expected 2 docs")
+		assert.Equal(t, int64(1), nCaret, "main^: expected 1 doc")
 
-		_, err = headItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(5)}, {Key: "label", Value: "via-HEAD"}})
-		require.NoError(t, err)
-
-		nMain, err := env.client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.Equal(t, int64(3), nMain, "HEAD write visible on main")
-
-		_, err = headItems.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(5)}})
-		require.NoError(t, err)
-
-		// HEAD~1: read-only, same as main~1.
-		nPrev, err := env.client.Database(dbName+"@HEAD~1").Collection("items").CountDocuments(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), nPrev, "HEAD~1: expected 1 doc")
-
-		_, err = env.client.Database(dbName+"@HEAD~1").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
-		assertWriteBlockedOperationFailed(t, err, "insert on HEAD~1")
-
-		// HEAD^: same as HEAD~1 (first parent), read-only.
-		nCaret, err := env.client.Database(dbName+"@HEAD^").Collection("items").CountDocuments(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), nCaret, "HEAD^: expected 1 doc")
-
-		_, err = env.client.Database(dbName+"@HEAD^").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
-		assertWriteBlockedOperationFailed(t, err, "insert on HEAD^")
+		_, err = env.client.Database(dbName+"@main^").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
+		assertWriteBlockedOperationFailed(t, err, "insert on main^")
 
 		// Caret parent selection and chaining require a merge commit.
 		chainDB := fmt.Sprintf("chain%d", rand.Int64N(1_000_000))

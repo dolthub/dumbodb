@@ -223,43 +223,38 @@ Key checks:
 
 ---
 
-## Scenario 6: HEAD, caret, and chained traversal
+## Scenario 6: HEAD rejected, caret, and chained traversal
 
-HEAD aliases the default branch (`main`). Caret (`^`) selects a specific parent.
-Tilde (`~`) walks first-parent ancestors. These operators compose left to right.
+HEAD is not supported in connection strings. DumboDB has no per-session "current
+branch" concept, so HEAD has no meaning. Use a branch name instead.
 
-### HEAD basics
+### HEAD is rejected
 
 ```js
-const head = db.getSiblingDB("verifydb@HEAD")
+db.getSiblingDB("verifydb@HEAD").items.find({}).toArray()
+// Expected error (code 96): HEAD is not supported in connection strings
 
-head.items.find({}).toArray()
-// Expected: same as main (2 documents)
+db.getSiblingDB("verifydb@HEAD~1").items.find({}).toArray()
+// Expected error (code 96)
 
-// Write via HEAD goes to main's working set
-head.items.insertOne({ _id: 5, label: "via-HEAD" })
-db.getSiblingDB("verifydb@main").items.countDocuments({})
-// Expected: 3
-
-head.items.deleteOne({ _id: 5 })
+db.getSiblingDB("verifydb@HEAD^").items.find({}).toArray()
+// Expected error (code 96)
 ```
 
-### HEAD~N and HEAD^
+> **Note:** `HEAD` is still accepted in command parameters like `dumboDiff`'s
+> `from` and `to` fields, where it resolves relative to the connection's branch.
+> It is only rejected in the connection string itself (`mydb@HEAD`).
+
+### Caret parent selection
+
+`main^` selects the first parent (same as `main~1`, read-only):
 
 ```js
-// HEAD~1 aliases main~1 (read-only)
-db.getSiblingDB("verifydb@HEAD~1").items.countDocuments({})
+db.getSiblingDB("verifydb@main^").items.countDocuments({})
 // Expected: 1
 
-// HEAD^ is the same as HEAD~1 (first parent, read-only)
-db.getSiblingDB("verifydb@HEAD^").items.countDocuments({})
-// Expected: 1
-
-// Writes blocked on both
-db.getSiblingDB("verifydb@HEAD~1").items.insertOne({ _id: 99 })
-// Expected error (code 96)
-db.getSiblingDB("verifydb@HEAD^").items.insertOne({ _id: 99 })
-// Expected error (code 96)
+db.getSiblingDB("verifydb@main^").items.insertOne({ _id: 99 })
+// Expected error (code 96): read-only
 ```
 
 ### Caret parent selection and chaining (requires merge commit)
@@ -415,10 +410,10 @@ db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 | Tag name | `mydb@release-1` | yes | no | yes | Read-only; resolves to tagged commit |
 | Commit hash (32 chars) | `mydb@<hash>` | yes | no | yes | Read-only snapshot |
 | Ancestor expression | `mydb@main~1` | yes | no | yes | Read-only; walks first-parent chain |
-| HEAD | `mydb@HEAD` | yes | yes | yes | Alias for `main` |
-| HEAD-relative | `mydb@HEAD~N`, `mydb@HEAD^` | yes | no | yes | Alias for `main~N` / `main^` |
+| HEAD | `mydb@HEAD` | no | no | no | Not supported in connection strings (code 96) |
+| HEAD-relative | `mydb@HEAD~N`, `mydb@HEAD^` | no | no | no | Not supported in connection strings (code 96) |
 | Caret parent | `mydb@main^2` | yes | no | yes | Selects Nth parent (merge commits) |
-| Chained | `mydb@main^1~2`, `mydb@HEAD^^` | yes | no | yes | Operators compose left to right |
+| Chained | `mydb@main^1~2`, `mydb@main^^` | yes | no | yes | Operators compose left to right |
 | Percent-encoded | `mydb@v1%2E0` (encodes `v1.0`) | yes | yes | yes | Decoded server-side |
 | Reflog | `mydb@main%40%7Byesterday%7D` | no | no | no | Not supported (code 96) |
 | Range | `mydb@main%2E%2Efeature` | no | no | no | Not supported (code 96) |

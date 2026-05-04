@@ -345,9 +345,8 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 // "feature%2Ffoo". The handler has already validated the encoding before the
 // backend is reached, so decode errors here fall back to the raw value.
 //
-// HEAD and HEAD~N are rewritten to main and main~N: DumboDB has no stateful
-// "current branch" concept per connection, so HEAD aliases the default branch.
-// Downstream resolvers never see the literal "HEAD".
+// HEAD and HEAD~N are rejected at the handler level (rejectHEAD). DumboDB has
+// no stateful "current branch" concept per connection.
 //
 // All-digit strings after '@' (e.g. Unix nanosecond timestamps) are not valid
 // rootish expressions and cause the whole encoded name to be treated as a plain
@@ -363,11 +362,8 @@ func splitEncodedDBName(encoded string) (dbName, rootish string) {
 		// All-digit strings are not valid rootish expressions; treat the whole
 		// encoded name as a plain database name instead.
 		if !splitAllDigits(candidate) {
-			if candidate == "HEAD" {
-				candidate = "main"
-			} else if strings.HasPrefix(candidate, "HEAD~") || strings.HasPrefix(candidate, "HEAD^") {
-				candidate = "main" + candidate[len("HEAD"):]
-			}
+			// HEAD is rejected at the handler level (rejectHEAD).
+			// If it reaches here, pass it through -- the handler will catch it.
 			return encoded[:idx], candidate
 		}
 	}
