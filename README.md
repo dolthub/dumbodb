@@ -119,6 +119,8 @@ The last command creates a new commit with the two inserted documents, and outpu
   message: 'baseline',
   author: 'alice <alice@acme.com>',
   timestamp: ISODate('2026-04-28T23:12:23.621Z'),
+  committer: 'alice <alice@acme.com>',
+  committerTimestamp: ISODate('2026-04-28T23:12:23.621Z'),
   ok: 1
 }
 ```
