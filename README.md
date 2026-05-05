@@ -247,7 +247,7 @@ There are also legitimate merges which join two commit histories, complete with 
 
 DumboDB is built on two open-source projects:
 
-- **[FerretDB](https://github.com/FerretDB/FerretDB)**  -- The wire protocol, connection handling, type system, and handler packages were adapted from FerretDB v1.24.2 (Apache 2.0). See [ACKNOWLEDGEMENTS](ACKNOWLEDGEMENTS) for details.
+- **[FerretDB](https://github.com/FerretDB/FerretDB)**  -- The wire protocol, connection handling, type system, and handler packages were adapted from FerretDB v1.24.2 (Apache 2.0). See [ACKNOWLEDGEMENTS](https://github.com/dolthub/dumbodb/blob/main/ACKNOWLEDGEMENTS) for details.
 - **[Dolt](https://github.com/dolthub/dolt)**  -- The version-controlled storage engine powering every commit, branch, and merge.
 
 ## Roadmap
