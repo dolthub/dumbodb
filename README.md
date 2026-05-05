@@ -112,7 +112,7 @@ db.runCommand({ dumboCommit: 1, message: "baseline", author: "alice <alice@acme.
 ```
 
 The last command creates a new commit with the two inserted documents, and outputs the commit details:
-```json
+```js
 {
   commitId: 'egqis00l0vqg5kd7gbje8k1k6g7dl7ja',
   branch: 'main',
@@ -141,7 +141,7 @@ At this point, if we run `dumboStatus`, we can see a summary of the uncommitted 
 db.runCommand({dumboStatus: 1})
 ```
 Will output the summary of your changes. Specifically, it shows that in the 'items' collection, you have 1 added document, 1 modified document, and 1 deleted document:
-```json
+```js
 {
   branch: 'main',
   dirty: true,
@@ -164,7 +164,7 @@ If you need more detail, you can run `dumboDiff`. When called with no additional
 db.runCommand({ dumboDiff: 1 })
 ```
 Will produce:
-```json
+```js
 {
   collections: [
     {
