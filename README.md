@@ -144,6 +144,8 @@ Will output the summary of your changes. Specifically, it shows that in the 'ite
 ```json
 {
   branch: 'main',
+  dirty: true,
+  readonly: false,
   collections: [
     {
       name: 'items',
