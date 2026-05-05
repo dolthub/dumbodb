@@ -412,27 +412,27 @@ func (h *Handler) initCommands() {
 	// sorted alphabetically
 	h.commands["createUser"] = &command{
 		anonymous: true,
-		Handler:   h.MsgCreateUser,
+		Handler:   h.msgAuthNotSupported,
 		Help:      "Creates a new user.",
 	}
 	h.commands["dropAllUsersFromDatabase"] = &command{
 		anonymous: true,
-		Handler:   h.MsgDropAllUsersFromDatabase,
+		Handler:   h.msgAuthNotSupported,
 		Help:      "Drops all users from database.",
 	}
 	h.commands["dropUser"] = &command{
 		anonymous: true,
-		Handler:   h.MsgDropUser,
+		Handler:   h.msgAuthNotSupported,
 		Help:      "Drops user.",
 	}
 	h.commands["updateUser"] = &command{
 		anonymous: true,
-		Handler:   h.MsgUpdateUser,
+		Handler:   h.msgAuthNotSupported,
 		Help:      "Updates user.",
 	}
 	h.commands["usersInfo"] = &command{
 		anonymous: true,
-		Handler:   h.MsgUsersInfo,
+		Handler:   h.msgAuthNotSupported,
 		Help:      "Returns information about users.",
 	}
 	// please keep sorted alphabetically
@@ -553,4 +553,13 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 // Commands returns a map of enabled commands.
 func (h *Handler) Commands() map[string]*command {
 	return h.commands
+}
+
+// msgAuthNotSupported returns an OperationFailed error for user management
+// commands. Authentication is not implemented in this release.
+func (h *Handler) msgAuthNotSupported(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	return nil, handlererrors.NewCommandErrorMsg(
+		handlererrors.ErrOperationFailed,
+		"authentication is not supported in this release of DumboDB",
+	)
 }
