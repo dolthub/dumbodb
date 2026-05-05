@@ -134,7 +134,7 @@ db.items.updateOne({ _id: 1 }, { $set: { score: 99 } })
 db.items.deleteOne({ _id: 2 })
 ```
 
-At this point, if we run `doltStatus`, we can see a summary of the uncommitted changes:
+At this point, if we run `dumboStatus`, we can see a summary of the uncommitted changes:
 
 ```js
 db.runCommand({dumboStatus: 1})
@@ -155,7 +155,7 @@ Will output the summary of your changes. Specifically, it shows that in the 'ite
   ok: 1
 }
 ```
-If you need more detail, you can run `dumboDiff`. When called with no additional arguments, it will print all of the changes in your session. Specifically everything that is not committed. These are the changes that will be committed when you run `doltCommit`.
+If you need more detail, you can run `dumboDiff`. When called with no additional arguments, it will print all of the changes in your session. Specifically everything that is not committed. These are the changes that will be committed when you run `dumboCommit`.
 
 ```js
 db.runCommand({ dumboDiff: 1 })
@@ -219,18 +219,18 @@ You can create a new branch with `dumboBranch`. In this example, you can see tha
 
 ```js
 // Create the branch
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ dumboBranch: 1, branch: "feature" })
 // "checkout"
 var feature = db.getSiblingDB("mydb@feature")
 
 feature.items.insertOne({ _id: 4, label: "delta", score: 40 })
-feature.runCommand({ doltCommit: 1, message: "add delta on feature branch", author: "alice <alice@acme.com>" })
+feature.runCommand({ dumboCommit: 1, message: "add delta on feature branch", author: "alice <alice@acme.com>" })
 ```
 
 The `dumboMerge` command will merge the changes from the `feature` branch back into whatever branch you are on. `db` is still connected to `main`, so when we run the merge command, it will merge `feature` into `main`, which in this case is a fast-forward merge, since `main` has not diverged from `feature`. The output of the merge command will show you the new commit that was created on `main` as a result of the merge.
 
 ```js
-db.runCommand({ doltMerge: 1, merge_in: "feature"})
+db.runCommand({ dumboMerge: 1, merge_in: "feature"})
 {
   commitId: 'gr2iofosqge0se1dcu2b1a1u42l6udd3',
   message: 'fast-forward',
