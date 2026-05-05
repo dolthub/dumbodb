@@ -769,7 +769,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		}
 	}
 
-	meta, err := datas.NewCommitMeta("dolt", "dolt@localhost", desc)
+	meta, err := datas.NewCommitMeta("dumbodb", "dumbodb@dumbodb", desc)
 	if err != nil {
 		return datas.Dataset{}, am, err
 	}
@@ -839,7 +839,7 @@ func migrateADRMtoSTRT(ctx context.Context, cs *nbs.GenerationalNBS, vs *dolttyp
 		return fmt.Errorf("reading current root: %w", err)
 	}
 
-	meta, err := datas.NewCommitMeta("dolt", "dolt@localhost", "migrate: ADRM to STRT")
+	meta, err := datas.NewCommitMeta("dumbodb", "dumbodb@dumbodb", "migrate: ADRM to STRT")
 	if err != nil {
 		return fmt.Errorf("creating commit meta: %w", err)
 	}
@@ -964,9 +964,9 @@ func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, sta
 	prevHash, _ := wsDs.MaybeHeadAddr()
 
 	meta := &datas.WorkingSetMeta{
-		Name:        "dolt",
-		Email:       "dolt@localhost",
-		Description: "dolt working set",
+		Name:        "dumbodb",
+		Email:       "dumbodb@dumbodb",
+		Description: "dumbodb working set",
 	}
 
 	spec := datas.WorkingSetSpec{
@@ -1533,8 +1533,8 @@ func (b *Backend) commitMerge(
 		mergeMessage = fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
 	}
 
-	commitName := "dolt"
-	commitEmail := "dolt@localhost"
+	commitName := "dumbodb"
+	commitEmail := "dumbodb@dumbodb"
 	if author != "" {
 		if idx := strings.Index(author, " <"); idx >= 0 {
 			commitName = author[:idx]
@@ -3118,8 +3118,8 @@ func (b *Backend) commitRevert(
 		}
 	}
 
-	commitName := "dolt"
-	commitEmail := "dolt@localhost"
+	commitName := "dumbodb"
+	commitEmail := "dumbodb@dumbodb"
 	if author != "" {
 		if idx := strings.Index(author, " <"); idx >= 0 {
 			commitName = author[:idx]
