@@ -31,18 +31,18 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 
 | Command | Description |
 |---------|-------------|
-| [`dumboCommit`](docs/COMMANDS.md#doltcommit) | Commit the current working set with a message and author |
-| [`dumboBranch`](docs/COMMANDS.md#doltbranch) | Create or delete a branch |
-| [`dumboMerge`](docs/COMMANDS.md#doltmerge) | Merge a source branch into the current branch |
-| [`dumboCherryPick`](docs/COMMANDS.md#doltcherrypick) | Apply one commit's diff onto the current branch |
-| [`dumboRebase`](docs/COMMANDS.md#doltrebase) | Reapply branch commits onto another branch tip, rewriting history |
-| [`dumboLog`](docs/COMMANDS.md#doltlog) | Return commit history for the current branch |
-| [`dumboStatus`](docs/COMMANDS.md#doltstatus) | Show summary of uncommitted changes on the current branch |
-| [`dumboDiff`](docs/COMMANDS.md#doltdiff) | Document-level diff between two states |
-| [`dumboReset`](docs/COMMANDS.md#doltreset) | Move branch HEAD to a target commit (soft or hard) |
-| [`dumboRevert`](docs/COMMANDS.md#doltrevert) | Revert one or more commits, creating a new inverse commit |
-| [`dumboConflicts`](docs/COMMANDS.md#doltconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
-| [`dumboResolveConflict`](docs/COMMANDS.md#doltresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
+| [`dumboCommit`](docs/COMMANDS.md#dumbocommit) | Commit the current working set with a message and author |
+| [`dumboBranch`](docs/COMMANDS.md#dumbobranch) | Create or delete a branch |
+| [`dumboMerge`](docs/COMMANDS.md#dumbomerge) | Merge a source branch into the current branch |
+| [`dumboCherryPick`](docs/COMMANDS.md#dumbocherrypick) | Apply one commit's diff onto the current branch |
+| [`dumboRebase`](docs/COMMANDS.md#dumborebase) | Reapply branch commits onto another branch tip, rewriting history |
+| [`dumboLog`](docs/COMMANDS.md#dumbolog) | Return commit history for the current branch |
+| [`dumboStatus`](docs/COMMANDS.md#dumbostatus) | Show summary of uncommitted changes on the current branch |
+| [`dumboDiff`](docs/COMMANDS.md#dumbodiff) | Document-level diff between two states |
+| [`dumboReset`](docs/COMMANDS.md#dumboreset) | Move branch HEAD to a target commit (soft or hard) |
+| [`dumboRevert`](docs/COMMANDS.md#dumborevert) | Revert one or more commits, creating a new inverse commit |
+| [`dumboConflicts`](docs/COMMANDS.md#dumboconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
+| [`dumboResolveConflict`](docs/COMMANDS.md#dumboresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
 | [`dumboTag`](docs/COMMANDS.md#dumbotag) | Create, list, or delete tags at specific commits |
 
 All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
