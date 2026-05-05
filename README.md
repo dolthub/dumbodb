@@ -50,8 +50,8 @@ All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whicheve
 Full command reference: [Command Reference](https://github.com/dolthub/dumbodb/wiki/Commands)
 
 ## Install, Run, Connect
-
-### Build From Source
+### Install DumboDB
+#### Build From Source
 ```bash
 git clone https://github.com/dolthub/dumbodb
 cd dumbodb
@@ -63,8 +63,11 @@ mkdir -p /tmp/dumbodb-data
 # Listens on 127.0.0.1:27017
 ```
 
-### Released Binaries
-We publish pre-built binaries for Linux, MacOS, and Windows on our [GitHub Releases page](https://github.com/dolthub/dumbodb/releases). Download the appropriate binary for your platform, put it somewhere in your `PATH`, and run it with the `--data-dir` flag to specify where you want your data to be stored. The specifics will depend on your operating system, as they have protections against running arbitrary binaries from the internet, so please refer to your OS documentation for how to run downloaded binaries. We are working on getting signed binaries published to make this easier!
+#### Released Binaries
+We publish pre-built binaries for Linux, MacOS, and Windows on our [GitHub Releases page](https://github.com/dolthub/dumbodb/releases). Download the appropriate binary for your platform, put it somewhere in your `PATH`. The specifics will depend on your operating system, as they have protections against running arbitrary binaries from the internet, so please refer to your OS documentation for how to run downloaded binaries. We are working on getting signed binaries published to make this easier!
+
+### Run DumboDB
+The only required argument to run DumboDB is `--data-dir`, which specifies the directory where your data will be stored. If the directory does not exist, it will be created.
 
 ```bash
 $ dumbodb --data-dir /tmp/dumbodb-data
