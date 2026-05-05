@@ -40,7 +40,7 @@ func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
 	if rootishIsReadOnly(db.rootish) {
 		return true
 	}
-	if db.rootish == "main" {
+	if db.rootish == defaultBranch {
 		return false
 	}
 	// Tags look like branch names syntactically but are read-only.
@@ -50,15 +50,15 @@ func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
 
 // resolveAM returns the collections AddressMap for the database's rootish.
 //
-// For "main", the current working-set AM (state.branchAMs["main"]) is returned. For read-only
+// For "main", the current working-set AM (state.branchAMs[defaultBranch]) is returned. For read-only
 // rootishes (commit hashes, ancestor expressions), the AM is loaded from the
 // historical RTVL at that revision. For writable branch rootishes, the in-memory
 // working-set AM is returned if it exists, otherwise the branch HEAD is loaded.
 //
 // The caller must hold at least state.mu.RLock().
 func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.AddressMap, error) {
-	if db.rootish == "main" {
-		return state.branchAMs["main"], nil
+	if db.rootish == defaultBranch {
+		return state.branchAMs[defaultBranch], nil
 	}
 	if rootishIsReadOnly(db.rootish) {
 		return amFromRootish(ctx, state, db.rootish)

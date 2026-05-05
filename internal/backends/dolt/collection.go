@@ -53,7 +53,7 @@ type collection struct {
 // getMap returns the prolly.Map for this collection.
 //
 // When the database's rootish is "main" (the default), the current working-set
-// AM (state.branchAMs["main"]) is used. When the rootish is a bare commit hash or a tag name,
+// AM (state.branchAMs[defaultBranch]) is used. When the rootish is a bare commit hash or a tag name,
 // the AM is loaded from the historical RTVL at that commit.
 //
 // Returns (emptyMap, false, nil, nil) if the database or collection doesn't exist.
@@ -1476,7 +1476,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs["main"], msg, "dumbodb <dumbodb@localhost>", time.Now())
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after insert: %w", err)
 		}
@@ -1754,7 +1754,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: update %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs["main"], msg, "dumbodb <dumbodb@localhost>", time.Now())
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after update: %w", err)
 		}
@@ -1900,7 +1900,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: delete from %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs["main"], msg, "dumbodb <dumbodb@localhost>", time.Now())
+		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after delete: %w", err)
 		}

@@ -341,7 +341,7 @@ func (state *dbState) getOrInitBranchAM(ctx context.Context, branch string) (pro
 // an empty AddressMap is returned (suitable as the initial staged root).
 // The caller must hold state.mu (read or write lock).
 func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (prolly.AddressMap, error) {
-	if branch == "main" {
+	if branch == defaultBranch {
 		return state.headRootAM(ctx)
 	}
 	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+branch)

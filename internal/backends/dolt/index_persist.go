@@ -347,7 +347,7 @@ func (state *dbState) loadIndexesFromDTBL(ctx context.Context, collName string, 
 //
 // The caller must hold state.mu (write lock).
 func (state *dbState) hydrateAllIndexes(ctx context.Context) error {
-	return state.branchAMs["main"].IterAll(ctx, func(collName string, dtblHash hash.Hash) error {
+	return state.branchAMs[defaultBranch].IterAll(ctx, func(collName string, dtblHash hash.Hash) error {
 		return state.loadIndexesFromDTBL(ctx, collName, dtblHash)
 	})
 }

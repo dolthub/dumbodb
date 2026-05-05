@@ -72,7 +72,7 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 		rootish = params.Branch
 	}
 	if rootish == "" {
-		rootish = "main"
+		rootish = defaultBranch
 	}
 
 	commitAddr, err := resolveRootishToCommitHash(ctx, db, rootish)

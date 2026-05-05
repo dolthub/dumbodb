@@ -77,6 +77,10 @@ const (
 	// Required for `dolt status` to work without panicking.
 	workingSetDataset = "workingSets/heads/main"
 
+	// defaultBranch is the name of the default branch. All new databases start
+	// with this branch, and connections without an explicit rootish default to it.
+	defaultBranch = "main"
+
 	// dbBranchSep is the separator between the database name and rootish in an
 	// encoded database name (e.g. "mydb@main", "mydb@feature/foo"). The '@'
 	// character is reserved as the delimiter and is forbidden in raw database
@@ -317,7 +321,7 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 
 	for _, db := range b.dbs {
 		db.mu.RLock()
-		count, err := db.branchAMs["main"].Count()
+		count, err := db.branchAMs[defaultBranch].Count()
 		db.mu.RUnlock()
 
 		if err != nil {
@@ -379,7 +383,7 @@ func splitEncodedDBName(encoded string) (dbName, rootish string) {
 			return encoded[:idx], candidate
 		}
 	}
-	return encoded, "main"
+	return encoded, defaultBranch
 }
 
 // splitAllDigits reports whether s consists entirely of ASCII decimal digits
@@ -438,7 +442,7 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			}
 
 			state.mu.RLock()
-			count, _ := state.branchAMs["main"].Count()
+			count, _ := state.branchAMs[defaultBranch].Count()
 			state.mu.RUnlock()
 
 			if count == 0 {
@@ -715,7 +719,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		vs:             vs,
 		doltDB:         doltDB,
 		ds:             ds,
-		branchAMs:      map[string]prolly.AddressMap{"main": am},
+		branchAMs:      map[string]prolly.AddressMap{defaultBranch: am},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),
@@ -794,7 +798,7 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		return datas.Dataset{}, am, err
 	}
 
-	if err := updateWorkingSet(ctx, doltDB, am, am, "main"); err != nil {
+	if err := updateWorkingSet(ctx, doltDB, am, am, defaultBranch); err != nil {
 		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
 	}
 
@@ -834,7 +838,7 @@ func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.
 		return datas.Dataset{}, am, err
 	}
 
-	if err := updateWorkingSet(ctx, doltDB, am, am, "main"); err != nil {
+	if err := updateWorkingSet(ctx, doltDB, am, am, defaultBranch); err != nil {
 		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
 	}
 
@@ -1019,7 +1023,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 	branch := params.Branch
 	if branch == "" {
-		branch = "main"
+		branch = defaultBranch
 	}
 
 	db.mu.Lock()
@@ -1051,18 +1055,18 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		return nil, fmt.Errorf("dumboCommit: merge in progress: use dumboMerge continue")
 	}
 
-	if branch == "main" {
+	if branch == defaultBranch {
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("dolt: DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			if db.branchAMs["main"].HashOf() == headAM.HashOf() {
+			if db.branchAMs[defaultBranch].HashOf() == headAM.HashOf() {
 				return nil, backends.ErrEmptyCommit
 			}
 		}
 
-		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.branchAMs["main"], message, params.Author, ts)
+		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.branchAMs[defaultBranch], message, params.Author, ts)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBCommit: committing db %q: %w", params.DBName, err)
 		}
@@ -1451,14 +1455,14 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if ffErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
-		if params.Into == "main" {
+		if params.Into == defaultBranch {
 			db.ds = newDS
 			ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
 			if ffAMErr != nil {
 				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
 			}
-			db.setAM("main", ffAM)
-			if err := updateWorkingSet(ctx, db.doltDB, ffAM, ffAM, "main"); err != nil {
+			db.setAM(defaultBranch, ffAM)
+			if err := updateWorkingSet(ctx, db.doltDB, ffAM, ffAM, defaultBranch); err != nil {
 				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: updating working set: %w", err)
 			}
 		}
@@ -1568,9 +1572,9 @@ func (b *Backend) commitMerge(
 	}
 
 	db.setAM(intoBranch, mergedAM)
-	if intoBranch == "main" {
+	if intoBranch == defaultBranch {
 		db.ds = newDS
-		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM, "main"); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM, defaultBranch); err != nil {
 			return nil, fmt.Errorf("dolt: commitMerge: updating working set: %w", err)
 		}
 	}
@@ -1614,7 +1618,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 
 	branch := params.Branch
 	if branch == "" {
-		branch = "main"
+		branch = defaultBranch
 	}
 
 	// Handle abort: discard in-progress cherry-pick and restore pre-pick state.
@@ -1847,9 +1851,9 @@ func (b *Backend) commitCherryPick(
 	}
 
 	db.setAM(branch, pickedAM)
-	if branch == "main" {
+	if branch == defaultBranch {
 		db.ds = newDS
-		if err := updateWorkingSet(ctx, db.doltDB, pickedAM, pickedAM, "main"); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, pickedAM, pickedAM, defaultBranch); err != nil {
 			return nil, fmt.Errorf("dolt: commitCherryPick: updating working set: %w", err)
 		}
 	}
@@ -2075,7 +2079,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 // DumboDBStatus implements backends.VersioningBackend.
 //
 // It returns the list of collections with uncommitted changes on the working set,
-// comparing the working set AM (state.branchAMs["main"]) against the HEAD committed AM.
+// comparing the working set AM (state.branchAMs[defaultBranch]) against the HEAD committed AM.
 // Each TableStatus entry carries one of "added", "modified", or "deleted".
 func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
@@ -2095,7 +2099,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("dolt: DumboDBStatus: reading HEAD AM for db %q: %w", params.DBName, err)
 	}
 
-	workingAM := state.branchAMs["main"]
+	workingAM := state.branchAMs[defaultBranch]
 
 	names, err := unionCollectionNames(ctx, headAM, workingAM)
 	if err != nil {
@@ -2181,7 +2185,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	if len(tables) == 0 && result.MergeOp == "" {
 		branch := params.Branch
 		if branch == "" {
-			branch = "main"
+			branch = defaultBranch
 		}
 		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
 			result.CommitID = h.String()
@@ -2194,7 +2198,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 // DumboDBReset implements backends.VersioningBackend.
 //
 // Soft reset (Hard=false): moves HEAD to the target commit; staged root is updated to match
-// the target commit's rootValue; the working tree (db.branchAMs["main"]) is left unchanged so that any
+// the target commit's rootValue; the working tree (db.branchAMs[defaultBranch]) is left unchanged so that any
 // uncommitted changes survive.
 //
 // Hard reset (Hard=true): moves HEAD to the target commit and resets both the working tree
@@ -2248,13 +2252,13 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 
 	if params.Hard {
 		// Hard reset: working tree and staged root both point to the target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, "main"); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, defaultBranch); err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBReset: updating working set (hard): %w", err)
 		}
-		db.setAM("main", targetAM)
+		db.setAM(defaultBranch, targetAM)
 	} else {
 		// Soft reset: keep the working tree as-is; staged root = target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, db.branchAMs["main"], targetAM, "main"); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, db.branchAMs[defaultBranch], targetAM, defaultBranch); err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBReset: updating working set (soft): %w", err)
 		}
 	}
@@ -2315,7 +2319,7 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 	switch {
 	case params.To == "":
 		// Default: current working set (may include uncommitted writes).
-		bAM = state.branchAMs["main"]
+		bAM = state.branchAMs[defaultBranch]
 	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
 		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)
 		if err != nil {
@@ -2479,7 +2483,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 
 	branch := params.Branch
 	if branch == "" {
-		branch = "main"
+		branch = defaultBranch
 	}
 
 	// Parse committer identity for replayed commits.
@@ -2508,7 +2512,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("dolt: DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
 		db.setAM(ms.intoBranch, ms.premergeAM)
-		if ms.intoBranch == "main" {
+		if ms.intoBranch == defaultBranch {
 			db.ds = newDS
 		}
 		_ = clearMergeState(db)
@@ -2636,7 +2640,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	if _, setErr := db.doltDB.SetHead(ctx, branchDS, ontoHead, ""); setErr != nil {
 		return nil, fmt.Errorf("dolt: DumboDBRebase: moving branch %q to onto tip: %w", branch, setErr)
 	}
-	if branch == "main" {
+	if branch == defaultBranch {
 		// Refresh db.ds so future operations use the updated dataset.
 		if db.ds, err = db.doltDB.GetDataset(ctx, mainDataset); err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBRebase: refreshing main dataset: %w", err)
@@ -2892,7 +2896,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 
 	branch := params.Branch
 	if branch == "" {
-		branch = "main"
+		branch = defaultBranch
 	}
 
 	// Handle abort: discard in-progress revert and restore pre-revert state.
@@ -3120,9 +3124,9 @@ func (b *Backend) commitRevert(
 	}
 
 	db.setAM(branch, revertedAM)
-	if branch == "main" {
+	if branch == defaultBranch {
 		db.ds = newDS
-		if err := updateWorkingSet(ctx, db.doltDB, revertedAM, revertedAM, "main"); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, revertedAM, revertedAM, defaultBranch); err != nil {
 			return nil, fmt.Errorf("dolt: commitRevert: updating working set: %w", err)
 		}
 	}

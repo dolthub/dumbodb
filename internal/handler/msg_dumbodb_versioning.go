@@ -38,6 +38,10 @@ import (
 // Must match the value in internal/backends/dolt/backend.go.
 const dbBranchSep = "@"
 
+// defaultBranch is the name of the default branch.
+// Must match the value in internal/backends/dolt/backend.go.
+const defaultBranch = "main"
+
 // MsgDumboDBDiff implements the `dumboDBDiff` command.
 //
 // Returns the document-level diff between two states for the branch encoded in $db.
@@ -194,7 +198,7 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 		}
 	}
 
-	return encoded, "main", false, nil
+	return encoded, defaultBranch, false, nil
 }
 
 // rejectHEAD returns an error if the rootish is HEAD or starts with HEAD~ / HEAD^.
