@@ -33,7 +33,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // statusResult holds the decoded top-level response from a dumboDBStatus command.
@@ -152,13 +151,14 @@ func TestStatusVerify(t *testing.T) {
 		assert.Empty(t, sr.Tables, "expected empty collections after commit with no new changes")
 		assert.NotEmpty(t, sr.CommitID, "commitId must be present when workspace is clean")
 
-		// mergeState must be absent on a clean repo (no merge/cherry-pick/rebase/revert in progress).
 		var rawStatus bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&rawStatus)
 		require.NoError(t, err)
 		assert.Nil(t, rawStatus["mergeState"], "mergeState must be absent on clean status")
+		assert.Equal(t, false, rawStatus["dirty"], "clean repo must not be dirty")
+		assert.Equal(t, false, rawStatus["readonly"], "branch connection is not readonly")
 	})
 
 	// -------------------------------------------------------------------------
@@ -175,6 +175,13 @@ func TestStatusVerify(t *testing.T) {
 		sr := runStatus(t, env, dbName)
 
 		assert.Empty(t, sr.CommitID, "commitId must be absent when workspace is dirty")
+
+		// dirty flag must be true after uncommitted insert.
+		var rawDirty bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltStatus", Value: int32(1)},
+		}).Decode(&rawDirty))
+		assert.Equal(t, true, rawDirty["dirty"], "workspace with uncommitted changes must be dirty")
 
 		newcoll := findTableStatus(sr, "newcoll")
 		require.NotNil(t, newcoll, "expected 'newcoll' in collections")
@@ -351,33 +358,32 @@ func TestStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 8: Read-only rootish  -- doltStatus returns a clear error
+	// Scenario 8: Read-only rootish  -- returns readonly:true, dirty:false
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_ReadOnlyRootish", func(t *testing.T) {
 		// Commit current state so we have a stable commit hash to point at.
-		commitHash := dumboDBCommit(t, env, dbName, "commit for read-only status", "alice <alice@acme.com>")
+		commitHash := dumboDBCommitAllowEmpty(t, env, dbName, "commit for read-only status", "alice <alice@acme.com>")
 
-		readOnlyDB := dbName + "@" + commitHash
-		err := env.client.Database(readOnlyDB).RunCommand(ctx, bson.D{
+		// Commit hash rootish.
+		var snapStatus bson.M
+		require.NoError(t, env.client.Database(dbName+"@"+commitHash).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
-		}).Err()
-		require.Error(t, err, "doltStatus on a commit-hash rootish must fail")
+		}).Decode(&snapStatus))
 
-		cmdErr, ok := err.(mongo.CommandError)
-		require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
-		assert.EqualValues(t, 96, cmdErr.Code, "expected OperationFailed (96)")
-		assert.Contains(t, cmdErr.Message, "no working set",
-			"error must mention no working set so callers know why doltStatus doesn't apply")
+		assert.EqualValues(t, 1, snapStatus["ok"])
+		assert.Equal(t, true, snapStatus["readonly"], "commit hash rootish must be readonly")
+		assert.Equal(t, false, snapStatus["dirty"], "read-only rootish is never dirty")
+		assert.Equal(t, commitHash, snapStatus["commitId"], "commitId must be the resolved hash")
 
-		// Ancestor expressions (~N) are also read-only and must error the same way.
-		parentDB := dbName + "@main~1"
-		err = env.client.Database(parentDB).RunCommand(ctx, bson.D{
+		// Ancestor expression.
+		var parentStatus bson.M
+		require.NoError(t, env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
-		}).Err()
-		require.Error(t, err, "doltStatus on an ancestor rootish must fail")
-		cmdErr, ok = err.(mongo.CommandError)
-		require.True(t, ok)
-		assert.EqualValues(t, 96, cmdErr.Code)
-		assert.Contains(t, cmdErr.Message, "no working set")
+		}).Decode(&parentStatus))
+
+		assert.EqualValues(t, 1, parentStatus["ok"])
+		assert.Equal(t, true, parentStatus["readonly"])
+		assert.Equal(t, false, parentStatus["dirty"])
+		assert.NotEmpty(t, parentStatus["commitId"], "commitId must be present for ancestor rootish")
 	})
 }

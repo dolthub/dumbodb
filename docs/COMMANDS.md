@@ -499,8 +499,11 @@ None (beyond the implicit `$db` connection).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `branch` | string | Active branch name |
-| `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]` |
+| `branch` | string | Active branch name (or rootish for read-only connections) |
+| `dirty` | bool | `true` when there are uncommitted changes; `false` otherwise |
+| `readonly` | bool | `true` when the connection is a read-only rootish (commit hash, ancestor, tag); `false` on branches |
+| `commitId` | string | HEAD commit hash. Only present when `dirty` is `false` and `readonly` is `false`. |
+| `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]`. Only present on writable connections. |
 | `mergeState` | string | **Only present during an in-progress operation.** One of `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`. |
 | `conflicts` | array | **Only present during an in-progress operation.** Per-collection conflict counts: `[{collection, count}, ...]`. |
 | `ok` | number | `1` |

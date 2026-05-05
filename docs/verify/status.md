@@ -51,13 +51,14 @@ db.runCommand({ doltStatus: 1 })
 Expected:
 
 ```json
-{ "branch": "main", "commitId": "<hashBase>", "collections": [], "ok": 1 }
+{ "branch": "main", "dirty": false, "readonly": false, "commitId": "<hashBase>", "collections": [], "ok": 1 }
 ```
 
 Key checks:
+- `dirty` is `false` (no uncommitted changes)
+- `readonly` is `false` (connected to a branch, not a snapshot)
+- `commitId` is present and equals the HEAD commit hash (only shown when not dirty)
 - `collections` is an empty array
-- `commitId` is present and equals the HEAD commit hash (only shown when workspace is clean)
-- No collection appears as changed
 
 ---
 
@@ -280,36 +281,30 @@ Key checks:
 
 ---
 
-## Scenario 8: Status on a read-only rootish  -- clear error
+## Scenario 8: Status on a read-only rootish  -- readonly flag
 
-`doltStatus` compares the working set against HEAD, but a connection pinned to a
-commit hash or ancestor expression (e.g. `mydb@<hash>` or `mydb@main~1`)
-is a read-only snapshot with no working set. The command returns a clear error
-rather than silent empty output.
+A connection pinned to a commit hash, ancestor expression, or tag is read-only.
+`dumboStatus` returns successfully with `readonly: true` and `dirty: false`.
 
 ```js
-// Commit the previous working set so we have a hash to point at.
 const r = db.runCommand({ doltCommit: 1, message: "commit for read-only status", author: "alice <alice@acme.com>" })
 const hash = r.commitId
 
-// Attach to the commit snapshot (read-only rootish).
+// Commit hash rootish.
 const snap = db.getSiblingDB("statusdb@" + hash)
 snap.runCommand({ doltStatus: 1 })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: doltStatus: no working set
-//   (connection is at a specific commit, not a named branch)
+// Expected: { branch: "<hash>", dirty: false, readonly: true, commitId: "<hash>", ok: 1 }
 
-// Ancestor expressions are also read-only and produce the same error.
+// Ancestor expression.
 db.getSiblingDB("statusdb@main~1").runCommand({ doltStatus: 1 })
-// Expected error (code 96):
-//   MongoServerError[OperationFailed]: doltStatus: no working set
-//   (connection is at a specific commit, not a named branch)
+// Expected: { branch: "main~1", dirty: false, readonly: true, commitId: "<resolved-hash>", ok: 1 }
 ```
 
 Key checks:
-- Error code is **96** (`OperationFailed`)
-- Message mentions "no working set" so the caller knows to connect via a branch name
-- No server crash, no confusing empty response
+- `readonly` is `true`
+- `dirty` is `false` (read-only connections are never dirty)
+- `commitId` is present with the resolved commit hash
+- No error -- the command always succeeds
 
 > **Rationale:** A read-only snapshot has no working set to compare against, so
 > "uncommitted changes" is not a meaningful question. Returning an explicit error
