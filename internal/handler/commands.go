@@ -267,7 +267,7 @@ func (h *Handler) initCommands() {
 			Help:    "Returns a summary of all runtime and configuration options.",
 		},
 		"getFreeMonitoringStatus": {
-			Handler: h.MsgGetFreeMonitoringStatus,
+			Handler: h.msgFreeMonitoringNotSupported,
 			Help:    "Returns a status of the free monitoring.",
 		},
 		"getLog": {
@@ -326,7 +326,7 @@ func (h *Handler) initCommands() {
 			Help:    "Returns a summary of indexes of the specified collection.",
 		},
 		"logout": {
-			Handler:   h.MsgLogout,
+			Handler:   h.msgAuthNotSupported,
 			anonymous: true,
 			Help:      "Logs out from the current session.",
 		},
@@ -336,7 +336,7 @@ func (h *Handler) initCommands() {
 			Help:      "Creates a new server session.",
 		},
 		"commitTransaction": {
-			Handler: h.MsgCommitTransaction,
+			Handler: h.msgTransactionsNotSupported,
 			Help:    "Commits a transaction (no-op: transactions are not isolated).",
 		},
 		"createSearchIndexes": {
@@ -356,7 +356,7 @@ func (h *Handler) initCommands() {
 			Help:    "Updates an Atlas Search index (not supported).",
 		},
 		"abortTransaction": {
-			Handler: h.MsgAbortTransaction,
+			Handler: h.msgTransactionsNotSupported,
 			Help:    "Aborts a transaction (no-op: operations cannot be rolled back).",
 		},
 		"endSessions": {
@@ -388,7 +388,7 @@ func (h *Handler) initCommands() {
 			Help:    "Returns an overview of the databases state.",
 		},
 		"setFreeMonitoring": {
-			Handler: h.MsgSetFreeMonitoring,
+			Handler: h.msgFreeMonitoringNotSupported,
 			Help:    "Toggles free monitoring.",
 		},
 		"update": {
@@ -561,5 +561,24 @@ func (h *Handler) msgAuthNotSupported(_ context.Context, _ *wire.OpMsg) (*wire.O
 	return nil, handlererrors.NewCommandErrorMsg(
 		handlererrors.ErrOperationFailed,
 		"authentication is not supported in this release of DumboDB",
+	)
+}
+
+// msgTransactionsNotSupported returns an OperationFailed error for transaction
+// commands. Transactions are not implemented in this release.
+func (h *Handler) msgTransactionsNotSupported(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	return nil, handlererrors.NewCommandErrorMsg(
+		handlererrors.ErrOperationFailed,
+		"transactions are not supported in this release of DumboDB",
+	)
+}
+
+// msgFreeMonitoringNotSupported returns an OperationFailed error for free
+// monitoring commands. Free monitoring is a MongoDB Atlas feature not
+// applicable to DumboDB.
+func (h *Handler) msgFreeMonitoringNotSupported(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
+	return nil, handlererrors.NewCommandErrorMsg(
+		handlererrors.ErrOperationFailed,
+		"free monitoring is not supported by DumboDB",
 	)
 }
