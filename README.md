@@ -55,12 +55,8 @@ Full command reference: [Command Reference](https://github.com/dolthub/dumbodb/w
 ```bash
 git clone https://github.com/dolthub/dumbodb
 cd dumbodb
-make build
-# Binary: .runtime/bin/dumbodb
-
-mkdir -p /tmp/dumbodb-data
-.runtime/bin/dumbodb --data-dir /tmp/dumbodb-data
-# Listens on 127.0.0.1:27017
+make build                             # Binary ends up here: .runtime/bin/dumbodb
+cp .runtime/bin/dumbodb /usr/local/bin # or somewhere else in your $PATH
 ```
 
 #### Released Binaries
