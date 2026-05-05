@@ -563,12 +563,6 @@ db.runCommand({ dumboStatus: 1 })
 // }
 ```
 
-### Errors
-
-| Condition | Error |
-|-----------|-------|
-| Connection is a read-only rootish (commit hash or ancestor expression) | `OperationFailed: dumboStatus: no working set (connection is at a specific commit, not a named branch)` |
-
 ### Notes
 
 - Only collections with uncommitted changes appear; unchanged collections are omitted.
