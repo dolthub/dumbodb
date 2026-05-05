@@ -95,7 +95,6 @@ func TestRebaseVerify(t *testing.T) {
 	_, _ = hashC1, hashC2
 
 	featureDB := env.client.Database(dbName + "@feature")
-	mainDB := env.client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Clean rebase  -- response shape
@@ -237,44 +236,15 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Abort rebase
+	// Scenario 5: Abort with no rebase in progress
 	// -------------------------------------------------------------------------
-	t.Run("Scenario5_AbortRebase", func(t *testing.T) {
-		// Advance main with a new document.
-		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{
-			{Key: "_id", Value: int32(4)},
-			{Key: "v", Value: int32(4)},
-		})
-		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName+"@main", "main-adds-4", "test <test@example.com>")
-
-		// Add a commit on feature that doesn't conflict.
-		_, err = featureDB.Collection("items").InsertOne(ctx, bson.D{
-			{Key: "_id", Value: int32(5)},
-			{Key: "v", Value: int32(5)},
-		})
-		require.NoError(t, err)
-		beforeAbortHash := dumboDBCommit(t, env, dbName+"@feature", "feature-adds-5", "test <test@example.com>")
-
-		// Trigger rebase (should succeed cleanly, but we abort it artificially
-		// by starting a conflicting rebase scenario).
-		// For the abort test, we'll start a clean rebase and then abort it.
+	t.Run("Scenario5_AbortNoRebase", func(t *testing.T) {
 		raw := runCommandRaw(t, featureDB, bson.D{
-			{Key: "dumboRebase", Value: int32(1)},
-			{Key: "onto", Value: "main"},
-		})
-		// Rebase succeeded; now check we can't abort a non-existent rebase.
-		assert.EqualValues(t, 1, raw["ok"], "clean rebase must succeed")
-
-		// Attempting abort when no rebase is in progress returns an error.
-		raw = runCommandRaw(t, featureDB, bson.D{
 			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
 		})
-		// The abort of a non-in-progress rebase should return an error (ok not 1 OR error response).
-		// We just check that it doesn't panic.
-		_ = beforeAbortHash
-		_ = raw
+		assert.EqualValues(t, 0, raw["ok"], "abort with no rebase must fail")
+		assert.NotEmpty(t, raw["errmsg"], "must include error message")
 	})
 
 	// -------------------------------------------------------------------------

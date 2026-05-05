@@ -145,38 +145,16 @@ Key checks:
 
 ---
 
-## Scenario 5: Abort rebase
-
-Advance main and feature with a non-conflicting commit, then start a clean rebase and
-attempt to abort it (no rebase in progress -> error).
+## Scenario 5: Abort with no rebase in progress
 
 ```js
-// Advance main.
-db.getSiblingDB("rebasedb@main").items.insertOne({_id: 4, v: 4})
-const r4main = db.getSiblingDB("rebasedb@main").runCommand({doltCommit: 1, message: "main-adds-4", author: "test <test@example.com>"})
-printjson(r4main)
-// Expected: { commitId: "<hash>", branch: "main", message: "main-adds-4", ok: 1 }
-
-// Advance feature.
-db.getSiblingDB("rebasedb@feature").items.insertOne({_id: 5, v: 5})
-const r5feat = db.getSiblingDB("rebasedb@feature").runCommand({doltCommit: 1, message: "feature-adds-5", author: "test <test@example.com>"})
-printjson(r5feat)
-// Expected: { commitId: "<hash>", branch: "feature", message: "feature-adds-5", ok: 1 }
-
-// Clean rebase succeeds immediately.
-const rClean = db.getSiblingDB("rebasedb@feature").runCommand({doltRebase: 1, onto: "main"})
-printjson(rClean)
-// Expected: { commitsReplayed: 1, newTip: "<hash>", ok: 1 }
-
-// Attempting abort when no rebase is in progress returns an error.
 const rAbort = db.getSiblingDB("rebasedb@feature").runCommand({doltRebase: 1, abort: 1})
 printjson(rAbort)
 // Expected: { ok: 0, errmsg: "..." }  (no rebase in progress to abort)
 ```
 
-Key checks:
-- The clean rebase returns `ok: 1`
-- The abort attempt returns `ok: 0` with an error message
+Key check:
+- Returns `ok: 0` with an error message
 
 ---
 
