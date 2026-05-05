@@ -213,37 +213,7 @@ Key check: `v1.0` appears with the same `commitId`, `author`, and
 
 ---
 
-## Scenario 6: Tag is visible from the dolt CLI
-
-`dumboTag` writes to the same `refs/tags/<name>` namespace `dolt tag` uses, so
-tags created via DumboDB show up in `dolt tag` on the underlying repository.
-
-In a shell, with `dolt` pointed at the DumboDB data directory for `tagvdb`:
-
-```bash
-dolt tag
-```
-
-Expected output (formatting may vary):
-
-```
-v1.0
-```
-
-For more detail, including the commit and author metadata:
-
-```bash
-dolt tag -v
-```
-
-Expected: an entry for `v1.0` with author, date, `first release`, and
-the commit hash matching `hash1` from setup.
-
-Key check: the tag created by `dumboTag` is listed by `dolt tag`.
-
----
-
-## Scenario 7: Duplicate tag name is rejected
+## Scenario 6: Duplicate tag name is rejected
 
 Creating a tag whose name already exists must fail rather than silently
 overwriting the existing tag.
@@ -268,7 +238,7 @@ Key check: the second create errors and `v1.0` still points at `hash1`.
 
 ---
 
-## Scenario 8: Deleting a nonexistent tag is rejected
+## Scenario 7: Deleting a nonexistent tag is rejected
 
 ```js
 db.getSiblingDB("tagvdb").runCommand({
@@ -283,7 +253,7 @@ Key check: the response is an error; no existing tags are affected.
 
 ---
 
-## Scenario 9: Invalid tag names
+## Scenario 8: Invalid tag names
 
 Tag names must not contain `@` (reserved as the database/branch delimiter) or
 whitespace.

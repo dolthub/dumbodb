@@ -186,9 +186,9 @@ func TestTagVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: Duplicate tag name is rejected
+	// Scenario 6: Duplicate tag name is rejected
 	// -------------------------------------------------------------------------
-	t.Run("Scenario7_DuplicateTagRejected", func(t *testing.T) {
+	t.Run("Scenario6_DuplicateTagRejected", func(t *testing.T) {
 		var result bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
@@ -208,9 +208,9 @@ func TestTagVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 8: Deleting a nonexistent tag is rejected
+	// Scenario 7: Deleting a nonexistent tag is rejected
 	// -------------------------------------------------------------------------
-	t.Run("Scenario8_DeleteNonexistentTagRejected", func(t *testing.T) {
+	t.Run("Scenario7_DeleteNonexistentTagRejected", func(t *testing.T) {
 		var result bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
@@ -221,9 +221,9 @@ func TestTagVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 9: Invalid tag names
+	// Scenario 8: Invalid tag names
 	// -------------------------------------------------------------------------
-	t.Run("Scenario9_InvalidTagNames", func(t *testing.T) {
+	t.Run("Scenario8_InvalidTagNames", func(t *testing.T) {
 		// @ is rejected
 		var result1 bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
