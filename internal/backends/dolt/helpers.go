@@ -320,13 +320,9 @@ func (state *dbState) dtblHashForCollection(ctx context.Context, collName string
 }
 
 // getOrInitBranchAM returns the current working-set AddressMap for branch.
-// For "main" it returns state.am. For other branches it checks state.branchAMs
-// and initializes from the branch HEAD if not already cached.
+// It checks state.branchAMs and initializes from the branch HEAD if not already cached.
 // The caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchAM(ctx context.Context, branch string) (prolly.AddressMap, error) {
-	if branch == "main" {
-		return state.am, nil
-	}
 	if am, ok := state.branchAMs[branch]; ok {
 		return am, nil
 	}
@@ -413,11 +409,7 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 
 	// Persist the updated AM before (optionally) pushing it to the working set.
 	// Later branchDirty entries need to see the in-memory AM, so record it first.
-	if branch == "main" {
-		state.am = newAM
-	} else {
-		state.branchAMs[branch] = newAM
-	}
+	state.setAM(branch, newAM)
 
 	if skipSync {
 		// Defer the journal-sync'ing UpdateWorkingSet call. Mark the branch dirty
@@ -464,12 +456,7 @@ func (state *dbState) flushDirtyBranches(ctx context.Context) error {
 	}
 
 	for _, branch := range branches {
-		var workingAM prolly.AddressMap
-		if branch == "main" {
-			workingAM = state.am
-		} else {
-			workingAM = state.branchAMs[branch]
-		}
+		workingAM := state.branchAMs[branch]
 
 		stagedAM, err := headRootAMForBranch(ctx, state, branch)
 		if err != nil {

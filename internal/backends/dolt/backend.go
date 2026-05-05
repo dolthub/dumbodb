@@ -119,8 +119,7 @@ type dbState struct {
 	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
 	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
 	ds     datas.Dataset         // "heads/main" dataset; HEAD stays fixed after init
-	am         prolly.AddressMap               // current collections address map (name -> DTBL hash) for main
-	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name -> AM)
+	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name -> AM); includes "main"
 	uuids      map[string]string               // collection name -> UUID string (in-memory)
 	indexes    map[string][]backends.IndexInfo // collection name -> secondary indexes (in-memory)
 	// secIndexMaps holds the secondary-index prolly.Maps for each collection.
@@ -155,6 +154,19 @@ type dbState struct {
 	// this set by calling flushDirtyBranches, making the state durable.
 	// Protected by mu.
 	dirtyBranches map[string]struct{}
+}
+
+// getAM returns the working-set AddressMap for the given branch.
+// The caller must hold at least s.mu.RLock().
+func (s *dbState) getAM(branch string) (prolly.AddressMap, bool) {
+	am, ok := s.branchAMs[branch]
+	return am, ok
+}
+
+// setAM stores the working-set AddressMap for the given branch.
+// The caller must hold s.mu (write lock).
+func (s *dbState) setAM(branch string, am prolly.AddressMap) {
+	s.branchAMs[branch] = am
 }
 
 // Backend implements backends.Backend using Dolt storage.
@@ -305,7 +317,7 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 
 	for _, db := range b.dbs {
 		db.mu.RLock()
-		count, err := db.am.Count()
+		count, err := db.branchAMs["main"].Count()
 		db.mu.RUnlock()
 
 		if err != nil {
@@ -426,7 +438,7 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			}
 
 			state.mu.RLock()
-			count, _ := state.am.Count()
+			count, _ := state.branchAMs["main"].Count()
 			state.mu.RUnlock()
 
 			if count == 0 {
@@ -703,8 +715,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		vs:             vs,
 		doltDB:         doltDB,
 		ds:             ds,
-		am:             am,
-		branchAMs:      make(map[string]prolly.AddressMap),
+		branchAMs:      map[string]prolly.AddressMap{"main": am},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),
@@ -1046,12 +1057,12 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			if err != nil {
 				return nil, fmt.Errorf("dolt: DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			if db.am.HashOf() == headAM.HashOf() {
+			if db.branchAMs["main"].HashOf() == headAM.HashOf() {
 				return nil, backends.ErrEmptyCommit
 			}
 		}
 
-		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.am, message, params.Author, ts)
+		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, db.ds, db.branchAMs["main"], message, params.Author, ts)
 		if err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBCommit: committing db %q: %w", params.DBName, err)
 		}
@@ -1323,11 +1334,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		db.mergeState = nil
 
 		// Restore the working set to the pre-merge AM.
-		if ms.intoBranch == "main" {
-			db.am = ms.premergeAM
-		} else {
-			db.branchAMs[ms.intoBranch] = ms.premergeAM
-		}
+		db.setAM(ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db) // best-effort: ignore error on abort
 
 		return &backends.MergeResult{Message: "merge aborted"}, nil
@@ -1446,11 +1453,12 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 		if params.Into == "main" {
 			db.ds = newDS
-			db.am, err = amFromCommitHash(ctx, db, fromHash.String())
-			if err != nil {
-				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: loading AM: %w", err)
+			ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
+			if ffAMErr != nil {
+				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
 			}
-			if err := updateWorkingSet(ctx, db.doltDB, db.am, db.am, "main"); err != nil {
+			db.setAM("main", ffAM)
+			if err := updateWorkingSet(ctx, db.doltDB, ffAM, ffAM, "main"); err != nil {
 				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: updating working set: %w", err)
 			}
 		}
@@ -1481,14 +1489,9 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 	if len(conflicts) > 0 {
 		// Capture the pre-merge working set AM for abort support.
-		var preMergeAM prolly.AddressMap
-		if params.Into == "main" {
-			preMergeAM = db.am
-		} else {
-			preMergeAM, err = db.getOrInitBranchAM(ctx, params.Into)
-			if err != nil {
-				return nil, fmt.Errorf("dolt: DumboDBMerge: loading premerge AM for branch %q: %w", params.Into, err)
-			}
+		preMergeAM, err := db.getOrInitBranchAM(ctx, params.Into)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DumboDBMerge: loading premerge AM for branch %q: %w", params.Into, err)
 		}
 
 		db.mergeState = &mergeInProgress{
@@ -1564,14 +1567,12 @@ func (b *Backend) commitMerge(
 		return nil, fmt.Errorf("dolt: commitMerge: no head after merge commit")
 	}
 
+	db.setAM(intoBranch, mergedAM)
 	if intoBranch == "main" {
 		db.ds = newDS
-		db.am = mergedAM
 		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: commitMerge: updating working set: %w", err)
 		}
-	} else {
-		db.branchAMs[intoBranch] = mergedAM
 	}
 
 	mergeAuthor := commitName + " <" + commitEmail + ">"
@@ -1625,11 +1626,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		db.mergeState = nil
 
 		// Restore the working set to the pre-pick AM.
-		if ms.intoBranch == "main" {
-			db.am = ms.premergeAM
-		} else {
-			db.branchAMs[ms.intoBranch] = ms.premergeAM
-		}
+		db.setAM(ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.CherryPickResult{Message: "cherry-pick aborted"}, nil
@@ -1766,14 +1763,9 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 
 	if len(conflicts) > 0 {
 		// Capture the pre-pick AM for abort support.
-		var prePickAM prolly.AddressMap
-		if branch == "main" {
-			prePickAM = db.am
-		} else {
-			prePickAM, err = db.getOrInitBranchAM(ctx, branch)
-			if err != nil {
-				return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading pre-pick AM for branch %q: %w", branch, err)
-			}
+		prePickAM, err := db.getOrInitBranchAM(ctx, branch)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading pre-pick AM for branch %q: %w", branch, err)
 		}
 
 		db.mergeState = &mergeInProgress{
@@ -1854,14 +1846,12 @@ func (b *Backend) commitCherryPick(
 		return nil, fmt.Errorf("dolt: commitCherryPick: no head after cherry-pick commit")
 	}
 
+	db.setAM(branch, pickedAM)
 	if branch == "main" {
 		db.ds = newDS
-		db.am = pickedAM
 		if err := updateWorkingSet(ctx, db.doltDB, pickedAM, pickedAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: commitCherryPick: updating working set: %w", err)
 		}
-	} else {
-		db.branchAMs[branch] = pickedAM
 	}
 
 	cpAuthor := pickMeta.Author.Name + " <" + pickMeta.Author.Email + ">"
@@ -2085,7 +2075,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 // DumboDBStatus implements backends.VersioningBackend.
 //
 // It returns the list of collections with uncommitted changes on the working set,
-// comparing the working set AM (state.am) against the HEAD committed AM.
+// comparing the working set AM (state.branchAMs["main"]) against the HEAD committed AM.
 // Each TableStatus entry carries one of "added", "modified", or "deleted".
 func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
@@ -2105,7 +2095,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("dolt: DumboDBStatus: reading HEAD AM for db %q: %w", params.DBName, err)
 	}
 
-	workingAM := state.am
+	workingAM := state.branchAMs["main"]
 
 	names, err := unionCollectionNames(ctx, headAM, workingAM)
 	if err != nil {
@@ -2204,7 +2194,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 // DumboDBReset implements backends.VersioningBackend.
 //
 // Soft reset (Hard=false): moves HEAD to the target commit; staged root is updated to match
-// the target commit's rootValue; the working tree (db.am) is left unchanged so that any
+// the target commit's rootValue; the working tree (db.branchAMs["main"]) is left unchanged so that any
 // uncommitted changes survive.
 //
 // Hard reset (Hard=true): moves HEAD to the target commit and resets both the working tree
@@ -2261,10 +2251,10 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBReset: updating working set (hard): %w", err)
 		}
-		db.am = targetAM
+		db.setAM("main", targetAM)
 	} else {
 		// Soft reset: keep the working tree as-is; staged root = target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, db.am, targetAM, "main"); err != nil {
+		if err := updateWorkingSet(ctx, db.doltDB, db.branchAMs["main"], targetAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: DumboDBReset: updating working set (soft): %w", err)
 		}
 	}
@@ -2325,7 +2315,7 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 	switch {
 	case params.To == "":
 		// Default: current working set (may include uncommitted writes).
-		bAM = state.am
+		bAM = state.branchAMs["main"]
 	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
 		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)
 		if err != nil {
@@ -2517,11 +2507,9 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		if setErr != nil {
 			return nil, fmt.Errorf("dolt: DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
+		db.setAM(ms.intoBranch, ms.premergeAM)
 		if ms.intoBranch == "main" {
 			db.ds = newDS
-			db.am = ms.premergeAM
-		} else {
-			db.branchAMs[ms.intoBranch] = ms.premergeAM
 		}
 		_ = clearMergeState(db)
 
@@ -2634,14 +2622,9 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	}
 
 	// Capture pre-rebase AM for abort support.
-	var preRebaseAM prolly.AddressMap
-	if branch == "main" {
-		preRebaseAM = db.am
-	} else {
-		preRebaseAM, err = db.getOrInitBranchAM(ctx, branch)
-		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: loading pre-rebase AM for branch %q: %w", branch, err)
-		}
+	preRebaseAM, err := db.getOrInitBranchAM(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("dolt: DumboDBRebase: loading pre-rebase AM for branch %q: %w", branch, err)
 	}
 
 	// Move the branch HEAD to ontoHead so that subsequent Commit() calls (which require
@@ -2778,11 +2761,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 	if err != nil {
 		return nil, fmt.Errorf("dolt: replayRemainingCommits: loading final AM: %w", err)
 	}
-	if ms.intoBranch == "main" {
-		db.am = finalAM
-	} else {
-		db.branchAMs[ms.intoBranch] = finalAM
-	}
+	db.setAM(ms.intoBranch, finalAM)
 
 	return &backends.RebaseResult{
 		CommitsReplayed: ms.rebaseCommitsReplayed,
@@ -2836,7 +2815,7 @@ func (b *Backend) commitRebasedPick(
 		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: no head after commit")
 	}
 
-	// Note: in-memory AM (db.am / db.branchAMs) is updated by the caller after all commits are done.
+	// Note: in-memory AM (db.branchAMs) is updated by the caller after all commits are done.
 	_ = pickHash // retained for context; not needed in commit but useful for error messages
 
 	return newHash, nil
@@ -2925,11 +2904,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		db.mergeState = nil
 
 		// Restore the working set to the pre-revert AM.
-		if ms.intoBranch == "main" {
-			db.am = ms.premergeAM
-		} else {
-			db.branchAMs[ms.intoBranch] = ms.premergeAM
-		}
+		db.setAM(ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.RevertResult{Message: "revert aborted"}, nil
@@ -3062,14 +3037,9 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 
 	if len(conflicts) > 0 {
 		// Capture the pre-revert AM for abort support.
-		var preRevertAM prolly.AddressMap
-		if branch == "main" {
-			preRevertAM = db.am
-		} else {
-			preRevertAM, err = db.getOrInitBranchAM(ctx, branch)
-			if err != nil {
-				return nil, fmt.Errorf("dolt: DumboDBRevert: loading pre-revert AM for branch %q: %w", branch, err)
-			}
+		preRevertAM, err := db.getOrInitBranchAM(ctx, branch)
+		if err != nil {
+			return nil, fmt.Errorf("dolt: DumboDBRevert: loading pre-revert AM for branch %q: %w", branch, err)
 		}
 
 		db.mergeState = &mergeInProgress{
@@ -3149,14 +3119,12 @@ func (b *Backend) commitRevert(
 		return nil, fmt.Errorf("dolt: commitRevert: no head after revert commit")
 	}
 
+	db.setAM(branch, revertedAM)
 	if branch == "main" {
 		db.ds = newDS
-		db.am = revertedAM
 		if err := updateWorkingSet(ctx, db.doltDB, revertedAM, revertedAM, "main"); err != nil {
 			return nil, fmt.Errorf("dolt: commitRevert: updating working set: %w", err)
 		}
-	} else {
-		db.branchAMs[branch] = revertedAM
 	}
 
 	revertAuthor := commitName + " <" + commitEmail + ">"
