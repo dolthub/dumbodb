@@ -248,26 +248,26 @@ func hashID(id any) ([20]byte, error) {
 	case *types.Document:
 		wdoc, err := bson.FromDocument(v)
 		if err != nil {
-			return [20]byte{}, fmt.Errorf("dolt: encoding _id document for hash: %w", err)
+			return [20]byte{}, fmt.Errorf("encoding _id document for hash: %w", err)
 		}
 		wval = wdoc
 	case *types.Array:
 		warr, err := bson.FromArray(v)
 		if err != nil {
-			return [20]byte{}, fmt.Errorf("dolt: encoding _id array for hash: %w", err)
+			return [20]byte{}, fmt.Errorf("encoding _id array for hash: %w", err)
 		}
 		wval = warr
 	default:
-		return [20]byte{}, fmt.Errorf("dolt: unsupported _id type %T", id)
+		return [20]byte{}, fmt.Errorf("unsupported _id type %T", id)
 	}
 
 	if err := doc.Add("_id", wval); err != nil {
-		return [20]byte{}, fmt.Errorf("dolt: building _id doc for hash: %w", err)
+		return [20]byte{}, fmt.Errorf("building _id doc for hash: %w", err)
 	}
 
 	raw, err := doc.Encode()
 	if err != nil {
-		return [20]byte{}, fmt.Errorf("dolt: encoding _id for hash: %w", err)
+		return [20]byte{}, fmt.Errorf("encoding _id for hash: %w", err)
 	}
 
 	sum := sha512.Sum512(raw)
@@ -283,7 +283,7 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 
 	tup, err := tb.Build(bufPool)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: building key tuple: %w", err)
+		return nil, fmt.Errorf("building key tuple: %w", err)
 	}
 
 	return tup, nil
@@ -296,7 +296,7 @@ func buildValue(jsonHash hash.Hash) (val.Tuple, error) {
 
 	tup, err := tb.Build(bufPool)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: building value tuple: %w", err)
+		return nil, fmt.Errorf("building value tuple: %w", err)
 	}
 
 	return tup, nil
@@ -397,14 +397,14 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 
 	newAM, err := editor.Flush(ctx)
 	if err != nil {
-		return fmt.Errorf("dolt: flushing address map: %w", err)
+		return fmt.Errorf("flushing address map: %w", err)
 	}
 
 	// Write the working RTVL chunk to the value store so the working set reference is
 	// resolvable. updateWorkingSet recomputes the same hash deterministically.
 	workingRtvlMsg := buildRootValueFlatbuffer(newAM)
 	if _, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvlMsg)); err != nil {
-		return fmt.Errorf("dolt: writing RTVL for working set: %w", err)
+		return fmt.Errorf("writing RTVL for working set: %w", err)
 	}
 
 	// Persist the updated AM before (optionally) pushing it to the working set.
@@ -425,11 +425,11 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 	// explicit stage operation advances it.
 	stagedAM, err := headRootAMForBranch(ctx, state, branch)
 	if err != nil {
-		return fmt.Errorf("dolt: reading HEAD AM for staged root: %w", err)
+		return fmt.Errorf("reading HEAD AM for staged root: %w", err)
 	}
 
 	if err := updateWorkingSet(ctx, state.doltDB, newAM, stagedAM, branch); err != nil {
-		return fmt.Errorf("dolt: updating working set: %w", err)
+		return fmt.Errorf("updating working set: %w", err)
 	}
 
 	// The working set is now current  -- clear any prior deferred dirty flag.
@@ -460,11 +460,11 @@ func (state *dbState) flushDirtyBranches(ctx context.Context) error {
 
 		stagedAM, err := headRootAMForBranch(ctx, state, branch)
 		if err != nil {
-			return fmt.Errorf("dolt: reading HEAD AM for staged root: %w", err)
+			return fmt.Errorf("reading HEAD AM for staged root: %w", err)
 		}
 
 		if err := updateWorkingSet(ctx, state.doltDB, workingAM, stagedAM, branch); err != nil {
-			return fmt.Errorf("dolt: updating working set: %w", err)
+			return fmt.Errorf("updating working set: %w", err)
 		}
 
 		delete(state.dirtyBranches, branch)

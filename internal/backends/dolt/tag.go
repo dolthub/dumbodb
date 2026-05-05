@@ -45,11 +45,11 @@ const tagRefPrefix = "refs/tags/"
 func (b *Backend) DumboDBTag(ctx context.Context, params *backends.TagParams) (*backends.TagResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBTag: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBTag: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBTag: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -77,15 +77,15 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 
 	commitAddr, err := resolveRootishToCommitHash(ctx, db, rootish)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: resolving %q: %w", rootish, err)
+		return nil, fmt.Errorf("DumboDBTag: resolving %q: %w", rootish, err)
 	}
 
 	tagDS, err := db.doltDB.GetDataset(ctx, tagRefPrefix+params.Name)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: getting tag dataset %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBTag: getting tag dataset %q: %w", params.Name, err)
 	}
 	if tagDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBTag: tag %q already exists", params.Name)
+		return nil, fmt.Errorf("DumboDBTag: tag %q already exists", params.Name)
 	}
 
 	taggerName, taggerEmail := "dumbodb", "dumbodb@dumbodb"
@@ -95,7 +95,7 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 	meta := datas.NewTagMeta(taggerName, taggerEmail, params.Message)
 
 	if _, err = db.doltDB.Tag(ctx, tagDS, commitAddr, datas.TagOptions{Meta: meta}); err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: creating tag %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBTag: creating tag %q: %w", params.Name, err)
 	}
 
 	return &backends.TagResult{
@@ -113,17 +113,17 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 func dumboDBTagDelete(ctx context.Context, db *dbState, params *backends.TagParams) (*backends.TagResult, error) {
 	tagDS, err := db.doltDB.GetDataset(ctx, tagRefPrefix+params.Name)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: getting tag dataset %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBTag: getting tag dataset %q: %w", params.Name, err)
 	}
 	if !tagDS.HasHead() {
 		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: DumboDBTag: tag %q does not exist", params.Name))
+			fmt.Errorf("DumboDBTag: tag %q does not exist", params.Name))
 	}
 
 	commitAddr := tagCommitAddr(tagDS)
 
 	if _, err = db.doltDB.Delete(ctx, tagDS, ""); err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: deleting tag %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBTag: deleting tag %q: %w", params.Name, err)
 	}
 
 	return &backends.TagResult{
@@ -138,7 +138,7 @@ func dumboDBTagDelete(ctx context.Context, db *dbState, params *backends.TagPara
 func dumboDBTagList(ctx context.Context, db *dbState) (*backends.TagResult, error) {
 	dsMap, err := db.doltDB.Datasets(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: listing datasets: %w", err)
+		return nil, fmt.Errorf("DumboDBTag: listing datasets: %w", err)
 	}
 
 	var tagIDs []string
@@ -148,14 +148,14 @@ func dumboDBTagList(ctx context.Context, db *dbState) (*backends.TagResult, erro
 		}
 		return nil
 	}); iterErr != nil {
-		return nil, fmt.Errorf("dolt: DumboDBTag: iterating datasets: %w", iterErr)
+		return nil, fmt.Errorf("DumboDBTag: iterating datasets: %w", iterErr)
 	}
 
 	tags := make([]backends.TagInfo, 0, len(tagIDs))
 	for _, id := range tagIDs {
 		ds, dsErr := db.doltDB.GetDataset(ctx, id)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBTag: loading tag %q: %w", id, dsErr)
+			return nil, fmt.Errorf("DumboDBTag: loading tag %q: %w", id, dsErr)
 		}
 		if !ds.HasHead() {
 			continue
@@ -165,7 +165,7 @@ func dumboDBTagList(ctx context.Context, db *dbState) (*backends.TagResult, erro
 		if ds.IsTag() {
 			meta, commitAddr, htErr := ds.HeadTag()
 			if htErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBTag: reading tag head %q: %w", name, htErr)
+				return nil, fmt.Errorf("DumboDBTag: reading tag head %q: %w", name, htErr)
 			}
 			info.CommitID = commitAddr.String()
 			if meta != nil {

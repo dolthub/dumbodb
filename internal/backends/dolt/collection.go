@@ -943,7 +943,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	// the gate is essentially free for the cases where the index does win.
 	primaryCount, err := primary.Count()
 	if err != nil {
-		return nil, false, fmt.Errorf("dolt: index lookup counting primary: %w", err)
+		return nil, false, fmt.Errorf("index lookup counting primary: %w", err)
 	}
 	maxResults := -1
 	if primaryCount > 0 {
@@ -966,7 +966,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	for _, idBytes := range primaryIDBytesList {
 		key, err := buildKey(idBytes)
 		if err != nil {
-			return nil, true, fmt.Errorf("dolt: index lookup building key: %w", err)
+			return nil, true, fmt.Errorf("index lookup building key: %w", err)
 		}
 		var doc *types.Document
 		if err := primary.Get(ctx, key, func(k, v val.Tuple) error {
@@ -975,13 +975,13 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 			}
 			jsonHash, ok := valDesc.GetJSONAddr(0, v)
 			if !ok {
-				return fmt.Errorf("dolt: primary value tuple missing JSON addr")
+				return fmt.Errorf("primary value tuple missing JSON addr")
 			}
 			var decErr error
 			doc, decErr = readDocJSON(ctx, state.ns, jsonHash)
 			return decErr
 		}); err != nil {
-			return nil, true, fmt.Errorf("dolt: index lookup primary fetch: %w", err)
+			return nil, true, fmt.Errorf("index lookup primary fetch: %w", err)
 		}
 		if doc != nil {
 			docs = append(docs, doc)
@@ -1340,24 +1340,24 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		// Extract the _id from this document.
 		docID, err := doc.Get("_id")
 		if err != nil {
-			return nil, fmt.Errorf("dolt: document missing _id: %w", err)
+			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
 		// Hash _id to get the fixed-size primary key.
 		h, err := hashID(docID)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: hashing _id: %w", err)
+			return nil, fmt.Errorf("hashing _id: %w", err)
 		}
 
 		// Check against existing IDs in the collection (point lookup).
 		exists, err := existsID(ctx, m, h)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: checking existing _id: %w", err)
+			return nil, fmt.Errorf("checking existing _id: %w", err)
 		}
 		if exists {
 			return nil, backends.NewError(
 				backends.ErrorCodeInsertDuplicateID,
-				fmt.Errorf("dolt: duplicate _id in collection"),
+				fmt.Errorf("duplicate _id in collection"),
 			)
 		}
 
@@ -1365,7 +1365,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		if _, dup := batchHashSet[h]; dup {
 			return nil, backends.NewError(
 				backends.ErrorCodeInsertDuplicateID,
-				fmt.Errorf("dolt: duplicate _id in batch"),
+				fmt.Errorf("duplicate _id in batch"),
 			)
 		}
 
@@ -1392,7 +1392,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				if indexKeysEqual(newKey, existKey) {
 					return nil, backends.NewError(
 						backends.ErrorCodeInsertDuplicateID,
-						fmt.Errorf("dolt: duplicate key for unique index %s", idx.Name),
+						fmt.Errorf("duplicate key for unique index %s", idx.Name),
 					)
 				}
 			}
@@ -1400,7 +1400,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				if indexKeysEqual(newKey, batchKey) {
 					return nil, backends.NewError(
 						backends.ErrorCodeInsertDuplicateID,
-						fmt.Errorf("dolt: duplicate key for unique index %s", idx.Name),
+						fmt.Errorf("duplicate key for unique index %s", idx.Name),
 					)
 				}
 			}
@@ -1457,10 +1457,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	// SecondaryIndexes field needs to reflect the post-insert state so that a
 	// later reopen sees the inserted entries in every index.
 	if err := c.updateSecondaryIndexesOnInsert(ctx, state, params.Docs); err != nil {
-		return nil, fmt.Errorf("dolt: updating secondary indexes: %w", err)
+		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
 	if err := state.persistIndexes(ctx, c.name); err != nil {
-		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+		return nil, fmt.Errorf("persisting secondary indexes: %w", err)
 	}
 
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
@@ -1478,10 +1478,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
 		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: auto-commit after insert: resolving main dataset: %w", dsErr)
+			return nil, fmt.Errorf("auto-commit after insert: resolving main dataset: %w", dsErr)
 		}
 		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
-			return nil, fmt.Errorf("dolt: auto-commit after insert: %w", err)
+			return nil, fmt.Errorf("auto-commit after insert: %w", err)
 		}
 	}
 
@@ -1509,28 +1509,28 @@ func (c *collection) updateSecondaryIndexesOnInsert(ctx context.Context, state *
 		if idxInfo == nil {
 			// secIndexMaps and state.indexes drifted: that's a backend
 			// invariant violation, not a per-doc skip.
-			return fmt.Errorf("dolt: index %q has a map but no IndexInfo on %q", idxName, c.name)
+			return fmt.Errorf("index %q has a map but no IndexInfo on %q", idxName, c.name)
 		}
 
 		mut := idxMap.Mutate()
 		for _, doc := range docs {
 			docID, err := doc.Get("_id")
 			if err != nil {
-				return fmt.Errorf("dolt: secondary index %q: document missing _id: %w", idxName, err)
+				return fmt.Errorf("secondary index %q: document missing _id: %w", idxName, err)
 			}
 			h, err := hashID(docID)
 			if err != nil {
-				return fmt.Errorf("dolt: secondary index %q: hashing _id: %w", idxName, err)
+				return fmt.Errorf("secondary index %q: hashing _id: %w", idxName, err)
 			}
 			idBytes := h[:]
 			fieldVals := extractIndexFieldValues(doc, *idxInfo)
 			if err := idxpkg.InsertEntry(ctx, mut, fieldVals, idBytes); err != nil {
-				return fmt.Errorf("dolt: secondary index %q: inserting entry: %w", idxName, err)
+				return fmt.Errorf("secondary index %q: inserting entry: %w", idxName, err)
 			}
 		}
 		updated, err := mut.Map(ctx)
 		if err != nil {
-			return fmt.Errorf("dolt: secondary index %q: flushing map: %w", idxName, err)
+			return fmt.Errorf("secondary index %q: flushing map: %w", idxName, err)
 		}
 		secMaps[idxName] = updated
 	}
@@ -1585,16 +1585,16 @@ func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *p
 		oldID := insertionOrder[i]
 		h, err := hashID(oldID)
 		if err != nil {
-			return fmt.Errorf("dolt: capped evict hashing _id: %w", err)
+			return fmt.Errorf("capped evict hashing _id: %w", err)
 		}
 
 		key, err := buildKey(h[:])
 		if err != nil {
-			return fmt.Errorf("dolt: capped evict building key: %w", err)
+			return fmt.Errorf("capped evict building key: %w", err)
 		}
 
 		if err := mut.Delete(ctx, key); err != nil {
-			return fmt.Errorf("dolt: capped evict delete: %w", err)
+			return fmt.Errorf("capped evict delete: %w", err)
 		}
 	}
 
@@ -1652,12 +1652,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		// Build key from the document's _id field.
 		docID, err := doc.Get("_id")
 		if err != nil {
-			return nil, fmt.Errorf("dolt: document missing _id: %w", err)
+			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
 		h, err := hashID(docID)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: hashing _id: %w", err)
+			return nil, fmt.Errorf("hashing _id: %w", err)
 		}
 
 		key, err := buildKey(h[:])
@@ -1740,7 +1740,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	// collection holds (e.g. from a recent CreateIndexes / InsertAll on the
 	// same handle) into the persisted DTBL.
 	if err := state.persistIndexes(ctx, c.name); err != nil {
-		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+		return nil, fmt.Errorf("persisting secondary indexes: %w", err)
 	}
 
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
@@ -1758,10 +1758,10 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		msg := fmt.Sprintf("auto: update %s", c.name)
 		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: auto-commit after update: resolving main dataset: %w", dsErr)
+			return nil, fmt.Errorf("auto-commit after update: resolving main dataset: %w", dsErr)
 		}
 		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
-			return nil, fmt.Errorf("dolt: auto-commit after update: %w", err)
+			return nil, fmt.Errorf("auto-commit after update: %w", err)
 		}
 	}
 
@@ -1888,7 +1888,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	// updates survive restart (DeleteAll itself does not yet rebuild index
 	// entries  -- tracked separately).
 	if err := state.persistIndexes(ctx, c.name); err != nil {
-		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+		return nil, fmt.Errorf("persisting secondary indexes: %w", err)
 	}
 
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
@@ -1906,10 +1906,10 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		msg := fmt.Sprintf("auto: delete from %s", c.name)
 		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: auto-commit after delete: resolving main dataset: %w", dsErr)
+			return nil, fmt.Errorf("auto-commit after delete: resolving main dataset: %w", dsErr)
 		}
 		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
-			return nil, fmt.Errorf("dolt: auto-commit after delete: %w", err)
+			return nil, fmt.Errorf("auto-commit after delete: %w", err)
 		}
 	}
 
@@ -2044,11 +2044,11 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 		state, stateErr := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
 		if stateErr == nil && state == nil {
 			return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-				fmt.Errorf("dolt: database %q does not exist", c.db.name))
+				fmt.Errorf("database %q does not exist", c.db.name))
 		}
 
 		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: collection %q does not exist", c.name))
+			fmt.Errorf("collection %q does not exist", c.name))
 	}
 
 	count, err := m.Count()
@@ -2202,7 +2202,7 @@ func scanDistinctFromIndex(
 
 	iter, err := idxMap.IterAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: distinct scan iterating index: %w", err)
+		return nil, fmt.Errorf("distinct scan iterating index: %w", err)
 	}
 
 	idxKeyDesc := idxpkg.KeyDescriptor()
@@ -2219,7 +2219,7 @@ func scanDistinctFromIndex(
 			if err == io.EOF {
 				break
 			}
-			return nil, fmt.Errorf("dolt: distinct scan reading index: %w", err)
+			return nil, fmt.Errorf("distinct scan reading index: %w", err)
 		}
 		if k == nil {
 			break
@@ -2275,7 +2275,7 @@ func lookupFieldFromPrimary(
 ) (any, error) {
 	key, err := buildKey(idBytes)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: distinct scan building key: %w", err)
+		return nil, fmt.Errorf("distinct scan building key: %w", err)
 	}
 
 	var doc *types.Document
@@ -2285,7 +2285,7 @@ func lookupFieldFromPrimary(
 		}
 		jsonHash, ok := valDesc.GetJSONAddr(0, v)
 		if !ok {
-			return fmt.Errorf("dolt: distinct scan primary value missing JSON addr")
+			return fmt.Errorf("distinct scan primary value missing JSON addr")
 		}
 		d, decErr := readDocJSON(ctx, ns, jsonHash)
 		if decErr != nil {
@@ -2294,7 +2294,7 @@ func lookupFieldFromPrimary(
 		doc = d
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("dolt: distinct scan primary fetch: %w", err)
+		return nil, fmt.Errorf("distinct scan primary fetch: %w", err)
 	}
 	if doc == nil {
 		return types.Null, nil
@@ -2324,7 +2324,7 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 
 		if state == nil {
 			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-				fmt.Errorf("dolt: collection %q does not exist", c.name))
+				fmt.Errorf("collection %q does not exist", c.name))
 		}
 
 		// If this collection was never registered (created), it doesn't exist.
@@ -2335,7 +2335,7 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 
 		if !registered {
 			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-				fmt.Errorf("dolt: collection %q does not exist", c.name))
+				fmt.Errorf("collection %q does not exist", c.name))
 		}
 	}
 
@@ -2369,7 +2369,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 
 	if state == nil {
 		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: collection %q does not exist", c.name))
+			fmt.Errorf("collection %q does not exist", c.name))
 	}
 
 	state.mu.Lock()
@@ -2413,7 +2413,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		}
 		idxMap, err := c.buildSecondaryIndex(ctx, state, idx)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: building secondary index %q on %q: %w", idx.Name, c.name, err)
+			return nil, fmt.Errorf("building secondary index %q on %q: %w", idx.Name, c.name, err)
 		}
 		if state.secIndexMaps[c.name] == nil {
 			state.secIndexMaps[c.name] = make(map[string]prolly.Map)
@@ -2424,10 +2424,10 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 	// Persist the new index set and re-write the collection's DTBL so the
 	// secondary_indexes AM survives restart even if no document writes follow.
 	if err := state.persistIndexes(ctx, c.name); err != nil {
-		return nil, fmt.Errorf("dolt: persisting secondary indexes: %w", err)
+		return nil, fmt.Errorf("persisting secondary indexes: %w", err)
 	}
 	if err := c.rewriteDTBLAfterIndexChange(ctx, state); err != nil {
-		return nil, fmt.Errorf("dolt: rewriting DTBL for %q: %w", c.name, err)
+		return nil, fmt.Errorf("rewriting DTBL for %q: %w", c.name, err)
 	}
 
 	return &backends.CreateIndexesResult{}, nil
@@ -2610,10 +2610,10 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 	}
 
 	if err := state.persistIndexes(ctx, c.name); err != nil {
-		return nil, fmt.Errorf("dolt: persisting secondary indexes after drop: %w", err)
+		return nil, fmt.Errorf("persisting secondary indexes after drop: %w", err)
 	}
 	if err := c.rewriteDTBLAfterIndexChange(ctx, state); err != nil {
-		return nil, fmt.Errorf("dolt: rewriting DTBL after drop for %q: %w", c.name, err)
+		return nil, fmt.Errorf("rewriting DTBL after drop for %q: %w", c.name, err)
 	}
 
 	return &backends.DropIndexesResult{}, nil
@@ -2682,18 +2682,18 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 		var err error
 		bsonBytes, err = bson.FromDocumentRaw(doc)
 		if err != nil {
-			return hash.Hash{}, fmt.Errorf("dolt: encoding document with MinKey/MaxKey to BSON: %w", err)
+			return hash.Hash{}, fmt.Errorf("encoding document with MinKey/MaxKey to BSON: %w", err)
 		}
 	} else {
 		// Step 1: Convert types.Document -> wirebson.Document -> BSON bytes.
 		wdoc, err := bson.FromDocument(doc)
 		if err != nil {
-			return hash.Hash{}, fmt.Errorf("dolt: encoding document to wirebson: %w", err)
+			return hash.Hash{}, fmt.Errorf("encoding document to wirebson: %w", err)
 		}
 
 		bsonBytes, err = wdoc.Encode()
 		if err != nil {
-			return hash.Hash{}, fmt.Errorf("dolt: encoding document to BSON: %w", err)
+			return hash.Hash{}, fmt.Errorf("encoding document to BSON: %w", err)
 		}
 	}
 
@@ -2702,14 +2702,14 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 	// double vs decimal128, etc.) through the JSON roundtrip.
 	jsonBytes, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: converting BSON to JSON: %w", err)
+		return hash.Hash{}, fmt.Errorf("converting BSON to JSON: %w", err)
 	}
 
 	// Step 3: Write JSON bytes to the dolt JSON chunk store.
 	jWrapper := sqltypes.NewLazyJSONDocument(jsonBytes)
 	root, err := tree.SerializeJsonToAddr(ctx, ns, jWrapper)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: serializing JSON to addr: %w", err)
+		return hash.Hash{}, fmt.Errorf("serializing JSON to addr: %w", err)
 	}
 
 	return root.HashOf(), nil
@@ -2729,14 +2729,14 @@ func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (
 func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash hash.Hash, mutations []backends.FieldMutation) (hash.Hash, error) {
 	wrapper, err := tree.NewJSONDoc(existingHash, ns).ToIndexedJSONDocument(ctx)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: loading indexed JSON document: %w", err)
+		return hash.Hash{}, fmt.Errorf("loading indexed JSON document: %w", err)
 	}
 
 	idx, ok := wrapper.(tree.IndexedJsonDocument)
 	if !ok {
 		// Legacy non-indexed multi-chunk document: no structural sharing
 		// available.
-		return hash.Hash{}, fmt.Errorf("dolt: stored document is not indexed")
+		return hash.Hash{}, fmt.Errorf("stored document is not indexed")
 	}
 
 	for _, m := range mutations {
@@ -2751,7 +2751,7 @@ func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash ha
 			}
 			next, ok := res.(tree.IndexedJsonDocument)
 			if !ok {
-				return hash.Hash{}, fmt.Errorf("dolt: remove fell back to in-memory document")
+				return hash.Hash{}, fmt.Errorf("remove fell back to in-memory document")
 			}
 			idx = next
 			continue
@@ -2768,7 +2768,7 @@ func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash ha
 		}
 		next, ok := res.(tree.IndexedJsonDocument)
 		if !ok {
-			return hash.Hash{}, fmt.Errorf("dolt: set fell back to in-memory document")
+			return hash.Hash{}, fmt.Errorf("set fell back to in-memory document")
 		}
 		idx = next
 	}
@@ -2789,29 +2789,29 @@ func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash ha
 func marshalExtJSONValue(value any) ([]byte, error) {
 	tmp, err := types.NewDocument("v", value)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: wrapping value for ExtJSON: %w", err)
+		return nil, fmt.Errorf("wrapping value for ExtJSON: %w", err)
 	}
 
 	var bsonBytes []byte
 	if docHasMinMaxKey(tmp) {
 		bsonBytes, err = bson.FromDocumentRaw(tmp)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding value with MinKey/MaxKey to BSON: %w", err)
+			return nil, fmt.Errorf("encoding value with MinKey/MaxKey to BSON: %w", err)
 		}
 	} else {
 		wdoc, err := bson.FromDocument(tmp)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding value to wirebson: %w", err)
+			return nil, fmt.Errorf("encoding value to wirebson: %w", err)
 		}
 		bsonBytes, err = wdoc.Encode()
 		if err != nil {
-			return nil, fmt.Errorf("dolt: encoding value to BSON: %w", err)
+			return nil, fmt.Errorf("encoding value to BSON: %w", err)
 		}
 	}
 
 	extJSON, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: converting value to ExtJSON: %w", err)
+		return nil, fmt.Errorf("converting value to ExtJSON: %w", err)
 	}
 
 	// Strip `{"v":` prefix and `}` suffix. The MongoDB driver emits compact
@@ -2819,11 +2819,11 @@ func marshalExtJSONValue(value any) ([]byte, error) {
 	// colon defensively.
 	prefix := []byte(`{"v":`)
 	if !bytes.HasPrefix(extJSON, prefix) || extJSON[len(extJSON)-1] != '}' {
-		return nil, fmt.Errorf("dolt: unexpected ExtJSON shape %q", extJSON)
+		return nil, fmt.Errorf("unexpected ExtJSON shape %q", extJSON)
 	}
 	inner := bytes.TrimLeft(extJSON[len(prefix):len(extJSON)-1], " ")
 	if len(inner) == 0 {
-		return nil, fmt.Errorf("dolt: empty ExtJSON value for %q", extJSON)
+		return nil, fmt.Errorf("empty ExtJSON value for %q", extJSON)
 	}
 	return inner, nil
 }
@@ -2846,11 +2846,11 @@ func readDocJSONBytes(ctx context.Context, ns tree.NodeStore, h hash.Hash) ([]by
 	jsonDoc := tree.NewJSONDoc(h, ns)
 	wrapper, err := jsonDoc.ToIndexedJSONDocument(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: reading JSON document: %w", err)
+		return nil, fmt.Errorf("reading JSON document: %w", err)
 	}
 	jsonBytes, err := sqltypes.MarshallJson(ctx, wrapper)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: getting JSON bytes: %w", err)
+		return nil, fmt.Errorf("getting JSON bytes: %w", err)
 	}
 	return jsonBytes, nil
 }
@@ -2861,7 +2861,7 @@ func readDocJSONBytes(ctx context.Context, ns tree.NodeStore, h hash.Hash) ([]by
 func decodeDocFromJSON(jsonBytes []byte) (*types.Document, error) {
 	var rawBSON mongobson.Raw
 	if err := mongobson.UnmarshalExtJSON(jsonBytes, true, &rawBSON); err != nil {
-		return nil, fmt.Errorf("dolt: converting JSON to BSON: %w", err)
+		return nil, fmt.Errorf("converting JSON to BSON: %w", err)
 	}
 	return decodeDocument([]byte(rawBSON))
 }
@@ -2871,7 +2871,7 @@ func decodeDocument(data []byte) (*types.Document, error) {
 	// Try the MinKey/MaxKey-aware path first.
 	doc, err := bson.ToDocumentHandlingMinMaxKey(wirebson.RawDocument(data))
 	if err != nil {
-		return nil, fmt.Errorf("dolt: decoding document: %w", err)
+		return nil, fmt.Errorf("decoding document: %w", err)
 	}
 	if doc != nil {
 		return doc, nil
@@ -2880,7 +2880,7 @@ func decodeDocument(data []byte) (*types.Document, error) {
 	// No MinKey/MaxKey  -- use the normal path.
 	doc, err = bson.ToDocument(wirebson.RawDocument(data))
 	if err != nil {
-		return nil, fmt.Errorf("dolt: decoding document: %w", err)
+		return nil, fmt.Errorf("decoding document: %w", err)
 	}
 
 	return doc, nil

@@ -206,39 +206,39 @@ func (state *dbState) persistIndexes(ctx context.Context, collName string) error
 
 	am, err := prolly.NewEmptyAddressMap(state.ns)
 	if err != nil {
-		return fmt.Errorf("dolt: creating index AM for %q: %w", collName, err)
+		return fmt.Errorf("creating index AM for %q: %w", collName, err)
 	}
 	edt := am.Editor()
 
 	for _, idx := range idxInfos {
 		m, ok := secMaps[idx.Name]
 		if !ok {
-			return fmt.Errorf("dolt: index %q on %q has no in-memory map", idx.Name, collName)
+			return fmt.Errorf("index %q on %q has no in-memory map", idx.Name, collName)
 		}
 
 		ref, err := state.vs.WriteValue(ctx, tree.ValueFromNode(m.Node()))
 		if err != nil {
-			return fmt.Errorf("dolt: writing index map root for %q.%q: %w", collName, idx.Name, err)
+			return fmt.Errorf("writing index map root for %q.%q: %w", collName, idx.Name, err)
 		}
 		mapRoot := ref.TargetHash()
 
 		entry, err := indexInfoToEntry(idx, mapRoot)
 		if err != nil {
-			return fmt.Errorf("dolt: encoding index entry for %q.%q: %w", collName, idx.Name, err)
+			return fmt.Errorf("encoding index entry for %q.%q: %w", collName, idx.Name, err)
 		}
 		entryHash, err := writeIndexEntryChunk(ctx, state.ns, entry)
 		if err != nil {
-			return fmt.Errorf("dolt: writing index entry chunk for %q.%q: %w", collName, idx.Name, err)
+			return fmt.Errorf("writing index entry chunk for %q.%q: %w", collName, idx.Name, err)
 		}
 
 		if err := edt.Add(ctx, idx.Name, entryHash); err != nil {
-			return fmt.Errorf("dolt: adding %q to index AM: %w", idx.Name, err)
+			return fmt.Errorf("adding %q to index AM: %w", idx.Name, err)
 		}
 	}
 
 	newAM, err := edt.Flush(ctx)
 	if err != nil {
-		return fmt.Errorf("dolt: flushing index AM for %q: %w", collName, err)
+		return fmt.Errorf("flushing index AM for %q: %w", collName, err)
 	}
 	state.collIndexAMs[collName] = newAM
 	return nil

@@ -210,7 +210,7 @@ func parseAuthorString(author string) (name, email string) {
 // automatically committed to Dolt history without an explicit doltCommit call.
 func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return nil, fmt.Errorf("dolt: creating data directory: %w", err)
+		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
 	b := &Backend{
@@ -228,7 +228,7 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 	// incorrectly returns "database does not exist" instead of "collection
 	// does not exist".
 	if _, err := b.getOrOpenDB(context.Background(), "admin", true); err != nil {
-		return nil, fmt.Errorf("dolt: initializing admin database: %w", err)
+		return nil, fmt.Errorf("initializing admin database: %w", err)
 	}
 
 	go b.deferredFlushLoop()
@@ -273,7 +273,7 @@ func (b *Backend) flushAllDirty(ctx context.Context) {
 		db.mu.Lock()
 		if len(db.dirtyBranches) > 0 {
 			if err := db.flushDirtyBranches(ctx); err != nil {
-				b.l.Warn("dolt: deferred flush failed", "err", err)
+				b.l.Warn("deferred flush failed", "err", err)
 			}
 		}
 		db.mu.Unlock()
@@ -303,7 +303,7 @@ func (b *Backend) Close() {
 	for name, db := range b.dbs {
 		db.mu.Lock()
 		if err := db.doltDB.Close(); err != nil {
-			b.l.Error("dolt: closing database", "db", name, "err", err)
+			b.l.Error("closing database", "db", name, "err", err)
 		}
 		db.mu.Unlock()
 	}
@@ -472,7 +472,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 
 	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
 		return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: database %q does not exist", params.Name))
+			fmt.Errorf("database %q does not exist", params.Name))
 	}
 
 	// Close the open store if it exists.
@@ -484,7 +484,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 	}
 
 	if err := os.RemoveAll(dbDir); err != nil {
-		return fmt.Errorf("dolt: dropping database %q: %w", params.Name, err)
+		return fmt.Errorf("dropping database %q: %w", params.Name, err)
 	}
 
 	return nil
@@ -519,33 +519,33 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		return nil, fmt.Errorf("dolt: creating db directory for %q: %w", dbName, err)
+		return nil, fmt.Errorf("creating db directory for %q: %w", dbName, err)
 	}
 
 	q := nbs.NewUnlimitedMemQuotaProvider()
 
 	newGenSt, err := nbs.NewLocalJournalingStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, q, false, nil)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: opening newgen NBS store for %q: %w", dbName, err)
+		return nil, fmt.Errorf("opening newgen NBS store for %q: %w", dbName, err)
 	}
 
 	oldgenDir := filepath.Join(dbDir, "oldgen")
 	if err := os.MkdirAll(oldgenDir, 0o755); err != nil {
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("dolt: creating oldgen directory for %q: %w", dbName, err)
+		return nil, fmt.Errorf("creating oldgen directory for %q: %w", dbName, err)
 	}
 
 	oldGenSt, err := nbs.NewLocalStore(ctx, newGenSt.Version(), oldgenDir, defaultMemTableSize, q, false)
 	if err != nil {
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("dolt: opening oldgen NBS store for %q: %w", dbName, err)
+		return nil, fmt.Errorf("opening oldgen NBS store for %q: %w", dbName, err)
 	}
 
 	ghostGen, err := nbs.NewGhostBlockStore(dbDir)
 	if err != nil {
 		_ = oldGenSt.Close()
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("dolt: opening ghost block store for %q: %w", dbName, err)
+		return nil, fmt.Errorf("opening ghost block store for %q: %w", dbName, err)
 	}
 
 	cs := nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen)
@@ -557,7 +557,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	rootHash, err := cs.Root(ctx)
 	if err != nil {
 		_ = cs.Close()
-		return nil, fmt.Errorf("dolt: reading root for %q: %w", dbName, err)
+		return nil, fmt.Errorf("reading root for %q: %w", dbName, err)
 	}
 
 	// Create the value store and dolt database which manage the STRT root format.
@@ -571,20 +571,20 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		am, err = prolly.NewEmptyAddressMap(ns)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("dolt: creating empty address map for %q: %w", dbName, err)
+			return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 		}
 
 		_, am, err = commitCollectionsAM(ctx, doltDB, datas.Dataset{}, am, "Initialize database")
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("dolt: initial commit for %q: %w", dbName, err)
+			return nil, fmt.Errorf("initial commit for %q: %w", dbName, err)
 		}
 	} else {
 		// Existing database: detect the root chunk format.
 		rootChunk, err := cs.Get(ctx, rootHash)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("dolt: reading root chunk for %q: %w", dbName, err)
+			return nil, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
 		}
 
 		fileID := serial.GetFileID(rootChunk.Data())
@@ -593,32 +593,32 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		case serial.AddressMapFileID:
 			// Legacy ADRM format: the root chunk is the collections AM directly.
 			// Migrate to STRT by creating an initial dolt commit.
-			b.l.Info("dolt: migrating database from ADRM to STRT root format", "db", dbName)
+			b.l.Info("migrating database from ADRM to STRT root format", "db", dbName)
 
 			amNode, _, err := tree.NodeFromChunk(&rootChunk)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("dolt: parsing ADRM root node for %q: %w", dbName, err)
+				return nil, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
 			}
 
 			am, err = prolly.NewAddressMap(amNode, ns)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("dolt: loading collections AM from ADRM root for %q: %w", dbName, err)
+				return nil, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
 			}
 
 			// Build the STRT structure manually because datas.Database panics on ADRM roots.
 			// We need to do this atomically: write commit + STRT, then swap the NBS root.
 			if err := migrateADRMtoSTRT(ctx, cs, vs, ns, am, rootHash); err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("dolt: migrating ADRM root for %q: %w", dbName, err)
+				return nil, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
 			}
 
 			// Now the NBS root is STRT; read the dataset from doltDB normally.
 			mainDS, migErr := doltDB.GetDataset(ctx, mainDataset)
 			if migErr != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("dolt: getting dataset after migration for %q: %w", dbName, migErr)
+				return nil, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
 			}
 			_ = mainDS // used only to verify migration succeeded
 
@@ -627,7 +627,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			ds, err := doltDB.GetDataset(ctx, mainDataset)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("dolt: getting dataset for %q: %w", dbName, err)
+				return nil, fmt.Errorf("getting dataset for %q: %w", dbName, err)
 			}
 
 			if !ds.HasHead() {
@@ -635,19 +635,19 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 				am, err = prolly.NewEmptyAddressMap(ns)
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("dolt: creating empty address map for %q: %w", dbName, err)
+					return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 				}
 			} else {
 				headValue, _, err := ds.MaybeHeadValue()
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("dolt: reading head value for %q: %w", dbName, err)
+					return nil, fmt.Errorf("reading head value for %q: %w", dbName, err)
 				}
 
 				headMsg, ok := headValue.(dolttypes.SerialMessage)
 				if !ok {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("dolt: unexpected root value type %T for %q", headValue, dbName)
+					return nil, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
 				}
 
 				headFileID := serial.GetFileID([]byte(headMsg))
@@ -658,56 +658,56 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 					// commit). Fall back to HEAD rootValue if the working set is missing.
 					wsAM, wsErr := readAMFromWorkingSet(ctx, doltDB, cs, ns)
 					if wsErr != nil {
-						b.l.Warn("dolt: working set unavailable, falling back to HEAD AM", "db", dbName, "err", wsErr)
+						b.l.Warn("working set unavailable, falling back to HEAD AM", "db", dbName, "err", wsErr)
 						rtvl, fallbackErr := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("dolt: parsing RTVL for %q: %w", dbName, fallbackErr)
+							return nil, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
 						}
 						amNode, _, fallbackErr := tree.NodeFromBytes(rtvl.TablesBytes())
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("dolt: parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 						wsAM, fallbackErr = prolly.NewAddressMap(amNode, ns)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("dolt: loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 					}
 					am = wsAM
 
 				case serial.AddressMapFileID:
 					// Legacy: commit rootValue is raw ADRM. Migrate to RTVL.
-					b.l.Info("dolt: migrating database from ADRM-valued commit to RTVL", "db", dbName)
+					b.l.Info("migrating database from ADRM-valued commit to RTVL", "db", dbName)
 
 					amNode, _, err := tree.NodeFromBytes([]byte(headMsg))
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("dolt: parsing ADRM from commit for %q: %w", dbName, err)
+						return nil, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
 					}
 
 					am, err = prolly.NewAddressMap(amNode, ns)
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("dolt: loading collections AM from commit for %q: %w", dbName, err)
+						return nil, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
 					}
 
 					ds, am, err = commitCollectionsAM(ctx, doltDB, ds, am, "migrate: wrap collections AM in RTVL")
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("dolt: RTVL migration commit for %q: %w", dbName, err)
+						return nil, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
 					}
 
 				default:
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("dolt: unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
+					return nil, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
 				}
 			}
 
 		default:
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("dolt: unexpected root chunk file ID %q for %q", fileID, dbName)
+			return nil, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
 		}
 	}
 
@@ -735,13 +735,13 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, fmt.Errorf("dolt: writing collection schema chunk: %w", err)
+		return nil, fmt.Errorf("writing collection schema chunk: %w", err)
 	}
 	db.collSchemaHash = schemaRef.TargetHash()
 	db.emptyIndexAM, err = prolly.NewEmptyAddressMap(ns)
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, fmt.Errorf("dolt: creating empty index address map: %w", err)
+		return nil, fmt.Errorf("creating empty index address map: %w", err)
 	}
 
 	b.dbs[dbName] = db
@@ -753,14 +753,14 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	if err := db.hydrateAllIndexes(ctx); err != nil {
 		_ = doltDB.Close()
 		delete(b.dbs, dbName)
-		return nil, fmt.Errorf("dolt: hydrating secondary indexes for %q: %w", dbName, err)
+		return nil, fmt.Errorf("hydrating secondary indexes for %q: %w", dbName, err)
 	}
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
 	// previous server session. Errors are non-fatal: if the state file is corrupted
 	// or the referenced chunks are gone, we log and proceed without merge state.
 	if ms, loadErr := loadMergeState(ctx, db); loadErr != nil {
-		b.l.Warn("dolt: could not restore merge state on open (treating as no merge in progress)",
+		b.l.Warn("could not restore merge state on open (treating as no merge in progress)",
 			"db", dbName, "err", loadErr)
 	} else if ms != nil {
 		db.mergeState = ms
@@ -1002,11 +1002,11 @@ var _ backends.VersioningBackend = (*Backend)(nil)
 func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitParams) (*backends.CommitResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBCommit: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBCommit: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBCommit: database %q does not exist", params.DBName))
 	}
 
 	message := params.Message
@@ -1057,7 +1057,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("dolt: DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
+				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
 			if db.branchAMs[defaultBranch].HashOf() == headAM.HashOf() {
 				return nil, backends.ErrEmptyCommit
@@ -1066,16 +1066,16 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 		mainDS, dsErr := db.doltDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
+			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
 		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, mainDS, db.branchAMs[defaultBranch], message, params.Author, ts)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCommit: committing db %q: %w", params.DBName, err)
+			return nil, fmt.Errorf("DumboDBCommit: committing db %q: %w", params.DBName, err)
 		}
 
 		headHash, ok := newDS.MaybeHeadAddr()
 		if !ok {
-			return nil, fmt.Errorf("dolt: DumboDBCommit: no head after commit for db %q", params.DBName)
+			return nil, fmt.Errorf("DumboDBCommit: no head after commit for db %q", params.DBName)
 		}
 
 		return &backends.CommitResult{
@@ -1092,21 +1092,21 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	// Non-main branch commit: get the branch dataset and its working AM.
 	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: resolving branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCommit: resolving branch %q: %w", branch, err)
 	}
 	if !branchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: branch %q has no commits", branch)
+		return nil, fmt.Errorf("DumboDBCommit: branch %q has no commits", branch)
 	}
 
 	branchAM, err := db.getOrInitBranchAM(ctx, branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: loading branch AM for %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCommit: loading branch AM for %q: %w", branch, err)
 	}
 
 	if !params.AllowEmpty {
 		branchHeadAM, err := headRootAMForBranch(ctx, db, branch)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCommit: reading HEAD AM for branch %q: %w", branch, err)
+			return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for branch %q: %w", branch, err)
 		}
 		if branchAM.HashOf() == branchHeadAM.HashOf() {
 			return nil, backends.ErrEmptyCommit
@@ -1123,17 +1123,17 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 	meta, err := datas.NewCommitMetaWithAuthor(name, email, message, ts)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: building commit meta for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCommit: building commit meta for branch %q: %w", branch, err)
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(branchAM)
 	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{Meta: meta})
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: committing branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCommit: committing branch %q: %w", branch, err)
 	}
 
 	if err := updateWorkingSet(ctx, db.doltDB, branchAM, branchAM, branch); err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: updating working set for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCommit: updating working set for branch %q: %w", branch, err)
 	}
 
 	// Clear the cached branch AM so the next access reloads from the new HEAD.
@@ -1141,7 +1141,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBCommit: no head after commit for branch %q", branch)
+		return nil, fmt.Errorf("DumboDBCommit: no head after commit for branch %q", branch)
 	}
 
 	return &backends.CommitResult{
@@ -1169,11 +1169,11 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBBranch: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBBranch: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBBranch: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -1187,20 +1187,20 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	// ancestor expression (e.g. "main~1"), so we use the general rootish resolver.
 	headHash, err := resolveRootishToCommitHash(ctx, db, params.From)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: resolving source %q: %w", params.From, err)
+		return nil, fmt.Errorf("DumboDBBranch: resolving source %q: %w", params.From, err)
 	}
 
 	newDatasetID := "refs/heads/" + params.Name
 	newDS, err := db.doltDB.GetDataset(ctx, newDatasetID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: getting new branch dataset %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBBranch: getting new branch dataset %q: %w", params.Name, err)
 	}
 	if newDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: branch %q already exists", params.Name)
+		return nil, fmt.Errorf("DumboDBBranch: branch %q already exists", params.Name)
 	}
 
 	if _, err = db.doltDB.SetHead(ctx, newDS, headHash, ""); err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: creating branch %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBBranch: creating branch %q: %w", params.Name, err)
 	}
 
 	return &backends.BranchResult{Branch: params.Name}, nil
@@ -1211,22 +1211,22 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
 	// Refuse to delete the current connection's branch.
 	if params.Name == params.From {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: cannot delete the currently checked-out branch %q", params.Name)
+		return nil, fmt.Errorf("DumboDBBranch: cannot delete the currently checked-out branch %q", params.Name)
 	}
 
 	datasetID := "refs/heads/" + params.Name
 	branchDS, err := db.doltDB.GetDataset(ctx, datasetID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: getting branch dataset %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBBranch: getting branch dataset %q: %w", params.Name, err)
 	}
 	if !branchDS.HasHead() {
 		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: DumboDBBranch: branch %q does not exist", params.Name))
+			fmt.Errorf("DumboDBBranch: branch %q does not exist", params.Name))
 	}
 
 	branchHash, ok := branchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: branch %q has no HEAD commit", params.Name)
+		return nil, fmt.Errorf("DumboDBBranch: branch %q has no HEAD commit", params.Name)
 	}
 
 	if !params.Force {
@@ -1236,12 +1236,12 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 		// and compare the result to branchHash.
 		branchCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, branchHash)
 		if loadErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBBranch: loading commit for branch %q: %w", params.Name, loadErr)
+			return nil, fmt.Errorf("DumboDBBranch: loading commit for branch %q: %w", params.Name, loadErr)
 		}
 
 		dsMap, dsErr := db.doltDB.Datasets(ctx)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBBranch: listing datasets: %w", dsErr)
+			return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", dsErr)
 		}
 
 		errFound := errors.New("reachable") // sentinel to stop IterAll early
@@ -1272,12 +1272,12 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 			return nil
 		})
 		if iterErr != nil && !errors.Is(iterErr, errFound) {
-			return nil, fmt.Errorf("dolt: DumboDBBranch: iterating datasets: %w", iterErr)
+			return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
 		}
 
 		if !reachable {
 			return nil, fmt.Errorf(
-				"dolt: DumboDBBranch: branch %q has unmerged commits; use forceDelete to force delete",
+				"DumboDBBranch: branch %q has unmerged commits; use forceDelete to force delete",
 				params.Name,
 			)
 		}
@@ -1292,7 +1292,7 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 
 	// Delete the branch dataset.
 	if _, err = db.doltDB.Delete(ctx, branchDS, ""); err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBBranch: deleting branch %q: %w", params.Name, err)
+		return nil, fmt.Errorf("DumboDBBranch: deleting branch %q: %w", params.Name, err)
 	}
 
 	// Clear any cached branch AM.
@@ -1317,11 +1317,11 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams) (*backends.MergeResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBMerge: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBMerge: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBMerge: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -1330,10 +1330,10 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	// Handle abort: discard in-progress merge and restore pre-merge state.
 	if params.Abort {
 		if db.mergeState == nil {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: no merge in progress to abort")
+			return nil, fmt.Errorf("DumboDBMerge: no merge in progress to abort")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick abort instead", params.Into)
+			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick abort instead", params.Into)
 		}
 		ms := db.mergeState
 		db.mergeState = nil
@@ -1351,7 +1351,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("dumboMerge: no merge in progress")
 		}
 		if db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick continue instead", params.Into)
+			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; use dumboCherryPick continue instead", params.Into)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
 			return nil, fmt.Errorf("dumboMerge: unresolved merge conflicts remain")
@@ -1360,17 +1360,17 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 		intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
+			return nil, fmt.Errorf("DumboDBMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
 		}
 
 		// Clear artifact maps from all conflicting collections before committing.
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: continue: clearing artifacts: %w", clearErr)
+			return nil, fmt.Errorf("DumboDBMerge: continue: clearing artifacts: %w", clearErr)
 		}
 
 		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: continue: %w", err)
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
 		}
 
 		db.mergeState = nil
@@ -1382,59 +1382,59 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("dolt: DumboDBMerge: rebase in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, fmt.Errorf("DumboDBMerge: rebase in progress on branch %q; resolve conflicts or abort first", params.Into)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("dolt: DumboDBMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, fmt.Errorf("DumboDBMerge: cherry-pick in progress on branch %q; resolve conflicts or abort first", params.Into)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("dolt: DumboDBMerge: revert in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, fmt.Errorf("DumboDBMerge: revert in progress on branch %q; resolve conflicts or abort first", params.Into)
 		default:
-			return nil, fmt.Errorf("dolt: DumboDBMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
+			return nil, fmt.Errorf("DumboDBMerge: merge already in progress on branch %q; resolve conflicts or abort first", params.Into)
 		}
 	}
 
 	// Resolve the Into branch dataset.
 	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.Into)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: resolving into branch %q: %w", params.Into, err)
+		return nil, fmt.Errorf("DumboDBMerge: resolving into branch %q: %w", params.Into, err)
 	}
 	if !intoBranchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: into branch %q has no commits", params.Into)
+		return nil, fmt.Errorf("DumboDBMerge: into branch %q has no commits", params.Into)
 	}
 	intoHash, ok := intoBranchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: into branch %q has no head address", params.Into)
+		return nil, fmt.Errorf("DumboDBMerge: into branch %q has no head address", params.Into)
 	}
 
 	// Resolve the From branch dataset.
 	fromBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.From)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: resolving from branch %q: %w", params.From, err)
+		return nil, fmt.Errorf("DumboDBMerge: resolving from branch %q: %w", params.From, err)
 	}
 	if !fromBranchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: from branch %q has no commits", params.From)
+		return nil, fmt.Errorf("DumboDBMerge: from branch %q has no commits", params.From)
 	}
 	fromHash, ok := fromBranchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: from branch %q has no head address", params.From)
+		return nil, fmt.Errorf("DumboDBMerge: from branch %q has no head address", params.From)
 	}
 
 	// Load commit objects for LCA computation.
 	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, intoHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: loading into commit: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: loading into commit: %w", err)
 	}
 	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, fromHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: loading from commit: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: loading from commit: %w", err)
 	}
 
 	// Find the lowest common ancestor.
 	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: finding common ancestor: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: finding common ancestor: %w", err)
 	}
 	if !hasBase {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: branches %q and %q have no common ancestor", params.Into, params.From)
+		return nil, fmt.Errorf("DumboDBMerge: branches %q and %q have no common ancestor", params.Into, params.From)
 	}
 
 	// Already up-to-date: From's HEAD is an ancestor of (or equal to) Into's HEAD.
@@ -1447,22 +1447,22 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 	// FFOnly: fail if a fast-forward is not possible (i.e. branches have diverged).
 	if params.FFOnly && baseHash != intoHash {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: not possible to fast-forward")
+		return nil, fmt.Errorf("DumboDBMerge: not possible to fast-forward")
 	}
 
 	// Fast-forward: Into's HEAD is an ancestor of From's HEAD.
 	if baseHash == intoHash && !params.NoFF {
 		if _, ffErr := db.doltDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
 		if params.Into == defaultBranch {
 			ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
 			if ffAMErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
+				return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
 			}
 			db.setAM(defaultBranch, ffAM)
 			if err := updateWorkingSet(ctx, db.doltDB, ffAM, ffAM, defaultBranch); err != nil {
-				return nil, fmt.Errorf("dolt: DumboDBMerge: fast-forward: updating working set: %w", err)
+				return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
 			}
 		}
 		return &backends.MergeResult{
@@ -1474,27 +1474,27 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	// True 3-way merge (or forced non-fast-forward): load AddressMaps and attempt to merge.
 	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: loading into AM: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: loading into AM: %w", err)
 	}
 	fromAM, err := amFromCommitHash(ctx, db, fromHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: loading from AM: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: loading from AM: %w", err)
 	}
 	baseAM, err := amFromCommitHash(ctx, db, baseHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: loading base AM: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: loading base AM: %w", err)
 	}
 
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBMerge: %w", err)
+		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}
 
 	if len(conflicts) > 0 {
 		// Capture the pre-merge working set AM for abort support.
 		preMergeAM, err := db.getOrInitBranchAM(ctx, params.Into)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBMerge: loading premerge AM for branch %q: %w", params.Into, err)
+			return nil, fmt.Errorf("DumboDBMerge: loading premerge AM for branch %q: %w", params.Into, err)
 		}
 
 		db.mergeState = &mergeInProgress{
@@ -1510,7 +1510,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		// Persist conflict state: write working set and save merge state to disk.
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
 			db.mergeState = nil
-			return nil, fmt.Errorf("dolt: DumboDBMerge: persisting conflict state: %w", wsErr)
+			return nil, fmt.Errorf("DumboDBMerge: persisting conflict state: %w", wsErr)
 		}
 
 		// Build the conflict summary for the error response.
@@ -1553,7 +1553,7 @@ func (b *Backend) commitMerge(
 
 	meta, err := datas.NewCommitMeta(commitName, commitEmail, mergeMessage)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: commitMerge: building commit meta: %w", err)
+		return nil, fmt.Errorf("commitMerge: building commit meta: %w", err)
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(mergedAM)
@@ -1562,18 +1562,18 @@ func (b *Backend) commitMerge(
 		Parents: []hash.Hash{intoHash, fromHash},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("dolt: commitMerge: committing merge: %w", err)
+		return nil, fmt.Errorf("commitMerge: committing merge: %w", err)
 	}
 
 	mergeHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: commitMerge: no head after merge commit")
+		return nil, fmt.Errorf("commitMerge: no head after merge commit")
 	}
 
 	db.setAM(intoBranch, mergedAM)
 	if intoBranch == defaultBranch {
 		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM, defaultBranch); err != nil {
-			return nil, fmt.Errorf("dolt: commitMerge: updating working set: %w", err)
+			return nil, fmt.Errorf("commitMerge: updating working set: %w", err)
 		}
 	}
 
@@ -1604,11 +1604,11 @@ func (b *Backend) commitMerge(
 func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.CherryPickParams) (*backends.CherryPickResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBCherryPick: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBCherryPick: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -1622,7 +1622,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	// Handle abort: discard in-progress cherry-pick and restore pre-pick state.
 	if params.Abort {
 		if db.mergeState == nil || !db.mergeState.isCherryPick {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: no cherry-pick in progress to abort")
+			return nil, fmt.Errorf("DumboDBCherryPick: no cherry-pick in progress to abort")
 		}
 		ms := db.mergeState
 		db.mergeState = nil
@@ -1637,35 +1637,35 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	// Handle continue: resume after conflict resolution and create the cherry-pick commit.
 	if params.Continue {
 		if db.mergeState == nil || !db.mergeState.isCherryPick || db.mergeState.intoBranch != branch {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: no cherry-pick in progress on branch %q", branch)
+			return nil, fmt.Errorf("DumboDBCherryPick: no cherry-pick in progress on branch %q", branch)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: unresolved cherry-pick conflicts remain")
+			return nil, fmt.Errorf("DumboDBCherryPick: unresolved cherry-pick conflicts remain")
 		}
 		ms := db.mergeState
 
 		intoBranchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
 
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: clearing artifacts: %w", clearErr)
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: clearing artifacts: %w", clearErr)
 		}
 
 		// Load original commit metadata to preserve author identity.
 		contPickCommit, contPickErr := datas.LoadCommitAddr(ctx, db.vs, ms.pickHash)
 		if contPickErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: loading pick commit: %w", contPickErr)
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: loading pick commit: %w", contPickErr)
 		}
 		contPickMeta, contMetaErr := datas.GetCommitMeta(ctx, contPickCommit.NomsValue())
 		if contMetaErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: reading pick commit meta: %w", contMetaErr)
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: reading pick commit meta: %w", contMetaErr)
 		}
 
 		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, contPickMeta, ms.originalMsg, params.Message, params.Committer)
 		if pickErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: continue: %w", pickErr)
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", pickErr)
 		}
 
 		db.mergeState = nil
@@ -1677,42 +1677,42 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: rebase in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBCherryPick: rebase in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBCherryPick: cherry-pick already in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: revert in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBCherryPick: revert in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBCherryPick: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
 	}
 
 	if params.Commit == "" {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: commit parameter is required")
+		return nil, fmt.Errorf("DumboDBCherryPick: commit parameter is required")
 	}
 
 	// Resolve the commit to cherry-pick.
 	pickHash, err := resolveRootishToCommitHash(ctx, db, params.Commit)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: resolving commit %q: %w", params.Commit, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: resolving commit %q: %w", params.Commit, err)
 	}
 
 	// Load the cherry-pick commit to read its message and find its parent.
 	pickCommit, err := datas.LoadCommitAddr(ctx, db.vs, pickHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading commit %q: %w", pickHash, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: loading commit %q: %w", pickHash, err)
 	}
 
 	pickMeta, err := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: reading meta for commit %q: %w", pickHash, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: reading meta for commit %q: %w", pickHash, err)
 	}
 	originalMsg := pickMeta.Description
 
 	// Get the parent hash of the commit to use as the merge base.
 	parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, pickCommit.NomsValue().(dolttypes.SerialMessage))
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: reading parents for commit %q: %w", pickHash, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: reading parents for commit %q: %w", pickHash, err)
 	}
 
 	// Load the base AM (parent of the cherry-picked commit).
@@ -1722,52 +1722,52 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	if len(parentAddrs) == 0 {
 		baseAM, err = prolly.NewEmptyAddressMap(db.ns)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: creating empty base AM: %w", err)
+			return nil, fmt.Errorf("DumboDBCherryPick: creating empty base AM: %w", err)
 		}
 	} else {
 		pickBaseHash = parentAddrs[0]
 		baseAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading parent AM for commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("DumboDBCherryPick: loading parent AM for commit %q: %w", pickHash, err)
 		}
 	}
 
 	// Load the cherry-pick commit's AM (the "from" side).
 	fromAM, err := amFromCommitHash(ctx, db, pickHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading pick AM for commit %q: %w", pickHash, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: loading pick AM for commit %q: %w", pickHash, err)
 	}
 
 	// Resolve the current branch dataset.
 	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: resolving into branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: resolving into branch %q: %w", branch, err)
 	}
 	if !intoBranchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: into branch %q has no commits", branch)
+		return nil, fmt.Errorf("DumboDBCherryPick: into branch %q has no commits", branch)
 	}
 	intoHash, ok := intoBranchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: into branch %q has no head address", branch)
+		return nil, fmt.Errorf("DumboDBCherryPick: into branch %q has no head address", branch)
 	}
 
 	// Load the current branch's HEAD AM (the "into" side).
 	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading into AM for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBCherryPick: loading into AM for branch %q: %w", branch, err)
 	}
 
 	// Perform the 3-way merge: apply cherry-pick diff (base->from) onto current HEAD (into).
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBCherryPick: %w", err)
+		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
 	}
 
 	if len(conflicts) > 0 {
 		// Capture the pre-pick AM for abort support.
 		prePickAM, err := db.getOrInitBranchAM(ctx, branch)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: loading pre-pick AM for branch %q: %w", branch, err)
+			return nil, fmt.Errorf("DumboDBCherryPick: loading pre-pick AM for branch %q: %w", branch, err)
 		}
 
 		db.mergeState = &mergeInProgress{
@@ -1783,7 +1783,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
 			db.mergeState = nil
-			return nil, fmt.Errorf("dolt: DumboDBCherryPick: persisting conflict state: %w", wsErr)
+			return nil, fmt.Errorf("DumboDBCherryPick: persisting conflict state: %w", wsErr)
 		}
 
 		summaries := db.mergeState.summaries()
@@ -1831,7 +1831,7 @@ func (b *Backend) commitCherryPick(
 		meta, err = datas.NewCommitMetaWithAuthor(pickMeta.Author.Name, pickMeta.Author.Email, commitMsg, pickMeta.Author.Date.Time())
 	}
 	if err != nil {
-		return nil, fmt.Errorf("dolt: commitCherryPick: building commit meta: %w", err)
+		return nil, fmt.Errorf("commitCherryPick: building commit meta: %w", err)
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(pickedAM)
@@ -1840,18 +1840,18 @@ func (b *Backend) commitCherryPick(
 		Parents: []hash.Hash{intoHash},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("dolt: commitCherryPick: committing: %w", err)
+		return nil, fmt.Errorf("commitCherryPick: committing: %w", err)
 	}
 
 	newHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: commitCherryPick: no head after cherry-pick commit")
+		return nil, fmt.Errorf("commitCherryPick: no head after cherry-pick commit")
 	}
 
 	db.setAM(branch, pickedAM)
 	if branch == defaultBranch {
 		if err := updateWorkingSet(ctx, db.doltDB, pickedAM, pickedAM, defaultBranch); err != nil {
-			return nil, fmt.Errorf("dolt: commitCherryPick: updating working set: %w", err)
+			return nil, fmt.Errorf("commitCherryPick: updating working set: %w", err)
 		}
 	}
 
@@ -1885,11 +1885,11 @@ func (b *Backend) commitCherryPick(
 func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBLog: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBLog: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBLog: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBLog: database %q does not exist", params.DBName))
 	}
 
 	db.mu.RLock()
@@ -1906,22 +1906,22 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		var ok bool
 		startHash, ok = hash.MaybeParse(params.From)
 		if !ok {
-			return nil, fmt.Errorf("dolt: DumboDBLog: invalid from hash %q", params.From)
+			return nil, fmt.Errorf("DumboDBLog: invalid from hash %q", params.From)
 		}
 		// Validate that the from hash resolves to an actual commit so the caller
 		// gets a clear error rather than an empty result.
 		if _, loadErr := datas.LoadCommitAddr(ctx, db.vs, startHash); loadErr != nil {
 			if loadErr == datas.ErrCommitNotFound {
-				return nil, fmt.Errorf("dolt: DumboDBLog: commit not found: %q", params.From)
+				return nil, fmt.Errorf("DumboDBLog: commit not found: %q", params.From)
 			}
-			return nil, fmt.Errorf("dolt: DumboDBLog: loading commit %q: %w", startHash, loadErr)
+			return nil, fmt.Errorf("DumboDBLog: loading commit %q: %w", startHash, loadErr)
 		}
 	} else {
 		// Resolve the connection's branch (or rootish expression) to its HEAD
 		// commit.
 		h, rErr := resolveRootishToCommitHash(ctx, db, params.Branch)
 		if rErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBLog: resolving branch %q: %w", params.Branch, rErr)
+			return nil, fmt.Errorf("DumboDBLog: resolving branch %q: %w", params.Branch, rErr)
 		}
 		startHash = h
 	}
@@ -1957,7 +1957,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	resolver := &doltHashResolver{vs: db.vs, ns: db.ns}
 	itr, err := commitgraph.GetTopologicalOrderIterator(ctx, resolver, []hash.Hash{startHash}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBLog: building topological iterator: %w", err)
+		return nil, fmt.Errorf("DumboDBLog: building topological iterator: %w", err)
 	}
 
 	var commits []backends.CommitInfo
@@ -1967,7 +1967,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 			break
 		}
 		if iterErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBLog: walking commits: %w", iterErr)
+			return nil, fmt.Errorf("DumboDBLog: walking commits: %w", iterErr)
 		}
 		if ci.IsGhost {
 			continue
@@ -2003,24 +2003,24 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		if params.Stat || params.Patch {
 			commitAM, amErr := amFromCommitHash(ctx, db, ci.Hash.String())
 			if amErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBLog: loading AM for commit %q: %w", ci.Hash.String(), amErr)
+				return nil, fmt.Errorf("DumboDBLog: loading AM for commit %q: %w", ci.Hash.String(), amErr)
 			}
 			var parentAM prolly.AddressMap
 			if len(ci.Parents) > 0 {
 				parentAM, amErr = amFromCommitHash(ctx, db, ci.Parents[0].String())
 				if amErr != nil {
-					return nil, fmt.Errorf("dolt: DumboDBLog: loading parent AM for commit %q: %w", ci.Hash.String(), amErr)
+					return nil, fmt.Errorf("DumboDBLog: loading parent AM for commit %q: %w", ci.Hash.String(), amErr)
 				}
 			} else {
 				parentAM, amErr = prolly.NewEmptyAddressMap(db.ns)
 				if amErr != nil {
-					return nil, fmt.Errorf("dolt: DumboDBLog: creating empty AM: %w", amErr)
+					return nil, fmt.Errorf("DumboDBLog: creating empty AM: %w", amErr)
 				}
 			}
 
 			names, nameErr := unionCollectionNames(ctx, parentAM, commitAM)
 			if nameErr != nil {
-				return nil, fmt.Errorf("dolt: DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
+				return nil, fmt.Errorf("DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
 			}
 
 			for _, name := range names {
@@ -2079,7 +2079,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.VersioningStatusParams) (*backends.VersioningStatusResult, error) {
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBStatus: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBStatus: opening db %q: %w", params.DBName, err)
 	}
 
 	if state == nil {
@@ -2091,14 +2091,14 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 
 	headAM, err := state.headRootAM(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBStatus: reading HEAD AM for db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBStatus: reading HEAD AM for db %q: %w", params.DBName, err)
 	}
 
 	workingAM := state.branchAMs[defaultBranch]
 
 	names, err := unionCollectionNames(ctx, headAM, workingAM)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBStatus: collecting collection names for db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBStatus: collecting collection names for db %q: %w", params.DBName, err)
 	}
 
 	var tables []backends.TableStatus
@@ -2106,12 +2106,12 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	for _, name := range names {
 		headHash, headErr := headAM.Get(ctx, name)
 		if headErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBStatus: reading HEAD hash for %q: %w", name, headErr)
+			return nil, fmt.Errorf("DumboDBStatus: reading HEAD hash for %q: %w", name, headErr)
 		}
 
 		workingHash, workingErr := workingAM.Get(ctx, name)
 		if workingErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBStatus: reading working hash for %q: %w", name, workingErr)
+			return nil, fmt.Errorf("DumboDBStatus: reading working hash for %q: %w", name, workingErr)
 		}
 
 		var status string
@@ -2129,17 +2129,17 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 
 		aMap, mapErr := collectionMapFromAM(ctx, state, headAM, name)
 		if mapErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBStatus: opening HEAD map for %q.%q: %w", params.DBName, name, mapErr)
+			return nil, fmt.Errorf("DumboDBStatus: opening HEAD map for %q.%q: %w", params.DBName, name, mapErr)
 		}
 
 		bMap, mapErr := collectionMapFromAM(ctx, state, workingAM, name)
 		if mapErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBStatus: opening working map for %q.%q: %w", params.DBName, name, mapErr)
+			return nil, fmt.Errorf("DumboDBStatus: opening working map for %q.%q: %w", params.DBName, name, mapErr)
 		}
 
 		addedCount, modifiedCount, deletedCount, countErr := countCollectionMapDiffs(ctx, aMap, bMap)
 		if countErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
+			return nil, fmt.Errorf("DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
 		}
 
 		tables = append(tables, backends.TableStatus{
@@ -2205,11 +2205,11 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams) (*backends.ResetResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBReset: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBReset: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBReset: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBReset: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -2220,11 +2220,11 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	if commitID == "" {
 		mainDS, dsErr := db.doltDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
+			return nil, fmt.Errorf("DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
 		headHash, ok := mainDS.MaybeHeadAddr()
 		if !ok {
-			return nil, fmt.Errorf("dolt: DumboDBReset: no HEAD commit for db %q", params.DBName)
+			return nil, fmt.Errorf("DumboDBReset: no HEAD commit for db %q", params.DBName)
 		}
 		commitID = headHash.String()
 	}
@@ -2232,35 +2232,35 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	// Resolve the rootish (hash, branch, tag, or ancestor expression) to a commit hash.
 	targetHash, err := resolveRootishToCommitHash(ctx, db, commitID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBReset: %w", err)
+		return nil, fmt.Errorf("DumboDBReset: %w", err)
 	}
 	commitID = targetHash.String()
 
 	// Load the AM from the target commit.
 	targetAM, err := amFromCommitHash(ctx, db, commitID)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBReset: resolving target commit %q: %w", commitID, err)
+		return nil, fmt.Errorf("DumboDBReset: resolving target commit %q: %w", commitID, err)
 	}
 
 	// Move HEAD to the target commit without touching the working set.
 	mainDS, dsErr := db.doltDB.GetDataset(ctx, mainDataset)
 	if dsErr != nil {
-		return nil, fmt.Errorf("dolt: DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
+		return nil, fmt.Errorf("DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
 	}
 	if _, err := db.doltDB.SetHead(ctx, mainDS, targetHash, ""); err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBReset: setting HEAD to %q: %w", commitID, err)
+		return nil, fmt.Errorf("DumboDBReset: setting HEAD to %q: %w", commitID, err)
 	}
 
 	if params.Hard {
 		// Hard reset: working tree and staged root both point to the target commit.
 		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, defaultBranch); err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBReset: updating working set (hard): %w", err)
+			return nil, fmt.Errorf("DumboDBReset: updating working set (hard): %w", err)
 		}
 		db.setAM(defaultBranch, targetAM)
 	} else {
 		// Soft reset: keep the working tree as-is; staged root = target commit.
 		if err := updateWorkingSet(ctx, db.doltDB, db.branchAMs[defaultBranch], targetAM, defaultBranch); err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBReset: updating working set (soft): %w", err)
+			return nil, fmt.Errorf("DumboDBReset: updating working set (soft): %w", err)
 		}
 	}
 
@@ -2282,7 +2282,7 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) (*backends.DiffResult, error) {
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBDiff: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBDiff: opening db %q: %w", params.DBName, err)
 	}
 
 	if state == nil {
@@ -2300,17 +2300,17 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		// Default: HEAD committed state.
 		aAM, err = state.headRootAM(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: reading HEAD AM for db %q: %w", params.DBName, err)
+			return nil, fmt.Errorf("DumboDBDiff: reading HEAD AM for db %q: %w", params.DBName, err)
 		}
 	case params.From == "HEAD" || strings.HasPrefix(params.From, "HEAD~"):
 		aAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.From)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: resolving from %q: %w", params.From, err)
+			return nil, fmt.Errorf("DumboDBDiff: resolving from %q: %w", params.From, err)
 		}
 	default:
 		aAM, err = amFromRootish(ctx, state, params.From)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: resolving from %q: %w", params.From, err)
+			return nil, fmt.Errorf("DumboDBDiff: resolving from %q: %w", params.From, err)
 		}
 	}
 
@@ -2324,19 +2324,19 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
 		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: resolving to %q: %w", params.To, err)
+			return nil, fmt.Errorf("DumboDBDiff: resolving to %q: %w", params.To, err)
 		}
 	default:
 		bAM, err = amFromRootish(ctx, state, params.To)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: resolving to %q: %w", params.To, err)
+			return nil, fmt.Errorf("DumboDBDiff: resolving to %q: %w", params.To, err)
 		}
 	}
 
 	// Enumerate all collection names present in either side.
 	names, err := unionCollectionNames(ctx, aAM, bAM)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBDiff: collecting collection names for db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBDiff: collecting collection names for db %q: %w", params.DBName, err)
 	}
 
 	var diffs []backends.CollectionDiff
@@ -2345,12 +2345,12 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		// Determine collection-level status from presence in each side.
 		aHash, hashErr := aAM.Get(ctx, name)
 		if hashErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: probing a-side AM for %q.%q: %w", params.DBName, name, hashErr)
+			return nil, fmt.Errorf("DumboDBDiff: probing a-side AM for %q.%q: %w", params.DBName, name, hashErr)
 		}
 
 		bHash, hashErr := bAM.Get(ctx, name)
 		if hashErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: probing b-side AM for %q.%q: %w", params.DBName, name, hashErr)
+			return nil, fmt.Errorf("DumboDBDiff: probing b-side AM for %q.%q: %w", params.DBName, name, hashErr)
 		}
 
 		inA := !aHash.IsEmpty()
@@ -2369,17 +2369,17 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		// Load or substitute an empty map for each side.
 		aMap, mapErr := collectionMapFromAM(ctx, state, aAM, name)
 		if mapErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
+			return nil, fmt.Errorf("DumboDBDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
 		}
 
 		bMap, mapErr := collectionMapFromAM(ctx, state, bAM, name)
 		if mapErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
+			return nil, fmt.Errorf("DumboDBDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
 		}
 
 		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, aMap, bMap)
 		if diffErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
+			return nil, fmt.Errorf("DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
 		}
 
 		// A "modified" collection with no document-level changes is no diff at all.
@@ -2472,11 +2472,11 @@ func readAMFromWorkingSet(ctx context.Context, doltDB datas.Database, cs *nbs.Ge
 func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebaseParams) (*backends.RebaseResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBRebase: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBRebase: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBRebase: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -2498,7 +2498,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	// Handle abort: discard in-progress rebase and restore pre-rebase state.
 	if params.Abort {
 		if db.mergeState == nil || !db.mergeState.isRebase {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: no rebase in progress to abort")
+			return nil, fmt.Errorf("DumboDBRebase: no rebase in progress to abort")
 		}
 		ms := db.mergeState
 		db.mergeState = nil
@@ -2506,10 +2506,10 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		// Restore the branch HEAD in doltDB to the pre-rebase commit.
 		branchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: abort: resolving branch %q: %w", ms.intoBranch, dsErr)
+			return nil, fmt.Errorf("DumboDBRebase: abort: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
 		if _, setErr := db.doltDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, ""); setErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
+			return nil, fmt.Errorf("DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
 		db.setAM(ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
@@ -2523,31 +2523,31 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	// Handle continue: resume after conflict resolution.
 	if params.Continue {
 		if db.mergeState == nil || !db.mergeState.isRebase || db.mergeState.intoBranch != branch {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: no rebase in progress on branch %q", branch)
+			return nil, fmt.Errorf("DumboDBRebase: no rebase in progress on branch %q", branch)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: unresolved rebase conflicts remain")
+			return nil, fmt.Errorf("DumboDBRebase: unresolved rebase conflicts remain")
 		}
 		ms := db.mergeState
 
 		// Clear artifact maps for the paused conflict before committing.
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: continue: clearing artifacts: %w", clearErr)
+			return nil, fmt.Errorf("DumboDBRebase: continue: clearing artifacts: %w", clearErr)
 		}
 
 		// Commit the paused commit using the resolved AM.
 		pickCommit, loadErr := datas.LoadCommitAddr(ctx, db.vs, ms.rebaseCurrentPick)
 		if loadErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: continue: loading paused commit %q: %w", ms.rebaseCurrentPick, loadErr)
+			return nil, fmt.Errorf("DumboDBRebase: continue: loading paused commit %q: %w", ms.rebaseCurrentPick, loadErr)
 		}
 		pickMeta, metaErr := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
 		if metaErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: continue: reading meta for paused commit: %w", metaErr)
+			return nil, fmt.Errorf("DumboDBRebase: continue: reading meta for paused commit: %w", metaErr)
 		}
 
 		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, ms.resolvedAM, pickMeta, rebaserName, rebaserEmail)
 		if commitErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRebase: continue: committing paused commit: %w", commitErr)
+			return nil, fmt.Errorf("DumboDBRebase: continue: committing paused commit: %w", commitErr)
 		}
 		ms.intoHash = newTipHash
 		ms.rebaseCommitsReplayed++
@@ -2575,43 +2575,43 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("dolt: DumboDBRebase: rebase already in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRebase: rebase already in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("dolt: DumboDBRebase: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRebase: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("dolt: DumboDBRebase: revert in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRebase: revert in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
-			return nil, fmt.Errorf("dolt: DumboDBRebase: merge in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRebase: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
 	}
 
 	if params.Onto == "" {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: onto parameter is required")
+		return nil, fmt.Errorf("DumboDBRebase: onto parameter is required")
 	}
 
 	// Resolve the current branch HEAD.
 	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: resolving branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBRebase: resolving branch %q: %w", branch, err)
 	}
 	if !branchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: branch %q has no commits", branch)
+		return nil, fmt.Errorf("DumboDBRebase: branch %q has no commits", branch)
 	}
 	branchHead, ok := branchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: branch %q has no head address", branch)
+		return nil, fmt.Errorf("DumboDBRebase: branch %q has no head address", branch)
 	}
 
 	// Resolve the onto branch/rootish to a commit hash.
 	ontoHead, err := resolveRootishToCommitHash(ctx, db, params.Onto)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: resolving onto %q: %w", params.Onto, err)
+		return nil, fmt.Errorf("DumboDBRebase: resolving onto %q: %w", params.Onto, err)
 	}
 
 	// Find all commits on branch not reachable from ontoHead (oldest-first).
 	toReplay, err := findCommitsToReplay(ctx, db, branchHead, ontoHead)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: finding commits to replay: %w", err)
+		return nil, fmt.Errorf("DumboDBRebase: finding commits to replay: %w", err)
 	}
 
 	// If nothing to replay, the branch is already up-to-date.
@@ -2625,17 +2625,17 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	// Capture pre-rebase AM for abort support.
 	preRebaseAM, err := db.getOrInitBranchAM(ctx, branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: loading pre-rebase AM for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBRebase: loading pre-rebase AM for branch %q: %w", branch, err)
 	}
 
 	// Move the branch HEAD to ontoHead so that subsequent Commit() calls (which require
 	// the parent to be the current branch HEAD) will succeed when replaying commits.
 	branchDS, err = db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: re-resolving branch %q before SetHead: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBRebase: re-resolving branch %q before SetHead: %w", branch, err)
 	}
 	if _, setErr := db.doltDB.SetHead(ctx, branchDS, ontoHead, ""); setErr != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRebase: moving branch %q to onto tip: %w", branch, setErr)
+		return nil, fmt.Errorf("DumboDBRebase: moving branch %q to onto tip: %w", branch, setErr)
 	}
 	// No per-branch dataset cache to refresh; datasets are resolved on demand.
 
@@ -2681,13 +2681,13 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		// Load pick commit metadata.
 		pickCommit, err := datas.LoadCommitAddr(ctx, db.vs, pickHash)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: loading commit %q: %w", pickHash, err)
 		}
 
 		// Get pick's parent (the base for 3-way merge).
 		parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, pickCommit.NomsValue().(dolttypes.SerialMessage))
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: reading parents for commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: reading parents for commit %q: %w", pickHash, err)
 		}
 
 		// baseAM = parent of pick (or empty for root commit).
@@ -2696,32 +2696,32 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		if len(parentAddrs) == 0 {
 			baseAM, err = prolly.NewEmptyAddressMap(db.ns)
 			if err != nil {
-				return nil, fmt.Errorf("dolt: replayRemainingCommits: creating empty base AM: %w", err)
+				return nil, fmt.Errorf("replayRemainingCommits: creating empty base AM: %w", err)
 			}
 		} else {
 			pickBaseHash = parentAddrs[0]
 			baseAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
 			if err != nil {
-				return nil, fmt.Errorf("dolt: replayRemainingCommits: loading base AM for commit %q: %w", pickHash, err)
+				return nil, fmt.Errorf("replayRemainingCommits: loading base AM for commit %q: %w", pickHash, err)
 			}
 		}
 
 		// fromAM = the pick commit's state.
 		fromAM, err := amFromCommitHash(ctx, db, pickHash.String())
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading pick AM for commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: loading pick AM for commit %q: %w", pickHash, err)
 		}
 
 		// intoAM = the current rebased tip's state.
 		intoAM, err := amFromCommitHash(ctx, db, ms.intoHash.String())
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: loading into AM for tip %q: %w", ms.intoHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: loading into AM for tip %q: %w", ms.intoHash, err)
 		}
 
 		// 3-way merge: apply pick's diff (base->from) onto the current rebased tip (into).
 		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: merging commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
 		}
 
 		if len(conflicts) > 0 {
@@ -2731,7 +2731,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 			ms.resolvedAM = mergedAM
 			// Persist conflict state: write working set and save merge state to disk.
 			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
-				return nil, fmt.Errorf("dolt: replayRemainingCommits: persisting conflict state: %w", wsErr)
+				return nil, fmt.Errorf("replayRemainingCommits: persisting conflict state: %w", wsErr)
 			}
 			// Signal conflict to caller via (nil, nil).
 			return nil, nil
@@ -2740,12 +2740,12 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		// No conflict  -- commit it.
 		pickMeta, err := datas.GetCommitMeta(ctx, pickCommit.NomsValue())
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: reading meta for commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: reading meta for commit %q: %w", pickHash, err)
 		}
 
 		newTipHash, err := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, pickHash, mergedAM, pickMeta, rebaserName, rebaserEmail)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: replayRemainingCommits: committing replayed commit %q: %w", pickHash, err)
+			return nil, fmt.Errorf("replayRemainingCommits: committing replayed commit %q: %w", pickHash, err)
 		}
 
 		ms.intoHash = newTipHash
@@ -2755,7 +2755,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 	// All commits replayed. Update in-memory AM to reflect the final state.
 	finalAM, err := amFromCommitHash(ctx, db, ms.intoHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: replayRemainingCommits: loading final AM: %w", err)
+		return nil, fmt.Errorf("replayRemainingCommits: loading final AM: %w", err)
 	}
 	db.setAM(ms.intoBranch, finalAM)
 
@@ -2790,25 +2790,25 @@ func (b *Backend) commitRebasedPick(
 		meta, err = datas.NewCommitMetaWithAuthor(pickMeta.Author.Name, pickMeta.Author.Email, pickMeta.Description, pickMeta.Author.Date.Time())
 	}
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: building commit meta: %w", err)
+		return hash.Hash{}, fmt.Errorf("commitRebasedPick: building commit meta: %w", err)
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(pickedAM)
 	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: resolving branch %q: %w", branch, err)
+		return hash.Hash{}, fmt.Errorf("commitRebasedPick: resolving branch %q: %w", branch, err)
 	}
 	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta:    meta,
 		Parents: []hash.Hash{currentTipHash},
 	})
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: committing: %w", err)
+		return hash.Hash{}, fmt.Errorf("commitRebasedPick: committing: %w", err)
 	}
 
 	newHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return hash.Hash{}, fmt.Errorf("dolt: commitRebasedPick: no head after commit")
+		return hash.Hash{}, fmt.Errorf("commitRebasedPick: no head after commit")
 	}
 
 	// Note: in-memory AM (db.branchAMs) is updated by the caller after all commits are done.
@@ -2876,11 +2876,11 @@ func findCommitsToReplay(ctx context.Context, state *dbState, branchHead, ontoHe
 func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertParams) (*backends.RevertResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: opening db %q: %w", params.DBName, err)
+		return nil, fmt.Errorf("DumboDBRevert: opening db %q: %w", params.DBName, err)
 	}
 	if db == nil {
 		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: DumboDBRevert: database %q does not exist", params.DBName))
+			fmt.Errorf("DumboDBRevert: database %q does not exist", params.DBName))
 	}
 
 	db.mu.Lock()
@@ -2894,7 +2894,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	// Handle abort: discard in-progress revert and restore pre-revert state.
 	if params.Abort {
 		if db.mergeState == nil || !db.mergeState.isRevert {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: no revert in progress to abort")
+			return nil, fmt.Errorf("DumboDBRevert: no revert in progress to abort")
 		}
 		ms := db.mergeState
 		db.mergeState = nil
@@ -2909,26 +2909,26 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	// Handle continue: resume after conflict resolution and create the revert commit.
 	if params.Continue {
 		if db.mergeState == nil || !db.mergeState.isRevert || db.mergeState.intoBranch != branch {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: no revert in progress on branch %q", branch)
+			return nil, fmt.Errorf("DumboDBRevert: no revert in progress on branch %q", branch)
 		}
 		if db.mergeState.hasUnresolvedConflicts() {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: unresolved revert conflicts remain")
+			return nil, fmt.Errorf("DumboDBRevert: unresolved revert conflicts remain")
 		}
 		ms := db.mergeState
 
 		intoBranchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if dsErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
+			return nil, fmt.Errorf("DumboDBRevert: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
 
 		if clearErr := clearConflictArtifacts(ctx, db, ms); clearErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: continue: clearing artifacts: %w", clearErr)
+			return nil, fmt.Errorf("DumboDBRevert: continue: clearing artifacts: %w", clearErr)
 		}
 
 		// pickHash is the commit being reverted; fromHash is the parent hash.
 		revertRes, revertErr := b.commitRevert(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
 		if revertErr != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: continue: %w", revertErr)
+			return nil, fmt.Errorf("DumboDBRevert: continue: %w", revertErr)
 		}
 
 		db.mergeState = nil
@@ -2940,48 +2940,48 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	if db.mergeState != nil {
 		switch {
 		case db.mergeState.isRebase:
-			return nil, fmt.Errorf("dolt: DumboDBRevert: rebase in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRevert: rebase in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isCherryPick:
-			return nil, fmt.Errorf("dolt: DumboDBRevert: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRevert: cherry-pick in progress on branch %q; resolve conflicts or abort first", branch)
 		case db.mergeState.isRevert:
-			return nil, fmt.Errorf("dolt: DumboDBRevert: revert already in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRevert: revert already in progress on branch %q; resolve conflicts or abort first", branch)
 		default:
-			return nil, fmt.Errorf("dolt: DumboDBRevert: merge in progress on branch %q; resolve conflicts or abort first", branch)
+			return nil, fmt.Errorf("DumboDBRevert: merge in progress on branch %q; resolve conflicts or abort first", branch)
 		}
 	}
 
 	if params.Commit == "" {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: commit parameter is required")
+		return nil, fmt.Errorf("DumboDBRevert: commit parameter is required")
 	}
 
 	// Resolve the commit to revert.
 	revertHash, err := resolveRootishToCommitHash(ctx, db, params.Commit)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: resolving commit %q: %w", params.Commit, err)
+		return nil, fmt.Errorf("DumboDBRevert: resolving commit %q: %w", params.Commit, err)
 	}
 
 	// Load the commit to revert to read its message and find its parent.
 	revertCommit, err := datas.LoadCommitAddr(ctx, db.vs, revertHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: loading commit %q: %w", revertHash, err)
+		return nil, fmt.Errorf("DumboDBRevert: loading commit %q: %w", revertHash, err)
 	}
 
 	revertMeta, err := datas.GetCommitMeta(ctx, revertCommit.NomsValue())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: reading meta for commit %q: %w", revertHash, err)
+		return nil, fmt.Errorf("DumboDBRevert: reading meta for commit %q: %w", revertHash, err)
 	}
 	originalMsg := revertMeta.Description
 
 	// Get the parent hash of the commit to use as the "from" (what we're reverting to).
 	parentAddrs, err := dolttypes.SerialCommitParentAddrs(dolttypes.Format_DOLT, revertCommit.NomsValue().(dolttypes.SerialMessage))
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: reading parents for commit %q: %w", revertHash, err)
+		return nil, fmt.Errorf("DumboDBRevert: reading parents for commit %q: %w", revertHash, err)
 	}
 
 	// Load the commit being reverted's AM (used as the "base" in 3-way merge).
 	revertAM, err := amFromCommitHash(ctx, db, revertHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: loading revert AM for commit %q: %w", revertHash, err)
+		return nil, fmt.Errorf("DumboDBRevert: loading revert AM for commit %q: %w", revertHash, err)
 	}
 
 	// Load the parent AM (used as the "from" side  -- the state to revert to).
@@ -2991,33 +2991,33 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	if len(parentAddrs) == 0 {
 		parentAM, err = prolly.NewEmptyAddressMap(db.ns)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: creating empty parent AM: %w", err)
+			return nil, fmt.Errorf("DumboDBRevert: creating empty parent AM: %w", err)
 		}
 	} else {
 		parentHash = parentAddrs[0]
 		parentAM, err = amFromCommitHash(ctx, db, parentAddrs[0].String())
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: loading parent AM for commit %q: %w", revertHash, err)
+			return nil, fmt.Errorf("DumboDBRevert: loading parent AM for commit %q: %w", revertHash, err)
 		}
 	}
 
 	// Resolve the current branch dataset.
 	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: resolving into branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBRevert: resolving into branch %q: %w", branch, err)
 	}
 	if !intoBranchDS.HasHead() {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: into branch %q has no commits", branch)
+		return nil, fmt.Errorf("DumboDBRevert: into branch %q has no commits", branch)
 	}
 	intoHash, ok := intoBranchDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: into branch %q has no head address", branch)
+		return nil, fmt.Errorf("DumboDBRevert: into branch %q has no head address", branch)
 	}
 
 	// Load the current branch's HEAD AM (the "into" side).
 	intoAM, err := amFromCommitHash(ctx, db, intoHash.String())
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: loading into AM for branch %q: %w", branch, err)
+		return nil, fmt.Errorf("DumboDBRevert: loading into AM for branch %q: %w", branch, err)
 	}
 
 	// Perform the 3-way merge to undo the commit:
@@ -3028,14 +3028,14 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	// baseHash  = revertHash (the "base" side commit hash)
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: DumboDBRevert: %w", err)
+		return nil, fmt.Errorf("DumboDBRevert: %w", err)
 	}
 
 	if len(conflicts) > 0 {
 		// Capture the pre-revert AM for abort support.
 		preRevertAM, err := db.getOrInitBranchAM(ctx, branch)
 		if err != nil {
-			return nil, fmt.Errorf("dolt: DumboDBRevert: loading pre-revert AM for branch %q: %w", branch, err)
+			return nil, fmt.Errorf("DumboDBRevert: loading pre-revert AM for branch %q: %w", branch, err)
 		}
 
 		db.mergeState = &mergeInProgress{
@@ -3052,7 +3052,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
 			db.mergeState = nil
-			return nil, fmt.Errorf("dolt: DumboDBRevert: persisting conflict state: %w", wsErr)
+			return nil, fmt.Errorf("DumboDBRevert: persisting conflict state: %w", wsErr)
 		}
 
 		summaries := db.mergeState.summaries()
@@ -3098,7 +3098,7 @@ func (b *Backend) commitRevert(
 
 	meta, err := datas.NewCommitMeta(commitName, commitEmail, commitMsg)
 	if err != nil {
-		return nil, fmt.Errorf("dolt: commitRevert: building commit meta: %w", err)
+		return nil, fmt.Errorf("commitRevert: building commit meta: %w", err)
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(revertedAM)
@@ -3107,18 +3107,18 @@ func (b *Backend) commitRevert(
 		Parents: []hash.Hash{intoHash},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("dolt: commitRevert: committing: %w", err)
+		return nil, fmt.Errorf("commitRevert: committing: %w", err)
 	}
 
 	newHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
-		return nil, fmt.Errorf("dolt: commitRevert: no head after revert commit")
+		return nil, fmt.Errorf("commitRevert: no head after revert commit")
 	}
 
 	db.setAM(branch, revertedAM)
 	if branch == defaultBranch {
 		if err := updateWorkingSet(ctx, db.doltDB, revertedAM, revertedAM, defaultBranch); err != nil {
-			return nil, fmt.Errorf("dolt: commitRevert: updating working set: %w", err)
+			return nil, fmt.Errorf("commitRevert: updating working set: %w", err)
 		}
 	}
 
@@ -3158,7 +3158,7 @@ func (r *doltHashResolver) ResolveCommitHash(ctx context.Context, h hash.Hash) (
 
 	sm, ok := commit.NomsValue().(dolttypes.SerialMessage)
 	if !ok {
-		return nil, fmt.Errorf("dolt: ResolveCommitHash: expected SerialMessage, got %T", commit.NomsValue())
+		return nil, fmt.Errorf("ResolveCommitHash: expected SerialMessage, got %T", commit.NomsValue())
 	}
 	parentHashes, err := dolttypes.SerialCommitParentAddrs(r.vs.Format(), sm)
 	if err != nil {

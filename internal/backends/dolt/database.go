@@ -178,7 +178,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	// Check if already exists as a view.
 	if _, isView := state.views[params.Name]; isView {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
-			fmt.Errorf("dolt: collection %q already exists in %q", params.Name, db.name))
+			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
 	}
 
 	// Check if already exists as a regular collection.
@@ -193,7 +193,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 
 	if exists {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
-			fmt.Errorf("dolt: collection %q already exists in %q", params.Name, db.name))
+			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
 	}
 
 	// If viewOn is set, this is a view  -- store metadata only, no prolly map.
@@ -266,7 +266,7 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 
 	if state == nil {
 		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: database %q does not exist", db.name))
+			fmt.Errorf("database %q does not exist", db.name))
 	}
 
 	state.mu.Lock()
@@ -290,7 +290,7 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 
 	if !exists {
 		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: collection %q does not exist in %q", params.Name, db.name))
+			fmt.Errorf("collection %q does not exist in %q", params.Name, db.name))
 	}
 
 	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
@@ -317,7 +317,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 
 	if state == nil {
 		return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: database %q does not exist", db.name))
+			fmt.Errorf("database %q does not exist", db.name))
 	}
 
 	state.mu.Lock()
@@ -335,7 +335,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 
 	if oldAddr.IsEmpty() {
 		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: collection %q does not exist in %q", params.OldName, db.name))
+			fmt.Errorf("collection %q does not exist in %q", params.OldName, db.name))
 	}
 
 	newExists, err := renameBranchAM.Has(ctx, params.NewName)
@@ -345,7 +345,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 
 	if newExists {
 		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
-			fmt.Errorf("dolt: collection %q already exists in %q", params.NewName, db.name))
+			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
 
 	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
@@ -394,7 +394,7 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 
 	if state == nil {
 		return backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("dolt: database %q does not exist", db.name))
+			fmt.Errorf("database %q does not exist", db.name))
 	}
 
 	state.mu.Lock()
@@ -411,7 +411,7 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 
 	if !exists {
 		return backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-			fmt.Errorf("dolt: collection %q does not exist in %q", params.Name, db.name))
+			fmt.Errorf("collection %q does not exist in %q", params.Name, db.name))
 	}
 
 	// Get or create validator entry.
