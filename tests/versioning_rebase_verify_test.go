@@ -248,9 +248,226 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 6: Conflict during rebase  -- structured error response
+	// Scenario 6: Three-commit rebase (clean, no conflicts)
 	// -------------------------------------------------------------------------
-	t.Run("Scenario6_ConflictResponse", func(t *testing.T) {
+	t.Run("Scenario6_ThreeCommitRebase", func(t *testing.T) {
+		tdb := fmt.Sprintf("rebase3c%d", rand.Int64N(1_000_000))
+		mainCol := env.client.Database(tdb + "@main").Collection("items")
+
+		// C1: root
+		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@main", "C1", "alice <alice@acme.com>")
+
+		// Create feature branch
+		require.NoError(t, env.client.Database(tdb+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "feature"},
+		}).Err())
+
+		featCol := env.client.Database(tdb + "@feature").Collection("items")
+
+		// Three commits on feature
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: int32(10)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F1", "bob <bob@widgets.io>")
+
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(11)}, {Key: "v", Value: int32(11)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F2", "bob <bob@widgets.io>")
+
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(12)}, {Key: "v", Value: int32(12)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F3", "bob <bob@widgets.io>")
+
+		// Advance main so rebase has work to do
+		_, err = mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: int32(2)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@main", "C2", "alice <alice@acme.com>")
+
+		// Rebase feature onto main
+		raw := runCommandRaw(t, env.client.Database(tdb+"@feature"), bson.D{
+			{Key: "dumboRebase", Value: int32(1)},
+			{Key: "onto", Value: "main"},
+		})
+		assert.EqualValues(t, 1, raw["ok"], "three-commit rebase must succeed")
+		assert.EqualValues(t, 3, raw["commitsReplayed"], "all 3 feature commits must be replayed")
+
+		// Verify all documents are present
+		n, err := env.client.Database(tdb+"@feature").Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(5), n, "feature must have 5 docs (C1 + C2 + F1 + F2 + F3)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 7: Three-commit rebase, first commit conflicts
+	// -------------------------------------------------------------------------
+	t.Run("Scenario7_ThreeCommit_FirstConflicts", func(t *testing.T) {
+		tdb := fmt.Sprintf("rebase3cf%d", rand.Int64N(1_000_000))
+		mainCol := env.client.Database(tdb + "@main").Collection("items")
+
+		// C1: root with _id:1
+		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@main", "C1", "alice <alice@acme.com>")
+
+		require.NoError(t, env.client.Database(tdb+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "feature"},
+		}).Err())
+
+		featCol := env.client.Database(tdb + "@feature").Collection("items")
+
+		// F1: modify _id:1 (will conflict with main)
+		_, err = featCol.UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F1-conflict", "bob <bob@widgets.io>")
+
+		// F2: add _id:10 (clean)
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: int32(10)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F2-clean", "bob <bob@widgets.io>")
+
+		// F3: add _id:11 (clean)
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(11)}, {Key: "v", Value: int32(11)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F3-clean", "bob <bob@widgets.io>")
+
+		// Advance main: modify _id:1 differently
+		_, err = mainCol.UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@main", "C2-conflict", "alice <alice@acme.com>")
+
+		featDB := env.client.Database(tdb + "@feature")
+
+		// Rebase -- first commit (F1) conflicts
+		raw := runCommandRaw(t, featDB, bson.D{
+			{Key: "dumboRebase", Value: int32(1)},
+			{Key: "onto", Value: "main"},
+		})
+		require.EqualValues(t, 0, raw["ok"], "rebase must conflict on F1")
+
+		// Resolve with ours
+		var conflictsRes bson.M
+		require.NoError(t, featDB.RunCommand(ctx, bson.D{
+			{Key: "doltConflicts", Value: int32(1)},
+		}).Decode(&conflictsRes))
+		colls := conflictsRes["collections"].(bson.A)
+		cfl := colls[0].(bson.M)["conflicts"].(bson.A)
+		cid := cfl[0].(bson.M)["conflictId"].(string)
+
+		var resolveRes bson.M
+		require.NoError(t, featDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)},
+			{Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: cid},
+			{Key: "resolution", Value: "ours"},
+		}).Decode(&resolveRes))
+		assert.EqualValues(t, 1, resolveRes["ok"])
+
+		// Continue -- F2 and F3 should replay cleanly
+		contRaw := runCommandRaw(t, featDB, bson.D{
+			{Key: "dumboRebase", Value: int32(1)},
+			{Key: "continue", Value: int32(1)},
+		})
+		assert.EqualValues(t, 1, contRaw["ok"], "continue must succeed")
+		assert.EqualValues(t, 3, contRaw["commitsReplayed"], "all 3 commits must be replayed")
+
+		// Verify all documents present
+		n, err := featDB.Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), n, "feature must have 3 docs (_id:1 + _id:10 + _id:11)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: Three-commit rebase, third commit conflicts
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_ThreeCommit_ThirdConflicts", func(t *testing.T) {
+		tdb := fmt.Sprintf("rebase3cl%d", rand.Int64N(1_000_000))
+		mainCol := env.client.Database(tdb + "@main").Collection("items")
+
+		// C1: root with _id:1
+		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@main", "C1", "alice <alice@acme.com>")
+
+		require.NoError(t, env.client.Database(tdb+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "feature"},
+		}).Err())
+
+		featCol := env.client.Database(tdb + "@feature").Collection("items")
+
+		// F1: add _id:10 (clean)
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: int32(10)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F1-clean", "bob <bob@widgets.io>")
+
+		// F2: add _id:11 (clean)
+		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(11)}, {Key: "v", Value: int32(11)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F2-clean", "bob <bob@widgets.io>")
+
+		// F3: modify _id:1 (will conflict with main)
+		_, err = featCol.UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@feature", "F3-conflict", "bob <bob@widgets.io>")
+
+		// Advance main: modify _id:1 differently
+		_, err = mainCol.UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, tdb+"@main", "C2-conflict", "alice <alice@acme.com>")
+
+		featDB := env.client.Database(tdb + "@feature")
+
+		// Rebase -- F1 and F2 replay clean, F3 conflicts
+		raw := runCommandRaw(t, featDB, bson.D{
+			{Key: "dumboRebase", Value: int32(1)},
+			{Key: "onto", Value: "main"},
+		})
+		require.EqualValues(t, 0, raw["ok"], "rebase must conflict on F3")
+
+		// Resolve with theirs (accept feature's v:100)
+		var conflictsRes bson.M
+		require.NoError(t, featDB.RunCommand(ctx, bson.D{
+			{Key: "doltConflicts", Value: int32(1)},
+		}).Decode(&conflictsRes))
+		colls := conflictsRes["collections"].(bson.A)
+		cfl := colls[0].(bson.M)["conflicts"].(bson.A)
+		cid := cfl[0].(bson.M)["conflictId"].(string)
+
+		var resolveRes bson.M
+		require.NoError(t, featDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)},
+			{Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: cid},
+			{Key: "resolution", Value: "theirs"},
+		}).Decode(&resolveRes))
+		assert.EqualValues(t, 1, resolveRes["ok"])
+
+		// Continue -- should complete the rebase
+		contRaw := runCommandRaw(t, featDB, bson.D{
+			{Key: "dumboRebase", Value: int32(1)},
+			{Key: "continue", Value: int32(1)},
+		})
+		assert.EqualValues(t, 1, contRaw["ok"], "continue must succeed")
+		assert.EqualValues(t, 3, contRaw["commitsReplayed"], "all 3 commits must be replayed")
+
+		// Verify: _id:1 should have v:100 (theirs/feature's version)
+		var doc bson.M
+		require.NoError(t, featDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
+		assert.EqualValues(t, 100, doc["v"], "theirs resolution: v must be 100")
+
+		// All 3 feature docs plus the original
+		n, err := featDB.Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), n, "feature must have 3 docs (_id:1 + _id:10 + _id:11)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: Conflict during rebase  -- structured error response
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_ConflictResponse", func(t *testing.T) {
 		// Set up a fresh database for this scenario.
 		conflictDB := fmt.Sprintf("rebaseconfl%d", rand.Int64N(1_000_000))
 		_, hashC2c, _ := rebaseVerifySetup(t, env, conflictDB)
@@ -308,9 +525,9 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 7: Conflict during rebase  -- resolve and continue
+	// Scenario 10: Conflict during rebase  -- resolve and continue
 	// -------------------------------------------------------------------------
-	t.Run("Scenario7_ConflictResolveAndContinue", func(t *testing.T) {
+	t.Run("Scenario10_ConflictResolveAndContinue", func(t *testing.T) {
 		conflictDB := fmt.Sprintf("rebaseresol%d", rand.Int64N(1_000_000))
 		_, _, _ = rebaseVerifySetup(t, env, conflictDB)
 

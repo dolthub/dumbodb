@@ -158,7 +158,137 @@ Key check:
 
 ---
 
-## Scenario 6: Conflict during rebase  -- structured error response
+## Scenario 6: Three-commit rebase (clean)
+
+Create a feature branch with three commits, advance main, then rebase all three.
+
+```js
+var tdb = db.getSiblingDB("rebase3c")
+tdb.dropDatabase()
+
+tdb.items.insertOne({_id: 1, v: 1})
+tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
+
+tdb.getSiblingDB("rebase3c@main").runCommand({doltBranch: 1, branch: "feature"})
+
+var feat = tdb.getSiblingDB("rebase3c@feature")
+feat.items.insertOne({_id: 10, v: 10})
+feat.runCommand({doltCommit: 1, message: "F1", author: "bob <bob@widgets.io>"})
+feat.items.insertOne({_id: 11, v: 11})
+feat.runCommand({doltCommit: 1, message: "F2", author: "bob <bob@widgets.io>"})
+feat.items.insertOne({_id: 12, v: 12})
+feat.runCommand({doltCommit: 1, message: "F3", author: "bob <bob@widgets.io>"})
+
+tdb.items.insertOne({_id: 2, v: 2})
+tdb.runCommand({doltCommit: 1, message: "C2", author: "alice <alice@acme.com>"})
+
+const r = feat.runCommand({doltRebase: 1, onto: "main"})
+printjson(r)
+// Expected: { commitsReplayed: 3, newTip: "<hash>", ok: 1 }
+```
+
+Key checks:
+- `commitsReplayed` is 3
+- Feature has all 5 documents (_id: 1, 2, 10, 11, 12)
+
+---
+
+## Scenario 7: Three-commit rebase, first commit conflicts
+
+```js
+var tdb = db.getSiblingDB("rebase3cf")
+tdb.dropDatabase()
+
+tdb.items.insertOne({_id: 1, v: 1})
+tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
+
+tdb.getSiblingDB("rebase3cf@main").runCommand({doltBranch: 1, branch: "feature"})
+
+var feat = tdb.getSiblingDB("rebase3cf@feature")
+// F1: modify _id:1 (will conflict)
+feat.items.updateOne({_id: 1}, {$set: {v: 100}})
+feat.runCommand({doltCommit: 1, message: "F1-conflict", author: "bob <bob@widgets.io>"})
+// F2, F3: add new docs (clean)
+feat.items.insertOne({_id: 10, v: 10})
+feat.runCommand({doltCommit: 1, message: "F2-clean", author: "bob <bob@widgets.io>"})
+feat.items.insertOne({_id: 11, v: 11})
+feat.runCommand({doltCommit: 1, message: "F3-clean", author: "bob <bob@widgets.io>"})
+
+// Advance main: modify _id:1 differently
+tdb.items.updateOne({_id: 1}, {$set: {v: 200}})
+tdb.runCommand({doltCommit: 1, message: "C2-conflict", author: "alice <alice@acme.com>"})
+
+// Rebase -- F1 conflicts immediately
+try { feat.runCommand({doltRebase: 1, onto: "main"}) } catch(e) { print(e) }
+
+// Resolve with ours, then continue
+const conflicts = feat.runCommand({doltConflicts: 1})
+const cid = conflicts.collections[0].conflicts[0].conflictId
+feat.runCommand({doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours"})
+
+const r = feat.runCommand({doltRebase: 1, continue: 1})
+printjson(r)
+// Expected: { commitsReplayed: 3, newTip: "<hash>", ok: 1 }
+```
+
+Key checks:
+- First commit (F1) triggers the conflict
+- After resolve + continue, all 3 commits are replayed
+- Feature has 3 docs (_id: 1, 10, 11)
+
+---
+
+## Scenario 8: Three-commit rebase, third commit conflicts
+
+```js
+var tdb = db.getSiblingDB("rebase3cl")
+tdb.dropDatabase()
+
+tdb.items.insertOne({_id: 1, v: 1})
+tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
+
+tdb.getSiblingDB("rebase3cl@main").runCommand({doltBranch: 1, branch: "feature"})
+
+var feat = tdb.getSiblingDB("rebase3cl@feature")
+// F1, F2: add new docs (clean)
+feat.items.insertOne({_id: 10, v: 10})
+feat.runCommand({doltCommit: 1, message: "F1-clean", author: "bob <bob@widgets.io>"})
+feat.items.insertOne({_id: 11, v: 11})
+feat.runCommand({doltCommit: 1, message: "F2-clean", author: "bob <bob@widgets.io>"})
+// F3: modify _id:1 (will conflict)
+feat.items.updateOne({_id: 1}, {$set: {v: 100}})
+feat.runCommand({doltCommit: 1, message: "F3-conflict", author: "bob <bob@widgets.io>"})
+
+// Advance main: modify _id:1 differently
+tdb.items.updateOne({_id: 1}, {$set: {v: 200}})
+tdb.runCommand({doltCommit: 1, message: "C2-conflict", author: "alice <alice@acme.com>"})
+
+// Rebase -- F1 and F2 replay clean, F3 conflicts
+try { feat.runCommand({doltRebase: 1, onto: "main"}) } catch(e) { print(e) }
+
+// Resolve with theirs (accept feature's v:100)
+const conflicts = feat.runCommand({doltConflicts: 1})
+const cid = conflicts.collections[0].conflicts[0].conflictId
+feat.runCommand({doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs"})
+
+const r = feat.runCommand({doltRebase: 1, continue: 1})
+printjson(r)
+// Expected: { commitsReplayed: 3, newTip: "<hash>", ok: 1 }
+
+// Verify resolved value
+feat.items.findOne({_id: 1})
+// Expected: { _id: 1, v: 100 }  (theirs)
+```
+
+Key checks:
+- F1 and F2 replay cleanly, F3 triggers the conflict
+- After resolve + continue, all 3 commits are replayed
+- _id:1 has v:100 (theirs resolution)
+- Feature has 3 docs (_id: 1, 10, 11)
+
+---
+
+## Scenario 9: Conflict during rebase  -- structured error response
 
 Use a fresh database.
 
@@ -224,7 +354,7 @@ Key checks:
 
 ---
 
-## Scenario 7: Conflict during rebase  -- resolve and continue
+## Scenario 10: Conflict during rebase  -- resolve and continue
 
 Use another fresh database.
 
