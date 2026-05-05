@@ -216,6 +216,8 @@ printjson(rStatus)
 // Expected:
 // {
 //   branch: "main",
+//   dirty: true,
+//   readonly: false,
 //   collections: [...],
 //   mergeState: "merge",
 //   conflicts: [ { collection: "inventory", count: 1 } ],
@@ -224,9 +226,10 @@ printjson(rStatus)
 ```
 
 Key checks:
+- `dirty` is `true` (conflicts make the workspace dirty)
+- `commitId` is absent (workspace is not identical to HEAD)
 - `mergeState` equals `"merge"`
 - `conflicts` lists per-collection conflict counts
-- These fields are only present because a merge is in progress
 
 ```js
 // Inspect conflicts  -- returns all conflicts grouped by collection.

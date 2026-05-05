@@ -1251,7 +1251,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	dirty := len(res.Tables) > 0
+	dirty := len(res.Tables) > 0 || res.MergeOp != ""
 
 	collections := types.MakeArray(len(res.Tables))
 

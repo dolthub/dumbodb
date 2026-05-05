@@ -166,6 +166,8 @@ printjson(rStatus)
 // Expected:
 // {
 //   branch: "main",
+//   dirty: true,
+//   readonly: false,
 //   collections: [...],
 //   mergeState: "revert",
 //   conflicts: [ { collection: "records", count: 1 } ],
@@ -174,9 +176,10 @@ printjson(rStatus)
 ```
 
 Key checks:
+- `dirty` is `true` (conflicts make the workspace dirty)
+- `commitId` is absent
 - `mergeState` equals `"revert"`
 - `conflicts` lists per-collection conflict counts
-- These fields are only present because a revert is in progress
 
 ---
 

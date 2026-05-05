@@ -169,6 +169,8 @@ printjson(rStatus)
 // Expected:
 // {
 //   branch: "main",
+//   dirty: true,
+//   readonly: false,
 //   collections: [...],
 //   mergeState: "cherry-pick",
 //   conflicts: [ { collection: "items", count: 1 } ],
@@ -177,9 +179,10 @@ printjson(rStatus)
 ```
 
 Key checks:
+- `dirty` is `true` (conflicts make the workspace dirty)
+- `commitId` is absent
 - `mergeState` equals `"cherry-pick"`
 - `conflicts` lists per-collection conflict counts
-- These fields are only present because a cherry-pick is in progress
 
 ---
 

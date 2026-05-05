@@ -297,15 +297,18 @@ printjson(rStatus)
 // Expected:
 // {
 //   branch: "feature",
+//   dirty: true,
+//   readonly: false,
 //   collections: [...],
 //   mergeState: "rebase",
 //   conflicts: [ { collection: "items", count: 1 } ],
 //   ok: 1
 // }
 // Key checks:
+// - dirty is true (conflicts make the workspace dirty)
+// - commitId is absent
 // - mergeState equals "rebase"
 // - conflicts lists per-collection conflict counts
-// - These fields are only present because a rebase is in progress
 
 // Inspect conflicts  -- returns all conflicts grouped by collection.
 const rConflicts = rdb.getSiblingDB("rebaseresolve@feature").runCommand({

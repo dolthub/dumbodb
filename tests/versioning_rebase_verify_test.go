@@ -377,6 +377,8 @@ func TestRebaseVerify(t *testing.T) {
 		}).Decode(&statusRaw)
 		require.NoError(t, err)
 		assert.Equal(t, "rebase", statusRaw["mergeState"], "mergeState must indicate rebase in progress")
+		assert.Equal(t, true, statusRaw["dirty"], "workspace must be dirty during rebase conflict")
+		assert.Nil(t, statusRaw["commitId"], "commitId must be absent during rebase conflict")
 		statusConflicts, ok := statusRaw["conflicts"].(bson.A)
 		require.True(t, ok, "conflicts must be present during rebase")
 		require.Len(t, statusConflicts, 1)
@@ -432,6 +434,8 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, cleanStatus["mergeState"], "mergeState must be absent after resolution")
 		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
+		assert.Equal(t, false, cleanStatus["dirty"], "workspace must not be dirty after resolution")
+		assert.NotNil(t, cleanStatus["commitId"], "commitId must be present after resolution")
 
 		// No committer param: rebased commits must have committer == author.
 		var logResult bson.M

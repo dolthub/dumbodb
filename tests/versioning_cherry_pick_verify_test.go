@@ -235,6 +235,8 @@ func TestCherryPickVerify(t *testing.T) {
 		}).Decode(&statusRaw)
 		require.NoError(t, err)
 		assert.Equal(t, "cherry-pick", statusRaw["mergeState"], "mergeState must indicate cherry-pick in progress")
+		assert.Equal(t, true, statusRaw["dirty"], "workspace must be dirty during cherry-pick conflict")
+		assert.Nil(t, statusRaw["commitId"], "commitId must be absent during cherry-pick conflict")
 		statusConflicts, ok2 := statusRaw["conflicts"].(bson.A)
 		require.True(t, ok2, "conflicts must be present during cherry-pick")
 		require.Len(t, statusConflicts, 1)
@@ -343,6 +345,8 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, cleanStatus["mergeState"], "mergeState must be absent after resolution")
 		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
+		assert.Equal(t, false, cleanStatus["dirty"], "workspace must not be dirty after resolution")
+		assert.NotNil(t, cleanStatus["commitId"], "commitId must be present after resolution")
 	})
 
 	// -------------------------------------------------------------------------

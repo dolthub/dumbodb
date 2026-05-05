@@ -2168,17 +2168,6 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 
 	result := &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}
 
-	// When the workspace is clean, include the HEAD commit hash.
-	if len(tables) == 0 {
-		branch := params.Branch
-		if branch == "" {
-			branch = "main"
-		}
-		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
-			result.CommitID = h.String()
-		}
-	}
-
 	// If a merge/cherry-pick/rebase/revert is in progress, include conflict info.
 	if ms := state.mergeState; ms != nil {
 		switch {
@@ -2194,6 +2183,18 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		result.Conflicts = ms.summaries()
 		if result.Conflicts == nil {
 			result.Conflicts = []backends.ConflictSummary{}
+		}
+	}
+
+	// commitId is only set when the working tree is identical to the checked-out
+	// commit: no uncommitted changes AND no merge/cherry-pick/rebase/revert in progress.
+	if len(tables) == 0 && result.MergeOp == "" {
+		branch := params.Branch
+		if branch == "" {
+			branch = "main"
+		}
+		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
+			result.CommitID = h.String()
 		}
 	}
 
