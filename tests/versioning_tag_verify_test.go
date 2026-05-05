@@ -225,20 +225,34 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_InvalidTagNames", func(t *testing.T) {
 		// @ is rejected
-		var result1 bson.M
+		var result bson.M
 		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "bad@name"},
-		}).Decode(&result1)
+		}).Decode(&result)
 		assert.Error(t, err, "tag name with @ must be rejected")
 
 		// Whitespace is rejected
-		var result2 bson.M
 		err = env.client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "bad name"},
-		}).Decode(&result2)
+		}).Decode(&result)
 		assert.Error(t, err, "tag name with whitespace must be rejected")
+
+		// 32 lowercase base32 chars -- looks like a commit hash
+		hashName := "na7kfra98h45fr2u5qtr30o2ggm7vh61"
+		err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dumboTag", Value: int32(1)},
+			{Key: "name", Value: hashName},
+		}).Decode(&result)
+		assert.Error(t, err, "tag name that looks like a commit hash must be rejected")
+
+		// Path ending with a hash-like segment is rejected
+		err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "dumboTag", Value: int32(1)},
+			{Key: "name", Value: "releases/" + hashName},
+		}).Decode(&result)
+		assert.Error(t, err, "tag path ending with hash-like segment must be rejected")
 	})
 
 	// -------------------------------------------------------------------------

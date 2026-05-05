@@ -289,4 +289,45 @@ func TestBranchVerify(t *testing.T) {
 		assert.Equal(t, "force-branch", result["branch"])
 		assert.EqualValues(t, 1, result["ok"])
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: Branch name that looks like a commit hash is rejected
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_CommitHashNameRejected", func(t *testing.T) {
+		// 32 lowercase base32 chars -- looks like a commit hash.
+		hashName := "na7kfra98h45fr2u5qtr30o2ggm7vh61"
+		err := env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: hashName},
+		}).Err()
+		require.Error(t, err, "branch name that looks like a commit hash must be rejected")
+
+		// Path ending with a hash-like segment is rejected.
+		err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "feature/" + hashName},
+		}).Err()
+		require.Error(t, err, "branch path ending with hash-like segment must be rejected")
+
+		// Hash-like segment in the middle is fine -- only the last segment matters.
+		err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: hashName + "/feature"},
+		}).Err()
+		require.NoError(t, err, "hash-like segment in middle of path is allowed")
+
+		// Upper case is fine -- commit hashes are always lowercase.
+		err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "NA7KFRA98H45FR2U5QTR30O2GGM7VH61"},
+		}).Err()
+		require.NoError(t, err, "uppercase 32-char name is not a commit hash")
+
+		// Path-like branch names work.
+		err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: "team/alice/experiment"},
+		}).Err()
+		require.NoError(t, err, "path-like branch names must work")
+	})
 }

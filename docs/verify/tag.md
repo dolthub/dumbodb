@@ -256,7 +256,8 @@ Key check: the response is an error; no existing tags are affected.
 ## Scenario 8: Invalid tag names
 
 Tag names must not contain `@` (reserved as the database/branch delimiter) or
-whitespace.
+whitespace. Names must not end with a path segment that looks like a commit
+hash (32 lowercase base32 characters).
 
 ```js
 // "@" is rejected
@@ -266,9 +267,17 @@ db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1, name: "bad@name" })
 // Whitespace is rejected
 db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1, name: "bad name" })
 // Expected: error  -- name must not contain whitespace
+
+// 32 lowercase base32 chars -- looks like a commit hash
+db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1, name: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
+// Expected: error  -- name looks like a commit hash
+
+// Path ending with a hash-like segment is also rejected
+db.getSiblingDB("tagvdb").runCommand({ dumboTag: 1, name: "releases/na7kfra98h45fr2u5qtr30o2ggm7vh61" })
+// Expected: error  -- name ends with a segment that looks like a commit hash
 ```
 
-Key check: both calls return errors; no tag is created.
+Key check: all calls return errors; no tag is created.
 
 ---
 

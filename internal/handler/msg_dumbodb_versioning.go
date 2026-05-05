@@ -24,6 +24,8 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dolt/go/store/hash"
+
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -259,6 +261,25 @@ func rootishIsReadOnly(rootish string) bool {
 	return true
 }
 
+// validateRefName checks that a branch or tag name does not end with a path
+// segment that looks like a commit hash. The last segment (after the final '/')
+// must not be exactly 32 lowercase base32 characters, which would be ambiguous
+// with a Dolt commit hash.
+func validateRefName(name, kind string) error {
+	lastSeg := name
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		lastSeg = name[idx+1:]
+	}
+	if _, ok := hash.MaybeParse(lastSeg); ok && len(lastSeg) == 32 {
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("%s: name %q ends with a segment that looks like a commit hash (32 lowercase base32 chars) and would be ambiguous", kind, name),
+			"name",
+		)
+	}
+	return nil
+}
+
 // enforceWritableRootish returns an OperationFailed error if the encoded database name
 // resolves to a read-only rootish (commit hash or ancestor expression).
 //
@@ -481,6 +502,10 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 			"dumboBranch: branch name must not contain '@' (reserved as the database/branch delimiter)",
 			"branch",
 		)
+	}
+
+	if err := validateRefName(newBranch, "dumboBranch"); err != nil {
+		return nil, err
 	}
 
 	safeDelete, err := common.GetOptionalBoolOrIntParam(document, "delete", false)
@@ -1853,6 +1878,9 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 				"dumboTag: tag name must not contain whitespace",
 				"name",
 			)
+		}
+		if err := validateRefName(name, "dumboTag"); err != nil {
+			return nil, err
 		}
 	}
 

@@ -231,6 +231,43 @@ Key check: `branch` echoes the name, `ok` is `1`; the branch is gone.
 
 ---
 
+## Scenario 9: Branch name that looks like a commit hash is rejected
+
+Branch names must not end with a path segment that is exactly 32 lowercase
+base32 characters (`[0-9a-v]{32}`), as this would be ambiguous with a Dolt
+commit hash.
+
+```js
+// 32 lowercase base32 chars -- looks like a commit hash
+db.runCommand({ doltBranch: 1, branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61" })
+// Expected error: name looks like a commit hash
+
+// Path ending with a hash-like segment is also rejected
+db.runCommand({ doltBranch: 1, branch: "feature/na7kfra98h45fr2u5qtr30o2ggm7vh61" })
+// Expected error: name ends with a segment that looks like a commit hash
+
+// Uppercase is fine -- commit hashes are always lowercase
+db.runCommand({ doltBranch: 1, branch: "NA7KFRA98H45FR2U5QTR30O2GGM7VH61" })
+// Expected: { branch: "NA7KFRA98H45FR2U5QTR30O2GGM7VH61", ok: 1 }
+
+// Path-like branch names work
+db.runCommand({ doltBranch: 1, branch: "team/alice/experiment" })
+// Expected: { branch: "team/alice/experiment", ok: 1 }
+
+// Hash-like segment in the middle is allowed -- only the last segment matters
+db.runCommand({ doltBranch: 1, branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61/feature" })
+// Expected: { branch: "na7kfra98h45fr2u5qtr30o2ggm7vh61/feature", ok: 1 }
+```
+
+Key checks:
+- Bare 32-char lowercase base32 name is rejected
+- Path ending with such a segment is rejected
+- Uppercase 32-char name is allowed (not a valid commit hash)
+- Path-like branch names work
+- Hash-like segment in the middle is allowed
+
+---
+
 ## Quick Reference
 
 | Command | Connection | Result |
