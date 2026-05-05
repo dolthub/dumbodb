@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Checkout wiki repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: dolthub/dumbodb.wiki
           path: wiki
@@ -49,16 +49,16 @@ jobs:
           - [[dumboCommit|Commands#dumbocommit]]
           - [[dumboBranch|Commands#dumbobranch]]
           - [[dumboMerge|Commands#dumbomerge]]
-          - [[dumboLog|Commands#dumbolog]]
-          - [[dumboDiff|Commands#dumbodiff]]
-          - [[dumboStatus|Commands#dumbostatus]]
-          - [[dumboReset|Commands#dumboreset]]
-          - [[dumboRevert|Commands#dumborevert]]
           - [[dumboCherryPick|Commands#dumbocherrypick]]
           - [[dumboRebase|Commands#dumborebase]]
-          - [[dumboCurrentBranch|Commands#dumbocurrentbranch]]
+          - [[dumboLog|Commands#dumbolog]]
+          - [[dumboStatus|Commands#dumbostatus]]
+          - [[dumboDiff|Commands#dumbodiff]]
+          - [[dumboReset|Commands#dumboreset]]
+          - [[dumboRevert|Commands#dumborevert]]
           - [[dumboConflicts|Commands#dumboconflicts]]
           - [[dumboResolveConflict|Commands#dumboresolveconflict]]
+          - [[dumboTag|Commands#dumbotag]]
           SIDEBAR
 
       - name: Commit and push to wiki

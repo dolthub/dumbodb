@@ -40,7 +40,7 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 | [`dumboStatus`](docs/COMMANDS.md#dumbostatus) | Show summary of uncommitted changes on the current branch |
 | [`dumboDiff`](docs/COMMANDS.md#dumbodiff) | Document-level diff between two states |
 | [`dumboReset`](docs/COMMANDS.md#dumboreset) | Move branch HEAD to a target commit (soft or hard) |
-| [`dumboRevert`](docs/COMMANDS.md#dumborevert) | Revert one or more commits, creating a new inverse commit |
+| [`dumboRevert`](docs/COMMANDS.md#dumborevert) | Revert a commit, creating a new inverse commit |
 | [`dumboConflicts`](docs/COMMANDS.md#dumboconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
 | [`dumboResolveConflict`](docs/COMMANDS.md#dumboresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
 | [`dumboTag`](docs/COMMANDS.md#dumbotag) | Create, list, or delete tags at specific commits |
