@@ -40,8 +40,7 @@ func TestDumboDBTag_CreateListDelete(t *testing.T) {
 		Name:    "v1.0",
 		Hash:    hash1,
 		Message: "first release",
-		Author:  "alice",
-		Email:   "alice@example.com",
+		Author:  "alice <alice@example.com>",
 	})
 	if err != nil {
 		t.Fatalf("DumboDBTag create: %v", err)
@@ -55,8 +54,8 @@ func TestDumboDBTag_CreateListDelete(t *testing.T) {
 	if createRes.Tags[0].CommitID != hash1 {
 		t.Errorf("create: want commit %s, got %s", hash1, createRes.Tags[0].CommitID)
 	}
-	if createRes.Tags[0].Tagger != "alice" {
-		t.Errorf("create: want tagger alice, got %q", createRes.Tags[0].Tagger)
+	if createRes.Tags[0].Author != "alice <alice@example.com>" {
+		t.Errorf("create: want author alice <alice@example.com>, got %q", createRes.Tags[0].Author)
 	}
 
 	// Listing should show the tag.
