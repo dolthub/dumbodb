@@ -735,6 +735,17 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	}).Decode(&resolveRaw))
 	assert.EqualValues(t, 1, resolveRaw["ok"])
 
+	// After resolving with "theirs", doltDiff must show the change vs HEAD.
+	// HEAD has v:11 (ours), resolved working set has v:22 (theirs).
+	var diffRaw bson.M
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltDiff", Value: int32(1)},
+	}).Decode(&diffRaw))
+	dr := decodeDiffResult(t, diffRaw)
+	cd := findCollDiff(dr, "inventory")
+	require.NotNil(t, cd, "doltDiff must show changes after resolving with theirs")
+	require.Len(t, cd.Modified, 1, "one modified document (_id:1)")
+
 	// Complete the merge with dumboDBMerge continue.
 	var continueRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{

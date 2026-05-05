@@ -292,7 +292,7 @@ func TestRevertVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, resolveRes["ok"])
 
-		// Step 4: After resolution, doltConflicts summary must return an empty collections array.
+		// Step 4: After resolution, doltConflicts must return empty collections.
 		var postResolveRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -301,6 +301,16 @@ func TestRevertVerify(t *testing.T) {
 		postColls, ok := postResolveRes["collections"].(bson.A)
 		require.True(t, ok, "collections must be an array after resolution")
 		assert.Len(t, postColls, 0, "no more conflicts after resolution")
+
+		// Step 4b: doltDiff must reflect the resolved state.
+		// We resolved with "ours" (keeping main's version), so the working
+		// tree is identical to HEAD and diff should be empty.
+		var diffRes bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltDiff", Value: int32(1)},
+		}).Decode(&diffRes))
+		dr := decodeDiffResult(t, diffRes)
+		assert.Empty(t, dr.Collections, "diff must be empty after resolving with ours (no change from HEAD)")
 
 		// Step 5: Continue the revert.
 		raw := runCommandRaw(t, mainDB, bson.D{

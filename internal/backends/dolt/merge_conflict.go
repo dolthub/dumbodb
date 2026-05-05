@@ -383,6 +383,14 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	ms.resolvedAM = finalAM
 	target.resolved = true
 
+	// Update the in-memory working set AM so that doltDiff and doltStatus
+	// reflect the resolved state immediately.
+	if ms.intoBranch == "main" {
+		db.am = finalAM
+	} else {
+		db.branchAMs[ms.intoBranch] = finalAM
+	}
+
 	// Update the working set so that dolt_conflicts SQL tables immediately reflect
 	// the resolved state.
 	stagedAM, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
