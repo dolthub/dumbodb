@@ -31,23 +31,23 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 
 | Command | Description |
 |---------|-------------|
-| [`dumboCommit`](docs/COMMANDS.md#dumbocommit) | Commit the current working set with a message and author |
-| [`dumboBranch`](docs/COMMANDS.md#dumbobranch) | Create or delete a branch |
-| [`dumboMerge`](docs/COMMANDS.md#dumbomerge) | Merge a source branch into the current branch |
-| [`dumboCherryPick`](docs/COMMANDS.md#dumbocherrypick) | Apply one commit's diff onto the current branch |
-| [`dumboRebase`](docs/COMMANDS.md#dumborebase) | Reapply branch commits onto another branch tip, rewriting history |
-| [`dumboLog`](docs/COMMANDS.md#dumbolog) | Return commit history for the current branch |
-| [`dumboStatus`](docs/COMMANDS.md#dumbostatus) | Show summary of uncommitted changes on the current branch |
-| [`dumboDiff`](docs/COMMANDS.md#dumbodiff) | Document-level diff between two states |
-| [`dumboReset`](docs/COMMANDS.md#dumboreset) | Move branch HEAD to a target commit (soft or hard) |
-| [`dumboRevert`](docs/COMMANDS.md#dumborevert) | Revert a commit, creating a new inverse commit |
-| [`dumboConflicts`](docs/COMMANDS.md#dumboconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
-| [`dumboResolveConflict`](docs/COMMANDS.md#dumboresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
-| [`dumboTag`](docs/COMMANDS.md#dumbotag) | Create, list, or delete tags at specific commits |
+| [`dumboCommit`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbocommit) | Commit the current working set with a message and author |
+| [`dumboBranch`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbobranch) | Create or delete a branch |
+| [`dumboMerge`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbomerge) | Merge a source branch into the current branch |
+| [`dumboCherryPick`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbocherrypick) | Apply one commit's diff onto the current branch |
+| [`dumboRebase`](https://github.com/dolthub/dumbodb/wiki/Commands#dumborebase) | Reapply branch commits onto another branch tip, rewriting history |
+| [`dumboLog`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbolog) | Return commit history for the current branch |
+| [`dumboStatus`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbostatus) | Show summary of uncommitted changes on the current branch |
+| [`dumboDiff`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbodiff) | Document-level diff between two states |
+| [`dumboReset`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboreset) | Move branch HEAD to a target commit (soft or hard) |
+| [`dumboRevert`](https://github.com/dolthub/dumbodb/wiki/Commands#dumborevert) | Revert a commit, creating a new inverse commit |
+| [`dumboConflicts`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
+| [`dumboResolveConflict`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
+| [`dumboTag`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbotag) | Create, list, or delete tags at specific commits |
 
 All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
 
-Full command reference: [docs/COMMANDS.md](docs/COMMANDS.md)
+Full command reference: [Command Reference](https://github.com/dolthub/dumbodb/wiki/Commands)
 
 ## Install, Run, Connect
 
@@ -237,7 +237,7 @@ db.runCommand({ dumboMerge: 1, merge_in: "feature"})
   ok: 1
 }
 ```
-There are also legitimate merges which join two commit histories, complete with conflict detection and resolution. Look at the [Commands Reference](docs/COMMANDS.md) for more details and examples.
+There are also legitimate merges which join two commit histories, complete with conflict detection and resolution. Look at the [Command Reference](https://github.com/dolthub/dumbodb/wiki/Commands) for more details and examples.
 
 
 ## Acknowledgements

@@ -32,7 +32,7 @@ jobs:
           cp -r img/ wiki/img/ 2>/dev/null || true
 
           # Home page: README with links rewritten for wiki context
-          sed -e 's|docs/COMMANDS.md|Commands|g' \
+          sed -e 's|https://github.com/dolthub/dumbodb/wiki/Commands|Commands|g' \
               -e 's|\./img/|img/|g' \
               README.md > wiki/Home.md
 
