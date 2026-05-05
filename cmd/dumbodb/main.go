@@ -46,12 +46,15 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	dataDir := flag.String("data-dir", "data", "directory for storing Dolt data")
-	addr := flag.String("addr", "127.0.0.1:27017", "listen address")
-	port := flag.Int("port", 0, "listen port (overrides port in --addr if set)")
-	logLevel := flag.String("log-level", "info", "log level (debug, info, warn, error)")
-	autoCommit := flag.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
-	flag.Parse()
+	// Use a custom FlagSet to avoid mysql-related flags registered
+	// globally by the vitess dependency.
+	fs := flag.NewFlagSet("dumbodb", flag.ExitOnError)
+	dataDir := fs.String("data-dir", "data", "directory for storing Dolt data")
+	addr := fs.String("addr", "127.0.0.1:27017", "listen address")
+	port := fs.Int("port", 0, "listen port (overrides port in --addr if set)")
+	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
+	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
+	fs.Parse(os.Args[1:])
 
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
@@ -65,7 +68,7 @@ func run(logger *slog.Logger) error {
 
 	if *port != 0 {
 		addrExplicit := false
-		flag.Visit(func(f *flag.Flag) {
+		fs.Visit(func(f *flag.Flag) {
 			if f.Name == "addr" {
 				addrExplicit = true
 			}
