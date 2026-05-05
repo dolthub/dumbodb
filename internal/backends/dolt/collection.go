@@ -1476,11 +1476,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now())
-		if err != nil {
+		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: auto-commit after insert: resolving main dataset: %w", dsErr)
+		}
+		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after insert: %w", err)
 		}
-		state.ds = newDS
 	}
 
 	return &backends.InsertAllResult{}, nil
@@ -1754,11 +1756,13 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: update %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now())
-		if err != nil {
+		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: auto-commit after update: resolving main dataset: %w", dsErr)
+		}
+		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after update: %w", err)
 		}
-		state.ds = newDS
 	}
 
 	return &backends.UpdateAllResult{Updated: updated}, nil
@@ -1900,11 +1904,13 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	if c.db.backend.autoCommit {
 		msg := fmt.Sprintf("auto: delete from %s", c.name)
-		newDS, _, err := commitCollectionsAMAs(ctx, state.doltDB, state.ds, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now())
-		if err != nil {
+		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
+		if dsErr != nil {
+			return nil, fmt.Errorf("dolt: auto-commit after delete: resolving main dataset: %w", dsErr)
+		}
+		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
 			return nil, fmt.Errorf("dolt: auto-commit after delete: %w", err)
 		}
-		state.ds = newDS
 	}
 
 	return &backends.DeleteAllResult{Deleted: deleted}, nil

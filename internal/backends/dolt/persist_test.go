@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/datas"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
@@ -30,6 +32,14 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+// mainDS returns the main branch dataset for the given dbState.
+func mainDS(t *testing.T, state *dbState) datas.Dataset {
+	t.Helper()
+	ds, err := state.doltDB.GetDataset(context.Background(), mainDataset)
+	require.NoError(t, err)
+	return ds
+}
 
 // TestInitialCommitMessage verifies that a brand-new database gets an "Initialize database"
 // root commit with no parents, satisfying the requirement that dolt log shows a clean
@@ -55,11 +65,11 @@ func TestInitialCommitMessage(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	if !state.ds.HasHead() {
+	if !mainDS(t, state).HasHead() {
 		t.Fatal("expected new database to have a head commit")
 	}
 
-	headVal, ok := state.ds.MaybeHead()
+	headVal, ok := mainDS(t, state).MaybeHead()
 	if !ok {
 		t.Fatal("MaybeHead returned false")
 	}
@@ -99,11 +109,11 @@ func TestRTVLFormat(t *testing.T) {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 
-	if !state.ds.HasHead() {
+	if !mainDS(t, state).HasHead() {
 		t.Fatal("expected new database to have a head commit")
 	}
 
-	headValue, _, err := state.ds.MaybeHeadValue()
+	headValue, _, err := mainDS(t, state).MaybeHeadValue()
 	if err != nil {
 		t.Fatalf("MaybeHeadValue: %v", err)
 	}
@@ -236,7 +246,7 @@ func TestWorkingSetDivergesAfterWrite(t *testing.T) {
 	}
 
 	// Record HEAD's rootValue hash before any writes  -- this is the expected staged addr.
-	headValue, _, err := state.ds.MaybeHeadValue()
+	headValue, _, err := mainDS(t, state).MaybeHeadValue()
 	if err != nil {
 		t.Fatalf("MaybeHeadValue: %v", err)
 	}
@@ -407,7 +417,7 @@ func TestWritesNoNewCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
-	initAddr, ok := state.ds.MaybeHeadAddr()
+	initAddr, ok := mainDS(t, state).MaybeHeadAddr()
 	if !ok {
 		t.Fatal("no HEAD after init")
 	}
@@ -436,7 +446,7 @@ func TestWritesNoNewCommits(t *testing.T) {
 	}
 
 	// Re-read the "heads/main" dataset directly from the doltDB to bypass any
-	// cached state.ds and verify HEAD has not moved.
+	// cached mainDS(t, state) and verify HEAD has not moved.
 	freshDS, err := state.doltDB.GetDataset(ctx, mainDataset)
 	if err != nil {
 		t.Fatalf("GetDataset after writes: %v", err)
@@ -472,7 +482,7 @@ func TestDumboDBCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
-	initAddr, ok := state.ds.MaybeHeadAddr()
+	initAddr, ok := mainDS(t, state).MaybeHeadAddr()
 	if !ok {
 		t.Fatal("no HEAD after init")
 	}
@@ -735,7 +745,7 @@ func TestDumboDBCommitWorkingSetClean(t *testing.T) {
 	}
 
 	// Read HEAD rootValue hash.
-	headVal, _, err := state.ds.MaybeHeadValue()
+	headVal, _, err := mainDS(t, state).MaybeHeadValue()
 	if err != nil {
 		t.Fatalf("MaybeHeadValue: %v", err)
 	}

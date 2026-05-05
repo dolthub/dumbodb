@@ -336,9 +336,9 @@ func (state *dbState) getOrInitBranchAM(ctx context.Context, branch string) (pro
 }
 
 // headRootAMForBranch returns the collections AddressMap from a branch HEAD's rootValue.
-// For "main" it delegates to headRootAM (uses state.ds). For other branches it loads
-// the branch dataset from doltDB and reads its HEAD. If the branch has no commits,
-// an empty AddressMap is returned (suitable as the initial staged root).
+// For "main" it delegates to headRootAM. For other branches it loads the branch
+// dataset from doltDB and reads its HEAD. If the branch has no commits, an empty
+// AddressMap is returned (suitable as the initial staged root).
 // The caller must hold state.mu (read or write lock).
 func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (prolly.AddressMap, error) {
 	if branch == defaultBranch {
@@ -478,10 +478,14 @@ func (state *dbState) flushDirtyBranches(ctx context.Context) error {
 // explicit stage operation advances it.
 // The caller must hold state.mu (read or write lock).
 func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error) {
-	if !state.ds.HasHead() {
+	ds, err := state.doltDB.GetDataset(ctx, mainDataset)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("resolving main dataset: %w", err)
+	}
+	if !ds.HasHead() {
 		return prolly.NewEmptyAddressMap(state.ns)
 	}
-	headValue, _, err := state.ds.MaybeHeadValue()
+	headValue, _, err := ds.MaybeHeadValue()
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("reading HEAD value: %w", err)
 	}
