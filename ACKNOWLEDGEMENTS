@@ -1,14 +1,25 @@
-DumboDB
-Copyright 2026 Dolthub, Inc.
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 This product includes software developed by the FerretDB project
 (https://www.ferretdb.com), licensed under the Apache License, Version 2.0.
 
 The initial wire protocol, client connection, handler, type system, and utility
-packages were adapted from FerretDB v1.24.2:
+packages were adapted from FerretDB:
 
   Repository: https://github.com/FerretDB/FerretDB
-  Commit:     cda72d440810406a208c4670aa7047f5bc8d528f
+  Commit:     799235dab9e350655e72e65a0b24d849f7d68143
 
 All import paths have been updated from github.com/FerretDB/FerretDB to
 github.com/dolthub/dumbodb, and the storage backend has been replaced with a
