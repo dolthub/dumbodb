@@ -307,6 +307,9 @@ const (
 	// ErrInvalidFieldPath indicates that the field path is not valid.
 	ErrInvalidFieldPath = ErrorCode(40353) // Location40353
 
+	// ErrIDLFailedToParse indicates that a required field in an IDL-defined command is missing.
+	ErrIDLFailedToParse = ErrorCode(40413) // IDLFailedToParse
+
 	// ErrMissingField indicates that the required field in document is missing.
 	ErrMissingField = ErrorCode(40414) // Location40414
 

@@ -150,7 +150,7 @@ func GetLimitStageParam(value any) (int64, error) {
 		)
 	case limit == 0:
 		return 0, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrStageLimitInvalidArg,
+			handlererrors.ErrStageLimitZero,
 			"the limit must be positive",
 			"$limit (stage)",
 		)
