@@ -458,7 +458,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, featDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 		assert.EqualValues(t, 100, doc["v"], "theirs resolution: v must be 100")
 
-		// All 3 feature docs plus the original
+		// Feature must have exactly 3 docs: _id:1 (resolved) + _id:10 (F1) + _id:11 (F2)
 		n, err := featDB.Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), n, "feature must have 3 docs (_id:1 + _id:10 + _id:11)")
