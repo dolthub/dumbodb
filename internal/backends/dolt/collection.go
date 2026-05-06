@@ -1543,8 +1543,10 @@ func (c *collection) updateSecondaryIndexesOnInsert(ctx context.Context, state *
 			}
 			idBytes := h[:]
 			fieldVals := extractIndexFieldValues(doc, *idxInfo)
-			if err := idxpkg.InsertEntry(ctx, mut, fieldVals, idBytes); err != nil {
-				return fmt.Errorf("secondary index %q: inserting entry: %w", idxName, err)
+			for _, fv := range expandMultiKeyValues(fieldVals) {
+				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
+					return fmt.Errorf("secondary index %q: inserting entry: %w", idxName, err)
+				}
 			}
 		}
 		updated, err := mut.Map(ctx)
@@ -2556,8 +2558,10 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		}
 
 		fieldVals := extractIndexFieldValues(doc, idx)
-		if err := idxpkg.InsertEntry(ctx, mut, fieldVals, idBytes); err != nil {
-			return prolly.Map{}, fmt.Errorf("index: inserting entry: %w", err)
+		for _, fv := range expandMultiKeyValues(fieldVals) {
+			if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
+				return prolly.Map{}, fmt.Errorf("index: inserting entry: %w", err)
+			}
 		}
 	}
 
@@ -2581,6 +2585,34 @@ func extractIndexFieldValues(doc *types.Document, idx backends.IndexInfo) []any 
 		}
 	}
 	return vals
+}
+
+// expandMultiKeyValues expands field values for multi-key indexing. If any
+// field value is an array, one set of field values is returned per element.
+// MongoDB allows at most one array field per compound index; we expand the
+// first array encountered. Scalar-only inputs return a single entry.
+func expandMultiKeyValues(fieldVals []any) [][]any {
+	for i, v := range fieldVals {
+		arr, ok := v.(*types.Array)
+		if !ok || arr == nil {
+			continue
+		}
+		if arr.Len() == 0 {
+			// Empty array: index the array itself (matches MongoDB behavior
+			// for queries like {field: {$size: 0}}).
+			return [][]any{fieldVals}
+		}
+		expanded := make([][]any, arr.Len())
+		for j := 0; j < arr.Len(); j++ {
+			elem, _ := arr.Get(j)
+			row := make([]any, len(fieldVals))
+			copy(row, fieldVals)
+			row[i] = elem
+			expanded[j] = row
+		}
+		return expanded
+	}
+	return [][]any{fieldVals}
 }
 
 // DropIndexes implements backends.Collection.
