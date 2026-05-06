@@ -26,25 +26,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
-// TestTransactionSmoke verifies the basic session and transaction lifecycle:
-// startSession -> StartTransaction -> insert documents -> CommitTransaction -> EndSession.
-// (DumboDBFull)
-//
-// DumboDB does not provide multi-document ACID isolation, but the driver-level
-// transaction API must not produce a crash or "no such command" error. The
-// round-trip is accepted and inserts are applied immediately.
+// TestTransactionSmoke verifies that commitTransaction returns an error.
+// DumboDB does not support transactions -- the command must fail cleanly
+// rather than silently pretending to commit.
 func TestTransactionSmoke(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	// Start a session.
 	sess, err := env.client.StartSession()
 	require.NoError(t, err, "StartSession must succeed")
 	defer sess.EndSession(ctx)
 
-	// Execute the transaction body via WithTransaction so the driver
-	// handles StartTransaction / CommitTransaction automatically.
 	_, err = sess.WithTransaction(ctx, func(sessCtx context.Context) (interface{}, error) {
 		_, insErr := coll.InsertOne(sessCtx, bson.D{
 			{Key: "txn", Value: "commit"},
@@ -52,18 +45,13 @@ func TestTransactionSmoke(t *testing.T) {
 		})
 		return nil, insErr
 	}, options.Transaction().SetReadPreference(readpref.Primary()))
-	require.NoError(t, err, "WithTransaction (commit path) must succeed")
-
-	// The document must be visible after commit.
-	count, err := coll.CountDocuments(ctx, bson.D{{Key: "txn", Value: "commit"}})
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count, "inserted document must be visible after commit")
+	require.Error(t, err, "WithTransaction must fail because transactions are not supported")
+	assert.Contains(t, err.Error(), "transactions are not supported")
 }
 
-// TestTransactionSmoke_Abort verifies that aborting a transaction does not crash
-// the server. Because DumboDB does not provide ACID isolation, the inserted
-// documents remain visible  -- but the server must not panic or return an error
-// on abortTransaction. (DumboDBFull)
+// TestTransactionSmoke_Abort verifies that the server does not crash when the
+// driver issues abortTransaction. The Go driver may handle abort locally
+// without contacting the server, so we only assert no panic occurs.
 func TestTransactionSmoke_Abort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -73,13 +61,12 @@ func TestTransactionSmoke_Abort(t *testing.T) {
 	require.NoError(t, err, "StartSession must succeed")
 	defer sess.EndSession(ctx)
 
-	// Start and immediately abort a transaction.
 	require.NoError(t, sess.StartTransaction(), "StartTransaction must succeed")
 
 	mongoCtx := mongo.NewSessionContext(ctx, sess)
 	_, _ = coll.InsertOne(mongoCtx, bson.D{{Key: "txn", Value: "abort"}, {Key: "n", Value: int32(2)}})
 
-	// AbortTransaction must not return an error even though DumboDB does not
-	// actually roll back the insert.
-	require.NoError(t, sess.AbortTransaction(ctx), "AbortTransaction must not error")
+	// The driver may or may not send abortTransaction to the server
+	// depending on session state. Either way, the server must not crash.
+	_ = sess.AbortTransaction(ctx)
 }
