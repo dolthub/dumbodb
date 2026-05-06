@@ -1,0 +1,81 @@
+name: Parity Tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})' --quiet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MONGO_URI: mongodb://localhost:27017
+      DUMBODB_URI: mongodb://localhost:27018
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build DumboDB
+        run: go build -o /usr/local/bin/dumbodb ./cmd/dumbodb
+
+      - name: Start DumboDB
+        run: |
+          dumbodb --port 27018 --data-dir /tmp/dumbodb-data > /tmp/dumbodb.log 2>&1 &
+          echo $! > /tmp/dumbodb.pid
+
+      - name: Wait for DumboDB to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if nc -z 127.0.0.1 27018 2>/dev/null; then
+              echo "DumboDB ready"
+              exit 0
+            fi
+            if ! kill -0 $(cat /tmp/dumbodb.pid) 2>/dev/null; then
+              echo "DumboDB process died:" >&2
+              cat /tmp/dumbodb.log >&2
+              exit 1
+            fi
+            echo "Waiting for DumboDB ($i/30)..."
+            sleep 2
+          done
+          echo "DumboDB did not start in time. Log:" >&2
+          cat /tmp/dumbodb.log >&2
+          exit 1
+
+      - name: Check out parity tests
+        uses: actions/checkout@v6
+        with:
+          repository: dolthub/dumbodb-parity-testing
+          path: parity-testing
+
+      - name: Run parity suite
+        working-directory: parity-testing
+        run: |
+          mkdir -p results
+          go test ./... -v -timeout 15m -json | tee results/parity.json
+          go test ./... -timeout 15m
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-results
+          path: parity-testing/results/
+          if-no-files-found: ignore
