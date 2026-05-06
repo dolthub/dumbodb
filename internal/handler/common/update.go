@@ -721,106 +721,13 @@ func hasAnyMutations(muts [][]backends.FieldMutation) bool {
 // The caller is responsible for still applying the operators to the in-memory
 // document; this function only produces a hint the backend can use to avoid
 // re-chunking unchanged JSON.
-func collectSimpleFieldMutations(update *types.Document) []backends.FieldMutation {
-	if update == nil {
-		return nil
-	}
-
-	var out []backends.FieldMutation
-
-	iter := update.Iterator()
-	defer iter.Close()
-
-	for {
-		operator, opVal, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-		if err != nil {
-			return nil
-		}
-
-		opDoc, ok := opVal.(*types.Document)
-		if !ok {
-			return nil
-		}
-
-		switch operator {
-		case "$set":
-			opIter := opDoc.Iterator()
-			for {
-				key, val, err := opIter.Next()
-				if errors.Is(err, iterator.ErrIteratorDone) {
-					break
-				}
-				if err != nil {
-					opIter.Close()
-					return nil
-				}
-				if !isSimpleTopLevelKey(key) {
-					opIter.Close()
-					return nil
-				}
-				out = append(out, backends.FieldMutation{Key: key, Value: val})
-			}
-			opIter.Close()
-
-		case "$unset":
-			opIter := opDoc.Iterator()
-			for {
-				key, _, err := opIter.Next()
-				if errors.Is(err, iterator.ErrIteratorDone) {
-					break
-				}
-				if err != nil {
-					opIter.Close()
-					return nil
-				}
-				if !isSimpleTopLevelKey(key) {
-					opIter.Close()
-					return nil
-				}
-				out = append(out, backends.FieldMutation{Key: key, Unset: true})
-			}
-			opIter.Close()
-
-		default:
-			return nil
-		}
-	}
-
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// isSimpleTopLevelKey reports whether key is a bare identifier that maps
-// cleanly to a single JSON object field  -- no dot-notation, no array indices,
-// no special characters that would need escaping in a MySQL-style JSON path.
-//
-// _id is excluded because partial updates cannot touch the primary key:
-// the key of the backing map is derived from _id, and rewriting it would
-// require a delete+insert rather than an in-place mutation.
-func isSimpleTopLevelKey(key string) bool {
-	if key == "" || key == "_id" {
-		return false
-	}
-	for i, r := range key {
-		switch {
-		case r == '_':
-			// always allowed
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-			if i == 0 {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
+func collectSimpleFieldMutations(_ *types.Document) []backends.FieldMutation {
+	// Disabled: Dolt's IndexedJsonDocument.Set and .Remove do not handle
+	// canonical Extended JSON correctly -- values stored as nested type
+	// wrappers (e.g. {"$numberDouble": "3"}) cause Set to insert duplicate
+	// keys and Remove to silently no-op.  Until the upstream Dolt API is
+	// fixed, fall back to the full-rewrite path for all updates.
+	return nil
 }
 
 // getSortedKVOps extracts key-value pairs and associated operators from update document
