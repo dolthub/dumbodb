@@ -272,7 +272,16 @@ func extJSONFieldPatterns(field string, value any) [][]byte {
 		if err != nil {
 			return nil
 		}
-		return [][]byte{p}
+		// Also include the bare value pattern so the prefilter passes
+		// when the field is an array containing this value. For example,
+		// {tags: "go"} must match documents where tags is ["go","rust"].
+		// The field-qualified pattern "tags":"go" would not appear in the
+		// stored JSON "tags":["go","rust"], but the bare "go" does.
+		vp, err := marshalExtJSONValue(value)
+		if err != nil {
+			return [][]byte{p}
+		}
+		return [][]byte{p, vp}
 	case types.Regex:
 		// Regex in a filter value means pattern match, not literal
 		// equality  -- byte-level substring check isn't sound.
@@ -295,9 +304,19 @@ func numericFieldPatterns(field string, asInt int64, asDouble float64, fractiona
 		if p, err := marshalExtJSONField(field, asInt); err == nil {
 			out = append(out, p)
 		}
+		// Bare value patterns for array element matching.
+		if vp, err := marshalExtJSONValue(int32(asInt)); err == nil && int64(int32(asInt)) == asInt {
+			out = append(out, vp)
+		}
+		if vp, err := marshalExtJSONValue(asInt); err == nil {
+			out = append(out, vp)
+		}
 	}
 	if p, err := marshalExtJSONField(field, asDouble); err == nil {
 		out = append(out, p)
+	}
+	if vp, err := marshalExtJSONValue(asDouble); err == nil {
+		out = append(out, vp)
 	}
 	if len(out) == 0 {
 		return nil
