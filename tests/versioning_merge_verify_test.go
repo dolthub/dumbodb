@@ -831,3 +831,108 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	require.NoError(t, mainDB.Collection("inventory").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
 	assert.EqualValues(t, 99, doc["v"], "custom resolution: v must be 99")
 }
+
+// TestMergePartialConflict verifies Scenario 13 from docs/verify/merge.md:
+// two documents are modified on the feature branch, but only one conflicts
+// with main. After resolving the single conflict and continuing, both
+// updates are present in the final merge commit.
+func TestMergePartialConflict(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("partial%d", rand.Int64N(1_000_000))
+	db := env.client.Database(dbName)
+	require.NoError(t, db.Drop(ctx))
+
+	// Baseline: two documents committed on main.
+	_, err := db.Collection("items").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "original"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "original"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
+
+	// Create feature branch.
+	mainDB := env.client.Database(dbName + "@main")
+	featDB := env.client.Database(dbName + "@feature")
+
+	var branchRaw bson.M
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltBranch", Value: int32(1)},
+		{Key: "branch", Value: "feature"},
+	}).Decode(&branchRaw))
+
+	// Main: modify _id:1 only.
+	_, err = mainDB.Collection("items").UpdateOne(ctx,
+		bson.D{{Key: "_id", Value: int32(1)}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "main-v1"}}}},
+	)
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName+"@main", "main updates id1", "alice <alice@acme.com>")
+
+	// Feature: modify both _id:1 (will conflict) and _id:2 (clean).
+	_, err = featDB.Collection("items").UpdateOne(ctx,
+		bson.D{{Key: "_id", Value: int32(1)}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "feat-v1"}}}},
+	)
+	require.NoError(t, err)
+	_, err = featDB.Collection("items").UpdateOne(ctx,
+		bson.D{{Key: "_id", Value: int32(2)}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "feat-v2"}}}},
+	)
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName+"@feature", "feature updates both", "bob <bob@widgets.io>")
+
+	// Merge feature into main -- _id:1 conflicts, _id:2 merges cleanly.
+	raw := runCommandRaw(t, mainDB, bson.D{
+		{Key: "doltMerge", Value: int32(1)},
+		{Key: "merge_in", Value: "feature"},
+	})
+	require.EqualValues(t, 0, raw["ok"], "merge must return ok:0 due to conflict on _id:1")
+
+	// Only _id:1 should appear in conflicts.
+	var conflictsRaw bson.M
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltConflicts", Value: int32(1)},
+	}).Decode(&conflictsRaw))
+
+	colls := conflictsRaw["collections"].(bson.A)
+	require.Len(t, colls, 1, "one collection with conflicts")
+	collEntry := colls[0].(bson.M)
+	assert.Equal(t, "items", collEntry["collection"])
+
+	conflicts := collEntry["conflicts"].(bson.A)
+	require.Len(t, conflicts, 1, "exactly one conflict (_id:1 only)")
+	cf := conflicts[0].(bson.M)
+	assert.EqualValues(t, int32(1), cf["_id"], "conflicting document must be _id:1")
+	conflictID := cf["conflictId"].(string)
+
+	// Resolve _id:1 with "theirs" (feature's value).
+	var resolveRaw bson.M
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltResolveConflict", Value: int32(1)},
+		{Key: "collection", Value: "items"},
+		{Key: "conflictId", Value: conflictID},
+		{Key: "resolution", Value: "theirs"},
+	}).Decode(&resolveRaw))
+	assert.EqualValues(t, 1, resolveRaw["ok"])
+
+	// Continue the merge.
+	var continueRaw bson.M
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltMerge", Value: int32(1)},
+		{Key: "continue", Value: int32(1)},
+		{Key: "message", Value: "merge with partial conflict"},
+		{Key: "author", Value: "alice <alice@acme.com>"},
+	}).Decode(&continueRaw))
+	assert.EqualValues(t, 1, continueRaw["ok"])
+	require.NotNil(t, continueRaw["commitId"], "merge continue must produce a commit")
+
+	// Both documents must reflect their resolved/merged values.
+	var doc1, doc2 bson.M
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc1))
+	assert.Equal(t, "feat-v1", doc1["v"], "_id:1 must have theirs resolution (feat-v1)")
+
+	require.NoError(t, mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(2)}}).Decode(&doc2))
+	assert.Equal(t, "feat-v2", doc2["v"], "_id:2 must have cleanly merged value (feat-v2)")
+}

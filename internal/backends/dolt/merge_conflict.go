@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -26,6 +27,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
+	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/zeebo/xxh3"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -550,41 +552,104 @@ func captureConflictsForCollection(
 	intoMap, fromMap, baseMap prolly.Map,
 	theirHash hash.Hash,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
-	collisionFn := func(left, right tree.Diff) (tree.Diff, bool) {
-		rawKey := val.Tuple(left.Key)
-		entry := &conflictEntry{
-			id:            conflictID(rawKey, theirHash),
-			rawKey:        rawKey,
-			ourDiffType:   diffTypeString(left.Type),
-			theirDiffType: diffTypeString(right.Type),
-		}
+	ns := baseMap.NodeStore()
 
-		// base value: From is the same for both left and right (common ancestor).
-		if left.From != nil {
-			entry.baseRawVal = val.Tuple(left.From)
-		}
-		// ours value: left.To (nil for RemovedDiff  -- our branch deleted the document).
-		if left.To != nil {
-			entry.oursRawVal = val.Tuple(left.To)
-		}
-		// theirs value: right.To (nil for RemovedDiff  -- their branch deleted the document).
-		if right.To != nil {
-			entry.theirsRawVal = val.Tuple(right.To)
-		}
-
-		entries = append(entries, entry)
-
-		// Keep "ours" (left) value in the merged result.
-		// For RemovedDiff (our branch deleted the doc), exclude the key from the merged map.
-		if left.Type == tree.RemovedDiff {
-			return tree.Diff{}, false
-		}
-		return left, true
+	// Resolve callback: DumboDB stores opaque JSON blobs, so there is no
+	// cell-level merge -- any divergent edit is a conflict.
+	noResolve := func(_ *sql.Context, left, right, base val.Tuple) (val.Tuple, bool, error) {
+		return nil, false, nil
 	}
 
-	mergedMap, _, err = prolly.MergeMaps(ctx, intoMap, fromMap, baseMap, collisionFn)
+	differ, err := tree.NewThreeWayDiffer[val.Tuple, val.Tuple, *val.TupleDesc](
+		ctx, ns,
+		intoMap.Tuples(), fromMap.Tuples(), baseMap.Tuples(),
+		noResolve,
+		false, // not keyless
+		tree.ThreeWayDiffInfo{},
+		intoMap.KeyDesc(),
+	)
 	if err != nil {
-		return prolly.Map{}, nil, fmt.Errorf("merging collection documents: %w", err)
+		return prolly.Map{}, nil, fmt.Errorf("creating three-way differ: %w", err)
+	}
+	defer differ.Close()
+
+	// Start from the from (theirs) map and apply left-only changes on top.
+	// This avoids key-encoding mismatches from tree re-chunking between
+	// the into and from maps. Conflicts keep "ours" (left) values.
+	mut := fromMap.Mutate()
+
+	sqlCtx := sql.NewEmptyContext()
+	for {
+		diff, err := differ.Next(sqlCtx)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return prolly.Map{}, nil, fmt.Errorf("three-way differ: %w", err)
+		}
+
+		switch diff.Op {
+		// Left-only changes: apply to the merged map (starting from the from map).
+		case tree.DiffOpLeftAdd, tree.DiffOpLeftModify:
+			if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
+				return prolly.Map{}, nil, fmt.Errorf("applying left change: %w", err)
+			}
+		case tree.DiffOpLeftDelete:
+			if err := mut.Delete(ctx, diff.Key); err != nil {
+				return prolly.Map{}, nil, fmt.Errorf("applying left delete: %w", err)
+			}
+
+		// Right-only changes: already in the from map, nothing to do.
+		case tree.DiffOpRightAdd, tree.DiffOpRightModify, tree.DiffOpRightDelete:
+			// no-op
+
+		// Convergent edits: both sides made the same change. Already in from map
+		// for add/modify; for delete, already absent.
+		case tree.DiffOpConvergentAdd, tree.DiffOpConvergentModify, tree.DiffOpConvergentDelete:
+			// no-op
+
+		// Divergent edits: real conflicts. Keep "ours" (left) value in the merged map.
+		case tree.DiffOpDivergentModifyConflict, tree.DiffOpDivergentDeleteConflict:
+			rawKey := val.Tuple(diff.Key)
+			entry := &conflictEntry{
+				id:     conflictID(rawKey, theirHash),
+				rawKey: rawKey,
+			}
+			if diff.Base != nil {
+				entry.baseRawVal = val.Tuple(diff.Base)
+			}
+			if diff.Left != nil {
+				entry.oursRawVal = val.Tuple(diff.Left)
+				entry.ourDiffType = "modified"
+				// Override from's value with ours in the merged map.
+				if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
+					return prolly.Map{}, nil, fmt.Errorf("applying ours for conflict: %w", err)
+				}
+			} else {
+				entry.ourDiffType = "deleted"
+				// Our side deleted; remove from the merged map.
+				if err := mut.Delete(ctx, diff.Key); err != nil {
+					return prolly.Map{}, nil, fmt.Errorf("deleting for our-side delete conflict: %w", err)
+				}
+			}
+			if diff.Right != nil {
+				entry.theirsRawVal = val.Tuple(diff.Right)
+				entry.theirDiffType = "modified"
+			} else {
+				entry.theirDiffType = "deleted"
+			}
+			entries = append(entries, entry)
+
+		// Resolved divergent edits (via cell-level merge): not applicable for
+		// DumboDB's opaque JSON values, but handle gracefully.
+		case tree.DiffOpDivergentModifyResolved, tree.DiffOpDivergentDeleteResolved:
+			// Resolved by callback; result is already applied.
+		}
+	}
+
+	mergedMap, err = mut.Map(ctx)
+	if err != nil {
+		return prolly.Map{}, nil, fmt.Errorf("flushing merged map: %w", err)
 	}
 
 	return mergedMap, entries, nil

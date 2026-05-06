@@ -1507,6 +1507,10 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			resolvedAM: mergedAM,
 		}
 
+		// Update the in-memory branch AM so reads during conflict resolution
+		// reflect the merged state (right-only changes already applied).
+		db.setAM(params.Into, mergedAM)
+
 		// Persist conflict state: write working set and save merge state to disk.
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
 			db.mergeState = nil

@@ -382,6 +382,82 @@ After abort the branch is back to its pre-merge state and `doltCommit` works nor
 
 ---
 
+## Scenario 13: Partial conflict -- one conflicting update, one clean update
+
+Both branches modify two documents. One document is modified to different values
+on each branch (conflict), while the other is only modified on the feature branch
+(clean). After merge, only the conflicting document appears in `doltConflicts`.
+After resolving that one conflict and continuing, both updates are present in the
+final commit.
+
+```js
+var db13 = db.getSiblingDB("mergedb13")
+db13.dropDatabase()
+
+// Baseline: two documents.
+db13.items.insertMany([
+  { _id: 1, v: "original" },
+  { _id: 2, v: "original" }
+])
+db13.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
+
+// Create feature branch.
+db13.getSiblingDB("mergedb13@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// Main: modify _id:1 only.
+db13.items.updateOne({ _id: 1 }, { $set: { v: "main-v1" } })
+db13.runCommand({ doltCommit: 1, message: "main updates id1", author: "alice <alice@acme.com>" })
+
+// Feature: modify both _id:1 (conflict) and _id:2 (clean).
+var feat13 = db13.getSiblingDB("mergedb13@feature")
+feat13.items.updateOne({ _id: 1 }, { $set: { v: "feat-v1" } })
+feat13.items.updateOne({ _id: 2 }, { $set: { v: "feat-v2" } })
+feat13.getSiblingDB("mergedb13@feature").runCommand({
+  doltCommit: 1, message: "feature updates both", author: "bob <bob@widgets.io>"
+})
+
+// Merge feature into main -- _id:1 conflicts, _id:2 merges cleanly.
+try {
+  db13.getSiblingDB("mergedb13@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+} catch (e) { print(e) }
+
+// Only _id:1 should appear in conflicts.
+const conflicts13 = db13.getSiblingDB("mergedb13@main").runCommand({ doltConflicts: 1 })
+printjson(conflicts13)
+// Expected: one conflict for _id:1, no conflict for _id:2
+const cid = conflicts13.collections[0].conflicts[0].conflictId
+
+// Resolve _id:1 with "theirs" (feature's value).
+db13.getSiblingDB("mergedb13@main").runCommand({
+  doltResolveConflict: 1,
+  collection: "items",
+  conflictId: cid,
+  resolution: "theirs"
+})
+
+// Continue the merge.
+const merged = db13.getSiblingDB("mergedb13@main").runCommand({
+  doltMerge: 1, continue: 1,
+  message: "merge with partial conflict", author: "alice <alice@acme.com>"
+})
+printjson(merged)
+// Expected: { commitId: "<hash>", ok: 1 }
+
+// Both documents must reflect their resolved/merged values.
+db13.getSiblingDB("mergedb13@main").items.find({}).sort({ _id: 1 }).forEach(printjson)
+// Expected: { _id: 1, v: "feat-v1" }  (theirs resolution)
+//           { _id: 2, v: "feat-v2" }  (clean merge from feature)
+```
+
+Key checks:
+- Only `_id: 1` appears in `doltConflicts` (one conflict)
+- `_id: 2` is not listed as a conflict (clean auto-merge)
+- After resolution and continue, `_id: 1` has `v: "feat-v1"` (theirs)
+- After resolution and continue, `_id: 2` has `v: "feat-v2"` (cleanly merged)
+- Both documents are present in the final merge commit
+
+---
+
 ## State Guards
 
 | State | `doltCommit` | `doltMerge` (new) | `doltMerge continue` |
