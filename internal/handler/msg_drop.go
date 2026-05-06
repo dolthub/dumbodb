@@ -76,6 +76,17 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, lazyerrors.Error(err)
 	}
 
+	// Count indexes before dropping so we can include nIndexesWas in the
+	// response, matching MongoDB behavior.
+	var nIndexesWas int32 = 1 // every collection has at least the _id index
+
+	c, cErr := db.Collection(collectionName)
+	if cErr == nil {
+		if idxRes, idxErr := c.ListIndexes(connCtx, nil); idxErr == nil {
+			nIndexesWas = int32(len(idxRes.Indexes))
+		}
+	}
+
 	err = db.DropCollection(connCtx, &backends.DropCollectionParams{
 		Name: collectionName,
 	})
@@ -84,6 +95,7 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	case err == nil:
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
+				"nIndexesWas", nIndexesWas,
 				"ns", dbName+"."+collectionName,
 				"ok", float64(1),
 			)),
