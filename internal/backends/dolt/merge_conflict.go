@@ -22,7 +22,6 @@ import (
 	"io"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
-	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -601,7 +600,7 @@ func captureConflictsForCollection(
 			return nil, false, nil
 		}
 
-		mergedDoc, conflict, err := merge.MergeJSON(ctx, ns, baseDoc, leftDoc, rightDoc)
+		mergedDoc, conflict, err := mergeJSON(ctx, ns, baseDoc, leftDoc, rightDoc)
 		if err != nil || conflict {
 			return nil, false, nil
 		}
