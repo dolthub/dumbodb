@@ -27,7 +27,7 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$densify")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrIDLFailedToParse,
+			handlererrors.ErrMissingField,
 			"BSON field '$densify.field' is missing but a required field",
 			"$densify (stage)",
 		)
@@ -36,7 +36,7 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 	spec, ok := v.(*types.Document)
 	if !ok || spec == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrIDLFailedToParse,
+			handlererrors.ErrMissingField,
 			"BSON field '$densify.field' is missing but a required field",
 			"$densify (stage)",
 		)
@@ -44,7 +44,7 @@ func newDensify(stage *types.Document) (aggregations.Stage, error) {
 
 	if _, err := spec.Get("field"); err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrIDLFailedToParse,
+			handlererrors.ErrMissingField,
 			"BSON field '$densify.field' is missing but a required field",
 			"$densify (stage)",
 		)
@@ -64,7 +64,7 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$fill")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrIDLFailedToParse,
+			handlererrors.ErrMissingField,
 			"BSON field '$fill.output' is missing but a required field",
 			"$fill (stage)",
 		)
@@ -73,7 +73,7 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 	spec, ok := v.(*types.Document)
 	if !ok || spec == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrIDLFailedToParse,
+			handlererrors.ErrMissingField,
 			"BSON field '$fill.output' is missing but a required field",
 			"$fill (stage)",
 		)
@@ -81,7 +81,7 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 
 	if _, err := spec.Get("output"); err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrIDLFailedToParse,
+			handlererrors.ErrMissingField,
 			"BSON field '$fill.output' is missing but a required field",
 			"$fill (stage)",
 		)
