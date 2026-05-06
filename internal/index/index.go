@@ -67,14 +67,14 @@ func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.T
 
 	ktb := val.NewTupleBuilder(idxKeyDesc, nil)
 	ktb.PutByteString(0, compositeKey)
-	keyTuple, err := ktb.Build(idxBufPool)
+	keyTuple, err := ktb.Build(context.Background(), idxBufPool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("index: building key tuple: %w", err)
 	}
 
 	vtb := val.NewTupleBuilder(idxValDesc, nil)
 	vtb.PutByteString(0, []byte{})
-	valTuple, err := vtb.Build(idxBufPool)
+	valTuple, err := vtb.Build(context.Background(), idxBufPool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("index: building val tuple: %w", err)
 	}
@@ -150,7 +150,7 @@ func boundTuple(key []byte) (val.Tuple, error) {
 	}
 	tb := val.NewTupleBuilder(idxKeyDesc, nil)
 	tb.PutByteString(0, key)
-	t, err := tb.Build(idxBufPool)
+	t, err := tb.Build(context.Background(), idxBufPool)
 	if err != nil {
 		return nil, fmt.Errorf("index: building bound tuple: %w", err)
 	}

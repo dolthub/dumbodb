@@ -281,7 +281,7 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(keyDesc, nil)
 	tb.PutByteString(0, idBytes)
 
-	tup, err := tb.Build(bufPool)
+	tup, err := tb.Build(context.Background(), bufPool)
 	if err != nil {
 		return nil, fmt.Errorf("building key tuple: %w", err)
 	}
@@ -294,7 +294,7 @@ func buildValue(jsonHash hash.Hash) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(valDesc, nil)
 	tb.PutJSONAddr(0, jsonHash)
 
-	tup, err := tb.Build(bufPool)
+	tup, err := tb.Build(context.Background(), bufPool)
 	if err != nil {
 		return nil, fmt.Errorf("building value tuple: %w", err)
 	}

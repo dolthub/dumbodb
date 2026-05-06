@@ -22,12 +22,14 @@ import (
 	"io"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 	"github.com/dolthub/go-mysql-server/sql"
+	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
 	"github.com/zeebo/xxh3"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -554,16 +556,72 @@ func captureConflictsForCollection(
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
-	// Resolve callback: DumboDB stores opaque JSON blobs, so there is no
-	// cell-level merge -- any divergent edit is a conflict.
-	noResolve := func(_ *sql.Context, left, right, base val.Tuple) (val.Tuple, bool, error) {
-		return nil, false, nil
+	// Resolve callback: attempt field-level JSON merge using Dolt's
+	// three-way JSON differ. Non-overlapping field changes are merged
+	// automatically; overlapping changes produce a conflict.
+	tryMergeJSON := func(_ *sql.Context, left, right, base val.Tuple) (val.Tuple, bool, error) {
+		// If either side is a delete (nil tuple), we can't merge JSON fields.
+		if left == nil || right == nil || len(left) == 0 || len(right) == 0 {
+			return nil, false, nil
+		}
+
+		// Extract JSON addresses from value tuples.
+		leftAddr, lok := valDesc.GetJSONAddr(0, left)
+		rightAddr, rok := valDesc.GetJSONAddr(0, right)
+		if !lok || !rok {
+			return nil, false, nil
+		}
+
+		var baseDoc sql.JSONWrapper
+		if base != nil {
+			if baseAddr, ok := valDesc.GetJSONAddr(0, base); ok {
+				doc, docErr := tree.NewJSONDoc(baseAddr, ns).ToIndexedJSONDocument(ctx)
+				if docErr != nil {
+					return nil, false, nil
+				}
+				baseDoc = doc
+			}
+		}
+		if baseDoc == nil {
+			// No base (both sides added) -- create an empty base.
+			emptyJSON := sqltypes.NewLazyJSONDocument([]byte("{}"))
+			root, serErr := tree.SerializeJsonToAddr(ctx, ns, emptyJSON)
+			if serErr != nil {
+				return nil, false, nil
+			}
+			baseDoc = tree.NewIndexedJsonDocument(ctx, root, ns)
+		}
+
+		leftDoc, err := tree.NewJSONDoc(leftAddr, ns).ToIndexedJSONDocument(ctx)
+		if err != nil {
+			return nil, false, nil
+		}
+		rightDoc, err := tree.NewJSONDoc(rightAddr, ns).ToIndexedJSONDocument(ctx)
+		if err != nil {
+			return nil, false, nil
+		}
+
+		mergedDoc, conflict, err := merge.MergeJSON(ctx, ns, baseDoc, leftDoc, rightDoc)
+		if err != nil || conflict {
+			return nil, false, nil
+		}
+
+		// Write the merged JSON and build a value tuple.
+		mergedRoot, err := tree.SerializeJsonToAddr(ctx, ns, mergedDoc)
+		if err != nil {
+			return nil, false, nil
+		}
+		mergedVal, err := buildValue(mergedRoot.HashOf())
+		if err != nil {
+			return nil, false, nil
+		}
+		return mergedVal, true, nil
 	}
 
 	differ, err := tree.NewThreeWayDiffer[val.Tuple, val.Tuple, *val.TupleDesc](
 		ctx, ns,
 		intoMap.Tuples(), fromMap.Tuples(), baseMap.Tuples(),
-		noResolve,
+		tryMergeJSON,
 		false, // not keyless
 		tree.ThreeWayDiffInfo{},
 		intoMap.KeyDesc(),
@@ -640,10 +698,23 @@ func captureConflictsForCollection(
 			}
 			entries = append(entries, entry)
 
-		// Resolved divergent edits (via cell-level merge): not applicable for
-		// DumboDB's opaque JSON values, but handle gracefully.
-		case tree.DiffOpDivergentModifyResolved, tree.DiffOpDivergentDeleteResolved:
-			// Resolved by callback; result is already applied.
+		// Resolved divergent edits: the JSON field merge succeeded. Apply
+		// the merged value to the map.
+		case tree.DiffOpDivergentModifyResolved:
+			if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
+				return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
+			}
+		case tree.DiffOpDivergentDeleteResolved:
+			// Delete-modify resolved by callback (unlikely for JSON merge).
+			if diff.Merged == nil {
+				if err := mut.Delete(ctx, diff.Key); err != nil {
+					return prolly.Map{}, nil, fmt.Errorf("applying resolved delete: %w", err)
+				}
+			} else {
+				if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
+					return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
+				}
+			}
 		}
 	}
 
