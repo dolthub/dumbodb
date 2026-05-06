@@ -2090,15 +2090,24 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return &backends.VersioningStatusResult{Branch: params.Branch, Tables: []backends.TableStatus{}}, nil
 	}
 
-	state.mu.RLock()
-	defer state.mu.RUnlock()
+	// Write lock: getOrInitBranchAM may initialize the branch AM on first access.
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-	headAM, err := state.headRootAM(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBStatus: reading HEAD AM for db %q: %w", params.DBName, err)
+	branch := params.Branch
+	if branch == "" {
+		branch = defaultBranch
 	}
 
-	workingAM := state.branchAMs[defaultBranch]
+	headAM, err := headRootAMForBranch(ctx, state, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: reading HEAD AM for branch %q: %w", branch, err)
+	}
+
+	workingAM, err := state.getOrInitBranchAM(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: reading working AM for branch %q: %w", branch, err)
+	}
 
 	names, err := unionCollectionNames(ctx, headAM, workingAM)
 	if err != nil {
@@ -2182,10 +2191,6 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	// commitId is only set when the working tree is identical to the checked-out
 	// commit: no uncommitted changes AND no merge/cherry-pick/rebase/revert in progress.
 	if len(tables) == 0 && result.MergeOp == "" {
-		branch := params.Branch
-		if branch == "" {
-			branch = defaultBranch
-		}
 		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
 			result.CommitID = h.String()
 		}
@@ -2293,18 +2298,24 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
 	}
 
-	state.mu.RLock()
-	defer state.mu.RUnlock()
+	// Write lock: getOrInitBranchAM may initialize the branch AM on first access.
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
 	// Resolve the "a" (from) side.
 	var aAM prolly.AddressMap
 
+	diffBranch := params.ConnRootish
+	if diffBranch == "" {
+		diffBranch = defaultBranch
+	}
+
 	switch {
 	case params.From == "":
-		// Default: HEAD committed state.
-		aAM, err = state.headRootAM(ctx)
+		// Default: HEAD committed state for the connection's branch.
+		aAM, err = headRootAMForBranch(ctx, state, diffBranch)
 		if err != nil {
-			return nil, fmt.Errorf("DumboDBDiff: reading HEAD AM for db %q: %w", params.DBName, err)
+			return nil, fmt.Errorf("DumboDBDiff: reading HEAD AM for branch %q: %w", diffBranch, err)
 		}
 	case params.From == "HEAD" || strings.HasPrefix(params.From, "HEAD~"):
 		aAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.From)
@@ -2323,8 +2334,11 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 
 	switch {
 	case params.To == "":
-		// Default: current working set (may include uncommitted writes).
-		bAM = state.branchAMs[defaultBranch]
+		// Default: current working set for the connection's branch.
+		bAM, err = state.getOrInitBranchAM(ctx, diffBranch)
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBDiff: reading working AM for branch %q: %w", diffBranch, err)
+		}
 	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
 		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)
 		if err != nil {
