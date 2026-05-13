@@ -31,9 +31,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/registry"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
+	"github.com/dolthub/dumbodb/internal/version"
 )
 
 func main() {
+	handleVersionFlag()
+
 	logging.Setup(&logging.NewHandlerOpts{
 		Base:  "text",
 		Level: slog.LevelInfo,
@@ -42,6 +45,21 @@ func main() {
 
 	if err := run(logger); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// handleVersionFlag prints the version and exits if --version or -v is passed.
+// It must be the only argument; combining it with anything else is an error.
+func handleVersionFlag() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-v" || arg == "-version" {
+			if len(os.Args) != 2 {
+				fmt.Fprintln(os.Stderr, "--version/-v cannot be combined with other arguments")
+				os.Exit(2)
+			}
+			fmt.Printf("dumbodb %s (commit %s)\n", version.Version, version.GitVersion)
+			os.Exit(0)
+		}
 	}
 }
 
