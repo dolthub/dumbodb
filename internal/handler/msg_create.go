@@ -111,7 +111,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		hasExplicitOptions = true
 	}
 
-	// Parse time series options.
 	if tsVal, _ := document.Get("timeseries"); tsVal != nil {
 		tsDoc, ok := tsVal.(*types.Document)
 		if !ok {
@@ -176,7 +175,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 	}
 
-	// Parse view options (viewOn + pipeline).
 	if viewOnVal, _ := document.Get("viewOn"); viewOnVal != nil {
 		viewOn, ok := viewOnVal.(string)
 		if !ok {
@@ -189,7 +187,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		params.ViewOn = viewOn
 		hasExplicitOptions = true
 
-		// Parse optional pipeline.
 		if pipelineVal, _ := document.Get("pipeline"); pipelineVal != nil {
 			pipeline, ok := pipelineVal.(*types.Array)
 			if !ok {
@@ -203,7 +200,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 	}
 
-	// Parse schema validation options.
 	if validatorVal, _ := document.Get("validator"); validatorVal != nil {
 		hasExplicitOptions = true
 		validatorDoc, ok := validatorVal.(*types.Document)

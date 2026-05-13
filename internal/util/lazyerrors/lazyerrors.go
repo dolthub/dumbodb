@@ -26,7 +26,6 @@ import (
 	"strings"
 )
 
-// withPC wraps errors with a single frame.
 type withPC struct {
 	error
 	pc uintptr
@@ -53,7 +52,6 @@ func (e withPC) Error() string {
 	return fmt.Sprintf("[%s] %s", l, e.error)
 }
 
-// Unwrap returns the wrapped error.
 func (e withPC) Unwrap() error {
 	return e.error
 }

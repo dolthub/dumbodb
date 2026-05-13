@@ -367,7 +367,6 @@ func filterExprOperator(doc, filter *types.Document) (bool, error) {
 
 // filterFieldExpr handles {field: {expr}} or {field: {document}} filter.
 func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document) (bool, error) {
-	// check if both documents are empty
 	if expr.Len() == 0 {
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {

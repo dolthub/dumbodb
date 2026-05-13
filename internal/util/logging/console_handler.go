@@ -53,13 +53,11 @@ type consoleHandler struct {
 	out io.Writer
 }
 
-// groupOrAttrs contains group name or attributes.
 type groupOrAttrs struct {
 	group string
 	attrs []slog.Attr
 }
 
-// newConsoleHandler creates a new console handler.
 func newConsoleHandler(out io.Writer, opts *NewHandlerOpts, testAttrs map[string]any) *consoleHandler {
 	must.NotBeZero(opts)
 
@@ -71,7 +69,6 @@ func newConsoleHandler(out io.Writer, opts *NewHandlerOpts, testAttrs map[string
 	}
 }
 
-// Enabled implements [slog.Handler].
 func (ch *consoleHandler) Enabled(_ context.Context, l slog.Level) bool {
 	minLevel := slog.LevelInfo
 	if ch.opts.Level != nil {
@@ -81,7 +78,6 @@ func (ch *consoleHandler) Enabled(_ context.Context, l slog.Level) bool {
 	return l >= minLevel
 }
 
-// Handle implements [slog.Handler].
 func (ch *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	var buf bytes.Buffer
 
@@ -155,7 +151,6 @@ func (ch *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	return err
 }
 
-// WithAttrs implements [slog.Handler].
 func (ch *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return ch
@@ -170,7 +165,6 @@ func (ch *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	}
 }
 
-// WithGroup implements [slog.Handler].
 func (ch *consoleHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return ch
@@ -239,7 +233,6 @@ func resolve(v slog.Value) any {
 	return m
 }
 
-// check interfaces
 var (
 	_ slog.Handler = (*consoleHandler)(nil)
 )

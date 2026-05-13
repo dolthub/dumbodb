@@ -24,13 +24,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// minAccumulator represents $min aggregation accumulator.
 type minAccumulator struct {
 	expression *aggregations.Expression
 	number     any
 }
 
-// newMin creates a new $min accumulator.
 func newMin(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -56,7 +54,6 @@ func newMin(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (m *minAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -108,13 +105,11 @@ func (m *minAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	return result, nil
 }
 
-// maxAccumulator represents $max aggregation accumulator.
 type maxAccumulator struct {
 	expression *aggregations.Expression
 	number     any
 }
 
-// newMax creates a new $max accumulator.
 func newMax(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -139,7 +134,6 @@ func newMax(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (m *maxAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -191,7 +185,6 @@ func (m *maxAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*minAccumulator)(nil)
 	_ Accumulator = (*maxAccumulator)(nil)

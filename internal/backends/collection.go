@@ -74,7 +74,6 @@ func CollectionContract(c Collection) Collection {
 	}
 }
 
-// QueryParams represents the parameters of Collection.Query method.
 type QueryParams struct {
 	Filter *types.Document
 	Sort   *types.Document
@@ -90,7 +89,6 @@ type QueryParams struct {
 	CaseInsensitive bool
 }
 
-// QueryResult represents the results of Collection.Query method.
 type QueryResult struct {
 	Iter types.DocumentsIterator
 }
@@ -138,7 +136,6 @@ func (cc *collectionContract) Query(ctx context.Context, params *QueryParams) (*
 	return res, err
 }
 
-// CountParams represents the parameters of Collection.Count method.
 type CountParams struct {
 	// Filter, when non-nil and non-empty, asks the backend to return the
 	// count of matching documents instead of the full collection size.
@@ -148,7 +145,6 @@ type CountParams struct {
 	Filter *types.Document
 }
 
-// CountResult represents the results of Collection.Count method.
 type CountResult struct {
 	// Count is the document count. When Filtered is true, this is the
 	// number of documents matching CountParams.Filter; otherwise it is
@@ -190,7 +186,6 @@ func (cc *collectionContract) Count(ctx context.Context, params *CountParams) (*
 	return res, err
 }
 
-// ExplainParams represents the parameters of Collection.Explain method.
 type ExplainParams struct {
 	Filter *types.Document
 	Sort   *types.Document
@@ -203,7 +198,6 @@ type ExplainParams struct {
 	Hint any
 }
 
-// ExplainResult represents the results of Collection.Explain method.
 type ExplainResult struct {
 	QueryPlanner   *types.Document
 	FilterPushdown bool
@@ -249,7 +243,6 @@ func (cc *collectionContract) Explain(ctx context.Context, params *ExplainParams
 	return res, err
 }
 
-// InsertAllParams represents the parameters of Collection.InsertAll method.
 type InsertAllParams struct {
 	Docs []*types.Document
 
@@ -260,7 +253,6 @@ type InsertAllParams struct {
 	SkipDurableSync bool
 }
 
-// InsertAllResult represents the results of Collection.InsertAll method.
 type InsertAllResult struct{}
 
 // InsertAll inserts documents into the collection.
@@ -293,7 +285,6 @@ func (cc *collectionContract) InsertAll(ctx context.Context, params *InsertAllPa
 	return res, err
 }
 
-// UpdateAllParams represents the parameters of Collection.Update method.
 type UpdateAllParams struct {
 	Docs []*types.Document
 
@@ -332,7 +323,6 @@ type FieldMutation struct {
 	Value any
 }
 
-// UpdateAllResult represents the results of Collection.Update method.
 type UpdateAllResult struct {
 	Updated int32
 }
@@ -365,7 +355,6 @@ func (cc *collectionContract) UpdateAll(ctx context.Context, params *UpdateAllPa
 	return res, err
 }
 
-// DeleteAllParams represents the parameters of Collection.Delete method.
 type DeleteAllParams struct {
 	IDs       []any
 	RecordIDs []int64
@@ -375,7 +364,6 @@ type DeleteAllParams struct {
 	SkipDurableSync bool
 }
 
-// DeleteAllResult represents the results of Collection.Delete method.
 type DeleteAllResult struct {
 	Deleted int32
 }
@@ -405,12 +393,10 @@ func (cc *collectionContract) DeleteAll(ctx context.Context, params *DeleteAllPa
 	return res, err
 }
 
-// CollectionStatsParams represents the parameters of Collection.Stats method.
 type CollectionStatsParams struct {
 	Refresh bool
 }
 
-// CollectionStatsResult represents the results of Collection.Stats method.
 type CollectionStatsResult struct {
 	CountDocuments  int64
 	SizeTotal       int64
@@ -420,7 +406,6 @@ type CollectionStatsResult struct {
 	IndexSizes      []IndexSize
 }
 
-// IndexSize represents the name and the size of an index.
 type IndexSize struct {
 	Name string
 	Size int64
@@ -444,12 +429,10 @@ func (cc *collectionContract) Stats(ctx context.Context, params *CollectionStats
 	return res, err
 }
 
-// CompactParams represents the parameters of Collection.Compact method.
 type CompactParams struct {
 	Full bool
 }
 
-// CompactResult represents the results of Collection.Compact method.
 type CompactResult struct{}
 
 // Compact reduces the disk space collection takes (by defragmenting, removing dead rows, etc)
@@ -471,15 +454,12 @@ func (cc *collectionContract) Compact(ctx context.Context, params *CompactParams
 	return res, err
 }
 
-// ListIndexesParams represents the parameters of Collection.ListIndexes method.
 type ListIndexesParams struct{}
 
-// ListIndexesResult represents the results of Collection.ListIndexes method.
 type ListIndexesResult struct {
 	Indexes []IndexInfo
 }
 
-// IndexInfo represents information about a single index.
 type IndexInfo struct {
 	Name                  string
 	Key                   []IndexKeyPair
@@ -496,7 +476,6 @@ type IndexInfo struct {
 	MatchesPartialFilter func(doc *types.Document) (bool, error)
 }
 
-// IndexKeyPair consists of a field name and a sort order that are part of the index.
 type IndexKeyPair struct {
 	Field       string
 	Descending  bool
@@ -529,12 +508,10 @@ func (cc *collectionContract) ListIndexes(ctx context.Context, params *ListIndex
 	return res, err
 }
 
-// CreateIndexesParams represents the parameters of Collection.CreateIndexes method.
 type CreateIndexesParams struct {
 	Indexes []IndexInfo
 }
 
-// CreateIndexesResult represents the results of Collection.CreateIndexes method.
 type CreateIndexesResult struct{}
 
 // CreateIndexes creates indexes for the collection.
@@ -558,12 +535,10 @@ func (cc *collectionContract) CreateIndexes(ctx context.Context, params *CreateI
 	return res, err
 }
 
-// DropIndexesParams represents the parameters of Collection.DropIndexes method.
 type DropIndexesParams struct {
 	Indexes []string
 }
 
-// DropIndexesResult represents the results of Collection.DropIndexes method.
 type DropIndexesResult struct{}
 
 // DropIndexes drops indexes for the collection.
@@ -610,7 +585,6 @@ func (cc *collectionContract) DistinctScan(ctx context.Context, params *Distinct
 	return res, err
 }
 
-// check interfaces
 var (
 	_ Collection      = (*collectionContract)(nil)
 	_ DistinctScanner = (*collectionContract)(nil)

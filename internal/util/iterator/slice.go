@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/resource"
 )
 
-// ForSlice returns an iterator over a slice.
 func ForSlice[V any](s []V) Interface[int, V] {
 	res := &sliceIterator[V]{
 		s:     s,
@@ -32,8 +31,6 @@ func ForSlice[V any](s []V) Interface[int, V] {
 	return res
 }
 
-// sliceIterator implements iterator.Interface.
-//
 //nolint:vet // golangci-lint's govet and gopls's govet could not agree on alignment
 type sliceIterator[V any] struct {
 	m     sync.Mutex
@@ -42,7 +39,6 @@ type sliceIterator[V any] struct {
 	token *resource.Token
 }
 
-// Next implements iterator.Interface.
 func (iter *sliceIterator[V]) Next() (int, V, error) {
 	iter.m.Lock()
 	defer iter.m.Unlock()
@@ -58,7 +54,6 @@ func (iter *sliceIterator[V]) Next() (int, V, error) {
 	return n, iter.s[n], nil
 }
 
-// Close implements iterator.Interface.
 func (iter *sliceIterator[V]) Close() {
 	iter.m.Lock()
 	defer iter.m.Unlock()
@@ -68,7 +63,6 @@ func (iter *sliceIterator[V]) Close() {
 	resource.Untrack(iter, iter.token)
 }
 
-// check interfaces
 var (
 	_ Interface[int, any] = (*sliceIterator[any])(nil)
 	_ Closer              = (*sliceIterator[any])(nil)

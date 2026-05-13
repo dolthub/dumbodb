@@ -27,12 +27,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// typeOp represents `$type` operator.
 type typeOp struct {
 	param any
 }
 
-// newType returns `$type` operator.
 func newType(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -47,7 +45,6 @@ func newType(args ...any) (Operator, error) {
 	}, nil
 }
 
-// Process implements Operator interface.
 func (t *typeOp) Process(doc *types.Document) (any, error) {
 	typeParam := t.param
 
@@ -122,7 +119,6 @@ func (t *typeOp) Process(doc *types.Document) (any, error) {
 	return handlerparams.AliasFromType(res), nil
 }
 
-// check interfaces
 var (
 	_ Operator = (*typeOp)(nil)
 )

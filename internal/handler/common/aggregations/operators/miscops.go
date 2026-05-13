@@ -22,8 +22,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// -- $literal -----------------------------------------------------------------
-
 // literalOp represents { $literal: <value> }.
 // Returns the value without evaluating it as an expression.
 type literalOp struct{ val any }
@@ -42,8 +40,6 @@ func (op *literalOp) Process(_ *types.Document) (any, error) {
 }
 
 var _ Operator = (*literalOp)(nil)
-
-// -- $let ---------------------------------------------------------------------
 
 // letOp represents { $let: { vars: { <name>: <expr>, ... }, in: <expr> } }.
 // Binds variables (as $$name keys in a temporary document) and evaluates `in`.
@@ -105,8 +101,6 @@ func (op *letOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*letOp)(nil)
 
-// -- $isNumber -----------------------------------------------------------------
-
 // isNumberOp represents { $isNumber: <expr> }.
 // Returns true if the value is a numeric type (double, int, long, decimal).
 type isNumberOp struct{ arg any }
@@ -136,8 +130,6 @@ func (op *isNumberOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*isNumberOp)(nil)
 
-// -- $isString -----------------------------------------------------------------
-
 type isStringOp struct{ arg any }
 
 func newIsString(args ...any) (Operator, error) {
@@ -162,8 +154,6 @@ func (op *isStringOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*isStringOp)(nil)
 
-// -- $isObjectId ---------------------------------------------------------------
-
 type isObjectIdOp struct{ arg any }
 
 func newIsObjectId(args ...any) (Operator, error) {
@@ -187,8 +177,6 @@ func (op *isObjectIdOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*isObjectIdOp)(nil)
-
-// -- $isDate -------------------------------------------------------------------
 
 type isDateOp struct{ arg any }
 

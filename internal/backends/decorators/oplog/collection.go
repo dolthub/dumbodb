@@ -31,7 +31,6 @@ const (
 	oplogCollection = "oplog.rs"
 )
 
-// collection implements backends.Collection interface by adding OpLog functionality to the wrapped collection.
 type collection struct {
 	origC  backends.Collection
 	name   string
@@ -40,7 +39,6 @@ type collection struct {
 	l      *slog.Logger
 }
 
-// newCollection creates a new Collection that wraps the given collection.
 func newCollection(origC backends.Collection, name, dbName string, origB backends.Backend, l *slog.Logger) backends.Collection {
 	return &collection{
 		origC:  origC,
@@ -51,17 +49,14 @@ func newCollection(origC backends.Collection, name, dbName string, origB backend
 	}
 }
 
-// Query implements backends.Collection interface.
 func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
 	return c.origC.Query(ctx, params)
 }
 
-// Count implements backends.Collection interface.
 func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*backends.CountResult, error) {
 	return c.origC.Count(ctx, params)
 }
 
-// InsertAll implements backends.Collection interface.
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
 	res, err := c.origC.InsertAll(ctx, params)
 	if err != nil {
@@ -99,7 +94,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	return res, nil
 }
 
-// UpdateAll implements backends.Collection interface.
 func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllParams) (*backends.UpdateAllResult, error) {
 	res, err := c.origC.UpdateAll(ctx, params)
 	if err != nil {
@@ -141,7 +135,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	return res, nil
 }
 
-// DeleteAll implements backends.Collection interface.
 func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllParams) (*backends.DeleteAllResult, error) {
 	res, err := c.origC.DeleteAll(ctx, params)
 	if err != nil {
@@ -184,32 +177,26 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	return res, nil
 }
 
-// Explain implements backends.Collection interface.
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
 	return c.origC.Explain(ctx, params)
 }
 
-// Stats implements backends.Collection interface.
 func (c *collection) Stats(ctx context.Context, params *backends.CollectionStatsParams) (*backends.CollectionStatsResult, error) {
 	return c.origC.Stats(ctx, params)
 }
 
-// Compact implements backends.Collection interface.
 func (c *collection) Compact(ctx context.Context, params *backends.CompactParams) (*backends.CompactResult, error) {
 	return c.origC.Compact(ctx, params)
 }
 
-// ListIndexes implements backends.Collection interface.
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
 	return c.origC.ListIndexes(ctx, params)
 }
 
-// CreateIndexes implements backends.Collection interface.
 func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateIndexesParams) (*backends.CreateIndexesResult, error) { //nolint:lll // for readability
 	return c.origC.CreateIndexes(ctx, params)
 }
 
-// DropIndexes implements backends.Collection interface.
 func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndexesParams) (*backends.DropIndexesResult, error) {
 	return c.origC.DropIndexes(ctx, params)
 }
@@ -245,7 +232,6 @@ func (c *collection) oplogCollection(ctx context.Context) backends.Collection {
 	return must.NotFail(db.Collection(oplogCollection))
 }
 
-// check interfaces
 var (
 	_ backends.Collection      = (*collection)(nil)
 	_ backends.DistinctScanner = (*collection)(nil)

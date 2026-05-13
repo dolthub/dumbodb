@@ -34,7 +34,6 @@ type avgOp struct {
 	args []any
 }
 
-// newAvgOp creates a new $avg expression operator.
 func newAvgOp(args ...any) (Operator, error) {
 	return &avgOp{args: args}, nil
 }
@@ -78,7 +77,6 @@ func (a *avgOp) Process(doc *types.Document) (any, error) {
 	return aggregations.AvgNumbers(numbers...), nil
 }
 
-// check interfaces
 var (
 	_ Operator = (*avgOp)(nil)
 )

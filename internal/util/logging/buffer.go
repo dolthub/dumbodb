@@ -30,14 +30,12 @@ import (
 // and stores the last 1024 entries in circular buffer in memory.
 var RecentEntries = NewCircularBuffer(1024)
 
-// circularBuffer is a storage of log records in memory.
 type circularBuffer struct {
 	mu      sync.RWMutex
 	records []*slog.Record
 	index   int
 }
 
-// NewCircularBuffer creates a circular buffer for log records in memory.
 func NewCircularBuffer(size int) *circularBuffer {
 	if size < 1 {
 		panic(fmt.Sprintf("buffer size must be at least 1, but %d provided", size))
@@ -48,7 +46,6 @@ func NewCircularBuffer(size int) *circularBuffer {
 	}
 }
 
-// add adds an entry in circularBuffer.
 func (cb *circularBuffer) add(record *slog.Record) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -57,7 +54,6 @@ func (cb *circularBuffer) add(record *slog.Record) {
 	cb.index = (cb.index + 1) % len(cb.records)
 }
 
-// get returns entries from circularBuffer.
 func (cb *circularBuffer) get() []*slog.Record {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()

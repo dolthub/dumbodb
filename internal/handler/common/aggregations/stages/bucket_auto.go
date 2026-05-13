@@ -51,7 +51,6 @@ type bucketAuto struct {
 	output   []bucketOutput
 }
 
-// newBucketAuto creates a new $bucketAuto stage.
 func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$bucketAuto")
 	if err != nil {
@@ -155,7 +154,6 @@ func newBucketAuto(stage *types.Document) (aggregations.Stage, error) {
 	return ba, nil
 }
 
-// Process implements Stage interface.
 func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -244,7 +242,6 @@ func (ba *bucketAuto) Process(ctx context.Context, iter types.DocumentsIterator,
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*bucketAuto)(nil)
 )

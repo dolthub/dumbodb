@@ -24,7 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// Computes the HMAC of the given data using the given key.
 func computeHMAC(h func() hash.Hash, key, data []byte) []byte {
 	mac := hmac.New(h, key)
 	mac.Write(data)
@@ -32,7 +31,6 @@ func computeHMAC(h func() hash.Hash, key, data []byte) []byte {
 	return mac.Sum(nil)
 }
 
-// Computes the hash of the given data.
 func computeHash(h func() hash.Hash, b []byte) []byte {
 	dh := h()
 	dh.Write(b)

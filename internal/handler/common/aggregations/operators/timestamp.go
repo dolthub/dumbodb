@@ -32,7 +32,6 @@ type tsIncrementOp struct {
 	param any
 }
 
-// newTsSecond creates a $tsSecond operator.
 func newTsSecond(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -45,7 +44,6 @@ func newTsSecond(args ...any) (Operator, error) {
 	return &tsSecondOp{param: args[0]}, nil
 }
 
-// newTsIncrement creates a $tsIncrement operator.
 func newTsIncrement(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -182,7 +180,6 @@ func (t *tsIncrementOp) Process(doc *types.Document) (any, error) {
 	return int64(uint64(res.ts) & 0xFFFFFFFF), nil
 }
 
-// check interfaces
 var (
 	_ Operator = (*tsSecondOp)(nil)
 	_ Operator = (*tsIncrementOp)(nil)

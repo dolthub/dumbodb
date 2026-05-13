@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// SortArray sorts the values of given array.
 func SortArray(arr *types.Array, sortType types.SortType) {
 	sorter := &arraySorter{arr: arr, sortType: sortType}
 	sort.Sort(sorter)
@@ -33,12 +32,10 @@ type arraySorter struct {
 	sortType types.SortType
 }
 
-// Len implements sort.Interface.
 func (as *arraySorter) Len() int {
 	return as.arr.Len()
 }
 
-// Swap implements sort.Interface.
 func (as *arraySorter) Swap(i, j int) {
 	p, q := must.NotFail(as.arr.Get(i)), must.NotFail(as.arr.Get(j))
 
@@ -46,7 +43,6 @@ func (as *arraySorter) Swap(i, j int) {
 	must.NoError(as.arr.Set(j, p))
 }
 
-// Less implements sort.Interface.
 func (as *arraySorter) Less(i, j int) bool {
 	p, q := must.NotFail(as.arr.Get(i)), must.NotFail(as.arr.Get(j))
 

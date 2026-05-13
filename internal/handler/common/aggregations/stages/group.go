@@ -52,13 +52,11 @@ type group struct {
 	groupBy           []groupBy
 }
 
-// groupBy represents accumulation to apply on the group.
 type groupBy struct {
 	accumulator accumulators.Accumulator
 	outputField string
 }
 
-// newGroup creates a new $group stage.
 func newGroup(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$group")
 	if err != nil {
@@ -129,7 +127,6 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 	return g, nil
 }
 
-// Process implements Stage interface.
 func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	groupedDocuments, err := g.groupDocuments(iter)
 	if err != nil {
@@ -360,7 +357,6 @@ func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) 
 	return evaluatedDocument, nil
 }
 
-// groupedDocuments contains group key and the documents for that group.
 type groupedDocuments struct {
 	groupID   any
 	documents []*types.Document
@@ -535,7 +531,6 @@ func processGroupStageError(err error) error {
 	return err
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*group)(nil)
 )

@@ -80,17 +80,14 @@ func (dbc *databaseContract) Collection(name string) (Collection, error) {
 	return res, err
 }
 
-// ListCollectionsParams represents the parameters of Database.ListCollections method.
 type ListCollectionsParams struct {
 	Name string
 }
 
-// ListCollectionsResult represents the results of Database.ListCollections method.
 type ListCollectionsResult struct {
 	Collections []CollectionInfo
 }
 
-// CollectionInfo represents information about a single collection.
 type CollectionInfo struct {
 	Name            string
 	UUID            string
@@ -119,7 +116,6 @@ type CollectionInfo struct {
 	_ struct{} // prevent unkeyed literals
 }
 
-// Capped returns true if collection is capped.
 func (ci *CollectionInfo) Capped() bool {
 	return ci.CappedSize > 0
 }
@@ -154,7 +150,6 @@ func (dbc *databaseContract) ListCollections(ctx context.Context, params *ListCo
 	return res, err
 }
 
-// CreateCollectionParams represents the parameters of Database.CreateCollection method.
 type CreateCollectionParams struct {
 	Name            string
 	CappedSize      int64
@@ -180,12 +175,10 @@ type CreateCollectionParams struct {
 	_ struct{} // prevent unkeyed literals
 }
 
-// Capped returns true if capped collection creation is requested.
 func (ccp *CreateCollectionParams) Capped() bool {
 	return ccp.CappedSize > 0
 }
 
-// CollModParams represents the parameters of Database.CollMod method.
 type CollModParams struct {
 	Name string
 	// Validator replaces the existing validator when SetValidator is true.
@@ -225,7 +218,6 @@ func (dbc *databaseContract) CreateCollection(ctx context.Context, params *Creat
 	return err
 }
 
-// DropCollectionParams represents the parameters of Database.DropCollection method.
 type DropCollectionParams struct {
 	Name string
 }
@@ -251,7 +243,6 @@ func (dbc *databaseContract) DropCollection(ctx context.Context, params *DropCol
 	return err
 }
 
-// RenameCollectionParams represents the parameters of Database.RenameCollection method.
 type RenameCollectionParams struct {
 	OldName string
 	NewName string
@@ -305,12 +296,10 @@ func (dbc *databaseContract) CollMod(ctx context.Context, params *CollModParams)
 	return err
 }
 
-// DatabaseStatsParams represents the parameters of Database.Stats method.
 type DatabaseStatsParams struct {
 	Refresh bool
 }
 
-// DatabaseStatsResult represents the results of Database.Stats method.
 type DatabaseStatsResult struct {
 	CountDocuments  int64
 	SizeTotal       int64
@@ -335,7 +324,6 @@ func (dbc *databaseContract) Stats(ctx context.Context, params *DatabaseStatsPar
 	return res, err
 }
 
-// check interfaces
 var (
 	_ Database = (*databaseContract)(nil)
 )

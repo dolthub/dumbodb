@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// pushAccumulator represents $push aggregation accumulator.
 type pushAccumulator struct {
 	expression *aggregations.Expression
 	constant   any
@@ -35,7 +34,6 @@ type pushAccumulator struct {
 	docExpr    *types.Document // non-nil when $push arg is a document template expression
 }
 
-// newPush creates a new $push accumulator.
 func newPush(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -66,7 +64,6 @@ func newPush(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (p *pushAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -163,7 +160,6 @@ func evalDocTemplateExpr(tmpl, doc *types.Document) *types.Document {
 	return result
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*pushAccumulator)(nil)
 )

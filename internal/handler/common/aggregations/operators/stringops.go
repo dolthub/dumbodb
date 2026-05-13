@@ -21,8 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// -- $concat -------------------------------------------------------------------
-
 // concatOp represents the $concat expression operator.
 //
 //	{ $concat: [ <expression1>, <expression2>, ... ] }
@@ -30,7 +28,6 @@ type concatOp struct {
 	args []any
 }
 
-// newConcat creates a new $concat operator.
 func newConcat(args ...any) (Operator, error) {
 	return &concatOp{args: args}, nil
 }
@@ -65,10 +62,7 @@ func (c *concatOp) Process(doc *types.Document) (any, error) {
 	return buf.String(), nil
 }
 
-// check interfaces
 var _ Operator = (*concatOp)(nil)
-
-// -- $toLower ------------------------------------------------------------------
 
 // toLowerOp represents the $toLower expression operator.
 //
@@ -77,7 +71,6 @@ type toLowerOp struct {
 	arg any
 }
 
-// newToLower creates a new $toLower operator.
 func newToLower(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -111,10 +104,7 @@ func (op *toLowerOp) Process(doc *types.Document) (any, error) {
 	return strings.ToLower(s), nil
 }
 
-// check interfaces
 var _ Operator = (*toLowerOp)(nil)
-
-// -- $toUpper ------------------------------------------------------------------
 
 // toUpperOp represents the $toUpper expression operator.
 //
@@ -123,7 +113,6 @@ type toUpperOp struct {
 	arg any
 }
 
-// newToUpper creates a new $toUpper operator.
 func newToUpper(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -157,5 +146,4 @@ func (op *toUpperOp) Process(doc *types.Document) (any, error) {
 	return strings.ToUpper(s), nil
 }
 
-// check interfaces
 var _ Operator = (*toUpperOp)(nil)

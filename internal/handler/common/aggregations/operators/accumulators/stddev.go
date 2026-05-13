@@ -25,13 +25,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// stdDevPopAccumulator represents $stdDevPop aggregation accumulator.
 type stdDevPopAccumulator struct {
 	expression *aggregations.Expression
 	number     any
 }
 
-// newStdDevPop creates a new $stdDevPop accumulator.
 func newStdDevPop(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -58,7 +56,6 @@ func newStdDevPop(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (s *stdDevPopAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -74,13 +71,11 @@ func (s *stdDevPopAccumulator) Accumulate(iter types.DocumentsIterator) (any, er
 	return stdDevPop(nums), nil
 }
 
-// stdDevSampAccumulator represents $stdDevSamp aggregation accumulator.
 type stdDevSampAccumulator struct {
 	expression *aggregations.Expression
 	number     any
 }
 
-// newStdDevSamp creates a new $stdDevSamp accumulator.
 func newStdDevSamp(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -107,7 +102,6 @@ func newStdDevSamp(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (s *stdDevSampAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -208,7 +202,6 @@ func stdDevSamp(nums []float64) float64 {
 	return math.Sqrt(variance)
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*stdDevPopAccumulator)(nil)
 	_ Accumulator = (*stdDevSampAccumulator)(nil)

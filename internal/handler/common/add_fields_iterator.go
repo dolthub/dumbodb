@@ -43,13 +43,11 @@ func AddFieldsIterator(iter types.DocumentsIterator, closer *iterator.MultiClose
 	return res
 }
 
-// addFieldsIterator is returned by AddFieldsIterator.
 type addFieldsIterator struct {
 	iter     types.DocumentsIterator
 	newField *types.Document
 }
 
-// Next implements iterator.Interface. See addFieldsIterator for details.
 func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
 
@@ -100,7 +98,6 @@ func (iter *addFieldsIterator) Next() (struct{}, *types.Document, error) {
 	return unused, doc, nil
 }
 
-// Close implements iterator.Interface. See AddFieldsIterator for details.
 func (iter *addFieldsIterator) Close() {
 	iter.iter.Close()
 }
@@ -155,7 +152,6 @@ func processAddFieldsError(err error) error {
 	}
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*addFieldsIterator)(nil)
 )

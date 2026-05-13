@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// multiply represents `$multiply` expression operator.
 type multiply struct {
 	expressions []*aggregations.Expression
 	operators   []*types.Document
@@ -133,7 +132,6 @@ func (m *multiply) Process(doc *types.Document) (any, error) {
 	return aggregations.MultiplyNumbers(values...), nil
 }
 
-// check interfaces
 var (
 	_ Operator = (*multiply)(nil)
 )

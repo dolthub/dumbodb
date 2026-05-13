@@ -31,7 +31,6 @@ type sample struct {
 	size int64
 }
 
-// newSample creates a new $sample stage.
 func newSample(stage *types.Document) (aggregations.Stage, error) {
 	spec, err := stage.Get("$sample")
 	if err != nil {
@@ -114,7 +113,6 @@ func (s *sample) Process(ctx context.Context, iter types.DocumentsIterator, clos
 	return res, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*sample)(nil)
 )

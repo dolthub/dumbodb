@@ -24,14 +24,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// addToSetAccumulator represents $addToSet aggregation accumulator.
 type addToSetAccumulator struct {
 	expression *aggregations.Expression
 	constant   any
 	isConst    bool
 }
 
-// newAddToSet creates a new $addToSet accumulator.
 func newAddToSet(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -58,7 +56,6 @@ func newAddToSet(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (a *addToSetAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -88,7 +85,6 @@ func (a *addToSetAccumulator) Accumulate(iter types.DocumentsIterator) (any, err
 			}
 		}
 
-		// Only add if not already in the set.
 		if !containsValue(result, val) {
 			result.Append(val)
 		}
@@ -121,7 +117,6 @@ func containsValue(arr *types.Array, val any) bool {
 	return false
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*addToSetAccumulator)(nil)
 )

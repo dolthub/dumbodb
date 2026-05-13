@@ -33,45 +33,25 @@ import (
 type TypeCode int32
 
 const (
-	// TypeCodeDouble is a double type code.
-	TypeCodeDouble = TypeCode(1) // double
-	// TypeCodeString is a string type code.
-	TypeCodeString = TypeCode(2) // string
-	// TypeCodeObject is an object type code.
-	TypeCodeObject = TypeCode(3) // object
-	// TypeCodeArray is an array type code.
-	TypeCodeArray = TypeCode(4) // array
-	// TypeCodeBinData is a binary data type code.
-	TypeCodeBinData = TypeCode(5) // binData
-	// TypeCodeObjectID is an object id type code.
-	TypeCodeObjectID = TypeCode(7) // objectId
-	// TypeCodeBool is a boolean type code.
-	TypeCodeBool = TypeCode(8) // bool
-	// TypeCodeDate is a date type code.
-	TypeCodeDate = TypeCode(9) // date
-	// TypeCodeNull is a null type code.
-	TypeCodeNull = TypeCode(10) // null
-	// TypeCodeRegex is a regex type code.
-	TypeCodeRegex = TypeCode(11) // regex
-	// TypeCodeInt is an int type code.
-	TypeCodeInt = TypeCode(16) // int
-	// TypeCodeTimestamp is a timestamp type code.
+	TypeCodeDouble    = TypeCode(1)  // double
+	TypeCodeString    = TypeCode(2)  // string
+	TypeCodeObject    = TypeCode(3)  // object
+	TypeCodeArray     = TypeCode(4)  // array
+	TypeCodeBinData   = TypeCode(5)  // binData
+	TypeCodeObjectID  = TypeCode(7)  // objectId
+	TypeCodeBool      = TypeCode(8)  // bool
+	TypeCodeDate      = TypeCode(9)  // date
+	TypeCodeNull      = TypeCode(10) // null
+	TypeCodeRegex     = TypeCode(11) // regex
+	TypeCodeInt       = TypeCode(16) // int
 	TypeCodeTimestamp = TypeCode(17) // timestamp
-	// TypeCodeLong is a long type code.
-	TypeCodeLong = TypeCode(18) // long
+	TypeCodeLong      = TypeCode(18) // long
 
-	// Not implemented.
-
-	// TypeCodeDecimal is a decimal type code.
-	TypeCodeDecimal = TypeCode(19) // decimal
-	// TypeCodeMinKey is a minKey type code.
-	TypeCodeMinKey = TypeCode(-1) // minKey
-	// TypeCodeMaxKey is a maxKey type code.
-	TypeCodeMaxKey = TypeCode(127) // maxKey
+	TypeCodeDecimal = TypeCode(19)  // decimal
+	TypeCodeMinKey  = TypeCode(-1)  // minKey
+	TypeCodeMaxKey  = TypeCode(127) // maxKey
 
 	// Not actual type code. `number` matches double, int, long, and decimal.
-
-	// TypeCodeNumber is a number type code.
 	TypeCodeNumber = TypeCode(-128) // number
 )
 

@@ -75,7 +75,6 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	return amFromRootish(ctx, state, db.rootish)
 }
 
-// Collection implements backends.Database.
 func (db *database) Collection(name string) (backends.Collection, error) {
 	return backends.CollectionContract(&collection{
 		db:   db,
@@ -83,7 +82,6 @@ func (db *database) Collection(name string) (backends.Collection, error) {
 	}), nil
 }
 
-// ListCollections implements backends.Database.
 func (db *database) ListCollections(ctx context.Context, params *backends.ListCollectionsParams) (*backends.ListCollectionsResult, error) {
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
@@ -165,7 +163,6 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 	return &backends.ListCollectionsResult{Collections: colls}, nil
 }
 
-// CreateCollection implements backends.Database.
 func (db *database) CreateCollection(ctx context.Context, params *backends.CreateCollectionParams) error {
 	state, err := db.backend.getOrOpenDB(ctx, db.name, true)
 	if err != nil {
@@ -257,7 +254,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	return nil
 }
 
-// DropCollection implements backends.Database.
 func (db *database) DropCollection(ctx context.Context, params *backends.DropCollectionParams) error {
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
@@ -308,7 +304,6 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	return nil
 }
 
-// RenameCollection implements backends.Database.
 func (db *database) RenameCollection(ctx context.Context, params *backends.RenameCollectionParams) error {
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
@@ -385,7 +380,6 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 	return nil
 }
 
-// CollMod implements backends.Database.
 func (db *database) CollMod(ctx context.Context, params *backends.CollModParams) error {
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {
@@ -447,7 +441,6 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	return nil
 }
 
-// Stats implements backends.Database.
 func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsParams) (*backends.DatabaseStatsResult, error) {
 	state, err := db.backend.getOrOpenDB(ctx, db.name, false)
 	if err != nil {

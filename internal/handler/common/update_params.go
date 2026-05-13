@@ -24,8 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// UpdateParams represents parameters for the update command.
-//
 //nolint:vet // for readability
 type UpdateParams struct {
 	DB         string `dumbo:"$db"`
@@ -58,8 +56,6 @@ type UpdateParams struct {
 	SkipDurableSync bool `dumbo:"-"`
 }
 
-// Update represents a single update operation parameters.
-//
 //nolint:vet // for readability
 type Update struct {
 	Filter    *types.Document `dumbo:"q,opt"`
@@ -99,7 +95,6 @@ type UpdateResult struct {
 	}
 }
 
-// GetUpdateParams returns parameters for update command.
 func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, error) {
 	var params UpdateParams
 

@@ -65,7 +65,6 @@ var info = &Info{
 	MongoDBVersionArray: must.NotFail(types.NewArray(int32(8), int32(0), int32(20), int32(0))),
 }
 
-// Get returns current build's info.
 func Get() *Info {
 	return info
 }

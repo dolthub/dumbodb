@@ -104,7 +104,6 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		)
 	}
 
-	// support cross-database rename
 	if oldDBName != newDBName {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrNotImplemented,

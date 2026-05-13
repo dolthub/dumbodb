@@ -22,8 +22,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// FindParams represents parameters for the find command.
-//
 //nolint:vet // for readability
 type FindParams struct {
 	DB           string          `dumbo:"$db"`
@@ -70,7 +68,6 @@ type FindParams struct {
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
-// GetFindParams returns `find` command parameters.
 func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 	params := FindParams{
 		BatchSize: 101,

@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
-// switchBranch holds a case/then pair for $switch.
 type switchBranch struct {
 	caseExpr any
 	thenExpr any

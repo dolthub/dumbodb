@@ -21,8 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// DeleteParams represents parameters for the delete command.
-//
 //nolint:vet // for readability
 type DeleteParams struct {
 	DB         string `dumbo:"$db"`
@@ -51,8 +49,6 @@ type DeleteParams struct {
 	SkipDurableSync bool `dumbo:"-"`
 }
 
-// Delete represents single delete operation parameters.
-//
 //nolint:vet // for readability
 type Delete struct {
 	Filter  *types.Document `dumbo:"q"`
@@ -63,7 +59,6 @@ type Delete struct {
 	Hint string `dumbo:"hint,ignored"`
 }
 
-// GetDeleteParams returns parameters for delete operation.
 func GetDeleteParams(document *types.Document, l *slog.Logger) (*DeleteParams, error) {
 	params := DeleteParams{
 		Ordered: true,

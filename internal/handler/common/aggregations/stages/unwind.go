@@ -37,7 +37,6 @@ type unwind struct {
 	preserveNullAndEmptyArrays bool
 }
 
-// newUnwind creates a new $unwind stage.
 func newUnwind(stage *types.Document) (aggregations.Stage, error) {
 	field, err := stage.Get("$unwind")
 	if err != nil {
@@ -208,7 +207,6 @@ func parseUnwindPath(field string) (*aggregations.Expression, error) {
 	return expr, nil
 }
 
-// Process implements Stage interface.
 func (u *unwind) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -300,7 +298,6 @@ func (u *unwind) Process(_ context.Context, iter types.DocumentsIterator, closer
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*unwind)(nil)
 )

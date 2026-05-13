@@ -34,8 +34,6 @@ func newMergeObjects(args ...any) (Operator, error) {
 	return &mergeObjects{args: args}, nil
 }
 
-// Process implements the Operator interface.
-// It evaluates each argument against doc and merges the resulting documents.
 func (m *mergeObjects) Process(doc *types.Document) (any, error) {
 	result, err := types.NewDocument()
 	if err != nil {
@@ -73,7 +71,6 @@ func evalArgValueWithRoot(arg any, doc *types.Document) (any, error) {
 	return evalArgValue(arg, doc)
 }
 
-// check interfaces
 var (
 	_ Operator = (*mergeObjects)(nil)
 )

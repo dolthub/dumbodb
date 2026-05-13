@@ -20,13 +20,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// -- $first (expression operator) ---------------------------------------------
-//
 // When used outside of $group, $first acts as an array expression operator:
 //   - If the evaluated argument is an array, returns its first element (null if empty).
 //   - If the evaluated argument is null/missing, returns null.
 //   - Otherwise returns the value as-is.
-
 type firstOp struct{ arg any }
 
 func newFirstOp(args ...any) (Operator, error) {
@@ -67,13 +64,10 @@ func (op *firstOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*firstOp)(nil)
 
-// -- $last (expression operator) ----------------------------------------------
-//
 // When used outside of $group, $last acts as an array expression operator:
 //   - If the evaluated argument is an array, returns its last element (null if empty).
 //   - If the evaluated argument is null/missing, returns null.
 //   - Otherwise returns the value as-is.
-
 type lastOp struct{ arg any }
 
 func newLastOp(args ...any) (Operator, error) {

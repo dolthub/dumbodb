@@ -23,8 +23,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// FindAndModifyParams represent parameters for the findAndModify command.
-//
 //nolint:vet // for readability
 type FindAndModifyParams struct {
 	DB                string          `dumbo:"$db"`
@@ -68,7 +66,6 @@ type FindAndModifyParams struct {
 	SkipDurableSync bool `dumbo:"-"`
 }
 
-// GetFindAndModifyParams returns `findAndModifyParams` command parameters.
 func GetFindAndModifyParams(doc *types.Document, l *slog.Logger) (*FindAndModifyParams, error) {
 	var params FindAndModifyParams
 

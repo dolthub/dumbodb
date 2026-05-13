@@ -46,14 +46,12 @@ func SkipIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, sk
 	}
 }
 
-// skipIterator is returned by SkipIterator.
 type skipIterator struct {
 	iter types.DocumentsIterator
 	n    atomic.Uint32
 	skip uint32
 }
 
-// Next implements iterator.Interface. See SkipIterator for details.
 func (iter *skipIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
 
@@ -70,13 +68,11 @@ func (iter *skipIterator) Next() (struct{}, *types.Document, error) {
 	return iter.iter.Next()
 }
 
-// Close implements iterator.Interface. See SkipIterator for details.
 func (iter *skipIterator) Close() {
 	iter.iter.Close()
 	iter.n.Store(iter.skip)
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*skipIterator)(nil)
 )

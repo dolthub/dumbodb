@@ -25,10 +25,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/state"
 )
 
-// newHandlerFunc represents a function that constructs a new handler.
 type newHandlerFunc func(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, error)
 
-// CloseBackendFunc represents a function that closes a backend.
 type CloseBackendFunc func()
 
 // registry maps handler names to constructors.

@@ -24,13 +24,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// avg represents $avg aggregation accumulator.
 type avg struct {
 	expression *aggregations.Expression
 	number     any
 }
 
-// newAvg creates a new $avg accumulator.
 func newAvg(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -57,7 +55,6 @@ func newAvg(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (a *avg) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -92,7 +89,6 @@ func (a *avg) Accumulate(iter types.DocumentsIterator) (any, error) {
 }
 
 
-// check interfaces
 var (
 	_ Accumulator = (*avg)(nil)
 )

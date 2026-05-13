@@ -83,7 +83,6 @@ var unsupportedStages = map[string]struct{}{
 	// please keep sorted alphabetically
 }
 
-// NewStage creates a new aggregation stage.
 func NewStage(stage *types.Document) (aggregations.Stage, error) {
 	if stage.Len() != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(

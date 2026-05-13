@@ -24,12 +24,10 @@ type Closer interface {
 // CloserFunc converts a function (such as context.CancelFunc) to a Closer.
 type CloserFunc func()
 
-// Close implements Closer.
 func (cf CloserFunc) Close() {
 	cf()
 }
 
-// MultiCloser is a helper for closing multiple closers.
 type MultiCloser struct {
 	token   *resource.Token
 	closers []Closer
@@ -60,7 +58,6 @@ func (mc *MultiCloser) Add(closers ...Closer) {
 	}
 }
 
-// Close closes all added closers.
 func (mc *MultiCloser) Close() {
 	for _, c := range mc.closers {
 		c.Close()
@@ -69,7 +66,6 @@ func (mc *MultiCloser) Close() {
 	resource.Untrack(mc, mc.token)
 }
 
-// check interfaces
 var (
 	_ Closer = CloserFunc(nil)
 )

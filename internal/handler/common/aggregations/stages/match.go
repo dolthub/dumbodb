@@ -30,7 +30,6 @@ type match struct {
 	filter *types.Document
 }
 
-// newMatch creates a new $match stage.
 func newMatch(stage *types.Document) (aggregations.Stage, error) {
 	filter, err := common.GetRequiredParam[*types.Document](stage, "$match")
 	if err != nil {
@@ -50,7 +49,6 @@ func newMatch(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.FilterIterator(iter, closer, m.filter), nil
 }
@@ -67,7 +65,6 @@ func validateMatch(filter *types.Document) error {
 	return nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*match)(nil)
 )

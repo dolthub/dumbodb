@@ -104,7 +104,6 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 		nIndexes += int64(len(iList.Indexes))
 
-		// Compute BSON data size for this collection.
 		colBSONSize, _, colErr := collectionBSONDataSize(connCtx, c, nil)
 		if colErr != nil && !backends.ErrorCodeIs(colErr, backends.ErrorCodeCollectionDoesNotExist) &&
 			!backends.ErrorCodeIs(colErr, backends.ErrorCodeDatabaseDoesNotExist) {

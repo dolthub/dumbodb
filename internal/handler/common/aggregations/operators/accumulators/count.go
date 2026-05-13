@@ -22,10 +22,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
-// count represents $count operator.
 type count struct{}
 
-// newCount creates a new $count aggregation operator.
 func newCount(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -48,7 +46,6 @@ func newCount(args ...any) (Accumulator, error) {
 	return new(count), nil
 }
 
-// Accumulate implements Accumulator interface.
 func (c *count) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 	var count int32
@@ -68,7 +65,6 @@ func (c *count) Accumulate(iter types.DocumentsIterator) (any, error) {
 	return count, nil
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*count)(nil)
 )

@@ -87,9 +87,7 @@ func durationWithJitter(cap time.Duration, attempt int64) time.Duration {
 		panic(fmt.Sprintf("cap must be larger than min duration (%dms)", minDuration))
 	}
 
-	// calculate base backoff based on base duration and amount of attempts
 	backoff := float64(base * math.Pow(2, float64(attempt)))
-	// cap is a max limit of possible durations returned
 	maxDuration := int64(math.Min(float64(capDuration), backoff))
 
 	// Math/rand is good enough because we don't need the randomness to be cryptographically secure.

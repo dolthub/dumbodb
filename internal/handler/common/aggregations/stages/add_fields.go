@@ -33,7 +33,6 @@ type addFields struct {
 	newField *types.Document
 }
 
-// newAddFields validates stage document and creates a new $addFields stage.
 func newAddFields(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := stage.Get("$addFields")
 	if err != nil {
@@ -62,12 +61,10 @@ func newAddFields(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (s *addFields) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.AddFieldsIterator(iter, closer, s.newField), nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*addFields)(nil)
 )

@@ -22,7 +22,6 @@ package resource
 // and they do.
 type Token byte
 
-// NewToken returns a new Token.
 func NewToken() *Token {
 	return new(Token)
 }

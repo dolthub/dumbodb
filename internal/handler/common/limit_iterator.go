@@ -48,14 +48,12 @@ func LimitIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, l
 	}
 }
 
-// limitIterator is returned by LimitIterator.
 type limitIterator struct {
 	iter  types.DocumentsIterator
 	n     atomic.Uint32
 	limit uint32
 }
 
-// Next implements iterator.Interface. See LimitIterator for details.
 func (iter *limitIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
 
@@ -68,13 +66,11 @@ func (iter *limitIterator) Next() (struct{}, *types.Document, error) {
 	return iter.iter.Next()
 }
 
-// Close implements iterator.Interface. See LimitIterator for details.
 func (iter *limitIterator) Close() {
 	iter.iter.Close()
 	iter.n.Store(iter.limit)
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*limitIterator)(nil)
 )

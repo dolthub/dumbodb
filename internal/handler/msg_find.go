@@ -103,7 +103,6 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		if len(srcList.Collections) > 0 {
 			cInfo = srcList.Collections[0]
 		}
-		// Re-obtain the collection object for the source collection.
 		coll, err = db.Collection(params.Collection)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
@@ -423,7 +422,6 @@ type minMaxIter struct {
 	maxDoc  *types.Document
 }
 
-// Next implements iterator.Interface.
 func (it *minMaxIter) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
 
@@ -439,7 +437,6 @@ func (it *minMaxIter) Next() (struct{}, *types.Document, error) {
 	}
 }
 
-// Close implements iterator.Interface.
 func (it *minMaxIter) Close() {
 	it.iter.Close()
 }
@@ -503,7 +500,6 @@ func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
 	return true
 }
 
-// check interfaces
 var _ types.DocumentsIterator = (*minMaxIter)(nil)
 
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.

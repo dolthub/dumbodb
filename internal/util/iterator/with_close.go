@@ -14,7 +14,6 @@
 
 package iterator
 
-// withCloseIterator wraps an iterator with a custom close function.
 type withCloseIterator[K, V any] struct {
 	iter  Interface[K, V]
 	close func()
@@ -30,18 +29,14 @@ func WithClose[K, V any](iter Interface[K, V], close func()) Interface[K, V] {
 	}
 }
 
-// Next implements iterator.Interface by calling Next() method of the wrapped iterator.
 func (iter *withCloseIterator[K, V]) Next() (K, V, error) {
 	return iter.iter.Next()
 }
 
-// Close implements iterator.Interface by calling the provided close function.
 func (iter *withCloseIterator[K, V]) Close() {
-	// we might want to wrap it with sync.Once if needed
 	iter.close()
 }
 
-// check interfaces
 var (
 	_ Interface[any, any] = (*withCloseIterator[any, any])(nil)
 	_ Closer              = (*withCloseIterator[any, any])(nil)

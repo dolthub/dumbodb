@@ -31,7 +31,6 @@ type sort struct {
 	fields *types.Document
 }
 
-// newSort creates a new $sort stage.
 func newSort(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$sort")
 	if err != nil {
@@ -77,7 +76,6 @@ func (s *sort) Process(ctx context.Context, iter types.DocumentsIterator, closer
 	return iter, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*sort)(nil)
 )

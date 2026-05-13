@@ -42,7 +42,6 @@ func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiClos
 	return res, nil
 }
 
-// projectionIterator is returned by ProjectionIterator.
 type projectionIterator struct {
 	iter       types.DocumentsIterator
 	projection *types.Document
@@ -71,7 +70,6 @@ func (iter *projectionIterator) Close() {
 	iter.iter.Close()
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*projectionIterator)(nil)
 )

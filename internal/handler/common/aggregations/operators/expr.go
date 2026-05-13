@@ -51,7 +51,6 @@ func NewExpr(exprValue *types.Document, errArgument string) (Operator, error) {
 	return e, nil
 }
 
-// Process implements Operator interface.
 func (e *expr) Process(doc *types.Document) (any, error) {
 	return e.processExpr(e.exprValue, doc)
 }
@@ -305,7 +304,6 @@ func processExprOperatorErrors(err error, argument string) error {
 	return lazyerrors.Error(err)
 }
 
-// check interfaces
 var (
 	_ Operator = (*expr)(nil)
 )

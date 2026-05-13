@@ -42,7 +42,6 @@ type storageStats struct {
 	scale int32
 }
 
-// newCollStats creates a new $collStats stage.
 func newCollStats(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$collStats")
 	if err != nil {
@@ -138,7 +137,6 @@ func (c *collStats) Process(ctx context.Context, iter types.DocumentsIterator, c
 	return iter, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*collStats)(nil)
 )

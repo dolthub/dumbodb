@@ -34,9 +34,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// WriteErrorDocument returns a document representation of the write error.
-//
-// Find a better place for this function.
 func WriteErrorDocument(we *mongo.WriteError) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"index", int32(we.Index),

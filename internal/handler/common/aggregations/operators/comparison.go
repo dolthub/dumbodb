@@ -47,7 +47,6 @@ type cmpOperator struct {
 	name  string
 }
 
-// newCmpOperator creates a new comparison operator.
 func newCmpOperator(name string, op compOp) newOperatorFunc {
 	return func(args ...any) (Operator, error) {
 		if len(args) != 2 {
@@ -94,10 +93,7 @@ func (c *cmpOperator) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*cmpOperator)(nil)
-
-// -- $cmp ---------------------------------------------------------------------
 
 // cmpOp represents { $cmp: [ <expr1>, <expr2> ] }.
 // Returns -1 if expr1 < expr2, 0 if equal, 1 if expr1 > expr2.
@@ -106,7 +102,6 @@ type cmpOp struct {
 	right any
 }
 
-// newCmp creates a new $cmp operator.
 func newCmp(args ...any) (Operator, error) {
 	if len(args) != 2 {
 		return nil, newOperatorError(
@@ -119,7 +114,6 @@ func newCmp(args ...any) (Operator, error) {
 	return &cmpOp{left: args[0], right: args[1]}, nil
 }
 
-// Process implements Operator.
 func (c *cmpOp) Process(doc *types.Document) (any, error) {
 	lv, err := evalArgValue(c.left, doc)
 	if err != nil {
@@ -141,5 +135,4 @@ func (c *cmpOp) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*cmpOp)(nil)

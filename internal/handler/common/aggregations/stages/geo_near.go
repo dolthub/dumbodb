@@ -54,7 +54,6 @@ type geoNear struct {
 	distanceMultiplier float64         // multiplier applied to distance (default 1)
 }
 
-// newGeoNear creates a new $geoNear stage.
 func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 	spec, err := common.GetRequiredParam[*types.Document](stage, "$geoNear")
 	if err != nil {
@@ -220,7 +219,6 @@ func newGeoNear(stage *types.Document) (aggregations.Stage, error) {
 	return g, nil
 }
 
-// Process implements the aggregations.Stage interface.
 func (g *geoNear) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) {
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -362,10 +360,6 @@ func (g *geoNear) computeDistance(fieldVal any) float64 {
 	return math.MaxFloat64
 }
 
-// ----------------------------------------------
-// Local helpers (avoid import cycle with common)
-// ----------------------------------------------
-
 const earthRadiusM = 6378137.0
 
 func haversineDistMeters(lon1, lat1, lon2, lat2 float64) float64 {
@@ -425,5 +419,4 @@ func geoToFloat64(v any) (float64, error) {
 	)
 }
 
-// check interface
 var _ aggregations.Stage = (*geoNear)(nil)

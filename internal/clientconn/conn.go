@@ -71,7 +71,6 @@ var AllModes = []string{
 	string(DiffProxyMode),
 }
 
-// conn represents client connection.
 type conn struct {
 	netConn        net.Conn
 	mode           Mode
@@ -82,7 +81,6 @@ type conn struct {
 	testRecordsDir string // if empty, no records are created
 }
 
-// newConnOpts represents newConn options.
 type newConnOpts struct {
 	netConn net.Conn
 	mode    Mode

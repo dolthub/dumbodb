@@ -36,19 +36,15 @@ import (
 
 //go:generate ../../../bin/stringer -linecomment -type Type
 
-// Type represents a cursor type.
 type Type int
 
 const (
 	_ Type = iota
 
-	// Normal represents a normal cursor.
 	Normal
 
-	// Tailable represents a tailable cursor.
 	Tailable
 
-	// TailableAwait represents a tailable and blocking cursor.
 	TailableAwait
 )
 
@@ -75,7 +71,6 @@ type Cursor struct {
 	m            sync.Mutex
 }
 
-// newCursor creates a new cursor.
 func newCursor(id int64, iter types.DocumentsIterator, params *NewParams, r *Registry) *Cursor {
 	if params.Type == 0 {
 		panic("Cursor type must be specified")
@@ -126,7 +121,6 @@ func (c *Cursor) Reset(iter types.DocumentsIterator) error {
 	}
 }
 
-// Next implements types.DocumentsIterator interface.
 func (c *Cursor) Next() (struct{}, *types.Document, error) {
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -174,7 +168,6 @@ func (c *Cursor) Close() {
 	resource.Untrack(c, c.token)
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*Cursor)(nil)
 )

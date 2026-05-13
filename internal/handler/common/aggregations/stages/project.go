@@ -38,7 +38,6 @@ type project struct {
 	inclusion  bool
 }
 
-// newProject validates projection document and creates a new $project stage.
 func newProject(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$project")
 	if err != nil {
@@ -60,14 +59,11 @@ func newProject(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
-//
 //nolint:lll // for readability
 func (p *project) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) {
 	return projection.ProjectionIterator(iter, closer, p.projection)
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*project)(nil)
 )

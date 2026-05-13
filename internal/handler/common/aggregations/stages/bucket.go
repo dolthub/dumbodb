@@ -52,13 +52,11 @@ type bucket struct {
 	output       []bucketOutput
 }
 
-// bucketOutput holds an output field name and its accumulator.
 type bucketOutput struct {
 	field       string
 	accumulator accumulators.Accumulator
 }
 
-// newBucket creates a new $bucket stage.
 func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$bucket")
 	if err != nil {
@@ -176,7 +174,6 @@ func newBucket(stage *types.Document) (aggregations.Stage, error) {
 	return b, nil
 }
 
-// Process implements Stage interface.
 func (b *bucket) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -295,7 +292,6 @@ func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []
 	}
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*bucket)(nil)
 )

@@ -59,7 +59,6 @@ type graphLookup struct {
 	fetcher                 CollectionFetcher
 }
 
-// NewGraphLookupStage creates a new $graphLookup stage with a collection fetcher.
 func NewGraphLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregations.Stage, error) {
 	spec, err := stage.Get("$graphLookup")
 	if err != nil {
@@ -190,7 +189,6 @@ func requireStringField(doc *types.Document, field, stageName string) (string, e
 	return s, nil
 }
 
-// Process implements the Stage interface.
 func (gl *graphLookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -426,7 +424,6 @@ func evaluateStartWith(startWith any, doc *types.Document) []any {
 	}
 }
 
-// arrayElements returns the elements of a types.Array as a []any slice.
 func arrayElements(arr *types.Array) []any {
 	result := make([]any, 0, arr.Len())
 	arrIter := arr.Iterator()
@@ -460,7 +457,6 @@ func docIdentityKey(doc *types.Document) string {
 	return fmt.Sprintf("doc:%v", doc)
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*graphLookup)(nil)
 )

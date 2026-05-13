@@ -75,17 +75,14 @@ func (e *CommandError) Err() error {
 	return e.err
 }
 
-// Code returns error code.
 func (e *CommandError) Code() ErrorCode {
 	return e.code
 }
 
-// Error implements error interface.
 func (e *CommandError) Error() string {
 	return fmt.Sprintf("%[1]s (%[1]d): %[2]v", e.code, e.err)
 }
 
-// Document implements ProtoErr interface.
 func (e *CommandError) Document() *wirebson.Document {
 	d := must.NotFail(wirebson.NewDocument(
 		"ok", float64(0),
@@ -100,12 +97,10 @@ func (e *CommandError) Document() *wirebson.Document {
 	return d
 }
 
-// Info implements ProtoErr interface.
 func (e *CommandError) Info() *ErrInfo {
 	return e.info
 }
 
-// check interfaces
 var (
 	_ ProtoErr = (*CommandError)(nil)
 )

@@ -65,7 +65,6 @@ func (s *State) DisableTelemetry() {
 	s.UpdateAvailable = false
 }
 
-// EnableTelemetry enables telemetry.
 func (s *State) EnableTelemetry() {
 	s.Telemetry = pointer.ToBool(true)
 }
@@ -81,7 +80,6 @@ func (s *State) fill() {
 	}
 }
 
-// deepCopy returns a deep copy of the state.
 func (s *State) deepCopy() *State {
 	var telemetry *bool
 	if s.Telemetry != nil {

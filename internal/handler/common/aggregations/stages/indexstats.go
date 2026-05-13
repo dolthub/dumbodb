@@ -100,5 +100,4 @@ func (s *indexStatsStage) Process(ctx context.Context, iter types.DocumentsItera
 	return result, nil
 }
 
-// check interfaces
 var _ aggregations.Stage = (*indexStatsStage)(nil)

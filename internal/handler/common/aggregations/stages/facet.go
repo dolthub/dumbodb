@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// rawFacetPipeline holds a named raw sub-pipeline array.
 type rawFacetPipeline struct {
 	name         string
 	pipelineArr  *types.Array
@@ -168,7 +167,6 @@ func runSubPipeline(ctx context.Context, inputDocs []*types.Document, stages []a
 	return result, nil
 }
 
-// Process implements Stage interface.
 func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Collect all input documents  -- each sub-pipeline gets the same set.
 	inputDocs, err := iterator.ConsumeValues(iter)
@@ -205,7 +203,6 @@ func (f *facet) Process(ctx context.Context, iter types.DocumentsIterator, close
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*facet)(nil)
 )

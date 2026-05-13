@@ -62,7 +62,6 @@ func opMsgDocument(msg *wire.OpMsg) (*types.Document, error) {
 	return res, nil
 }
 
-// documentOpMsg converts the document to [*wirebson.Document].
 func documentOpMsg(doc *types.Document) (*wire.OpMsg, error) {
 	return wire.NewOpMsg(must.NotFail(bson.FromDocument(doc)))
 }

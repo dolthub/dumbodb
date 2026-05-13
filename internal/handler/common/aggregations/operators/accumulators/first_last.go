@@ -24,14 +24,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// firstAccumulator represents $first aggregation accumulator.
 type firstAccumulator struct {
 	expression *aggregations.Expression
 	constant   any
 	isConst    bool
 }
 
-// newFirst creates a new $first accumulator.
 func newFirst(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -58,7 +56,6 @@ func newFirst(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (f *firstAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -87,14 +84,12 @@ func (f *firstAccumulator) Accumulate(iter types.DocumentsIterator) (any, error)
 	return types.Null, nil
 }
 
-// lastAccumulator represents $last aggregation accumulator.
 type lastAccumulator struct {
 	expression *aggregations.Expression
 	constant   any
 	isConst    bool
 }
 
-// newLast creates a new $last accumulator.
 func newLast(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -121,7 +116,6 @@ func newLast(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (l *lastAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -160,7 +154,6 @@ func (l *lastAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) 
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*firstAccumulator)(nil)
 	_ Accumulator = (*lastAccumulator)(nil)

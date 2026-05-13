@@ -31,20 +31,10 @@ type ExpressionErrorCode int
 
 const (
 	_ ExpressionErrorCode = iota
-
-	// ErrNotExpression indicates that field is not an expression.
 	ErrNotExpression
-
-	// ErrInvalidExpression indicates that expression is invalid.
 	ErrInvalidExpression
-
-	// ErrEmptyFieldPath indicates that field path expression is empty.
 	ErrEmptyFieldPath
-
-	// ErrUndefinedVariable indicates that variable name is not defined.
 	ErrUndefinedVariable
-
-	// ErrEmptyVariable indicates that variable name is empty.
 	ErrEmptyVariable
 )
 
@@ -54,17 +44,14 @@ type ExpressionError struct {
 	name string
 }
 
-// newExpressionError creates a new ExpressionError.
 func newExpressionError(code ExpressionErrorCode, name string) error {
 	return &ExpressionError{code: code, name: name}
 }
 
-// Error implements the error interface.
 func (e *ExpressionError) Error() string {
 	return e.code.String()
 }
 
-// Code returns the ExpressionError code.
 func (e *ExpressionError) Code() ExpressionErrorCode {
 	return e.code
 }

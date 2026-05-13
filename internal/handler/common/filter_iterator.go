@@ -36,13 +36,11 @@ func FilterIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, 
 	return res
 }
 
-// filterIterator is returned by FilterIterator.
 type filterIterator struct {
 	iter   types.DocumentsIterator
 	filter *types.Document
 }
 
-// Next implements iterator.Interface. See FilterIterator for details.
 func (iter *filterIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
 
@@ -63,12 +61,10 @@ func (iter *filterIterator) Next() (struct{}, *types.Document, error) {
 	}
 }
 
-// Close implements iterator.Interface. See FilterIterator for details.
 func (iter *filterIterator) Close() {
 	iter.iter.Close()
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*filterIterator)(nil)
 )

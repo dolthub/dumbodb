@@ -25,14 +25,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// sum represents $sum aggregation operator.
 type sum struct {
 	expression *aggregations.Expression
 	operator   operators.Operator
 	number     any
 }
 
-// newSum creates a new $sum aggregation operator.
 func newSum(args ...any) (Accumulator, error) {
 	accumulator := new(sum)
 
@@ -82,7 +80,6 @@ func newSum(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator interface.
 func (s *sum) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -136,7 +133,6 @@ func (s *sum) Accumulate(iter types.DocumentsIterator) (any, error) {
 	return aggregations.SumNumbers(numbers...), nil
 }
 
-// check interfaces
 var (
 	_ Accumulator = (*sum)(nil)
 )

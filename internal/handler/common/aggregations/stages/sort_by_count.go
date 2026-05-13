@@ -41,7 +41,6 @@ type sortByCount struct {
 	groupExpression any
 }
 
-// newSortByCount creates a new $sortByCount stage.
 func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$sortByCount")
 	if err != nil {
@@ -60,7 +59,6 @@ func newSortByCount(stage *types.Document) (aggregations.Stage, error) {
 	return &sortByCount{groupExpression: v}, nil
 }
 
-// Process implements Stage interface.
 func (s *sortByCount) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Collect all documents.
 	docs, err := iterator.ConsumeValues(iter)
@@ -148,7 +146,6 @@ func evaluateGroupExpr(groupExpr any, doc *types.Document) (any, error) {
 	}
 }
 
-// sortByCountEntry holds a group id and its count.
 type sortByCountEntry struct {
 	id    any
 	count int32
@@ -171,7 +168,6 @@ func (m *sortByCountMap) increment(id any) {
 	m.entries = append(m.entries, sortByCountEntry{id: id, count: 1})
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*sortByCount)(nil)
 )

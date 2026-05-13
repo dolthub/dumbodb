@@ -273,10 +273,6 @@ func docDistanceFromField(doc *types.Document, field string, lon, lat float64, s
 	return math.MaxFloat64
 }
 
-// ----------------------------------------------
-// Filter operators
-// ----------------------------------------------
-
 // filterFieldGeoWithin handles {field: {$geoWithin: spec}}.
 func filterFieldGeoWithin(fieldValue any, spec *types.Document) (bool, error) {
 	for _, k := range spec.Keys() {
@@ -497,10 +493,6 @@ func filterFieldNear(fieldValue any, opDoc *types.Document, spherical bool) (boo
 
 	return dist >= minDist && dist <= maxDist, nil
 }
-
-// ----------------------------------------------
-// Geometry containment / intersection
-// ----------------------------------------------
 
 // geometryWithinGeometry reports whether docGeom (from the document) is entirely
 // within queryGeom.
@@ -816,10 +808,6 @@ func segmentsIntersect(a1, a2, b1, b2 [2]float64) bool {
 	return t >= 0 && t <= 1 && u >= 0 && u <= 1
 }
 
-// ----------------------------------------------
-// GeoJSON parsing helpers
-// ----------------------------------------------
-
 // geoJSONType returns the "type" field of a GeoJSON document.
 func geoJSONType(doc *types.Document) (string, error) {
 	typeAny, err := doc.Get("type")
@@ -1066,10 +1054,6 @@ func extractAllPoints(val any) [][2]float64 {
 	return nil
 }
 
-// ----------------------------------------------
-// Geometric predicates
-// ----------------------------------------------
-
 // pointInRing returns true if the point (px, py) is inside the ring using the
 // even-odd (ray casting) algorithm.
 func pointInRing(px, py float64, ring [][2]float64) bool {
@@ -1090,10 +1074,6 @@ func pointInRing(px, py float64, ring [][2]float64) bool {
 	return inside
 }
 
-// ----------------------------------------------
-// Distance functions
-// ----------------------------------------------
-
 // haversineMeters computes the great-circle distance in metres between two
 // [lon, lat] points using the Haversine formula.
 func haversineMeters(lon1, lat1, lon2, lat2 float64) float64 {
@@ -1112,10 +1092,6 @@ func euclidean(x1, y1, x2, y2 float64) float64 {
 	dy := y2 - y1
 	return math.Sqrt(dx*dx + dy*dy)
 }
-
-// ----------------------------------------------
-// Array conversion helpers
-// ----------------------------------------------
 
 // arrToPoint converts a BSON array [x, y] to [2]float64.
 func arrToPoint(val any) ([2]float64, error) {

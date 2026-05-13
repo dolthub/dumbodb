@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// sum represents `$sum` operator.
 type sum struct {
 	// expressions are valid path expression requiring evaluation
 	expressions []*aggregations.Expression
@@ -161,7 +160,6 @@ func (s *sum) Process(doc *types.Document) (any, error) {
 	return aggregations.SumNumbers(numbers...), nil
 }
 
-// check interfaces
 var (
 	_ Operator = (*sum)(nil)
 )

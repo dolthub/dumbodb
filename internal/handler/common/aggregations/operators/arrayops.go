@@ -76,8 +76,6 @@ func sliceToArray(items []any) *types.Array {
 	return arr
 }
 
-// -- $size ---------------------------------------------------------------------
-
 type sizeOp struct{ arg any }
 
 func newSize(args ...any) (Operator, error) {
@@ -104,8 +102,6 @@ func (op *sizeOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*sizeOp)(nil)
 
-// -- $isArray ------------------------------------------------------------------
-
 type isArrayOp struct{ arg any }
 
 func newIsArray(args ...any) (Operator, error) {
@@ -129,8 +125,6 @@ func (op *isArrayOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*isArrayOp)(nil)
-
-// -- $arrayElemAt --------------------------------------------------------------
 
 // arrayElemAtOp represents { $arrayElemAt: [ <array>, <idx> ] }.
 type arrayElemAtOp struct {
@@ -187,8 +181,6 @@ func (op *arrayElemAtOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*arrayElemAtOp)(nil)
 
-// -- $concatArrays -------------------------------------------------------------
-
 type concatArraysOp struct{ args []any }
 
 func newConcatArrays(args ...any) (Operator, error) {
@@ -220,8 +212,6 @@ func (op *concatArraysOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*concatArraysOp)(nil)
-
-// -- $reverseArray -------------------------------------------------------------
 
 type reverseArrayOp struct{ arg any }
 
@@ -257,8 +247,6 @@ func (op *reverseArrayOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*reverseArrayOp)(nil)
-
-// -- $slice --------------------------------------------------------------------
 
 // sliceOp represents { $slice: [ <array>, <n> ] } or { $slice: [ <array>, <position>, <n> ] }.
 type sliceOp struct {
@@ -344,8 +332,6 @@ func (op *sliceOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*sliceOp)(nil)
-
-// -- $indexOfArray -------------------------------------------------------------
 
 // indexOfArrayOp represents { $indexOfArray: [ <array>, <search-expr>, <start>, <end> ] }.
 type indexOfArrayOp struct {
@@ -434,8 +420,6 @@ func (op *indexOfArrayOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*indexOfArrayOp)(nil)
 
-// -- $range --------------------------------------------------------------------
-
 // rangeOp represents { $range: [ <start>, <end>, <step> ] }.
 type rangeOp struct {
 	startArg any
@@ -502,8 +486,6 @@ func (op *rangeOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*rangeOp)(nil)
 
-// -- $in (array membership check) ----------------------------------------------
-
 // inArrayOp represents { $in: [ <expr>, <array-expr> ] }.
 type inArrayOp struct {
 	valueArg any
@@ -549,8 +531,6 @@ func (op *inArrayOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*inArrayOp)(nil)
-
-// -- $filter -------------------------------------------------------------------
 
 // filterOp represents { $filter: { input: <array>, as: <var>, cond: <cond-expr> } }.
 type filterOp struct {
@@ -609,7 +589,6 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 	var result []any
 
 	for _, item := range items {
-		// Create a document with the variable bound.
 		iterDoc := doc.DeepCopy()
 		if err != nil {
 			return nil, err
@@ -631,8 +610,6 @@ func (op *filterOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*filterOp)(nil)
-
-// -- $map ----------------------------------------------------------------------
 
 // mapOp represents { $map: { input: <array>, as: <var>, in: <expr> } }.
 type mapOp struct {
@@ -710,8 +687,6 @@ func (op *mapOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*mapOp)(nil)
 
-// -- $reduce -------------------------------------------------------------------
-
 // reduceOp represents { $reduce: { input: <array>, initialValue: <val>, in: <expr> } }.
 type reduceOp struct {
 	inputArg        any
@@ -788,8 +763,6 @@ func (op *reduceOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*reduceOp)(nil)
 
-// -- $zip ----------------------------------------------------------------------
-
 // zipOp represents { $zip: { inputs: [ <arr1>, <arr2>, ... ], useLongestLength: bool, defaults: <arr> } }.
 type zipOp struct {
 	inputsArg          any
@@ -847,7 +820,6 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	// Evaluate each input array.
 	var arrays [][]any
 
 	for _, inp := range inputs {
@@ -872,7 +844,6 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 		return sliceToArray(nil), nil
 	}
 
-	// Determine length.
 	minLen := len(arrays[0])
 	maxLen := len(arrays[0])
 
@@ -891,7 +862,6 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 		length = maxLen
 	}
 
-	// Collect defaults.
 	var defaults []any
 
 	if op.defaultsArg != nil {
@@ -910,7 +880,6 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 		}
 	}
 
-	// Build result.
 	result := make([]any, 0, length)
 
 	for i := range length {
@@ -933,8 +902,6 @@ func (op *zipOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*zipOp)(nil)
-
-// -- $objectToArray ------------------------------------------------------------
 
 // objectToArrayOp represents { $objectToArray: <object-expr> }.
 // Converts a document to an array of {k, v} documents.
@@ -980,8 +947,6 @@ func (op *objectToArrayOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*objectToArrayOp)(nil)
-
-// -- $arrayToObject ------------------------------------------------------------
 
 // arrayToObjectOp represents { $arrayToObject: <array-expr> }.
 // Converts an array of {k, v} documents to a single document.

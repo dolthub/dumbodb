@@ -30,7 +30,6 @@ type count struct {
 	field string
 }
 
-// newCount creates a new $count stage.
 func newCount(stage *types.Document) (aggregations.Stage, error) {
 	field, err := common.GetRequiredParam[string](stage, "$count")
 	if err != nil {
@@ -78,12 +77,10 @@ func newCount(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (c *count) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.CountIterator(iter, closer, c.field), nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*count)(nil)
 )

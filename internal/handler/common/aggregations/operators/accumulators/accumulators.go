@@ -42,7 +42,6 @@ type Accumulator interface {
 	Accumulate(iter types.DocumentsIterator) (any, error)
 }
 
-// NewAccumulator returns accumulator for provided value.
 func NewAccumulator(stage, key string, value any) (Accumulator, error) {
 	accumulation, ok := value.(*types.Document)
 	if !ok || accumulation.Len() == 0 {

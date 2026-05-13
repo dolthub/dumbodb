@@ -25,7 +25,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// ExplainParams represents the parameters for the explain command.
 type ExplainParams struct {
 	DB         string `dumbo:"$db"`
 	Collection string `dumbo:"collection"`
@@ -51,7 +50,6 @@ type ExplainParams struct {
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
-// GetExplainParams returns the parameters for the explain command.
 func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams, error) {
 	var err error
 

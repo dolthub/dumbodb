@@ -91,7 +91,6 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	var rangeFilter *types.Document
 	if kp, kpErr := document.Get("keyPattern"); kpErr == nil {
 		if kpDoc, ok := kp.(*types.Document); ok && kpDoc.Len() > 0 {
-			// Get the first field name from the key pattern.
 			fieldName := kpDoc.Keys()[0]
 
 			minDoc, minErr := document.Get("min")

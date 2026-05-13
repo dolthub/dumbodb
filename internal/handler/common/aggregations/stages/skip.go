@@ -29,7 +29,6 @@ type skip struct {
 	value int64
 }
 
-// newSkip creates a new $skip stage.
 func newSkip(stage *types.Document) (aggregations.Stage, error) {
 	value, err := stage.Get("$skip")
 	if err != nil {
@@ -46,12 +45,10 @@ func newSkip(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (s *skip) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.SkipIterator(iter, closer, s.value), nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*skip)(nil)
 )

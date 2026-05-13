@@ -71,17 +71,14 @@ func BackendContract(b Backend) Backend {
 	return bc
 }
 
-// Close closes all database connections and frees all resources associated with the backend.
 func (bc *backendContract) Close() {
 	bc.b.Close()
 
 	resource.Untrack(bc, bc.token)
 }
 
-// StatusParams represents the parameters of Backend.Status method.
 type StatusParams struct{}
 
-// StatusResult represents the results of Backend.Status method.
 type StatusResult struct {
 	CountCollections       int64
 	CountCappedCollections int32
@@ -126,17 +123,14 @@ func (bc *backendContract) Database(name string) (Database, error) {
 	return res, err
 }
 
-// ListDatabasesParams represents the parameters of Backend.ListDatabases method.
 type ListDatabasesParams struct {
 	Name string
 }
 
-// ListDatabasesResult represents the results of Backend.ListDatabases method.
 type ListDatabasesResult struct {
 	Databases []DatabaseInfo
 }
 
-// DatabaseInfo represents information about a single database.
 type DatabaseInfo struct {
 	Name string
 }
@@ -171,7 +165,6 @@ func (bc *backendContract) ListDatabases(ctx context.Context, params *ListDataba
 	return res, err
 }
 
-// DropDatabaseParams represents the parameters of Backend.DropDatabase method.
 type DropDatabaseParams struct {
 	Name string
 }
@@ -195,7 +188,6 @@ func (bc *backendContract) DropDatabase(ctx context.Context, params *DropDatabas
 	return err
 }
 
-// DumboDBCommit implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBCommit(ctx context.Context, params *CommitParams) (*CommitResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBCommit(ctx, params)
@@ -204,7 +196,6 @@ func (bc *backendContract) DumboDBCommit(ctx context.Context, params *CommitPara
 	return nil, newVersioningUnsupportedError("DumboDBCommit")
 }
 
-// DumboDBBranch implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBBranch(ctx context.Context, params *BranchParams) (*BranchResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBBranch(ctx, params)
@@ -213,7 +204,6 @@ func (bc *backendContract) DumboDBBranch(ctx context.Context, params *BranchPara
 	return nil, newVersioningUnsupportedError("DumboDBBranch")
 }
 
-// DumboDBMerge implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBMerge(ctx context.Context, params *MergeParams) (*MergeResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBMerge(ctx, params)
@@ -222,7 +212,6 @@ func (bc *backendContract) DumboDBMerge(ctx context.Context, params *MergeParams
 	return nil, newVersioningUnsupportedError("DumboDBMerge")
 }
 
-// DumboDBLog implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBLog(ctx context.Context, params *LogParams) (*LogResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBLog(ctx, params)
@@ -231,7 +220,6 @@ func (bc *backendContract) DumboDBLog(ctx context.Context, params *LogParams) (*
 	return nil, newVersioningUnsupportedError("DumboDBLog")
 }
 
-// DumboDBStatus implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBStatus(ctx context.Context, params *VersioningStatusParams) (*VersioningStatusResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBStatus(ctx, params)
@@ -240,7 +228,6 @@ func (bc *backendContract) DumboDBStatus(ctx context.Context, params *Versioning
 	return nil, newVersioningUnsupportedError("DumboDBStatus")
 }
 
-// DumboDBDiff implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBDiff(ctx context.Context, params *DiffParams) (*DiffResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBDiff(ctx, params)
@@ -257,7 +244,6 @@ func (bc *backendContract) DumboDBReset(ctx context.Context, params *ResetParams
 	return nil, newVersioningUnsupportedError("DumboDBReset")
 }
 
-// DumboDBConflicts implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBConflicts(ctx context.Context, params *ConflictsParams) (*ConflictsResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBConflicts(ctx, params)
@@ -266,7 +252,6 @@ func (bc *backendContract) DumboDBConflicts(ctx context.Context, params *Conflic
 	return nil, newVersioningUnsupportedError("DumboDBConflicts")
 }
 
-// DumboDBResolveConflict implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBResolveConflict(ctx context.Context, params *ResolveConflictParams) (*ResolveConflictResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBResolveConflict(ctx, params)
@@ -275,7 +260,6 @@ func (bc *backendContract) DumboDBResolveConflict(ctx context.Context, params *R
 	return nil, newVersioningUnsupportedError("DumboDBResolveConflict")
 }
 
-// DumboDBCherryPick implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBCherryPick(ctx context.Context, params *CherryPickParams) (*CherryPickResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBCherryPick(ctx, params)
@@ -284,7 +268,6 @@ func (bc *backendContract) DumboDBCherryPick(ctx context.Context, params *Cherry
 	return nil, newVersioningUnsupportedError("DumboDBCherryPick")
 }
 
-// DumboDBRebase implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBRebase(ctx context.Context, params *RebaseParams) (*RebaseResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBRebase(ctx, params)
@@ -293,7 +276,6 @@ func (bc *backendContract) DumboDBRebase(ctx context.Context, params *RebasePara
 	return nil, newVersioningUnsupportedError("DumboDBRebase")
 }
 
-// DumboDBRevert implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBRevert(ctx context.Context, params *RevertParams) (*RevertResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBRevert(ctx, params)
@@ -302,7 +284,6 @@ func (bc *backendContract) DumboDBRevert(ctx context.Context, params *RevertPara
 	return nil, newVersioningUnsupportedError("DumboDBRevert")
 }
 
-// DumboDBTag implements VersioningBackend if the wrapped backend supports it.
 func (bc *backendContract) DumboDBTag(ctx context.Context, params *TagParams) (*TagResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBTag(ctx, params)
@@ -311,14 +292,11 @@ func (bc *backendContract) DumboDBTag(ctx context.Context, params *TagParams) (*
 	return nil, newVersioningUnsupportedError("DumboDBTag")
 }
 
-// newVersioningUnsupportedError returns a standard error for when a versioning operation
-// is not supported by the current backend.
 func newVersioningUnsupportedError(op string) error {
 	return fmt.Errorf("dolt versioning not supported by this backend: %s", op)
 }
 
-// check interfaces
 var (
-	_ Backend          = (*backendContract)(nil)
+	_ Backend           = (*backendContract)(nil)
 	_ VersioningBackend = (*backendContract)(nil)
 )

@@ -198,7 +198,6 @@ func NewLookupStage(stage *types.Document, fetcher CollectionFetcher) (aggregati
 	return l, nil
 }
 
-// Process implements Stage interface.
 func (l *lookup) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -596,7 +595,6 @@ func valuesEqual(a, b any) bool {
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*lookup)(nil)
 )

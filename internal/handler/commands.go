@@ -27,7 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/logging"
 )
 
-// command represents a handler for single command.
 type command struct {
 	// anonymous indicates that the command does not require authentication.
 	anonymous bool
@@ -42,7 +41,6 @@ type command struct {
 	Help string
 }
 
-// initCommands initializes the commands map for that handler instance.
 func (h *Handler) initCommands() {
 	h.commands = map[string]*command{
 		// sorted alphabetically
@@ -454,7 +452,6 @@ func (h *Handler) initCommands() {
 		}
 	}
 
-	// Wrap all commands with per-command request logging.
 	for name, cmd := range h.commands {
 		cmdName := name
 		cmdHandler := cmd.Handler
@@ -484,7 +481,6 @@ func (h *Handler) initCommands() {
 				ns = db
 			}
 
-			// Get connection identifier from peer address.
 			conn := ""
 			if info := conninfo.Get(ctx); info != nil && info.Peer.IsValid() {
 				conn = info.Peer.String()
@@ -550,7 +546,6 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 	)
 }
 
-// Commands returns a map of enabled commands.
 func (h *Handler) Commands() map[string]*command {
 	return h.commands
 }

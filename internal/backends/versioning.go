@@ -27,7 +27,6 @@ import (
 // has no changes versus HEAD and CommitParams.AllowEmpty is false.
 var ErrEmptyCommit = errors.New("nothing to commit, working tree clean")
 
-// CommitParams represents the parameters of VersioningBackend.DumboDBCommit method.
 type CommitParams struct {
 	DBName     string
 	Branch     string
@@ -37,7 +36,6 @@ type CommitParams struct {
 	AllowEmpty bool      // if true, create a commit even when the working set has no changes vs HEAD
 }
 
-// CommitResult represents the result of VersioningBackend.DumboDBCommit method.
 type CommitResult struct {
 	CommitID           string
 	Branch             string
@@ -48,7 +46,6 @@ type CommitResult struct {
 	CommitterTimestamp int64  // Unix milliseconds of the committer date
 }
 
-// BranchParams represents the parameters of VersioningBackend.DumboDBBranch method.
 type BranchParams struct {
 	DBName string
 	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
@@ -57,12 +54,10 @@ type BranchParams struct {
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
 }
 
-// BranchResult represents the result of VersioningBackend.DumboDBBranch method.
 type BranchResult struct {
 	Branch string
 }
 
-// MergeParams represents the parameters of VersioningBackend.DumboDBMerge method.
 type MergeParams struct {
 	DBName   string
 	Into     string // target branch (the current branch)
@@ -75,7 +70,6 @@ type MergeParams struct {
 	FFOnly   bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
 }
 
-// MergeResult represents the result of VersioningBackend.DumboDBMerge method.
 type MergeResult struct {
 	CommitID           string
 	Message            string
@@ -99,12 +93,10 @@ type MergeConflictError struct {
 	Conflicts []ConflictSummary
 }
 
-// Error implements the error interface.
 func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("dumboMerge: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
-// CherryPickParams represents the parameters of VersioningBackend.DumboDBCherryPick method.
 type CherryPickParams struct {
 	DBName    string
 	Branch    string // current branch (the target branch to apply the cherry-pick onto)
@@ -115,7 +107,6 @@ type CherryPickParams struct {
 	Committer string // optional: 'Name <email>' explicit committer identity; when empty, committer equals the original author
 }
 
-// CherryPickResult represents the result of VersioningBackend.DumboDBCherryPick method.
 type CherryPickResult struct {
 	CommitID           string
 	Message            string
@@ -133,7 +124,6 @@ type DumboDBCherryPickConflictError struct {
 	Conflicts []ConflictSummary
 }
 
-// Error implements the error interface.
 func (e *DumboDBCherryPickConflictError) Error() string {
 	return fmt.Sprintf("dumboCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
@@ -148,7 +138,6 @@ type ConflictInfo struct {
 	TheirDiffType string          // "added", "modified", "deleted"
 }
 
-// ConflictsParams represents the parameters of VersioningBackend.DumboDBConflicts method.
 type ConflictsParams struct {
 	DBName string
 	Branch string
@@ -166,7 +155,6 @@ type ConflictsResult struct {
 	Collections []CollectionConflicts
 }
 
-// ResolveConflictParams represents the parameters of VersioningBackend.DumboDBResolveConflict method.
 type ResolveConflictParams struct {
 	DBName     string
 	Branch     string
@@ -176,10 +164,8 @@ type ResolveConflictParams struct {
 	Value      *types.Document // only used when Resolution == "custom"
 }
 
-// ResolveConflictResult represents the result of VersioningBackend.DumboDBResolveConflict method.
 type ResolveConflictResult struct{}
 
-// LogParams represents the parameters of VersioningBackend.DumboDBLog method.
 type LogParams struct {
 	DBName     string
 	Branch     string
@@ -206,12 +192,10 @@ type CommitInfo struct {
 	Diff               []CollectionDiff // full document diffs (only when LogParams.Patch is true)
 }
 
-// LogResult represents the result of VersioningBackend.DumboDBLog method.
 type LogResult struct {
 	Commits []CommitInfo
 }
 
-// VersioningStatusParams represents the parameters of VersioningBackend.DumboDBStatus method.
 type VersioningStatusParams struct {
 	DBName string
 	Branch string
@@ -235,7 +219,6 @@ type TableStatus struct {
 	Deleted  int
 }
 
-// VersioningStatusResult represents the result of VersioningBackend.DumboDBStatus method.
 type VersioningStatusResult struct {
 	Branch    string
 	CommitID  string // HEAD commit hash; populated only when the workspace is clean (no changes)
@@ -291,7 +274,6 @@ type DiffResult struct {
 	Collections []CollectionDiff
 }
 
-// ResetParams represents the parameters of VersioningBackend.DumboDBReset method.
 type ResetParams struct {
 	DBName   string
 	Branch   string
@@ -299,12 +281,10 @@ type ResetParams struct {
 	Hard     bool
 }
 
-// ResetResult represents the result of VersioningBackend.DumboDBReset method.
 type ResetResult struct {
 	CommitID string
 }
 
-// RebaseParams represents the parameters of VersioningBackend.DumboDBRebase method.
 type RebaseParams struct {
 	DBName    string
 	Branch    string // current branch (the branch to rebase)
@@ -314,7 +294,6 @@ type RebaseParams struct {
 	Continue  bool   // if true, after conflict resolution, complete the current commit and proceed
 }
 
-// RebaseResult represents the result of VersioningBackend.DumboDBRebase method.
 type RebaseResult struct {
 	CommitsReplayed int
 	NewTip          string // hash of the new branch tip after rebase
@@ -329,12 +308,10 @@ type DumboDBRebaseConflictError struct {
 	ConflictCommit string // hash of the commit being replayed when the conflict occurred
 }
 
-// Error implements the error interface.
 func (e *DumboDBRebaseConflictError) Error() string {
 	return fmt.Sprintf("dumboRebase: unresolved conflicts in %d collection(s) replaying commit %s", len(e.Conflicts), e.ConflictCommit)
 }
 
-// RevertParams represents the parameters of VersioningBackend.DumboDBRevert method.
 type RevertParams struct {
 	DBName   string
 	Branch   string // current branch (the branch to apply the revert onto)
@@ -345,7 +322,6 @@ type RevertParams struct {
 	Author   string // optional: 'Name <email>'
 }
 
-// RevertResult represents the result of VersioningBackend.DumboDBRevert method.
 type RevertResult struct {
 	CommitID           string
 	Message            string
@@ -363,7 +339,6 @@ type DumboDBRevertConflictError struct {
 	Conflicts []ConflictSummary
 }
 
-// Error implements the error interface.
 func (e *DumboDBRevertConflictError) Error() string {
 	return fmt.Sprintf("dumboRevert: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }

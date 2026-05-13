@@ -24,8 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// InsertParams represents the parameters for an insert command.
-//
 //nolint:vet // for readability
 type InsertParams struct {
 	Docs       *types.Array `dumbo:"documents,opt"`
@@ -55,7 +53,6 @@ type InsertParams struct {
 	SkipDurableSync bool `dumbo:"-"`
 }
 
-// GetInsertParams returns the parameters for an insert command.
 func GetInsertParams(document *types.Document, l *slog.Logger) (*InsertParams, error) {
 	params := InsertParams{
 		Ordered: true,

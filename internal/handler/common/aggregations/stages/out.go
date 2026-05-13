@@ -144,7 +144,6 @@ func (s *out) Process(ctx context.Context, iter types.DocumentsIterator, closer 
 	return empty, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*out)(nil)
 )

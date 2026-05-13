@@ -22,7 +22,6 @@ import (
 // databaseNameRe validates database name (allows unicode but not special chars like / \ $ . null space).
 var databaseNameRe = regexp.MustCompile(`^[^\x00 /\\.$]{1,63}$`)
 
-// collectionNameRe validates collection names.
 var collectionNameRe = regexp.MustCompile("^[^\\.$\x00][^$\x00]{0,234}$")
 
 // ReservedPrefix for names: databases, collections, schemas, tables, indexes, columns, etc.

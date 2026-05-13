@@ -45,7 +45,6 @@ type Registry struct {
 	wg sync.WaitGroup
 }
 
-// NewRegistry creates a new Registry.
 func NewRegistry(l *slog.Logger) *Registry {
 	return &Registry{
 		m: map[int64]*Cursor{},
@@ -58,7 +57,6 @@ func (r *Registry) Close() {
 	r.wg.Wait()
 }
 
-// NewParams represent parameters for NewCursor.
 type NewParams struct {
 	// Data stored, but not used by this package.
 	// Used to pass *handler.findCursorData between `find` and `getMore` command implementations.
@@ -136,7 +134,6 @@ func (r *Registry) All() []*Cursor {
 	return maps.Values(r.m)
 }
 
-// CloseAndRemove closes the given cursors, then removes it from the registry.
 func (r *Registry) CloseAndRemove(c *Cursor) {
 	c.Close()
 

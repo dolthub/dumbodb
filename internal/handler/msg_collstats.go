@@ -114,7 +114,6 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Build indexSizes document.
 	indexSizes := types.MakeDocument(len(stats.IndexSizes))
 	for _, indexSize := range stats.IndexSizes {
 		indexSizes.Set(indexSize.Name, int32(indexSize.Size/scale))

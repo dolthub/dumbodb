@@ -95,7 +95,6 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		Name: collectionName,
 	}
 
-	// Parse validator.
 	if validatorVal, _ := document.Get("validator"); validatorVal != nil {
 		params.SetValidator = true
 		switch v := validatorVal.(type) {
@@ -112,7 +111,6 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 	}
 
-	// Parse validationLevel.
 	if validationLevelVal, _ := document.Get("validationLevel"); validationLevelVal != nil {
 		level, ok := validationLevelVal.(string)
 		if !ok {
@@ -134,7 +132,6 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 	}
 
-	// Parse validationAction.
 	if validationActionVal, _ := document.Get("validationAction"); validationActionVal != nil {
 		action, ok := validationActionVal.(string)
 		if !ok {

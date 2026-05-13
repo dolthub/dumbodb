@@ -20,23 +20,15 @@ type operatorErrorCode uint
 const (
 	_ operatorErrorCode = iota
 
-	// ErrArgsInvalidLen indicates that operator have invalid amount of arguments.
 	ErrArgsInvalidLen
-
-	// ErrTooManyFields indicates that operator field specifes more than one operators.
 	ErrTooManyFields
-
-	// ErrNotImplemented indicates that given operator is not implemented yet.
 	ErrNotImplemented
-
-	// ErrInvalidExpression indicates that given operator does not exist.
 	ErrInvalidExpression
 
 	// ErrInvalidNestedExpression indicates that operator inside the target operator does not exist.
 	ErrInvalidNestedExpression
 )
 
-// newOperatorError returns new OperatorError.
 func newOperatorError(code operatorErrorCode, name, msg string) error {
 	return OperatorError{
 		code: code,
@@ -52,12 +44,10 @@ type OperatorError struct {
 	code operatorErrorCode
 }
 
-// Error implements error interface.
 func (opErr OperatorError) Error() string {
 	return opErr.msg
 }
 
-// Code returns operatorError code.
 func (opErr OperatorError) Code() operatorErrorCode {
 	return opErr.code
 }

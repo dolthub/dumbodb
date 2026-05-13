@@ -38,15 +38,12 @@ func toTime(v any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// -- date part operators ($year, $month, $dayOfMonth, etc.) ------------------
-
 // datePartOp is a generic date component extractor.
 type datePartOp struct {
 	name string
 	arg  any
 }
 
-// newDatePartOp returns a constructor for the given date part operator.
 func newDatePartOp(name string) func(args ...any) (Operator, error) {
 	return func(args ...any) (Operator, error) {
 		if len(args) != 1 {
@@ -124,8 +121,6 @@ func (op *datePartOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*datePartOp)(nil)
-
-// -- $dateToString -------------------------------------------------------------
 
 // dateToStringOp represents { $dateToString: { date: <expr>, format: <format>, timezone: <tz>, onNull: <val> } }.
 type dateToStringOp struct {
@@ -223,8 +218,6 @@ func formatDate(format string, t time.Time) string {
 
 var _ Operator = (*dateToStringOp)(nil)
 
-// -- $dateAdd ------------------------------------------------------------------
-
 // dateAddOp represents { $dateAdd: { startDate: <expr>, unit: <string>, amount: <number> } }.
 type dateAddOp struct {
 	startDateArg any
@@ -302,7 +295,6 @@ func (op *dateAddOp) Process(doc *types.Document) (any, error) {
 	return addDateUnit(t, unit, amount)
 }
 
-// addDateUnit adds the given amount of the specified date unit to t.
 func addDateUnit(t time.Time, unit string, amount int64) (time.Time, error) {
 	switch strings.ToLower(unit) {
 	case "year":
@@ -329,7 +321,6 @@ func addDateUnit(t time.Time, unit string, amount int64) (time.Time, error) {
 	}
 }
 
-// toInt64 converts a numeric value to int64.
 func toInt64(v any) int64 {
 	switch n := v.(type) {
 	case int32:
@@ -344,8 +335,6 @@ func toInt64(v any) int64 {
 }
 
 var _ Operator = (*dateAddOp)(nil)
-
-// -- $dateDiff -----------------------------------------------------------------
 
 // dateDiffOp represents { $dateDiff: { startDate: <expr>, endDate: <expr>, unit: <string> } }.
 type dateDiffOp struct {
@@ -433,7 +422,6 @@ func (op *dateDiffOp) Process(doc *types.Document) (any, error) {
 	return diff, nil
 }
 
-// diffDateUnit computes the integer difference between two dates in the specified unit.
 func diffDateUnit(start, end time.Time, unit string) (int64, error) {
 	switch strings.ToLower(unit) {
 	case "millisecond":
@@ -489,8 +477,6 @@ func diffDateUnit(start, end time.Time, unit string) (int64, error) {
 }
 
 var _ Operator = (*dateDiffOp)(nil)
-
-// -- $dateTrunc ----------------------------------------------------------------
 
 // dateTruncOp represents { $dateTrunc: { date: <expr>, unit: <string>, binSize: <number> } }.
 // Truncates a date to the start of the specified time unit.

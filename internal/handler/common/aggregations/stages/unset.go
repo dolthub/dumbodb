@@ -38,7 +38,6 @@ type unset struct {
 	exclusion *types.Document
 }
 
-// newUnset validates unset document and creates a new $unset stage.
 func newUnset(stage *types.Document) (aggregations.Stage, error) {
 	fields := must.NotFail(stage.Get("$unset"))
 
@@ -138,7 +137,6 @@ func newUnset(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (u *unset) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Use $project to unset fields, $unset is alias for $project exclusion.
 	return projection.ProjectionIterator(iter, closer, u.exclusion)
@@ -183,7 +181,6 @@ func validateUnsetField(field string) (*types.Path, error) {
 	return &path, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*unset)(nil)
 )

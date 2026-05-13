@@ -43,7 +43,6 @@ func ProjectionIterator(iter types.DocumentsIterator, closer *iterator.MultiClos
 	return res, nil
 }
 
-// projectionIterator is returned by ProjectionIterator.
 type projectionIterator struct {
 	iter       types.DocumentsIterator
 	projection *types.Document
@@ -51,7 +50,6 @@ type projectionIterator struct {
 	inclusion  bool
 }
 
-// Next implements iterator.Interface. See ProjectionIterator for details.
 func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
 	var unused struct{}
 
@@ -68,12 +66,10 @@ func (iter *projectionIterator) Next() (struct{}, *types.Document, error) {
 	return unused, projected, nil
 }
 
-// Close implements iterator.Interface. See ProjectionIterator for details.
 func (iter *projectionIterator) Close() {
 	iter.iter.Close()
 }
 
-// check interfaces
 var (
 	_ types.DocumentsIterator = (*projectionIterator)(nil)
 )

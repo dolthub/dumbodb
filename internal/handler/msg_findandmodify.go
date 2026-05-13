@@ -198,8 +198,6 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		return result, nil
 	}
 
-	// handle update and upsert
-
 	update := &common.Update{
 		Filter:             params.Query,
 		Update:             params.Update,

@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// CountParams represents parameters for the count command.
 type CountParams struct {
 	Filter     *types.Document `dumbo:"query,opt"`
 	DB         string          `dumbo:"$db"`
@@ -47,7 +46,6 @@ type CountParams struct {
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
-// GetCountParams returns the parameters for the count command.
 func GetCountParams(document *types.Document, l *slog.Logger) (*CountParams, error) {
 	var count CountParams
 

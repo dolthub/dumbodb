@@ -33,7 +33,6 @@ type replaceRoot struct {
 	newRoot any // expression or literal document
 }
 
-// newReplaceRoot creates a new $replaceRoot stage.
 func newReplaceRoot(stage *types.Document) (aggregations.Stage, error) {
 	spec, err := stage.Get("$replaceRoot")
 	if err != nil {
@@ -73,7 +72,6 @@ func newReplaceWith(stage *types.Document) (aggregations.Stage, error) {
 	return &replaceRoot{newRoot: newRootVal}, nil
 }
 
-// Process implements Stage interface.
 func (r *replaceRoot) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -258,7 +256,6 @@ func evaluateDocumentExpression(templateDoc *types.Document, doc *types.Document
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*replaceRoot)(nil)
 )

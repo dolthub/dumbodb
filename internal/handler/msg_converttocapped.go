@@ -60,7 +60,6 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 	var cappedSize int64
 
 	if sizeErr != nil || sizeVal == nil || sizeVal == types.Null {
-		// Missing size field.
 		cappedSize = 0
 	} else {
 		cappedSize, err = handlerparams.GetWholeNumberParam(sizeVal)
@@ -93,7 +92,6 @@ func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Update the collection to be capped by modifying its options.
 	if err = db.CollMod(connCtx, &backends.CollModParams{
 		Name:       collectionName,
 		CappedSize: cappedSize,

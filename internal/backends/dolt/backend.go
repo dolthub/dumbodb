@@ -280,7 +280,6 @@ func (b *Backend) flushAllDirty(ctx context.Context) {
 	}
 }
 
-// Close implements backends.Backend.
 func (b *Backend) Close() {
 	// Signal the flusher to drain any remaining deferred writes and exit.
 	// Guard against a double close by checking whether it's already closed,
@@ -311,7 +310,6 @@ func (b *Backend) Close() {
 	b.dbs = make(map[string]*dbState)
 }
 
-// Status implements backends.Backend.
 func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*backends.StatusResult, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -404,7 +402,6 @@ func splitAllDigits(s string) bool {
 	return true
 }
 
-// ListDatabases implements backends.Backend.
 func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDatabasesParams) (*backends.ListDatabasesResult, error) {
 	entries, err := os.ReadDir(b.dataDir)
 	if err != nil {
@@ -463,7 +460,6 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 	return &backends.ListDatabasesResult{Databases: dbs}, nil
 }
 
-// DropDatabase implements backends.Backend.
 func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabaseParams) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1885,7 +1881,6 @@ func (b *Backend) commitCherryPick(
 // branch heads (git --decorate style). The connection branch (ConnBranch) gets
 // two entries: "HEAD" and the bare branch name; all other branch heads get only
 // their bare branch name.
-// TODO: tag decoration is not yet supported.
 func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*backends.LogResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {

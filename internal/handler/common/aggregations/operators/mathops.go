@@ -21,8 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// -- $abs ---------------------------------------------------------------------
-
 type absOp struct{ arg any }
 
 func newAbs(args ...any) (Operator, error) {
@@ -67,8 +65,6 @@ func (op *absOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*absOp)(nil)
 
-// -- $ceil ---------------------------------------------------------------------
-
 type ceilOp struct{ arg any }
 
 func newCeil(args ...any) (Operator, error) {
@@ -104,8 +100,6 @@ func (op *ceilOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*ceilOp)(nil)
-
-// -- $floor --------------------------------------------------------------------
 
 type floorOp struct{ arg any }
 
@@ -143,8 +137,6 @@ func (op *floorOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*floorOp)(nil)
 
-// -- $sqrt ---------------------------------------------------------------------
-
 type sqrtOp struct{ arg any }
 
 func newSqrt(args ...any) (Operator, error) {
@@ -170,8 +162,6 @@ func (op *sqrtOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*sqrtOp)(nil)
-
-// -- $exp ----------------------------------------------------------------------
 
 type expOp struct{ arg any }
 
@@ -199,8 +189,6 @@ func (op *expOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*expOp)(nil)
 
-// -- $ln -----------------------------------------------------------------------
-
 type lnOp struct{ arg any }
 
 func newLn(args ...any) (Operator, error) {
@@ -227,8 +215,6 @@ func (op *lnOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*lnOp)(nil)
 
-// -- $log10 --------------------------------------------------------------------
-
 type log10Op struct{ arg any }
 
 func newLog10(args ...any) (Operator, error) {
@@ -254,8 +240,6 @@ func (op *log10Op) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*log10Op)(nil)
-
-// -- $log ----------------------------------------------------------------------
 
 // logOp represents { $log: [ <number>, <base> ] }.
 type logOp struct {
@@ -292,8 +276,6 @@ func (op *logOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*logOp)(nil)
 
-// -- $pow ----------------------------------------------------------------------
-
 // powOp represents { $pow: [ <base>, <exponent> ] }.
 type powOp struct {
 	base     any
@@ -328,8 +310,6 @@ func (op *powOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*powOp)(nil)
-
-// -- $trunc --------------------------------------------------------------------
 
 // truncOp represents { $trunc: <number> } or { $trunc: [ <number>, <place> ] }.
 type truncOp struct {
@@ -389,8 +369,6 @@ func (op *truncOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*truncOp)(nil)
 
-// -- $round --------------------------------------------------------------------
-
 // roundOp represents { $round: <number> } or { $round: [ <number>, <place> ] }.
 type roundOp struct {
 	number any
@@ -448,8 +426,6 @@ func (op *roundOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*roundOp)(nil)
-
-// -- $mod ----------------------------------------------------------------------
 
 // modOp represents { $mod: [ <dividend>, <divisor> ] }.
 type modOp struct {

@@ -72,7 +72,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, err
 	}
 
-	// handle collection-agnostic pipelines ({aggregate: 1})
 	var ok bool
 	var cName string
 
@@ -588,7 +587,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	)
 }
 
-// stagesDocumentsParams contains the parameters for processStagesDocuments.
 type stagesDocumentsParams struct {
 	c      backends.Collection
 	qp     *backends.QueryParams
@@ -616,7 +614,6 @@ func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p
 	return iter, nil
 }
 
-// stagesStatsParams contains the parameters for processStagesStats.
 type stagesStatsParams struct {
 	c          backends.Collection
 	db         backends.Database
@@ -628,10 +625,7 @@ type stagesStatsParams struct {
 }
 
 // processStagesStats retrieves the statistics from the database and then processes them through the stages.
-//
-// Move $collStats specific logic to its stage.
 func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *stagesStatsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	// Clarify what needs to be retrieved from the database and retrieve it.
 	_, hasCount := p.statistics[stages.StatisticCount]
 	_, hasStorage := p.statistics[stages.StatisticStorage]
 
@@ -749,7 +743,6 @@ func processStagesStats(ctx context.Context, closer *iterator.MultiCloser, p *st
 		)
 	}
 
-	// Process the retrieved statistics through the stages.
 	iter := iterator.Values(iterator.ForSlice([]*types.Document{doc}))
 	closer.Add(iter)
 
@@ -819,7 +812,6 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			return nil
 		}
 
-		// Fetch all existing documents from the target collection for matching.
 		qRes, err := coll.Query(ctx, new(backends.QueryParams))
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
@@ -841,7 +833,6 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 			return lazyerrors.Error(err)
 		}
 
-		// Build a lookup map of existing docs keyed by the "on" field value(s).
 		type existingEntry struct {
 			doc   *types.Document
 			index int

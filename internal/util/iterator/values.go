@@ -98,23 +98,19 @@ func Values[K, V any](iter Interface[K, V]) Interface[struct{}, V] {
 	}
 }
 
-// valuesIterator implements iterator.Interface.
 type valuesIterator[K, V any] struct {
 	iter Interface[K, V]
 }
 
-// Next implements iterator.Interface.
 func (iter *valuesIterator[K, V]) Next() (struct{}, V, error) {
 	_, v, err := iter.iter.Next()
 	return struct{}{}, v, err
 }
 
-// Close implements iterator.Interface.
 func (iter *valuesIterator[K, V]) Close() {
 	iter.iter.Close()
 }
 
-// check interfaces
 var (
 	_ Interface[struct{}, any] = (*valuesIterator[any, any])(nil)
 	_ Closer                   = (*valuesIterator[any, any])(nil)

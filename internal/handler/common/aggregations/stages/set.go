@@ -35,7 +35,6 @@ type set struct {
 	newField *types.Document
 }
 
-// newSet validates stage document and creates a new $set stage.
 func newSet(stage *types.Document) (aggregations.Stage, error) {
 	fields, err := stage.Get("$set")
 	if err != nil {
@@ -64,12 +63,10 @@ func newSet(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (s *set) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.AddFieldsIterator(iter, closer, s.newField), nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*set)(nil)
 )

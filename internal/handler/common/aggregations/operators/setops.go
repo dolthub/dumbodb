@@ -47,8 +47,6 @@ func toSet(arr *types.Array) ([]any, error) {
 	return result, nil
 }
 
-// -- $setUnion -----------------------------------------------------------------
-
 type setUnionOp struct{ args []any }
 
 func newSetUnion(args ...any) (Operator, error) {
@@ -93,8 +91,6 @@ func (op *setUnionOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*setUnionOp)(nil)
-
-// -- $setIntersection ----------------------------------------------------------
 
 type setIntersectionOp struct{ args []any }
 
@@ -154,8 +150,6 @@ func (op *setIntersectionOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*setIntersectionOp)(nil)
-
-// -- $setDifference ------------------------------------------------------------
 
 // setDifferenceOp represents { $setDifference: [ <set1>, <set2> ] }.
 type setDifferenceOp struct {
@@ -223,8 +217,6 @@ func (op *setDifferenceOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setDifferenceOp)(nil)
 
-// -- $setEquals ----------------------------------------------------------------
-
 type setEqualsOp struct{ args []any }
 
 func newSetEquals(args ...any) (Operator, error) {
@@ -284,8 +276,6 @@ func (op *setEqualsOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*setEqualsOp)(nil)
-
-// -- $setIsSubset --------------------------------------------------------------
 
 // setIsSubsetOp represents { $setIsSubset: [ <set1>, <set2> ] }.
 type setIsSubsetOp struct {
@@ -351,8 +341,6 @@ func (op *setIsSubsetOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*setIsSubsetOp)(nil)
 
-// -- $anyElementTrue -----------------------------------------------------------
-
 type anyElementTrueOp struct{ arg any }
 
 func newAnyElementTrue(args ...any) (Operator, error) {
@@ -389,8 +377,6 @@ func (op *anyElementTrueOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*anyElementTrueOp)(nil)
-
-// -- $allElementsTrue ----------------------------------------------------------
 
 type allElementsTrueOp struct{ arg any }
 

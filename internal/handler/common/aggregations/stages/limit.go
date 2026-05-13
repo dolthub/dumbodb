@@ -29,7 +29,6 @@ type limit struct {
 	limit int64
 }
 
-// newLimit creates a new $limit stage.
 func newLimit(stage *types.Document) (aggregations.Stage, error) {
 	doc, err := stage.Get("$limit")
 	if err != nil {
@@ -46,12 +45,10 @@ func newLimit(stage *types.Document) (aggregations.Stage, error) {
 	}, nil
 }
 
-// Process implements Stage interface.
 func (l *limit) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	return common.LimitIterator(iter, closer, l.limit), nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*limit)(nil)
 )

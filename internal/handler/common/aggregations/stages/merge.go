@@ -25,7 +25,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// MergeParams holds parameters for the MergeFunc callback.
 type MergeParams struct {
 	DBName         string
 	CollName       string
@@ -363,7 +362,6 @@ func (s *merge) Process(ctx context.Context, iter types.DocumentsIterator, close
 	return empty, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*merge)(nil)
 )

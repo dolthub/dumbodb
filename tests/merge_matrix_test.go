@@ -153,10 +153,6 @@ func getDocField(t *testing.T, col *mongo.Collection, id int32, field string) in
 	return doc[field]
 }
 
-// --------------------------------------------------------------------------
-// Test 1: MixedChanges_SingleCollection
-// --------------------------------------------------------------------------
-
 func TestMergeMatrix_MixedChanges_SingleCollection(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -227,10 +223,6 @@ func TestMergeMatrix_MixedChanges_SingleCollection(t *testing.T) {
 	assert.False(t, docExists(t, col, 5), "_id:5 must stay deleted")
 }
 
-// --------------------------------------------------------------------------
-// Test 2: DeleteModifyConflict
-// --------------------------------------------------------------------------
-
 func TestMergeMatrix_DeleteModifyConflict(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -276,10 +268,6 @@ func TestMergeMatrix_DeleteModifyConflict(t *testing.T) {
 	assert.Equal(t, "feat1", getDocField(t, col, 1, "v"))
 }
 
-// --------------------------------------------------------------------------
-// Test 3: ModifyDeleteConflict
-// --------------------------------------------------------------------------
-
 func TestMergeMatrix_ModifyDeleteConflict(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -324,10 +312,6 @@ func TestMergeMatrix_ModifyDeleteConflict(t *testing.T) {
 	assert.False(t, docExists(t, col, 1), "_id:1 must be deleted after theirs resolution")
 }
 
-// --------------------------------------------------------------------------
-// Test 4: IndependentFieldAdds_NoConflict
-// --------------------------------------------------------------------------
-
 func TestMergeMatrix_IndependentFieldAdds_NoConflict(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -366,10 +350,6 @@ func TestMergeMatrix_IndependentFieldAdds_NoConflict(t *testing.T) {
 	assert.EqualValues(t, 1, doc["foo"], "merged doc must have foo:1")
 	assert.EqualValues(t, 1, doc["bar"], "merged doc must have bar:1")
 }
-
-// --------------------------------------------------------------------------
-// Test 5: ConflictingAdds
-// --------------------------------------------------------------------------
 
 func TestMergeMatrix_ConflictingAdds(t *testing.T) {
 	env := startDumboDB(t)
@@ -411,10 +391,6 @@ func TestMergeMatrix_ConflictingAdds(t *testing.T) {
 	assert.Equal(t, "main", getDocField(t, col, 10, "v"), "ours resolution keeps main's value")
 }
 
-// --------------------------------------------------------------------------
-// Test 6: ConvergentModify_NoConflict
-// --------------------------------------------------------------------------
-
 func TestMergeMatrix_ConvergentModify_NoConflict(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -450,10 +426,6 @@ func TestMergeMatrix_ConvergentModify_NoConflict(t *testing.T) {
 	col := mainDB.Collection("items")
 	assert.Equal(t, "same", getDocField(t, col, 1, "v"))
 }
-
-// --------------------------------------------------------------------------
-// Test 7: MultiCollection_MixedConflicts
-// --------------------------------------------------------------------------
 
 func TestMergeMatrix_MultiCollection_MixedConflicts(t *testing.T) {
 	env := startDumboDB(t)
@@ -529,10 +501,6 @@ func TestMergeMatrix_MultiCollection_MixedConflicts(t *testing.T) {
 	assert.Equal(t, "feat-u2", getDocField(t, mainDB.Collection("users"), 2, "v"))
 }
 
-// --------------------------------------------------------------------------
-// Test 8: MultiCollection_OneClean
-// --------------------------------------------------------------------------
-
 func TestMergeMatrix_MultiCollection_OneClean(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -588,10 +556,6 @@ func TestMergeMatrix_MultiCollection_OneClean(t *testing.T) {
 	assert.Equal(t, "feat-b1", getDocField(t, mainDB.Collection("beta"), 1, "v"),
 		"beta._id:1 must have feature's value")
 }
-
-// --------------------------------------------------------------------------
-// Test 9: MultiCollection_IndependentNewCollections
-// --------------------------------------------------------------------------
 
 func TestMergeMatrix_MultiCollection_IndependentNewCollections(t *testing.T) {
 	env := startDumboDB(t)

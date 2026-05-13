@@ -24,8 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// -- $toInt --------------------------------------------------------------------
-
 // toIntOp represents the $toInt expression operator.
 //
 //	{ $toInt: <expression> }
@@ -33,7 +31,6 @@ type toIntOp struct {
 	arg any
 }
 
-// newToInt creates a new $toInt operator.
 func newToInt(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -91,10 +88,7 @@ func (op *toIntOp) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*toIntOp)(nil)
-
-// -- $toString -----------------------------------------------------------------
 
 // toStringOp represents the $toString expression operator.
 //
@@ -103,7 +97,6 @@ type toStringOp struct {
 	arg any
 }
 
-// newToString creates a new $toString operator.
 func newToString(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -152,10 +145,7 @@ func (op *toStringOp) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*toStringOp)(nil)
-
-// -- $toDouble -----------------------------------------------------------------
 
 // toDoubleOp represents the $toDouble expression operator.
 //
@@ -164,7 +154,6 @@ type toDoubleOp struct {
 	arg any
 }
 
-// newToDouble creates a new $toDouble operator.
 func newToDouble(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -222,10 +211,7 @@ func (op *toDoubleOp) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*toDoubleOp)(nil)
-
-// -- $toDate -------------------------------------------------------------------
 
 // toDateOp represents the $toDate expression operator.
 //
@@ -234,7 +220,6 @@ type toDateOp struct {
 	arg any
 }
 
-// newToDate creates a new $toDate operator.
 func newToDate(args ...any) (Operator, error) {
 	if len(args) != 1 {
 		return nil, newOperatorError(
@@ -301,10 +286,7 @@ func (op *toDateOp) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*toDateOp)(nil)
-
-// -- $toLong -------------------------------------------------------------------
 
 type toLongOp struct{ arg any }
 
@@ -355,8 +337,6 @@ func (op *toLongOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*toLongOp)(nil)
-
-// -- $toDecimal ----------------------------------------------------------------
 
 // toDecimalOp converts to float64 (DumboDB uses float64 for Decimal128 approximation).
 type toDecimalOp struct{ arg any }
@@ -409,8 +389,6 @@ func (op *toDecimalOp) Process(doc *types.Document) (any, error) {
 
 var _ Operator = (*toDecimalOp)(nil)
 
-// -- $toBool -------------------------------------------------------------------
-
 type toBoolOp struct{ arg any }
 
 func newToBool(args ...any) (Operator, error) {
@@ -450,8 +428,6 @@ func (op *toBoolOp) Process(doc *types.Document) (any, error) {
 }
 
 var _ Operator = (*toBoolOp)(nil)
-
-// -- $convert ------------------------------------------------------------------
 
 // convertOp represents { $convert: { input: <expr>, to: <type>, onError: <expr>, onNull: <expr> } }.
 // Converts input to the specified type. Uses onError result on conversion failure,
@@ -511,7 +487,6 @@ func newConvert(args ...any) (Operator, error) {
 	return &convertOp{inputArg: inputArg, toType: toType, onErrorArg: onErrorArg, onNullArg: onNullArg}, nil
 }
 
-// bsonTypeAlias converts a BSON type number to its string alias.
 func bsonTypeAlias(code int32) string {
 	switch code {
 	case 1:
@@ -559,7 +534,6 @@ func (op *convertOp) Process(doc *types.Document) (any, error) {
 	return result, nil
 }
 
-// convertValue performs the actual type conversion.
 func convertValue(v any, toType string) (any, error) {
 	// Delegate to existing specific-type operators where possible.
 	switch toType {

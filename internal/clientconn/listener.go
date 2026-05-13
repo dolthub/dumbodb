@@ -52,7 +52,6 @@ type Listener struct {
 	listenersClosed   chan struct{}
 }
 
-// NewListenerOpts represents listener configuration.
 type NewListenerOpts struct {
 	TCP  string
 	Unix string
@@ -284,7 +283,6 @@ func (l *Listener) TCPAddr() net.Addr {
 	return l.tcpListener.Addr()
 }
 
-// UnixAddr returns Unix domain socket listener's address.
 func (l *Listener) UnixAddr() net.Addr {
 	<-l.unixListenerReady
 	must.NotBeZero(l.unixListener)

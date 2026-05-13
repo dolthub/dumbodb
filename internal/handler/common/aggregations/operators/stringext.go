@@ -21,8 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// -- $strcasecmp ---------------------------------------------------------------
-
 // strcasecmpOp represents $strcasecmp.
 //
 //	{ $strcasecmp: [ <expression1>, <expression2> ] }
@@ -31,7 +29,6 @@ type strcasecmpOp struct {
 	rhs any
 }
 
-// newStrcasecmp creates a new $strcasecmp operator.
 func newStrcasecmp(args ...any) (Operator, error) {
 	if len(args) != 2 {
 		return nil, newOperatorError(
@@ -84,10 +81,7 @@ func (op *strcasecmpOp) Process(doc *types.Document) (any, error) {
 	}
 }
 
-// check interfaces
 var _ Operator = (*strcasecmpOp)(nil)
-
-// -- $substrBytes -------------------------------------------------------------
 
 // substrBytesOp represents $substrBytes.
 //
@@ -98,7 +92,6 @@ type substrBytesOp struct {
 	length any
 }
 
-// newSubstrBytesOp creates a new $substrBytes operator.
 func newSubstrBytesOp(args ...any) (Operator, error) {
 	if len(args) != 3 {
 		return nil, newOperatorError(
@@ -167,5 +160,4 @@ func (op *substrBytesOp) Process(doc *types.Document) (any, error) {
 	return string(b[:length]), nil
 }
 
-// check interfaces
 var _ Operator = (*substrBytesOp)(nil)

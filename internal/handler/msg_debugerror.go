@@ -43,7 +43,6 @@ func (h *Handler) MsgDebugError(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	// check if parameter is an error code
 	if n, err := strconv.ParseInt(expected, 10, 32); err == nil {
 		errCode := handlererrors.ErrorCode(n)
 		return nil, errors.New(errCode.String())

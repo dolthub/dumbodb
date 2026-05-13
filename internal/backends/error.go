@@ -21,7 +21,6 @@ import (
 
 //go:generate ../../bin/stringer -linecomment -type ErrorCode
 
-// ErrorCode represent a backend error code.
 type ErrorCode int
 
 // Error codes.
@@ -63,14 +62,12 @@ func NewError(code ErrorCode, err error) *Error {
 	}
 }
 
-// Code returns the error code.
 func (err *Error) Code() ErrorCode {
 	return err.code
 }
 
 // There is intentionally no method to return the internal error.
 
-// Error implements error interface.
 func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)
 }
@@ -92,7 +89,6 @@ func ErrorCodeIs(err error, code ErrorCode, codes ...ErrorCode) bool {
 // It previously enforced backend error contracts in debug builds; production builds always skipped it.
 func checkError(err error, codes ...ErrorCode) {}
 
-// check interfaces
 var (
 	_ error = (*Error)(nil)
 )

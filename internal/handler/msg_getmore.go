@@ -58,7 +58,6 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, err
 	}
 
-	// Use ExtractParam.
 	v, _ := document.Get("collection")
 	if v == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -153,11 +152,8 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		)
 	}
 
-	// Handle comment.
-
 	username := conninfo.Get(connCtx).Username()
 
-	// Use ExtractParam.
 	c := h.cursors.Get(cursorID)
 	if c == nil || c.Username != username {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(

@@ -266,7 +266,6 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 
 		hasValue = true
 
-		// Process required param "key"
 		var keyDoc *types.Document
 
 		keyDoc, err = common.GetRequiredParam[*types.Document](indexDoc, "key")

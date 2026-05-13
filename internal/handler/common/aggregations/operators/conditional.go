@@ -21,8 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// -- $cond --------------------------------------------------------------------
-
 // condOp represents the $cond expression operator.
 //
 //	// Array form:
@@ -108,10 +106,7 @@ func (c *condOp) Process(doc *types.Document) (any, error) {
 	return evalArgValue(c.thenArg, doc)
 }
 
-// check interfaces
 var _ Operator = (*condOp)(nil)
-
-// -- $ifNull -------------------------------------------------------------------
 
 // ifNullOp represents the $ifNull expression operator.
 //
@@ -123,7 +118,6 @@ type ifNullOp struct {
 	args []any
 }
 
-// newIfNull creates a new $ifNull operator.
 func newIfNull(args ...any) (Operator, error) {
 	if len(args) < 2 {
 		return nil, newOperatorError(
@@ -155,5 +149,4 @@ func (n *ifNullOp) Process(doc *types.Document) (any, error) {
 	return must.NotFail(types.NewDocument()), nil // unreachable but satisfies compiler
 }
 
-// check interfaces
 var _ Operator = (*ifNullOp)(nil)

@@ -80,7 +80,6 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 	)
 }
 
-// MsgEndSessions implements the `endSessions` command.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(

@@ -50,10 +50,8 @@ const (
 	// ErrProtocolError indicates SASL handshake failed.
 	ErrProtocolError = ErrorCode(17) // ProtocolError
 
-	// ErrAuthenticationFailed indicates failed authentication.
 	ErrAuthenticationFailed = ErrorCode(18) // AuthenticationFailed
 
-	// ErrIllegalOperation indicated that operation is illegal.
 	ErrIllegalOperation = ErrorCode(20) // IllegalOperation
 
 	// ErrNamespaceNotFound indicates that a collection is not found.
@@ -68,25 +66,20 @@ const (
 	// ErrConflictingUpdateOperators indicates that $set, $inc or $setOnInsert were used together.
 	ErrConflictingUpdateOperators = ErrorCode(40) // ConflictingUpdateOperators
 
-	// ErrCursorNotFound indicates that cursor is not found.
 	ErrCursorNotFound = ErrorCode(43) // CursorNotFound
 
 	// ErrNamespaceExists indicates that the collection already exists.
 	ErrNamespaceExists = ErrorCode(48) // NamespaceExists
 
-	// ErrMaxTimeMSExpired indicates the MaxTimeMS expired.
 	ErrMaxTimeMSExpired = ErrorCode(50) // MaxTimeMSExpired
 
-	// ErrDollarPrefixedFieldName indicates the field name is prefixed with $.
 	ErrDollarPrefixedFieldName = ErrorCode(52) // DollarPrefixedFieldName
 
 	// ErrInvalidID indicates that _id field is invalid.
 	ErrInvalidID = ErrorCode(53) // InvalidIdField
 
-	// ErrEmptyName indicates that the field name is empty.
 	ErrEmptyName = ErrorCode(56) // EmptyFieldName
 
-	// ErrCommandNotFound indicates unknown command input.
 	ErrCommandNotFound = ErrorCode(59) // CommandNotFound
 
 	// ErrImmutableField indicates that _id field is immutable.
@@ -98,7 +91,6 @@ const (
 	// ErrIndexAlreadyExists indicates that identical index already exists.
 	ErrIndexAlreadyExists = ErrorCode(68) // IndexAlreadyExists
 
-	// ErrInvalidOptions indicates that invalid options were passed.
 	ErrInvalidOptions = ErrorCode(72) // InvalidOptions
 
 	// ErrInvalidNamespace indicates that the collection name is invalid.
@@ -110,13 +102,10 @@ const (
 	// ErrIndexKeySpecsConflict indicates that index build process failed due to key specs conflict.
 	ErrIndexKeySpecsConflict = ErrorCode(86) // IndexKeySpecsConflict
 
-	// ErrOperationFailed indicates that the operation failed.
 	ErrOperationFailed = ErrorCode(96) // OperationFailed
 
-	// ErrDocumentValidationFailure indicates that document validation failed.
 	ErrDocumentValidationFailure = ErrorCode(121) // DocumentValidationFailure
 
-	// ErrInvalidIndexSpecificationOption indicates that the index option is invalid.
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
 
 	// ErrCommandNotSupportedOnView indicates that the command does not support views.
@@ -125,7 +114,6 @@ const (
 	// ErrInvalidPipelineOperator indicates that provided aggregation operator is invalid.
 	ErrInvalidPipelineOperator = ErrorCode(168) // InvalidPipelineOperator
 
-	// ErrClientMetadataCannotBeMutated indicates that client metadata cannot be mutated.
 	ErrClientMetadataCannotBeMutated = ErrorCode(186) // ClientMetadataCannotBeMutated
 
 	// ErrNotImplemented indicates that a flag or command is not implemented.

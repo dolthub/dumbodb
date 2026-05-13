@@ -22,7 +22,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// writeError represents a single write error details.
 type writeError struct {
 	// the order of fields is weird to make the struct smaller due to alignment
 
@@ -51,7 +50,6 @@ func NewWriteErrorMsg(code ErrorCode, msg string) error {
 	}
 }
 
-// Error implements error interface.
 func (we *WriteErrors) Error() string {
 	var err string
 
@@ -66,7 +64,6 @@ func (we *WriteErrors) Error() string {
 	return err
 }
 
-// Document implements ProtoErr interface.
 func (we *WriteErrors) Document() *wirebson.Document {
 	errs := wirebson.MakeArray(we.Len())
 
@@ -86,7 +83,6 @@ func (we *WriteErrors) Document() *wirebson.Document {
 	))
 }
 
-// Info implements ProtoErr interface.
 func (we *WriteErrors) Info() *ErrInfo {
 	return nil
 }
@@ -114,7 +110,6 @@ func (we *WriteErrors) Append(err error, index int32) {
 	}
 }
 
-// Len returns the number of errors.
 func (we *WriteErrors) Len() int {
 	return len(we.errs)
 }
@@ -127,7 +122,6 @@ func (we *WriteErrors) Merge(we2 *WriteErrors, index int32) {
 	}
 }
 
-// check interfaces
 var (
 	_ ProtoErr = (*WriteErrors)(nil)
 )

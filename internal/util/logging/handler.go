@@ -54,7 +54,6 @@ type NewHandlerOpts struct {
 	CheckMessages bool
 }
 
-// shortPath returns shorter path for the given path.
 func shortPath(path string) string {
 	must.NotBeZero(path)
 
@@ -111,7 +110,6 @@ func replaceAttrFunc(opts *NewHandlerOpts) func([]string, slog.Attr) slog.Attr {
 	}
 }
 
-// NewHandler creates a new handler with the given options.
 func NewHandler(out io.Writer, opts *NewHandlerOpts) *Handler {
 	must.NotBeZero(opts)
 
@@ -140,12 +138,10 @@ func NewHandler(out io.Writer, opts *NewHandlerOpts) *Handler {
 	}
 }
 
-// Enabled implements [slog.Handler].
 func (h *Handler) Enabled(ctx context.Context, l slog.Level) bool {
 	return h.base.Enabled(ctx, l)
 }
 
-// Handle implements [slog.Handler].
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	err := h.base.Handle(ctx, r)
 
@@ -185,7 +181,6 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	}
 }
 
-// WithAttrs implements [slog.Handler].
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &Handler{
 		base: h.base.WithAttrs(attrs),
@@ -193,7 +188,6 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	}
 }
 
-// WithGroup implements [slog.Handler].
 func (h *Handler) WithGroup(name string) slog.Handler {
 	return &Handler{
 		base: h.base.WithGroup(name),
@@ -201,7 +195,6 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 	}
 }
 
-// check interfaces
 var (
 	_ slog.Handler = (*Handler)(nil)
 )

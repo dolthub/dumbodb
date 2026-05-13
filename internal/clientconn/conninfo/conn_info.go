@@ -29,7 +29,6 @@ type contextKey struct{}
 // Context key for WithConnInfo/Get.
 var connInfoKey = contextKey{}
 
-// ConnInfo represents client connection information.
 type ConnInfo struct {
 	// the order of fields is weird to make the struct smaller due to alignment
 
@@ -54,12 +53,10 @@ type ConnInfo struct {
 	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
 }
 
-// New returns a new ConnInfo.
 func New() *ConnInfo {
 	return new(ConnInfo)
 }
 
-// Username returns stored username.
 func (connInfo *ConnInfo) Username() string {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -86,7 +83,6 @@ func (connInfo *ConnInfo) SetAuth(username, password string, sc *scram.ServerCon
 	connInfo.db = db
 }
 
-// MetadataRecv returns whatever client metadata was received already.
 func (connInfo *ConnInfo) MetadataRecv() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -94,7 +90,6 @@ func (connInfo *ConnInfo) MetadataRecv() bool {
 	return connInfo.metadataRecv
 }
 
-// SetMetadataRecv marks client metadata as received.
 func (connInfo *ConnInfo) SetMetadataRecv() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -111,7 +106,6 @@ func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
 	connInfo.scramAuthenticated = true
 }
 
-// SCRAMAuthenticated reports whether SCRAM authentication has been completed on this connection.
 func (connInfo *ConnInfo) SCRAMAuthenticated() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -127,7 +121,6 @@ func (connInfo *ConnInfo) SetBypassBackendAuth() {
 	connInfo.bypassBackendAuth = true
 }
 
-// BypassBackendAuth returns whether the connection requires backend authentication.
 func (connInfo *ConnInfo) BypassBackendAuth() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -140,7 +133,6 @@ func Ctx(ctx context.Context, connInfo *ConnInfo) context.Context {
 	return context.WithValue(ctx, connInfoKey, connInfo)
 }
 
-// Get returns the ConnInfo value stored in ctx.
 func Get(ctx context.Context) *ConnInfo {
 	value := ctx.Value(connInfoKey)
 	if value == nil {

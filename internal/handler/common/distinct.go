@@ -33,8 +33,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// DistinctParams contains `distinct` command parameters supported by at least one handler.
-//
 //nolint:vet // for readability
 type DistinctParams struct {
 	DB         string          `dumbo:"$db"`
@@ -57,7 +55,6 @@ type DistinctParams struct {
 	ApiDeprecationErrors bool   `dumbo:"apiDeprecationErrors,ignored"`
 }
 
-// GetDistinctParams returns `distinct` command parameters.
 func GetDistinctParams(document *types.Document, l *slog.Logger) (*DistinctParams, error) {
 	var dp DistinctParams
 

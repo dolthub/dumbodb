@@ -92,7 +92,6 @@ func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, er
 	return m, true, state, nil
 }
 
-// Query implements backends.Collection.
 func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*backends.QueryResult, error) {
 	m, exists, state, err := c.getMap(ctx)
 	if err != nil {
@@ -1125,7 +1124,6 @@ func compareScalars(a, b any) int {
 	}
 }
 
-// Explain implements backends.Collection.
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
 	parsedQuery := types.MakeDocument(0)
 	if params != nil && params.Filter != nil {
@@ -1278,7 +1276,6 @@ func indexKeysEqual(a, b []any) bool {
 	return true
 }
 
-// InsertAll implements backends.Collection.
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
 	if err != nil {
@@ -1638,7 +1635,6 @@ func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
 	return found, err
 }
 
-// UpdateAll implements backends.Collection.
 func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllParams) (*backends.UpdateAllResult, error) {
 	if len(params.Docs) == 0 {
 		return &backends.UpdateAllResult{}, nil
@@ -1789,7 +1785,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	return &backends.UpdateAllResult{Updated: updated}, nil
 }
 
-// DeleteAll implements backends.Collection.
 func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllParams) (*backends.DeleteAllResult, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
 	if err != nil {
@@ -2120,7 +2115,6 @@ func (c *collection) Stats(ctx context.Context, params *backends.CollectionStats
 	}, nil
 }
 
-// Compact implements backends.Collection.
 func (c *collection) Compact(ctx context.Context, params *backends.CompactParams) (*backends.CompactResult, error) {
 	return &backends.CompactResult{}, nil
 }
@@ -2327,7 +2321,6 @@ func lookupFieldFromPrimary(
 	return v, nil
 }
 
-// ListIndexes implements backends.Collection.
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
 	_, exists, state, err := c.getMap(ctx)
 	if err != nil {
@@ -2381,7 +2374,6 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 	return &backends.ListIndexesResult{Indexes: indexes}, nil
 }
 
-// CreateIndexes implements backends.Collection.
 func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateIndexesParams) (*backends.CreateIndexesResult, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
 	if err != nil {
@@ -2615,7 +2607,6 @@ func expandMultiKeyValues(fieldVals []any) [][]any {
 	return [][]any{fieldVals}
 }
 
-// DropIndexes implements backends.Collection.
 func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndexesParams) (*backends.DropIndexesResult, error) {
 	if len(params.Indexes) == 0 {
 		return &backends.DropIndexesResult{}, nil

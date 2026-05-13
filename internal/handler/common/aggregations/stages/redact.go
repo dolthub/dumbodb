@@ -38,7 +38,6 @@ type redactStage struct {
 	expr any
 }
 
-// newRedact creates a new $redact stage.
 func newRedact(stage *types.Document) (aggregations.Stage, error) {
 	v, err := stage.Get("$redact")
 	if err != nil {
@@ -48,7 +47,6 @@ func newRedact(stage *types.Document) (aggregations.Stage, error) {
 	return &redactStage{expr: v}, nil
 }
 
-// Process implements Stage interface.
 func (r *redactStage) Process(_ context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	docs, err := iterator.ConsumeValues(iter)
 	if err != nil {
@@ -258,7 +256,6 @@ func evalRedactExpr(expr any, doc *types.Document) (string, error) {
 	}
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*redactStage)(nil)
 )

@@ -21,8 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// -- $add ---------------------------------------------------------------------
-
 // addOp represents the $add expression operator.
 //
 //	{ $add: [ <expression1>, <expression2>, ... ] }
@@ -30,7 +28,6 @@ type addOp struct {
 	args []any
 }
 
-// newAdd creates a new $add operator.
 func newAdd(args ...any) (Operator, error) {
 	return &addOp{args: args}, nil
 }
@@ -57,10 +54,7 @@ func (a *addOp) Process(doc *types.Document) (any, error) {
 	return aggregations.SumNumbers(values...), nil
 }
 
-// check interfaces
 var _ Operator = (*addOp)(nil)
-
-// -- $subtract ----------------------------------------------------------------
 
 // subtractOp represents the $subtract expression operator.
 //
@@ -70,7 +64,6 @@ type subtractOp struct {
 	subtrahend any
 }
 
-// newSubtract creates a new $subtract operator.
 func newSubtract(args ...any) (Operator, error) {
 	if len(args) != 2 {
 		return nil, newOperatorError(
@@ -138,8 +131,6 @@ func subtractValues(a, b any) any {
 	return toFloat64(a) - toFloat64(b)
 }
 
-// -- $divide ------------------------------------------------------------------
-
 // divideOp represents the $divide expression operator.
 //
 //	{ $divide: [ <expression1>, <expression2> ] }
@@ -148,7 +139,6 @@ type divideOp struct {
 	divisor  any
 }
 
-// newDivide creates a new $divide operator.
 func newDivide(args ...any) (Operator, error) {
 	if len(args) != 2 {
 		return nil, newOperatorError(
@@ -190,7 +180,6 @@ func (d *divideOp) Process(doc *types.Document) (any, error) {
 	return toFloat64(a) / bf, nil
 }
 
-// toFloat64 converts a numeric value to float64.
 func toFloat64(v any) float64 {
 	switch n := v.(type) {
 	case float64:
@@ -204,7 +193,6 @@ func toFloat64(v any) float64 {
 	return 0
 }
 
-// check interfaces
 var (
 	_ Operator = (*subtractOp)(nil)
 	_ Operator = (*divideOp)(nil)

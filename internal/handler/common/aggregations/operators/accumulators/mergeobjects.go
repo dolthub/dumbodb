@@ -36,7 +36,6 @@ type mergeObjectsAccumulator struct {
 	isRoot     bool // true when the expression is "$$ROOT"
 }
 
-// newMergeObjectsAccumulator creates a new $mergeObjects accumulator.
 func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 	if len(args) != 1 {
 		return nil, nil
@@ -75,7 +74,6 @@ func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-// Accumulate implements Accumulator.
 func (m *mergeObjectsAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
 	defer iter.Close()
 
@@ -129,5 +127,4 @@ func (m *mergeObjectsAccumulator) Accumulate(iter types.DocumentsIterator) (any,
 	return result, nil
 }
 
-// check interfaces
 var _ Accumulator = (*mergeObjectsAccumulator)(nil)

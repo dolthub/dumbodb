@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// database implements backends.Database interface by delegating all methods to the wrapped database.
 type database struct {
 	origDB backends.Database
 	name   string
@@ -29,7 +28,6 @@ type database struct {
 	l      *slog.Logger
 }
 
-// newDatabase creates a new Database that wraps the given database.
 func newDatabase(origDB backends.Database, name string, origB backends.Backend, l *slog.Logger) backends.Database {
 	return &database{
 		origDB: origDB,
@@ -39,7 +37,6 @@ func newDatabase(origDB backends.Database, name string, origB backends.Backend, 
 	}
 }
 
-// Collection implements backends.Database interface.
 func (db *database) Collection(name string) (backends.Collection, error) {
 	origC, err := db.origDB.Collection(name)
 	if err != nil {
@@ -49,39 +46,31 @@ func (db *database) Collection(name string) (backends.Collection, error) {
 	return newCollection(origC, name, db.name, db.origB, db.l), nil
 }
 
-// ListCollections implements backends.Database interface.
-//
 //nolint:lll // for readability
 func (db *database) ListCollections(ctx context.Context, params *backends.ListCollectionsParams) (*backends.ListCollectionsResult, error) {
 	return db.origDB.ListCollections(ctx, params)
 }
 
-// CreateCollection implements backends.Database interface.
 func (db *database) CreateCollection(ctx context.Context, params *backends.CreateCollectionParams) error {
 	return db.origDB.CreateCollection(ctx, params)
 }
 
-// DropCollection implements backends.Database interface.
 func (db *database) DropCollection(ctx context.Context, params *backends.DropCollectionParams) error {
 	return db.origDB.DropCollection(ctx, params)
 }
 
-// RenameCollection implements backends.Database interface.
 func (db *database) RenameCollection(ctx context.Context, params *backends.RenameCollectionParams) error {
 	return db.origDB.RenameCollection(ctx, params)
 }
 
-// CollMod implements backends.Database interface.
 func (db *database) CollMod(ctx context.Context, params *backends.CollModParams) error {
 	return db.origDB.CollMod(ctx, params)
 }
 
-// Stats implements backends.Database interface.
 func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsParams) (*backends.DatabaseStatsResult, error) {
 	return db.origDB.Stats(ctx, params)
 }
 
-// check interfaces
 var (
 	_ backends.Database = (*database)(nil)
 )

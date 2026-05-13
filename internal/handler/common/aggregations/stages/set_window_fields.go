@@ -31,7 +31,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// windowBound represents a window boundary.
 type windowBound struct {
 	unbounded bool
 	current   bool
@@ -46,7 +45,6 @@ const (
 	windowFrameRange
 )
 
-// windowFrame represents the window frame specification.
 type windowFrame struct {
 	frameType windowFrameType
 	lower     windowBound
@@ -114,7 +112,6 @@ type setWindowFields struct {
 	outputs     []windowOutputField
 }
 
-// newSetWindowFields creates a new $setWindowFields stage.
 func newSetWindowFields(stage *types.Document) (aggregations.Stage, error) {
 	spec, err := common.GetRequiredParam[*types.Document](stage, "$setWindowFields")
 	if err != nil {
@@ -453,7 +450,6 @@ func parseWindowBound(v any) (windowBound, error) {
 	}
 }
 
-// Process implements Stage interface.
 func (s *setWindowFields) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	// Collect all documents.
 	docs, err := iterator.ConsumeValues(iter)
@@ -1780,7 +1776,6 @@ func computeTopBottom(op string, spec topSpec, window []*types.Document) (any, e
 	return result, nil
 }
 
-// check interfaces
 var (
 	_ aggregations.Stage = (*setWindowFields)(nil)
 )
