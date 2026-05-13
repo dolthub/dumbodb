@@ -21,14 +21,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/resource"
 )
 
-// documentIterator represents an iterator over the document fields.
 type documentIterator struct {
 	n     atomic.Uint32
 	doc   *Document
 	token *resource.Token
 }
 
-// newDocumentIterator creates a new document iterator.
 func newDocumentIterator(document *Document) iterator.Interface[string, any] {
 	iter := &documentIterator{
 		doc:   document,
@@ -39,7 +37,6 @@ func newDocumentIterator(document *Document) iterator.Interface[string, any] {
 	return iter
 }
 
-// Next implements iterator.Interface.
 func (iter *documentIterator) Next() (string, any, error) {
 	n := int(iter.n.Add(1)) - 1
 
@@ -50,14 +47,12 @@ func (iter *documentIterator) Next() (string, any, error) {
 	return iter.doc.fields[n].key, iter.doc.fields[n].value, nil
 }
 
-// Close implements iterator.Interface.
 func (iter *documentIterator) Close() {
 	iter.n.Store(uint32(iter.doc.Len()))
 
 	resource.Untrack(iter, iter.token)
 }
 
-// check interfaces
 var (
 	_ iterator.Interface[string, any] = (*documentIterator)(nil)
 )

@@ -30,7 +30,6 @@ type Array struct {
 	frozen bool
 }
 
-// MakeArray creates an empty array with set capacity.
 func MakeArray(capacity int) *Array {
 	if capacity == 0 {
 		return new(Array)
@@ -62,7 +61,6 @@ func (a *Array) Freeze() {
 	}
 }
 
-// checkFrozen panics if array is frozen.
 func (a *Array) checkFrozen() {
 	if a.frozen {
 		panic("array is frozen and can't be modified")
@@ -89,12 +87,10 @@ func (a *Array) Len() int {
 	return len(a.s)
 }
 
-// Iterator returns an iterator for the array.
 func (a *Array) Iterator() iterator.Interface[int, any] {
 	return newArrayIterator(a)
 }
 
-// Get returns a value at the given index.
 func (a *Array) Get(index int) (any, error) {
 	if l := a.Len(); index < 0 || index >= l {
 		return nil, fmt.Errorf("types.Array.Get: index %d is out of bounds [0-%d)", index, l)
@@ -103,7 +99,6 @@ func (a *Array) Get(index int) (any, error) {
 	return a.s[index], nil
 }
 
-// GetByPath returns a value by path.
 func (a *Array) GetByPath(path Path) (any, error) {
 	return getByPath(a, path)
 }
@@ -148,7 +143,6 @@ func (a *Array) RemoveByPath(path Path) {
 	removeByPath(a, path)
 }
 
-// Min returns the minimum value from the array.
 func (a *Array) Min() any {
 	if a == nil || a.Len() == 0 {
 		panic("cannot get Min value; array is nil or empty")
@@ -165,7 +159,6 @@ func (a *Array) Min() any {
 	return min
 }
 
-// Max returns the maximum value from the array.
 func (a *Array) Max() any {
 	if a == nil || a.Len() == 0 {
 		panic("cannot get Max value; array is nil or empty")
@@ -239,9 +232,6 @@ func (a *Array) Contains(filterValue any) bool {
 	}
 }
 
-// ContainsAll checks if Array a contains all the given values of Array b.
-// Currently, this algorithm is O(n^2) without any performance tuning.
-// This place can be significantly improved if a more performant algorithm is chosen.
 func (a *Array) ContainsAll(b *Array) bool {
 	for _, v := range b.s {
 		if !a.Contains(v) {
@@ -251,7 +241,6 @@ func (a *Array) ContainsAll(b *Array) bool {
 	return true
 }
 
-// Remove removes the value at the given index.
 func (a *Array) Remove(index int) {
 	a.checkFrozen()
 
@@ -262,12 +251,10 @@ func (a *Array) Remove(index int) {
 	a.s = append(a.s[:index], a.s[index+1:]...)
 }
 
-// LogValue implements [slog.LogValuer].
 func (arr *Array) LogValue() slog.Value {
 	return slogValue(arr, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = (*Array)(nil)
 )

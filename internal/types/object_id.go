@@ -32,12 +32,10 @@ type ObjectID [ObjectIDLen]byte
 // ObjectIDLen is an ObjectID length in bytes.
 const ObjectIDLen = 12
 
-// NewObjectID returns a new ObjectID.
 func NewObjectID() ObjectID {
 	return newObjectIDTime(time.Now())
 }
 
-// newObjectIDTime returns a new ObjectID with given time.
 func newObjectIDTime(t time.Time) ObjectID {
 	var res ObjectID
 
@@ -64,12 +62,10 @@ func init() {
 	objectIDCounter.Store(rand.Uint32())
 }
 
-// LogValue implements [slog.LogValuer].
 func (o ObjectID) LogValue() slog.Value {
 	return slogValue(o, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = ObjectID{}
 )

@@ -95,10 +95,7 @@ func detectDataType(value any) compareTypeOrderResult {
 type SortType int8
 
 const (
-	// Ascending is used for sort in ascending order.
-	Ascending SortType = 1
-
-	// Descending is used for sort in descending order.
+	Ascending  SortType = 1
 	Descending SortType = -1
 )
 
@@ -182,7 +179,6 @@ func CompareOrderForSort(a, b any, order SortType) CompareResult {
 			return result
 		}
 
-		// invert the result for descending sort.
 		return compareInvert(result)
 	}
 
@@ -191,7 +187,6 @@ func CompareOrderForSort(a, b any, order SortType) CompareResult {
 		return result
 	}
 
-	// invert the result for descending sort.
 	return compareInvert(result)
 }
 
@@ -216,8 +211,6 @@ func CompareOrderForOperator(a, b any, order SortType) CompareResult {
 	arrB, isBArray := b.(*Array)
 
 	if isAArray && !isBArray {
-		// if only a is array, filter the array by
-		// only keeping the same type as b.
 		arrA = arrA.FilterArrayByType(b)
 	}
 
@@ -249,7 +242,6 @@ func CompareOrderForOperator(a, b any, order SortType) CompareResult {
 	return Compare(a, b)
 }
 
-// compareTypeOrder detects the data type for two values and compares them.
 func compareTypeOrder(a, b any) CompareResult {
 	aType := detectDataType(a)
 	bType := detectDataType(b)

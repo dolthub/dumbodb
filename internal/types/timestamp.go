@@ -23,15 +23,12 @@ import (
 // Timestamp represents BSON type Timestamp.
 type Timestamp uint64
 
-// timestampCounter is a process-wide timestamp counter.
 var timestampCounter atomic.Uint32
 
-// NewTimestamp returns the timestamp for the given time and counter values.
 func NewTimestamp(t time.Time, c uint32) Timestamp {
 	return Timestamp((uint64(t.Unix()) << 32) | uint64(c))
 }
 
-// NextTimestamp returns the next timestamp for the given time value.
 func NextTimestamp(t time.Time) Timestamp {
 	// Technically, that should be a counter within a second, not a process-wide,
 	// but that's good enough for us.
@@ -40,23 +37,19 @@ func NextTimestamp(t time.Time) Timestamp {
 	return NewTimestamp(t, c)
 }
 
-// Time returns timestamp's time component.
 func (ts Timestamp) Time() time.Time {
 	sec := int64(ts >> 32)
 	return time.Unix(sec, 0).UTC()
 }
 
-// Signed returns the timestamp as a signed value.
 func (ts Timestamp) Signed() int64 {
 	return int64(ts)
 }
 
-// LogValue implements [slog.LogValuer].
 func (ts Timestamp) LogValue() slog.Value {
 	return slogValue(ts, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = Timestamp(0)
 )

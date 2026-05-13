@@ -23,15 +23,12 @@ type (
 	NullType struct{}
 )
 
-// Null represents BSON value Null.
 var Null = NullType{}
 
-// LogValue implements [slog.LogValuer].
 func (n NullType) LogValue() slog.Value {
 	return slogValue(n, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = NullType{}
 )

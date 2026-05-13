@@ -27,7 +27,6 @@ import (
 
 //go:generate ../../bin/stringer -linecomment -type CompareResult
 
-// CompareResult represents the result of a comparison.
 type CompareResult int8
 
 // Values match results of comparison functions such as bytes.Compare.
@@ -87,7 +86,6 @@ func CompareForAggregation(docValue, filterValue any) CompareResult {
 	}
 }
 
-// compareScalars compares BSON scalar values.
 func compareScalars(v1, v2 any) CompareResult {
 	assertType(v1)
 	assertType(v2)
@@ -245,7 +243,6 @@ func compareScalars(v1, v2 any) CompareResult {
 	panic("not reached")
 }
 
-// compareInvert swaps Less and Greater, keeping Equal.
 func compareInvert(res CompareResult) CompareResult {
 	switch res {
 	case Equal:
@@ -259,7 +256,6 @@ func compareInvert(res CompareResult) CompareResult {
 	panic("not reached")
 }
 
-// compareOrdered compares BSON values of the same type using ==, <, > operators.
 func compareOrdered[T constraints.Ordered](a, b T) CompareResult {
 	switch {
 	case a == b:
@@ -273,7 +269,6 @@ func compareOrdered[T constraints.Ordered](a, b T) CompareResult {
 	}
 }
 
-// compareNumbers compares BSON numbers.
 func compareNumbers(a float64, b int64) CompareResult {
 	bigA := new(big.Float).SetFloat64(a).SetPrec(100000)
 	bigB := new(big.Float).SetInt64(b).SetPrec(100000)
@@ -353,17 +348,14 @@ func compareDocuments(a, b *Document) CompareResult {
 			return Greater
 		}
 
-		// compare type
 		if result := compareTypeOrder(aValues[i], bValues[i]); result != Equal {
 			return result
 		}
 
-		// compare keys
 		if result := compareScalars(aKey, bKeys[i]); result != Equal {
 			return result
 		}
 
-		// compare values
 		if result := Compare(aValues[i], bValues[i]); result != Equal {
 			return result
 		}
@@ -376,7 +368,6 @@ func compareDocuments(a, b *Document) CompareResult {
 	return Equal
 }
 
-// compareArray compares array to any value.
 func compareArray(as *Array, b any) CompareResult {
 	assertType(b)
 

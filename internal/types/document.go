@@ -38,16 +38,12 @@ type Document struct {
 	recordID int64
 }
 
-// field represents a field in the document.
-// RecordID is not a field.
-//
-// The order of field is like that to reduce a pressure on gc a bit, and make vet/fieldalignment linter happy.
+// Field order is chosen to reduce gc pressure and satisfy the fieldalignment linter.
 type field struct {
 	value any
 	key   string
 }
 
-// MakeDocument creates an empty document with set capacity.
 func MakeDocument(capacity int) *Document {
 	if capacity == 0 {
 		return new(Document)
@@ -59,7 +55,6 @@ func MakeDocument(capacity int) *Document {
 	}
 }
 
-// NewDocument creates a document with the given key/value pairs.
 func NewDocument(pairs ...any) (*Document, error) {
 	l := len(pairs)
 	if l%2 != 0 {
@@ -102,7 +97,6 @@ func (d *Document) RecordID() int64 {
 	return d.recordID
 }
 
-// SetRecordID sets the document's RecordID.
 func (d *Document) SetRecordID(recordID int64) {
 	d.recordID = recordID
 }
@@ -119,7 +113,6 @@ func (d *Document) Freeze() {
 	}
 }
 
-// checkFrozen panics if document is frozen.
 func (d *Document) checkFrozen() {
 	if d.frozen {
 		panic("document is frozen and can't be modified")
@@ -231,7 +224,6 @@ func (d *Document) Command() string {
 	return d.fields[0].key
 }
 
-// Has returns true if the given key is present in the document.
 func (d *Document) Has(key string) bool {
 	_, ok := d.keys[key]
 	return ok
@@ -318,15 +310,12 @@ func (d *Document) Remove(key string) any {
 	return nil
 }
 
-// HasByPath returns true if the given path is present in the document.
 func (d *Document) HasByPath(path Path) bool {
 	_, err := d.GetByPath(path)
 
 	return err == nil
 }
 
-// GetByPath returns a value by path.
-// If the Path has only one element, it returns the value for the given key.
 func (d *Document) GetByPath(path Path) (any, error) {
 	return getByPath(d, path)
 }
@@ -345,7 +334,6 @@ func (d *Document) SetByPath(path Path, value any) error {
 	}
 
 	if !d.HasByPath(path.TrimSuffix()) {
-		// we should insert the missing part of the path
 		if err := insertByPath(d, path); err != nil {
 			return err
 		}
@@ -397,7 +385,6 @@ func (d *Document) RemoveByPath(path Path) {
 	removeByPath(d, path)
 }
 
-// SortFieldsByKey sorts the document fields by ascending order of the key.
 func (d *Document) SortFieldsByKey() {
 	d.checkFrozen()
 
@@ -406,14 +393,10 @@ func (d *Document) SortFieldsByKey() {
 	})
 }
 
-// isKeyDuplicate returns true if the target key is duplicated in the document and false otherwise.
-// If the key is not found, it returns false.
 func (d *Document) isKeyDuplicate(targetKey string) bool {
 	return d.keys[targetKey] > 1
 }
 
-// moveIDToTheFirstIndex sets the _id field of the document at the first position.
-// If the _id field is not present, it does nothing.
 func (d *Document) moveIDToTheFirstIndex() {
 	if !d.Has("_id") {
 		return
@@ -442,12 +425,10 @@ func (d *Document) moveIDToTheFirstIndex() {
 	d.fields = slices.Delete(d.fields, idIdx+1, idIdx+2)
 }
 
-// LogValue implements [slog.LogValuer].
 func (doc *Document) LogValue() slog.Value {
 	return slogValue(doc, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = (*Document)(nil)
 )

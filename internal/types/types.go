@@ -62,7 +62,6 @@ const MaxDocumentLen = 16 * 1024 * 1024 // 16 MiB = 16777216 bytes
 // MaxSafeDouble is the maximum double value that can be represented precisely.
 const MaxSafeDouble = float64(1<<53 - 1) // 52bit mantissa max value = 9007199254740991
 
-// ScalarType represents scalar type.
 type ScalarType interface {
 	float64 | string | Binary | ObjectID | bool | time.Time | NullType | Regex | int32 | Timestamp | int64 | Decimal128 | MinKeyType | MaxKeyType
 }
@@ -72,13 +71,10 @@ type CompositeType interface {
 	*Document | *Array
 }
 
-// Type represents any BSON type (scalar or composite).
 type Type interface {
 	ScalarType | CompositeType
 }
 
-// CompositeTypeInterface consists of Document and Array.
-//
 //sumtype:decl
 type CompositeTypeInterface interface {
 	compositeType() // seal for sumtype
@@ -122,7 +118,6 @@ func isScalar(value any) bool {
 	return false
 }
 
-// deepCopy returns a deep copy of the given value.
 func deepCopy(value any) any {
 	switch value := value.(type) {
 	case *Document:

@@ -21,14 +21,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/resource"
 )
 
-// arrayIterator represents an iterator for an Array.
 type arrayIterator struct {
 	n     atomic.Uint32
 	arr   *Array
 	token *resource.Token
 }
 
-// newArrayIterator returns a new arrayIterator.
 func newArrayIterator(array *Array) iterator.Interface[int, any] {
 	iter := &arrayIterator{
 		arr:   array,
@@ -39,7 +37,6 @@ func newArrayIterator(array *Array) iterator.Interface[int, any] {
 	return iter
 }
 
-// Next implements iterator.Interface.
 func (iter *arrayIterator) Next() (int, any, error) {
 	n := int(iter.n.Add(1)) - 1
 
@@ -50,14 +47,12 @@ func (iter *arrayIterator) Next() (int, any, error) {
 	return n, iter.arr.s[n], nil
 }
 
-// Close implements iterator.Interface.
 func (iter *arrayIterator) Close() {
 	iter.n.Store(uint32(iter.arr.Len()))
 
 	resource.Untrack(iter, iter.token)
 }
 
-// check interfaces
 var (
 	_ iterator.Interface[int, any] = (*arrayIterator)(nil)
 )

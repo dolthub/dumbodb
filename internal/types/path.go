@@ -26,37 +26,18 @@ import (
 
 //go:generate ../../bin/stringer -linecomment -type PathErrorCode
 
-// PathErrorCode represents PathError code.
 type PathErrorCode int
 
 const (
 	_ PathErrorCode = iota
-
-	// ErrPathElementEmpty indicates that provided path contains an empty element.
 	ErrPathElementEmpty
-
-	// ErrPathElementInvalid indicates that provided path contains an invalid element (other than empty).
 	ErrPathElementInvalid
-
-	// ErrPathKeyNotFound indicates that key was not found in document.
 	ErrPathKeyNotFound
-
-	// ErrPathIndexInvalid indicates that provided array index is invalid.
 	ErrPathIndexInvalid
-
-	// ErrPathIndexOutOfBound indicates that provided array index is out of bound.
 	ErrPathIndexOutOfBound
-
-	// ErrPathCannotAccess indicates that path couldn't be accessed.
 	ErrPathCannotAccess
-
-	// ErrPathCannotCreateField indicates that it's impossible to create a specific field.
 	ErrPathCannotCreateField
-
-	// ErrPathConflictOverwrite indicates a path overwrites another path.
 	ErrPathConflictOverwrite
-
-	// ErrPathConflictCollision indicates a path creates collision at another path.
 	ErrPathConflictCollision
 )
 
@@ -66,17 +47,14 @@ type PathError struct {
 	code PathErrorCode
 }
 
-// Error implements the error interface.
 func (e *PathError) Error() string {
 	return e.err.Error()
 }
 
-// Code returns the PathError code.
 func (e *PathError) Code() PathErrorCode {
 	return e.code
 }
 
-// newPathError creates a new PathError.
 func newPathError(code PathErrorCode, reason error) error {
 	return &PathError{err: reason, code: code}
 }
@@ -91,7 +69,6 @@ type Path struct {
 	e []string
 }
 
-// newPath returns Path from a strings slice.
 func newPath(path ...string) (Path, error) {
 	var res Path
 
@@ -103,9 +80,6 @@ func newPath(path ...string) (Path, error) {
 			return res, newPathError(ErrPathElementInvalid, errors.New("path element must not contain spaces"))
 		case strings.Contains(e, "."):
 			return res, newPathError(ErrPathElementInvalid, errors.New("path element must not contain '.'"))
-			// enable validation of `$` prefix and update Path struct comment
-			// case strings.HasPrefix(e, "$"):
-			//	return res, newPathError(ErrPathElementInvalid, errors.New("path element must not start with '$'"))
 		}
 	}
 
@@ -129,34 +103,28 @@ func NewPathFromString(s string) (Path, error) {
 	return newPath(strings.Split(s, ".")...)
 }
 
-// String returns a dot notation for that path.
 func (p Path) String() string {
 	return strings.Join(p.e, ".")
 }
 
-// Len returns path length.
 func (p Path) Len() int {
 	return len(p.e)
 }
 
-// Slice returns path elements array.
 func (p Path) Slice() []string {
 	path := make([]string, p.Len())
 	copy(path, p.e)
 	return path
 }
 
-// Suffix returns the last path element.
 func (p Path) Suffix() string {
 	return p.e[p.Len()-1]
 }
 
-// Prefix returns the first path element.
 func (p Path) Prefix() string {
 	return p.e[0]
 }
 
-// TrimSuffix returns a path without the last element.
 func (p Path) TrimSuffix() Path {
 	if p.Len() <= 1 {
 		panic("path should have more than 1 element")
@@ -165,7 +133,6 @@ func (p Path) TrimSuffix() Path {
 	return NewStaticPath(p.e[:p.Len()-1]...)
 }
 
-// TrimPrefix returns a copy of path without the first element.
 func (p Path) TrimPrefix() Path {
 	if p.Len() <= 1 {
 		panic("path should have more than 1 element")
@@ -174,7 +141,6 @@ func (p Path) TrimPrefix() Path {
 	return NewStaticPath(p.e[1:]...)
 }
 
-// Append returns new Path constructed from the current path and given element.
 func (p Path) Append(elem string) Path {
 	elems := p.Slice()
 
@@ -227,7 +193,6 @@ func IsConflictPath(paths []Path, path Path) error {
 	return nil
 }
 
-// getByPath returns a value by path - a sequence of indexes and keys.
 func getByPath[T CompositeTypeInterface](comp T, path Path) (any, error) {
 	var next any = comp
 	for _, p := range path.Slice() {
@@ -267,7 +232,6 @@ func getByPath[T CompositeTypeInterface](comp T, path Path) (any, error) {
 	return next, nil
 }
 
-// removeByPath removes path elements for given value, which could be *Document or *Array.
 func removeByPath(v any, path Path) {
 	if path.Len() == 0 {
 		return

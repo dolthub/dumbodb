@@ -26,38 +26,17 @@ import (
 )
 
 var (
-	// ErrOptionNotImplemented indicates unimplemented regex option.
 	ErrOptionNotImplemented = fmt.Errorf("regex: option not implemented")
-
-	// ErrMissingParen indicates missing parentheses in regex expression.
-	ErrMissingParen = fmt.Errorf("Regular expression is invalid: missing )")
-
-	// ErrMissingBracket indicates missing terminating ] for character class.
-	ErrMissingBracket = fmt.Errorf("Regular expression is invalid: missing terminating ] for character class")
-
-	// ErrInvalidEscape indicates invalid escape errors.
-	ErrInvalidEscape = fmt.Errorf("Regular expression is invalid: PCRE does not support \\L, \\l, \\N{name}, \\U, or \\u")
-
-	// ErrMissingTerminator indicates syntax error in subpattern name (missing terminator).
-	ErrMissingTerminator = fmt.Errorf("Regular expression is invalid: syntax error in subpattern name (missing terminator)")
-
-	// ErrUnmatchedParentheses indicates unmatched parentheses.
+	ErrMissingParen         = fmt.Errorf("Regular expression is invalid: missing )")
+	ErrMissingBracket       = fmt.Errorf("Regular expression is invalid: missing terminating ] for character class")
+	ErrInvalidEscape        = fmt.Errorf("Regular expression is invalid: PCRE does not support \\L, \\l, \\N{name}, \\U, or \\u")
+	ErrMissingTerminator    = fmt.Errorf("Regular expression is invalid: syntax error in subpattern name (missing terminator)")
 	ErrUnmatchedParentheses = fmt.Errorf("Regular expression is invalid: unmatched parentheses")
-
-	// ErrTrailingBackslash indicates \\ at end of the pattern.
-	ErrTrailingBackslash = fmt.Errorf("Regular expression is invalid: \\ at end of pattern")
-
-	// ErrNothingToRepeat indicates invalid regex: nothing to repeat.
-	ErrNothingToRepeat = fmt.Errorf("Regular expression is invalid: nothing to repeat")
-
-	// ErrInvalidClassRange indicates that range out of order in character class.
-	ErrInvalidClassRange = fmt.Errorf("Regular expression is invalid: range out of order in character class")
-
-	// ErrUnsupportedPerlOp indicates unrecognized character after the grouping sequence start.
-	ErrUnsupportedPerlOp = fmt.Errorf("Regular expression is invalid: unrecognized character after (? or (?-")
-
-	// ErrInvalidRepeatSize indicates that the regular expression is too large.
-	ErrInvalidRepeatSize = fmt.Errorf("Regular expression is invalid: regular expression is too large")
+	ErrTrailingBackslash    = fmt.Errorf("Regular expression is invalid: \\ at end of pattern")
+	ErrNothingToRepeat      = fmt.Errorf("Regular expression is invalid: nothing to repeat")
+	ErrInvalidClassRange    = fmt.Errorf("Regular expression is invalid: range out of order in character class")
+	ErrUnsupportedPerlOp    = fmt.Errorf("Regular expression is invalid: unrecognized character after (? or (?-")
+	ErrInvalidRepeatSize    = fmt.Errorf("Regular expression is invalid: regular expression is too large")
 )
 
 // Matcher is implemented by compiled regular expressions returned by Regex.Compile.
@@ -66,7 +45,6 @@ type Matcher interface {
 	String() string
 }
 
-// regexp2Matcher wraps regexp2.Regexp to implement Matcher.
 type regexp2Matcher struct {
 	re *regexp2.Regexp
 }
@@ -215,12 +193,10 @@ func stripExtendedWhitespace(pattern string) string {
 	return string(result)
 }
 
-// LogValue implements [slog.LogValuer].
 func (r Regex) LogValue() slog.Value {
 	return slogValue(r, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = Regex{}
 )

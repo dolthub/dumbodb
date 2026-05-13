@@ -24,19 +24,12 @@ import (
 
 //go:generate ../../bin/stringer -linecomment -type ValidationErrorCode
 
-// ValidationErrorCode represents ValidationData error code.
 type ValidationErrorCode int
 
 const (
 	_ ValidationErrorCode = iota
-
-	// ErrValidation indicates that document is invalid.
 	ErrValidation
-
-	// ErrWrongIDType indicates that _id field is invalid.
 	ErrWrongIDType
-
-	// ErrIDNotFound indicates that _id field is not found.
 	ErrIDNotFound
 )
 
@@ -46,17 +39,14 @@ type ValidationError struct {
 	reason error
 }
 
-// newValidationError creates a new ValidationError.
 func newValidationError(code ValidationErrorCode, reason error) error {
 	return &ValidationError{reason: reason, code: code}
 }
 
-// Error implements the error interface.
 func (e *ValidationError) Error() string {
 	return e.reason.Error()
 }
 
-// Code returns the ValidationError code.
 func (e *ValidationError) Code() ValidationErrorCode {
 	return e.code
 }
@@ -79,8 +69,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 	var idPresent bool
 
 	for i, key := range keys {
-		// integration tests for those cases are in the `dance` repo
-
 		if !utf8.ValidString(key) {
 			return newValidationError(ErrValidation, fmt.Errorf("invalid key: %q (not a valid UTF-8 string)", key))
 		}

@@ -36,17 +36,14 @@ var MinKey = MinKeyType{}
 // MaxKey is the singleton BSON MaxKey value.
 var MaxKey = MaxKeyType{}
 
-// LogValue implements [slog.LogValuer].
 func (MinKeyType) LogValue() slog.Value {
 	return slogValue(MinKeyType{}, 1)
 }
 
-// LogValue implements [slog.LogValuer].
 func (MaxKeyType) LogValue() slog.Value {
 	return slogValue(MaxKeyType{}, 1)
 }
 
-// check interfaces
 var (
 	_ slog.LogValuer = MinKeyType{}
 	_ slog.LogValuer = MaxKeyType{}

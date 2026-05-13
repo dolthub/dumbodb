@@ -85,7 +85,6 @@ func FormatAnyValue(value any) string {
 	}
 }
 
-// formatDocument formats Document for error output.
 func formatDocument(doc *Document) string {
 	if len(doc.fields) == 0 {
 		return "{}"
@@ -104,7 +103,6 @@ func formatDocument(doc *Document) string {
 	return result + " }"
 }
 
-// formatArray formats Array for error output.
 func formatArray(array *Array) string {
 	if len(array.s) == 0 {
 		return "[]"
