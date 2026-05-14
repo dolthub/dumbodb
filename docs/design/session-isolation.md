@@ -567,93 +567,201 @@ guess.
 
 ## Correctness Testing
 
-Session isolation introduces concurrency and merge semantics that don't exist
-in DumboDB today. The scenarios below should be covered by integration tests
-in `dumbodb` and parity tests in `dumbodb-parity-testing`, the latter using
-`DumboDBFull` / `DumboDBXFail` / `DumboDBMongoOnly` to classify each case
-per the table in the previous section.
+Tests are split into two classes by where the behavior lives:
 
-Tests 1-12 cover the `--session-isolation` mode flow. Tests 13-17 cover the
-default-mode (pessimistic transaction) flow.
+- **Parity tests** -- behaviors that exist in MongoDB. DumboDB must match
+  Mongo. These live in
+  [`dumbodb-parity-testing`](https://github.com/dolthub/dumbodb-parity-testing).
+  The harness runs each scenario against MongoDB 8 and DumboDB and asserts
+  the results match, with each test classified `DumboDBFull` (divergence
+  fails CI), `DumboDBXFail` (knowingly divergent), or `DumboDBMongoOnly`
+  (skipped on DumboDB).
+- **DumboDB-only tests** -- behaviors that exist only in DumboDB:
+  `--session-isolation` mode, `doltCommit`, `doltConflicts`,
+  `doltResolveConflict`, branch-revision database names. Mongo has no
+  analog so they cannot be parity-tested. These live as Go integration
+  tests in the `dumbodb` repository under `tests/`.
 
-### Test 1: Uncommitted writes invisible to read-only sessions
+The split rule is simple: if the scenario uses only standard MongoDB
+commands (insert, update, find, startTransaction, etc.), it belongs in
+parity tests. If it uses `doltCommit`, `doltConflicts`, the `@branch`
+revision syntax, or depends on the `--session-isolation` server flag, it
+belongs in DumboDB integration tests.
 
-Two clients connect to the same branch. Client A inserts a document. Client B
-(read-only, has not written) reads the collection. Since A hasn't committed,
-B should not see A's document. After A commits, B reads from the updated
-branch HEAD and sees the document.
+### Parity Tests (dumbodb-parity-testing)
 
-```
-Client A: insert {_id: 1, x: "from A"}            <- A's branchState is now dirty
-Client B: find {} -> should return [] (empty)     <- B's branchState is clean, reads HEAD
-Client A: doltCommit                              <- A's insert merges into branch HEAD
-Client B: find {} -> should return [{_id: 1}]     <- B re-reads HEAD on next transaction
-```
+These cover MongoDB-compatible behavior in DumboDB's default mode.
 
-### Test 2: Dirty session is pinned to fork point
-
-When Client B has its own uncommitted writes, it reads from its working set,
-which was forked at B's transaction start. B does NOT see commits made by A
-after B's fork point -- until B commits (merges).
+#### P1: Basic startTransaction / commitTransaction
 
 ```
+Client A: startTransaction
+Client A: insert {_id: 1, x: "in txn"}
+Client B: find {} -> [] (A hasn't committed)
+Client A: commitTransaction
+Client B: find {} -> [{_id: 1, x: "in txn"}]
+```
+
+#### P2: abortTransaction discards changes
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1, x: "will abort"}
+Client A: find {_id: 1} -> [{_id: 1}]    (read-your-own-writes)
+Client A: abortTransaction
+Client A: find {_id: 1} -> []
+```
+
+#### P3: Read-your-own-writes within a transaction
+
+A single client inserts and reads back within one transaction. The read
+sees the uncommitted write; another session does not.
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1, x: "hello"}
+Client A: find {_id: 1} -> [{_id: 1, x: "hello"}]
+Client B: find {_id: 1} -> []
+Client A: commitTransaction
+Client B: find {_id: 1} -> [{_id: 1, x: "hello"}]
+```
+
+#### P4: Document locking -- concurrent txn blocked on same doc
+
+```
+Setup: collection has {_id: 1, x: "original"}
+Client A: startTransaction
+Client A: update {_id: 1}, {$set: {x: "A"}}     <- acquires lock on _id:1
+Client B: startTransaction
+Client B: update {_id: 1}, {$set: {x: "B"}}     <- WriteConflict
+Client A: commitTransaction                       <- releases lock
+Client B: (retries) update {_id: 1} -> succeeds
+Client B: commitTransaction
+```
+
+The exact wait/timeout semantics are governed by the "Open Behavioral
+Choices" table -- the oracle is whatever MongoDB returns.
+
+#### P5: Non-conflicting transactions succeed
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1}                       <- locks _id:1
+Client B: startTransaction
+Client B: insert {_id: 2}                       <- locks _id:2 (no conflict)
+Client A: commitTransaction
+Client B: commitTransaction
+Both documents present.
+```
+
+#### P6: Session reconnection preserves transaction state
+
+A client starts a transaction, disconnects, reconnects with the same
+`lsid`, and continues. Both Mongo and DumboDB resume the same state
+(within Mongo's transaction lifetime).
+
+```
+Client A (lsid: ABC): startTransaction
+Client A: insert {_id: 1, x: "before disconnect"}
+Client A: disconnect
+Client A (lsid: ABC): reconnect
+Client A: find {_id: 1} -> [{_id: 1}]
+Client A: commitTransaction
+```
+
+#### P7: Session timeout discards uncommitted state
+
+After the session/transaction timeout, an uncommitted transaction is
+gone. Both Mongo and DumboDB discard the state.
+
+```
+Client A: startTransaction
+Client A: insert {_id: 99, x: "never committed"}
+Client A: idle past timeout (no commit)
+Client B: find {_id: 99} -> []
+Client A: commitTransaction -> error (transaction expired)
+```
+
+#### P8: endSession discards uncommitted state
+
+```
+Client A: startTransaction
+Client A: insert {_id: 1}
+Client A: endSession
+Client B: find {_id: 1} -> []
+```
+
+### DumboDB-Only Tests (dumbodb integration tests)
+
+These cover features that exist only in DumboDB. Use multiple concurrent
+Mongo clients against a live DumboDB server.
+
+#### D1: Uncommitted writes invisible to read-only sessions (--session-isolation)
+
+Client A inserts; Client B (no writes) reads HEAD and does not see A's
+write until A commits.
+
+```
+Server started with --session-isolation
+Client A: insert {_id: 1, x: "from A"}            <- A's branchState dirty
+Client B: find {} -> []                            <- B reads HEAD
+Client A: doltCommit                               <- merges into HEAD
+Client B: find {} -> [{_id: 1}]
+```
+
+#### D2: Dirty session is pinned to fork point (--session-isolation)
+
+```
+Server started with --session-isolation
 Client A: insert {_id: 1, x: "from A"}
 Client B: insert {_id: 2, x: "from B"}            <- B forks at current HEAD
-Client A: doltCommit                              <- branch HEAD advances
-Client B: find {} -> should return [{_id: 2}]     <- B sees own write, NOT A's commit
-Client B: doltCommit                              <- three-way merge picks up both
-Client B: find {} -> should return [{_id: 1}, {_id: 2}]
+Client A: doltCommit                               <- HEAD advances
+Client B: find {} -> [{_id: 2}]                    <- B sees own write only
+Client B: doltCommit                               <- three-way merge
+Client B: find {} -> [{_id: 1}, {_id: 2}]
 ```
 
-### Test 3: Read-your-own-writes
+#### D3: Read-your-own-writes outside a transaction (--session-isolation)
 
-A single client inserts a document and reads it back within the same session,
-before committing.
+In --session-isolation mode there is no `startTransaction`; the session
+is the unit of isolation.
 
 ```
+Server started with --session-isolation
 Client A: insert {_id: 1, x: "hello"}
-Client A: find {_id: 1} -> [{_id: 1, x: "hello"}]   <- reads from working set
+Client A: find {_id: 1} -> [{_id: 1, x: "hello"}]
 Client A: doltCommit
 Client A: find {_id: 1} -> [{_id: 1, x: "hello"}]
 ```
 
-### Test 4: Non-conflicting concurrent writes merge cleanly
-
-Two clients write to different documents on the same branch, then both commit.
-No conflicts -- three-way merge combines both sets of changes.
+#### D4: Non-conflicting concurrent writes merge cleanly
 
 ```
-Client A: insert {_id: 1, x: "from A"}            <- A forks from HEAD C0
-Client B: insert {_id: 2, x: "from B"}            <- B forks from HEAD C0
-Client A: find {} -> [{_id: 1}]                   <- A sees own write only
-Client B: find {} -> [{_id: 2}]                   <- B sees own write only
-Client A: doltCommit -> succeeds                  <- HEAD advances to C1
-Client A: find {} -> [{_id: 1}, {_id: 2}]         <- A's fork resets to C1; sees both
-Client B: find {} -> [{_id: 2}]                   <- B still pinned to C0
-Client B: doltCommit -> succeeds                  <- merge(base=C0, ours=B, theirs=C1)
+Server started with --session-isolation
+Client A: insert {_id: 1, x: "from A"}            <- forks from HEAD C0
+Client B: insert {_id: 2, x: "from B"}            <- forks from HEAD C0
+Client A: doltCommit -> succeeds                   <- HEAD = C1
+Client A: find {} -> [{_id: 1}, {_id: 2}]          <- A's fork resets to C1
+Client B: find {} -> [{_id: 2}]                    <- B still pinned to C0
+Client B: doltCommit -> succeeds                   <- merge(C0, B, C1)
 Client B: find {} -> [{_id: 1}, {_id: 2}]
 ```
 
-### Test 5: After commit, session returns to read-only and sees new commits
-
-After committing, a session's `branchState` resets to the new HEAD. Subsequent
-reads pick up any commits made by other sessions in the meantime.
+#### D5: After commit, session sees new commits from others
 
 ```
+Server started with --session-isolation
 Client A: insert {_id: 1, x: "from A"}
-Client A: doltCommit -> succeeds                  <- HEAD advances to C1
+Client A: doltCommit -> succeeds                   <- HEAD = C1
 Client B: insert {_id: 2, x: "from B"}
-Client B: doltCommit -> succeeds                  <- HEAD advances to C2
-Client A: find {} -> [{_id: 1}, {_id: 2}]         <- A re-reads HEAD (C2)
-Client B: find {} -> [{_id: 1}, {_id: 2}]
+Client B: doltCommit -> succeeds                   <- HEAD = C2
+Client A: find {} -> [{_id: 1}, {_id: 2}]          <- re-reads HEAD (C2)
 ```
 
-### Test 6: Conflicting writes produce a conflict
-
-Two clients modify the same document on the same branch, then both commit.
-The second committer should get a merge conflict.
+#### D6: Conflicting writes produce a conflict
 
 ```
+Server started with --session-isolation
 Setup: collection has {_id: 1, x: "original"}
 Client A: update {_id: 1}, {$set: {x: "A's version"}}
 Client B: update {_id: 1}, {$set: {x: "B's version"}}
@@ -661,141 +769,88 @@ Client A: doltCommit -> succeeds
 Client B: doltCommit -> conflict error
 ```
 
-### Test 7: Conflict resolution and continue
-
-Continues from Test 6. After a conflict, the session can resolve and
-re-commit.
+#### D7: Conflict resolution and continue
 
 ```
-Client B: doltCommit -> conflict on _id:1
+Continuing from D6:
 Client B: doltConflicts -> shows (base, ours, theirs) versions
-Client B: doltResolveConflict (choose "ours" or "theirs" or manual)
+Client B: doltResolveConflict (ours / theirs / manual)
 Client B: doltCommit -> succeeds
 ```
 
-### Test 8: Abandoned session cleanup
-
-A client writes without committing, then disconnects. The write never reached
-the branch HEAD, so no other client should see it. After timeout, the session
-registry releases the entry.
+#### D8: Abandoned --session-isolation session cleanup
 
 ```
+Server started with --session-isolation
 Client A: insert {_id: 99, x: "never committed"}
 Client A: disconnect (no doltCommit)
-Client B: find {_id: 99} -> [] (empty)
+Client B: find {_id: 99} -> []
 Wait for session timeout
 Verify: SessionRegistry no longer holds A's DoltSession
 ```
 
-### Test 9: Multi-branch isolation within one session
+#### D9: Multi-branch isolation within one session
 
-A single client writes to two branches in the same session. Each branch has
-its own `branchState`. Commits are independent.
+Uses the `@branch` revision syntax in the database name.
 
 ```
+Server started with --session-isolation
 Client A on mydb (main): insert {_id: 1, x: "main write"}
 Client A on mydb@feat:   insert {_id: 2, x: "feat write"}
 Client A on mydb@feat:   doltCommit -> succeeds (only feat)
-Client B on mydb (main): find {} -> should NOT see {_id: 1}
-Client B on mydb@feat:   find {} -> should see {_id: 2}
+Client B on mydb (main): find {} -> does NOT see {_id: 1}
+Client B on mydb@feat:   find {} -> sees {_id: 2}
 Client A on mydb (main): doltCommit -> succeeds
 Client B on mydb (main): find {} -> now sees {_id: 1}
 ```
 
-### Test 10: Session reconnection preserves uncommitted state
+#### D10: --session-isolation session reconnect preserves uncommitted state
 
-A client writes, disconnects, reconnects with the same lsid, and continues
-working with the same `branchState`.
-
-```
-Client A (lsid: ABC): insert {_id: 1, x: "before disconnect"}
-Client A: disconnect
-Client A (lsid: ABC): reconnect
-Client A: find {_id: 1} -> [{_id: 1, x: "before disconnect"}]
-Client A: doltCommit -> succeeds
-```
-
-### Test 11: Concurrent commits -- serialization order
-
-Three clients all fork from the same branch HEAD. Each commit merges against
-the result of the previous commit (the current HEAD at commit time), not
-against the original fork point. The keymutex in dsess serializes them.
-
-```
-All three fork from branch HEAD C0
-Client A: insert {_id: 1}
-Client B: insert {_id: 2}
-Client C: insert {_id: 3}
-Client A: doltCommit -> merge(base=C0, ours=A, theirs=C0) -> HEAD is C1
-Client B: doltCommit -> merge(base=C0, ours=B, theirs=C1) -> HEAD is C2
-Client C: doltCommit -> merge(base=C0, ours=C, theirs=C2) -> HEAD is C3
-Final state: all three documents present
-```
-
-### Test 12: Delete + modify conflict
-
-One client deletes a document, another modifies it. The second committer
-should get a conflict.
-
-```
-Setup: collection has {_id: 1, x: "original"}
-Client A: delete {_id: 1}
-Client B: update {_id: 1}, {$set: {x: "modified"}}
-Client A: doltCommit -> succeeds (_id:1 removed from HEAD)
-Client B: doltCommit -> conflict (base had _id:1, A deleted it, B modified it)
-```
-
-### Test 13: Basic startTransaction / commitTransaction (default mode)
-
-```
-Client A: startTransaction
-Client A: insert {_id: 1, x: "in txn"}
-Client B: find {} -> should return [] (A hasn't committed)
-Client A: commitTransaction
-Client B: find {} -> should return [{_id: 1, x: "in txn"}]
-```
-
-### Test 14: abortTransaction discards changes (default mode)
-
-```
-Client A: startTransaction
-Client A: insert {_id: 1, x: "will abort"}
-Client A: find {_id: 1} -> [{_id: 1}] (read-your-own-writes)
-Client A: abortTransaction
-Client A: find {_id: 1} -> []
-```
-
-### Test 15: Document locking -- concurrent txn blocked on same doc
-
-```
-Setup: collection has {_id: 1, x: "original"}
-Client A: startTransaction
-Client A: update {_id: 1}, {$set: {x: "A"}}     <- acquires lock on _id:1
-Client B: startTransaction
-Client B: update {_id: 1}, {$set: {x: "B"}}     <- WriteConflict (doc locked by A)
-Client A: commitTransaction                       <- releases lock
-Client B: (retries) update {_id: 1} -> succeeds
-Client B: commitTransaction
-```
-
-### Test 16: Non-conflicting transactions succeed
-
-```
-Client A: startTransaction
-Client A: insert {_id: 1}                         <- locks _id:1
-Client B: startTransaction
-Client B: insert {_id: 2}                         <- locks _id:2 (no conflict)
-Client A: commitTransaction
-Client B: commitTransaction
-Both documents present.
-```
-
-### Test 17: startTransaction rejected in --session-isolation mode
+In default mode this is covered by parity test P6. In --session-isolation
+mode the session can hold uncommitted writes across reconnect without
+ever being in a transaction -- a behavior Mongo doesn't have.
 
 ```
 Server started with --session-isolation
-Client A: startTransaction -> error: "Transactions are not available in
-  session-isolation mode. Use doltCommit instead."
+Client A (lsid: ABC): insert {_id: 1, x: "before disconnect"}
+Client A: disconnect (no doltCommit)
+Client A (lsid: ABC): reconnect
+Client A: find {_id: 1} -> [{_id: 1}]
+Client A: doltCommit -> succeeds
+```
+
+#### D11: Concurrent doltCommits -- serialization order
+
+```
+Server started with --session-isolation
+All three fork from HEAD C0
+Client A: insert {_id: 1}
+Client B: insert {_id: 2}
+Client C: insert {_id: 3}
+Client A: doltCommit -> merge(C0, A, C0)  -> HEAD = C1
+Client B: doltCommit -> merge(C0, B, C1)  -> HEAD = C2
+Client C: doltCommit -> merge(C0, C, C2)  -> HEAD = C3
+Final state: all three documents present
+```
+
+#### D12: Delete + modify conflict
+
+```
+Server started with --session-isolation
+Setup: collection has {_id: 1, x: "original"}
+Client A: delete {_id: 1}
+Client B: update {_id: 1}, {$set: {x: "modified"}}
+Client A: doltCommit -> succeeds
+Client B: doltCommit -> conflict (deleted vs modified)
+```
+
+#### D13: startTransaction rejected in --session-isolation mode
+
+```
+Server started with --session-isolation
+Client A: startTransaction -> error:
+  "Transactions are not available in session-isolation mode.
+   Use doltCommit instead."
 ```
 
 ## Migration Path
@@ -846,9 +901,16 @@ Client A: startTransaction -> error: "Transactions are not available in
 | `go/libraries/doltcore/sqle/dsess/session_registry.go` | NEW: `SessionRegistry` keyed by external session ID, with timeout, reconnect, and GC-safepoint integration. |
 | `go/libraries/doltcore/sqle/dsess/session.go` | Decouple `DoltSession` creation from `sql.BaseSession` enough that the registry can manage its lifecycle independently of a SQL connection. |
 
+### In dumbodb (integration tests)
+
+| File | Change |
+|---|---|
+| `tests/session_isolation_test.go` | NEW: D1-D12 -- `--session-isolation` mode coverage (`doltCommit`, `doltConflicts`, `doltResolveConflict`, multi-branch isolation, fork-point pinning, concurrent commit serialization, abandoned-session cleanup, reconnect with uncommitted state). |
+| `tests/mode_flag_test.go` | NEW: D13 -- verify `startTransaction` rejected when server is launched with `--session-isolation`. |
+
 ### In dumbodb-parity-testing
 
 | File | Change |
 |---|---|
-| `tests/transaction_test.go` | NEW: coverage for `startTransaction` / `commitTransaction` / `abortTransaction`, document-lock conflicts, and the behavioral questions listed in "Open Behavioral Choices". |
-| `tests/session_test.go` | NEW: coverage for `lsid` reconnect semantics, `endSession`, session timeout. |
+| `tests/transaction_test.go` | NEW: P1-P5 -- `startTransaction` / `commitTransaction` / `abortTransaction`, read-your-own-writes inside a txn, pessimistic doc-lock conflict, non-conflicting concurrent txns. |
+| `tests/session_test.go` | NEW: P6-P8 -- `lsid` reconnect inside a transaction, session/transaction timeout discards uncommitted state, `endSession` discards uncommitted state. |
