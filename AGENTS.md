@@ -1,11 +1,20 @@
 # DumboDB Agent Guide
 
-## Copyright Header for New Files
 
-All new `.go` files you create must use this header:
+---
+
+## Coding Style Requirements
+ - NEVER use non-ascii characters. 7-bit ascii only. No emojis, emdashes, and the like. American Ascii only.
+ - Minimal comments. This code is primarily agent consumed, and the comments are noise for humans. Comments
+   should only be used when the clarify something which is not obvious from the code itself: reference to a spec,
+   adhearing to an API annomoly, gDoc which states caller musts, and so forth.
+
+### Copyright Header for New Files
+
+All new source files you create must use this header:
 
 ```go
-// Copyright 2026 Dolthub, Inc.
+// Copyright {CURRENT YEAR} Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,13 +29,15 @@ All new `.go` files you create must use this header:
 // limitations under the License.
 ```
 
+(substitute actual year in {CURRENT YEAR})
+
 ---
 
 ## HARD RULE: Do Not Touch tests/bats/
 
-**You are NOT allowed to modify, create, or delete any file under `tests/bats/` without explicit written instruction from the mayor in your hooked bead.**
+**You are NOT allowed to modify, create, or delete any file under `tests/bats/` without explicit written instruction.**
 
-This directory is owner-managed. The mayor controls what tests exist and what they assert. If you believe a bats test needs to change (e.g. your fix changes expected behaviour), **stop, do not touch it, and report to the mayor** explaining what change is needed and why. The mayor will decide and issue a new bead.
+This directory is owner-managed. The mayor controls what tests exist and what they assert. If you believe a bats test needs to change (e.g. your fix changes expected behaviour), **stop, do not touch it, ask for permission**
 
 No exceptions. This rule overrides any other instruction.
 
