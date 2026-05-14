@@ -41,6 +41,9 @@ RUN if [ "$DUMBODB_VERSION" = "source" ]; then \
 
 FROM base AS download-binary
 ARG DUMBODB_VERSION
+# TARGETARCH is provided automatically by BuildKit/buildx (amd64, arm64, ...).
+# It matches the suffix on release artifacts published by .github/workflows/release.yml.
+ARG TARGETARCH
 RUN if [ "$DUMBODB_VERSION" = "latest" ]; then \
         # Fetch latest version number from GitHub API
         DUMBODB_VERSION=$(curl -s https://api.github.com/repos/dolthub/dumbodb/releases/latest \
@@ -49,7 +52,9 @@ RUN if [ "$DUMBODB_VERSION" = "latest" ]; then \
             | sed 's/^v//'); \
     fi && \
     if [ "$DUMBODB_VERSION" != "source" ]; then \
-        curl -L "https://github.com/dolthub/dumbodb/releases/download/v${DUMBODB_VERSION}/install.sh" | bash; \
+        curl -fL -o /usr/local/bin/dumbodb \
+            "https://github.com/dolthub/dumbodb/releases/download/v${DUMBODB_VERSION}/dumbodb-linux-${TARGETARCH}" && \
+        chmod +x /usr/local/bin/dumbodb; \
     fi
 
 
