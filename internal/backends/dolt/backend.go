@@ -2803,12 +2803,14 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		ms.rebaseCommitsReplayed++
 	}
 
-	// All commits replayed. Update in-memory AM to reflect the final state.
+	// All commits replayed. Update working set to reflect the final state.
 	finalAM, err := amFromCommitHash(ctx, db, ms.intoHash.String())
 	if err != nil {
 		return nil, fmt.Errorf("replayRemainingCommits: loading final AM: %w", err)
 	}
-	db.setAM(ms.intoBranch, finalAM)
+	if err := db.persistAM(ctx, ms.intoBranch, finalAM); err != nil {
+		return nil, fmt.Errorf("replayRemainingCommits: persisting final AM: %w", err)
+	}
 
 	return &backends.RebaseResult{
 		CommitsReplayed: ms.rebaseCommitsReplayed,
