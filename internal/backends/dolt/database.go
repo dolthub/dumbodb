@@ -44,7 +44,7 @@ func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
 		return false
 	}
 	// Tags look like branch names syntactically but are read-only.
-	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+db.rootish)
+	tagDS, err := state.datasDB.GetDataset(ctx, "refs/tags/"+db.rootish)
 	return err == nil && tagDS.HasHead()
 }
 
@@ -58,19 +58,17 @@ func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
 // The caller must hold at least state.mu.RLock().
 func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.AddressMap, error) {
 	if db.rootish == defaultBranch {
-		return state.branchAMs[defaultBranch], nil
+		ws := state.workingSets[defaultBranch]
+		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
 	if rootishIsReadOnly(db.rootish) {
 		return amFromRootish(ctx, state, db.rootish)
 	}
-	// Check if the rootish is a tag -- tags are read-only even though
-	// they look like branch names syntactically.
-	if tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+db.rootish); tagErr == nil && tagDS.HasHead() {
+	if tagDS, tagErr := state.datasDB.GetDataset(ctx, "refs/tags/"+db.rootish); tagErr == nil && tagDS.HasHead() {
 		return amFromRootish(ctx, state, db.rootish)
 	}
-	// Writable branch: prefer working-set AM if already initialized.
-	if am, ok := state.branchAMs[db.rootish]; ok {
-		return am, nil
+	if ws, ok := state.workingSets[db.rootish]; ok {
+		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
 	return amFromRootish(ctx, state, db.rootish)
 }

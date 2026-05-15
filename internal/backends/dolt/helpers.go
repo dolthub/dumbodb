@@ -24,6 +24,8 @@ import (
 	fb "github.com/dolthub/flatbuffers/v23/go"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/pool"
@@ -319,101 +321,100 @@ func (state *dbState) dtblHashForCollection(ctx context.Context, collName string
 	return ref.TargetHash(), nil
 }
 
-// getOrInitBranchAM returns the current working-set AddressMap for branch.
-// It checks state.branchAMs and initializes from the branch HEAD if not already cached.
-// The caller must hold state.mu (write lock).
-func (state *dbState) getOrInitBranchAM(ctx context.Context, branch string) (prolly.AddressMap, error) {
-	if am, ok := state.branchAMs[branch]; ok {
-		return am, nil
-	}
-	// Initialize from the branch HEAD commit.
-	am, err := amFromRootish(ctx, state, branch)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("initializing branch AM for %q: %w", branch, err)
-	}
-	state.branchAMs[branch] = am
-	return am, nil
-}
-
-// headRootAMForBranch returns the collections AddressMap from a branch HEAD's rootValue.
-// For "main" it delegates to headRootAM. For other branches it loads the branch
-// dataset from doltDB and reads its HEAD. If the branch has no commits, an empty
-// AddressMap is returned (suitable as the initial staged root).
-// The caller must hold state.mu (read or write lock).
-func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (prolly.AddressMap, error) {
-	if branch == defaultBranch {
-		return state.headRootAM(ctx)
-	}
-	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+branch)
-	if err != nil || !branchDS.HasHead() {
-		return prolly.NewEmptyAddressMap(state.ns)
-	}
-	headValue, _, err := branchDS.MaybeHeadValue()
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("reading HEAD value for branch %q: %w", branch, err)
-	}
-	headMsg, ok := headValue.(dolttypes.SerialMessage)
+// amFromWorkingRoot extracts a prolly.AddressMap from a doltdb.RootValue.
+// This is a backward-compat bridge for functions that still consume the raw AM
+// (e.g. the Dolt commit path). The AM is parsed from the RTVL flatbuffer that
+// the RootValue wraps.
+func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeStore) (prolly.AddressMap, error) {
+	msg, ok := rv.NomsValue().(dolttypes.SerialMessage)
 	if !ok {
-		return prolly.AddressMap{}, fmt.Errorf("unexpected HEAD value type %T for branch %q", headValue, branch)
+		return prolly.AddressMap{}, fmt.Errorf("unexpected RootValue noms type %T", rv.NomsValue())
 	}
-	rtvl, err := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
+	rtvl, err := serial.TryGetRootAsRootValue([]byte(msg), serial.MessagePrefixSz)
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("parsing HEAD RTVL for branch %q: %w", branch, err)
+		return prolly.AddressMap{}, fmt.Errorf("parsing RTVL from working root: %w", err)
 	}
 	amNode, _, err := tree.NodeFromBytes(rtvl.TablesBytes())
 	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("parsing AM from HEAD RTVL for branch %q: %w", branch, err)
+		return prolly.AddressMap{}, fmt.Errorf("parsing AM from RTVL: %w", err)
 	}
-	return prolly.NewAddressMap(amNode, state.ns)
+	return prolly.NewAddressMap(amNode, ns)
 }
 
-// updateAddressMap applies a mutation to the collections address map for branch and
-// persists it to the dolt working set only. HEAD stays at the last explicit
-// commit; only working_root_addr advances. staged_root_addr stays at HEAD's
-// rootValue so that `dolt status` shows "Changes not staged for commit".
+// getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
+// the doltDB if not already cached. The caller must hold state.mu (write lock).
+func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	if ws, ok := state.workingSets[branch]; ok {
+		return ws, nil
+	}
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	ws, err := state.doltDB.ResolveWorkingSet(ctx, wsRef)
+	if err != nil {
+		// Branch has no working set yet; initialize from HEAD.
+		rv, rvErr := headRootValueForBranch(ctx, state, branch)
+		if rvErr != nil {
+			return nil, fmt.Errorf("initializing working set for %q: %w", branch, rvErr)
+		}
+		ws = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+	}
+	state.workingSets[branch] = ws
+	return ws, nil
+}
+
+// headRootValueForBranch returns the doltdb.RootValue at the HEAD of branch.
+// If the branch has no commits, an empty RootValue is returned.
+// The caller must hold state.mu (read or write lock).
+func headRootValueForBranch(ctx context.Context, state *dbState, branch string) (doltdb.RootValue, error) {
+	branchDS, err := state.datasDB.GetDataset(ctx, "refs/heads/"+branch)
+	if err != nil || !branchDS.HasHead() {
+		return doltdb.EmptyRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore())
+	}
+	headValue, _, err := branchDS.MaybeHeadValue()
+	if err != nil {
+		return nil, fmt.Errorf("reading HEAD value for branch %q: %w", branch, err)
+	}
+	return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), headValue)
+}
+
+// headRootAMForBranch returns the collections AddressMap from a branch HEAD's rootValue.
+// This is used by the Dolt commit path (which still works in AM terms) to get
+// the staged AM. The caller must hold state.mu (read or write lock).
+func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (prolly.AddressMap, error) {
+	rv, err := headRootValueForBranch(ctx, state, branch)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	return amFromWorkingRoot(ctx, rv, state.ns)
+}
+
+// updateWorkingRoot applies fn to the current working RootValue for branch,
+// stores the updated WorkingSet in state, and persists it via doltDB unless
+// skipSync is true (in which case the branch is marked dirty for later flush).
 // The caller must hold state.mu (write lock).
-func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error) error {
-	return state.updateAddressMapWithSync(ctx, branch, fn, false)
-}
-
-// updateAddressMapWithSync is updateAddressMap with an explicit skipSync flag:
-// when skipSync is true, the new AM is held only in memory and written to the
-// value store, but doltDB.UpdateWorkingSet (the call that triggers the NBS
-// journal fsync) is deferred. Callers that pass skipSync=true must ensure a
-// background flusher or Close-time flush eventually calls flushWorkingSet to
-// make the state durable. The caller must hold state.mu (write lock).
-func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error, skipSync bool) error {
-	// Get the current AM for this branch (initializes from HEAD if needed).
-	currentAM, err := state.getOrInitBranchAM(ctx, branch)
+func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn func(doltdb.RootValue) (doltdb.RootValue, error), skipSync bool) error {
+	ws, err := state.getOrInitBranchWS(ctx, branch)
 	if err != nil {
 		return err
 	}
 
-	editor := currentAM.Editor()
-
-	if err := fn(editor); err != nil {
+	newRV, err := fn(ws.WorkingRoot())
+	if err != nil {
 		return err
 	}
 
-	newAM, err := editor.Flush(ctx)
-	if err != nil {
-		return fmt.Errorf("flushing address map: %w", err)
+	stagedRV := ws.StagedRoot()
+	if stagedRV == nil {
+		// Staged stays at HEAD until an explicit stage; initialize from HEAD.
+		stagedRV, err = headRootValueForBranch(ctx, state, branch)
+		if err != nil {
+			return fmt.Errorf("reading HEAD root for staged: %w", err)
+		}
 	}
 
-	// Write the working RTVL chunk to the value store so the working set reference is
-	// resolvable. updateWorkingSet recomputes the same hash deterministically.
-	workingRtvlMsg := buildRootValueFlatbuffer(newAM)
-	if _, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvlMsg)); err != nil {
-		return fmt.Errorf("writing RTVL for working set: %w", err)
-	}
-
-	// Persist the updated AM before (optionally) pushing it to the working set.
-	// Later branchDirty entries need to see the in-memory AM, so record it first.
-	state.setAM(branch, newAM)
+	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
+	state.workingSets[branch] = newWS
 
 	if skipSync {
-		// Defer the journal-sync'ing UpdateWorkingSet call. Mark the branch dirty
-		// so the backend's background flusher (or Close) picks it up later.
 		if state.dirtyBranches == nil {
 			state.dirtyBranches = make(map[string]struct{})
 		}
@@ -421,55 +422,57 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 		return nil
 	}
 
-	// Get the staged AM from the branch HEAD's rootValue. Staged stays at HEAD until an
-	// explicit stage operation advances it.
-	stagedAM, err := headRootAMForBranch(ctx, state, branch)
-	if err != nil {
-		return fmt.Errorf("reading HEAD AM for staged root: %w", err)
-	}
-
-	if err := updateWorkingSet(ctx, state.doltDB, newAM, stagedAM, branch); err != nil {
+	if err := updateWorkingSet(ctx, state.doltDB, newWS, branch); err != nil {
 		return fmt.Errorf("updating working set: %w", err)
 	}
 
-	// The working set is now current  -- clear any prior deferred dirty flag.
 	if state.dirtyBranches != nil {
 		delete(state.dirtyBranches, branch)
 	}
-
 	return nil
 }
 
-// flushDirtyBranches pushes any branches with deferred UpdateWorkingSet calls
-// (from skipSync writes) to the dolt working set. This is the durable step
-// previously performed inline; calling it later trades per-write latency for
-// a periodic fsync on behalf of a pool of deferred writes.
+// updateAddressMap is a backward-compat wrapper around updateWorkingRoot for
+// callers that still use the AddressMapEditor pattern. The fn receives a
+// RootValue whose AM is modified and returns the updated RootValue.
 // The caller must hold state.mu (write lock).
+func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error) error {
+	return state.updateAddressMapWithSync(ctx, branch, fn, false)
+}
+
+func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error, skipSync bool) error {
+	return state.updateWorkingRoot(ctx, branch, func(rv doltdb.RootValue) (doltdb.RootValue, error) {
+		am, err := amFromWorkingRoot(ctx, rv, state.ns)
+		if err != nil {
+			return nil, err
+		}
+		ed := am.Editor()
+		if err := fn(ed); err != nil {
+			return nil, err
+		}
+		newAM, err := ed.Flush(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("flushing address map: %w", err)
+		}
+		rtvlMsg := buildRootValueFlatbuffer(newAM)
+		return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
+	}, skipSync)
+}
+
 func (state *dbState) flushDirtyBranches(ctx context.Context) error {
 	if len(state.dirtyBranches) == 0 {
 		return nil
 	}
-
-	branches := make([]string, 0, len(state.dirtyBranches))
-	for b := range state.dirtyBranches {
-		branches = append(branches, b)
-	}
-
-	for _, branch := range branches {
-		workingAM := state.branchAMs[branch]
-
-		stagedAM, err := headRootAMForBranch(ctx, state, branch)
-		if err != nil {
-			return fmt.Errorf("reading HEAD AM for staged root: %w", err)
+	for branch := range state.dirtyBranches {
+		ws, ok := state.workingSets[branch]
+		if !ok {
+			continue
 		}
-
-		if err := updateWorkingSet(ctx, state.doltDB, workingAM, stagedAM, branch); err != nil {
-			return fmt.Errorf("updating working set: %w", err)
+		if err := updateWorkingSet(ctx, state.doltDB, ws, branch); err != nil {
+			return fmt.Errorf("updating working set for %q: %w", branch, err)
 		}
-
 		delete(state.dirtyBranches, branch)
 	}
-
 	return nil
 }
 
@@ -478,29 +481,6 @@ func (state *dbState) flushDirtyBranches(ctx context.Context) error {
 // explicit stage operation advances it.
 // The caller must hold state.mu (read or write lock).
 func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error) {
-	ds, err := state.doltDB.GetDataset(ctx, mainDataset)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("resolving main dataset: %w", err)
-	}
-	if !ds.HasHead() {
-		return prolly.NewEmptyAddressMap(state.ns)
-	}
-	headValue, _, err := ds.MaybeHeadValue()
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("reading HEAD value: %w", err)
-	}
-	headMsg, ok := headValue.(dolttypes.SerialMessage)
-	if !ok {
-		return prolly.AddressMap{}, fmt.Errorf("unexpected HEAD value type %T", headValue)
-	}
-	rtvl, err := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("parsing HEAD RTVL: %w", err)
-	}
-	amNode, _, err := tree.NodeFromBytes(rtvl.TablesBytes())
-	if err != nil {
-		return prolly.AddressMap{}, fmt.Errorf("parsing AM from HEAD RTVL: %w", err)
-	}
-	return prolly.NewAddressMap(amNode, state.ns)
+	return headRootAMForBranch(ctx, state, defaultBranch)
 }
 

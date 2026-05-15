@@ -152,7 +152,7 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 	}
 
 	// Read the current working set AM (the resolved AM from before the crash).
-	resolvedAM, err := readAMFromWorkingSet(ctx, state.doltDB, state.cs, state.ns)
+	resolvedAM, err := readAMFromWorkingSet(ctx, state.datasDB, state.cs, state.ns)
 	if err != nil {
 		return nil, fmt.Errorf("reading working set AM: %w", err)
 	}
@@ -356,7 +356,7 @@ func computeDiffType(base, current val.Tuple) string {
 // JSON file. The caller must hold state.mu (write lock).
 func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
 	// Update the working set to reflect the partial merged AM.
-	stagedAM, err := headRootAMForBranch(ctx, state, ms.intoBranch)
+	_, err := headRootAMForBranch(ctx, state, ms.intoBranch)
 	if err != nil {
 		return fmt.Errorf("reading staged AM: %w", err)
 	}
@@ -366,7 +366,7 @@ func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgre
 		return fmt.Errorf("writing working RTVL: %w", writeErr)
 	}
 
-	if wsErr := updateWorkingSet(ctx, state.doltDB, ms.resolvedAM, stagedAM, ms.intoBranch); wsErr != nil {
+	if wsErr := state.persistAM(ctx, ms.intoBranch, ms.resolvedAM); wsErr != nil {
 		return fmt.Errorf("updating working set: %w", wsErr)
 	}
 

@@ -1491,12 +1491,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	if c.db.backend.autoCommit {
+		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, state.workingSets[c.db.rootish].WorkingRoot(), state.ns)
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
-		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
+		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
 			return nil, fmt.Errorf("auto-commit after insert: resolving main dataset: %w", dsErr)
 		}
-		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
+		if _, _, err := commitCollectionsAMAs(ctx, state.datasDB, mainDS, workingAMForAutoCommit, msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
 			return nil, fmt.Errorf("auto-commit after insert: %w", err)
 		}
 	}
@@ -1772,12 +1773,13 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	}
 
 	if c.db.backend.autoCommit {
+		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, state.workingSets[c.db.rootish].WorkingRoot(), state.ns)
 		msg := fmt.Sprintf("auto: update %s", c.name)
-		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
+		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
 			return nil, fmt.Errorf("auto-commit after update: resolving main dataset: %w", dsErr)
 		}
-		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
+		if _, _, err := commitCollectionsAMAs(ctx, state.datasDB, mainDS, workingAMForAutoCommit, msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
 			return nil, fmt.Errorf("auto-commit after update: %w", err)
 		}
 	}
@@ -1919,12 +1921,13 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	}
 
 	if c.db.backend.autoCommit {
+		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, state.workingSets[c.db.rootish].WorkingRoot(), state.ns)
 		msg := fmt.Sprintf("auto: delete from %s", c.name)
-		mainDS, dsErr := state.doltDB.GetDataset(ctx, mainDataset)
+		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
 			return nil, fmt.Errorf("auto-commit after delete: resolving main dataset: %w", dsErr)
 		}
-		if _, _, err := commitCollectionsAMAs(ctx, state.doltDB, mainDS, state.branchAMs[defaultBranch], msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
+		if _, _, err := commitCollectionsAMAs(ctx, state.datasDB, mainDS, workingAMForAutoCommit, msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
 			return nil, fmt.Errorf("auto-commit after delete: %w", err)
 		}
 	}

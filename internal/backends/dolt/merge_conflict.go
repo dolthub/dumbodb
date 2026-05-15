@@ -392,7 +392,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 
 	// Update the working set so that dolt_conflicts SQL tables immediately reflect
 	// the resolved state.
-	stagedAM, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
+	_, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
 	if stageErr != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: reading staged AM: %w", stageErr)
 	}
@@ -400,7 +400,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", writeErr)
 	}
-	if wsErr := updateWorkingSet(ctx, db.doltDB, finalAM, stagedAM, ms.intoBranch); wsErr != nil {
+	if wsErr := db.persistAM(ctx, ms.intoBranch, finalAM); wsErr != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: updating working set: %w", wsErr)
 	}
 

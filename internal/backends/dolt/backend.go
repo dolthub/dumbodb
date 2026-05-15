@@ -53,6 +53,8 @@ import (
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
@@ -116,61 +118,92 @@ type timeSeriesMeta struct {
 
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
-	mu     sync.RWMutex
-	dbDir  string                // filesystem path to this database's data directory
+	mu    sync.RWMutex
+	dbDir string
+
 	cs     *nbs.GenerationalNBS
 	ns     tree.NodeStore
-	vs     *dolttypes.ValueStore // value store for writing RTVL chunks without committing
-	doltDB datas.Database        // manages STRT root format; owns cs lifecycle
-	branchAMs  map[string]prolly.AddressMap    // per-branch working-set address maps (branch name -> AM); includes "main"
-	uuids      map[string]string               // collection name -> UUID string (in-memory)
-	indexes    map[string][]backends.IndexInfo // collection name -> secondary indexes (in-memory)
-	// secIndexMaps holds the secondary-index prolly.Maps for each collection.
-	// Keyed by collection name, then by index name. Hydrated on db open from
-	// each DTBL's SecondaryIndexes AM and kept in sync with collIndexAMs.
+	vs     *dolttypes.ValueStore
+
+	// doltDB is the primary handle for working-set and commit operations.
+	// datasDB is the lower-level dataset interface required for operations not yet
+	// exposed on *doltdb.DoltDB (GetDataset, Commit, Delete, Datasets).
+	doltDB  *doltdb.DoltDB
+	datasDB datas.Database
+
+	// workingSets is the per-branch in-progress state. Each value is the session's
+	// current working root; the isolation unit for both writes and reads.
+	workingSets map[string]*doltdb.WorkingSet
+
+	uuids        map[string]string
+	indexes      map[string][]backends.IndexInfo
 	secIndexMaps map[string]map[string]prolly.Map
-	// collIndexAMs holds the per-collection secondary-index AddressMap that gets
-	// inlined into the DTBL's secondary_indexes field. Keyed by collection name.
-	// Each AM maps index name -> IndexEntry chunk hash.
 	collIndexAMs map[string]prolly.AddressMap
-	validators map[string]*collectionValidator // collection name -> validator (in-memory)
-	capped     map[string]*cappedCollectionMeta // collection name -> capped config (in-memory)
-	// insertionOrder tracks document _id values in insertion order for FIFO eviction in capped collections.
+	validators   map[string]*collectionValidator
+	capped       map[string]*cappedCollectionMeta
 	insertionOrder map[string][]any
-	views          map[string]*viewMeta         // collection name -> view definition (in-memory)
-	timeSeries     map[string]*timeSeriesMeta   // collection name -> time series config (in-memory)
+	views          map[string]*viewMeta
+	timeSeries     map[string]*timeSeriesMeta
 
-	// collSchemaHash is the hash of the shared DSCH (TableSchema) chunk for the
-	// collection schema: _id VARBINARY NOT NULL PK, doc JSON NOT NULL.
-	// Written once at DB open and reused for all DTBL construction.
 	collSchemaHash hash.Hash
-	// emptyIndexAM is an empty AddressMap used for the DTBL secondary_indexes field.
-	emptyIndexAM prolly.AddressMap
-	// mergeState is non-nil when a merge is in progress (conflicts exist that must be resolved
-	// before DumboDBCommit will succeed). Protected by mu.
-	mergeState *mergeInProgress
-
-	// dirtyBranches tracks branches whose in-memory AM has advanced past what
-	// dolt.UpdateWorkingSet (and thus the NBS journal) has been told about.
-	// Populated by writes that carried MongoDB writeConcern j:false / w:0, where
-	// we skip the synchronous fsync. The backend's flush loop and Close() drain
-	// this set by calling flushDirtyBranches, making the state durable.
-	// Protected by mu.
-	dirtyBranches map[string]struct{}
+	emptyIndexAM   prolly.AddressMap
+	mergeState     *mergeInProgress
+	dirtyBranches  map[string]struct{}
 }
 
-// getAM returns the working-set AddressMap for the given branch.
-// The caller must hold at least s.mu.RLock().
-func (s *dbState) getAM(branch string) (prolly.AddressMap, bool) {
-	am, ok := s.branchAMs[branch]
-	return am, ok
+func (s *dbState) workingSet(branch string) (*doltdb.WorkingSet, bool) {
+	ws, ok := s.workingSets[branch]
+	return ws, ok
 }
 
-// setAM stores the working-set AddressMap for the given branch.
+func (s *dbState) setWorkingSet(branch string, ws *doltdb.WorkingSet) {
+	s.workingSets[branch] = ws
+}
+
+// getOrInitBranchAM is a bridge for version-control operations that still work
+// in AM terms. Extracts the AM from the branch's working root.
+// The caller must hold state.mu (write lock).
+func (s *dbState) getOrInitBranchAM(ctx context.Context, branch string) (prolly.AddressMap, error) {
+	ws, err := s.getOrInitBranchWS(ctx, branch)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	return amFromWorkingRoot(ctx, ws.WorkingRoot(), s.ns)
+}
+
+// amToRootValue wraps an AM in a doltdb.RootValue via the RTVL flatbuffer path.
+func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (doltdb.RootValue, error) {
+	rtvlMsg := buildRootValueFlatbuffer(am)
+	return doltdb.NewRootValue(ctx, db.doltDB.ValueReadWriter(), db.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
+}
+
+// persistAM sets the working root for branch to am and immediately flushes to
+// the doltDB working set. Used by version-control operations that produce a new
+// AM and need it durable. The caller must hold s.mu (write lock).
+func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly.AddressMap) error {
+	s.setAM(branch, workingAM)
+	ws := s.workingSets[branch]
+	return updateWorkingSet(ctx, s.doltDB, ws, branch)
+}
+
+// setAM is a bridge for version-control operations that still produce raw AMs.
+// Wraps the AM in a RootValue and updates the branch working set.
 // The caller must hold s.mu (write lock).
 func (s *dbState) setAM(branch string, am prolly.AddressMap) {
-	s.branchAMs[branch] = am
+	ctx := context.Background()
+	rtvlMsg := buildRootValueFlatbuffer(am)
+	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
+	if err != nil {
+		return
+	}
+	ws, ok := s.workingSets[branch]
+	if !ok {
+		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+		ws = doltdb.EmptyWorkingSet(wsRef)
+	}
+	s.workingSets[branch] = ws.WithWorkingRoot(rv)
 }
+
 
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
@@ -318,7 +351,8 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 
 	for _, db := range b.dbs {
 		db.mu.RLock()
-		count, err := db.branchAMs[defaultBranch].Count()
+		names, err := db.workingSets[defaultBranch].WorkingRoot().GetTableNames(ctx, "", false)
+		count := int64(len(names))
 		db.mu.RUnlock()
 
 		if err != nil {
@@ -438,7 +472,8 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			}
 
 			state.mu.RLock()
-			count, _ := state.branchAMs[defaultBranch].Count()
+			names, _ := state.workingSets[defaultBranch].WorkingRoot().GetTableNames(ctx, "", false)
+			count := len(names)
 			state.mu.RUnlock()
 
 			if count == 0 {
@@ -556,9 +591,16 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		return nil, fmt.Errorf("reading root for %q: %w", dbName, err)
 	}
 
-	// Create the value store and dolt database which manage the STRT root format.
+	// Create the value store and higher-level DoltDB. datasDB is the low-level
+	// datas.Database handle retained for dataset operations not yet on *doltdb.DoltDB.
 	vs := dolttypes.NewValueStore(cs)
-	doltDB := datas.NewTypesDatabase(vs, ns)
+	doltDBVal, err := doltdb.DoltDBFromCS(cs, dbName)
+	if err != nil {
+		_ = cs.Close()
+		return nil, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
+	}
+	doltDB := doltDBVal
+	datasDB := doltdb.ExposeDatabaseFromDoltDB(doltDB)
 
 	var am prolly.AddressMap
 
@@ -570,7 +612,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 		}
 
-		_, am, err = commitCollectionsAM(ctx, doltDB, datas.Dataset{}, am, "Initialize database")
+		_, am, err = commitCollectionsAM(ctx, datasDB, datas.Dataset{}, am, "Initialize database")
 		if err != nil {
 			_ = doltDB.Close()
 			return nil, fmt.Errorf("initial commit for %q: %w", dbName, err)
@@ -611,7 +653,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			}
 
 			// Now the NBS root is STRT; read the dataset from doltDB normally.
-			mainDS, migErr := doltDB.GetDataset(ctx, mainDataset)
+			mainDS, migErr := datasDB.GetDataset(ctx, mainDataset)
 			if migErr != nil {
 				_ = doltDB.Close()
 				return nil, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
@@ -620,7 +662,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 
 		case serial.StoreRootFileID:
 			// STRT format: read the collections AM from the head commit's rootValue.
-			ds, err := doltDB.GetDataset(ctx, mainDataset)
+			ds, err := datasDB.GetDataset(ctx, mainDataset)
 			if err != nil {
 				_ = doltDB.Close()
 				return nil, fmt.Errorf("getting dataset for %q: %w", dbName, err)
@@ -652,7 +694,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 					// RTVL format: prefer the working set  -- it holds the latest state
 					// after writes that don't create commits (HEAD stays at last explicit
 					// commit). Fall back to HEAD rootValue if the working set is missing.
-					wsAM, wsErr := readAMFromWorkingSet(ctx, doltDB, cs, ns)
+					wsAM, wsErr := readAMFromWorkingSet(ctx, datasDB, cs, ns)
 					if wsErr != nil {
 						b.l.Warn("working set unavailable, falling back to HEAD AM", "db", dbName, "err", wsErr)
 						rtvl, fallbackErr := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
@@ -689,7 +731,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 						return nil, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
 					}
 
-					ds, am, err = commitCollectionsAM(ctx, doltDB, ds, am, "migrate: wrap collections AM in RTVL")
+					ds, am, err = commitCollectionsAM(ctx, datasDB, ds, am, "migrate: wrap collections AM in RTVL")
 					if err != nil {
 						_ = doltDB.Close()
 						return nil, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
@@ -707,13 +749,26 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		}
 	}
 
+	wsRef := doltref.NewWorkingSetRef("heads/" + defaultBranch)
+	mainWS, wsErr := doltDB.ResolveWorkingSet(ctx, wsRef)
+	if wsErr != nil {
+		rtvlMsg := buildRootValueFlatbuffer(am)
+		rv, rvErr := doltdb.NewRootValue(ctx, doltDB.ValueReadWriter(), doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
+		if rvErr != nil {
+			_ = doltDB.Close()
+			return nil, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
+		}
+		mainWS = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+	}
+
 	db = &dbState{
 		dbDir:          dbDir,
 		cs:             cs,
 		ns:             ns,
 		vs:             vs,
 		doltDB:         doltDB,
-		branchAMs:      map[string]prolly.AddressMap{defaultBranch: am},
+		datasDB:        datasDB,
+		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),
@@ -768,11 +823,10 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 // commitCollectionsAM creates a new dolt commit with the given collections
 // AddressMap as its root value, updating the "heads/main" dataset.
 // Returns the updated dataset and the (unchanged) AM.
-func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc string) (datas.Dataset, prolly.AddressMap, error) {
-	// For a new dataset, we need to get it first.
+func commitCollectionsAM(ctx context.Context, datasDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc string) (datas.Dataset, prolly.AddressMap, error) {
 	var err error
 	if ds.ID() == "" {
-		ds, err = doltDB.GetDataset(ctx, mainDataset)
+		ds, err = datasDB.GetDataset(ctx, mainDataset)
 		if err != nil {
 			return datas.Dataset{}, am, err
 		}
@@ -783,17 +837,12 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 		return datas.Dataset{}, am, err
 	}
 
-	// Wrap the collections AM in an RTVL flatbuffer so dolt can read it.
 	rtvlMsg := buildRootValueFlatbuffer(am)
-	newDS, err := doltDB.Commit(ctx, ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+	newDS, err := datasDB.Commit(ctx, ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta: meta,
 	})
 	if err != nil {
 		return datas.Dataset{}, am, err
-	}
-
-	if err := updateWorkingSet(ctx, doltDB, am, am, defaultBranch); err != nil {
-		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
 	}
 
 	return newDS, am, nil
@@ -802,10 +851,10 @@ func commitCollectionsAM(ctx context.Context, doltDB datas.Database, ds datas.Da
 // commitCollectionsAMAs creates a new dolt commit with the given collections
 // AddressMap as its root value, using the provided author name and timestamp.
 // Returns the updated dataset and the (unchanged) AM.
-func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc, authorName string, ts time.Time) (datas.Dataset, prolly.AddressMap, error) {
+func commitCollectionsAMAs(ctx context.Context, datasDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc, authorName string, ts time.Time) (datas.Dataset, prolly.AddressMap, error) {
 	var err error
 	if ds.ID() == "" {
-		ds, err = doltDB.GetDataset(ctx, mainDataset)
+		ds, err = datasDB.GetDataset(ctx, mainDataset)
 		if err != nil {
 			return datas.Dataset{}, am, err
 		}
@@ -825,15 +874,11 @@ func commitCollectionsAMAs(ctx context.Context, doltDB datas.Database, ds datas.
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(am)
-	newDS, err := doltDB.Commit(ctx, ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+	newDS, err := datasDB.Commit(ctx, ds, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta: meta,
 	})
 	if err != nil {
 		return datas.Dataset{}, am, err
-	}
-
-	if err := updateWorkingSet(ctx, doltDB, am, am, defaultBranch); err != nil {
-		return datas.Dataset{}, am, fmt.Errorf("updating working set: %w", err)
 	}
 
 	return newDS, am, nil
@@ -952,40 +997,18 @@ func workingSetForBranch(branch string) string {
 // The RTVL chunk for workingAM must already be in the value store (written by the
 // caller via vs.WriteValue). The staged RTVL is recomputed from stagedAM and its
 // chunk must also be present in the store (e.g. written by a prior commit).
-func updateWorkingSet(ctx context.Context, doltDB datas.Database, workingAM, stagedAM prolly.AddressMap, branch string) error {
-	workingRtvlMsg := buildRootValueFlatbuffer(workingAM)
-	workingRtvlRef, err := dolttypes.NewRef(dolttypes.SerialMessage(workingRtvlMsg), dolttypes.Format_DOLT)
-	if err != nil {
-		return fmt.Errorf("creating working RTVL ref: %w", err)
+func updateWorkingSet(ctx context.Context, ddb *doltdb.DoltDB, ws *doltdb.WorkingSet, branch string) error {
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	// Use the current on-disk working set hash as the optimistic-lock prevHash.
+	// ws.HashOf() returns an error for in-memory WS created via WithWorkingRoot,
+	// so we resolve from disk instead.
+	var prevHash hash.Hash
+	if cur, resolveErr := ddb.ResolveWorkingSet(ctx, wsRef); resolveErr == nil {
+		prevHash, _ = cur.HashOf()
 	}
-
-	stagedRtvlMsg := buildRootValueFlatbuffer(stagedAM)
-	stagedRtvlRef, err := dolttypes.NewRef(dolttypes.SerialMessage(stagedRtvlMsg), dolttypes.Format_DOLT)
-	if err != nil {
-		return fmt.Errorf("creating staged RTVL ref: %w", err)
-	}
-
-	wsDs, err := doltDB.GetDataset(ctx, workingSetForBranch(branch))
-	if err != nil {
-		return fmt.Errorf("getting working set dataset: %w", err)
-	}
-
-	prevHash, _ := wsDs.MaybeHeadAddr()
-
-	meta := &datas.WorkingSetMeta{
-		Name:        "dumbodb",
-		Email:       "dumbodb@dumbodb",
-		Description: "dumbodb working set",
-	}
-
-	spec := datas.WorkingSetSpec{
-		Meta:        meta,
-		WorkingRoot: workingRtvlRef,
-		StagedRoot:  stagedRtvlRef,
-	}
-
-	_, err = doltDB.UpdateWorkingSet(ctx, wsDs, spec, prevHash)
-	return err
+	meta := doltdb.TodoWorkingSetMeta()
+	var rsc doltdb.ReplicationStatusController
+	return ddb.UpdateWorkingSet(ctx, wsRef, ws, prevHash, meta, &rsc)
 }
 
 // Verify that Backend implements VersioningBackend.
@@ -1055,16 +1078,24 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			if err != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			if db.branchAMs[defaultBranch].HashOf() == headAM.HashOf() {
+			workingAM, amErr := amFromWorkingRoot(ctx, db.workingSets[defaultBranch].WorkingRoot(), db.ns)
+			if amErr != nil {
+				return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
+			}
+			if workingAM.HashOf() == headAM.HashOf() {
 				return nil, backends.ErrEmptyCommit
 			}
 		}
 
-		mainDS, dsErr := db.doltDB.GetDataset(ctx, mainDataset)
+		mainDS, dsErr := db.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
-		newDS, _, err := commitCollectionsAMAs(ctx, db.doltDB, mainDS, db.branchAMs[defaultBranch], message, params.Author, ts)
+		workingAM, amErr := amFromWorkingRoot(ctx, db.workingSets[defaultBranch].WorkingRoot(), db.ns)
+		if amErr != nil {
+			return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
+		}
+		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, workingAM, message, params.Author, ts)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCommit: committing db %q: %w", params.DBName, err)
 		}
@@ -1086,7 +1117,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	// Non-main branch commit: get the branch dataset and its working AM.
-	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	branchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: resolving branch %q: %w", branch, err)
 	}
@@ -1123,17 +1154,17 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(branchAM)
-	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{Meta: meta})
+	newDS, err := db.datasDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{Meta: meta})
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: committing branch %q: %w", branch, err)
 	}
 
-	if err := updateWorkingSet(ctx, db.doltDB, branchAM, branchAM, branch); err != nil {
+	if err := db.persistAM(ctx, branch, branchAM); err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: updating working set for branch %q: %w", branch, err)
 	}
 
 	// Clear the cached branch AM so the next access reloads from the new HEAD.
-	delete(db.branchAMs, branch)
+	delete(db.workingSets, branch)
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
@@ -1187,7 +1218,7 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	}
 
 	newDatasetID := "refs/heads/" + params.Name
-	newDS, err := db.doltDB.GetDataset(ctx, newDatasetID)
+	newDS, err := db.datasDB.GetDataset(ctx, newDatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: getting new branch dataset %q: %w", params.Name, err)
 	}
@@ -1195,7 +1226,7 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, fmt.Errorf("DumboDBBranch: branch %q already exists", params.Name)
 	}
 
-	if _, err = db.doltDB.SetHead(ctx, newDS, headHash, ""); err != nil {
+	if _, err = db.datasDB.SetHead(ctx, newDS, headHash, ""); err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: creating branch %q: %w", params.Name, err)
 	}
 
@@ -1211,7 +1242,7 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 	}
 
 	datasetID := "refs/heads/" + params.Name
-	branchDS, err := db.doltDB.GetDataset(ctx, datasetID)
+	branchDS, err := db.datasDB.GetDataset(ctx, datasetID)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: getting branch dataset %q: %w", params.Name, err)
 	}
@@ -1235,7 +1266,7 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 			return nil, fmt.Errorf("DumboDBBranch: loading commit for branch %q: %w", params.Name, loadErr)
 		}
 
-		dsMap, dsErr := db.doltDB.Datasets(ctx)
+		dsMap, dsErr := db.datasDB.Datasets(ctx)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", dsErr)
 		}
@@ -1281,18 +1312,18 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 
 	// Delete the working set for this branch if it exists (best-effort).
 	wsID := workingSetForBranch(params.Name)
-	wsDS, wsErr := db.doltDB.GetDataset(ctx, wsID)
+	wsDS, wsErr := db.datasDB.GetDataset(ctx, wsID)
 	if wsErr == nil && wsDS.HasHead() {
-		_, _ = db.doltDB.Delete(ctx, wsDS, "")
+		_, _ = db.datasDB.Delete(ctx, wsDS, "")
 	}
 
 	// Delete the branch dataset.
-	if _, err = db.doltDB.Delete(ctx, branchDS, ""); err != nil {
+	if _, err = db.datasDB.Delete(ctx, branchDS, ""); err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: deleting branch %q: %w", params.Name, err)
 	}
 
 	// Clear any cached branch AM.
-	delete(db.branchAMs, params.Name)
+	delete(db.workingSets, params.Name)
 
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
@@ -1354,7 +1385,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 		ms := db.mergeState
 
-		intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		intoBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
 		}
@@ -1389,7 +1420,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	}
 
 	// Resolve the Into branch dataset.
-	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.Into)
+	intoBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+params.Into)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: resolving into branch %q: %w", params.Into, err)
 	}
@@ -1402,7 +1433,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	}
 
 	// Resolve the From branch dataset.
-	fromBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+params.From)
+	fromBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+params.From)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: resolving from branch %q: %w", params.From, err)
 	}
@@ -1448,7 +1479,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 	// Fast-forward: Into's HEAD is an ancestor of From's HEAD.
 	if baseHash == intoHash && !params.NoFF {
-		if _, ffErr := db.doltDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
+		if _, ffErr := db.datasDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
 		if params.Into == defaultBranch {
@@ -1457,7 +1488,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 				return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
 			}
 			db.setAM(defaultBranch, ffAM)
-			if err := updateWorkingSet(ctx, db.doltDB, ffAM, ffAM, defaultBranch); err != nil {
+			if err := db.persistAM(ctx, defaultBranch, ffAM); err != nil {
 				return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
 			}
 		}
@@ -1557,7 +1588,7 @@ func (b *Backend) commitMerge(
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(mergedAM)
-	newDS, err := db.doltDB.Commit(ctx, intoBranchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+	newDS, err := db.datasDB.Commit(ctx, intoBranchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta:    meta,
 		Parents: []hash.Hash{intoHash, fromHash},
 	})
@@ -1572,7 +1603,7 @@ func (b *Backend) commitMerge(
 
 	db.setAM(intoBranch, mergedAM)
 	if intoBranch == defaultBranch {
-		if err := updateWorkingSet(ctx, db.doltDB, mergedAM, mergedAM, defaultBranch); err != nil {
+		if err := db.persistAM(ctx, defaultBranch, mergedAM); err != nil {
 			return nil, fmt.Errorf("commitMerge: updating working set: %w", err)
 		}
 	}
@@ -1644,7 +1675,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		}
 		ms := db.mergeState
 
-		intoBranchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		intoBranchDS, dsErr := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
@@ -1739,7 +1770,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	}
 
 	// Resolve the current branch dataset.
-	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	intoBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: resolving into branch %q: %w", branch, err)
 	}
@@ -1835,7 +1866,7 @@ func (b *Backend) commitCherryPick(
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(pickedAM)
-	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+	newDS, err := db.datasDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta:    meta,
 		Parents: []hash.Hash{intoHash},
 	})
@@ -1850,7 +1881,7 @@ func (b *Backend) commitCherryPick(
 
 	db.setAM(branch, pickedAM)
 	if branch == defaultBranch {
-		if err := updateWorkingSet(ctx, db.doltDB, pickedAM, pickedAM, defaultBranch); err != nil {
+		if err := db.persistAM(ctx, defaultBranch, pickedAM); err != nil {
 			return nil, fmt.Errorf("commitCherryPick: updating working set: %w", err)
 		}
 	}
@@ -1929,7 +1960,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	// branch datasets.  The connection branch (ConnBranch) gets "HEAD -> <name>",
 	// every other branch gets its bare name.
 	refsForCommit := make(map[string][]string)
-	dsMap, dsErr := db.doltDB.Datasets(ctx)
+	dsMap, dsErr := db.datasDB.Datasets(ctx)
 	if dsErr == nil {
 		connBranch := params.ConnBranch
 		_ = dsMap.IterAll(ctx, func(datasetID string, headAddr hash.Hash) error {
@@ -2222,7 +2253,7 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	// Resolve empty CommitID to the current HEAD.
 	commitID := params.CommitID
 	if commitID == "" {
-		mainDS, dsErr := db.doltDB.GetDataset(ctx, mainDataset)
+		mainDS, dsErr := db.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
@@ -2247,23 +2278,30 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	}
 
 	// Move HEAD to the target commit without touching the working set.
-	mainDS, dsErr := db.doltDB.GetDataset(ctx, mainDataset)
+	mainDS, dsErr := db.datasDB.GetDataset(ctx, mainDataset)
 	if dsErr != nil {
 		return nil, fmt.Errorf("DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
 	}
-	if _, err := db.doltDB.SetHead(ctx, mainDS, targetHash, ""); err != nil {
+	if _, err := db.datasDB.SetHead(ctx, mainDS, targetHash, ""); err != nil {
 		return nil, fmt.Errorf("DumboDBReset: setting HEAD to %q: %w", commitID, err)
 	}
 
 	if params.Hard {
 		// Hard reset: working tree and staged root both point to the target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, targetAM, targetAM, defaultBranch); err != nil {
+		if err := db.persistAM(ctx, defaultBranch, targetAM); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (hard): %w", err)
 		}
 		db.setAM(defaultBranch, targetAM)
 	} else {
-		// Soft reset: keep the working tree as-is; staged root = target commit.
-		if err := updateWorkingSet(ctx, db.doltDB, db.branchAMs[defaultBranch], targetAM, defaultBranch); err != nil {
+		// Soft reset: keep working tree, change staged to target commit.
+		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)
+		if stagedErr != nil {
+			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
+		}
+		ws := db.workingSets[defaultBranch]
+		newWS := ws.WithStagedRoot(stagedRV)
+		db.workingSets[defaultBranch] = newWS
+		if err := updateWorkingSet(ctx, db.doltDB, newWS, defaultBranch); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (soft): %w", err)
 		}
 	}
@@ -2517,11 +2555,11 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		db.mergeState = nil
 
 		// Restore the branch HEAD in doltDB to the pre-rebase commit.
-		branchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		branchDS, dsErr := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
-		if _, setErr := db.doltDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, ""); setErr != nil {
+		if _, setErr := db.datasDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, ""); setErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
 		db.setAM(ms.intoBranch, ms.premergeAM)
@@ -2603,7 +2641,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	}
 
 	// Resolve the current branch HEAD.
-	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	branchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRebase: resolving branch %q: %w", branch, err)
 	}
@@ -2643,11 +2681,11 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 
 	// Move the branch HEAD to ontoHead so that subsequent Commit() calls (which require
 	// the parent to be the current branch HEAD) will succeed when replaying commits.
-	branchDS, err = db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	branchDS, err = db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRebase: re-resolving branch %q before SetHead: %w", branch, err)
 	}
-	if _, setErr := db.doltDB.SetHead(ctx, branchDS, ontoHead, ""); setErr != nil {
+	if _, setErr := db.datasDB.SetHead(ctx, branchDS, ontoHead, ""); setErr != nil {
 		return nil, fmt.Errorf("DumboDBRebase: moving branch %q to onto tip: %w", branch, setErr)
 	}
 	// No per-branch dataset cache to refresh; datasets are resolved on demand.
@@ -2807,11 +2845,11 @@ func (b *Backend) commitRebasedPick(
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(pickedAM)
-	branchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	branchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("commitRebasedPick: resolving branch %q: %w", branch, err)
 	}
-	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+	newDS, err := db.datasDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta:    meta,
 		Parents: []hash.Hash{currentTipHash},
 	})
@@ -2929,7 +2967,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		}
 		ms := db.mergeState
 
-		intoBranchDS, dsErr := db.doltDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
+		intoBranchDS, dsErr := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBRevert: continue: resolving branch %q: %w", ms.intoBranch, dsErr)
 		}
@@ -3015,7 +3053,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	}
 
 	// Resolve the current branch dataset.
-	intoBranchDS, err := db.doltDB.GetDataset(ctx, "refs/heads/"+branch)
+	intoBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: resolving into branch %q: %w", branch, err)
 	}
@@ -3115,7 +3153,7 @@ func (b *Backend) commitRevert(
 	}
 
 	rtvlMsg := buildRootValueFlatbuffer(revertedAM)
-	newDS, err := db.doltDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
+	newDS, err := db.datasDB.Commit(ctx, branchDS, dolttypes.SerialMessage(rtvlMsg), datas.CommitOptions{
 		Meta:    meta,
 		Parents: []hash.Hash{intoHash},
 	})
@@ -3130,7 +3168,7 @@ func (b *Backend) commitRevert(
 
 	db.setAM(branch, revertedAM)
 	if branch == defaultBranch {
-		if err := updateWorkingSet(ctx, db.doltDB, revertedAM, revertedAM, defaultBranch); err != nil {
+		if err := db.persistAM(ctx, defaultBranch, revertedAM); err != nil {
 			return nil, fmt.Errorf("commitRevert: updating working set: %w", err)
 		}
 	}

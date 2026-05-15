@@ -80,7 +80,7 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 		return nil, fmt.Errorf("DumboDBTag: resolving %q: %w", rootish, err)
 	}
 
-	tagDS, err := db.doltDB.GetDataset(ctx, tagRefPrefix+params.Name)
+	tagDS, err := db.datasDB.GetDataset(ctx, tagRefPrefix+params.Name)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBTag: getting tag dataset %q: %w", params.Name, err)
 	}
@@ -94,7 +94,7 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 	}
 	meta := datas.NewTagMeta(taggerName, taggerEmail, params.Message)
 
-	if _, err = db.doltDB.Tag(ctx, tagDS, commitAddr, datas.TagOptions{Meta: meta}); err != nil {
+	if _, err = db.datasDB.Tag(ctx, tagDS, commitAddr, datas.TagOptions{Meta: meta}); err != nil {
 		return nil, fmt.Errorf("DumboDBTag: creating tag %q: %w", params.Name, err)
 	}
 
@@ -111,7 +111,7 @@ func dumboDBTagCreate(ctx context.Context, db *dbState, params *backends.TagPara
 
 // dumboDBTagDelete deletes the named tag. Caller must hold db.mu.Lock().
 func dumboDBTagDelete(ctx context.Context, db *dbState, params *backends.TagParams) (*backends.TagResult, error) {
-	tagDS, err := db.doltDB.GetDataset(ctx, tagRefPrefix+params.Name)
+	tagDS, err := db.datasDB.GetDataset(ctx, tagRefPrefix+params.Name)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBTag: getting tag dataset %q: %w", params.Name, err)
 	}
@@ -122,7 +122,7 @@ func dumboDBTagDelete(ctx context.Context, db *dbState, params *backends.TagPara
 
 	commitAddr := tagCommitAddr(tagDS)
 
-	if _, err = db.doltDB.Delete(ctx, tagDS, ""); err != nil {
+	if _, err = db.datasDB.Delete(ctx, tagDS, ""); err != nil {
 		return nil, fmt.Errorf("DumboDBTag: deleting tag %q: %w", params.Name, err)
 	}
 
@@ -136,7 +136,7 @@ func dumboDBTagDelete(ctx context.Context, db *dbState, params *backends.TagPara
 
 // dumboDBTagList lists all tags in the database. Caller must hold db.mu.Lock().
 func dumboDBTagList(ctx context.Context, db *dbState) (*backends.TagResult, error) {
-	dsMap, err := db.doltDB.Datasets(ctx)
+	dsMap, err := db.datasDB.Datasets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBTag: listing datasets: %w", err)
 	}
@@ -153,7 +153,7 @@ func dumboDBTagList(ctx context.Context, db *dbState) (*backends.TagResult, erro
 
 	tags := make([]backends.TagInfo, 0, len(tagIDs))
 	for _, id := range tagIDs {
-		ds, dsErr := db.doltDB.GetDataset(ctx, id)
+		ds, dsErr := db.datasDB.GetDataset(ctx, id)
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBTag: loading tag %q: %w", id, dsErr)
 		}

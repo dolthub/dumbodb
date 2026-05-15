@@ -86,7 +86,7 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 	}
 
 	// Case 3: branch name  -- try refs/heads/<rootish>.
-	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+rootish)
+	branchDS, err := state.datasDB.GetDataset(ctx, "refs/heads/"+rootish)
 	if err == nil && branchDS.HasHead() {
 		branchHead, ok := branchDS.MaybeHeadAddr()
 		if !ok {
@@ -97,7 +97,7 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 
 	// Case 4: tag name  -- use tagCommitAddr to dereference through the tag
 	// flatbuffer to the underlying commit hash.
-	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
+	tagDS, err := state.datasDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if err != nil {
 		return prolly.AddressMap{}, fmt.Errorf("rootish %q: not a commit hash, branch, or tag: %w", rootish, err)
 	}
@@ -134,7 +134,7 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 	}
 
 	// Case 4: branch name.
-	branchDS, err := state.doltDB.GetDataset(ctx, "refs/heads/"+rootish)
+	branchDS, err := state.datasDB.GetDataset(ctx, "refs/heads/"+rootish)
 	if err == nil && branchDS.HasHead() {
 		if h, ok := branchDS.MaybeHeadAddr(); ok {
 			return h, nil
@@ -143,7 +143,7 @@ func resolveRootishToCommitHash(ctx context.Context, state *dbState, rootish str
 
 	// Case 5: tag name  -- use tagCommitAddr to dereference through the tag
 	// flatbuffer to the underlying commit hash.
-	tagDS, tagErr := state.doltDB.GetDataset(ctx, "refs/tags/"+rootish)
+	tagDS, tagErr := state.datasDB.GetDataset(ctx, "refs/tags/"+rootish)
 	if tagErr == nil && tagDS.HasHead() {
 		if h := tagCommitAddr(tagDS); !h.IsEmpty() {
 			return h, nil
