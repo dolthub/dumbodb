@@ -36,7 +36,7 @@ import (
 // mainDS returns the main branch dataset for the given dbState.
 func mainDS(t *testing.T, state *dbState) datas.Dataset {
 	t.Helper()
-	ds, err := state.doltDB.GetDataset(context.Background(), mainDataset)
+	ds, err := state.datasDB.GetDataset(context.Background(), mainDataset)
 	require.NoError(t, err)
 	return ds
 }
@@ -167,7 +167,7 @@ func TestWorkingSetRTVL(t *testing.T) {
 	}
 
 	// Read the working set dataset.
-	wsDs, err := state.doltDB.GetDataset(ctx, workingSetDataset)
+	wsDs, err := state.datasDB.GetDataset(ctx, workingSetDataset)
 	if err != nil {
 		t.Fatalf("GetDataset(workingSet): %v", err)
 	}
@@ -279,7 +279,7 @@ func TestWorkingSetDivergesAfterWrite(t *testing.T) {
 	}
 
 	// Read the updated working set.
-	wsDs, err := state.doltDB.GetDataset(ctx, workingSetDataset)
+	wsDs, err := state.datasDB.GetDataset(ctx, workingSetDataset)
 	if err != nil {
 		t.Fatalf("GetDataset(workingSet): %v", err)
 	}
@@ -447,7 +447,7 @@ func TestWritesNoNewCommits(t *testing.T) {
 
 	// Re-read the "heads/main" dataset directly from the doltDB to bypass any
 	// cached mainDS(t, state) and verify HEAD has not moved.
-	freshDS, err := state.doltDB.GetDataset(ctx, mainDataset)
+	freshDS, err := state.datasDB.GetDataset(ctx, mainDataset)
 	if err != nil {
 		t.Fatalf("GetDataset after writes: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestDumboDBCommit(t *testing.T) {
 	}
 
 	// HEAD must have advanced past the init commit.
-	freshDS, err := state.doltDB.GetDataset(ctx, mainDataset)
+	freshDS, err := state.datasDB.GetDataset(ctx, mainDataset)
 	if err != nil {
 		t.Fatalf("GetDataset after commit: %v", err)
 	}
@@ -756,7 +756,7 @@ func TestDumboDBCommitWorkingSetClean(t *testing.T) {
 	headRtvlHash := headRtvlRef.TargetHash()
 
 	// Read the working set and get the staged root addr.
-	wsDs, err := state.doltDB.GetDataset(ctx, workingSetDataset)
+	wsDs, err := state.datasDB.GetDataset(ctx, workingSetDataset)
 	if err != nil {
 		t.Fatalf("GetDataset working set: %v", err)
 	}

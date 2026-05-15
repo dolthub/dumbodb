@@ -69,8 +69,8 @@ jobs:
         working-directory: parity-testing
         run: |
           mkdir -p results
-          go test ./... -v -timeout 15m -json | tee results/parity.json
-          go test ./... -timeout 15m
+          go test ./tests/ -v -timeout 15m -json | tee results/parity.json
+          go test ./tests/ -timeout 15m
 
       - name: Upload results
         if: always()

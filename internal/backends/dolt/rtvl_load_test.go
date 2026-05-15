@@ -341,12 +341,12 @@ func TestRTVLLoad_Tag_Query(t *testing.T) {
 		t.Fatalf("invalid hash: %q", hash1)
 	}
 	// Create a tag dataset pointing to hash1.
-	tagDS, err := state.doltDB.GetDataset(ctx, "refs/tags/v1.0")
+	tagDS, err := state.datasDB.GetDataset(ctx, "refs/tags/v1.0")
 	if err != nil {
 		state.mu.Unlock()
 		t.Fatalf("GetDataset(refs/tags/v1.0): %v", err)
 	}
-	tagDS, err = state.doltDB.SetHead(ctx, tagDS, tagHash, "")
+	tagDS, err = state.datasDB.SetHead(ctx, tagDS, tagHash, "")
 	if err != nil {
 		state.mu.Unlock()
 		t.Fatalf("SetHead(tag v1.0 -> %s): %v", hash1, err)

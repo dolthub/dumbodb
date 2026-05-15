@@ -825,6 +825,14 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 
 	b.dbs[dbName] = db
 
+	// If the working set was not on disk (new database or first open after migration),
+	// persist it now so that dolt CLI tools can read it.
+	if wsErr != nil {
+		if persistErr := updateWorkingSet(ctx, doltDB, mainWS, defaultBranch); persistErr != nil {
+			b.l.Warn("could not persist initial working set", "db", dbName, "err", persistErr)
+		}
+	}
+
 	// Hydrate persisted secondary indexes from each collection's DTBL so that
 	// listIndexes, unique-constraint enforcement, and tryIndexLookup all work
 	// across restarts. Failures are fatal because silently dropping indexes on
