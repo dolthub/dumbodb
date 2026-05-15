@@ -181,9 +181,26 @@ func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (dolt
 // the doltDB working set. Used by version-control operations that produce a new
 // AM and need it durable. The caller must hold s.mu (write lock).
 func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly.AddressMap) error {
-	s.setAM(branch, workingAM)
-	ws := s.workingSets[branch]
-	return updateWorkingSet(ctx, s.doltDB, ws, branch)
+	rtvlMsg := buildRootValueFlatbuffer(workingAM)
+	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
+	if err != nil {
+		return err
+	}
+	ws, ok := s.workingSets[branch]
+	if !ok {
+		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+		if loaded, loadErr := s.doltDB.ResolveWorkingSet(ctx, wsRef); loadErr == nil {
+			ws = loaded
+		} else {
+			ws = doltdb.EmptyWorkingSet(wsRef)
+		}
+	}
+	// Set both working and staged to the same root so dolt sees a clean
+	// working tree (no uncommitted diff). Conflict artifacts are stored in
+	// the DTBL ArtifactMap, not in the working/staged difference.
+	newWS := ws.WithWorkingRoot(rv).WithStagedRoot(rv)
+	s.workingSets[branch] = newWS
+	return updateWorkingSet(ctx, s.doltDB, newWS, branch)
 }
 
 // setAM is a bridge for version-control operations that still produce raw AMs.
@@ -198,9 +215,20 @@ func (s *dbState) setAM(branch string, am prolly.AddressMap) {
 	}
 	ws, ok := s.workingSets[branch]
 	if !ok {
+		// New branch not yet cached. Initialize from disk or build a minimal WS.
 		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		ws = doltdb.EmptyWorkingSet(wsRef)
+		if loaded, loadErr := s.doltDB.ResolveWorkingSet(ctx, wsRef); loadErr == nil {
+			ws = loaded
+		} else {
+			// No WS on disk yet; staged stays at HEAD.
+			headRV, headErr := headRootValueForBranch(ctx, s, branch)
+			if headErr != nil {
+				headRV = rv
+			}
+			ws = doltdb.EmptyWorkingSet(wsRef).WithStagedRoot(headRV)
+		}
 	}
+	// Only update working root; staged stays where it was (HEAD until explicit stage).
 	s.workingSets[branch] = ws.WithWorkingRoot(rv)
 }
 
@@ -1098,6 +1126,10 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, workingAM, message, params.Author, ts)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCommit: committing db %q: %w", params.DBName, err)
+		}
+
+		if err := db.persistAM(ctx, defaultBranch, workingAM); err != nil {
+			return nil, fmt.Errorf("DumboDBCommit: updating working set for %q: %w", params.DBName, err)
 		}
 
 		headHash, ok := newDS.MaybeHeadAddr()
@@ -2688,7 +2720,6 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	if _, setErr := db.datasDB.SetHead(ctx, branchDS, ontoHead, ""); setErr != nil {
 		return nil, fmt.Errorf("DumboDBRebase: moving branch %q to onto tip: %w", branch, setErr)
 	}
-	// No per-branch dataset cache to refresh; datasets are resolved on demand.
 
 	// Initialize rebase state: start with onto as the current tip.
 	ms := &mergeInProgress{

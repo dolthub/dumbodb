@@ -355,17 +355,9 @@ func computeDiffType(base, current val.Tuple) string {
 // (with ArtifactMaps in conflicting collection DTBLs) and saves the merge state
 // JSON file. The caller must hold state.mu (write lock).
 func persistConflictState(ctx context.Context, state *dbState, ms *mergeInProgress) error {
-	// Update the working set to reflect the partial merged AM.
-	_, err := headRootAMForBranch(ctx, state, ms.intoBranch)
-	if err != nil {
-		return fmt.Errorf("reading staged AM: %w", err)
-	}
-
-	workingRtvl := buildRootValueFlatbuffer(ms.resolvedAM)
-	if _, writeErr := state.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
-		return fmt.Errorf("writing working RTVL: %w", writeErr)
-	}
-
+	// Persist the conflict state as the branch working set with working == staged
+	// so `dolt checkout <branch>` sees no uncommitted diff. The conflict artifacts
+	// are embedded in the resolvedAM DTBL chunks visible to `dolt sql dolt_conflicts_*`.
 	if wsErr := state.persistAM(ctx, ms.intoBranch, ms.resolvedAM); wsErr != nil {
 		return fmt.Errorf("updating working set: %w", wsErr)
 	}
