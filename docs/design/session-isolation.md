@@ -352,7 +352,10 @@ commit keymutex (`Provider().TxLocks()`) inside dsess serializes them.
    HEAD and the working set is reset; on conflict, the working set stays
    dirty until resolved.
 9. **Disconnect without commit** -> the session stays in the registry. A
-   reconnect with the same `lsid` resumes it.
+   later TCP connection that carries the same `lsid` resumes it. In practice
+   this is the driver's internal connection-pool churn under a single
+   `mongo.Session`; cross-process resume requires raw wire control (drivers
+   don't expose `lsid` injection).
 10. **Session timeout** -> registry discards the session; uncommitted working
     set is lost; locks are released. Configurable, default 30 min.
 11. **`endSession`** -> explicit version of timeout.
@@ -429,10 +432,23 @@ const session = client.startSession()
 
 The session is tied to the `lsid`, **not the TCP connection**. This means:
 
-**Reconnection:** If a client disconnects (network glitch, process restart)
-and reconnects with the same `lsid`, DumboDB looks up the session in the
-registry and resumes where the client left off -- uncommitted writes are
-still there.
+**Server-side reconnection:** If the underlying TCP connection drops and
+re-opens with the same `lsid`, DumboDB looks up the session in the registry
+and resumes -- uncommitted writes are still there. In practice this is the
+mechanism the official drivers rely on internally: the driver maintains one
+`mongo.Session` (one `lsid`) but pools many TCP connections under it, so a
+socket reset is transparent. The server-side property -- "state is keyed by
+`lsid`, not by connection" -- is exactly what makes that pooling work.
+
+**Driver limitation -- no cross-process resume.** The MongoDB Driver
+Specification forbids drivers from accepting a caller-supplied `lsid`. Every
+`mongo.Client.StartSession()` generates a fresh UUID; there is no API to say
+"resume the lsid I had last time." So while the wire protocol allows two
+unrelated clients to coordinate by sharing an `lsid`, no official driver
+exposes that. Cross-process resume is reachable only via raw wire-protocol
+control (see the wire-level parity test P6 in
+`dumbodb-parity-testing/tests/transaction_wire_test.go`), and we test it
+that way to confirm our server matches MongoDB's behavior.
 
 **Session timeout:** Sessions persist for a configurable period of inactivity
 (default: 30 minutes). After timeout, the session state is discarded and
@@ -442,16 +458,14 @@ uncommitted changes are lost. Matches MongoDB's
 **`endSession` command:** Explicit client signal to discard session state.
 Any uncommitted changes are lost.
 
-**Session transfer:** The wire protocol allows two different connections to
-share an `lsid`. This means two processes could collaborate on the same
-uncommitted working set. We don't need to encourage this, but it falls out
-naturally from keying on `lsid` rather than connection.
-
-**Retryable writes (future):** MongoDB uses `lsid` + `txnNumber` to deduplicate
-retried writes. If a client retries an insert after a timeout, the server
-recognizes the `(lsid, txnNumber)` pair and returns the cached result instead
-of double-inserting. Not required for Phase 1, but the session registry makes
-it straightforward to add later.
+**Retryable writes (future):** MongoDB uses `lsid` + `txnNumber` to
+deduplicate retried writes. If a client retries an insert after a timeout,
+the server recognizes the `(lsid, txnNumber)` pair and returns the cached
+result instead of double-inserting. Drivers handle the retry transparently
+under the *same* `lsid` they're already using -- this is exactly the
+"server-side reconnection" property above, with retry semantics layered on
+top. Not required for Phase 1, but the session registry makes it
+straightforward to add later.
 
 ### Non-Session Clients
 
@@ -588,6 +602,16 @@ parity tests. If it uses `doltCommit`, `doltConflicts`, the `@branch`
 revision syntax, or depends on the `--session-isolation` server flag, it
 belongs in DumboDB integration tests.
 
+A parity test is allowed to bypass the official Go driver when the
+behavior under test is not driver-reachable. The MongoDB Driver
+Specification forbids drivers from accepting a caller-supplied `lsid`,
+so a scenario that depends on shared-lsid-across-connections (P6) cannot
+be expressed at the driver level. We test those at the wire level: raw
+OP_MSG against the same servers, comparison via the same harness. This
+keeps the "if both servers behave the same, parity passes" contract
+intact while reaching parts of the protocol the driver hides. The wire
+client lives in `dumbodb-parity-testing/wire/`.
+
 ### Parity Tests (dumbodb-parity-testing)
 
 These cover MongoDB-compatible behavior in DumboDB's default mode.
@@ -654,19 +678,26 @@ Client B: commitTransaction
 Both documents present.
 ```
 
-#### P6: Session reconnection preserves transaction state
+#### P6: Session reconnection preserves transaction state (wire-level)
 
-A client starts a transaction, disconnects, reconnects with the same
-`lsid`, and continues. Both Mongo and DumboDB resume the same state
-(within Mongo's transaction lifetime).
+A client starts a transaction on one TCP connection, drops it, and
+opens a new one carrying the same `(lsid, txnNumber)`. Both Mongo and
+DumboDB resume the same server-side transaction.
+
+Implemented as a wire-level test (raw OP_MSG, caller-chosen `lsid`)
+because the MongoDB Driver Specification forbids drivers from accepting
+a caller-supplied `lsid`. See
+`dumbodb-parity-testing/tests/transaction_wire_test.go` and the
+`wire/` package.
 
 ```
-Client A (lsid: ABC): startTransaction
-Client A: insert {_id: 1, x: "before disconnect"}
-Client A: disconnect
-Client A (lsid: ABC): reconnect
-Client A: find {_id: 1} -> [{_id: 1}]
-Client A: commitTransaction
+conn1: insert {_id: "p6"} with lsid=L, txnNumber=1, startTransaction=true
+conn1: close
+conn2 (fresh TCP): find {_id: "p6"} with lsid=L, txnNumber=1
+  -> should see {_id: "p6"} (uncommitted, same txn)
+conn2: commitTransaction with lsid=L, txnNumber=1
+conn2: find {_id: "p6"} with a fresh lsid (no txn)
+  -> should see {_id: "p6"} (now committed)
 ```
 
 #### P7: Session timeout discards uncommitted state
@@ -804,19 +835,24 @@ Client A on mydb (main): doltCommit -> succeeds
 Client B on mydb (main): find {} -> now sees {_id: 1}
 ```
 
-#### D10: --session-isolation session reconnect preserves uncommitted state
+#### D10: --session-isolation session reconnect preserves uncommitted state (wire-level)
 
-In default mode this is covered by parity test P6. In --session-isolation
-mode the session can hold uncommitted writes across reconnect without
-ever being in a transaction -- a behavior Mongo doesn't have.
+In default mode the equivalent property is covered by the wire-level
+parity test P6. In `--session-isolation` mode the session can hold
+uncommitted writes across reconnect without ever being in a transaction
+-- a behavior Mongo has no analog for, so this is a DumboDB-only test.
+Like P6 it has to be implemented at the wire level (the driver won't let
+us pin an `lsid` across `*mongo.Client` instances).
 
 ```
 Server started with --session-isolation
-Client A (lsid: ABC): insert {_id: 1, x: "before disconnect"}
-Client A: disconnect (no doltCommit)
-Client A (lsid: ABC): reconnect
-Client A: find {_id: 1} -> [{_id: 1}]
-Client A: doltCommit -> succeeds
+conn1: insert {_id: 1, x: "before disconnect"} with lsid=L (no txn fields)
+conn1: close
+conn2 (fresh TCP): find {_id: 1} with lsid=L
+  -> should see {_id: 1} (uncommitted, same session's working set)
+conn2: doltCommit
+conn2: find {_id: 1} with a fresh lsid
+  -> should see {_id: 1}
 ```
 
 #### D11: Concurrent doltCommits -- serialization order
@@ -905,12 +941,16 @@ Client A: startTransaction -> error:
 
 | File | Change |
 |---|---|
-| `tests/session_isolation_test.go` | NEW: D1-D12 -- `--session-isolation` mode coverage (`doltCommit`, `doltConflicts`, `doltResolveConflict`, multi-branch isolation, fork-point pinning, concurrent commit serialization, abandoned-session cleanup, reconnect with uncommitted state). |
+| `tests/session_isolation_test.go` | NEW: D1-D9, D11, D12 -- `--session-isolation` mode coverage (`doltCommit`, `doltConflicts`, `doltResolveConflict`, multi-branch isolation, fork-point pinning, concurrent commit serialization, abandoned-session cleanup). |
+| `tests/session_isolation_wire_test.go` | NEW: D10 -- wire-level test for `--session-isolation` reconnect with uncommitted state (requires a caller-chosen `lsid`, so the driver won't work; see the parallel parity wire client). |
 | `tests/mode_flag_test.go` | NEW: D13 -- verify `startTransaction` rejected when server is launched with `--session-isolation`. |
 
 ### In dumbodb-parity-testing
 
 | File | Change |
 |---|---|
-| `tests/transaction_test.go` | NEW: P1-P5 -- `startTransaction` / `commitTransaction` / `abortTransaction`, read-your-own-writes inside a txn, pessimistic doc-lock conflict, non-conflicting concurrent txns. |
-| `tests/session_test.go` | NEW: P6-P8 -- `lsid` reconnect inside a transaction, session/transaction timeout discards uncommitted state, `endSession` discards uncommitted state. |
+| `tests/transaction_test.go` | DONE: P1-P5, P8 -- `startTransaction` / `commitTransaction` / `abortTransaction`, read-your-own-writes inside a txn, pessimistic doc-lock conflict, non-conflicting concurrent txns, `endSession` discards uncommitted state. |
+| `tests/transaction_wire_test.go` | DONE: P6 -- wire-level `lsid` reconnect across TCP connections (driver spec forbids caller-supplied `lsid`, so we speak raw OP_MSG). |
+| `wire/conn.go` | DONE: minimal OP_MSG client + UUID `lsid` generator. Shared infrastructure for any future wire-level parity tests. |
+| `harness/setup.go` | DONE: export `MongoURI()` / `DumboDBURI()` so wire tests can dial the same servers the driver-based tests do. |
+| `tests/session_test.go` | TODO: P7 -- session/transaction timeout discards uncommitted state. Default `transactionLifetimeLimitSeconds` is 60s; needs either a tunable server-side timeout or accepted wall-clock cost. |
