@@ -242,6 +242,12 @@ type Backend struct {
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
 
+	// provider is the dsess.DoltDatabaseProvider used to construct
+	// per-connection *dsess.DoltSession instances via internal/sqlctx. Owned
+	// here (one per process) so the keymutex used for transaction commit
+	// serialization is shared across sessions.
+	provider *dumbodbProvider
+
 	// flusherStop is closed by Close to signal the background flusher to
 	// drain any remaining dirty state and exit.
 	flusherStop chan struct{}
@@ -274,11 +280,17 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
+	provider, err := newDumbodbProvider(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("constructing dsess provider: %w", err)
+	}
+
 	b := &Backend{
 		dataDir:     dataDir,
 		l:           l,
 		autoCommit:  autoCommit,
 		dbs:         make(map[string]*dbState),
+		provider:    provider,
 		flusherStop: make(chan struct{}),
 		flusherDone: make(chan struct{}),
 	}
