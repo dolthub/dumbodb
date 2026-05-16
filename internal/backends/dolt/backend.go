@@ -248,12 +248,65 @@ type Backend struct {
 	// serialization is shared across sessions.
 	provider *dumbodbProvider
 
+	// docLocksMu guards docLocks. The DocLockManagers themselves are
+	// individually thread-safe; this mutex only protects map mutation.
+	docLocksMu sync.Mutex
+	// docLocks holds one DocLockManager per (db, branch) tuple, keyed by
+	// docLocksKey(db, branch). Lazily populated by docLockManager().
+	// Per session-isolation.md: pessimistic locking is Mongo-specific and
+	// lives in the DumboDB backend (not upstream in dsess).
+	docLocks map[string]*DocLockManager
+
 	// flusherStop is closed by Close to signal the background flusher to
 	// drain any remaining dirty state and exit.
 	flusherStop chan struct{}
 	// flusherDone is closed by the flusher goroutine when it exits, so Close
 	// can wait for the final drain to complete before tearing down dbs.
 	flusherDone chan struct{}
+}
+
+// docLocksKey is the key under which the DocLockManager for a given
+// (database, branch) tuple is stored in docLocks. Centralized so callers
+// don't construct it ad-hoc.
+func docLocksKey(db, branch string) string {
+	return db + "/" + branch
+}
+
+// docLockManager returns the DocLockManager for the given (db, branch),
+// lazily creating one on first lookup. Safe for concurrent callers.
+func (b *Backend) docLockManager(db, branch string) *DocLockManager {
+	key := docLocksKey(db, branch)
+
+	b.docLocksMu.Lock()
+	defer b.docLocksMu.Unlock()
+
+	m, ok := b.docLocks[key]
+	if !ok {
+		m = NewDocLockManager()
+		b.docLocks[key] = m
+	}
+	return m
+}
+
+// OnSessionEnd implements backends.SessionAwareBackend: releases every
+// document lock held by |owner| across every DocLockManager. Called by
+// the handler on Mongo's endSessions command (and eventually on session
+// timeout from the SessionRegistry).
+//
+// Idempotent: safe to call for owners that hold no locks.
+func (b *Backend) OnSessionEnd(owner string) {
+	b.docLocksMu.Lock()
+	managers := make([]*DocLockManager, 0, len(b.docLocks))
+	for _, m := range b.docLocks {
+		managers = append(managers, m)
+	}
+	b.docLocksMu.Unlock()
+
+	// Release each manager outside the docLocksMu so a manager's own
+	// internal mutex can be taken without holding the registry mutex.
+	for _, m := range managers {
+		m.Release(owner)
+	}
 }
 
 // lookupDbStateForDsess is the dbLookup callback the dsess provider uses to
@@ -307,6 +360,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool) (*Backend, erro
 		l:           l,
 		autoCommit:  autoCommit,
 		dbs:         make(map[string]*dbState),
+		docLocks:    make(map[string]*DocLockManager),
 		flusherStop: make(chan struct{}),
 		flusherDone: make(chan struct{}),
 	}

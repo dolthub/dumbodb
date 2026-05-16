@@ -21,6 +21,8 @@ import (
 	"github.com/FerretDB/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -80,7 +82,18 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 	)
 }
 
+// MsgEndSessions implements the `endSessions` command.
+//
+// Per the session-isolation design, the backend may hold per-session
+// state -- chiefly document locks for default-mode transactions -- keyed
+// by ConnInfo.Owner(). On endSessions we ask the backend to drop that
+// state via the optional SessionAwareBackend interface. Backends without
+// session state (the stub backend) need not implement it.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnSessionEnd(conninfo.Get(connCtx).Owner())
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
