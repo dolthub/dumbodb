@@ -42,6 +42,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/proxy"
+	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -411,11 +412,21 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		// decoded successfully already in [run] [wire.ReadMessage] [UnmarshalBinaryNocopy] [check]
 		doc := must.NotFail(msg.RawSection0().Decode())
 
-		_, err = bson.ToDocument(doc)
+		var typedDoc *types.Document
+		typedDoc, err = bson.ToDocument(doc)
 
 		connCtx, span = otel.Tracer("").Start(connCtx, "")
 
 		command = doc.Command()
+
+		// Extract the MongoDB lsid (if present) from every command and
+		// record it on the connection's ConnInfo so backend operations
+		// can key per-session state (e.g. document locks) by Owner().
+		// Doing this once at the wire layer covers every Msg* handler
+		// without each having to remember to plumb it.
+		if err == nil {
+			extractAndSetLSID(connCtx, typedDoc)
+		}
 
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
