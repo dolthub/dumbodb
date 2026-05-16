@@ -50,6 +50,14 @@ type ConnInfo struct {
 
 	rw sync.RWMutex
 
+	// inTransaction is true between a successful startTransaction and the
+	// matching commitTransaction/abortTransaction/endSessions. Backend
+	// write paths consult this to decide whether to route through the
+	// per-(owner, branch) pending working-set overlay (txn semantics) or
+	// the shared working set (implicit single-statement semantics).
+	// Protected by rw.
+	inTransaction bool
+
 	metadataRecv bool // protected by rw
 
 	// If true, backend implementations should not perform authentication
@@ -155,6 +163,27 @@ func (connInfo *ConnInfo) SetLSID(lsid string) {
 	connInfo.lsid = lsid
 }
 
+// InTransaction reports whether this connection is currently inside a
+// MongoDB transaction (between startTransaction and the matching
+// commit/abort/endSessions).
+func (connInfo *ConnInfo) InTransaction() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.inTransaction
+}
+
+// SetInTransaction records whether this connection is currently inside a
+// MongoDB transaction. The transaction handlers in the handler package
+// call this on startTransaction (true) and on
+// commit/abort/endSessions (false).
+func (connInfo *ConnInfo) SetInTransaction(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.inTransaction = v
+}
+
 // Owner returns a stable identifier for the entity that owns
 // session-scoped state on this connection: the MongoDB lsid when one is
 // present, otherwise a synthetic per-connection id derived from the
@@ -191,5 +220,21 @@ func Get(ctx context.Context) *ConnInfo {
 		panic("connInfo is set in context with nil value")
 	}
 
+	return connInfo
+}
+
+// GetIfPresent returns the ConnInfo from ctx, or nil if none is set.
+// Use this from code paths that may run under a background context (e.g.
+// capped-collection cleanup, deferred flush) where no client connection
+// is active.
+func GetIfPresent(ctx context.Context) *ConnInfo {
+	value := ctx.Value(connInfoKey)
+	if value == nil {
+		return nil
+	}
+	connInfo, ok := value.(*ConnInfo)
+	if !ok {
+		return nil
+	}
 	return connInfo
 }

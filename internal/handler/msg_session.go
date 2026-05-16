@@ -58,10 +58,23 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // MsgCommitTransaction implements the `commitTransaction` command.
 //
-// Since DumboDB does not support multi-document ACID transactions, this
-// is a no-op acknowledgement. Individual operations within a
-// "transaction" are applied immediately without isolation.
+// Merges the connection's per-(owner, branch) pending working-set overlay
+// into the committed working set across every open database, persists,
+// and releases any document locks the owner holds. The session exits
+// the in-transaction state.
+//
+// Calling commit when not in a transaction is harmless: the backend's
+// overlay is empty for this owner so nothing changes, and the lock
+// release is a no-op.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	ci := conninfo.Get(connCtx)
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		if err := sab.OnTransactionCommit(connCtx, ci.Owner()); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+	}
+	ci.SetInTransaction(false)
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
@@ -71,10 +84,16 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 
 // MsgAbortTransaction implements the `abortTransaction` command.
 //
-// Since DumboDB does not support multi-document ACID transactions, this
-// is a no-op acknowledgement. Operations already applied cannot be
-// rolled back.
+// Discards the connection's per-(owner, branch) pending working-set
+// overlay without touching the committed working set, releases the
+// owner's document locks, and exits the in-transaction state.
 func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	ci := conninfo.Get(connCtx)
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(ci.Owner())
+	}
+	ci.SetInTransaction(false)
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
@@ -85,14 +104,20 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 // MsgEndSessions implements the `endSessions` command.
 //
 // Per the session-isolation design, the backend may hold per-session
-// state -- chiefly document locks for default-mode transactions -- keyed
-// by ConnInfo.Owner(). On endSessions we ask the backend to drop that
-// state via the optional SessionAwareBackend interface. Backends without
-// session state (the stub backend) need not implement it.
+// state -- chiefly document locks and pending-transaction overlays --
+// keyed by ConnInfo.Owner(). On endSessions we ask the backend to drop
+// that state via the optional SessionAwareBackend interface. Backends
+// without session state (the stub backend) need not implement it.
+//
+// Any in-progress transaction on this connection is implicitly aborted:
+// pending writes are discarded, the in-transaction flag is cleared so
+// follow-up commands behave as new implicit sessions.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	ci := conninfo.Get(connCtx)
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
-		sab.OnSessionEnd(conninfo.Get(connCtx).Owner())
+		sab.OnSessionEnd(ci.Owner())
 	}
+	ci.SetInTransaction(false)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(

@@ -35,6 +35,7 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -341,9 +342,39 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 	return prolly.NewAddressMap(amNode, ns)
 }
 
-// getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
-// the doltDB if not already cached. The caller must hold state.mu (write lock).
+// getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it
+// from the doltDB if not already cached. The caller must hold state.mu
+// (write lock).
+//
+// When the calling connection is inside a MongoDB transaction (per
+// conninfo.InTransaction), this consults the per-(owner, branch) pending
+// overlay first so that in-txn reads see writes the same txn already
+// performed, and so reads do NOT see writes from other concurrent txns.
+// The pending entry is lazily snapshotted from the committed working set
+// on first in-txn read or write.
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	if owner, ok := ownerForTxn(ctx); ok {
+		if ws, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
+			return ws, nil
+		}
+		// Snapshot the current committed working set so this txn has a
+		// stable view independent of concurrent writers.
+		ws, err := state.loadCommittedWS(ctx, branch)
+		if err != nil {
+			return nil, err
+		}
+		state.pendingWS[pendingWSKey{owner, branch}] = ws
+		return ws, nil
+	}
+
+	return state.loadCommittedWS(ctx, branch)
+}
+
+// loadCommittedWS is the committed-path version of getOrInitBranchWS:
+// returns the shared working set for branch, loading from disk if needed
+// and caching the result in state.workingSets. Callers that intend to
+// route through the txn overlay should use getOrInitBranchWS.
+func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
 	if ws, ok := state.workingSets[branch]; ok {
 		return ws, nil
 	}
@@ -359,6 +390,53 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 	}
 	state.workingSets[branch] = ws
 	return ws, nil
+}
+
+// ownerForTxn returns the in-transaction owner string for ctx, or "", false
+// if ctx is not associated with an active transaction. Tolerates contexts
+// with no ConnInfo (background loops, capped-cleanup) by returning false.
+func ownerForTxn(ctx context.Context) (string, bool) {
+	ci := conninfo.GetIfPresent(ctx)
+	if ci == nil || !ci.InTransaction() {
+		return "", false
+	}
+	return ci.Owner(), true
+}
+
+// commitPendingForOwner merges every (owner, branch) entry in pendingWS
+// into the committed workingSets and persists each to disk. Used by
+// commitTransaction. Caller must hold state.mu (write lock).
+//
+// Returns the list of branches that received a merge so callers can
+// participate in autoCommit / log lines.
+func (state *dbState) commitPendingForOwner(ctx context.Context, owner string) ([]string, error) {
+	var branches []string
+	for key, ws := range state.pendingWS {
+		if key.owner != owner {
+			continue
+		}
+		state.workingSets[key.branch] = ws
+		if err := updateWorkingSet(ctx, state.doltDB, ws, key.branch); err != nil {
+			return branches, fmt.Errorf("commitTransaction: persisting working set for %q: %w", key.branch, err)
+		}
+		if state.dirtyBranches != nil {
+			delete(state.dirtyBranches, key.branch)
+		}
+		delete(state.pendingWS, key)
+		branches = append(branches, key.branch)
+	}
+	return branches, nil
+}
+
+// abortPendingForOwner discards every (owner, branch) entry in pendingWS
+// without touching the committed workingSets. Used by abortTransaction
+// and by OnSessionEnd. Caller must hold state.mu (write lock).
+func (state *dbState) abortPendingForOwner(owner string) {
+	for key := range state.pendingWS {
+		if key.owner == owner {
+			delete(state.pendingWS, key)
+		}
+	}
 }
 
 // headRootValueForBranch returns the doltdb.RootValue at the HEAD of branch.
@@ -391,6 +469,13 @@ func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (pr
 // stores the updated WorkingSet in state, and persists it via doltDB unless
 // skipSync is true (in which case the branch is marked dirty for later flush).
 // The caller must hold state.mu (write lock).
+//
+// When the calling connection is inside a MongoDB transaction (per
+// conninfo.InTransaction), the updated WorkingSet is written into the
+// per-(owner, branch) pending overlay instead of state.workingSets, and
+// is NOT persisted to disk. The overlay is merged into state.workingSets
+// on commitTransaction; the writes become visible to other connections
+// only at that point. abortTransaction discards the overlay.
 func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn func(doltdb.RootValue) (doltdb.RootValue, error), skipSync bool) error {
 	ws, err := state.getOrInitBranchWS(ctx, branch)
 	if err != nil {
@@ -412,6 +497,15 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 	}
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
+
+	// Inside a MongoDB transaction: writes accumulate in the per-(owner,
+	// branch) overlay and are not visible to other connections (and not
+	// persisted) until commitTransaction.
+	if owner, ok := ownerForTxn(ctx); ok {
+		state.pendingWS[pendingWSKey{owner, branch}] = newWS
+		return nil
+	}
+
 	state.workingSets[branch] = newWS
 
 	if skipSync {

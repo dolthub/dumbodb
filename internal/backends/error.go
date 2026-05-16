@@ -15,6 +15,7 @@
 package backends
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -37,6 +38,11 @@ const (
 	ErrorCodeInsertDuplicateID
 
 	ErrorCodeReadOnlyDatabase
+
+	// ErrorCodeWriteConflict is returned when a default-mode MongoDB
+	// transaction tries to write to a document already locked by another
+	// transaction. Handlers translate it to MongoDB wire error code 112.
+	ErrorCodeWriteConflict
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.
@@ -72,15 +78,16 @@ func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)
 }
 
-// ErrorCodeIs returns true if err is *Error with one of the given error codes.
+// ErrorCodeIs returns true if err (or any error it wraps) is *Error with
+// one of the given error codes. Walks the error chain via errors.As so
+// callers that wrap with lazyerrors / fmt.Errorf / similar still match.
 //
 // At least one error code must be given.
 func ErrorCodeIs(err error, code ErrorCode, codes ...ErrorCode) bool {
-	e, ok := err.(*Error) //nolint:errorlint // do not inspect error chain
-	if !ok {
+	var e *Error
+	if !errors.As(err, &e) {
 		return false
 	}
-
 	return e.code == code || slices.Contains(codes, e.code)
 }
 

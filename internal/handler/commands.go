@@ -334,8 +334,8 @@ func (h *Handler) initCommands() {
 			Help:      "Creates a new server session.",
 		},
 		"commitTransaction": {
-			Handler: h.msgTransactionsNotSupported,
-			Help:    "Commits a transaction (no-op: transactions are not isolated).",
+			Handler: h.MsgCommitTransaction,
+			Help:    "Commits a MongoDB transaction.",
 		},
 		"createSearchIndexes": {
 			Handler: h.MsgCreateSearchIndexes,
@@ -354,8 +354,8 @@ func (h *Handler) initCommands() {
 			Help:    "Updates an Atlas Search index (not supported).",
 		},
 		"abortTransaction": {
-			Handler: h.msgTransactionsNotSupported,
-			Help:    "Aborts a transaction (no-op: operations cannot be rolled back).",
+			Handler: h.MsgAbortTransaction,
+			Help:    "Aborts a MongoDB transaction.",
 		},
 		"endSessions": {
 			Handler:   h.MsgEndSessions,

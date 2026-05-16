@@ -184,6 +184,9 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 				"cannot write to a read-only database snapshot",
 			)
 		}
+		if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+			return 0, common.TranslateBackendWriteError(err)
+		}
 		return 0, lazyerrors.Error(err)
 	}
 

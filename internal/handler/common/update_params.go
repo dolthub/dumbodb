@@ -42,6 +42,7 @@ type UpdateParams struct {
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
 	LSID                     any             `dumbo:"lsid,ignored"`
 	TxnNumber                int64           `dumbo:"txnNumber,ignored"`
+	StartTransaction         bool            `dumbo:"startTransaction,ignored"`
 	Autocommit               bool            `dumbo:"autocommit,ignored"`
 	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
 	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`

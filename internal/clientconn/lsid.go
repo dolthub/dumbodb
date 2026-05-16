@@ -59,3 +59,32 @@ func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 
 	conninfo.Get(ctx).SetLSID(hex.EncodeToString(bin.B))
 }
+
+// extractAndSetTransactionFlag inspects a decoded command for the
+// MongoDB wire-protocol fields that mark a transaction boundary and
+// updates ConnInfo.SetInTransaction accordingly.
+//
+// MongoDB does not expose a separate startTransaction command at the
+// wire level. Drivers tag the FIRST command in a transaction with
+// `startTransaction: true` (alongside `autocommit: false` and the
+// session's `txnNumber`). Every subsequent command in the same txn
+// carries autocommit: false and the same txnNumber, but without
+// startTransaction.
+//
+// The dedicated `commitTransaction` / `abortTransaction` commands clear
+// the flag from their own handlers (msg_session.go); this function only
+// flips the flag on when a fresh transaction starts.
+func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) {
+	if doc == nil || !doc.Has("startTransaction") {
+		return
+	}
+	v, err := doc.Get("startTransaction")
+	if err != nil {
+		return
+	}
+	// MongoDB sends startTransaction as a bool; tolerate other types
+	// defensively.
+	if b, ok := v.(bool); ok && b {
+		conninfo.Get(ctx).SetInTransaction(true)
+	}
+}

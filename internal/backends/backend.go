@@ -77,6 +77,32 @@ func (bc *backendContract) Close() {
 	resource.Untrack(bc, bc.token)
 }
 
+// OnSessionEnd / OnTransactionCommit / OnTransactionAbort delegate to the
+// wrapped backend when (and only when) it implements
+// SessionAwareBackend. The contract wrapper itself implements
+// SessionAwareBackend unconditionally so handlers can type-assert
+// against the wrapper -- backends that hold no per-session state get
+// no-op delegation.
+
+func (bc *backendContract) OnSessionEnd(owner string) {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		sab.OnSessionEnd(owner)
+	}
+}
+
+func (bc *backendContract) OnTransactionCommit(ctx context.Context, owner string) error {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		return sab.OnTransactionCommit(ctx, owner)
+	}
+	return nil
+}
+
+func (bc *backendContract) OnTransactionAbort(owner string) {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		sab.OnTransactionAbort(owner)
+	}
+}
+
 type StatusParams struct{}
 
 type StatusResult struct {

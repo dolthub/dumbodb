@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/google/uuid"
@@ -58,6 +59,9 @@ func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
 // The caller must hold at least state.mu.RLock().
 func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.AddressMap, error) {
 	if db.rootish == defaultBranch {
+		if ws, ok := txnVisibleWS(ctx, state, defaultBranch); ok {
+			return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
+		}
 		ws := state.workingSets[defaultBranch]
 		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
@@ -67,10 +71,28 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	if tagDS, tagErr := state.datasDB.GetDataset(ctx, "refs/tags/"+db.rootish); tagErr == nil && tagDS.HasHead() {
 		return amFromRootish(ctx, state, db.rootish)
 	}
+	if ws, ok := txnVisibleWS(ctx, state, db.rootish); ok {
+		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
+	}
 	if ws, ok := state.workingSets[db.rootish]; ok {
 		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
 	return amFromRootish(ctx, state, db.rootish)
+}
+
+// txnVisibleWS returns the per-(owner, branch) pending overlay if the
+// caller's context is inside a Mongo transaction AND the overlay has an
+// entry for this (owner, branch). Used by read paths that hold state.mu
+// only with a read lock: it never mutates state.pendingWS, so an RLock
+// is sufficient. Read-after-write inside a txn relies on the write path
+// having already populated the overlay.
+func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
+	owner, inTxn := ownerForTxn(ctx)
+	if !inTxn {
+		return nil, false
+	}
+	ws, ok := state.pendingWS[pendingWSKey{owner, branch}]
+	return ws, ok
 }
 
 func (db *database) Collection(name string) (backends.Collection, error) {

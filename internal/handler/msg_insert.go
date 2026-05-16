@@ -253,6 +253,10 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				)
 			}
 
+			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+				return nil, common.TranslateBackendWriteError(err)
+			}
+
 			if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
 				return nil, lazyerrors.Error(err)
 			}

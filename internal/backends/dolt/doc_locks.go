@@ -15,10 +15,15 @@
 package dolt
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/dolthub/dolt/go/store/hash"
+
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // ErrWriteConflict is the sentinel returned by DocLockManager.Acquire when
@@ -110,6 +115,98 @@ func (m *DocLockManager) Release(owner string) {
 			delete(m.locks, coll)
 		}
 	}
+}
+
+// acquireTxnLocks is the in-write-path helper that performs the
+// pessimistic per-doc lock acquisition for default-mode MongoDB
+// transactions. Call sites pass the resolved set of doc id hashes the
+// operation will touch; the helper acquires them all-or-nothing on the
+// (db, branch)-scoped DocLockManager and returns a backends.NewError(
+// ErrorCodeWriteConflict) when any id is already held by another owner.
+//
+// When the connection is not in a transaction (no startTransaction has
+// been seen), the function is a no-op -- non-txn writes flow through
+// existing dbState mutex serialization without taking per-doc locks,
+// matching the design's "implicit single-statement transactions".
+func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash) error {
+	owner, inTxn := ownerForTxn(ctx)
+	if !inTxn || len(ids) == 0 {
+		return nil
+	}
+	mgr := b.docLockManager(db, branch)
+	if err := mgr.Acquire(owner, collection, ids); err != nil {
+		if errors.Is(err, ErrWriteConflict) {
+			return backends.NewError(backends.ErrorCodeWriteConflict, err)
+		}
+		return err
+	}
+	return nil
+}
+
+// idsFromDocs hashes the _id of each document and returns the resulting
+// hash list. Used by acquireInsertLocks / acquireUpdateLocks where the
+// caller already has the documents in hand.
+func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
+	out := make([]hash.Hash, 0, len(docs))
+	for _, d := range docs {
+		idVal, err := d.Get("_id")
+		if err != nil {
+			return nil, fmt.Errorf("document missing _id: %w", err)
+		}
+		h, err := hashID(idVal)
+		if err != nil {
+			return nil, fmt.Errorf("hashing _id: %w", err)
+		}
+		out = append(out, hashFromArray(h))
+	}
+	return out, nil
+}
+
+// idsFromValues hashes a list of raw _id values. Used by
+// acquireDeleteLocks where the handler already resolved the filter.
+func idsFromValues(idVals []any) ([]hash.Hash, error) {
+	out := make([]hash.Hash, 0, len(idVals))
+	for _, v := range idVals {
+		h, err := hashID(v)
+		if err != nil {
+			return nil, fmt.Errorf("hashing _id: %w", err)
+		}
+		out = append(out, hashFromArray(h))
+	}
+	return out, nil
+}
+
+func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Document) error {
+	if _, inTxn := ownerForTxn(ctx); !inTxn {
+		return nil
+	}
+	ids, err := idsFromDocs(docs)
+	if err != nil {
+		return err
+	}
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+}
+
+func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Document) error {
+	if _, inTxn := ownerForTxn(ctx); !inTxn {
+		return nil
+	}
+	ids, err := idsFromDocs(docs)
+	if err != nil {
+		return err
+	}
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+}
+
+func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error {
+	if _, inTxn := ownerForTxn(ctx); !inTxn {
+		return nil
+	}
+	ids, err := idsFromValues(idVals)
+	if err != nil {
+		return err
+	}
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
 }
 
 // Holds reports whether |owner| currently holds a lock on |id| in

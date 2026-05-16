@@ -131,9 +131,17 @@ type dbState struct {
 	doltDB  *doltdb.DoltDB
 	datasDB datas.Database
 
-	// workingSets is the per-branch in-progress state. Each value is the session's
-	// current working root; the isolation unit for both writes and reads.
+	// workingSets is the per-branch in-progress state. Each value is the
+	// committed view of the working root that connections without an active
+	// transaction see.
 	workingSets map[string]*doltdb.WorkingSet
+
+	// pendingWS is the per-(owner, branch) transaction overlay. Connections
+	// inside a MongoDB transaction read and write through this overlay
+	// instead of the shared workingSets above; on commit the overlay is
+	// merged back into workingSets, on abort it is discarded. The owner is
+	// conninfo.ConnInfo.Owner() (lsid hex or synthetic conn id).
+	pendingWS map[pendingWSKey]*doltdb.WorkingSet
 
 	uuids        map[string]string
 	indexes      map[string][]backends.IndexInfo
@@ -149,6 +157,13 @@ type dbState struct {
 	emptyIndexAM   prolly.AddressMap
 	mergeState     *mergeInProgress
 	dirtyBranches  map[string]struct{}
+}
+
+// pendingWSKey identifies a per-(owner, branch) entry in dbState.pendingWS.
+// The owner is conninfo.Owner(); branch is the rootish branch name.
+type pendingWSKey struct {
+	owner  string
+	branch string
 }
 
 func (s *dbState) workingSet(branch string) (*doltdb.WorkingSet, bool) {
@@ -289,12 +304,70 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 }
 
 // OnSessionEnd implements backends.SessionAwareBackend: releases every
-// document lock held by |owner| across every DocLockManager. Called by
-// the handler on Mongo's endSessions command (and eventually on session
-// timeout from the SessionRegistry).
+// document lock held by |owner| AND discards any pending transaction
+// overlays the owner holds. Called by the handler on Mongo's endSessions
+// command (and eventually on session timeout from the SessionRegistry).
 //
-// Idempotent: safe to call for owners that hold no locks.
+// Idempotent: safe to call for owners that hold no state.
 func (b *Backend) OnSessionEnd(owner string) {
+	b.releaseLocksForOwner(owner)
+	b.abortPendingForOwner(owner)
+}
+
+// OnTransactionCommit implements backends.SessionAwareBackend: merges
+// every pending (owner, branch) overlay into the committed working set,
+// persists each branch, then releases the owner's doc locks. Called by
+// the handler on commitTransaction.
+func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
+	b.mu.RLock()
+	dbs := make([]*dbState, 0, len(b.dbs))
+	for _, db := range b.dbs {
+		dbs = append(dbs, db)
+	}
+	b.mu.RUnlock()
+
+	var firstErr error
+	for _, db := range dbs {
+		db.mu.Lock()
+		_, err := db.commitPendingForOwner(ctx, owner)
+		db.mu.Unlock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	b.releaseLocksForOwner(owner)
+	return firstErr
+}
+
+// OnTransactionAbort implements backends.SessionAwareBackend: discards
+// every pending (owner, branch) overlay without touching the committed
+// working set, then releases the owner's doc locks. Called by the
+// handler on abortTransaction.
+func (b *Backend) OnTransactionAbort(owner string) {
+	b.abortPendingForOwner(owner)
+	b.releaseLocksForOwner(owner)
+}
+
+// abortPendingForOwner walks every open dbState and drops the owner's
+// pending overlay entries. Used by both abort and end-session paths.
+func (b *Backend) abortPendingForOwner(owner string) {
+	b.mu.RLock()
+	dbs := make([]*dbState, 0, len(b.dbs))
+	for _, db := range b.dbs {
+		dbs = append(dbs, db)
+	}
+	b.mu.RUnlock()
+
+	for _, db := range dbs {
+		db.mu.Lock()
+		db.abortPendingForOwner(owner)
+		db.mu.Unlock()
+	}
+}
+
+// releaseLocksForOwner is the OnSessionEnd lock-release path extracted so
+// commit / abort / end-session can all reuse it.
+func (b *Backend) releaseLocksForOwner(owner string) {
 	b.docLocksMu.Lock()
 	managers := make([]*DocLockManager, 0, len(b.docLocks))
 	for _, m := range b.docLocks {
@@ -302,8 +375,8 @@ func (b *Backend) OnSessionEnd(owner string) {
 	}
 	b.docLocksMu.Unlock()
 
-	// Release each manager outside the docLocksMu so a manager's own
-	// internal mutex can be taken without holding the registry mutex.
+	// Release outside docLocksMu so the per-manager mutex can be taken
+	// without holding the registry mutex.
 	for _, m := range managers {
 		m.Release(owner)
 	}
@@ -887,6 +960,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		doltDB:         doltDB,
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
+		pendingWS:      map[pendingWSKey]*doltdb.WorkingSet{},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),

@@ -61,6 +61,19 @@ func TestOwnerFallsBackToConnSyntheticID(t *testing.T) {
 	assert.NotEqual(t, o1a, o2, "Owner must distinguish different connections")
 }
 
+// TestInTransactionRoundTrip verifies set/get on the transaction flag,
+// including that it defaults to false on a fresh connection.
+func TestInTransactionRoundTrip(t *testing.T) {
+	c := New()
+	assert.False(t, c.InTransaction(), "fresh ConnInfo must default to not-in-transaction")
+
+	c.SetInTransaction(true)
+	assert.True(t, c.InTransaction())
+
+	c.SetInTransaction(false)
+	assert.False(t, c.InTransaction())
+}
+
 // TestSetLSIDOverridesFallback verifies that once an lsid arrives, the
 // Owner switches from synthetic-conn to the lsid. This matches the wire-
 // protocol expectation: the first command may not carry lsid (older drivers,

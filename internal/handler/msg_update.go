@@ -147,6 +147,9 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 					"cannot write to a read-only database snapshot",
 				)
 			}
+			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+				return 0, 0, nil, common.TranslateBackendWriteError(err)
+			}
 			return 0, 0, nil, lazyerrors.Error(err)
 		}
 
