@@ -16,6 +16,8 @@ package dolt
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -34,7 +36,7 @@ import (
 // database) because the provider+NewSession path is independent of that
 // machinery and we don't want unrelated startup work in a unit test.
 func TestBackendNewSessionConstructs(t *testing.T) {
-	provider, err := newDumbodbProvider(t.TempDir())
+	provider, err := newDumbodbProvider(t.TempDir(), func(string) (*dbState, bool) { return nil, false })
 	require.NoError(t, err)
 	b := &Backend{provider: provider}
 
@@ -56,13 +58,34 @@ func TestBackendNewSessionConstructs(t *testing.T) {
 	assert.Nil(t, state)
 }
 
+// TestSessionLookupDbStateResolvesRealDb exercises the provider's
+// SessionDatabase / LookupDbState path against a real Backend with the
+// admin database initialized. This is the .2.6 acceptance point (1):
+// "dumbodbProvider.SessionDatabase returns a working dsess.SqlDatabase
+// for known db names."
+func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	sess := be.NewSession()
+	sqlCtx := sqlctx.Wrap(context.Background(), sess)
+
+	// "admin" is initialized by newBackend; LookupDbState must resolve it.
+	state, found, err := sess.LookupDbState(sqlCtx, "admin")
+	require.NoError(t, err)
+	require.True(t, found, "admin database should be resolvable via LookupDbState")
+	require.NotNil(t, state)
+	require.NotNil(t, state.WorkingRoot(), "branchState must have a working root")
+}
+
 // TestProviderSurface verifies the parts of the provider that have real
 // implementations (rather than not-found stubs) return sensible values.
 // FileSystem and TxLocks back the lifecycle pieces that dsess uses
 // internally, so they need to be non-nil even before SessionDatabase et al
 // are filled in.
 func TestProviderSurface(t *testing.T) {
-	provider, err := newDumbodbProvider(t.TempDir())
+	provider, err := newDumbodbProvider(t.TempDir(), func(string) (*dbState, bool) { return nil, false })
 	require.NoError(t, err)
 
 	require.NotNil(t, provider.FileSystem(), "FileSystem must not be nil; dsess accesses it during construction")

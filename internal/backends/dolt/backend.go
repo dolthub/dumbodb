@@ -256,6 +256,17 @@ type Backend struct {
 	flusherDone chan struct{}
 }
 
+// lookupDbStateForDsess is the dbLookup callback the dsess provider uses to
+// resolve database names to existing dbStates. It only finds already-open
+// databases (no auto-create on read-through), so callers must have routed
+// through getOrOpenDB first.
+func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	state, ok := b.dbs[name]
+	return state, ok
+}
+
 // deferredFlushInterval is how often the backend drains per-database dirty
 // state from writeConcern j:false / w:0 writes into the dolt working set
 // (and thus through the NBS journal fsync). A short-enough interval keeps
@@ -276,13 +287,19 @@ func parseAuthorString(author string) (name, email string) {
 // When autoCommit is true, every document write (insert/update/delete) is
 // automatically committed to Dolt history without an explicit doltCommit call.
 func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backend, error) {
+	b, err := newBackend(dataDir, l, autoCommit)
+	if err != nil {
+		return nil, err
+	}
+	return backends.BackendContract(b), nil
+}
+
+// newBackend is the inner constructor that returns the concrete *Backend.
+// Useful from in-package tests that need access to Backend-specific fields
+// without going through the BackendContract wrapper.
+func newBackend(dataDir string, l *slog.Logger, autoCommit bool) (*Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
-	}
-
-	provider, err := newDumbodbProvider(dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("constructing dsess provider: %w", err)
 	}
 
 	b := &Backend{
@@ -290,10 +307,17 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 		l:           l,
 		autoCommit:  autoCommit,
 		dbs:         make(map[string]*dbState),
-		provider:    provider,
 		flusherStop: make(chan struct{}),
 		flusherDone: make(chan struct{}),
 	}
+
+	// The dsess provider looks up dbStates via Backend.dbs; we hand it a
+	// closure so the provider package does not need to know about dbs.
+	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
+	if err != nil {
+		return nil, fmt.Errorf("constructing dsess provider: %w", err)
+	}
+	b.provider = provider
 
 	// Initialize the admin database so it always exists on disk, matching
 	// MongoDB's behavior where the admin database is always present even when
@@ -306,7 +330,7 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 
 	go b.deferredFlushLoop()
 
-	return backends.BackendContract(b), nil
+	return b, nil
 }
 
 // deferredFlushLoop drains dbState.dirtyBranches on every database at a fixed
