@@ -17,6 +17,7 @@ package conninfo
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
 
@@ -39,6 +40,13 @@ type ConnInfo struct {
 
 	username string // protected by rw
 	password string // protected by rw
+
+	// lsid is the MongoDB logical session ID (UUID string) attached to the
+	// most recent command on this connection. Wire-protocol handlers set it
+	// via SetLSID; the backend reads it via LSID() to key per-session state
+	// (e.g. document locks for default-mode transactions).
+	// Empty until the first command that carries an lsid arrives. Protected by rw.
+	lsid string
 
 	rw sync.RWMutex
 
@@ -126,6 +134,41 @@ func (connInfo *ConnInfo) BypassBackendAuth() bool {
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.bypassBackendAuth
+}
+
+// LSID returns the MongoDB logical session ID most recently set on this
+// connection, or "" if no command carrying an lsid has arrived yet.
+func (connInfo *ConnInfo) LSID() string {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.lsid
+}
+
+// SetLSID records the lsid carried on the current command. Handlers call
+// this on every command parse so the backend can resolve the owning
+// session for per-session state (e.g. document locks).
+func (connInfo *ConnInfo) SetLSID(lsid string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.lsid = lsid
+}
+
+// Owner returns a stable identifier for the entity that owns
+// session-scoped state on this connection: the MongoDB lsid when one is
+// present, otherwise a synthetic per-connection id derived from the
+// ConnInfo's memory address. The fallback lets us key per-session state
+// (like document locks) before lsid-aware command parsing lands, and
+// keeps drivers that talk to DumboDB without explicit sessions working.
+//
+// The "conn:" prefix on the fallback makes it unambiguous in logs that
+// this is not a real lsid.
+func (connInfo *ConnInfo) Owner() string {
+	if id := connInfo.LSID(); id != "" {
+		return id
+	}
+	return fmt.Sprintf("conn:%p", connInfo)
 }
 
 // Ctx returns a derived context with the given ConnInfo.
