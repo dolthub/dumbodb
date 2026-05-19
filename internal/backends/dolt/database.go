@@ -80,12 +80,6 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	return amFromRootish(ctx, state, db.rootish)
 }
 
-// txnVisibleWS returns the per-(owner, branch) pending overlay if the
-// caller's context is inside a Mongo transaction AND the overlay has an
-// entry for this (owner, branch). Used by read paths that hold state.mu
-// only with a read lock: it never mutates state.pendingWS, so an RLock
-// is sufficient. Read-after-write inside a txn relies on the write path
-// having already populated the overlay.
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
 	owner, inTxn := ownerForTxn(ctx)
 	if !inTxn {

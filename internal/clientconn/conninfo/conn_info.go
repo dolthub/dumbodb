@@ -41,22 +41,11 @@ type ConnInfo struct {
 	username string // protected by rw
 	password string // protected by rw
 
-	// lsid is the MongoDB logical session ID (UUID string) attached to the
-	// most recent command on this connection. Wire-protocol handlers set it
-	// via SetLSID; the backend reads it via LSID() to key per-session state
-	// (e.g. document locks for default-mode transactions).
-	// Empty until the first command that carries an lsid arrives. Protected by rw.
-	lsid string
+	lsid string // protected by rw
 
 	rw sync.RWMutex
 
-	// inTransaction is true between a successful startTransaction and the
-	// matching commitTransaction/abortTransaction/endSessions. Backend
-	// write paths consult this to decide whether to route through the
-	// per-(owner, branch) pending working-set overlay (txn semantics) or
-	// the shared working set (implicit single-statement semantics).
-	// Protected by rw.
-	inTransaction bool
+	inTransaction bool // protected by rw
 
 	metadataRecv bool // protected by rw
 
@@ -144,8 +133,6 @@ func (connInfo *ConnInfo) BypassBackendAuth() bool {
 	return connInfo.bypassBackendAuth
 }
 
-// LSID returns the MongoDB logical session ID most recently set on this
-// connection, or "" if no command carrying an lsid has arrived yet.
 func (connInfo *ConnInfo) LSID() string {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -153,9 +140,6 @@ func (connInfo *ConnInfo) LSID() string {
 	return connInfo.lsid
 }
 
-// SetLSID records the lsid carried on the current command. Handlers call
-// this on every command parse so the backend can resolve the owning
-// session for per-session state (e.g. document locks).
 func (connInfo *ConnInfo) SetLSID(lsid string) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -163,9 +147,6 @@ func (connInfo *ConnInfo) SetLSID(lsid string) {
 	connInfo.lsid = lsid
 }
 
-// InTransaction reports whether this connection is currently inside a
-// MongoDB transaction (between startTransaction and the matching
-// commit/abort/endSessions).
 func (connInfo *ConnInfo) InTransaction() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -173,10 +154,6 @@ func (connInfo *ConnInfo) InTransaction() bool {
 	return connInfo.inTransaction
 }
 
-// SetInTransaction records whether this connection is currently inside a
-// MongoDB transaction. The transaction handlers in the handler package
-// call this on startTransaction (true) and on
-// commit/abort/endSessions (false).
 func (connInfo *ConnInfo) SetInTransaction(v bool) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -184,15 +161,6 @@ func (connInfo *ConnInfo) SetInTransaction(v bool) {
 	connInfo.inTransaction = v
 }
 
-// Owner returns a stable identifier for the entity that owns
-// session-scoped state on this connection: the MongoDB lsid when one is
-// present, otherwise a synthetic per-connection id derived from the
-// ConnInfo's memory address. The fallback lets us key per-session state
-// (like document locks) before lsid-aware command parsing lands, and
-// keeps drivers that talk to DumboDB without explicit sessions working.
-//
-// The "conn:" prefix on the fallback makes it unambiguous in logs that
-// this is not a real lsid.
 func (connInfo *ConnInfo) Owner() string {
 	if id := connInfo.LSID(); id != "" {
 		return id
@@ -223,10 +191,6 @@ func Get(ctx context.Context) *ConnInfo {
 	return connInfo
 }
 
-// GetIfPresent returns the ConnInfo from ctx, or nil if none is set.
-// Use this from code paths that may run under a background context (e.g.
-// capped-collection cleanup, deferred flush) where no client connection
-// is active.
 func GetIfPresent(ctx context.Context) *ConnInfo {
 	value := ctx.Value(connInfoKey)
 	if value == nil {

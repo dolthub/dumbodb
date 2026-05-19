@@ -31,9 +31,6 @@ import (
 	"github.com/dolthub/dolt/go/store/types"
 )
 
-// stubProvider satisfies dsess.DoltDatabaseProvider with no databases. Models
-// dolt's own emptyRevisionDatabaseProvider; only enough is implemented to let
-// DefaultSession construct and LookupDbState return a clean not-found.
 type stubProvider struct {
 	sql.DatabaseProvider
 }
@@ -74,9 +71,6 @@ func (stubProvider) RevisionDbState(_ *sql.Context, revDB string) (dsess.Initial
 func (stubProvider) EngineOverrides() sql.EngineOverrides { return sql.EngineOverrides{} }
 func (stubProvider) TxLocks() keymutex.Keymutex           { return keymutex.NewMapped() }
 
-// TestNewSessionConstructs verifies that NewSession returns a valid DoltSession
-// from a stub provider. This is the minimum integration boundary: dsess is
-// importable, can be constructed, and produces a sql.Session-compatible value.
 func TestNewSessionConstructs(t *testing.T) {
 	sess := NewSession(stubProvider{}, nil)
 	require.NotNil(t, sess)
@@ -84,8 +78,6 @@ func TestNewSessionConstructs(t *testing.T) {
 	var _ sql.Session = sess
 }
 
-// TestWrapProducesContext verifies that Wrap produces a *sql.Context whose
-// Session is the supplied DoltSession.
 func TestWrapProducesContext(t *testing.T) {
 	sess := NewSession(stubProvider{}, nil)
 	sqlCtx := Wrap(context.Background(), sess)
@@ -94,12 +86,6 @@ func TestWrapProducesContext(t *testing.T) {
 	require.Same(t, sess, dsess.DSessFromSess(sqlCtx.Session))
 }
 
-// TestNewOneShotSmokeLookupDbState exercises a smoke call into
-// dsess.LookupDbState through the shim. The stub provider has no databases,
-// so the call should propagate sql.ErrDatabaseNotFound -- proving the call
-// path threads correctly into dsess. Once a real backend adapter lands
-// (.2.2), an integration test in that package will exercise the same path
-// against a populated provider and read an actual working set.
 func TestNewOneShotSmokeLookupDbState(t *testing.T) {
 	sqlCtx, sess := New(context.Background(), stubProvider{}, nil)
 	require.NotNil(t, sqlCtx)

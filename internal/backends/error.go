@@ -39,9 +39,6 @@ const (
 
 	ErrorCodeReadOnlyDatabase
 
-	// ErrorCodeWriteConflict is returned when a default-mode MongoDB
-	// transaction tries to write to a document already locked by another
-	// transaction. Handlers translate it to MongoDB wire error code 112.
 	ErrorCodeWriteConflict
 )
 
@@ -78,9 +75,9 @@ func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)
 }
 
-// ErrorCodeIs returns true if err (or any error it wraps) is *Error with
-// one of the given error codes. Walks the error chain via errors.As so
-// callers that wrap with lazyerrors / fmt.Errorf / similar still match.
+// ErrorCodeIs reports whether err (or any error it wraps) is *Error with one
+// of the given error codes. Uses errors.As, so callers that wrap with
+// lazyerrors / fmt.Errorf still match.
 //
 // At least one error code must be given.
 func ErrorCodeIs(err error, code ErrorCode, codes ...ErrorCode) bool {

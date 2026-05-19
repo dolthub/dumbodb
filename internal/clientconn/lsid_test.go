@@ -25,15 +25,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// makeCtx returns a fresh ctx with an empty ConnInfo. The ConnInfo is
-// returned alongside so tests can inspect what was set.
 func makeCtx() (context.Context, *conninfo.ConnInfo) {
 	ci := conninfo.New()
 	return conninfo.Ctx(context.Background(), ci), ci
 }
 
-// docWithLSID builds a decoded command document carrying the standard
-// MongoDB lsid shape: { lsid: { id: BinData(4, ...) } }.
 func docWithLSID(uuidBytes []byte) *types.Document {
 	lsidSub := types.MakeDocument(1)
 	lsidSub.Set("id", types.Binary{B: uuidBytes, Subtype: types.BinaryUUID})
@@ -43,8 +39,6 @@ func docWithLSID(uuidBytes []byte) *types.Document {
 	return cmd
 }
 
-// TestExtractAndSetLSIDWithUUID verifies the happy path: a command carrying
-// the standard lsid shape is hex-encoded onto the ConnInfo's lsid field.
 func TestExtractAndSetLSIDWithUUID(t *testing.T) {
 	ctx, ci := makeCtx()
 	uuid := []byte{
@@ -55,9 +49,6 @@ func TestExtractAndSetLSIDWithUUID(t *testing.T) {
 	assert.Equal(t, "0102030405060708090a0b0c0d0e0f10", ci.LSID())
 }
 
-// TestExtractAndSetLSIDNoLSIDIsNoop -- a command without lsid (hello,
-// isMaster, mongosh without explicit session) must not panic and must not
-// alter the lsid on the connection.
 func TestExtractAndSetLSIDNoLSIDIsNoop(t *testing.T) {
 	ctx, ci := makeCtx()
 	cmd := types.MakeDocument(1)
@@ -65,12 +56,9 @@ func TestExtractAndSetLSIDNoLSIDIsNoop(t *testing.T) {
 	extractAndSetLSID(ctx, cmd)
 	assert.Equal(t, "", ci.LSID())
 
-	// Owner() falls back to the synthetic conn id.
 	assert.True(t, strings.HasPrefix(ci.Owner(), "conn:"))
 }
 
-// TestExtractAndSetLSIDMalformedIsNoop -- defensively, an lsid that is not
-// shaped like { id: BinData(...) } must not panic and must not set lsid.
 func TestExtractAndSetLSIDMalformedIsNoop(t *testing.T) {
 	cases := []struct {
 		name string
@@ -113,7 +101,6 @@ func TestExtractAndSetLSIDMalformedIsNoop(t *testing.T) {
 	}
 }
 
-// TestExtractAndSetLSIDNilDocIsNoop -- defensive nil-check.
 func TestExtractAndSetLSIDNilDocIsNoop(t *testing.T) {
 	ctx, ci := makeCtx()
 	extractAndSetLSID(ctx, nil)

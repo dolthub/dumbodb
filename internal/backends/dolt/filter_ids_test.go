@@ -24,9 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// hashFor returns the hash.Hash that ResolveFilterToDocIDHashes is
-// expected to produce for the given _id value, by calling the same
-// hashID helper the resolver uses.
 func hashFor(t *testing.T, idVal any) string {
 	t.Helper()
 	h, err := hashID(idVal)
@@ -34,9 +31,6 @@ func hashFor(t *testing.T, idVal any) string {
 	return hashFromArray(h).String()
 }
 
-// TestResolvePreciseScalarID covers {_id: <scalar>} -- the common explicit-id
-// case from updateOne({_id: X}, ...) / deleteOne({_id: X}). Each accepted
-// scalar type produces a single, deterministic hash.
 func TestResolvePreciseScalarID(t *testing.T) {
 	cases := []struct {
 		name string
@@ -60,8 +54,6 @@ func TestResolvePreciseScalarID(t *testing.T) {
 	}
 }
 
-// TestResolveInArrayOfIDs covers {_id: {$in: [...]}}, the bulk form used
-// by batched update/delete by id list.
 func TestResolveInArrayOfIDs(t *testing.T) {
 	in := must.NotFail(types.NewArray(int32(1), int32(2), int32(3)))
 	filter := must.NotFail(types.NewDocument(
@@ -78,9 +70,6 @@ func TestResolveInArrayOfIDs(t *testing.T) {
 	assert.Equal(t, hashFor(t, int32(3)), ids[2].String())
 }
 
-// TestResolveFullCollectionFallbacks: filters that cannot be enumerated
-// precisely must report fullCollection=true so the caller knows to
-// over-acquire (or scan).
 func TestResolveFullCollectionFallbacks(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -138,9 +127,6 @@ func TestResolveFullCollectionFallbacks(t *testing.T) {
 	}
 }
 
-// TestResolveInWithSubDocFallsToFullCollection: a $in element that is a
-// sub-document is either an exact-doc match (uncommon for _id) or a
-// malformed query. The resolver over-acquires rather than guessing.
 func TestResolveInWithSubDocFallsToFullCollection(t *testing.T) {
 	inner := must.NotFail(types.NewDocument("nested", "field"))
 	in := must.NotFail(types.NewArray(int32(1), inner))

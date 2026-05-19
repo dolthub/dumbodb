@@ -26,12 +26,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
-// TestTransactionSmoke verifies that WithTransaction completes successfully
-// and the committed write is visible after the transaction returns. Default-
-// mode transactions are implemented via the per-(owner, branch) pending
-// overlay and DocLockManager (see internal/backends/dolt and the session-
-// isolation design doc); parity tests P1-P4/P8 cover the wire-level
-// behavior, this is a local smoke that the path is wired end-to-end.
 func TestTransactionSmoke(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -55,10 +49,6 @@ func TestTransactionSmoke(t *testing.T) {
 	assert.EqualValues(t, 1, got["n"])
 }
 
-// TestTransactionSmoke_Abort verifies that abortTransaction discards the
-// uncommitted write. The Go driver may handle abort locally without
-// contacting the server, so the post-abort find is the load-bearing
-// assertion.
 func TestTransactionSmoke_Abort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()

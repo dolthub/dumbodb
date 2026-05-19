@@ -19,21 +19,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 )
 
-// mongoWriteConflictCode is the MongoDB wire-protocol error code 112,
-// surfaced when a default-mode transaction conflicts with another on a
-// document-level pessimistic lock. Defined inline rather than as a named
-// constant in handlererrors because the generated stringer table covers
-// only the codes the handler emits directly today.
 const mongoWriteConflictCode = handlererrors.ErrorCode(112)
 
-// TranslateBackendWriteError maps backend-level write errors (returned
-// from InsertAll / UpdateAll / DeleteAll) into wire-protocol command
-// errors with the matching MongoDB error code. Callers should invoke it
-// on any write-path error before returning to the wire layer.
-//
-// Returns nil if err is nil. Returns err unchanged for codes the
-// function does not translate; the caller decides what to do (typically
-// lazyerrors.Error wrapping or per-write-error accumulation).
 func TranslateBackendWriteError(err error) error {
 	if err == nil {
 		return nil

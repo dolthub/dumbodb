@@ -26,52 +26,23 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ErrWriteConflict is the sentinel returned by DocLockManager.Acquire when
-// any of the requested docIDs is held by a different owner. msg_transaction
-// translates it to MongoDB wire error code 112 ("WriteConflict").
-//
-// Lock policy is currently no-wait: a conflict is reported immediately.
-// Parity test P4 in dumbodb-parity-testing pins the eventual semantics
-// (no-wait vs bounded-wait); start simple and adjust if Mongo's behavior
-// diverges.
 var ErrWriteConflict = errors.New("write conflict: document locked by another transaction")
 
-// DocLockManager provides pessimistic per-document locks for default-mode
-// MongoDB transactions. One instance is held per (database, branch) by the
-// Backend; the design treats document-level locking as Mongo-specific
-// semantics layered above dsess (which is optimistic-merge-on-commit).
-//
-// Concurrency:
-//   - Acquire is all-or-nothing. If any requested id collides with another
-//     owner, the call returns ErrWriteConflict and no locks are taken.
-//   - Release drops every lock held by the given owner across every
-//     collection in this manager.
-//   - Acquire is also idempotent for the same owner: an owner re-acquiring
-//     a lock it already holds is a no-op.
-//
-// Owner is a string -- typically the MongoDB lsid for default-mode txns,
-// or a per-connection synthetic id when no lsid is present.
 type DocLockManager struct {
-	mu sync.Mutex
-	// locks: collection name -> docID hash -> owner string.
+	mu    sync.Mutex
 	locks map[string]map[hash.Hash]string
 }
 
-// NewDocLockManager constructs an empty manager.
 func NewDocLockManager() *DocLockManager {
 	return &DocLockManager{
 		locks: map[string]map[hash.Hash]string{},
 	}
 }
 
-// Acquire attempts to lock all of |ids| in |collection| for |owner|. On any
-// collision with a different owner the call returns ErrWriteConflict and
-// the manager state is unchanged (no partial locks are recorded). Locks
-// the owner already holds count as success.
 func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash) error {
 	if owner == "" {
-		// Empty owner would be indistinguishable from "no owner" on
-		// release; reject it rather than silently leak.
+		// Empty owner means upstream lost the lsid/conn-id; reject so the bug
+		// surfaces rather than locking under a sentinel value.
 		return errors.New("DocLockManager.Acquire: owner must not be empty")
 	}
 
@@ -80,7 +51,6 @@ func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Has
 
 	collLocks, ok := m.locks[collection]
 	if ok {
-		// Probe for any collision first, so we don't write partial state.
 		for _, id := range ids {
 			if existing, held := collLocks[id]; held && existing != owner {
 				return ErrWriteConflict
@@ -88,7 +58,6 @@ func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Has
 		}
 	}
 
-	// All clear -- record (or refresh) every lock.
 	if collLocks == nil {
 		collLocks = map[hash.Hash]string{}
 		m.locks[collection] = collLocks
@@ -99,8 +68,6 @@ func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Has
 	return nil
 }
 
-// Release drops every lock held by |owner| across every collection. Safe
-// to call for an owner that holds no locks.
 func (m *DocLockManager) Release(owner string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,17 +84,8 @@ func (m *DocLockManager) Release(owner string) {
 	}
 }
 
-// acquireTxnLocks is the in-write-path helper that performs the
-// pessimistic per-doc lock acquisition for default-mode MongoDB
-// transactions. Call sites pass the resolved set of doc id hashes the
-// operation will touch; the helper acquires them all-or-nothing on the
-// (db, branch)-scoped DocLockManager and returns a backends.NewError(
-// ErrorCodeWriteConflict) when any id is already held by another owner.
-//
-// When the connection is not in a transaction (no startTransaction has
-// been seen), the function is a no-op -- non-txn writes flow through
-// existing dbState mutex serialization without taking per-doc locks,
-// matching the design's "implicit single-statement transactions".
+// No-op outside a txn: implicit single-statement writes serialize on state.mu
+// without per-doc locks.
 func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash) error {
 	owner, inTxn := ownerForTxn(ctx)
 	if !inTxn || len(ids) == 0 {
@@ -143,9 +101,6 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 	return nil
 }
 
-// idsFromDocs hashes the _id of each document and returns the resulting
-// hash list. Used by acquireInsertLocks / acquireUpdateLocks where the
-// caller already has the documents in hand.
 func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
 	out := make([]hash.Hash, 0, len(docs))
 	for _, d := range docs {
@@ -162,8 +117,6 @@ func idsFromDocs(docs []*types.Document) ([]hash.Hash, error) {
 	return out, nil
 }
 
-// idsFromValues hashes a list of raw _id values. Used by
-// acquireDeleteLocks where the handler already resolved the filter.
 func idsFromValues(idVals []any) ([]hash.Hash, error) {
 	out := make([]hash.Hash, 0, len(idVals))
 	for _, v := range idVals {
@@ -209,8 +162,6 @@ func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error
 	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
 }
 
-// Holds reports whether |owner| currently holds a lock on |id| in
-// |collection|. Used in tests to verify acquire/release behavior.
 func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

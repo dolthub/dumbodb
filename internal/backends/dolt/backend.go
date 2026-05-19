@@ -131,16 +131,10 @@ type dbState struct {
 	doltDB  *doltdb.DoltDB
 	datasDB datas.Database
 
-	// workingSets is the per-branch in-progress state. Each value is the
-	// committed view of the working root that connections without an active
-	// transaction see.
+	// workingSets is the per-branch in-progress state. Each value is the session's
+	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
-	// pendingWS is the per-(owner, branch) transaction overlay. Connections
-	// inside a MongoDB transaction read and write through this overlay
-	// instead of the shared workingSets above; on commit the overlay is
-	// merged back into workingSets, on abort it is discarded. The owner is
-	// conninfo.ConnInfo.Owner() (lsid hex or synthetic conn id).
 	pendingWS map[pendingWSKey]*doltdb.WorkingSet
 
 	uuids        map[string]string
@@ -159,8 +153,6 @@ type dbState struct {
 	dirtyBranches  map[string]struct{}
 }
 
-// pendingWSKey identifies a per-(owner, branch) entry in dbState.pendingWS.
-// The owner is conninfo.Owner(); branch is the rootish branch name.
 type pendingWSKey struct {
 	owner  string
 	branch string
@@ -257,20 +249,10 @@ type Backend struct {
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
 
-	// provider is the dsess.DoltDatabaseProvider used to construct
-	// per-connection *dsess.DoltSession instances via internal/sqlctx. Owned
-	// here (one per process) so the keymutex used for transaction commit
-	// serialization is shared across sessions.
 	provider *dumbodbProvider
 
-	// docLocksMu guards docLocks. The DocLockManagers themselves are
-	// individually thread-safe; this mutex only protects map mutation.
 	docLocksMu sync.Mutex
-	// docLocks holds one DocLockManager per (db, branch) tuple, keyed by
-	// docLocksKey(db, branch). Lazily populated by docLockManager().
-	// Per session-isolation.md: pessimistic locking is Mongo-specific and
-	// lives in the DumboDB backend (not upstream in dsess).
-	docLocks map[string]*DocLockManager
+	docLocks   map[string]*DocLockManager
 
 	// flusherStop is closed by Close to signal the background flusher to
 	// drain any remaining dirty state and exit.
@@ -280,15 +262,10 @@ type Backend struct {
 	flusherDone chan struct{}
 }
 
-// docLocksKey is the key under which the DocLockManager for a given
-// (database, branch) tuple is stored in docLocks. Centralized so callers
-// don't construct it ad-hoc.
 func docLocksKey(db, branch string) string {
 	return db + "/" + branch
 }
 
-// docLockManager returns the DocLockManager for the given (db, branch),
-// lazily creating one on first lookup. Safe for concurrent callers.
 func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 	key := docLocksKey(db, branch)
 
@@ -303,21 +280,11 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 	return m
 }
 
-// OnSessionEnd implements backends.SessionAwareBackend: releases every
-// document lock held by |owner| AND discards any pending transaction
-// overlays the owner holds. Called by the handler on Mongo's endSessions
-// command (and eventually on session timeout from the SessionRegistry).
-//
-// Idempotent: safe to call for owners that hold no state.
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
 	b.abortPendingForOwner(owner)
 }
 
-// OnTransactionCommit implements backends.SessionAwareBackend: merges
-// every pending (owner, branch) overlay into the committed working set,
-// persists each branch, then releases the owner's doc locks. Called by
-// the handler on commitTransaction.
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	b.mu.RLock()
 	dbs := make([]*dbState, 0, len(b.dbs))
@@ -339,17 +306,11 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 	return firstErr
 }
 
-// OnTransactionAbort implements backends.SessionAwareBackend: discards
-// every pending (owner, branch) overlay without touching the committed
-// working set, then releases the owner's doc locks. Called by the
-// handler on abortTransaction.
 func (b *Backend) OnTransactionAbort(owner string) {
 	b.abortPendingForOwner(owner)
 	b.releaseLocksForOwner(owner)
 }
 
-// abortPendingForOwner walks every open dbState and drops the owner's
-// pending overlay entries. Used by both abort and end-session paths.
 func (b *Backend) abortPendingForOwner(owner string) {
 	b.mu.RLock()
 	dbs := make([]*dbState, 0, len(b.dbs))
@@ -365,8 +326,6 @@ func (b *Backend) abortPendingForOwner(owner string) {
 	}
 }
 
-// releaseLocksForOwner is the OnSessionEnd lock-release path extracted so
-// commit / abort / end-session can all reuse it.
 func (b *Backend) releaseLocksForOwner(owner string) {
 	b.docLocksMu.Lock()
 	managers := make([]*DocLockManager, 0, len(b.docLocks))
@@ -375,17 +334,11 @@ func (b *Backend) releaseLocksForOwner(owner string) {
 	}
 	b.docLocksMu.Unlock()
 
-	// Release outside docLocksMu so the per-manager mutex can be taken
-	// without holding the registry mutex.
 	for _, m := range managers {
 		m.Release(owner)
 	}
 }
 
-// lookupDbStateForDsess is the dbLookup callback the dsess provider uses to
-// resolve database names to existing dbStates. It only finds already-open
-// databases (no auto-create on read-through), so callers must have routed
-// through getOrOpenDB first.
 func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -420,9 +373,6 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 	return backends.BackendContract(b), nil
 }
 
-// newBackend is the inner constructor that returns the concrete *Backend.
-// Useful from in-package tests that need access to Backend-specific fields
-// without going through the BackendContract wrapper.
 func newBackend(dataDir string, l *slog.Logger, autoCommit bool) (*Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
@@ -438,8 +388,6 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit bool) (*Backend, erro
 		flusherDone: make(chan struct{}),
 	}
 
-	// The dsess provider looks up dbStates via Backend.dbs; we hand it a
-	// closure so the provider package does not need to know about dbs.
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
 	if err != nil {
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)

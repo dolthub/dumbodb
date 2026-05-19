@@ -26,9 +26,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// TestBackendImplementsSessionAwareBackend is a compile-time check that the
-// dolt backend satisfies the optional session-lifecycle interface so the
-// handler's type assertion succeeds.
 func TestBackendImplementsSessionAwareBackend(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	require.NoError(t, err)
@@ -37,9 +34,6 @@ func TestBackendImplementsSessionAwareBackend(t *testing.T) {
 	var _ backends.SessionAwareBackend = be
 }
 
-// TestDocLockManagerIsPerDbBranch verifies that calling docLockManager with
-// different (db, branch) tuples returns distinct managers, and calling
-// again with the same tuple returns the same one (caching).
 func TestDocLockManagerIsPerDbBranch(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	require.NoError(t, err)
@@ -55,10 +49,6 @@ func TestDocLockManagerIsPerDbBranch(t *testing.T) {
 	assert.NotSame(t, mA, mC, "different dbs must have different managers")
 }
 
-// TestOnSessionEndReleasesAllLocks verifies that OnSessionEnd releases
-// every lock the owner holds, across every DocLockManager, leaving other
-// owners' locks untouched. This is the .3.7 acceptance: "endSession ...
-// releases any held doc locks."
 func TestOnSessionEndReleasesAllLocks(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	require.NoError(t, err)
@@ -69,13 +59,11 @@ func TestOnSessionEndReleasesAllLocks(t *testing.T) {
 	idB[0] = 0x02
 	idC[0] = 0x03
 
-	// ownerX locks one doc on each of two (db,branch) tuples.
 	mMain := be.docLockManager("mydb", "main")
 	mFeat := be.docLockManager("mydb", "feat")
 	require.NoError(t, mMain.Acquire("ownerX", "col", []hash.Hash{idA}))
 	require.NoError(t, mFeat.Acquire("ownerX", "col", []hash.Hash{idB}))
 
-	// ownerY locks one doc that ownerX shouldn't touch on release.
 	require.NoError(t, mMain.Acquire("ownerY", "col", []hash.Hash{idC}))
 
 	be.OnSessionEnd("ownerX")
@@ -85,17 +73,13 @@ func TestOnSessionEndReleasesAllLocks(t *testing.T) {
 	assert.True(t, mMain.Holds("ownerY", "col", idC), "ownerY's lock must remain")
 }
 
-// TestOnSessionEndUnknownOwnerIsNoop -- ending a session that never
-// acquired any locks must not error, matching the idempotency requirement.
 func TestOnSessionEndUnknownOwnerIsNoop(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
-	// No locks at all -- just confirm no panic/error.
 	be.OnSessionEnd("ownerZ")
 
-	// And with one DocLockManager present but no relevant owner.
 	var idA hash.Hash
 	idA[0] = 0x01
 	m := be.docLockManager("mydb", "main")

@@ -68,11 +68,7 @@ func (b *backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	return nil, fmt.Errorf("oplog: DumboDBCommit: versioning not supported by wrapped backend")
 }
 
-// SessionAwareBackend pass-throughs. Mirror the VersioningBackend pattern:
-// delegate to the wrapped backend when (and only when) it implements the
-// optional interface. The decorator itself implements SessionAwareBackend
-// unconditionally so handler-side type assertions succeed regardless of
-// the wrapped backend's capabilities.
+// SessionAwareBackend pass-throughs; see backendContract for rationale.
 
 func (b *backend) OnSessionEnd(owner string) {
 	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {

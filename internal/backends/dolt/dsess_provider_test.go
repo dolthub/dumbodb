@@ -28,13 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
-// TestBackendNewSessionConstructs verifies that the Backend can produce a
-// *dsess.DoltSession via the sqlctx shim. This is the .2.2 acceptance:
-// "backend wires DoltSession via the sqlctx shim".
-//
-// The test bypasses NewBackend (which spins up a flush loop and an admin
-// database) because the provider+NewSession path is independent of that
-// machinery and we don't want unrelated startup work in a unit test.
 func TestBackendNewSessionConstructs(t *testing.T) {
 	provider, err := newDumbodbProvider(t.TempDir(), func(string) (*dbState, bool) { return nil, false })
 	require.NoError(t, err)
@@ -43,13 +36,8 @@ func TestBackendNewSessionConstructs(t *testing.T) {
 	sess := b.NewSession()
 	require.NotNil(t, sess)
 
-	// Sanity: the session is a usable sql.Session.
 	var _ sql.Session = sess
 
-	// LookupDbState on an unknown db must propagate ErrDatabaseNotFound,
-	// proving the call path threads through the provider correctly. The
-	// real provider implementation lands in subsequent beads -- here we
-	// only need to confirm the wiring is in place.
 	sqlCtx := sqlctx.Wrap(context.Background(), sess)
 	state, ok, err := sess.LookupDbState(sqlCtx, "nonexistent")
 	require.Error(t, err)
@@ -58,11 +46,6 @@ func TestBackendNewSessionConstructs(t *testing.T) {
 	assert.Nil(t, state)
 }
 
-// TestSessionLookupDbStateResolvesRealDb exercises the provider's
-// SessionDatabase / LookupDbState path against a real Backend with the
-// admin database initialized. This is the .2.6 acceptance point (1):
-// "dumbodbProvider.SessionDatabase returns a working dsess.SqlDatabase
-// for known db names."
 func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	require.NoError(t, err)
@@ -71,7 +54,6 @@ func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
 	sess := be.NewSession()
 	sqlCtx := sqlctx.Wrap(context.Background(), sess)
 
-	// "admin" is initialized by newBackend; LookupDbState must resolve it.
 	state, found, err := sess.LookupDbState(sqlCtx, "admin")
 	require.NoError(t, err)
 	require.True(t, found, "admin database should be resolvable via LookupDbState")
@@ -79,11 +61,6 @@ func TestSessionLookupDbStateResolvesRealDb(t *testing.T) {
 	require.NotNil(t, state.WorkingRoot(), "branchState must have a working root")
 }
 
-// TestProviderSurface verifies the parts of the provider that have real
-// implementations (rather than not-found stubs) return sensible values.
-// FileSystem and TxLocks back the lifecycle pieces that dsess uses
-// internally, so they need to be non-nil even before SessionDatabase et al
-// are filled in.
 func TestProviderSurface(t *testing.T) {
 	provider, err := newDumbodbProvider(t.TempDir(), func(string) (*dbState, bool) { return nil, false })
 	require.NoError(t, err)

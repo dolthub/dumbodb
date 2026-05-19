@@ -419,15 +419,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 		command = doc.Command()
 
-		// Extract the MongoDB lsid (if present) from every command and
-		// record it on the connection's ConnInfo so backend operations
-		// can key per-session state (e.g. document locks) by Owner().
-		// Doing this once at the wire layer covers every Msg* handler
-		// without each having to remember to plumb it.
-		//
-		// Likewise pick up startTransaction: true from the first command
-		// in a transaction so the backend write paths route through the
-		// per-(owner, branch) pending overlay.
 		if err == nil {
 			extractAndSetLSID(connCtx, typedDoc)
 			extractAndSetTransactionFlag(connCtx, typedDoc)

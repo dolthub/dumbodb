@@ -1289,9 +1289,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
 	}
 
-	// Inside a Mongo transaction, acquire pessimistic per-doc locks for
-	// every id being inserted before mutating storage. Locks survive
-	// until commitTransaction / abortTransaction / endSessions.
 	if err := c.acquireInsertLocks(ctx, params.Docs); err != nil {
 		return nil, err
 	}
@@ -1664,10 +1661,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
 	}
 
-	// Inside a Mongo transaction, acquire pessimistic per-doc locks for
-	// every id being updated before mutating storage. The handler has
-	// already resolved the filter to specific docs by the time UpdateAll
-	// runs, so each params.Docs entry's _id is the lock target.
 	if err := c.acquireUpdateLocks(ctx, params.Docs); err != nil {
 		return nil, err
 	}
@@ -1819,9 +1812,6 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
 	}
 
-	// Inside a Mongo transaction, acquire pessimistic per-doc locks for
-	// every id being deleted. The handler has already resolved the filter
-	// to specific _ids by the time DeleteAll runs.
 	if err := c.acquireDeleteLocks(ctx, params.IDs); err != nil {
 		return nil, err
 	}
