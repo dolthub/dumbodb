@@ -187,3 +187,352 @@ func TestSessionIsolation_ReadYourOwnWrites(t *testing.T) {
 	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "_id", Value: "own"}}).Decode(&got))
 	assert.Equal(t, "v2", got["v"], "session must read its own uncommitted update")
 }
+
+func siDoltCommit(t *testing.T, coll *mongo.Collection, message string) error {
+	t.Helper()
+	return coll.Database().RunCommand(context.Background(), bson.D{
+		{Key: "doltCommit", Value: 1},
+		{Key: "message", Value: message},
+	}).Err()
+}
+
+func siCreateBranch(t *testing.T, db *mongo.Database, branch string) {
+	t.Helper()
+	require.NoError(t, db.RunCommand(context.Background(), bson.D{
+		{Key: "doltBranch", Value: int32(1)},
+		{Key: "branch", Value: branch},
+	}).Err())
+}
+
+// D2: After client B forks at HEAD and client A commits, B continues to
+// observe only its own pending writes (not A's new HEAD) until B itself
+// commits. B's three-way merge then folds A's commit in.
+func TestSessionIsolation_DirtySessionPinnedToForkPoint(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+	collA := env.collection(t)
+
+	cB := siClient(t, env)
+	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
+
+	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-A"}})
+	require.NoError(t, err)
+	_, err = collB.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-B"}})
+	require.NoError(t, err)
+
+	require.NoError(t, siDoltCommit(t, collA, "A commits first"))
+
+	cur, err := collB.Find(ctx, bson.D{})
+	require.NoError(t, err)
+	var pre []bson.M
+	require.NoError(t, cur.All(ctx, &pre))
+	preIDs := make([]string, 0, len(pre))
+	for _, d := range pre {
+		if s, ok := d["_id"].(string); ok {
+			preIDs = append(preIDs, s)
+		}
+	}
+	assert.ElementsMatch(t, []string{"from-B"}, preIDs,
+		"B must remain pinned to fork point: must NOT see A's commit, must see only own write")
+
+	require.NoError(t, siDoltCommit(t, collB, "B commits second"))
+
+	cur, err = collB.Find(ctx, bson.D{})
+	require.NoError(t, err)
+	var post []bson.M
+	require.NoError(t, cur.All(ctx, &post))
+	postIDs := make([]string, 0, len(post))
+	for _, d := range post {
+		if s, ok := d["_id"].(string); ok {
+			postIDs = append(postIDs, s)
+		}
+	}
+	assert.ElementsMatch(t, []string{"from-A", "from-B"}, postIDs,
+		"after B commits, three-way merge folds A's commit into B's view")
+}
+
+// D5: After a session commits its own work, it advances past the fork
+// point and observes commits made by other sessions in the interim.
+func TestSessionIsolation_SeesNewCommitsAfterOwnCommit(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+	collA := env.collection(t)
+
+	cB := siClient(t, env)
+	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
+
+	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-A"}})
+	require.NoError(t, err)
+	require.NoError(t, siDoltCommit(t, collA, "A first"))
+
+	_, err = collB.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-B"}})
+	require.NoError(t, err)
+	require.NoError(t, siDoltCommit(t, collB, "B second"))
+
+	cur, err := collA.Find(ctx, bson.D{})
+	require.NoError(t, err)
+	var docs []bson.M
+	require.NoError(t, cur.All(ctx, &docs))
+	ids := make([]string, 0, len(docs))
+	for _, d := range docs {
+		if s, ok := d["_id"].(string); ok {
+			ids = append(ids, s)
+		}
+	}
+	assert.ElementsMatch(t, []string{"from-A", "from-B"}, ids,
+		"A must see B's commit after A finished its own commit cycle")
+}
+
+// D9: One session writing to two different branches keeps the pending
+// overlays separate (indexed by (owner, branch)). Committing on one
+// branch does not affect the pending state on the other.
+func TestSessionIsolation_MultiBranchIsolationOneSession(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("multibranch_%d", env.port)
+	collName := "items"
+
+	uri := fmt.Sprintf("mongodb://127.0.0.1:%d/?maxPoolSize=1", env.port)
+	cA, err := mongo.Connect(options.Client().ApplyURI(uri))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cA.Disconnect(context.Background()) })
+
+	cB := siClient(t, env)
+
+	_, err = cA.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	require.NoError(t, err)
+	require.NoError(t, cA.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
+	}).Err())
+
+	siCreateBranch(t, cA.Database(dbName+"@main"), "feat")
+
+	mainA := cA.Database(dbName).Collection(collName)
+	featA := cA.Database(dbName + "@feat").Collection(collName)
+
+	_, err = mainA.InsertOne(ctx, bson.D{{Key: "_id", Value: "main-write"}})
+	require.NoError(t, err)
+	_, err = featA.InsertOne(ctx, bson.D{{Key: "_id", Value: "feat-write"}})
+	require.NoError(t, err)
+
+	require.NoError(t, cA.Database(dbName+"@feat").RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "feat-only"},
+	}).Err())
+
+	mainB := cB.Database(dbName).Collection(collName)
+	featB := cB.Database(dbName + "@feat").Collection(collName)
+
+	cnt, err := mainB.CountDocuments(ctx, bson.D{{Key: "_id", Value: "main-write"}})
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, cnt, "B on main must NOT see A's uncommitted main write")
+
+	cnt, err = featB.CountDocuments(ctx, bson.D{{Key: "_id", Value: "feat-write"}})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, cnt, "B on feat must see A's committed feat write")
+
+	require.NoError(t, cA.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "main-now"},
+	}).Err())
+
+	cnt, err = mainB.CountDocuments(ctx, bson.D{{Key: "_id", Value: "main-write"}})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, cnt, "B on main must see A's main write after A commits on main")
+}
+
+// D11: Three sessions fork from the same HEAD and sequentially commit
+// non-conflicting inserts. Each subsequent commit is a three-way merge
+// against the advancing HEAD; all three writes land in the final state.
+func TestSessionIsolation_ThreeWayConcurrentCommitSerializes(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+	collA := env.collection(t)
+
+	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	require.NoError(t, err)
+	require.NoError(t, siDoltCommit(t, collA, "seed C0"))
+
+	cB := siClient(t, env)
+	cC := siClient(t, env)
+	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
+	collC := cC.Database(collA.Database().Name()).Collection(collA.Name())
+
+	_, err = collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-A"}})
+	require.NoError(t, err)
+	_, err = collB.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-B"}})
+	require.NoError(t, err)
+	_, err = collC.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-C"}})
+	require.NoError(t, err)
+
+	require.NoError(t, siDoltCommit(t, collA, "A -> C1"))
+	require.NoError(t, siDoltCommit(t, collB, "B -> C2"))
+	require.NoError(t, siDoltCommit(t, collC, "C -> C3"))
+
+	cur, err := collA.Find(ctx, bson.D{})
+	require.NoError(t, err)
+	var docs []bson.M
+	require.NoError(t, cur.All(ctx, &docs))
+	ids := make([]string, 0, len(docs))
+	for _, d := range docs {
+		if s, ok := d["_id"].(string); ok {
+			ids = append(ids, s)
+		}
+	}
+	assert.ElementsMatch(t, []string{"seed", "from-A", "from-B", "from-C"}, ids,
+		"all three concurrent writes plus seed must be present after serialization")
+}
+
+// D12: A deletes a row while B modifies the same row. After A commits,
+// B's commit must be rejected with a conflict.
+func TestSessionIsolation_DeleteVsModifyConflict(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+	collA := env.collection(t)
+
+	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "p"}, {Key: "x", Value: "original"}})
+	require.NoError(t, err)
+	require.NoError(t, siDoltCommit(t, collA, "seed"))
+
+	cB := siClient(t, env)
+	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
+
+	_, err = collA.DeleteOne(ctx, bson.D{{Key: "_id", Value: "p"}})
+	require.NoError(t, err)
+	_, err = collB.UpdateOne(ctx,
+		bson.D{{Key: "_id", Value: "p"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "x", Value: "modified"}}}})
+	require.NoError(t, err)
+
+	require.NoError(t, siDoltCommit(t, collA, "A deletes"))
+
+	err = siDoltCommit(t, collB, "B modifies")
+	require.Error(t, err, "delete-vs-modify on the same _id must be a conflict")
+	assert.Contains(t, err.Error(), "conflict")
+}
+
+// Branch variant of D1: ImplicitForkVisibility, exercised on a freshly
+// created non-main branch. Ensures the (owner, branch) overlay key
+// works for non-main branches, not just main.
+func TestSessionIsolation_ImplicitForkVisibility_OnFeatureBranch(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("brfork_%d", env.port)
+	collName := "items"
+
+	_, err := env.client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	require.NoError(t, err)
+	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
+	}).Err())
+
+	siCreateBranch(t, env.client.Database(dbName+"@main"), "feature")
+
+	collA := env.client.Database(dbName + "@feature").Collection(collName)
+	cB := siClient(t, env)
+	collB := cB.Database(dbName + "@feature").Collection(collName)
+
+	_, err = collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "feature-only"}})
+	require.NoError(t, err)
+
+	cnt, err := collB.CountDocuments(ctx, bson.D{{Key: "_id", Value: "feature-only"}})
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, cnt, "B on feature must NOT see A's uncommitted write")
+
+	require.NoError(t, collA.Database().RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "A on feature"},
+	}).Err())
+
+	cnt, err = collB.CountDocuments(ctx, bson.D{{Key: "_id", Value: "feature-only"}})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, cnt, "B on feature must see A's write after commit")
+}
+
+// Branch variant of D4: NonConflictingMergesCleanly, on a non-main branch.
+func TestSessionIsolation_NonConflictingMergesCleanly_OnFeatureBranch(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("brmerge_%d", env.port)
+	collName := "items"
+
+	_, err := env.client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	require.NoError(t, err)
+	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
+	}).Err())
+	siCreateBranch(t, env.client.Database(dbName+"@main"), "feature")
+
+	collA := env.client.Database(dbName + "@feature").Collection(collName)
+	cB := siClient(t, env)
+	collB := cB.Database(dbName + "@feature").Collection(collName)
+
+	_, err = collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-A"}})
+	require.NoError(t, err)
+	_, err = collB.InsertOne(ctx, bson.D{{Key: "_id", Value: "from-B"}})
+	require.NoError(t, err)
+
+	require.NoError(t, collA.Database().RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "A"},
+	}).Err())
+	require.NoError(t, collB.Database().RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B"},
+	}).Err())
+
+	cur, err := collA.Find(ctx, bson.D{})
+	require.NoError(t, err)
+	var docs []bson.M
+	require.NoError(t, cur.All(ctx, &docs))
+	ids := make([]string, 0, len(docs))
+	for _, d := range docs {
+		if s, ok := d["_id"].(string); ok {
+			ids = append(ids, s)
+		}
+	}
+	assert.ElementsMatch(t, []string{"seed", "from-A", "from-B"}, ids)
+}
+
+// Branch variant of D6: ConflictRejectsSecondCommit, on a non-main branch.
+func TestSessionIsolation_ConflictRejectsSecondCommit_OnFeatureBranch(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	ctx := context.Background()
+
+	dbName := fmt.Sprintf("brconf_%d", env.port)
+	collName := "items"
+
+	_, err := env.client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{
+		{Key: "_id", Value: "p"}, {Key: "x", Value: "seed"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
+	}).Err())
+	siCreateBranch(t, env.client.Database(dbName+"@main"), "feature")
+
+	collA := env.client.Database(dbName + "@feature").Collection(collName)
+	cB := siClient(t, env)
+	collB := cB.Database(dbName + "@feature").Collection(collName)
+
+	_, err = collA.UpdateOne(ctx,
+		bson.D{{Key: "_id", Value: "p"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "x", Value: "A"}}}})
+	require.NoError(t, err)
+	_, err = collB.UpdateOne(ctx,
+		bson.D{{Key: "_id", Value: "p"}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "x", Value: "B"}}}})
+	require.NoError(t, err)
+
+	require.NoError(t, collA.Database().RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "A"},
+	}).Err())
+
+	err = collB.Database().RunCommand(ctx, bson.D{
+		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B"},
+	}).Err()
+	require.Error(t, err, "second commit on feature branch must be rejected on conflict")
+	assert.Contains(t, err.Error(), "conflict")
+
+	var final bson.M
+	require.NoError(t, collA.FindOne(ctx, bson.D{{Key: "_id", Value: "p"}}).Decode(&final))
+	assert.Equal(t, "A", final["x"], "feature branch must reflect A's value, not B's rejected commit")
+}
