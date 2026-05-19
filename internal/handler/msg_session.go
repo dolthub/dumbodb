@@ -17,12 +17,14 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 
 	"github.com/FerretDB/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -59,6 +61,13 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 // MsgCommitTransaction implements the `commitTransaction` command.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	ci := conninfo.Get(connCtx)
+	if ci.TxnAborted() {
+		ci.SetInTransaction(false)
+		return nil, handlererrors.NewCommandError(
+			handlererrors.ErrorCode(251),
+			errors.New("Transaction was aborted by a prior server-side rejection."),
+		)
+	}
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		if err := sab.OnTransactionCommit(connCtx, ci.Owner()); err != nil {
 			return nil, lazyerrors.Error(err)

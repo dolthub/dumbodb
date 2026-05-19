@@ -260,6 +260,18 @@ func (h *Handler) SessionIsolation() bool {
 	return false
 }
 
+// AbortPendingTransaction discards any per-connection pending overlay
+// and marks the txn as aborted, so a subsequent commitTransaction
+// returns NoSuchTransaction (251). Used when the wire layer rejects an
+// in-txn DDL with OperationNotSupportedInTransaction (263).
+func (h *Handler) AbortPendingTransaction(ctx context.Context) {
+	ci := conninfo.Get(ctx)
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(ci.Owner())
+	}
+	ci.SetTxnAborted(true)
+}
+
 func (h *Handler) Close() {
 	h.cursors.Close()
 	close(h.cappedCleanupStop)

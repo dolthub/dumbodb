@@ -46,6 +46,7 @@ type ConnInfo struct {
 	rw sync.RWMutex
 
 	inTransaction bool // protected by rw
+	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
 	metadataRecv bool // protected by rw
 
@@ -159,6 +160,23 @@ func (connInfo *ConnInfo) SetInTransaction(v bool) {
 	defer connInfo.rw.Unlock()
 
 	connInfo.inTransaction = v
+	if !v {
+		connInfo.txnAborted = false
+	}
+}
+
+func (connInfo *ConnInfo) TxnAborted() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.txnAborted
+}
+
+func (connInfo *ConnInfo) SetTxnAborted(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.txnAborted = v
 }
 
 func (connInfo *ConnInfo) Owner() string {

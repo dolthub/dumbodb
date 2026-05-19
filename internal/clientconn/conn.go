@@ -432,6 +432,14 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			)
 		}
 
+		if err == nil && commandBlockedInTxn(command) && conninfo.Get(connCtx).InTransaction() {
+			c.h.AbortPendingTransaction(connCtx)
+			err = handlererrors.NewCommandError(
+				handlererrors.ErrorCode(263),
+				fmt.Errorf("Cannot run '%s' in a multi-document transaction.", command),
+			)
+		}
+
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
 

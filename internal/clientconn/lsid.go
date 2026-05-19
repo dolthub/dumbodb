@@ -54,6 +54,17 @@ func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 	conninfo.Get(ctx).SetLSID(hex.EncodeToString(bin.B))
 }
 
+// commandBlockedInTxn reports whether a command is rejected by MongoDB
+// with OperationNotSupportedInTransaction (263) when issued inside a
+// multi-document transaction.
+func commandBlockedInTxn(cmd string) bool {
+	switch cmd {
+	case "drop", "dropDatabase", "createIndexes", "renameCollection", "collMod":
+		return true
+	}
+	return false
+}
+
 // MongoDB has no separate startTransaction command; the driver flags the
 // first command in a txn with startTransaction:true. Returns whether the
 // flag was observed; conn-level routing uses this to reject the wire
@@ -67,7 +78,9 @@ func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (sta
 		return false
 	}
 	if b, ok := v.(bool); ok && b {
-		conninfo.Get(ctx).SetInTransaction(true)
+		ci := conninfo.Get(ctx)
+		ci.SetTxnAborted(false)
+		ci.SetInTransaction(true)
 		return true
 	}
 	return false
