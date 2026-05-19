@@ -54,7 +54,7 @@ func (stubProvider) GetRevisionForRevisionDatabase(*sql.Context, string) (string
 	return "", "", nil
 }
 func (stubProvider) IsRevisionDatabase(*sql.Context, string) (bool, error) { return false, nil }
-func (stubProvider) GetRemoteDB(context.Context, *types.NomsBinFormat, env.Remote, bool) (*doltdb.DoltDB, error) {
+func (stubProvider) GetRemoteDB(context.Context, *types.NomsBinFormat, env.Remote) (*doltdb.DoltDB, error) {
 	return nil, nil
 }
 func (stubProvider) FileSystem() filesys.Filesys { return nil }

@@ -6,9 +6,9 @@ require (
 	github.com/AlekSi/pointer v1.2.0
 	github.com/FerretDB/wire v0.0.8
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20260506222236-acbcbc3583f4
+	github.com/dolthub/dolt/go v0.40.5-0.20260519223508-dc0b16653381
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260505171600-5a9dda3f04ff
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260519163920-8a6f65450db7
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/stretchr/testify v1.11.1
@@ -70,6 +70,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.1.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
+	github.com/cockroachdb/apd/v3 v3.2.3 // indirect
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
@@ -114,7 +115,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.8.3 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect

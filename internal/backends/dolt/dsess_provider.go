@@ -99,7 +99,7 @@ func (p *dumbodbProvider) FileSystemForDatabase(_ string) (filesys.Filesys, erro
 	return p.fs, nil
 }
 
-func (p *dumbodbProvider) GetRemoteDB(_ context.Context, _ *types.NomsBinFormat, _ env.Remote, _ bool) (*doltdb.DoltDB, error) {
+func (p *dumbodbProvider) GetRemoteDB(_ context.Context, _ *types.NomsBinFormat, _ env.Remote) (*doltdb.DoltDB, error) {
 	return nil, fmt.Errorf("dumbodb provider: GetRemoteDB not supported")
 }
 
