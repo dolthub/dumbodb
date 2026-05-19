@@ -22,6 +22,7 @@ import (
 
 	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
+	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -346,14 +347,14 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // the doltDB if not already cached. The caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
 	if owner, ok := ownerForTxn(ctx); ok {
-		if ws, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
-			return ws, nil
+		if entry, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
+			return entry.current, nil
 		}
 		ws, err := state.loadCommittedWS(ctx, branch)
 		if err != nil {
 			return nil, err
 		}
-		state.pendingWS[pendingWSKey{owner, branch}] = ws
+		state.pendingWS[pendingWSKey{owner, branch}] = &pendingTxnState{base: ws, current: ws}
 		return ws, nil
 	}
 
@@ -388,15 +389,24 @@ func ownerForTxn(ctx context.Context) (string, bool) {
 	return ci.Owner(), true
 }
 
-// Caller must hold state.mu write lock.
-func (state *dbState) commitPendingForOwner(ctx context.Context, owner string) ([]string, error) {
+// Caller must hold state.mu write lock. sqlCtx is required because the
+// three-way merge runs through dolt's merge.MergeRoots.
+func (state *dbState) commitPendingForOwner(sqlCtx *sql.Context, resolver doltdb.TableResolver, owner string) ([]string, error) {
 	var branches []string
-	for key, ws := range state.pendingWS {
+	for key, entry := range state.pendingWS {
 		if key.owner != owner {
 			continue
 		}
-		state.workingSets[key.branch] = ws
-		if err := updateWorkingSet(ctx, state.doltDB, ws, key.branch); err != nil {
+		committed, ok := state.workingSets[key.branch]
+		if !ok {
+			committed = entry.base
+		}
+		merged, err := mergePendingIntoCommitted(sqlCtx, resolver, entry.base, entry.current, committed)
+		if err != nil {
+			return branches, fmt.Errorf("commitTransaction: merging working set for %q: %w", key.branch, err)
+		}
+		state.workingSets[key.branch] = merged
+		if err := updateWorkingSet(sqlCtx, state.doltDB, merged, key.branch); err != nil {
 			return branches, fmt.Errorf("commitTransaction: persisting working set for %q: %w", key.branch, err)
 		}
 		if state.dirtyBranches != nil {
@@ -470,7 +480,13 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
 
 	if owner, ok := ownerForTxn(ctx); ok {
-		state.pendingWS[pendingWSKey{owner, branch}] = newWS
+		key := pendingWSKey{owner, branch}
+		entry, ok := state.pendingWS[key]
+		if !ok {
+			entry = &pendingTxnState{base: ws}
+			state.pendingWS[key] = entry
+		}
+		entry.current = newWS
 		return nil
 	}
 

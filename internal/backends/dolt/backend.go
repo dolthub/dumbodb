@@ -63,6 +63,7 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -135,7 +136,7 @@ type dbState struct {
 	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
-	pendingWS map[pendingWSKey]*doltdb.WorkingSet
+	pendingWS map[pendingWSKey]*pendingTxnState
 
 	uuids        map[string]string
 	indexes      map[string][]backends.IndexInfo
@@ -156,6 +157,14 @@ type dbState struct {
 type pendingWSKey struct {
 	owner  string
 	branch string
+}
+
+// pendingTxnState holds the per-(owner, branch) transaction overlay along
+// with the base working set snapshot taken when the txn first touched the
+// branch. The base is required for three-way merge on commit.
+type pendingTxnState struct {
+	base    *doltdb.WorkingSet
+	current *doltdb.WorkingSet
 }
 
 func (s *dbState) workingSet(branch string) (*doltdb.WorkingSet, bool) {
@@ -286,18 +295,35 @@ func (b *Backend) OnSessionEnd(owner string) {
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
+	type namedDb struct {
+		name string
+		db   *dbState
+	}
 	b.mu.RLock()
-	dbs := make([]*dbState, 0, len(b.dbs))
-	for _, db := range b.dbs {
-		dbs = append(dbs, db)
+	dbs := make([]namedDb, 0, len(b.dbs))
+	for name, db := range b.dbs {
+		dbs = append(dbs, namedDb{name: name, db: db})
 	}
 	b.mu.RUnlock()
 
+	sess := b.NewSession()
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+
 	var firstErr error
-	for _, db := range dbs {
-		db.mu.Lock()
-		_, err := db.commitPendingForOwner(ctx, owner)
-		db.mu.Unlock()
+	for _, nd := range dbs {
+		sqlDB, ok, err := b.provider.getOrBuildSqleDatabase(sqlCtx, nd.name)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !ok {
+			continue
+		}
+		nd.db.mu.Lock()
+		_, err = nd.db.commitPendingForOwner(sqlCtx, sqlDB.GetTableResolver(), owner)
+		nd.db.mu.Unlock()
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -908,7 +934,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		doltDB:         doltDB,
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
-		pendingWS:      map[pendingWSKey]*doltdb.WorkingSet{},
+		pendingWS:      map[pendingWSKey]*pendingTxnState{},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),

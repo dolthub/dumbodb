@@ -85,8 +85,11 @@ func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.W
 	if !inTxn {
 		return nil, false
 	}
-	ws, ok := state.pendingWS[pendingWSKey{owner, branch}]
-	return ws, ok
+	entry, ok := state.pendingWS[pendingWSKey{owner, branch}]
+	if !ok {
+		return nil, false
+	}
+	return entry.current, true
 }
 
 func (db *database) Collection(name string) (backends.Collection, error) {
