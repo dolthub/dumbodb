@@ -81,7 +81,7 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 }
 
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
-	owner, inTxn := ownerForTxn(ctx)
+	owner, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
 	if !inTxn {
 		return nil, false
 	}

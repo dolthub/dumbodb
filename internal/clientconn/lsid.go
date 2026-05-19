@@ -17,9 +17,17 @@ package clientconn
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
+)
+
+// Per the session-isolation design: startTransaction is unavailable in
+// --session-isolation mode; the user is expected to issue writes directly
+// and call doltCommit to merge them back to HEAD.
+var errSessionIsolationRejectStartTransaction = errors.New(
+	"Transactions are not available in session-isolation mode. Use doltCommit instead.",
 )
 
 func extractAndSetLSID(ctx context.Context, doc *types.Document) {
@@ -47,16 +55,20 @@ func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 }
 
 // MongoDB has no separate startTransaction command; the driver flags the
-// first command in a txn with startTransaction:true.
-func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) {
+// first command in a txn with startTransaction:true. Returns whether the
+// flag was observed; conn-level routing uses this to reject the wire
+// frame in --session-isolation mode.
+func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (started bool) {
 	if doc == nil || !doc.Has("startTransaction") {
-		return
+		return false
 	}
 	v, err := doc.Get("startTransaction")
 	if err != nil {
-		return
+		return false
 	}
 	if b, ok := v.(bool); ok && b {
 		conninfo.Get(ctx).SetInTransaction(true)
+		return true
 	}
+	return false
 }

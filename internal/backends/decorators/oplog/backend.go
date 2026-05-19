@@ -89,6 +89,13 @@ func (b *backend) OnTransactionAbort(owner string) {
 	}
 }
 
+func (b *backend) SessionIsolation() bool {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		return sab.SessionIsolation()
+	}
+	return false
+}
+
 func (b *backend) DumboDBBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	if vb, ok := b.origB.(backends.VersioningBackend); ok {
 		return vb.DumboDBBranch(ctx, params)

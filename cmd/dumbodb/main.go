@@ -72,6 +72,7 @@ func run(logger *slog.Logger) error {
 	port := fs.Int("port", 0, "listen port (overrides port in --addr if set)")
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
+	sessionIsolation := fs.Bool("session-isolation", false, "run in version-control-native isolation mode: per-connection working-set overlay, doltCommit merges, startTransaction rejected")
 	fs.Parse(os.Args[1:])
 
 	var level slog.Level
@@ -106,12 +107,13 @@ func run(logger *slog.Logger) error {
 	}
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
-		Logger:        logger,
-		StateProvider: stateProvider,
-		TCPHost:       *addr,
-		ReplSetName:   "",
-		DoltDataDir:   *dataDir,
-		AutoCommit:    *autoCommit,
+		Logger:           logger,
+		StateProvider:    stateProvider,
+		TCPHost:          *addr,
+		ReplSetName:      "",
+		DoltDataDir:      *dataDir,
+		AutoCommit:       *autoCommit,
+		SessionIsolation: *sessionIsolation,
 	})
 	if err != nil {
 		return err

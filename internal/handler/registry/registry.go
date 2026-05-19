@@ -57,6 +57,12 @@ type NewHandlerOpts struct {
 	// Used only by the "dolt" handler.
 	AutoCommit bool
 
+	// SessionIsolation, when true, runs DumboDB in version-control-native
+	// isolation: writes auto-fork into a per-connection working-set overlay,
+	// startTransaction is rejected with code 263, and doltCommit merges the
+	// overlay back to the branch HEAD with three-way conflict detection.
+	SessionIsolation bool
+
 	TestOpts
 
 	_ struct{} // prevent unkeyed literals

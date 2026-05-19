@@ -100,6 +100,13 @@ func (bc *backendContract) OnTransactionAbort(owner string) {
 	}
 }
 
+func (bc *backendContract) SessionIsolation() bool {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		return sab.SessionIsolation()
+	}
+	return false
+}
+
 type StatusParams struct{}
 
 type StatusResult struct {

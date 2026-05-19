@@ -84,10 +84,15 @@ func (m *DocLockManager) Release(owner string) {
 	}
 }
 
-// No-op outside a txn: implicit single-statement writes serialize on state.mu
-// without per-doc locks.
+// Skipped in --session-isolation mode: conflicts are resolved at doltCommit
+// time via three-way merge rather than at write time via locks. Also a
+// no-op for non-transactional writes (implicit single-statement txns
+// serialize on state.mu instead).
 func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash) error {
-	owner, inTxn := ownerForTxn(ctx)
+	if b.sessionIsolation {
+		return nil
+	}
+	owner, inTxn := ownerForTxn(ctx, false)
 	if !inTxn || len(ids) == 0 {
 		return nil
 	}
@@ -130,7 +135,7 @@ func idsFromValues(idVals []any) ([]hash.Hash, error) {
 }
 
 func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Document) error {
-	if _, inTxn := ownerForTxn(ctx); !inTxn {
+	if _, inTxn := ownerForTxn(ctx, c.db.backend.sessionIsolation); !inTxn {
 		return nil
 	}
 	ids, err := idsFromDocs(docs)
@@ -141,7 +146,7 @@ func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Docum
 }
 
 func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Document) error {
-	if _, inTxn := ownerForTxn(ctx); !inTxn {
+	if _, inTxn := ownerForTxn(ctx, c.db.backend.sessionIsolation); !inTxn {
 		return nil
 	}
 	ids, err := idsFromDocs(docs)
@@ -152,7 +157,7 @@ func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Docum
 }
 
 func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error {
-	if _, inTxn := ownerForTxn(ctx); !inTxn {
+	if _, inTxn := ownerForTxn(ctx, c.db.backend.sessionIsolation); !inTxn {
 		return nil
 	}
 	ids, err := idsFromValues(idVals)

@@ -419,9 +419,17 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 		command = doc.Command()
 
+		var startedTxn bool
 		if err == nil {
 			extractAndSetLSID(connCtx, typedDoc)
-			extractAndSetTransactionFlag(connCtx, typedDoc)
+			startedTxn = extractAndSetTransactionFlag(connCtx, typedDoc)
+		}
+
+		if err == nil && startedTxn && c.h.SessionIsolation() {
+			err = handlererrors.NewCommandError(
+				handlererrors.ErrorCode(263),
+				errSessionIsolationRejectStartTransaction,
+			)
 		}
 
 		if err == nil {

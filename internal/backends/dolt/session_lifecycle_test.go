@@ -27,7 +27,7 @@ import (
 )
 
 func TestBackendImplementsSessionAwareBackend(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -35,7 +35,7 @@ func TestBackendImplementsSessionAwareBackend(t *testing.T) {
 }
 
 func TestDocLockManagerIsPerDbBranch(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -50,7 +50,7 @@ func TestDocLockManagerIsPerDbBranch(t *testing.T) {
 }
 
 func TestOnSessionEndReleasesAllLocks(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
@@ -74,7 +74,7 @@ func TestOnSessionEndReleasesAllLocks(t *testing.T) {
 }
 
 func TestOnSessionEndUnknownOwnerIsNoop(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 

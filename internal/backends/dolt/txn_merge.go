@@ -71,6 +71,11 @@ func mergePendingIntoCommitted(
 	if result.HasSchemaConflicts() {
 		return nil, fmt.Errorf("merge: schema conflict on transaction commit")
 	}
+	for tbl, stats := range result.Stats {
+		if stats.DataConflicts > 0 {
+			return nil, fmt.Errorf("merge: data conflict on %q (%d row(s)); commit rejected", tbl.Name, stats.DataConflicts)
+		}
+	}
 
 	return ours.WithWorkingRoot(result.Root).WithStagedRoot(result.Root), nil
 }

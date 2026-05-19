@@ -29,7 +29,7 @@ func newDoltHandler(opts *NewHandlerOpts) (*handler.Handler, CloseBackendFunc, e
 		dataDir = "data"
 	}
 
-	b, err := dolt.NewBackend(dataDir, opts.Logger, opts.AutoCommit)
+	b, err := dolt.NewBackend(dataDir, opts.Logger, opts.AutoCommit, opts.SessionIsolation)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -119,6 +119,8 @@ type timeSeriesMeta struct {
 
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
+	backend *Backend // back-pointer; lets helpers read backend-level config (e.g. sessionIsolation)
+
 	mu    sync.RWMutex
 	dbDir string
 
@@ -251,9 +253,10 @@ func (s *dbState) setAM(branch string, am prolly.AddressMap) {
 
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
-	dataDir    string
-	l          *slog.Logger
-	autoCommit bool // when true, each write auto-creates a Dolt commit
+	dataDir          string
+	l                *slog.Logger
+	autoCommit       bool // when true, each write auto-creates a Dolt commit
+	sessionIsolation bool // when true, writes auto-fork into per-conn overlay and doltCommit merges
 
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
@@ -337,6 +340,10 @@ func (b *Backend) OnTransactionAbort(owner string) {
 	b.releaseLocksForOwner(owner)
 }
 
+func (b *Backend) SessionIsolation() bool {
+	return b.sessionIsolation
+}
+
 func (b *Backend) abortPendingForOwner(owner string) {
 	b.mu.RLock()
 	dbs := make([]*dbState, 0, len(b.dbs))
@@ -391,27 +398,28 @@ func parseAuthorString(author string) (name, email string) {
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
 // When autoCommit is true, every document write (insert/update/delete) is
 // automatically committed to Dolt history without an explicit doltCommit call.
-func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backend, error) {
-	b, err := newBackend(dataDir, l, autoCommit)
+func NewBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool) (backends.Backend, error) {
+	b, err := newBackend(dataDir, l, autoCommit, sessionIsolation)
 	if err != nil {
 		return nil, err
 	}
 	return backends.BackendContract(b), nil
 }
 
-func newBackend(dataDir string, l *slog.Logger, autoCommit bool) (*Backend, error) {
+func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool) (*Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
 	b := &Backend{
-		dataDir:     dataDir,
-		l:           l,
-		autoCommit:  autoCommit,
-		dbs:         make(map[string]*dbState),
-		docLocks:    make(map[string]*DocLockManager),
-		flusherStop: make(chan struct{}),
-		flusherDone: make(chan struct{}),
+		dataDir:          dataDir,
+		l:                l,
+		autoCommit:       autoCommit,
+		sessionIsolation: sessionIsolation,
+		dbs:              make(map[string]*dbState),
+		docLocks:         make(map[string]*DocLockManager),
+		flusherStop:      make(chan struct{}),
+		flusherDone:      make(chan struct{}),
 	}
 
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
@@ -927,6 +935,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
+		backend:        b,
 		dbDir:          dbDir,
 		cs:             cs,
 		ns:             ns,
@@ -1215,6 +1224,10 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	branch := params.Branch
 	if branch == "" {
 		branch = defaultBranch
+	}
+
+	if b.sessionIsolation {
+		return b.doltCommitSessionIsolation(ctx, params, db, branch, message, ts)
 	}
 
 	db.mu.Lock()

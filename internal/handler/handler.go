@@ -250,6 +250,16 @@ func (h *Handler) runCappedCleanup() {
 
 // Close gracefully shutdowns handler.
 // It should be called after listener closes all client connections and stops listening.
+// SessionIsolation reports whether the underlying backend is running in
+// --session-isolation mode. Used by the wire-dispatch layer to reject
+// startTransaction.
+func (h *Handler) SessionIsolation() bool {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		return sab.SessionIsolation()
+	}
+	return false
+}
+
 func (h *Handler) Close() {
 	h.cursors.Close()
 	close(h.cappedCleanupStop)

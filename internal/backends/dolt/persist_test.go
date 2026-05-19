@@ -326,7 +326,7 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	logger := slog.Default()
 
 	// --- Phase 1: insert a document ---
-	b1, err := NewBackend(dir, logger, false)
+	b1, err := NewBackend(dir, logger, false, false)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
 	}
@@ -356,7 +356,7 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	b1.Close()
 
 	// --- Phase 2: reopen and query ---
-	b2, err := NewBackend(dir, logger, false)
+	b2, err := NewBackend(dir, logger, false, false)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}

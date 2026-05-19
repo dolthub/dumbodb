@@ -346,7 +346,7 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
 // the doltDB if not already cached. The caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
-	if owner, ok := ownerForTxn(ctx); ok {
+	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
 		if entry, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
 			return entry.current, nil
 		}
@@ -381,12 +381,18 @@ func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*dolt
 
 // GetIfPresent (not Get): background loops (deferredFlushLoop, capped
 // cleanup) run without a ConnInfo and would otherwise panic.
-func ownerForTxn(ctx context.Context) (string, bool) {
+//
+// In --session-isolation mode every connection is implicitly forked, so
+// the InTransaction check is bypassed.
+func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
 	ci := conninfo.GetIfPresent(ctx)
-	if ci == nil || !ci.InTransaction() {
+	if ci == nil {
 		return "", false
 	}
-	return ci.Owner(), true
+	if sessionIsolation || ci.InTransaction() {
+		return ci.Owner(), true
+	}
+	return "", false
 }
 
 // Caller must hold state.mu write lock. sqlCtx is required because the
@@ -479,7 +485,7 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
 
-	if owner, ok := ownerForTxn(ctx); ok {
+	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
 		key := pendingWSKey{owner, branch}
 		entry, ok := state.pendingWS[key]
 		if !ok {
