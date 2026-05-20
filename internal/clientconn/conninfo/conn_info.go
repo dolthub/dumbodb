@@ -17,11 +17,15 @@ package conninfo
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"sync"
 
 	"github.com/xdg-go/scram"
+
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 // contextKey is a named unexported type for the safe use of context.WithValue.
@@ -41,7 +45,8 @@ type ConnInfo struct {
 	username string // protected by rw
 	password string // protected by rw
 
-	lsid string // protected by rw
+	lsid         string         // protected by rw
+	cachedShadow *sqlctx.Shadow // protected by rw
 
 	rw sync.RWMutex
 
@@ -146,6 +151,51 @@ func (connInfo *ConnInfo) SetLSID(lsid string) {
 	defer connInfo.rw.Unlock()
 
 	connInfo.lsid = lsid
+}
+
+// EnsureLSID ensures the connection has a non-empty lsid. If the lsid
+// is empty, EnsureLSID generates a server-private synthetic id with the
+// "synthetic:" prefix and assigns it. Synthetic ids let log lines and
+// metrics distinguish driver-supplied from server-generated sessions,
+// but the prefix is opaque to the registry.
+//
+// Returns the resulting lsid.
+func (connInfo *ConnInfo) EnsureLSID() string {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	if connInfo.lsid != "" {
+		return connInfo.lsid
+	}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is fatal-level for the connection, but we
+		// must return *something* the registry can key on; fall back to
+		// the conn pointer so each call still yields a stable id.
+		connInfo.lsid = fmt.Sprintf("synthetic:fallback-%p", connInfo)
+		return connInfo.lsid
+	}
+	connInfo.lsid = "synthetic:" + hex.EncodeToString(b[:])
+	return connInfo.lsid
+}
+
+// CachedShadow returns the most recent session shadow cached on this
+// connection, or nil if no shadow has been cached (or the cached one
+// has been cleared).
+func (connInfo *ConnInfo) CachedShadow() *sqlctx.Shadow {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+	return connInfo.cachedShadow
+}
+
+// SetCachedShadow caches a session shadow on the connection. The wire
+// dispatch caches the result of registry.Connect here on first sight of
+// an lsid; subsequent frames read it back to avoid hitting the registry
+// mutex on the hot path.
+func (connInfo *ConnInfo) SetCachedShadow(s *sqlctx.Shadow) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.cachedShadow = s
 }
 
 func (connInfo *ConnInfo) InTransaction() bool {

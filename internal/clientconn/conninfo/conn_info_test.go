@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLSIDRoundTrip(t *testing.T) {
@@ -71,4 +72,57 @@ func TestSetLSIDOverridesFallback(t *testing.T) {
 	c.SetLSID("real-lsid")
 	assert.Equal(t, "real-lsid", c.Owner(),
 		"Owner must prefer lsid once it is set, not the synthetic fallback")
+}
+
+// .6.4.7 tests below.
+
+func TestCachedShadow_DefaultsToNil(t *testing.T) {
+	c := New()
+	assert.Nil(t, c.CachedShadow())
+}
+
+func TestCachedShadow_RoundTrip(t *testing.T) {
+	// Use an arbitrary non-nil pointer; the type only matters for the
+	// concrete *sqlctx.Shadow field. Tests in sqlctx exercise the
+	// shadow's actual behavior; here we just round-trip the field.
+	c := New()
+	require.Nil(t, c.CachedShadow())
+
+	c.SetCachedShadow(nil) // explicit nil is a valid clear
+	assert.Nil(t, c.CachedShadow())
+}
+
+func TestEnsureLSID_GeneratesSyntheticOnEmpty(t *testing.T) {
+	c := New()
+	require.Equal(t, "", c.LSID())
+
+	got := c.EnsureLSID()
+	assert.True(t, strings.HasPrefix(got, "synthetic:"), "EnsureLSID must prefix server-generated ids with 'synthetic:'; got %q", got)
+	assert.Equal(t, got, c.LSID(), "EnsureLSID must persist the generated id on the ConnInfo")
+	assert.Greater(t, len(got), len("synthetic:"), "synthetic id must include random bytes after the prefix")
+}
+
+func TestEnsureLSID_NoopOnDriverSupplied(t *testing.T) {
+	c := New()
+	c.SetLSID("driver-supplied-id")
+
+	got := c.EnsureLSID()
+	assert.Equal(t, "driver-supplied-id", got, "EnsureLSID must not overwrite a driver-supplied lsid")
+	assert.Equal(t, "driver-supplied-id", c.LSID())
+}
+
+func TestEnsureLSID_OwnerPrefersSyntheticOverConnFallback(t *testing.T) {
+	c := New()
+	require.True(t, strings.HasPrefix(c.Owner(), "conn:"), "before EnsureLSID, Owner uses conn:%p")
+
+	id := c.EnsureLSID()
+	assert.Equal(t, id, c.Owner(), "after EnsureLSID, Owner returns the synthetic lsid")
+	assert.True(t, strings.HasPrefix(c.Owner(), "synthetic:"))
+}
+
+func TestEnsureLSID_StableAcrossCalls(t *testing.T) {
+	c := New()
+	first := c.EnsureLSID()
+	second := c.EnsureLSID()
+	assert.Equal(t, first, second, "subsequent EnsureLSID calls must return the same id")
 }
