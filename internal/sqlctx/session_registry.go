@@ -15,7 +15,6 @@
 package sqlctx
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,13 +81,6 @@ func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Begin/End pair auto-registers sess with its gcSafepointController
-	// (when present) and leaves it quiesced so VisitGCRoots can fire.
-	if err := sess.CommandBegin(); err != nil {
-		return nil, fmt.Errorf("SessionRegistry.Connect: CommandBegin for new session %q: %w", lsid, err)
-	}
-	sess.CommandEnd()
 
 	shadow := NewShadow(sess, r.nowFn())
 	entry := &sessionEntry{sess: sess}
