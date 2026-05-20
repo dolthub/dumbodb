@@ -27,17 +27,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// .6.4.5 acceptance: Backend wires the registry, the registry's factory
-// produces sessions attached to the backend's GC controller, and the
-// minted sessions can VisitGCRoots without panic.
-
 func TestBackend_HasSessionRegistry(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
-	require.NotNil(t, be.SessionRegistry(), "Backend must construct a SessionRegistry")
-	require.NotNil(t, be.GCSafepointController(), "Backend must own a GCSafepointController")
+	require.NotNil(t, be.SessionRegistry())
+	require.NotNil(t, be.GCSafepointController())
 }
 
 func TestBackend_RegistryFactoryWiresGCController(t *testing.T) {
@@ -51,14 +47,9 @@ func TestBackend_RegistryFactoryWiresGCController(t *testing.T) {
 
 	sess := shadow.Session()
 	require.NotNil(t, sess)
-	require.Same(t, be.GCSafepointController(), sess.GCSafepointController(),
-		"the registry's factory must wire the backend's GC controller into every minted session")
+	require.Same(t, be.GCSafepointController(), sess.GCSafepointController())
 }
 
-// VisitGCRoots must not panic on a freshly minted, never-touched session.
-// This is the smoke that confirms the session is properly registered with
-// the controller (via the Connect path's Begin/End pair) and that its
-// internal state is consistent enough for GC to walk.
 func TestBackend_NewSessionCanVisitGCRoots(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
@@ -68,14 +59,7 @@ func TestBackend_NewSessionCanVisitGCRoots(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := shadow.Session()
-	// VisitGCRoots iterates the session's dbStates. A fresh session has
-	// no dbStates registered yet so the walk is trivially safe; the
-	// point is that the method runs without panic and respects the
-	// session's internal mutex.
 	err = sess.VisitGCRoots(context.Background(), "admin", func(hash.Hash) bool {
-		// The session has no live roots yet, so the callback shouldn't be
-		// invoked. If it is, that's a panic-equivalent (something is
-		// pinned that shouldn't be).
 		t.Fatalf("VisitGCRoots called keep() on a fresh session with no dbStates")
 		return false
 	})
@@ -93,15 +77,9 @@ func TestBackend_RegistryYieldsDistinctSessionsPerLsid(t *testing.T) {
 	sB, err := be.SessionRegistry().Connect("test-lsid-B")
 	require.NoError(t, err)
 
-	assert.NotSame(t, sA.Session(), sB.Session(),
-		"distinct lsids must produce distinct underlying *dsess.DoltSession instances")
+	assert.NotSame(t, sA.Session(), sB.Session())
 }
 
-// Once Connect mints a session, subsequent Connect for the same lsid
-// (within the timeout window) returns a Shadow over the SAME underlying
-// session -- the supersession semantic. This is registry-level behavior
-// covered in .6.4.2's unit tests; here it's a quick smoke that the
-// production-wired registry preserves it.
 func TestBackend_RegistryReusesSessionOnReconnect(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
@@ -114,18 +92,10 @@ func TestBackend_RegistryReusesSessionOnReconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Same(t, first.Session(), second.Session())
-	assert.False(t, first.Active(), "supersede invalidates the first shadow")
+	assert.False(t, first.Active())
 	assert.True(t, second.Active())
-
-	// Sanity: the registry uses our intended timeout (defaultSessionTimeout = 30m).
-	// Connecting in quick succession does not reset that window; the new shadow
-	// inherits lastUsed (see .6.4.2 unit tests for the timing).
-	_ = time.Minute // anchor the time import
 }
 
-// Ensure that a session retrieved via the registry is usable for the
-// kind of operations the wire dispatcher will run against it. Smoke
-// check: passing the session through Wrap to build a *sql.Context.
 func TestBackend_RegistrySessionConstructsSqlContext(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)

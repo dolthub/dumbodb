@@ -261,9 +261,6 @@ func (h *Handler) SessionIsolation() bool {
 	return false
 }
 
-// SessionRegistry returns the backend's lsid-keyed session registry, or
-// nil if the backend does not support it. The wire-dispatch layer routes
-// every command through it (arriving in .6.4.8).
 func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		return sab.SessionRegistry()

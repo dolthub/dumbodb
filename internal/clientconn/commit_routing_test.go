@@ -20,24 +20,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// .6.4.10 acceptance: the wire-dispatch helper recognises the
-// durable-commit commands so they are routed through Shadow.Commit
-// (writeMu fence) rather than Shadow.Use (lock-free hot path).
-
 func TestCommandIsDurableCommit(t *testing.T) {
 	durable := []string{"doltCommit", "commitTransaction"}
 	for _, c := range durable {
-		assert.True(t, commandIsDurableCommit(c), "%q must route through Shadow.Commit", c)
+		assert.True(t, commandIsDurableCommit(c), c)
 	}
 
 	notDurable := []string{
 		"find", "insert", "update", "delete",
 		"hello", "ping", "isMaster", "buildInfo",
-		"abortTransaction", // releases the txn; not a durable boundary
-		"endSessions",      // advisory; not durable
-		"doltBranch",       // metadata mutation; current design does not need the fence
+		"abortTransaction", "endSessions", "doltBranch",
 	}
 	for _, c := range notDurable {
-		assert.False(t, commandIsDurableCommit(c), "%q must NOT route through Shadow.Commit", c)
+		assert.False(t, commandIsDurableCommit(c), c)
 	}
 }

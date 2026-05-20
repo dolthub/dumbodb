@@ -25,27 +25,16 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends/dolt"
 )
 
-// .6.4.6 acceptance: Handler.SessionRegistry() returns the registry from
-// the underlying dolt.Backend, even after wrapping in the BackendContract
-// and oplog decorator chain that production uses.
-
 func TestHandler_SessionRegistry_RoutesThroughWrappers(t *testing.T) {
 	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
-	// Build a Handler manually around this backend. The constructor for
-	// Handler in production goes through registry.NewHandler; here we
-	// shortcut by passing the backend into a minimal Handler with the
-	// same backend-assignment as production.
 	h := &Handler{NewOpts: &NewOpts{Backend: be, L: slog.New(slog.NewTextHandler(io.Discard, nil))}, b: be}
 
 	reg := h.SessionRegistry()
-	require.NotNil(t, reg, "Handler.SessionRegistry must surface the registry through BackendContract")
+	require.NotNil(t, reg)
 
-	// Round-trip: create a shadow via the registry, observe it through
-	// Get. This proves the same registry is being exposed (not, say, a
-	// freshly-constructed empty one).
 	shadow, err := reg.Connect("test-lsid")
 	require.NoError(t, err)
 	got, ok := reg.Get("test-lsid")

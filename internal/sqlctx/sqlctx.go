@@ -21,10 +21,6 @@ func NewSessionWithGlobals(provider dsess.DoltDatabaseProvider, writeSessFunc ds
 	return dsess.DefaultSession(provider, writeSessFunc).WithGlobals(globals)
 }
 
-// NewSessionWithGC constructs a DoltSession via dsess.NewDetachedSession,
-// wiring in the given GCSafepointController so VisitGCRoots is meaningful.
-// Used by the SessionRegistry factory in production paths; the controller
-// drives chunk pinning while the session is in the registry.
 func NewSessionWithGC(
 	provider dsess.DoltDatabaseProvider,
 	writeSessFunc dsess.WriteSessFunc,
@@ -35,10 +31,10 @@ func NewSessionWithGC(
 		provider,
 		conf,
 		branch_control.CreateDefaultController(context.TODO()),
-		nil, // statsProvider
+		nil,
 		writeSessFunc,
 		gc,
-		nil, // branchActivityTracker
+		nil,
 	)
 }
 

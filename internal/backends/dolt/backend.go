@@ -71,14 +71,8 @@ import (
 )
 
 const (
-	// defaultSessionTimeout is how long a registered lsid can be idle
-	// before Sweep reaps it. Matches MongoDB's
-	// logicalSessionTimeoutMinutes default.
-	defaultSessionTimeout = 30 * time.Minute
-
-	// defaultSessionSweepPeriod is how often the backend invokes
-	// SessionRegistry.Sweep. Independent of the timeout window; this is
-	// just the polling cadence.
+	// defaultSessionTimeout matches MongoDB's logicalSessionTimeoutMinutes default.
+	defaultSessionTimeout     = 30 * time.Minute
 	defaultSessionSweepPeriod = time.Minute
 
 	// defaultMemTableSize is the in-memory table size for NBS.
@@ -289,9 +283,6 @@ type Backend struct {
 	// can wait for the final drain to complete before tearing down dbs.
 	flusherDone chan struct{}
 
-	// sweeperStop / sweeperDone drive the SessionRegistry sweep ticker
-	// goroutine; sweeperPeriod is the tick interval (1 minute by default;
-	// overridable for tests).
 	sweeperStop   chan struct{}
 	sweeperDone   chan struct{}
 	sweeperPeriod time.Duration
@@ -474,10 +465,6 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 	return b, nil
 }
 
-// sessionSweepLoop drains expired entries from the SessionRegistry on a
-// fixed cadence. The cadence is independent from the per-entry timeout:
-// idle-window is 30 minutes by default, but we tick every minute so a
-// just-expired entry never lingers more than a minute past its window.
 func (b *Backend) sessionSweepLoop() {
 	defer close(b.sweeperDone)
 
@@ -556,7 +543,6 @@ func (b *Backend) Close() {
 		}
 	}
 
-	// Stop the session-sweep goroutine.
 	if b.sweeperStop != nil {
 		select {
 		case <-b.sweeperStop:

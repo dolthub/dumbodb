@@ -26,10 +26,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// wireConn speaks MongoDB OP_MSG directly to DumboDB so tests can stamp
-// a chosen lsid onto a frame without the driver overriding it. Used by
-// session-isolation tests that need to exercise lsid handling across
-// two TCP connections sharing a forged-identical session id.
+// wireConn speaks MongoDB OP_MSG directly so tests can stamp a chosen
+// lsid onto a frame without the driver overriding it.
 type wireConn struct {
 	c    net.Conn
 	next atomic.Int32
@@ -45,9 +43,6 @@ func dialWire(t *testing.T, env *dumboDBTestEnv) *wireConn {
 	w := &wireConn{c: c}
 	t.Cleanup(func() { _ = c.Close() })
 
-	// Handshake -- some Mongo-compatible servers close the connection
-	// without an opening hello. DumboDB tolerates either order; sending
-	// hello unconditionally is the safer pattern.
 	if _, err := w.run(bson.D{{Key: "hello", Value: 1}, {Key: "$db", Value: "admin"}}); err != nil {
 		t.Fatalf("wire hello: %v", err)
 	}
@@ -91,8 +86,6 @@ func (w *wireConn) run(cmd bson.D) (bson.M, error) {
 	return out, nil
 }
 
-// freshLsid returns a UUID-shaped BSON document suitable for stamping
-// into an OP_MSG frame's "lsid" field.
 func freshLsid() bson.D {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {

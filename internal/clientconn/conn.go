@@ -585,15 +585,6 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	return
 }
 
-// dispatchThroughSession routes the request through the lsid-keyed session
-// registry: every frame's handler runs inside Shadow.Use so the GC
-// safepoint controller sees the session as in-flight only for the
-// duration, and a concurrent reconnect on the same lsid surfaces to this
-// connection as MongoDB error code 225 (TransactionTooOld) on its next
-// frame.
-//
-// Falls back to a direct handleOpMsg call when the handler has no
-// SessionRegistry (stub backends in tests).
 func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, command string) (*wire.OpMsg, error) {
 	reg := c.h.SessionRegistry()
 	if reg == nil {
@@ -605,12 +596,6 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 
 	shadow, cachedLsid := ci.CachedShadow()
 	if shadow == nil || cachedLsid != lsid {
-		// First frame on this connection, or the lsid changed since
-		// the last frame (e.g. handshake had a synthetic id; the
-		// driver supplied an explicit lsid on this frame). Connect to
-		// the registry, which either mints a fresh session or
-		// supersedes any prior shadow another connection was holding
-		// for this lsid.
 		s, err := reg.Connect(lsid)
 		if err != nil {
 			return nil, fmt.Errorf("session registry: Connect for %q: %w", lsid, err)
@@ -618,22 +603,13 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		ci.SetCachedShadow(lsid, s)
 		shadow = s
 	}
-	// If the cached shadow is no longer active, another connection has
-	// taken over this lsid (or Sweep / End reaped it). Surface the
-	// terminal error to this connection; do NOT re-Connect (that would
-	// ping-pong supersedes between the two connections).
+	// A re-Connect here would ping-pong supersedes between this
+	// connection and the one that took over; surface the terminal
+	// error instead.
 	if !shadow.Active() {
-		return nil, handlererrors.NewCommandError(
-			handlererrors.ErrorCode(225),
-			errors.New("session was taken over by a newer connection on this lsid"),
-		)
+		return nil, supersededError()
 	}
 
-	// Commands that durably persist the session's pending state go
-	// through Shadow.Commit, which holds writeMu for the duration so a
-	// concurrent supersede / sweep / end is fenced until the fsync
-	// lands. Non-commit commands go through Shadow.Use (lock-free
-	// hot path).
 	runFn := shadow.Use
 	if commandIsDurableCommit(command) {
 		runFn = shadow.Commit
@@ -646,19 +622,18 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		return handlerErr
 	})
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
-		return nil, handlererrors.NewCommandError(
-			handlererrors.ErrorCode(225),
-			errors.New("session was taken over by a newer connection on this lsid"),
-		)
+		return nil, supersededError()
 	}
 	return resMsg, runErr
 }
 
-// commandIsDurableCommit reports whether the command persists the
-// session's pending state to disk and therefore needs the Shadow.Commit
-// writeMu fence so a concurrent reconnect / sweep is blocked until the
-// commit returns. doltCommit is the SI-mode durable boundary;
-// commitTransaction is the default-mode durable boundary.
+func supersededError() error {
+	return handlererrors.NewCommandError(
+		handlererrors.ErrorCode(225),
+		errors.New("session was taken over by a newer connection on this lsid"),
+	)
+}
+
 func commandIsDurableCommit(command string) bool {
 	switch command {
 	case "doltCommit", "commitTransaction":

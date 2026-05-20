@@ -187,16 +187,10 @@ func (b *Backend) NewSession() *dsess.DoltSession {
 	return sqlctx.NewSession(b.provider, writer.NewWriteSession)
 }
 
-// SessionRegistry returns the lsid-keyed session registry owned by this
-// Backend. Wire-dispatch routes every command through it (Phase B,
-// arriving in .6.4.8).
 func (b *Backend) SessionRegistry() *sqlctx.SessionRegistry {
 	return b.sessions
 }
 
-// GCSafepointController returns the controller that the SessionRegistry
-// factory wires into every minted DoltSession. Exposed for tests and for
-// future GC-driven entry points.
 func (b *Backend) GCSafepointController() *gcctx.GCSafepointController {
 	return b.gcController
 }

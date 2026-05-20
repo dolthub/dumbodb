@@ -47,7 +47,7 @@ type ConnInfo struct {
 
 	lsid             string         // protected by rw
 	cachedShadow     *sqlctx.Shadow // protected by rw
-	cachedShadowLsid string         // protected by rw; the lsid the cachedShadow is for
+	cachedShadowLsid string         // protected by rw
 
 	rw sync.RWMutex
 
@@ -154,13 +154,10 @@ func (connInfo *ConnInfo) SetLSID(lsid string) {
 	connInfo.lsid = lsid
 }
 
-// EnsureLSID ensures the connection has a non-empty lsid. If the lsid
-// is empty, EnsureLSID generates a server-private synthetic id with the
-// "synthetic:" prefix and assigns it. Synthetic ids let log lines and
-// metrics distinguish driver-supplied from server-generated sessions,
-// but the prefix is opaque to the registry.
-//
-// Returns the resulting lsid.
+// EnsureLSID assigns a "synthetic:" prefixed id when none is present
+// (handshake, ping, legacy clients with no implicit session). The
+// prefix is opaque to the registry but distinguishes server-generated
+// from driver-supplied ids in logs.
 func (connInfo *ConnInfo) EnsureLSID() string {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -170,9 +167,6 @@ func (connInfo *ConnInfo) EnsureLSID() string {
 	}
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failing is fatal-level for the connection, but we
-		// must return *something* the registry can key on; fall back to
-		// the conn pointer so each call still yields a stable id.
 		connInfo.lsid = fmt.Sprintf("synthetic:fallback-%p", connInfo)
 		return connInfo.lsid
 	}
@@ -180,22 +174,16 @@ func (connInfo *ConnInfo) EnsureLSID() string {
 	return connInfo.lsid
 }
 
-// CachedShadow returns the most recent session shadow cached on this
-// connection along with the lsid it was acquired for, or (nil, "") if
-// no shadow has been cached. Callers compare the returned lsid to the
-// current frame's lsid; a mismatch means the cache is stale (driver
-// switched session ids on this connection) and the caller must call
-// the registry to obtain a fresh shadow.
+// CachedShadow returns the cached shadow and the lsid it was acquired
+// for. A mismatch with the current frame's lsid means the cache is
+// stale and the caller must Connect again (e.g. handshake's synthetic
+// id is replaced by a driver-supplied id on the next frame).
 func (connInfo *ConnInfo) CachedShadow() (*sqlctx.Shadow, string) {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
 	return connInfo.cachedShadow, connInfo.cachedShadowLsid
 }
 
-// SetCachedShadow caches a session shadow on the connection along with
-// the lsid it is associated with. The wire dispatch caches the result
-// of registry.Connect here on first sight of an lsid; subsequent frames
-// read it back to avoid hitting the registry mutex on the hot path.
 func (connInfo *ConnInfo) SetCachedShadow(lsid string, s *sqlctx.Shadow) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()

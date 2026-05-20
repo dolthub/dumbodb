@@ -74,8 +74,6 @@ func TestSetLSIDOverridesFallback(t *testing.T) {
 		"Owner must prefer lsid once it is set, not the synthetic fallback")
 }
 
-// .6.4.7 tests below.
-
 func TestCachedShadow_DefaultsToNil(t *testing.T) {
 	c := New()
 	s, lsid := c.CachedShadow()
@@ -88,7 +86,7 @@ func TestCachedShadow_RoundTrip(t *testing.T) {
 	s, _ := c.CachedShadow()
 	require.Nil(t, s)
 
-	c.SetCachedShadow("some-lsid", nil) // explicit nil is a valid clear
+	c.SetCachedShadow("some-lsid", nil)
 	s, lsid := c.CachedShadow()
 	assert.Nil(t, s)
 	assert.Equal(t, "some-lsid", lsid)
@@ -99,9 +97,9 @@ func TestEnsureLSID_GeneratesSyntheticOnEmpty(t *testing.T) {
 	require.Equal(t, "", c.LSID())
 
 	got := c.EnsureLSID()
-	assert.True(t, strings.HasPrefix(got, "synthetic:"), "EnsureLSID must prefix server-generated ids with 'synthetic:'; got %q", got)
-	assert.Equal(t, got, c.LSID(), "EnsureLSID must persist the generated id on the ConnInfo")
-	assert.Greater(t, len(got), len("synthetic:"), "synthetic id must include random bytes after the prefix")
+	assert.True(t, strings.HasPrefix(got, "synthetic:"))
+	assert.Equal(t, got, c.LSID())
+	assert.Greater(t, len(got), len("synthetic:"))
 }
 
 func TestEnsureLSID_NoopOnDriverSupplied(t *testing.T) {
@@ -109,16 +107,16 @@ func TestEnsureLSID_NoopOnDriverSupplied(t *testing.T) {
 	c.SetLSID("driver-supplied-id")
 
 	got := c.EnsureLSID()
-	assert.Equal(t, "driver-supplied-id", got, "EnsureLSID must not overwrite a driver-supplied lsid")
+	assert.Equal(t, "driver-supplied-id", got)
 	assert.Equal(t, "driver-supplied-id", c.LSID())
 }
 
 func TestEnsureLSID_OwnerPrefersSyntheticOverConnFallback(t *testing.T) {
 	c := New()
-	require.True(t, strings.HasPrefix(c.Owner(), "conn:"), "before EnsureLSID, Owner uses conn:%p")
+	require.True(t, strings.HasPrefix(c.Owner(), "conn:"))
 
 	id := c.EnsureLSID()
-	assert.Equal(t, id, c.Owner(), "after EnsureLSID, Owner returns the synthetic lsid")
+	assert.Equal(t, id, c.Owner())
 	assert.True(t, strings.HasPrefix(c.Owner(), "synthetic:"))
 }
 
@@ -126,5 +124,5 @@ func TestEnsureLSID_StableAcrossCalls(t *testing.T) {
 	c := New()
 	first := c.EnsureLSID()
 	second := c.EnsureLSID()
-	assert.Equal(t, first, second, "subsequent EnsureLSID calls must return the same id")
+	assert.Equal(t, first, second)
 }

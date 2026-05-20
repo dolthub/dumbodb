@@ -44,7 +44,7 @@ func TestSessionRegistry_Connect_CreatesAndCaches(t *testing.T) {
 
 	got, ok := r.Get("lsid-A")
 	require.True(t, ok)
-	assert.Same(t, first, got, "Get must return the same shadow as Connect just produced")
+	assert.Same(t, first, got)
 }
 
 func TestSessionRegistry_Connect_InvalidatesPriorShadow(t *testing.T) {
@@ -58,9 +58,9 @@ func TestSessionRegistry_Connect_InvalidatesPriorShadow(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, second.Active())
 
-	assert.NotSame(t, first, second, "reconnect must return a new shadow")
-	assert.False(t, first.Active(), "the prior shadow's latch must be off after reconnect")
-	assert.Equal(t, 1, r.Len(), "the entry count must not grow on reconnect")
+	assert.NotSame(t, first, second)
+	assert.False(t, first.Active())
+	assert.Equal(t, 1, r.Len())
 }
 
 func TestSessionRegistry_Connect_NewShadowInheritsLastUsed(t *testing.T) {
@@ -71,19 +71,14 @@ func TestSessionRegistry_Connect_NewShadowInheritsLastUsed(t *testing.T) {
 
 	first, err := r.Connect("lsid-A")
 	require.NoError(t, err)
-	// Simulate activity at T=5min via Use.
 	usedAt := clock.Add(5 * time.Minute)
 	require.NoError(t, first.Use(usedAt, func(*dsess.DoltSession) error { return nil }))
 	assert.Equal(t, usedAt.UnixNano(), first.LastUsed().UnixNano())
 
-	// Reconnect at T=10min. The new shadow's lastUsed must equal the old
-	// shadow's lastUsed at the moment of supersession (T=5min, not the
-	// reconnect time of T=10min).
-	clock = clock.Add(5 * time.Minute) // T = 10min
+	clock = clock.Add(5 * time.Minute)
 	second, err := r.Connect("lsid-A")
 	require.NoError(t, err)
-	assert.Equal(t, usedAt.UnixNano(), second.LastUsed().UnixNano(),
-		"reconnect must inherit lastUsed; reconnect itself is not session activity")
+	assert.Equal(t, usedAt.UnixNano(), second.LastUsed().UnixNano())
 }
 
 func TestSessionRegistry_Connect_NewShadowReusesSession(t *testing.T) {
@@ -95,8 +90,7 @@ func TestSessionRegistry_Connect_NewShadowReusesSession(t *testing.T) {
 	second, err := r.Connect("lsid-A")
 	require.NoError(t, err)
 
-	assert.Same(t, first.Session(), second.Session(),
-		"reconnect must reuse the underlying *dsess.DoltSession")
+	assert.Same(t, first.Session(), second.Session())
 }
 
 func TestSessionRegistry_FactoryErrorNoEntryStored(t *testing.T) {
@@ -107,16 +101,12 @@ func TestSessionRegistry_FactoryErrorNoEntryStored(t *testing.T) {
 
 	_, err := r.Connect("lsid-A")
 	require.ErrorIs(t, err, wantErr)
-	assert.Equal(t, 0, r.Len(), "failed creation must not leave a stub entry")
+	assert.Equal(t, 0, r.Len())
 
 	_, ok := r.Get("lsid-A")
 	assert.False(t, ok)
 }
 
-// Use loop on shadow_A while another goroutine supersedes via Connect.
-// After supersession, every subsequent Use on shadow_A must return
-// ErrShadowInvalidated. Run under -race to validate the lock-free hot
-// path against the registry mutex / writeMu interplay.
 func TestSessionRegistry_Race_UseVsConnect(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 
@@ -132,7 +122,6 @@ func TestSessionRegistry_Race_UseVsConnect(t *testing.T) {
 		close(supersedeDone)
 	}()
 
-	// Drive Use on the first shadow before, during, and after supersede.
 	var preSupersedeUses, postSupersedeErrs int32
 	close(supersedeReady)
 
@@ -148,7 +137,6 @@ func TestSessionRegistry_Race_UseVsConnect(t *testing.T) {
 
 	<-supersedeDone
 
-	// After supersede is done, every Use must error.
 	for i := 0; i < 50; i++ {
 		err := first.Use(time.Now(), func(*dsess.DoltSession) error { return nil })
 		require.ErrorIs(t, err, ErrShadowInvalidated)
@@ -157,9 +145,6 @@ func TestSessionRegistry_Race_UseVsConnect(t *testing.T) {
 	t.Logf("pre-supersede Use successes: %d, post-supersede errors: %d", preSupersedeUses, postSupersedeErrs)
 }
 
-// 32 goroutines Connect to one lsid. Connect is serialised by r.mu, so
-// they run sequentially; each call supersedes the prior. Exactly one
-// shadow ends up active at the end, and all others are invalidated.
 func TestSessionRegistry_Concurrent_Connect_SameLsid(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 
@@ -191,11 +176,10 @@ func TestSessionRegistry_Concurrent_Connect_SameLsid(t *testing.T) {
 			active++
 		}
 	}
-	assert.Equal(t, 1, active, "exactly one shadow must remain Active after concurrent supersedes")
-	assert.Equal(t, 1, r.Len(), "exactly one entry in the registry")
+	assert.Equal(t, 1, active)
+	assert.Equal(t, 1, r.Len())
 }
 
-// Many distinct lsids in parallel each get their own session.
 func TestSessionRegistry_Concurrent_Connect_DifferentLsids(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 
@@ -218,7 +202,7 @@ func TestSessionRegistry_Concurrent_Connect_DifferentLsids(t *testing.T) {
 	close(gate)
 	wg.Wait()
 
-	assert.Equal(t, workers, r.Len(), "each distinct lsid must produce its own entry")
+	assert.Equal(t, workers, r.Len())
 }
 
 func TestSessionRegistry_PurgeNow_InvalidatesShadow(t *testing.T) {
@@ -229,7 +213,7 @@ func TestSessionRegistry_PurgeNow_InvalidatesShadow(t *testing.T) {
 	require.True(t, s.Active())
 
 	assert.True(t, r.PurgeNow("lsid-A"))
-	assert.False(t, s.Active(), "PurgeNow must flip the latch on the entry's shadow")
+	assert.False(t, s.Active())
 }
 
 func TestSessionRegistry_PurgeNow_DeletesEntry(t *testing.T) {
@@ -251,20 +235,14 @@ func TestSessionRegistry_PurgeNow_OnUnknownReturnsFalse(t *testing.T) {
 	assert.False(t, r.PurgeNow("never-existed"))
 }
 
-// PurgeNow's call to sess.SessionEnd deregisters the session from the
-// configured GC controller. The stubProvider-built sessions used in
-// these unit tests have no controller wired (gcSafepointController is
-// nil) so SessionEnd is a no-op. The integration with a real
-// GCSafepointController is exercised in .6.4.5 once the Backend factory
-// wires it. This test just documents that PurgeNow calls SessionEnd
-// without error -- the stub session's SessionEnd panics if called on a
-// nil controller, so passing through here means we exercise the
-// expected delegation surface.
+// stubProvider sessions have a nil gcSafepointController so SessionEnd
+// is a no-op; the GC integration is exercised in the dolt-backend
+// integration tests.
 func TestSessionRegistry_PurgeNow_CallsSessionEnd(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 	_, err := r.Connect("lsid-A")
 	require.NoError(t, err)
-	require.True(t, r.PurgeNow("lsid-A"), "PurgeNow must succeed (and indirectly invoke sess.SessionEnd) on a known lsid")
+	require.True(t, r.PurgeNow("lsid-A"))
 }
 
 func TestSessionRegistry_Sweep_RemovesIdle(t *testing.T) {
@@ -276,12 +254,11 @@ func TestSessionRegistry_Sweep_RemovesIdle(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, s.Active())
 
-	// Advance past the timeout window with no activity.
 	clock = clock.Add(10 * time.Minute)
 	removed := r.Sweep(clock)
 	assert.Equal(t, 1, removed)
 	assert.Equal(t, 0, r.Len())
-	assert.False(t, s.Active(), "swept shadow's latch must be off")
+	assert.False(t, s.Active())
 }
 
 func TestSessionRegistry_Sweep_KeepsActive(t *testing.T) {
@@ -292,22 +269,16 @@ func TestSessionRegistry_Sweep_KeepsActive(t *testing.T) {
 	s, err := r.Connect("lsid-A")
 	require.NoError(t, err)
 
-	// Drive activity within the idle window.
 	for step := 0; step < 4; step++ {
 		clock = clock.Add(2 * time.Minute)
 		require.NoError(t, s.Use(clock, func(*dsess.DoltSession) error { return nil }))
-		assert.Equal(t, 0, r.Sweep(clock), "Use bumps lastUsed; Sweep must not reap")
+		assert.Equal(t, 0, r.Sweep(clock))
 	}
 
-	// Now go idle past the window.
 	clock = clock.Add(11 * time.Minute)
 	assert.Equal(t, 1, r.Sweep(clock))
 }
 
-// Use loop while Sweep fires repeatedly with a not-yet-elapsed timeout.
-// Use must continue to succeed because every Use call bumps lastUsed.
-// Run under -race to validate atomic correctness across the
-// Sweep-collect / Use-bump interleaving.
 func TestSessionRegistry_Race_UseVsSweep(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 	s, err := r.Connect("lsid-A")
@@ -328,21 +299,18 @@ func TestSessionRegistry_Race_UseVsSweep(t *testing.T) {
 		}
 	}()
 
-	// Sweep with a not-yet-elapsed timeout (1h) and an asOf of now.
 	for i := 0; i < 100; i++ {
 		removed := r.Sweep(time.Now())
-		assert.Equal(t, 0, removed, "Use is keeping lastUsed fresh; Sweep must skip")
+		assert.Equal(t, 0, removed)
 	}
 
 	close(stop)
 	<-useDone
 }
 
-// Long Commit holds writeMu; concurrent Sweep with elapsed timeout must
-// wait for the commit fn to return before PurgeNow can flip the latch.
-// Timing-based assertion: Sweep should not return before Commit returns.
+// Long-running Commit must fence PurgeNow against the latch flip.
 func TestSessionRegistry_Sweep_FencesAgainstCommit(t *testing.T) {
-	r := NewSessionRegistry(time.Nanosecond, stubFactory()) // any lastUsed > 0 ago is "expired"
+	r := NewSessionRegistry(time.Nanosecond, stubFactory())
 	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	r.WithClock(func() time.Time { return clock })
 
@@ -365,22 +333,17 @@ func TestSessionRegistry_Sweep_FencesAgainstCommit(t *testing.T) {
 
 	<-commitStarted
 	sweepStarted := time.Now()
-	// asOf far enough past clock that any lastUsed predates cutoff.
 	removed := r.Sweep(clock.Add(time.Hour))
 	sweepReturned := time.Now()
 
 	commitDoneAt := <-commitReturned
 
-	assert.Equal(t, 1, removed, "Sweep must purge after the commit returns")
+	assert.Equal(t, 1, removed)
 	heldFor := sweepReturned.Sub(sweepStarted)
-	assert.GreaterOrEqual(t, heldFor, fnDuration-20*time.Millisecond,
-		"Sweep blocked for %v; expected approximately %v while commit was in flight", heldFor, fnDuration)
-	assert.GreaterOrEqual(t, sweepReturned.UnixNano(), commitDoneAt.Add(-20*time.Millisecond).UnixNano(),
-		"Sweep return must be at or after commit return")
+	assert.GreaterOrEqual(t, heldFor, fnDuration-20*time.Millisecond)
+	assert.GreaterOrEqual(t, sweepReturned.UnixNano(), commitDoneAt.Add(-20*time.Millisecond).UnixNano())
 }
 
-// End is advisory: it does not flip the latch and does not delete the
-// entry. The active shadow remains usable until Sweep arrives.
 func TestSessionRegistry_End_IsAdvisoryNotImmediate(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 
@@ -389,10 +352,9 @@ func TestSessionRegistry_End_IsAdvisoryNotImmediate(t *testing.T) {
 	require.True(t, s.Active())
 
 	assert.True(t, r.End("lsid-A"))
-	assert.True(t, s.Active(), "End must not flip the latch")
-	assert.Equal(t, 1, r.Len(), "End must not delete the entry immediately")
+	assert.True(t, s.Active())
+	assert.Equal(t, 1, r.Len())
 
-	// A subsequent Use must still succeed against the same shadow.
 	require.NoError(t, s.Use(time.Now(), func(*dsess.DoltSession) error { return nil }))
 }
 
@@ -401,10 +363,6 @@ func TestSessionRegistry_End_OnUnknownLsidReturnsFalse(t *testing.T) {
 	assert.False(t, r.End("never-existed"))
 }
 
-// End must return immediately while a Commit is in flight; it does not
-// acquire writeMu. The mark survives the commit and the next Sweep
-// reaps. Timing-based assertion: End's wall-clock duration is far less
-// than the commit's fn duration.
 func TestSessionRegistry_End_DoesNotFenceAgainstCommit(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 	s, err := r.Connect("lsid-A")
@@ -428,14 +386,11 @@ func TestSessionRegistry_End_DoesNotFenceAgainstCommit(t *testing.T) {
 	assert.True(t, r.End("lsid-A"))
 	endDuration := time.Since(endStart)
 
-	assert.Less(t, endDuration, fnDuration/2,
-		"End must not block on writeMu; took %v, fn is %v", endDuration, fnDuration)
+	assert.Less(t, endDuration, fnDuration/2)
 
 	<-commitReturned
 }
 
-// After End sets lastUsed=0, the next Sweep tick (with any cutoff > 0)
-// reaps the entry.
 func TestSessionRegistry_End_FollowedBySweepReaps(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -446,19 +401,14 @@ func TestSessionRegistry_End_FollowedBySweepReaps(t *testing.T) {
 
 	assert.True(t, r.End("lsid-A"))
 
-	// asOf > 0 means cutoff > -timeout; lastUsed=0 < cutoff always.
 	removed := r.Sweep(clock.Add(time.Second))
 	assert.Equal(t, 1, removed)
 	assert.False(t, s.Active())
 	assert.Equal(t, 0, r.Len())
 }
 
-// Pathological race: End marks lastUsed=0, then a concurrent Use bumps
-// it back to "now" before Sweep can reap. Sweep then skips the entry.
-// This is benign: the client by definition is no longer trying to use
-// the session after endSessions, so the bump-back can only come from
-// existing in-flight work, which will complete naturally and let the
-// session go idle for real.
+// Race window where End's mark is overwritten by a concurrent Use; the
+// session survives until idle for real. Benign per the design.
 func TestSessionRegistry_End_BumpedBackByUse(t *testing.T) {
 	r := NewSessionRegistry(time.Hour, stubFactory())
 	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -469,20 +419,13 @@ func TestSessionRegistry_End_BumpedBackByUse(t *testing.T) {
 
 	assert.True(t, r.End("lsid-A"))
 
-	// Concurrent Use bumps lastUsed back to now (a fresh activity stamp).
 	require.NoError(t, s.Use(clock, func(*dsess.DoltSession) error { return nil }))
 
-	// Sweep at asOf=clock with a 1-hour timeout: cutoff = clock - 1h.
-	// lastUsed = clock (from the Use). lastUsed >= cutoff, so NOT reaped.
 	removed := r.Sweep(clock)
-	assert.Equal(t, 0, removed, "Use bumped lastUsed back into the live window; Sweep must skip")
+	assert.Equal(t, 0, removed)
 	assert.True(t, s.Active())
 }
 
-// T=0 Connect, T=4min Connect again (inherits lastUsed=0), T=8min check
-// with a 10-minute idle window: the entry should still be there with
-// lastUsed near 0. This documents that the reconnect inherits and does
-// not refresh.
 func TestSessionRegistry_LastUsed_AcrossSupersession(t *testing.T) {
 	r := NewSessionRegistry(10*time.Minute, stubFactory())
 	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -492,14 +435,10 @@ func TestSessionRegistry_LastUsed_AcrossSupersession(t *testing.T) {
 	require.NoError(t, err)
 	originalLastUsed := first.LastUsed()
 
-	// Reconnect at T+4min.
 	clock = clock.Add(4 * time.Minute)
 	second, err := r.Connect("lsid-A")
 	require.NoError(t, err)
 
-	assert.Equal(t, originalLastUsed.UnixNano(), second.LastUsed().UnixNano(),
-		"new shadow's lastUsed must equal the original lastUsed, not the reconnect time")
-
-	// And the registry still has the one entry.
+	assert.Equal(t, originalLastUsed.UnixNano(), second.LastUsed().UnixNano())
 	assert.Equal(t, 1, r.Len())
 }
