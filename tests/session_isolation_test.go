@@ -546,6 +546,92 @@ func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
 	}
 }
 
+// .6.4.10 acceptance: a doltCommit that races with a concurrent
+// reconnect on the same lsid still lands durably. The commit-routing
+// fence (Shadow.Commit's writeMu) blocks B's supersede until A's commit
+// fn returns, so the durable write completes; then B's supersede flips
+// A's shadow, A's next op gets 225, and B reads the committed data.
+func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testing.T) {
+	env := startDumboDB(t)
+	dbName := fmt.Sprintf("commitfence_%d", env.port)
+	lsid := freshLsid()
+
+	a := dialWire(t, env)
+
+	// A inserts and doltCommits; the latter goes through Shadow.Commit
+	// (writeMu fence) per the routing change in .6.4.10.
+	_, err := a.run(bson.D{
+		{Key: "insert", Value: "c"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "from-A"}}}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+
+	// Spin a parallel B that calls a command with the same lsid as
+	// soon as A's commit starts. With the fence in place, B's Connect
+	// (and thus the first frame's response) cannot return before A's
+	// commit returns.
+	commitDone := make(chan struct{})
+	bDone := make(chan bson.M, 1)
+	go func() {
+		<-commitDone
+		b := dialWire(t, env)
+		res, err := b.run(bson.D{
+			{Key: "find", Value: "c"},
+			{Key: "filter", Value: bson.D{}},
+			{Key: "lsid", Value: lsid},
+			{Key: "$db", Value: dbName},
+		})
+		require.NoError(t, err)
+		bDone <- res
+	}()
+
+	// Trigger B and start the commit. (The goroutine waits on
+	// commitDone, then races against A's next response. We don't have
+	// a hook to slow the real doltCommit so the timing test is more
+	// of a smoke; the per-Shadow writeMu fence is exercised in the
+	// shadow_test.go timing-based unit test.)
+	close(commitDone)
+	resCommit, err := a.run(bson.D{
+		{Key: "doltCommit", Value: int32(1)},
+		{Key: "message", Value: "A commits"},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resCommit["ok"], "doltCommit must succeed: %#v", resCommit)
+
+	// B's find response. Either it ran before A's commit and supersede
+	// already happened (so A's commit would have been on a stale
+	// shadow -- not possible because A's frame established its cached
+	// shadow first), OR it ran after. The fence guarantees ordering,
+	// so B sees the durable data committed by A.
+	resFind := <-bDone
+	require.Equal(t, 1.0, resFind["ok"], "B's find must succeed")
+	first := firstBatchFromFindResponse(t, resFind)
+	require.Len(t, first, 1, "B must see exactly the one durable insert from A")
+	doc, ok := first[0].(bson.D)
+	require.True(t, ok)
+	assert.Equal(t, "from-A", bsonDLookup(doc, "_id"))
+
+	// A's next op should fail with 225 -- B's supersede has invalidated
+	// A's cached shadow.
+	resA2, err := a.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, resA2["ok"], "A's next op after B's supersede must fail")
+	if code, ok := resA2["code"].(int32); ok {
+		assert.Equal(t, int32(225), code)
+	} else if code, ok := resA2["code"].(int64); ok {
+		assert.Equal(t, int64(225), code)
+	}
+}
+
 // .6.4.8 wire-dispatch acceptance: a client that reconnects with the
 // same lsid sees the durably-committed state. Smoke test of end-to-end
 // lsid routing.

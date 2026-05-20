@@ -629,19 +629,42 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		)
 	}
 
+	// Commands that durably persist the session's pending state go
+	// through Shadow.Commit, which holds writeMu for the duration so a
+	// concurrent supersede / sweep / end is fenced until the fsync
+	// lands. Non-commit commands go through Shadow.Use (lock-free
+	// hot path).
+	runFn := shadow.Use
+	if commandIsDurableCommit(command) {
+		runFn = shadow.Commit
+	}
+
 	var resMsg *wire.OpMsg
-	useErr := shadow.Use(time.Now(), func(*dsess.DoltSession) error {
+	runErr := runFn(time.Now(), func(*dsess.DoltSession) error {
 		var handlerErr error
 		resMsg, handlerErr = c.handleOpMsg(connCtx, msg, command)
 		return handlerErr
 	})
-	if errors.Is(useErr, sqlctx.ErrShadowInvalidated) {
+	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, handlererrors.NewCommandError(
 			handlererrors.ErrorCode(225),
 			errors.New("session was taken over by a newer connection on this lsid"),
 		)
 	}
-	return resMsg, useErr
+	return resMsg, runErr
+}
+
+// commandIsDurableCommit reports whether the command persists the
+// session's pending state to disk and therefore needs the Shadow.Commit
+// writeMu fence so a concurrent reconnect / sweep is blocked until the
+// commit returns. doltCommit is the SI-mode durable boundary;
+// commitTransaction is the default-mode durable boundary.
+func commandIsDurableCommit(command string) bool {
+	switch command {
+	case "doltCommit", "commitTransaction":
+		return true
+	}
+	return false
 }
 
 // handleOpMsg processes OP_MSG requests.
