@@ -24,6 +24,7 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/util/must"
 	"github.com/dolthub/dumbodb/internal/util/resource"
 )
@@ -105,6 +106,13 @@ func (bc *backendContract) SessionIsolation() bool {
 		return sab.SessionIsolation()
 	}
 	return false
+}
+
+func (bc *backendContract) SessionRegistry() *sqlctx.SessionRegistry {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		return sab.SessionRegistry()
+	}
+	return nil
 }
 
 type StatusParams struct{}

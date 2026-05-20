@@ -14,11 +14,19 @@
 
 package backends
 
-import "context"
+import (
+	"context"
+
+	"github.com/dolthub/dumbodb/internal/sqlctx"
+)
 
 type SessionAwareBackend interface {
 	OnSessionEnd(owner string)
 	OnTransactionCommit(ctx context.Context, owner string) error
 	OnTransactionAbort(owner string)
 	SessionIsolation() bool
+	// SessionRegistry returns the backend's lsid-keyed session registry.
+	// May return nil for backends that do not support it (e.g. the stub
+	// backend used in tests).
+	SessionRegistry() *sqlctx.SessionRegistry
 }

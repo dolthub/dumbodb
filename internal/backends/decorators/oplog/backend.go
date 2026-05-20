@@ -20,6 +20,7 @@ import (
 	"log/slog"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 type backend struct {
@@ -94,6 +95,13 @@ func (b *backend) SessionIsolation() bool {
 		return sab.SessionIsolation()
 	}
 	return false
+}
+
+func (b *backend) SessionRegistry() *sqlctx.SessionRegistry {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		return sab.SessionRegistry()
+	}
+	return nil
 }
 
 func (b *backend) DumboDBBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {

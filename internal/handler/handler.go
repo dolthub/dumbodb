@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/users"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/ctxutil"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -258,6 +259,16 @@ func (h *Handler) SessionIsolation() bool {
 		return sab.SessionIsolation()
 	}
 	return false
+}
+
+// SessionRegistry returns the backend's lsid-keyed session registry, or
+// nil if the backend does not support it. The wire-dispatch layer routes
+// every command through it (arriving in .6.4.8).
+func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		return sab.SessionRegistry()
+	}
+	return nil
 }
 
 // AbortPendingTransaction discards any per-connection pending overlay
