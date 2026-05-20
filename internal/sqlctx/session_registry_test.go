@@ -379,6 +379,106 @@ func TestSessionRegistry_Sweep_FencesAgainstCommit(t *testing.T) {
 		"Sweep return must be at or after commit return")
 }
 
+// End is advisory: it does not flip the latch and does not delete the
+// entry. The active shadow remains usable until Sweep arrives.
+func TestSessionRegistry_End_IsAdvisoryNotImmediate(t *testing.T) {
+	r := NewSessionRegistry(time.Hour, stubFactory())
+
+	s, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+	require.True(t, s.Active())
+
+	assert.True(t, r.End("lsid-A"))
+	assert.True(t, s.Active(), "End must not flip the latch")
+	assert.Equal(t, 1, r.Len(), "End must not delete the entry immediately")
+
+	// A subsequent Use must still succeed against the same shadow.
+	require.NoError(t, s.Use(time.Now(), func(*dsess.DoltSession) error { return nil }))
+}
+
+func TestSessionRegistry_End_OnUnknownLsidReturnsFalse(t *testing.T) {
+	r := NewSessionRegistry(time.Hour, stubFactory())
+	assert.False(t, r.End("never-existed"))
+}
+
+// End must return immediately while a Commit is in flight; it does not
+// acquire writeMu. The mark survives the commit and the next Sweep
+// reaps. Timing-based assertion: End's wall-clock duration is far less
+// than the commit's fn duration.
+func TestSessionRegistry_End_DoesNotFenceAgainstCommit(t *testing.T) {
+	r := NewSessionRegistry(time.Hour, stubFactory())
+	s, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+
+	const fnDuration = 100 * time.Millisecond
+	commitStarted := make(chan struct{})
+	commitReturned := make(chan struct{})
+
+	go func() {
+		_ = s.Commit(time.Now(), func(*dsess.DoltSession) error {
+			close(commitStarted)
+			time.Sleep(fnDuration)
+			return nil
+		})
+		close(commitReturned)
+	}()
+
+	<-commitStarted
+	endStart := time.Now()
+	assert.True(t, r.End("lsid-A"))
+	endDuration := time.Since(endStart)
+
+	assert.Less(t, endDuration, fnDuration/2,
+		"End must not block on writeMu; took %v, fn is %v", endDuration, fnDuration)
+
+	<-commitReturned
+}
+
+// After End sets lastUsed=0, the next Sweep tick (with any cutoff > 0)
+// reaps the entry.
+func TestSessionRegistry_End_FollowedBySweepReaps(t *testing.T) {
+	r := NewSessionRegistry(time.Hour, stubFactory())
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.WithClock(func() time.Time { return clock })
+
+	s, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+
+	assert.True(t, r.End("lsid-A"))
+
+	// asOf > 0 means cutoff > -timeout; lastUsed=0 < cutoff always.
+	removed := r.Sweep(clock.Add(time.Second))
+	assert.Equal(t, 1, removed)
+	assert.False(t, s.Active())
+	assert.Equal(t, 0, r.Len())
+}
+
+// Pathological race: End marks lastUsed=0, then a concurrent Use bumps
+// it back to "now" before Sweep can reap. Sweep then skips the entry.
+// This is benign: the client by definition is no longer trying to use
+// the session after endSessions, so the bump-back can only come from
+// existing in-flight work, which will complete naturally and let the
+// session go idle for real.
+func TestSessionRegistry_End_BumpedBackByUse(t *testing.T) {
+	r := NewSessionRegistry(time.Hour, stubFactory())
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.WithClock(func() time.Time { return clock })
+
+	s, err := r.Connect("lsid-A")
+	require.NoError(t, err)
+
+	assert.True(t, r.End("lsid-A"))
+
+	// Concurrent Use bumps lastUsed back to now (a fresh activity stamp).
+	require.NoError(t, s.Use(clock, func(*dsess.DoltSession) error { return nil }))
+
+	// Sweep at asOf=clock with a 1-hour timeout: cutoff = clock - 1h.
+	// lastUsed = clock (from the Use). lastUsed >= cutoff, so NOT reaped.
+	removed := r.Sweep(clock)
+	assert.Equal(t, 0, removed, "Use bumped lastUsed back into the live window; Sweep must skip")
+	assert.True(t, s.Active())
+}
+
 // T=0 Connect, T=4min Connect again (inherits lastUsed=0), T=8min check
 // with a 10-minute idle window: the entry should still be there with
 // lastUsed near 0. This documents that the reconnect inherits and does

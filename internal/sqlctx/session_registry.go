@@ -189,6 +189,30 @@ func (r *SessionRegistry) Sweep(asOf time.Time) int {
 	return removed
 }
 
+// End is the advisory implementation of Mongo's endSessions command.
+// Per live-Mongo probes (see docs/design/session-registry.md), endSessions
+// is best-effort: it neither cancels in-flight work nor immediately
+// removes session state. We match that semantic by marking the entry's
+// shadow.lastUsed = 0 so the next Sweep tick picks it up; the latch
+// stays on and active connections keep working until the sweep arrives.
+//
+// Returns true if lsid was known. Mongo always returns ok:1 even on
+// unknown lsids; the boolean here is for tests and metrics.
+//
+// End does NOT acquire shadow.writeMu, so it returns immediately even
+// while a Commit is in flight. The marked entry will be purged by Sweep
+// after the commit completes.
+func (r *SessionRegistry) End(lsid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.sessions[lsid]
+	if !ok {
+		return false
+	}
+	entry.shadow.Load().lastUsed.Store(0)
+	return true
+}
+
 // Get returns the current active shadow for lsid without altering its
 // state. Intended for tests and observation; callers that intend to do
 // work must use Connect followed by Shadow.Use / Shadow.Commit.
