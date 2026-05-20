@@ -73,6 +73,8 @@ func run(logger *slog.Logger) error {
 	logLevel := fs.String("log-level", "info", "log level (debug, info, warn, error)")
 	autoCommit := fs.Bool("auto-commit", false, "automatically commit each write (insert/update/delete) to Dolt history")
 	sessionIsolation := fs.Bool("session-isolation", false, "run in version-control-native isolation mode: per-connection working-set overlay, doltCommit merges, startTransaction rejected")
+	sessionTimeout := fs.Duration("session-timeout", 0, "idle timeout for lsid-keyed sessions; default is 30m (matches MongoDB logicalSessionTimeoutMinutes)")
+	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	fs.Parse(os.Args[1:])
 
 	var level slog.Level
@@ -112,8 +114,10 @@ func run(logger *slog.Logger) error {
 		TCPHost:          *addr,
 		ReplSetName:      "",
 		DoltDataDir:      *dataDir,
-		AutoCommit:       *autoCommit,
-		SessionIsolation: *sessionIsolation,
+		AutoCommit:         *autoCommit,
+		SessionIsolation:   *sessionIsolation,
+		SessionTimeout:     *sessionTimeout,
+		SessionSweepPeriod: *sessionSweepPeriod,
 	})
 	if err != nil {
 		return err

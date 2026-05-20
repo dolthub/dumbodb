@@ -26,7 +26,7 @@ import (
 )
 
 func TestHandler_SessionRegistry_RoutesThroughWrappers(t *testing.T) {
-	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 

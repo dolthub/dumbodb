@@ -27,11 +27,16 @@ import (
 var ErrShadowInvalidated = errors.New("session shadow invalidated by reconnect or sweep")
 
 // Shadow's writeMu is held by Commit and acquired by the registry's
-// invalidate paths so a commit cannot be cancelled mid-fsync.
+// invalidate paths so a commit cannot be cancelled mid-fsync. purged
+// distinguishes a Sweep / End teardown (the session was reaped) from a
+// supersede (another connection took over the lsid); callers map the
+// two to wire codes 251 (NoSuchTransaction) and 225 (TransactionTooOld)
+// respectively.
 type Shadow struct {
 	sess     *dsess.DoltSession
 	lastUsed atomic.Int64
 	active   atomic.Bool
+	purged   atomic.Bool
 
 	writeMu sync.Mutex
 }
@@ -49,8 +54,22 @@ func (s *Shadow) LastUsed() time.Time { return time.Unix(0, s.lastUsed.Load()) }
 
 func (s *Shadow) Active() bool { return s.active.Load() }
 
-// invalidate must be called with writeMu held.
+// Purged reports whether the shadow's invalidation was caused by a
+// Sweep or End teardown (rather than a supersede on the same lsid).
+// Meaningful only after Active() returns false.
+func (s *Shadow) Purged() bool { return s.purged.Load() }
+
+// invalidate must be called with writeMu held. Used by the Connect
+// supersede path; the shadow's invalidation is "a newer connection
+// took over." See purge for the teardown variant.
 func (s *Shadow) invalidate() { s.active.Store(false) }
+
+// purge must be called with writeMu held. Used by PurgeNow (Sweep,
+// End); the shadow's invalidation is "the session is gone."
+func (s *Shadow) purge() {
+	s.purged.Store(true)
+	s.active.Store(false)
+}
 
 func (s *Shadow) Use(now time.Time, fn func(*dsess.DoltSession) error) error {
 	if !s.active.Load() {

@@ -63,6 +63,14 @@ type NewHandlerOpts struct {
 	// overlay back to the branch HEAD with three-way conflict detection.
 	SessionIsolation bool
 
+	// SessionTimeout overrides the default lsid-keyed session idle
+	// timeout. Zero leaves the dolt backend's default in place (30m).
+	SessionTimeout time.Duration
+
+	// SessionSweepPeriod overrides the default registry sweep cadence.
+	// Zero leaves the dolt backend's default in place (1m).
+	SessionSweepPeriod time.Duration
+
 	TestOpts
 
 	_ struct{} // prevent unkeyed literals

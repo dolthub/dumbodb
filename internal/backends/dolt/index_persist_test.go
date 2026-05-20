@@ -44,7 +44,7 @@ func TestSecondaryIndexSurvivesRestart(t *testing.T) {
 	const targetEmail = "alice@x.com"
 
 	// --- Phase 1: create index, insert docs ---
-	b1, err := NewBackend(dir, logger, false, false)
+	b1, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
 	}
@@ -96,7 +96,7 @@ func TestSecondaryIndexSurvivesRestart(t *testing.T) {
 	b1.Close()
 
 	// --- Phase 2: reopen, query by indexed field, assert correct docs ---
-	b2, err := NewBackend(dir, logger, false, false)
+	b2, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}
@@ -153,7 +153,7 @@ func TestListIndexesSurvivesRestart(t *testing.T) {
 	logger := slog.Default()
 
 	// --- Phase 1: build a non-trivial index set ---
-	b1, err := NewBackend(dir, logger, false, false)
+	b1, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
 	}
@@ -190,7 +190,7 @@ func TestListIndexesSurvivesRestart(t *testing.T) {
 	b1.Close()
 
 	// --- Phase 2: reopen and re-list ---
-	b2, err := NewBackend(dir, logger, false, false)
+	b2, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSecondaryIndexSurvivesDoltCommit(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	b1, err := NewBackend(dir, logger, false, false)
+	b1, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
 	}
@@ -294,7 +294,7 @@ func TestSecondaryIndexSurvivesDoltCommit(t *testing.T) {
 
 	b1.Close()
 
-	b2, err := NewBackend(dir, logger, false, false)
+	b2, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}

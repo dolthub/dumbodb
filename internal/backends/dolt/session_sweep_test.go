@@ -26,7 +26,7 @@ import (
 
 func newBackendForSweepTest(t *testing.T, period time.Duration) *Backend {
 	t.Helper()
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	close(be.sweeperStop)
 	<-be.sweeperDone

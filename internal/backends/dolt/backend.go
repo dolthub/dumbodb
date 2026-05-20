@@ -412,15 +412,18 @@ func parseAuthorString(author string) (name, email string) {
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
 // When autoCommit is true, every document write (insert/update/delete) is
 // automatically committed to Dolt history without an explicit doltCommit call.
-func NewBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool) (backends.Backend, error) {
-	b, err := newBackend(dataDir, l, autoCommit, sessionIsolation)
+// sessionTimeout overrides the default lsid-keyed session idle timeout
+// (zero falls back to defaultSessionTimeout). sessionSweepPeriod overrides
+// the registry sweep cadence (zero falls back to defaultSessionSweepPeriod).
+func NewBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool, sessionTimeout, sessionSweepPeriod time.Duration) (backends.Backend, error) {
+	b, err := newBackend(dataDir, l, autoCommit, sessionIsolation, sessionTimeout, sessionSweepPeriod)
 	if err != nil {
 		return nil, err
 	}
 	return backends.BackendContract(b), nil
 }
 
-func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool) (*Backend, error) {
+func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool, sessionTimeout, sessionSweepPeriod time.Duration) (*Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
@@ -436,7 +439,11 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		flusherDone:      make(chan struct{}),
 		sweeperStop:      make(chan struct{}),
 		sweeperDone:      make(chan struct{}),
-		sweeperPeriod:    defaultSessionSweepPeriod,
+	}
+	if sessionSweepPeriod > 0 {
+		b.sweeperPeriod = sessionSweepPeriod
+	} else {
+		b.sweeperPeriod = defaultSessionSweepPeriod
 	}
 
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
@@ -446,7 +453,10 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 	b.provider = provider
 
 	b.gcController = gcctx.NewGCSafepointController()
-	b.sessions = sqlctx.NewSessionRegistry(defaultSessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
+	if sessionTimeout <= 0 {
+		sessionTimeout = defaultSessionTimeout
+	}
+	b.sessions = sqlctx.NewSessionRegistry(sessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
 		return sqlctx.NewSessionWithGC(b.provider, writer.NewWriteSession, b.gcController)
 	})
 

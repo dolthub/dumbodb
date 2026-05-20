@@ -606,9 +606,11 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	}
 	// A re-Connect here would ping-pong supersedes between this
 	// connection and the one that took over; surface the terminal
-	// error instead.
+	// error instead. Distinguish supersede (another connection took
+	// over) from purge (Sweep / End reaped the session) so the wire
+	// code matches MongoDB's semantics.
 	if !shadow.Active() {
-		return nil, supersededError()
+		return nil, shadowGoneError(shadow)
 	}
 
 	runFn := shadow.Use
@@ -623,12 +625,21 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		return handlerErr
 	})
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
-		return nil, supersededError()
+		return nil, shadowGoneError(shadow)
 	}
 	return resMsg, runErr
 }
 
-func supersededError() error {
+// shadowGoneError maps an invalidated shadow to the appropriate wire
+// code: 251 NoSuchTransaction when the session was reaped (Sweep / End),
+// or 225 TransactionTooOld when superseded by another connection.
+func shadowGoneError(s *sqlctx.Shadow) error {
+	if s != nil && s.Purged() {
+		return handlererrors.NewCommandError(
+			handlererrors.ErrorCode(251),
+			errors.New("Transaction has been aborted because the session was idle past the configured timeout."),
+		)
+	}
 	return handlererrors.NewCommandError(
 		handlererrors.ErrorCode(225),
 		errors.New("session was taken over by a newer connection on this lsid"),

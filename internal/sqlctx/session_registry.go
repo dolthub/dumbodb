@@ -100,7 +100,7 @@ func (r *SessionRegistry) PurgeNow(lsid string) bool {
 
 	shadow := entry.shadow.Load()
 	shadow.writeMu.Lock()
-	shadow.invalidate()
+	shadow.purge()
 	shadow.writeMu.Unlock()
 
 	entry.sess.SessionEnd()

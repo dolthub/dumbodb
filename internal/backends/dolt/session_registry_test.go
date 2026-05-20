@@ -28,7 +28,7 @@ import (
 )
 
 func TestBackend_HasSessionRegistry(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
@@ -37,7 +37,7 @@ func TestBackend_HasSessionRegistry(t *testing.T) {
 }
 
 func TestBackend_RegistryFactoryWiresGCController(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
@@ -51,7 +51,7 @@ func TestBackend_RegistryFactoryWiresGCController(t *testing.T) {
 }
 
 func TestBackend_NewSessionCanVisitGCRoots(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
@@ -67,7 +67,7 @@ func TestBackend_NewSessionCanVisitGCRoots(t *testing.T) {
 }
 
 func TestBackend_RegistryYieldsDistinctSessionsPerLsid(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
@@ -81,7 +81,7 @@ func TestBackend_RegistryYieldsDistinctSessionsPerLsid(t *testing.T) {
 }
 
 func TestBackend_RegistryReusesSessionOnReconnect(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 
@@ -97,7 +97,7 @@ func TestBackend_RegistryReusesSessionOnReconnect(t *testing.T) {
 }
 
 func TestBackend_RegistrySessionConstructsSqlContext(t *testing.T) {
-	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
 	defer be.Close() //nolint:errcheck
 

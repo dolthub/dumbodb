@@ -26,7 +26,7 @@ import (
 
 func handlerForTest(t *testing.T) *Handler {
 	t.Helper()
-	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false)
+	be, err := dolt.NewBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("dolt.NewBackend: %v", err)
 	}
