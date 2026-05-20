@@ -127,6 +127,68 @@ func (r *SessionRegistry) Connect(lsid string) (*Shadow, error) {
 	return shadow, nil
 }
 
+// PurgeNow forcibly invalidates and removes the entry for lsid. The
+// shadow's latch is flipped (fenced against any in-flight Commit via
+// shadow.writeMu), the underlying session is deregistered from the GC
+// safepoint controller via sess.SessionEnd(), and the entry is deleted
+// from the map. Returns false if lsid is unknown.
+//
+// PurgeNow is the engine of both Sweep (idle reap) and explicit
+// teardown. The advisory End (subsequent bead) does not call PurgeNow
+// directly; it merely marks the entry so the next Sweep tick picks it
+// up.
+func (r *SessionRegistry) PurgeNow(lsid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.sessions[lsid]
+	if !ok {
+		return false
+	}
+
+	shadow := entry.shadow.Load()
+	shadow.writeMu.Lock()
+	shadow.invalidate()
+	shadow.writeMu.Unlock()
+
+	entry.sess.SessionEnd()
+	delete(r.sessions, lsid)
+	return true
+}
+
+// Sweep removes every entry whose shadow.lastUsed is older than
+// asOf - timeout. Returns the number of sessions removed. Callers
+// schedule Sweep on a timer (a goroutine in Backend arrives in .6.4.9);
+// the registry does not run its own goroutine.
+//
+// Two-phase to avoid holding r.mu across a writeMu acquire that may
+// block on an in-flight Commit:
+//
+//  1. Under r.mu, collect lsids whose lastUsed predates the cutoff.
+//  2. Release r.mu and call PurgeNow on each collected lsid. PurgeNow
+//     re-takes r.mu; an entry that was deleted by another path
+//     between phases is safely returned-false.
+func (r *SessionRegistry) Sweep(asOf time.Time) int {
+	cutoffNanos := asOf.Add(-r.timeout).UnixNano()
+
+	var eligible []string
+	r.mu.Lock()
+	for lsid, entry := range r.sessions {
+		if entry.shadow.Load().lastUsed.Load() < cutoffNanos {
+			eligible = append(eligible, lsid)
+		}
+	}
+	r.mu.Unlock()
+
+	removed := 0
+	for _, lsid := range eligible {
+		if r.PurgeNow(lsid) {
+			removed++
+		}
+	}
+	return removed
+}
+
 // Get returns the current active shadow for lsid without altering its
 // state. Intended for tests and observation; callers that intend to do
 // work must use Connect followed by Shadow.Use / Shadow.Commit.
