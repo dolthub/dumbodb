@@ -76,6 +76,11 @@ const (
 	// logicalSessionTimeoutMinutes default.
 	defaultSessionTimeout = 30 * time.Minute
 
+	// defaultSessionSweepPeriod is how often the backend invokes
+	// SessionRegistry.Sweep. Independent of the timeout window; this is
+	// just the polling cadence.
+	defaultSessionSweepPeriod = time.Minute
+
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
 
@@ -283,6 +288,13 @@ type Backend struct {
 	// flusherDone is closed by the flusher goroutine when it exits, so Close
 	// can wait for the final drain to complete before tearing down dbs.
 	flusherDone chan struct{}
+
+	// sweeperStop / sweeperDone drive the SessionRegistry sweep ticker
+	// goroutine; sweeperPeriod is the tick interval (1 minute by default;
+	// overridable for tests).
+	sweeperStop   chan struct{}
+	sweeperDone   chan struct{}
+	sweeperPeriod time.Duration
 }
 
 func docLocksKey(db, branch string) string {
@@ -431,6 +443,9 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		docLocks:         make(map[string]*DocLockManager),
 		flusherStop:      make(chan struct{}),
 		flusherDone:      make(chan struct{}),
+		sweeperStop:      make(chan struct{}),
+		sweeperDone:      make(chan struct{}),
+		sweeperPeriod:    defaultSessionSweepPeriod,
 	}
 
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
@@ -454,8 +469,31 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 	}
 
 	go b.deferredFlushLoop()
+	go b.sessionSweepLoop()
 
 	return b, nil
+}
+
+// sessionSweepLoop drains expired entries from the SessionRegistry on a
+// fixed cadence. The cadence is independent from the per-entry timeout:
+// idle-window is 30 minutes by default, but we tick every minute so a
+// just-expired entry never lingers more than a minute past its window.
+func (b *Backend) sessionSweepLoop() {
+	defer close(b.sweeperDone)
+
+	ticker := time.NewTicker(b.sweeperPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.sweeperStop:
+			return
+		case <-ticker.C:
+			if b.sessions != nil {
+				b.sessions.Sweep(time.Now())
+			}
+		}
+	}
 }
 
 // deferredFlushLoop drains dbState.dirtyBranches on every database at a fixed
@@ -515,6 +553,18 @@ func (b *Backend) Close() {
 		}
 		if b.flusherDone != nil {
 			<-b.flusherDone
+		}
+	}
+
+	// Stop the session-sweep goroutine.
+	if b.sweeperStop != nil {
+		select {
+		case <-b.sweeperStop:
+		default:
+			close(b.sweeperStop)
+		}
+		if b.sweeperDone != nil {
+			<-b.sweeperDone
 		}
 	}
 
