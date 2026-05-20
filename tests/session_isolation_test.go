@@ -618,6 +618,76 @@ func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testin
 	}
 }
 
+// D10: in --session-isolation mode, uncommitted writes survive a TCP
+// disconnect when a new connection arrives with the same lsid. The
+// pending overlay sits on the underlying *dsess.DoltSession; the
+// supersede on reconnect swaps the shadow but keeps the session. A
+// subsequent doltCommit through the resumed session merges the
+// previously-uncommitted state to HEAD, where a fresh lsid can read it.
+func TestSessionIsolation_WireReconnectResumesUncommittedState(t *testing.T) {
+	env := startDumboDB(t, "--session-isolation")
+	dbName := fmt.Sprintf("wirereconnect_%d", env.port)
+	lsid := freshLsid()
+
+	conn1 := dialWire(t, env)
+	resInsert, err := conn1.run(bson.D{
+		{Key: "insert", Value: "c"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "before-disconnect"}}}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resInsert["ok"])
+
+	// Drop conn1 without committing. The write lives in the session's
+	// pending overlay, not on disk.
+	_ = conn1.c.Close()
+
+	// conn2 with the same lsid must observe the uncommitted write via
+	// the resumed *dsess.DoltSession.
+	conn2 := dialWire(t, env)
+	resFind1, err := conn2.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resFind1["ok"])
+	first := firstBatchFromFindResponse(t, resFind1)
+	require.Len(t, first, 1, "conn2 must see conn1's uncommitted write")
+	doc, ok := first[0].(bson.D)
+	require.True(t, ok)
+	assert.Equal(t, "before-disconnect", bsonDLookup(doc, "_id"))
+
+	// conn2 commits. The write becomes durable in HEAD.
+	resCommit, err := conn2.run(bson.D{
+		{Key: "doltCommit", Value: int32(1)},
+		{Key: "message", Value: "conn2 commits conn1's write"},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resCommit["ok"])
+
+	// A fresh lsid sees the now-durable write from HEAD.
+	conn3 := dialWire(t, env)
+	freshOtherLsid := freshLsid()
+	resFind2, err := conn3.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: freshOtherLsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resFind2["ok"])
+	first = firstBatchFromFindResponse(t, resFind2)
+	require.Len(t, first, 1, "a fresh lsid must read the now-durable write from HEAD")
+	doc, ok = first[0].(bson.D)
+	require.True(t, ok)
+	assert.Equal(t, "before-disconnect", bsonDLookup(doc, "_id"))
+}
+
 func TestSessionIsolation_ReconnectResumesCommittedState(t *testing.T) {
 	env := startDumboDB(t)
 
