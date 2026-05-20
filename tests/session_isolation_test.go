@@ -53,9 +53,10 @@ func mongoCommandCode(err error) int32 {
 	return 0
 }
 
-// startTransaction is rejected with code 263 when the server is in
-// --session-isolation mode. The wire-protocol field, not a separate command,
-// is what gets rejected so any first transactional write triggers it.
+// D13: startTransaction is rejected with code 263 and the redirect
+// message the design specifies. The wire-protocol field, not a separate
+// command, is what gets rejected so any first transactional write
+// triggers it.
 func TestSessionIsolation_StartTransactionRejected(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
@@ -69,7 +70,25 @@ func TestSessionIsolation_StartTransactionRejected(t *testing.T) {
 	_, err = coll.InsertOne(mongo.NewSessionContext(ctx, sess), bson.D{{Key: "_id", Value: "x"}})
 	require.Error(t, err)
 	assert.Equal(t, int32(263), mongoCommandCode(err))
-	assert.Contains(t, err.Error(), "session-isolation")
+	assert.Contains(t, err.Error(), "Transactions are not available in session-isolation mode")
+	assert.Contains(t, err.Error(), "Use doltCommit instead")
+}
+
+// D13 default-mode counterpart: without --session-isolation, the same
+// startTransaction-bearing operation must succeed. Guards against a
+// regression that would reject startTransaction unconditionally.
+func TestSessionIsolation_StartTransactionAllowedInDefaultMode(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	coll := env.collection(t)
+
+	sess, err := env.client.StartSession()
+	require.NoError(t, err)
+	defer sess.EndSession(ctx)
+	require.NoError(t, sess.StartTransaction())
+
+	_, err = coll.InsertOne(mongo.NewSessionContext(ctx, sess), bson.D{{Key: "_id", Value: "x"}})
+	require.NoError(t, err, "startTransaction must succeed when --session-isolation is not set")
 }
 
 // In --session-isolation mode writes auto-fork into a per-connection overlay.
