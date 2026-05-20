@@ -37,11 +37,14 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/proxy"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
@@ -442,9 +445,8 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
-
 			var resMsg *wire.OpMsg
-			resMsg, err = c.handleOpMsg(connCtx, msg, command)
+			resMsg, err = c.dispatchThroughSession(connCtx, msg, command)
 
 			if resMsg != nil {
 				resBody = resMsg
@@ -581,6 +583,65 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	}
 
 	return
+}
+
+// dispatchThroughSession routes the request through the lsid-keyed session
+// registry: every frame's handler runs inside Shadow.Use so the GC
+// safepoint controller sees the session as in-flight only for the
+// duration, and a concurrent reconnect on the same lsid surfaces to this
+// connection as MongoDB error code 225 (TransactionTooOld) on its next
+// frame.
+//
+// Falls back to a direct handleOpMsg call when the handler has no
+// SessionRegistry (stub backends in tests).
+func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, command string) (*wire.OpMsg, error) {
+	reg := c.h.SessionRegistry()
+	if reg == nil {
+		return c.handleOpMsg(connCtx, msg, command)
+	}
+
+	ci := conninfo.Get(connCtx)
+	lsid := ci.EnsureLSID()
+
+	shadow, cachedLsid := ci.CachedShadow()
+	if shadow == nil || cachedLsid != lsid {
+		// First frame on this connection, or the lsid changed since
+		// the last frame (e.g. handshake had a synthetic id; the
+		// driver supplied an explicit lsid on this frame). Connect to
+		// the registry, which either mints a fresh session or
+		// supersedes any prior shadow another connection was holding
+		// for this lsid.
+		s, err := reg.Connect(lsid)
+		if err != nil {
+			return nil, fmt.Errorf("session registry: Connect for %q: %w", lsid, err)
+		}
+		ci.SetCachedShadow(lsid, s)
+		shadow = s
+	}
+	// If the cached shadow is no longer active, another connection has
+	// taken over this lsid (or Sweep / End reaped it). Surface the
+	// terminal error to this connection; do NOT re-Connect (that would
+	// ping-pong supersedes between the two connections).
+	if !shadow.Active() {
+		return nil, handlererrors.NewCommandError(
+			handlererrors.ErrorCode(225),
+			errors.New("session was taken over by a newer connection on this lsid"),
+		)
+	}
+
+	var resMsg *wire.OpMsg
+	useErr := shadow.Use(time.Now(), func(*dsess.DoltSession) error {
+		var handlerErr error
+		resMsg, handlerErr = c.handleOpMsg(connCtx, msg, command)
+		return handlerErr
+	})
+	if errors.Is(useErr, sqlctx.ErrShadowInvalidated) {
+		return nil, handlererrors.NewCommandError(
+			handlererrors.ErrorCode(225),
+			errors.New("session was taken over by a newer connection on this lsid"),
+		)
+	}
+	return resMsg, useErr
 }
 
 // handleOpMsg processes OP_MSG requests.

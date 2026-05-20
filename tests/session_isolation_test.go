@@ -492,6 +492,130 @@ func TestSessionIsolation_NonConflictingMergesCleanly_OnFeatureBranch(t *testing
 	assert.ElementsMatch(t, []string{"seed", "from-A", "from-B"}, ids)
 }
 
+// .6.4.8 wire-dispatch acceptance: when two TCP connections forge the
+// same lsid, the second's first op supersedes the first's shadow, and
+// the first connection's next op surfaces as wire code 225
+// (TransactionTooOld) with the expected message.
+func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
+	env := startDumboDB(t)
+
+	a := dialWire(t, env)
+	b := dialWire(t, env)
+
+	dbName := fmt.Sprintf("supersede_%d", env.port)
+	lsid := freshLsid()
+
+	// A inserts with the forged lsid.
+	resA, err := a.run(bson.D{
+		{Key: "insert", Value: "c"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "from-A"}}}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, resA["ok"], "A's initial insert must succeed")
+
+	// B does an op with the SAME lsid -- supersedes A's shadow.
+	resB, err := b.run(bson.D{
+		{Key: "insert", Value: "c"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "from-B"}}}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, resB["ok"], "B's supersede insert must succeed")
+
+	// A's next op observes the invalidated shadow.
+	resA2, err := a.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err, "wire transport must still work")
+	assert.Equal(t, 0.0, resA2["ok"], "A's next op must fail with ok:0")
+	if code, ok := resA2["code"].(int32); ok {
+		assert.Equal(t, int32(225), code, "stale-shadow code must be 225 (TransactionTooOld)")
+	} else if code, ok := resA2["code"].(int64); ok {
+		assert.Equal(t, int64(225), code)
+	} else {
+		t.Fatalf("expected numeric code in response: %#v", resA2)
+	}
+	if msg, ok := resA2["errmsg"].(string); ok {
+		assert.Contains(t, msg, "taken over", "errmsg must explain the supersede; got %q", msg)
+	}
+}
+
+// .6.4.8 wire-dispatch acceptance: a client that reconnects with the
+// same lsid sees the durably-committed state. Smoke test of end-to-end
+// lsid routing.
+func TestSessionIsolation_ReconnectResumesCommittedState(t *testing.T) {
+	env := startDumboDB(t)
+
+	a := dialWire(t, env)
+	dbName := fmt.Sprintf("reconnect_%d", env.port)
+	lsid := freshLsid()
+
+	// A inserts and commits.
+	resInsert, err := a.run(bson.D{
+		{Key: "insert", Value: "c"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "from-A"}}}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resInsert["ok"], "A's insert must succeed: %v", resInsert)
+
+	resCommit, err := a.run(bson.D{
+		{Key: "doltCommit", Value: int32(1)},
+		{Key: "message", Value: "A commits"},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resCommit["ok"], "doltCommit must succeed: %v", resCommit)
+
+	// A disconnects (test cleanup will close).
+	_ = a.c.Close()
+
+	// B reconnects with the SAME lsid.
+	b := dialWire(t, env)
+	resFind, err := b.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: lsid},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resFind["ok"], "B's find must succeed: %#v", resFind)
+
+	first := firstBatchFromFindResponse(t, resFind)
+	require.Len(t, first, 1, "B must see exactly the one durable insert from A")
+	doc, ok := first[0].(bson.D)
+	require.True(t, ok)
+	assert.Equal(t, "from-A", bsonDLookup(doc, "_id"))
+}
+
+// firstBatchFromFindResponse extracts the firstBatch array from a find
+// response, handling the bson.D / bson.M asymmetry in the wire client.
+func firstBatchFromFindResponse(t *testing.T, res bson.M) bson.A {
+	t.Helper()
+	cursor, ok := res["cursor"].(bson.D)
+	require.True(t, ok, "find response must carry cursor; got %#v", res)
+	first, ok := bsonDLookup(cursor, "firstBatch").(bson.A)
+	require.True(t, ok, "cursor must have firstBatch; got %#v", cursor)
+	return first
+}
+
+func bsonDLookup(d bson.D, key string) interface{} {
+	for _, e := range d {
+		if e.Key == key {
+			return e.Value
+		}
+	}
+	return nil
+}
+
 // Branch variant of D6: ConflictRejectsSecondCommit, on a non-main branch.
 func TestSessionIsolation_ConflictRejectsSecondCommit_OnFeatureBranch(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")

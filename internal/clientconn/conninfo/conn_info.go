@@ -45,8 +45,9 @@ type ConnInfo struct {
 	username string // protected by rw
 	password string // protected by rw
 
-	lsid         string         // protected by rw
-	cachedShadow *sqlctx.Shadow // protected by rw
+	lsid             string         // protected by rw
+	cachedShadow     *sqlctx.Shadow // protected by rw
+	cachedShadowLsid string         // protected by rw; the lsid the cachedShadow is for
 
 	rw sync.RWMutex
 
@@ -180,22 +181,26 @@ func (connInfo *ConnInfo) EnsureLSID() string {
 }
 
 // CachedShadow returns the most recent session shadow cached on this
-// connection, or nil if no shadow has been cached (or the cached one
-// has been cleared).
-func (connInfo *ConnInfo) CachedShadow() *sqlctx.Shadow {
+// connection along with the lsid it was acquired for, or (nil, "") if
+// no shadow has been cached. Callers compare the returned lsid to the
+// current frame's lsid; a mismatch means the cache is stale (driver
+// switched session ids on this connection) and the caller must call
+// the registry to obtain a fresh shadow.
+func (connInfo *ConnInfo) CachedShadow() (*sqlctx.Shadow, string) {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
-	return connInfo.cachedShadow
+	return connInfo.cachedShadow, connInfo.cachedShadowLsid
 }
 
-// SetCachedShadow caches a session shadow on the connection. The wire
-// dispatch caches the result of registry.Connect here on first sight of
-// an lsid; subsequent frames read it back to avoid hitting the registry
-// mutex on the hot path.
-func (connInfo *ConnInfo) SetCachedShadow(s *sqlctx.Shadow) {
+// SetCachedShadow caches a session shadow on the connection along with
+// the lsid it is associated with. The wire dispatch caches the result
+// of registry.Connect here on first sight of an lsid; subsequent frames
+// read it back to avoid hitting the registry mutex on the hot path.
+func (connInfo *ConnInfo) SetCachedShadow(lsid string, s *sqlctx.Shadow) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 	connInfo.cachedShadow = s
+	connInfo.cachedShadowLsid = lsid
 }
 
 func (connInfo *ConnInfo) InTransaction() bool {

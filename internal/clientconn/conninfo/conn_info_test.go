@@ -78,18 +78,20 @@ func TestSetLSIDOverridesFallback(t *testing.T) {
 
 func TestCachedShadow_DefaultsToNil(t *testing.T) {
 	c := New()
-	assert.Nil(t, c.CachedShadow())
+	s, lsid := c.CachedShadow()
+	assert.Nil(t, s)
+	assert.Equal(t, "", lsid)
 }
 
 func TestCachedShadow_RoundTrip(t *testing.T) {
-	// Use an arbitrary non-nil pointer; the type only matters for the
-	// concrete *sqlctx.Shadow field. Tests in sqlctx exercise the
-	// shadow's actual behavior; here we just round-trip the field.
 	c := New()
-	require.Nil(t, c.CachedShadow())
+	s, _ := c.CachedShadow()
+	require.Nil(t, s)
 
-	c.SetCachedShadow(nil) // explicit nil is a valid clear
-	assert.Nil(t, c.CachedShadow())
+	c.SetCachedShadow("some-lsid", nil) // explicit nil is a valid clear
+	s, lsid := c.CachedShadow()
+	assert.Nil(t, s)
+	assert.Equal(t, "some-lsid", lsid)
 }
 
 func TestEnsureLSID_GeneratesSyntheticOnEmpty(t *testing.T) {
