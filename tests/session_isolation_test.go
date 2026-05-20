@@ -293,14 +293,16 @@ func TestSessionIsolation_MultiBranchIsolationOneSession(t *testing.T) {
 	dbName := fmt.Sprintf("multibranch_%d", env.port)
 	collName := "items"
 
-	uri := fmt.Sprintf("mongodb://127.0.0.1:%d/?maxPoolSize=1", env.port)
-	cA, err := mongo.Connect(options.Client().ApplyURI(uri))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = cA.Disconnect(context.Background()) })
+	// Prior to .6.4.8's lsid-keyed session routing this client was
+	// pinned to maxPoolSize=1 so the server-side Owner (conn:%p) was
+	// stable across all of A's operations. With the registry, the
+	// driver-issued implicit lsid identifies the session and survives
+	// across connection-pool TCP rebinds.
+	cA := siClient(t, env)
 
 	cB := siClient(t, env)
 
-	_, err = cA.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	_, err := cA.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
 	require.NoError(t, err)
 	require.NoError(t, cA.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
