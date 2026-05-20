@@ -54,7 +54,10 @@ import (
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
@@ -68,6 +71,11 @@ import (
 )
 
 const (
+	// defaultSessionTimeout is how long a registered lsid can be idle
+	// before Sweep reaps it. Matches MongoDB's
+	// logicalSessionTimeoutMinutes default.
+	defaultSessionTimeout = 30 * time.Minute
+
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
 
@@ -263,6 +271,9 @@ type Backend struct {
 
 	provider *dumbodbProvider
 
+	gcController *gcctx.GCSafepointController
+	sessions     *sqlctx.SessionRegistry
+
 	docLocksMu sync.Mutex
 	docLocks   map[string]*DocLockManager
 
@@ -427,6 +438,11 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
 	}
 	b.provider = provider
+
+	b.gcController = gcctx.NewGCSafepointController()
+	b.sessions = sqlctx.NewSessionRegistry(defaultSessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
+		return sqlctx.NewSessionWithGC(b.provider, writer.NewWriteSession, b.gcController)
+	})
 
 	// Initialize the admin database so it always exists on disk, matching
 	// MongoDB's behavior where the admin database is always present even when

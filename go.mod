@@ -6,7 +6,7 @@ require (
 	github.com/AlekSi/pointer v1.2.0
 	github.com/FerretDB/wire v0.0.8
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20260519223508-dc0b16653381
+	github.com/dolthub/dolt/go v0.40.5-0.20260519230928-8132c593d411
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260519163920-8a6f65450db7
 	github.com/google/uuid v1.6.0
