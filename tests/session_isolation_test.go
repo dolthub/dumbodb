@@ -618,6 +618,78 @@ func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testin
 	}
 }
 
+// Default-mode reconnect: a multi-document transaction started by
+// conn1 continues on conn2 when conn2 carries the same lsid +
+// txnNumber + autocommit:false. The dispatch observes autocommit:false
+// on every frame (not just the first via startTransaction:true), so
+// the second TCP connection's InTransaction flag reflects the wire
+// frame and writes/reads route through the lsid-keyed pending overlay.
+// This is the property the parity-side P6 lsid_reconnect_wire test
+// covers against an RS Mongo; this local version locks it in for
+// DumboDB CI runs where MONGO_RS_URI may not be set.
+func TestTransaction_WireReconnectResumesTransactionState(t *testing.T) {
+	env := startDumboDB(t)
+	dbName := fmt.Sprintf("txnreconnect_%d", env.port)
+	lsid := freshLsid()
+	const txnNum = int64(1)
+
+	conn1 := dialWire(t, env)
+	resInsert, err := conn1.run(bson.D{
+		{Key: "insert", Value: "c"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "in-txn"}}}},
+		{Key: "lsid", Value: lsid},
+		{Key: "txnNumber", Value: txnNum},
+		{Key: "startTransaction", Value: true},
+		{Key: "autocommit", Value: false},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resInsert["ok"])
+	_ = conn1.c.Close()
+
+	conn2 := dialWire(t, env)
+	resFind, err := conn2.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: lsid},
+		{Key: "txnNumber", Value: txnNum},
+		{Key: "autocommit", Value: false},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resFind["ok"])
+	first := firstBatchFromFindResponse(t, resFind)
+	require.Len(t, first, 1, "conn2 must see conn1's uncommitted in-txn write via the lsid-keyed overlay")
+	doc, ok := first[0].(bson.D)
+	require.True(t, ok)
+	assert.Equal(t, "in-txn", bsonDLookup(doc, "_id"))
+
+	resCommit, err := conn2.run(bson.D{
+		{Key: "commitTransaction", Value: int32(1)},
+		{Key: "lsid", Value: lsid},
+		{Key: "txnNumber", Value: txnNum},
+		{Key: "autocommit", Value: false},
+		{Key: "$db", Value: "admin"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, resCommit["ok"])
+
+	// A fresh lsid sees the now-durable write.
+	conn3 := dialWire(t, env)
+	resFind2, err := conn3.run(bson.D{
+		{Key: "find", Value: "c"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "lsid", Value: freshLsid()},
+		{Key: "$db", Value: dbName},
+	})
+	require.NoError(t, err)
+	first = firstBatchFromFindResponse(t, resFind2)
+	require.Len(t, first, 1)
+	doc, ok = first[0].(bson.D)
+	require.True(t, ok)
+	assert.Equal(t, "in-txn", bsonDLookup(doc, "_id"))
+}
+
 // D10: in --session-isolation mode, uncommitted writes survive a TCP
 // disconnect when a new connection arrives with the same lsid. The
 // pending overlay sits on the underlying *dsess.DoltSession; the

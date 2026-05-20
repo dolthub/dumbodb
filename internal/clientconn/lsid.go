@@ -54,23 +54,44 @@ func extractAndSetLSID(ctx context.Context, doc *types.Document) {
 	conninfo.Get(ctx).SetLSID(hex.EncodeToString(bin.B))
 }
 
-// MongoDB has no separate startTransaction command; the driver flags the
-// first command in a txn with startTransaction:true. Returns whether the
-// flag was observed; conn-level routing uses this to reject the wire
-// frame in --session-isolation mode.
+// extractAndSetTransactionFlag observes the wire-protocol transaction
+// markers and reflects them onto ConnInfo for the current frame. Two
+// markers, distinct semantics:
+//
+//   - startTransaction:true marks the FIRST frame of a new txn. Clears any
+//     prior aborted state, sets InTransaction.
+//   - autocommit:false marks ANY frame as part of a txn (including a
+//     continuation that arrives on a fresh TCP connection -- the
+//     SessionRegistry resumes the underlying DoltSession but ConnInfo is
+//     per-TCP-connection, so the second frame must set InTransaction
+//     from the wire field rather than carrying it forward).
+//
+// Returns whether startTransaction:true was observed; the conn-level
+// routing uses that specifically to reject the wire frame in
+// --session-isolation mode.
 func extractAndSetTransactionFlag(ctx context.Context, doc *types.Document) (started bool) {
-	if doc == nil || !doc.Has("startTransaction") {
+	if doc == nil {
 		return false
 	}
-	v, err := doc.Get("startTransaction")
-	if err != nil {
-		return false
+	ci := conninfo.Get(ctx)
+
+	if doc.Has("startTransaction") {
+		if v, err := doc.Get("startTransaction"); err == nil {
+			if b, ok := v.(bool); ok && b {
+				ci.SetTxnAborted(false)
+				ci.SetInTransaction(true)
+				started = true
+			}
+		}
 	}
-	if b, ok := v.(bool); ok && b {
-		ci := conninfo.Get(ctx)
-		ci.SetTxnAborted(false)
-		ci.SetInTransaction(true)
-		return true
+
+	if doc.Has("autocommit") {
+		if v, err := doc.Get("autocommit"); err == nil {
+			if b, ok := v.(bool); ok && !b {
+				ci.SetInTransaction(true)
+			}
+		}
 	}
-	return false
+
+	return started
 }
