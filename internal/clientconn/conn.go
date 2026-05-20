@@ -421,6 +421,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		connCtx, span = otel.Tracer("").Start(connCtx, "")
 
 		command = doc.Command()
+		cmd := c.h.Commands()[command]
 
 		var startedTxn bool
 		if err == nil {
@@ -435,7 +436,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 			)
 		}
 
-		if err == nil && commandBlockedInTxn(command) && conninfo.Get(connCtx).InTransaction() {
+		if err == nil && cmd != nil && cmd.BlockedInTxn && conninfo.Get(connCtx).InTransaction() {
 			c.h.AbortPendingTransaction(connCtx)
 			err = handlererrors.NewCommandError(
 				handlererrors.ErrorCode(263),
@@ -446,7 +447,7 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
 			var resMsg *wire.OpMsg
-			resMsg, err = c.dispatchThroughSession(connCtx, msg, command)
+			resMsg, err = c.dispatchThroughSession(connCtx, msg, command, cmd)
 
 			if resMsg != nil {
 				resBody = resMsg
@@ -585,10 +586,10 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	return
 }
 
-func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, command string) (*wire.OpMsg, error) {
+func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
 	reg := c.h.SessionRegistry()
 	if reg == nil {
-		return c.handleOpMsg(connCtx, msg, command)
+		return c.invokeHandler(connCtx, msg, name, cmd)
 	}
 
 	ci := conninfo.Get(connCtx)
@@ -611,14 +612,14 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	}
 
 	runFn := shadow.Use
-	if commandIsDurableCommit(command) {
+	if cmd != nil && cmd.Durable {
 		runFn = shadow.Commit
 	}
 
 	var resMsg *wire.OpMsg
 	runErr := runFn(time.Now(), func(*dsess.DoltSession) error {
 		var handlerErr error
-		resMsg, handlerErr = c.handleOpMsg(connCtx, msg, command)
+		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
 		return handlerErr
 	})
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
@@ -634,26 +635,14 @@ func supersededError() error {
 	)
 }
 
-func commandIsDurableCommit(command string) bool {
-	switch command {
-	case "doltCommit", "commitTransaction":
-		return true
+func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
+	if cmd == nil || cmd.Handler == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrCommandNotFound,
+			fmt.Sprintf("no such command: '%s'", name),
+		)
 	}
-	return false
-}
-
-// handleOpMsg processes OP_MSG requests.
-//
-// The passed context is canceled when the client disconnects.
-func (c *conn) handleOpMsg(connCtx context.Context, msg *wire.OpMsg, command string) (*wire.OpMsg, error) {
-	if cmd := c.h.Commands()[command]; cmd != nil && cmd.Handler != nil {
-		return cmd.Handler(connCtx, msg)
-	}
-
-	return nil, handlererrors.NewCommandErrorMsg(
-		handlererrors.ErrCommandNotFound,
-		fmt.Sprintf("no such command: '%s'", command),
-	)
+	return cmd.Handler(connCtx, msg)
 }
 
 // logResponse logs response's header and body and returns the log level that was used.

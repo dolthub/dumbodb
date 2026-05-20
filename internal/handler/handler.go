@@ -62,7 +62,7 @@ type Handler struct {
 	b backends.Backend
 
 	cursors   *cursor.Registry
-	commands  map[string]*command
+	commands  map[string]*Command
 	wg        sync.WaitGroup
 	processID types.ObjectID
 
