@@ -52,7 +52,7 @@ var setParameterEnvelopeFields = map[string]bool{
 // Returns the previous value of the last-updated parameter under "was",
 // matching MongoDB's wire shape for the single-parameter case. Unknown
 // parameters return code 72 (InvalidOptions); known-but-not-settable-at-
-// runtime parameters return code 13631.
+// runtime parameters return code 20 (IllegalOperation).
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgSetParameter(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -99,8 +99,8 @@ func (h *Handler) MsgSetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 			)
 		case ParamSetNotRuntime:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrorCode(13631),
-				fmt.Sprintf("Server parameter %q is not settable at runtime", k),
+				handlererrors.ErrIllegalOperation,
+				fmt.Sprintf("not allowed to change [%s] at runtime", k),
 				k,
 			)
 		}
