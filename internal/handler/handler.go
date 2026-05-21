@@ -61,10 +61,11 @@ type Handler struct {
 
 	b backends.Backend
 
-	cursors   *cursor.Registry
-	commands  map[string]*Command
-	wg        sync.WaitGroup
-	processID types.ObjectID
+	cursors    *cursor.Registry
+	commands   map[string]*Command
+	paramStore *parameterStore
+	wg         sync.WaitGroup
+	processID  types.ObjectID
 
 	cappedCleanupStop chan struct{}
 }

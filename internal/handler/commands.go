@@ -58,6 +58,9 @@ func (h *Handler) register(c *Command, names ...string) {
 }
 
 func (h *Handler) initCommands() {
+	if h.paramStore == nil {
+		h.paramStore = newParameterStore()
+	}
 	h.commands = map[string]*Command{
 		// Single-name commands. Aliased and flag-bearing commands are
 		// registered below via h.register(...). Keep this map sorted
@@ -105,6 +108,7 @@ func (h *Handler) initCommands() {
 		"saslContinue":            {Handler: h.MsgSASLContinue, anonymous: true},
 		"serverStatus":            {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
 		"setFreeMonitoring":       {Handler: h.msgFreeMonitoringNotSupported, Help: "Toggles free monitoring."},
+		"setParameter":            {Handler: h.MsgSetParameter, Help: "Sets the value of a runtime-settable server parameter."},
 		"update":                  {Handler: h.MsgUpdate, Help: "Updates documents that are matched by the query."},
 		"validate":                {Handler: h.MsgValidate, Help: "Validates collection."},
 		"whatsmyuri":              {Handler: h.MsgWhatsMyURI, anonymous: true, Help: "Returns peer information."},

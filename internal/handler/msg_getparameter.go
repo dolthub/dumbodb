@@ -47,37 +47,7 @@ func (h *Handler) MsgGetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 	common.Ignored(document, h.L, "comment")
 
-	mechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
-
-	parameters := must.NotFail(types.NewDocument(
-		// to add a new parameter, fill template and place it in the alphabetical order position
-		//"<name>", must.NotFail(types.NewDocument(
-		//	"value", <value>,
-		//	"settableAtRuntime", <bool>,
-		//	"settableAtStartup", <bool>,
-		//)),
-		"authenticationMechanisms", must.NotFail(types.NewDocument(
-			"value", mechanisms,
-			"settableAtRuntime", false,
-			"settableAtStartup", true,
-		)),
-		"authSchemaVersion", must.NotFail(types.NewDocument(
-			"value", int32(5),
-			"settableAtRuntime", true,
-			"settableAtStartup", true,
-		)),
-		"featureCompatibilityVersion", must.NotFail(types.NewDocument(
-			"value", must.NotFail(types.NewDocument("version", "7.0")),
-			"settableAtRuntime", false,
-			"settableAtStartup", false,
-		)),
-		"quiet", must.NotFail(types.NewDocument(
-			"value", false,
-			"settableAtRuntime", true,
-			"settableAtStartup", true,
-		)),
-		// parameters are alphabetically ordered
-	))
+	parameters := buildParameterDoc(h.paramStore)
 
 	resDoc, err := selectParameters(document, parameters, showDetails, allParameters)
 	if err != nil {
