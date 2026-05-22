@@ -1282,15 +1282,18 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
+	// acquireInsertLocks may block waiting for a holding transaction to
+	// commit/abort (non-txn callers); the holding txn's release path needs
+	// state.mu, so the wait must happen before we take state.mu.
+	if err := c.acquireInsertLocks(ctx, params.Docs); err != nil {
+		return nil, err
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	if c.db.isReadOnly(ctx, state) {
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
-	}
-
-	if err := c.acquireInsertLocks(ctx, params.Docs); err != nil {
-		return nil, err
 	}
 
 	// Load or create the collection's prolly map.
@@ -1654,15 +1657,17 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return &backends.UpdateAllResult{}, nil
 	}
 
+	// See Insert: acquireUpdateLocks may block on a holding transaction whose
+	// release path needs state.mu; wait before taking state.mu.
+	if err := c.acquireUpdateLocks(ctx, params.Docs); err != nil {
+		return nil, err
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	if c.db.isReadOnly(ctx, state) {
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
-	}
-
-	if err := c.acquireUpdateLocks(ctx, params.Docs); err != nil {
-		return nil, err
 	}
 
 	m, err := c.loadOrCreateMap(ctx, state)
@@ -1805,15 +1810,17 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return &backends.DeleteAllResult{}, nil
 	}
 
+	// See Insert: acquireDeleteLocks may block on a holding transaction whose
+	// release path needs state.mu; wait before taking state.mu.
+	if err := c.acquireDeleteLocks(ctx, params.IDs); err != nil {
+		return nil, err
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	if c.db.isReadOnly(ctx, state) {
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
-	}
-
-	if err := c.acquireDeleteLocks(ctx, params.IDs); err != nil {
-		return nil, err
 	}
 
 	m, err := c.loadOrCreateMap(ctx, state)

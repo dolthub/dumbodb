@@ -30,13 +30,16 @@ var ErrWriteConflict = errors.New("write conflict: document locked by another tr
 
 type DocLockManager struct {
 	mu    sync.Mutex
+	cond  *sync.Cond
 	locks map[string]map[hash.Hash]string
 }
 
 func NewDocLockManager() *DocLockManager {
-	return &DocLockManager{
+	m := &DocLockManager{
 		locks: map[string]map[hash.Hash]string{},
 	}
+	m.cond = sync.NewCond(&m.mu)
+	return m
 }
 
 func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash) error {
@@ -82,21 +85,75 @@ func (m *DocLockManager) Release(owner string) {
 			delete(m.locks, coll)
 		}
 	}
+	m.cond.Broadcast()
+}
+
+// WaitForRelease blocks until none of the given ids in collection are held
+// by any owner, or until ctx is canceled. Non-transactional writes use this
+// to honour MongoDB's semantics that a non-txn write contending with a
+// document held by an open multi-doc transaction waits for that transaction
+// to commit or abort, rather than racing past the lock.
+func (m *DocLockManager) WaitForRelease(ctx context.Context, collection string, ids []hash.Hash) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	stopWatcher := make(chan struct{})
+	defer close(stopWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			m.mu.Lock()
+			m.cond.Broadcast()
+			m.mu.Unlock()
+		case <-stopWatcher:
+		}
+	}()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for {
+		if !m.heldLocked(collection, ids) {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.cond.Wait()
+	}
+}
+
+// heldLocked reports whether any of ids in collection are held. Caller must
+// hold m.mu.
+func (m *DocLockManager) heldLocked(collection string, ids []hash.Hash) bool {
+	collLocks, ok := m.locks[collection]
+	if !ok {
+		return false
+	}
+	for _, id := range ids {
+		if _, has := collLocks[id]; has {
+			return true
+		}
+	}
+	return false
 }
 
 // Skipped in --session-isolation mode: conflicts are resolved at doltCommit
-// time via three-way merge rather than at write time via locks. Also a
-// no-op for non-transactional writes (implicit single-statement txns
-// serialize on state.mu instead).
+// time via three-way merge rather than at write time via locks.
+//
+// In default mode: transactional callers Acquire (fail-fast WriteConflict on
+// contention); non-transactional callers WaitForRelease (block until any
+// holding transaction commits or aborts) so they observe MongoDB's
+// "non-txn write blocks behind open transaction" semantics.
 func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash) error {
-	if b.sessionIsolation {
-		return nil
-	}
-	owner, inTxn := ownerForTxn(ctx, false)
-	if !inTxn || len(ids) == 0 {
+	if b.sessionIsolation || len(ids) == 0 {
 		return nil
 	}
 	mgr := b.docLockManager(db, branch)
+	owner, inTxn := ownerForTxn(ctx, false)
+	if !inTxn {
+		return mgr.WaitForRelease(ctx, collection, ids)
+	}
 	if err := mgr.Acquire(owner, collection, ids); err != nil {
 		if errors.Is(err, ErrWriteConflict) {
 			return backends.NewError(backends.ErrorCodeWriteConflict, err)
@@ -135,7 +192,7 @@ func idsFromValues(idVals []any) ([]hash.Hash, error) {
 }
 
 func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Document) error {
-	if _, inTxn := ownerForTxn(ctx, c.db.backend.sessionIsolation); !inTxn {
+	if c.db.backend.sessionIsolation {
 		return nil
 	}
 	ids, err := idsFromDocs(docs)
@@ -146,7 +203,7 @@ func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Docum
 }
 
 func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Document) error {
-	if _, inTxn := ownerForTxn(ctx, c.db.backend.sessionIsolation); !inTxn {
+	if c.db.backend.sessionIsolation {
 		return nil
 	}
 	ids, err := idsFromDocs(docs)
@@ -157,7 +214,7 @@ func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Docum
 }
 
 func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error {
-	if _, inTxn := ownerForTxn(ctx, c.db.backend.sessionIsolation); !inTxn {
+	if c.db.backend.sessionIsolation {
 		return nil
 	}
 	ids, err := idsFromValues(idVals)

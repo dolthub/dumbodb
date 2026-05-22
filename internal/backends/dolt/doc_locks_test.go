@@ -15,8 +15,10 @@
 package dolt
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/stretchr/testify/assert"
@@ -106,4 +108,55 @@ func TestAcquireEmptyIdsIsNoop(t *testing.T) {
 	m := NewDocLockManager()
 	require.NoError(t, m.Acquire("ownerA", "col", nil))
 	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{}))
+}
+
+func TestWaitForReleaseReturnsImmediatelyWhenUnheld(t *testing.T) {
+	m := NewDocLockManager()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)}))
+	assert.Less(t, time.Since(start), 50*time.Millisecond)
+}
+
+func TestWaitForReleaseBlocksUntilReleased(t *testing.T) {
+	m := NewDocLockManager()
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		m.Release("ownerA")
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)}))
+	elapsed := time.Since(start)
+	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond, "should have waited for the release")
+	assert.Less(t, elapsed, 500*time.Millisecond, "should have unblocked promptly after release")
+}
+
+func TestWaitForReleaseRespectsContextCancellation(t *testing.T) {
+	m := NewDocLockManager()
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := m.WaitForRelease(ctx, "col", []hash.Hash{idH(1)})
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond)
+	assert.Less(t, elapsed, 500*time.Millisecond)
+}
+
+func TestWaitForReleaseEmptyIdsIsNoop(t *testing.T) {
+	m := NewDocLockManager()
+	require.NoError(t, m.Acquire("ownerA", "col", []hash.Hash{idH(1)}))
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	require.NoError(t, m.WaitForRelease(ctx, "col", nil))
+	require.NoError(t, m.WaitForRelease(ctx, "col", []hash.Hash{}))
 }
