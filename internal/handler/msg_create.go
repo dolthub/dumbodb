@@ -22,6 +22,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -304,10 +305,13 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionAlreadyExists):
-		// MongoDB 7.0+ returns success when creating an already-existing collection with the
-		// same options (idempotent). With different options (e.g., size), it returns a
-		// NamespaceExists error.
-		if hasExplicitOptions {
+		// MongoDB 8.0: idempotent OK for no-options create outside a txn,
+		// NamespaceExists (48) inside a txn or with explicit options.
+		ci := conninfo.Get(connCtx)
+		if hasExplicitOptions || ci.InTransaction() {
+			if ci.InTransaction() {
+				h.AbortPendingTransaction(connCtx)
+			}
 			msg := fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
 		}

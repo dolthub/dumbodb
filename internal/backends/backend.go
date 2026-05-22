@@ -24,6 +24,7 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/util/must"
 	"github.com/dolthub/dumbodb/internal/util/resource"
 )
@@ -75,6 +76,43 @@ func (bc *backendContract) Close() {
 	bc.b.Close()
 
 	resource.Untrack(bc, bc.token)
+}
+
+// SessionAwareBackend methods. Implemented on the wrapper unconditionally so
+// handler-side type assertions reach the wrapped backend; backends with no
+// per-session state get no-op delegation.
+
+func (bc *backendContract) OnSessionEnd(owner string) {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		sab.OnSessionEnd(owner)
+	}
+}
+
+func (bc *backendContract) OnTransactionCommit(ctx context.Context, owner string) error {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		return sab.OnTransactionCommit(ctx, owner)
+	}
+	return nil
+}
+
+func (bc *backendContract) OnTransactionAbort(owner string) {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		sab.OnTransactionAbort(owner)
+	}
+}
+
+func (bc *backendContract) SessionIsolation() bool {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		return sab.SessionIsolation()
+	}
+	return false
+}
+
+func (bc *backendContract) SessionRegistry() *sqlctx.SessionRegistry {
+	if sab, ok := bc.b.(SessionAwareBackend); ok {
+		return sab.SessionRegistry()
+	}
+	return nil
 }
 
 type StatusParams struct{}

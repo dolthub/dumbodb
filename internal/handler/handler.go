@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
 	"github.com/dolthub/dumbodb/internal/handler/users"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/ctxutil"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -60,10 +61,11 @@ type Handler struct {
 
 	b backends.Backend
 
-	cursors   *cursor.Registry
-	commands  map[string]*command
-	wg        sync.WaitGroup
-	processID types.ObjectID
+	cursors    *cursor.Registry
+	commands   map[string]*Command
+	paramStore *parameterStore
+	wg         sync.WaitGroup
+	processID  types.ObjectID
 
 	cappedCleanupStop chan struct{}
 }
@@ -250,6 +252,35 @@ func (h *Handler) runCappedCleanup() {
 
 // Close gracefully shutdowns handler.
 // It should be called after listener closes all client connections and stops listening.
+// SessionIsolation reports whether the underlying backend is running in
+// --session-isolation mode. Used by the wire-dispatch layer to reject
+// startTransaction.
+func (h *Handler) SessionIsolation() bool {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		return sab.SessionIsolation()
+	}
+	return false
+}
+
+func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		return sab.SessionRegistry()
+	}
+	return nil
+}
+
+// AbortPendingTransaction discards any per-connection pending overlay
+// and marks the txn as aborted, so a subsequent commitTransaction
+// returns NoSuchTransaction (251). Used when the wire layer rejects an
+// in-txn DDL with OperationNotSupportedInTransaction (263).
+func (h *Handler) AbortPendingTransaction(ctx context.Context) {
+	ci := conninfo.Get(ctx)
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(ci.Owner())
+	}
+	ci.SetTxnAborted(true)
+}
+
 func (h *Handler) Close() {
 	h.cursors.Close()
 	close(h.cappedCleanupStop)

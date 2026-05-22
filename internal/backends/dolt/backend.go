@@ -54,7 +54,10 @@ import (
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
@@ -63,10 +66,15 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
 const (
+	// defaultSessionTimeout matches MongoDB's logicalSessionTimeoutMinutes default.
+	defaultSessionTimeout     = 30 * time.Minute
+	defaultSessionSweepPeriod = time.Minute
+
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
 
@@ -118,6 +126,8 @@ type timeSeriesMeta struct {
 
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
+	backend *Backend // back-pointer; lets helpers read backend-level config (e.g. sessionIsolation)
+
 	mu    sync.RWMutex
 	dbDir string
 
@@ -135,6 +145,8 @@ type dbState struct {
 	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
+	pendingWS map[pendingWSKey]*pendingTxnState
+
 	uuids        map[string]string
 	indexes      map[string][]backends.IndexInfo
 	secIndexMaps map[string]map[string]prolly.Map
@@ -149,6 +161,19 @@ type dbState struct {
 	emptyIndexAM   prolly.AddressMap
 	mergeState     *mergeInProgress
 	dirtyBranches  map[string]struct{}
+}
+
+type pendingWSKey struct {
+	owner  string
+	branch string
+}
+
+// pendingTxnState holds the per-(owner, branch) transaction overlay along
+// with the base working set snapshot taken when the txn first touched the
+// branch. The base is required for three-way merge on commit.
+type pendingTxnState struct {
+	base    *doltdb.WorkingSet
+	current *doltdb.WorkingSet
 }
 
 func (s *dbState) workingSet(branch string) (*doltdb.WorkingSet, bool) {
@@ -235,12 +260,21 @@ func (s *dbState) setAM(branch string, am prolly.AddressMap) {
 
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
-	dataDir    string
-	l          *slog.Logger
-	autoCommit bool // when true, each write auto-creates a Dolt commit
+	dataDir          string
+	l                *slog.Logger
+	autoCommit       bool // when true, each write auto-creates a Dolt commit
+	sessionIsolation bool // when true, writes auto-fork into per-conn overlay and doltCommit merges
 
 	mu  sync.RWMutex
 	dbs map[string]*dbState // dbName -> dbState
+
+	provider *dumbodbProvider
+
+	gcController *gcctx.GCSafepointController
+	sessions     *sqlctx.SessionRegistry
+
+	docLocksMu sync.Mutex
+	docLocks   map[string]*DocLockManager
 
 	// flusherStop is closed by Close to signal the background flusher to
 	// drain any remaining dirty state and exit.
@@ -248,6 +282,118 @@ type Backend struct {
 	// flusherDone is closed by the flusher goroutine when it exits, so Close
 	// can wait for the final drain to complete before tearing down dbs.
 	flusherDone chan struct{}
+
+	sweeperStop   chan struct{}
+	sweeperDone   chan struct{}
+	sweeperPeriod time.Duration
+}
+
+func docLocksKey(db, branch string) string {
+	return db + "/" + branch
+}
+
+func (b *Backend) docLockManager(db, branch string) *DocLockManager {
+	key := docLocksKey(db, branch)
+
+	b.docLocksMu.Lock()
+	defer b.docLocksMu.Unlock()
+
+	if b.docLocks == nil {
+		b.docLocks = map[string]*DocLockManager{}
+	}
+	m, ok := b.docLocks[key]
+	if !ok {
+		m = NewDocLockManager()
+		b.docLocks[key] = m
+	}
+	return m
+}
+
+func (b *Backend) OnSessionEnd(owner string) {
+	b.releaseLocksForOwner(owner)
+	b.abortPendingForOwner(owner)
+}
+
+func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
+	type namedDb struct {
+		name string
+		db   *dbState
+	}
+	b.mu.RLock()
+	dbs := make([]namedDb, 0, len(b.dbs))
+	for name, db := range b.dbs {
+		dbs = append(dbs, namedDb{name: name, db: db})
+	}
+	b.mu.RUnlock()
+
+	sess := b.NewSession()
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+
+	var firstErr error
+	for _, nd := range dbs {
+		sqlDB, ok, err := b.provider.getOrBuildSqleDatabase(sqlCtx, nd.name)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !ok {
+			continue
+		}
+		nd.db.mu.Lock()
+		_, err = nd.db.commitPendingForOwner(sqlCtx, sqlDB.GetTableResolver(), owner)
+		nd.db.mu.Unlock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	b.releaseLocksForOwner(owner)
+	return firstErr
+}
+
+func (b *Backend) OnTransactionAbort(owner string) {
+	b.abortPendingForOwner(owner)
+	b.releaseLocksForOwner(owner)
+}
+
+func (b *Backend) SessionIsolation() bool {
+	return b.sessionIsolation
+}
+
+func (b *Backend) abortPendingForOwner(owner string) {
+	b.mu.RLock()
+	dbs := make([]*dbState, 0, len(b.dbs))
+	for _, db := range b.dbs {
+		dbs = append(dbs, db)
+	}
+	b.mu.RUnlock()
+
+	for _, db := range dbs {
+		db.mu.Lock()
+		db.abortPendingForOwner(owner)
+		db.mu.Unlock()
+	}
+}
+
+func (b *Backend) releaseLocksForOwner(owner string) {
+	b.docLocksMu.Lock()
+	managers := make([]*DocLockManager, 0, len(b.docLocks))
+	for _, m := range b.docLocks {
+		managers = append(managers, m)
+	}
+	b.docLocksMu.Unlock()
+
+	for _, m := range managers {
+		m.Release(owner)
+	}
+}
+
+func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	state, ok := b.dbs[name]
+	return state, ok
 }
 
 // deferredFlushInterval is how often the backend drains per-database dirty
@@ -269,19 +415,53 @@ func parseAuthorString(author string) (name, email string) {
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
 // When autoCommit is true, every document write (insert/update/delete) is
 // automatically committed to Dolt history without an explicit doltCommit call.
-func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backend, error) {
+// sessionTimeout overrides the default lsid-keyed session idle timeout
+// (zero falls back to defaultSessionTimeout). sessionSweepPeriod overrides
+// the registry sweep cadence (zero falls back to defaultSessionSweepPeriod).
+func NewBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool, sessionTimeout, sessionSweepPeriod time.Duration) (backends.Backend, error) {
+	b, err := newBackend(dataDir, l, autoCommit, sessionIsolation, sessionTimeout, sessionSweepPeriod)
+	if err != nil {
+		return nil, err
+	}
+	return backends.BackendContract(b), nil
+}
+
+func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation bool, sessionTimeout, sessionSweepPeriod time.Duration) (*Backend, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
 	b := &Backend{
-		dataDir:     dataDir,
-		l:           l,
-		autoCommit:  autoCommit,
-		dbs:         make(map[string]*dbState),
-		flusherStop: make(chan struct{}),
-		flusherDone: make(chan struct{}),
+		dataDir:          dataDir,
+		l:                l,
+		autoCommit:       autoCommit,
+		sessionIsolation: sessionIsolation,
+		dbs:              make(map[string]*dbState),
+		docLocks:         make(map[string]*DocLockManager),
+		flusherStop:      make(chan struct{}),
+		flusherDone:      make(chan struct{}),
+		sweeperStop:      make(chan struct{}),
+		sweeperDone:      make(chan struct{}),
 	}
+	if sessionSweepPeriod > 0 {
+		b.sweeperPeriod = sessionSweepPeriod
+	} else {
+		b.sweeperPeriod = defaultSessionSweepPeriod
+	}
+
+	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
+	if err != nil {
+		return nil, fmt.Errorf("constructing dsess provider: %w", err)
+	}
+	b.provider = provider
+
+	b.gcController = gcctx.NewGCSafepointController()
+	if sessionTimeout <= 0 {
+		sessionTimeout = defaultSessionTimeout
+	}
+	b.sessions = sqlctx.NewSessionRegistry(sessionTimeout, func(lsid string) (*dsess.DoltSession, error) {
+		return sqlctx.NewSessionWithGC(b.provider, writer.NewWriteSession, b.gcController)
+	})
 
 	// Initialize the admin database so it always exists on disk, matching
 	// MongoDB's behavior where the admin database is always present even when
@@ -293,8 +473,27 @@ func NewBackend(dataDir string, l *slog.Logger, autoCommit bool) (backends.Backe
 	}
 
 	go b.deferredFlushLoop()
+	go b.sessionSweepLoop()
 
-	return backends.BackendContract(b), nil
+	return b, nil
+}
+
+func (b *Backend) sessionSweepLoop() {
+	defer close(b.sweeperDone)
+
+	ticker := time.NewTicker(b.sweeperPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.sweeperStop:
+			return
+		case <-ticker.C:
+			if b.sessions != nil {
+				b.sessions.Sweep(time.Now())
+			}
+		}
+	}
 }
 
 // deferredFlushLoop drains dbState.dirtyBranches on every database at a fixed
@@ -354,6 +553,17 @@ func (b *Backend) Close() {
 		}
 		if b.flusherDone != nil {
 			<-b.flusherDone
+		}
+	}
+
+	if b.sweeperStop != nil {
+		select {
+		case <-b.sweeperStop:
+		default:
+			close(b.sweeperStop)
+		}
+		if b.sweeperDone != nil {
+			<-b.sweeperDone
 		}
 	}
 
@@ -790,6 +1000,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	}
 
 	db = &dbState{
+		backend:        b,
 		dbDir:          dbDir,
 		cs:             cs,
 		ns:             ns,
@@ -797,6 +1008,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		doltDB:         doltDB,
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
+		pendingWS:      map[pendingWSKey]*pendingTxnState{},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),
@@ -1077,6 +1289,10 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	branch := params.Branch
 	if branch == "" {
 		branch = defaultBranch
+	}
+
+	if b.sessionIsolation {
+		return b.doltCommitSessionIsolation(ctx, params, db, branch, message, ts)
 	}
 
 	db.mu.Lock()

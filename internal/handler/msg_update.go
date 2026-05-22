@@ -16,7 +16,9 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/FerretDB/wire"
 
@@ -49,8 +51,22 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	_ = params.Ordered
 
-	matched, modified, upserted, err := h.updateDocument(connCtx, params)
+	ctx := connCtx
+	if params.MaxTimeMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(connCtx, time.Duration(params.MaxTimeMS)*time.Millisecond)
+		defer cancel()
+	}
+
+	matched, modified, upserted, err := h.updateDocument(ctx, params)
 	if err != nil {
+		if params.MaxTimeMS > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrMaxTimeMSExpired,
+				"Executor error during update command :: caused by :: operation exceeded time limit",
+				"update",
+			)
+		}
 		return nil, handleUpdateError(params.DB, params.Collection, "update", err)
 	}
 
@@ -146,6 +162,9 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 					handlererrors.ErrOperationFailed,
 					"cannot write to a read-only database snapshot",
 				)
+			}
+			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+				return 0, 0, nil, common.TranslateBackendWriteError(err)
 			}
 			return 0, 0, nil, lazyerrors.Error(err)
 		}

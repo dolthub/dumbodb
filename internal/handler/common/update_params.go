@@ -32,7 +32,7 @@ type UpdateParams struct {
 	Updates []Update `dumbo:"updates"`
 
 	Comment   string `dumbo:"comment,opt"`
-	MaxTimeMS int64  `dumbo:"maxTimeMS,ignored"`
+	MaxTimeMS int64  `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
 	Let *types.Document `dumbo:"let,unimplemented"`
 
@@ -42,6 +42,7 @@ type UpdateParams struct {
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
 	LSID                     any             `dumbo:"lsid,ignored"`
 	TxnNumber                int64           `dumbo:"txnNumber,ignored"`
+	StartTransaction         bool            `dumbo:"startTransaction,ignored"`
 	Autocommit               bool            `dumbo:"autocommit,ignored"`
 	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
 	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`

@@ -15,6 +15,7 @@
 package backends
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -37,6 +38,8 @@ const (
 	ErrorCodeInsertDuplicateID
 
 	ErrorCodeReadOnlyDatabase
+
+	ErrorCodeWriteConflict
 )
 
 // Error represents a backend error returned by all Backend, Database and Collection methods.
@@ -72,15 +75,16 @@ func (err *Error) Error() string {
 	return fmt.Sprintf("%s: %v", err.code, err.err)
 }
 
-// ErrorCodeIs returns true if err is *Error with one of the given error codes.
+// ErrorCodeIs reports whether err (or any error it wraps) is *Error with one
+// of the given error codes. Uses errors.As, so callers that wrap with
+// lazyerrors / fmt.Errorf still match.
 //
 // At least one error code must be given.
 func ErrorCodeIs(err error, code ErrorCode, codes ...ErrorCode) bool {
-	e, ok := err.(*Error) //nolint:errorlint // do not inspect error chain
-	if !ok {
+	var e *Error
+	if !errors.As(err, &e) {
 		return false
 	}
-
 	return e.code == code || slices.Contains(codes, e.code)
 }
 

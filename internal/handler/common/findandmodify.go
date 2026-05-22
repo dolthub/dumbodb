@@ -53,6 +53,8 @@ type FindAndModifyParams struct {
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	LSID                     any             `dumbo:"lsid,ignored"`
 	TxnNumber                int64           `dumbo:"txnNumber,ignored"`
+	StartTransaction         bool            `dumbo:"startTransaction,ignored"`
+	Autocommit               bool            `dumbo:"autocommit,ignored"`
 	ClusterTime              any             `dumbo:"$clusterTime,ignored"`
 	ReadPreference           *types.Document `dumbo:"$readPreference,ignored"`
 

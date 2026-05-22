@@ -26,9 +26,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
-// TestTransactionSmoke verifies that commitTransaction returns an error.
-// DumboDB does not support transactions -- the command must fail cleanly
-// rather than silently pretending to commit.
 func TestTransactionSmoke(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -40,18 +37,18 @@ func TestTransactionSmoke(t *testing.T) {
 
 	_, err = sess.WithTransaction(ctx, func(sessCtx context.Context) (interface{}, error) {
 		_, insErr := coll.InsertOne(sessCtx, bson.D{
-			{Key: "txn", Value: "commit"},
+			{Key: "_id", Value: "smoke-commit"},
 			{Key: "n", Value: int32(1)},
 		})
 		return nil, insErr
 	}, options.Transaction().SetReadPreference(readpref.Primary()))
-	require.Error(t, err, "WithTransaction must fail because transactions are not supported")
-	assert.Contains(t, err.Error(), "transactions are not supported")
+	require.NoError(t, err, "WithTransaction must succeed now that transactions are implemented")
+
+	var got bson.M
+	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "_id", Value: "smoke-commit"}}).Decode(&got))
+	assert.EqualValues(t, 1, got["n"])
 }
 
-// TestTransactionSmoke_Abort verifies that the server does not crash when the
-// driver issues abortTransaction. The Go driver may handle abort locally
-// without contacting the server, so we only assert no panic occurs.
 func TestTransactionSmoke_Abort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -64,9 +61,10 @@ func TestTransactionSmoke_Abort(t *testing.T) {
 	require.NoError(t, sess.StartTransaction(), "StartTransaction must succeed")
 
 	mongoCtx := mongo.NewSessionContext(ctx, sess)
-	_, _ = coll.InsertOne(mongoCtx, bson.D{{Key: "txn", Value: "abort"}, {Key: "n", Value: int32(2)}})
+	_, _ = coll.InsertOne(mongoCtx, bson.D{{Key: "_id", Value: "smoke-abort"}, {Key: "n", Value: int32(2)}})
 
-	// The driver may or may not send abortTransaction to the server
-	// depending on session state. Either way, the server must not crash.
-	_ = sess.AbortTransaction(ctx)
+	require.NoError(t, sess.AbortTransaction(ctx))
+
+	err = coll.FindOne(ctx, bson.D{{Key: "_id", Value: "smoke-abort"}}).Err()
+	require.ErrorIs(t, err, mongo.ErrNoDocuments, "abort must discard the uncommitted write")
 }

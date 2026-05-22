@@ -34,9 +34,11 @@ type DeleteParams struct {
 
 	MaxTimeMS      int64           `dumbo:"maxTimeMS,ignored"`
 	WriteConcern   *types.Document `dumbo:"writeConcern,opt"`
-	LSID           any             `dumbo:"lsid,ignored"`
-	TxnNumber      int64           `dumbo:"txnNumber,ignored"`
-	ClusterTime    any             `dumbo:"$clusterTime,ignored"`
+	LSID             any             `dumbo:"lsid,ignored"`
+	TxnNumber        int64           `dumbo:"txnNumber,ignored"`
+	StartTransaction bool            `dumbo:"startTransaction,ignored"`
+	Autocommit       bool            `dumbo:"autocommit,ignored"`
+	ClusterTime      any             `dumbo:"$clusterTime,ignored"`
 	ReadPreference *types.Document `dumbo:"$readPreference,ignored"`
 
 	ApiVersion           string `dumbo:"apiVersion,ignored"`

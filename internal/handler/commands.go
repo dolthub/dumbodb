@@ -27,7 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/logging"
 )
 
-type command struct {
+type Command struct {
 	// anonymous indicates that the command does not require authentication.
 	anonymous bool
 
@@ -36,440 +36,159 @@ type command struct {
 	// The passed context is canceled when the client disconnects.
 	Handler func(context.Context, *wire.OpMsg) (*wire.OpMsg, error)
 
-	// Help is shown in the `listCommands` command output.
-	// If empty, that command is hidden, but still can be used.
+	// Help is shown in the `listCommands` command output. Empty means hidden.
 	Help string
+
+	// Durable routes through Shadow.Commit (writeMu fence) instead of
+	// Shadow.Use; a concurrent reconnect/sweep waits for fsync.
+	Durable bool
+
+	// BlockedInTxn returns code 263 OperationNotSupportedInTransaction
+	// when ConnInfo.InTransaction(); the txn is then aborted server-side.
+	BlockedInTxn bool
+}
+
+// register adds c to the command map under every supplied name. A single
+// *Command can answer to multiple names (aliases) without duplicating its
+// definition.
+func (h *Handler) register(c *Command, names ...string) {
+	for _, n := range names {
+		h.commands[n] = c
+	}
 }
 
 func (h *Handler) initCommands() {
-	h.commands = map[string]*command{
-		// sorted alphabetically
-		"aggregate": {
-			Handler: h.MsgAggregate,
-			Help:    "Returns aggregated data.",
-		},
-		"autoCompact": {
-			Handler: h.MsgAutoCompact,
-			Help:    "Enables or disables background compaction (MongoDB 8.0+).",
-		},
-		"buildInfo": {
-			Handler:   h.MsgBuildInfo,
-			anonymous: true,
-			Help:      "Returns a summary of the build information.",
-		},
-		"buildinfo": { // old lowercase variant
-			Handler:   h.MsgBuildInfo,
-			anonymous: true,
-			Help:      "", // hidden
-		},
-		"bulkWrite": {
-			Handler: h.MsgBulkWrite,
-			Help:    "Performs multiple write operations across collections in a single command.",
-		},
-		"collMod": {
-			Handler: h.MsgCollMod,
-			Help:    "Adds options to a collection or modify view definitions.",
-		},
-		"convertToCapped": {
-			Handler: h.MsgConvertToCapped,
-			Help:    "Converts an existing collection to a capped collection.",
-		},
-		"collStats": {
-			Handler: h.MsgCollStats,
-			Help:    "Returns storage data for a collection.",
-		},
-		"compact": {
-			Handler: h.MsgCompact,
-			Help:    "Reduces the disk space collection takes and refreshes its statistics.",
-		},
-		"connectionStatus": {
-			Handler:   h.MsgConnectionStatus,
-			anonymous: true,
-			Help: "Returns information about the current connection, " +
-				"specifically the state of authenticated users and their available permissions.",
-		},
-		"count": {
-			Handler: h.MsgCount,
-			Help:    "Returns the count of documents that's matched by the query.",
-		},
-		"create": {
-			Handler: h.MsgCreate,
-			Help:    "Creates the collection.",
-		},
-		"createIndexes": {
-			Handler: h.MsgCreateIndexes,
-			Help:    "Creates indexes on a collection.",
-		},
-		"currentOp": {
-			Handler: h.MsgCurrentOp,
-			Help:    "Returns information about operations currently in progress.",
-		},
-		"dataSize": {
-			Handler: h.MsgDataSize,
-			Help:    "Returns the size of the collection in bytes.",
-		},
-		"dbStats": {
-			Handler: h.MsgDBStats,
-			Help:    "Returns the statistics of the database.",
-		},
-		"dbstats": { // old lowercase variant
-			Handler: h.MsgDBStats,
-			Help:    "", // hidden
-		},
-		"debugError": {
-			Handler: h.MsgDebugError,
-			Help:    "Returns error for debugging.",
-		},
-		"doltBranch": {
-			Handler: h.MsgDumboDBBranch,
-			Help:    "Creates a new DumboDB branch from the current branch encoded in the database name.",
-		},
-		"doltCherryPick": {
-			Handler: h.MsgDumboDBCherryPick,
-			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
-		},
-		"doltRebase": {
-			Handler: h.MsgDumboDBRebase,
-			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
-		},
-		"doltRevert": {
-			Handler: h.MsgDumboDBRevert,
-			Help:    "Reverts the changes introduced by the named commit, creating a new inverse commit.",
-		},
-		"doltConflicts": {
-			Handler: h.MsgDumboDBConflicts,
-			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
-		},
-		"doltDiff": {
-			Handler: h.MsgDumboDBDiff,
-			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
-		},
-		"doltCommit": {
-			Handler: h.MsgDumboDBCommit,
-			Help:    "Commits the current working set on the branch encoded in the database name.",
-		},
-"doltLog": {
-			Handler: h.MsgDumboDBLog,
-			Help:    "Returns commit history for the branch encoded in the database name.",
-		},
-		"doltMerge": {
-			Handler: h.MsgDumboDBMerge,
-			Help:    "Merges a source branch into the branch encoded in the database name.",
-		},
-		"doltReset": {
-			Handler: h.MsgDumboDBReset,
-			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
-		},
-		"doltResolveConflict": {
-			Handler: h.MsgDumboDBResolveConflict,
-			Help:    "Resolves a single document conflict in the current in-progress merge.",
-		},
-		"doltStatus": {
-			Handler: h.MsgDumboDBStatus,
-			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
-		},
-		"doltTag": {
-			Handler: h.MsgDumboDBTag,
-			Help:    "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>).",
-		},
-		"dumboBranch": {
-			Handler: h.MsgDumboDBBranch,
-			Help:    "Creates a new DumboDB branch from the current branch encoded in the database name.",
-		},
-		"dumboCherryPick": {
-			Handler: h.MsgDumboDBCherryPick,
-			Help:    "Applies the diff introduced by the named commit onto the current branch encoded in the database name.",
-		},
-		"dumboRebase": {
-			Handler: h.MsgDumboDBRebase,
-			Help:    "Reapplies commits on the current branch onto the tip of another branch, rewriting history.",
-		},
-		"dumboRevert": {
-			Handler: h.MsgDumboDBRevert,
-			Help:    "Reverts the changes introduced by the named commit, creating a new inverse commit.",
-		},
-		"dumboConflicts": {
-			Handler: h.MsgDumboDBConflicts,
-			Help:    "Returns conflict information for the current in-progress merge on the branch encoded in the database name.",
-		},
-		"dumboDiff": {
-			Handler: h.MsgDumboDBDiff,
-			Help:    "Returns document-level diff between two states for the branch encoded in the database name.",
-		},
-		"dumboCommit": {
-			Handler: h.MsgDumboDBCommit,
-			Help:    "Commits the current working set on the branch encoded in the database name.",
-		},
-"dumboLog": {
-			Handler: h.MsgDumboDBLog,
-			Help:    "Returns commit history for the branch encoded in the database name.",
-		},
-		"dumboMerge": {
-			Handler: h.MsgDumboDBMerge,
-			Help:    "Merges a source branch into the branch encoded in the database name.",
-		},
-		"dumboReset": {
-			Handler: h.MsgDumboDBReset,
-			Help:    "Resets the branch HEAD to a target commit, optionally resetting the working tree.",
-		},
-		"dumboResolveConflict": {
-			Handler: h.MsgDumboDBResolveConflict,
-			Help:    "Resolves a single document conflict in the current in-progress merge.",
-		},
-		"dumboStatus": {
-			Handler: h.MsgDumboDBStatus,
-			Help:    "Returns uncommitted changes on the branch encoded in the database name.",
-		},
-		"dumboTag": {
-			Handler: h.MsgDumboDBTag,
-			Help:    "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>).",
-		},
-		"delete": {
-			Handler: h.MsgDelete,
-			Help:    "Deletes documents matched by the query.",
-		},
-		"distinct": {
-			Handler: h.MsgDistinct,
-			Help:    "Returns an array of distinct values for the given field.",
-		},
-		"drop": {
-			Handler: h.MsgDrop,
-			Help:    "Drops the collection.",
-		},
-		"dropDatabase": {
-			Handler: h.MsgDropDatabase,
-			Help:    "Drops production database.",
-		},
-		"dropIndexes": {
-			Handler: h.MsgDropIndexes,
-			Help:    "Drops indexes on a collection.",
-		},
-		"explain": {
-			Handler: h.MsgExplain,
-			Help:    "Returns the execution plan.",
-		},
-		"find": {
-			Handler: h.MsgFind,
-			Help:    "Returns documents matched by the query.",
-		},
-		"findAndModify": {
-			Handler: h.MsgFindAndModify,
-			Help:    "Updates or deletes, and returns a document matched by the query.",
-		},
-		"findandmodify": { // old lowercase variant
-			Handler: h.MsgFindAndModify,
-			Help:    "", // hidden
-		},
-		"getCmdLineOpts": {
-			Handler: h.MsgGetCmdLineOpts,
-			Help:    "Returns a summary of all runtime and configuration options.",
-		},
-		"getFreeMonitoringStatus": {
-			Handler: h.msgFreeMonitoringNotSupported,
-			Help:    "Returns a status of the free monitoring.",
-		},
-		"getLog": {
-			Handler: h.MsgGetLog,
-			Help:    "Returns the most recent logged events from memory.",
-		},
-		"getMore": {
-			Handler: h.MsgGetMore,
-			Help:    "Returns the next batch of documents from a cursor.",
-		},
-		"getParameter": {
-			Handler: h.MsgGetParameter,
-			Help:    "Returns the value of the parameter.",
-		},
-		"hello": {
-			Handler:   h.MsgHello,
-			anonymous: true,
-			Help:      "Returns the role of the DumboDB instance.",
-		},
-		"hostInfo": {
-			Handler: h.MsgHostInfo,
-			Help:    "Returns a summary of the system information.",
-		},
-		"insert": {
-			Handler: h.MsgInsert,
-			Help:    "Inserts documents into the database.",
-		},
-		"isMaster": {
-			Handler:   h.MsgIsMaster,
-			anonymous: true,
-			Help:      "Returns the role of the DumboDB instance.",
-		},
-		"ismaster": { // old lowercase variant
-			Handler:   h.MsgIsMaster,
-			anonymous: true,
-			Help:      "", // hidden
-		},
-		"killCursors": {
-			Handler: h.MsgKillCursors,
-			Help:    "Closes server cursors.",
-		},
-		"listCollections": {
-			Handler: h.MsgListCollections,
-			Help:    "Returns the information of the collections and views in the database.",
-		},
-		"listCommands": {
-			Handler: h.MsgListCommands,
-			Help:    "Returns a list of currently supported commands.",
-		},
-		"listDatabases": {
-			Handler: h.MsgListDatabases,
-			Help:    "Returns a summary of all the databases.",
-		},
-		"listIndexes": {
-			Handler: h.MsgListIndexes,
-			Help:    "Returns a summary of indexes of the specified collection.",
-		},
-		"logout": {
-			Handler:   h.msgAuthNotSupported,
-			anonymous: true,
-			Help:      "Logs out from the current session.",
-		},
-		"startSession": {
-			Handler:   h.MsgStartSession,
-			anonymous: true,
-			Help:      "Creates a new server session.",
-		},
-		"commitTransaction": {
-			Handler: h.msgTransactionsNotSupported,
-			Help:    "Commits a transaction (no-op: transactions are not isolated).",
-		},
-		"createSearchIndexes": {
-			Handler: h.MsgCreateSearchIndexes,
-			Help:    "Creates Atlas Search indexes (not supported).",
-		},
-		"listSearchIndexes": {
-			Handler: h.MsgListSearchIndexes,
-			Help:    "Lists Atlas Search indexes (not supported).",
-		},
-		"dropSearchIndex": {
-			Handler: h.MsgDropSearchIndex,
-			Help:    "Drops an Atlas Search index (not supported).",
-		},
-		"updateSearchIndex": {
-			Handler: h.MsgUpdateSearchIndex,
-			Help:    "Updates an Atlas Search index (not supported).",
-		},
-		"abortTransaction": {
-			Handler: h.msgTransactionsNotSupported,
-			Help:    "Aborts a transaction (no-op: operations cannot be rolled back).",
-		},
-		"endSessions": {
-			Handler:   h.MsgEndSessions,
-			anonymous: true,
-			Help:      "Ends server sessions.",
-		},
-		"ping": {
-			Handler:   h.MsgPing,
-			anonymous: true,
-			Help:      "Returns a pong response.",
-		},
-		"renameCollection": {
-			Handler: h.MsgRenameCollection,
-			Help:    "Changes the name of an existing collection.",
-		},
-		"saslStart": {
-			Handler:   h.MsgSASLStart,
-			anonymous: true,
-			Help:      "", // hidden
-		},
-		"saslContinue": {
-			Handler:   h.MsgSASLContinue,
-			anonymous: true,
-			Help:      "", // hidden
-		},
-		"serverStatus": {
-			Handler: h.MsgServerStatus,
-			Help:    "Returns an overview of the databases state.",
-		},
-		"setFreeMonitoring": {
-			Handler: h.msgFreeMonitoringNotSupported,
-			Help:    "Toggles free monitoring.",
-		},
-		"update": {
-			Handler: h.MsgUpdate,
-			Help:    "Updates documents that are matched by the query.",
-		},
-		"validate": {
-			Handler: h.MsgValidate,
-			Help:    "Validates collection.",
-		},
-		"whatsmyuri": {
-			Handler:   h.MsgWhatsMyURI,
-			anonymous: true,
-			Help:      "Returns peer information.",
-		},
-		// please keep sorted alphabetically
+	if h.paramStore == nil {
+		h.paramStore = newParameterStore()
+	}
+	h.commands = map[string]*Command{
+		// Single-name commands. Aliased and flag-bearing commands are
+		// registered below via h.register(...). Keep this map sorted
+		// alphabetically.
+		"aggregate":               {Handler: h.MsgAggregate, Help: "Returns aggregated data."},
+		"autoCompact":             {Handler: h.MsgAutoCompact, Help: "Enables or disables background compaction (MongoDB 8.0+)."},
+		"bulkWrite":               {Handler: h.MsgBulkWrite, Help: "Performs multiple write operations across collections in a single command."},
+		"convertToCapped":         {Handler: h.MsgConvertToCapped, Help: "Converts an existing collection to a capped collection."},
+		"collStats":               {Handler: h.MsgCollStats, Help: "Returns storage data for a collection."},
+		"compact":                 {Handler: h.MsgCompact, Help: "Reduces the disk space collection takes and refreshes its statistics."},
+		"connectionStatus":        {Handler: h.MsgConnectionStatus, anonymous: true, Help: "Returns information about the current connection, specifically the state of authenticated users and their available permissions."},
+		"count":                   {Handler: h.MsgCount, Help: "Returns the count of documents that's matched by the query."},
+		"create":                  {Handler: h.MsgCreate, Help: "Creates the collection."},
+		"currentOp":               {Handler: h.MsgCurrentOp, Help: "Returns information about operations currently in progress."},
+		"dataSize":                {Handler: h.MsgDataSize, Help: "Returns the size of the collection in bytes."},
+		"debugError":              {Handler: h.MsgDebugError, Help: "Returns error for debugging."},
+		"delete":                  {Handler: h.MsgDelete, Help: "Deletes documents matched by the query."},
+		"distinct":                {Handler: h.MsgDistinct, Help: "Returns an array of distinct values for the given field."},
+		"dropIndexes":             {Handler: h.MsgDropIndexes, Help: "Drops indexes on a collection."},
+		"explain":                 {Handler: h.MsgExplain, Help: "Returns the execution plan."},
+		"find":                    {Handler: h.MsgFind, Help: "Returns documents matched by the query."},
+		"getCmdLineOpts":          {Handler: h.MsgGetCmdLineOpts, Help: "Returns a summary of all runtime and configuration options."},
+		"getFreeMonitoringStatus": {Handler: h.msgFreeMonitoringNotSupported, Help: "Returns a status of the free monitoring."},
+		"getLog":                  {Handler: h.MsgGetLog, Help: "Returns the most recent logged events from memory."},
+		"getMore":                 {Handler: h.MsgGetMore, Help: "Returns the next batch of documents from a cursor."},
+		"getParameter":            {Handler: h.MsgGetParameter, Help: "Returns the value of the parameter."},
+		"hello":                   {Handler: h.MsgHello, anonymous: true, Help: "Returns the role of the DumboDB instance."},
+		"hostInfo":                {Handler: h.MsgHostInfo, Help: "Returns a summary of the system information."},
+		"insert":                  {Handler: h.MsgInsert, Help: "Inserts documents into the database."},
+		"killCursors":             {Handler: h.MsgKillCursors, Help: "Closes server cursors."},
+		"listCollections":         {Handler: h.MsgListCollections, Help: "Returns the information of the collections and views in the database."},
+		"listCommands":            {Handler: h.MsgListCommands, Help: "Returns a list of currently supported commands."},
+		"listDatabases":           {Handler: h.MsgListDatabases, Help: "Returns a summary of all the databases."},
+		"listIndexes":             {Handler: h.MsgListIndexes, Help: "Returns a summary of indexes of the specified collection."},
+		"logout":                  {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Logs out from the current session."},
+		"startSession":            {Handler: h.MsgStartSession, anonymous: true, Help: "Creates a new server session."},
+		"createSearchIndexes":     {Handler: h.MsgCreateSearchIndexes, Help: "Creates Atlas Search indexes (not supported)."},
+		"listSearchIndexes":       {Handler: h.MsgListSearchIndexes, Help: "Lists Atlas Search indexes (not supported)."},
+		"dropSearchIndex":         {Handler: h.MsgDropSearchIndex, Help: "Drops an Atlas Search index (not supported)."},
+		"updateSearchIndex":       {Handler: h.MsgUpdateSearchIndex, Help: "Updates an Atlas Search index (not supported)."},
+		"abortTransaction":        {Handler: h.MsgAbortTransaction, Help: "Aborts a MongoDB transaction."},
+		"endSessions":             {Handler: h.MsgEndSessions, anonymous: true, Help: "Ends server sessions."},
+		"ping":                    {Handler: h.MsgPing, anonymous: true, Help: "Returns a pong response."},
+		"saslStart":               {Handler: h.MsgSASLStart, anonymous: true},
+		"saslContinue":            {Handler: h.MsgSASLContinue, anonymous: true},
+		"serverStatus":            {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
+		"setFreeMonitoring":       {Handler: h.msgFreeMonitoringNotSupported, Help: "Toggles free monitoring."},
+		"setParameter":            {Handler: h.MsgSetParameter, Help: "Sets the value of a runtime-settable server parameter."},
+		"update":                  {Handler: h.MsgUpdate, Help: "Updates documents that are matched by the query."},
+		"validate":                {Handler: h.MsgValidate, Help: "Validates collection."},
+		"whatsmyuri":              {Handler: h.MsgWhatsMyURI, anonymous: true, Help: "Returns peer information."},
+		"createUser":              {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Creates a new user."},
+		"dropAllUsersFromDatabase": {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Drops all users from database."},
+		"dropUser":                {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Drops user."},
+		"updateUser":              {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Updates user."},
+		"usersInfo":               {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Returns information about users."},
 	}
 
-	// User management commands are always registered (anonymous so they work without auth).
-	// When EnableNewAuth is false these are effectively no-ops (system.users is always empty).
-	// sorted alphabetically
-	h.commands["createUser"] = &command{
-		anonymous: true,
-		Handler:   h.msgAuthNotSupported,
-		Help:      "Creates a new user.",
-	}
-	h.commands["dropAllUsersFromDatabase"] = &command{
-		anonymous: true,
-		Handler:   h.msgAuthNotSupported,
-		Help:      "Drops all users from database.",
-	}
-	h.commands["dropUser"] = &command{
-		anonymous: true,
-		Handler:   h.msgAuthNotSupported,
-		Help:      "Drops user.",
-	}
-	h.commands["updateUser"] = &command{
-		anonymous: true,
-		Handler:   h.msgAuthNotSupported,
-		Help:      "Updates user.",
-	}
-	h.commands["usersInfo"] = &command{
-		anonymous: true,
-		Handler:   h.msgAuthNotSupported,
-		Help:      "Returns information about users.",
-	}
-	// please keep sorted alphabetically
+	// Lowercase-variant handshake / introspection aliases.
+	h.register(&Command{Handler: h.MsgBuildInfo, anonymous: true, Help: "Returns a summary of the build information."}, "buildInfo", "buildinfo")
+	h.register(&Command{Handler: h.MsgDBStats, Help: "Returns the statistics of the database."}, "dbStats", "dbstats")
+	h.register(&Command{Handler: h.MsgFindAndModify, Help: "Updates or deletes, and returns a document matched by the query."}, "findAndModify", "findandmodify")
+	h.register(&Command{Handler: h.MsgIsMaster, anonymous: true, Help: "Returns the role of the DumboDB instance."}, "isMaster", "ismaster")
 
-	for name, cmd := range h.commands {
+	// DumboDB version-control commands accept both dolt* and dumbo* prefixes.
+	h.register(&Command{Handler: h.MsgDumboDBBranch, Help: "Creates a new DumboDB branch from the current branch encoded in the database name."}, "doltBranch", "dumboBranch")
+	h.register(&Command{Handler: h.MsgDumboDBCherryPick, Help: "Applies the diff introduced by the named commit onto the current branch encoded in the database name."}, "doltCherryPick", "dumboCherryPick")
+	h.register(&Command{Handler: h.MsgDumboDBConflicts, Help: "Returns conflict information for the current in-progress merge on the branch encoded in the database name."}, "doltConflicts", "dumboConflicts")
+	h.register(&Command{Handler: h.MsgDumboDBDiff, Help: "Returns document-level diff between two states for the branch encoded in the database name."}, "doltDiff", "dumboDiff")
+	h.register(&Command{Handler: h.MsgDumboDBLog, Help: "Returns commit history for the branch encoded in the database name."}, "doltLog", "dumboLog")
+	h.register(&Command{Handler: h.MsgDumboDBMerge, Help: "Merges a source branch into the branch encoded in the database name."}, "doltMerge", "dumboMerge")
+	h.register(&Command{Handler: h.MsgDumboDBRebase, Help: "Reapplies commits on the current branch onto the tip of another branch, rewriting history."}, "doltRebase", "dumboRebase")
+	h.register(&Command{Handler: h.MsgDumboDBReset, Help: "Resets the branch HEAD to a target commit, optionally resetting the working tree."}, "doltReset", "dumboReset")
+	h.register(&Command{Handler: h.MsgDumboDBResolveConflict, Help: "Resolves a single document conflict in the current in-progress merge."}, "doltResolveConflict", "dumboResolveConflict")
+	h.register(&Command{Handler: h.MsgDumboDBRevert, Help: "Reverts the changes introduced by the named commit, creating a new inverse commit."}, "doltRevert", "dumboRevert")
+	h.register(&Command{Handler: h.MsgDumboDBStatus, Help: "Returns uncommitted changes on the branch encoded in the database name."}, "doltStatus", "dumboStatus")
+	h.register(&Command{Handler: h.MsgDumboDBTag, Help: "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>)."}, "doltTag", "dumboTag")
+
+	// Durable boundaries: routed through Shadow.Commit (writeMu fence).
+	h.register(&Command{Handler: h.MsgDumboDBCommit, Durable: true, Help: "Commits the current working set on the branch encoded in the database name."}, "doltCommit", "dumboCommit")
+	h.register(&Command{Handler: h.MsgCommitTransaction, Durable: true, Help: "Commits a MongoDB transaction."}, "commitTransaction")
+
+	// Commands rejected with code 263 OperationNotSupportedInTransaction.
+	h.register(&Command{Handler: h.MsgDrop, BlockedInTxn: true, Help: "Drops the collection."}, "drop")
+	h.register(&Command{Handler: h.MsgDropDatabase, BlockedInTxn: true, Help: "Drops production database."}, "dropDatabase")
+	h.register(&Command{Handler: h.MsgCreateIndexes, BlockedInTxn: true, Help: "Creates indexes on a collection."}, "createIndexes")
+	h.register(&Command{Handler: h.MsgRenameCollection, BlockedInTxn: true, Help: "Changes the name of an existing collection."}, "renameCollection")
+	h.register(&Command{Handler: h.MsgCollMod, BlockedInTxn: true, Help: "Adds options to a collection or modify view definitions."}, "collMod")
+
+	// Wrap each *Command's Handler with auth and logging exactly once,
+	// even when multiple aliases point to the same *Command. Iterating
+	// h.commands by name would double-wrap aliased entries.
+	seen := make(map[*Command]bool)
+	for _, cmd := range h.commands {
+		if seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+
+		inner := cmd.Handler
+
 		if !cmd.anonymous {
-			cmdHandler := h.commands[name].Handler
+			authed := inner
 			enableNewAuth := h.EnableNewAuth
-
-			h.commands[name].Handler = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 				if enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated() {
-					if err := checkSCRAMConversation(ctx, name, h.L); err != nil {
+					if err := checkSCRAMConversation(ctx, wireCommandName(msg), h.L); err != nil {
 						return nil, err
 					}
 				}
-
-				return cmdHandler(ctx, msg)
+				return authed(ctx, msg)
 			}
 		}
-	}
 
-	for name, cmd := range h.commands {
-		cmdName := name
-		cmdHandler := cmd.Handler
 		l := h.L
-
-		h.commands[name].Handler = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+		next := inner
+		cmd.Handler = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 			start := time.Now()
 
-			// Extract db and ns for logging; ignore parse errors here since the real handler will catch them.
-			var db, ns string
+			var db, ns, cmdName string
 			if doc, err := opMsgDocument(msg); err == nil {
 				if v, err := doc.Get("$db"); err == nil {
 					if s, ok := v.(string); ok {
 						db = s
 					}
 				}
-				keys := doc.Keys()
-				if len(keys) > 0 {
+				if keys := doc.Keys(); len(keys) > 0 {
+					cmdName = keys[0]
 					if v, err := doc.Get(keys[0]); err == nil {
 						if col, ok := v.(string); ok && col != "" {
 							ns = db + "." + col
@@ -486,7 +205,7 @@ func (h *Handler) initCommands() {
 				conn = info.Peer.String()
 			}
 
-			res, handlerErr := cmdHandler(ctx, msg)
+			res, handlerErr := next(ctx, msg)
 
 			durationMs := time.Since(start).Milliseconds()
 
@@ -512,6 +231,20 @@ func (h *Handler) initCommands() {
 			return res, handlerErr
 		}
 	}
+}
+
+// wireCommandName returns the command name from msg's first BSON field,
+// or empty string on parse failure.
+func wireCommandName(msg *wire.OpMsg) string {
+	doc, err := opMsgDocument(msg)
+	if err != nil {
+		return ""
+	}
+	keys := doc.Keys()
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 // checkSCRAMConversation returns error if SCRAM conversation is not valid.
@@ -546,7 +279,7 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 	)
 }
 
-func (h *Handler) Commands() map[string]*command {
+func (h *Handler) Commands() map[string]*Command {
 	return h.commands
 }
 

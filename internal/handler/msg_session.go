@@ -17,10 +17,14 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 
 	"github.com/FerretDB/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -55,11 +59,22 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 }
 
 // MsgCommitTransaction implements the `commitTransaction` command.
-//
-// Since DumboDB does not support multi-document ACID transactions, this
-// is a no-op acknowledgement. Individual operations within a
-// "transaction" are applied immediately without isolation.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	ci := conninfo.Get(connCtx)
+	if ci.TxnAborted() {
+		ci.SetInTransaction(false)
+		return nil, handlererrors.NewCommandError(
+			handlererrors.ErrorCode(251),
+			errors.New("Transaction was aborted by a prior server-side rejection."),
+		)
+	}
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		if err := sab.OnTransactionCommit(connCtx, ci.Owner()); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+	}
+	ci.SetInTransaction(false)
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
@@ -68,11 +83,13 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 }
 
 // MsgAbortTransaction implements the `abortTransaction` command.
-//
-// Since DumboDB does not support multi-document ACID transactions, this
-// is a no-op acknowledgement. Operations already applied cannot be
-// rolled back.
 func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	ci := conninfo.Get(connCtx)
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(ci.Owner())
+	}
+	ci.SetInTransaction(false)
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
@@ -80,7 +97,14 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 	)
 }
 
+// MsgEndSessions implements the `endSessions` command.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	ci := conninfo.Get(connCtx)
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnSessionEnd(ci.Owner())
+	}
+	ci.SetInTransaction(false)
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),

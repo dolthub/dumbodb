@@ -37,11 +37,15 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/proxy"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
+	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -411,17 +415,39 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 		// decoded successfully already in [run] [wire.ReadMessage] [UnmarshalBinaryNocopy] [check]
 		doc := must.NotFail(msg.RawSection0().Decode())
 
-		_, err = bson.ToDocument(doc)
+		var typedDoc *types.Document
+		typedDoc, err = bson.ToDocument(doc)
 
 		connCtx, span = otel.Tracer("").Start(connCtx, "")
 
 		command = doc.Command()
+		cmd := c.h.Commands()[command]
+
+		var startedTxn bool
+		if err == nil {
+			extractAndSetLSID(connCtx, typedDoc)
+			startedTxn = extractAndSetTransactionFlag(connCtx, typedDoc)
+		}
+
+		if err == nil && startedTxn && c.h.SessionIsolation() {
+			err = handlererrors.NewCommandError(
+				handlererrors.ErrorCode(263),
+				errSessionIsolationRejectStartTransaction,
+			)
+		}
+
+		if err == nil && cmd != nil && cmd.BlockedInTxn && conninfo.Get(connCtx).InTransaction() {
+			c.h.AbortPendingTransaction(connCtx)
+			err = handlererrors.NewCommandError(
+				handlererrors.ErrorCode(263),
+				fmt.Errorf("Cannot run '%s' in a multi-document transaction.", command),
+			)
+		}
 
 		if err == nil {
 			// do not store typed nil in interface, it makes it non-nil
-
 			var resMsg *wire.OpMsg
-			resMsg, err = c.handleOpMsg(connCtx, msg, command)
+			resMsg, err = c.dispatchThroughSession(connCtx, msg, command, cmd)
 
 			if resMsg != nil {
 				resBody = resMsg
@@ -560,18 +586,74 @@ func (c *conn) route(connCtx context.Context, reqHeader *wire.MsgHeader, reqBody
 	return
 }
 
-// handleOpMsg processes OP_MSG requests.
-//
-// The passed context is canceled when the client disconnects.
-func (c *conn) handleOpMsg(connCtx context.Context, msg *wire.OpMsg, command string) (*wire.OpMsg, error) {
-	if cmd := c.h.Commands()[command]; cmd != nil && cmd.Handler != nil {
-		return cmd.Handler(connCtx, msg)
+func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
+	reg := c.h.SessionRegistry()
+	if reg == nil {
+		return c.invokeHandler(connCtx, msg, name, cmd)
 	}
 
-	return nil, handlererrors.NewCommandErrorMsg(
-		handlererrors.ErrCommandNotFound,
-		fmt.Sprintf("no such command: '%s'", command),
+	ci := conninfo.Get(connCtx)
+	lsid := ci.EnsureLSID()
+
+	shadow, cachedLsid := ci.CachedShadow()
+	if shadow == nil || cachedLsid != lsid {
+		s, err := reg.Connect(lsid)
+		if err != nil {
+			return nil, fmt.Errorf("session registry: Connect for %q: %w", lsid, err)
+		}
+		ci.SetCachedShadow(lsid, s)
+		shadow = s
+	}
+	// A re-Connect here would ping-pong supersedes between this
+	// connection and the one that took over; surface the terminal
+	// error instead. Distinguish supersede (another connection took
+	// over) from purge (Sweep / End reaped the session) so the wire
+	// code matches MongoDB's semantics.
+	if !shadow.Active() {
+		return nil, shadowGoneError(shadow)
+	}
+
+	runFn := shadow.Use
+	if cmd != nil && cmd.Durable {
+		runFn = shadow.Commit
+	}
+
+	var resMsg *wire.OpMsg
+	runErr := runFn(time.Now(), func(*dsess.DoltSession) error {
+		var handlerErr error
+		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
+		return handlerErr
+	})
+	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
+		return nil, shadowGoneError(shadow)
+	}
+	return resMsg, runErr
+}
+
+// shadowGoneError maps an invalidated shadow to the appropriate wire
+// code: 251 NoSuchTransaction when the session was reaped (Sweep / End),
+// or 225 TransactionTooOld when superseded by another connection.
+func shadowGoneError(s *sqlctx.Shadow) error {
+	if s != nil && s.Purged() {
+		return handlererrors.NewCommandError(
+			handlererrors.ErrorCode(251),
+			errors.New("Transaction has been aborted because the session was idle past the configured timeout."),
+		)
+	}
+	return handlererrors.NewCommandError(
+		handlererrors.ErrorCode(225),
+		errors.New("session was taken over by a newer connection on this lsid"),
 	)
+}
+
+func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name string, cmd *handler.Command) (*wire.OpMsg, error) {
+	if cmd == nil || cmd.Handler == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrCommandNotFound,
+			fmt.Sprintf("no such command: '%s'", name),
+		)
+	}
+	return cmd.Handler(connCtx, msg)
 }
 
 // logResponse logs response's header and body and returns the log level that was used.

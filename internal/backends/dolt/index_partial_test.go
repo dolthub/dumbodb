@@ -53,7 +53,7 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 	pfe := must.NotFail(types.NewDocument("status", "active"))
 
 	// --- Phase 1: create partial unique index, insert non-conflicting docs ---
-	b1, err := NewBackend(dir, logger, false)
+	b1, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
 	}
@@ -100,7 +100,7 @@ func TestPartialIndexUniquenessSurvivesRestart(t *testing.T) {
 	b1.Close()
 
 	// --- Phase 2: reopen and verify uniqueness is enforced exactly for matching docs ---
-	b2, err := NewBackend(dir, logger, false)
+	b2, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
 	}

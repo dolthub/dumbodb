@@ -20,6 +20,7 @@ import (
 	"log/slog"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 type backend struct {
@@ -66,6 +67,41 @@ func (b *backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	return nil, fmt.Errorf("oplog: DumboDBCommit: versioning not supported by wrapped backend")
+}
+
+// SessionAwareBackend pass-throughs; see backendContract for rationale.
+
+func (b *backend) OnSessionEnd(owner string) {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		sab.OnSessionEnd(owner)
+	}
+}
+
+func (b *backend) OnTransactionCommit(ctx context.Context, owner string) error {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		return sab.OnTransactionCommit(ctx, owner)
+	}
+	return nil
+}
+
+func (b *backend) OnTransactionAbort(owner string) {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(owner)
+	}
+}
+
+func (b *backend) SessionIsolation() bool {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		return sab.SessionIsolation()
+	}
+	return false
+}
+
+func (b *backend) SessionRegistry() *sqlctx.SessionRegistry {
+	if sab, ok := b.origB.(backends.SessionAwareBackend); ok {
+		return sab.SessionRegistry()
+	}
+	return nil
 }
 
 func (b *backend) DumboDBBranch(ctx context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {

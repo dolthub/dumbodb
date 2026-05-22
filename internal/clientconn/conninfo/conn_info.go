@@ -17,10 +17,15 @@ package conninfo
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"net/netip"
 	"sync"
 
 	"github.com/xdg-go/scram"
+
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 // contextKey is a named unexported type for the safe use of context.WithValue.
@@ -40,7 +45,14 @@ type ConnInfo struct {
 	username string // protected by rw
 	password string // protected by rw
 
+	lsid             string         // protected by rw
+	cachedShadow     *sqlctx.Shadow // protected by rw
+	cachedShadowLsid string         // protected by rw
+
 	rw sync.RWMutex
+
+	inTransaction bool // protected by rw
+	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
 	metadataRecv bool // protected by rw
 
@@ -128,6 +140,95 @@ func (connInfo *ConnInfo) BypassBackendAuth() bool {
 	return connInfo.bypassBackendAuth
 }
 
+func (connInfo *ConnInfo) LSID() string {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.lsid
+}
+
+func (connInfo *ConnInfo) SetLSID(lsid string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.lsid = lsid
+}
+
+// EnsureLSID assigns a "synthetic:" prefixed id when none is present
+// (handshake, ping, legacy clients with no implicit session). The
+// prefix is opaque to the registry but distinguishes server-generated
+// from driver-supplied ids in logs.
+func (connInfo *ConnInfo) EnsureLSID() string {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	if connInfo.lsid != "" {
+		return connInfo.lsid
+	}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		connInfo.lsid = fmt.Sprintf("synthetic:fallback-%p", connInfo)
+		return connInfo.lsid
+	}
+	connInfo.lsid = "synthetic:" + hex.EncodeToString(b[:])
+	return connInfo.lsid
+}
+
+// CachedShadow returns the cached shadow and the lsid it was acquired
+// for. A mismatch with the current frame's lsid means the cache is
+// stale and the caller must Connect again (e.g. handshake's synthetic
+// id is replaced by a driver-supplied id on the next frame).
+func (connInfo *ConnInfo) CachedShadow() (*sqlctx.Shadow, string) {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+	return connInfo.cachedShadow, connInfo.cachedShadowLsid
+}
+
+func (connInfo *ConnInfo) SetCachedShadow(lsid string, s *sqlctx.Shadow) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.cachedShadow = s
+	connInfo.cachedShadowLsid = lsid
+}
+
+func (connInfo *ConnInfo) InTransaction() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.inTransaction
+}
+
+func (connInfo *ConnInfo) SetInTransaction(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.inTransaction = v
+	if !v {
+		connInfo.txnAborted = false
+	}
+}
+
+func (connInfo *ConnInfo) TxnAborted() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.txnAborted
+}
+
+func (connInfo *ConnInfo) SetTxnAborted(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.txnAborted = v
+}
+
+func (connInfo *ConnInfo) Owner() string {
+	if id := connInfo.LSID(); id != "" {
+		return id
+	}
+	return fmt.Sprintf("conn:%p", connInfo)
+}
+
 // Ctx returns a derived context with the given ConnInfo.
 func Ctx(ctx context.Context, connInfo *ConnInfo) context.Context {
 	return context.WithValue(ctx, connInfoKey, connInfo)
@@ -148,5 +249,17 @@ func Get(ctx context.Context) *ConnInfo {
 		panic("connInfo is set in context with nil value")
 	}
 
+	return connInfo
+}
+
+func GetIfPresent(ctx context.Context) *ConnInfo {
+	value := ctx.Value(connInfoKey)
+	if value == nil {
+		return nil
+	}
+	connInfo, ok := value.(*ConnInfo)
+	if !ok {
+		return nil
+	}
 	return connInfo
 }

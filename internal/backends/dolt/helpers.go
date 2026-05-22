@@ -22,6 +22,7 @@ import (
 
 	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
+	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -35,6 +36,7 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -344,6 +346,22 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
 // the doltDB if not already cached. The caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
+		if entry, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
+			return entry.current, nil
+		}
+		ws, err := state.loadCommittedWS(ctx, branch)
+		if err != nil {
+			return nil, err
+		}
+		state.pendingWS[pendingWSKey{owner, branch}] = &pendingTxnState{base: ws, current: ws}
+		return ws, nil
+	}
+
+	return state.loadCommittedWS(ctx, branch)
+}
+
+func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
 	if ws, ok := state.workingSets[branch]; ok {
 		return ws, nil
 	}
@@ -359,6 +377,60 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 	}
 	state.workingSets[branch] = ws
 	return ws, nil
+}
+
+// GetIfPresent (not Get): background loops (deferredFlushLoop, capped
+// cleanup) run without a ConnInfo and would otherwise panic.
+//
+// In --session-isolation mode every connection is implicitly forked, so
+// the InTransaction check is bypassed.
+func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
+	ci := conninfo.GetIfPresent(ctx)
+	if ci == nil {
+		return "", false
+	}
+	if sessionIsolation || ci.InTransaction() {
+		return ci.Owner(), true
+	}
+	return "", false
+}
+
+// Caller must hold state.mu write lock. sqlCtx is required because the
+// three-way merge runs through dolt's merge.MergeRoots.
+func (state *dbState) commitPendingForOwner(sqlCtx *sql.Context, resolver doltdb.TableResolver, owner string) ([]string, error) {
+	var branches []string
+	for key, entry := range state.pendingWS {
+		if key.owner != owner {
+			continue
+		}
+		committed, ok := state.workingSets[key.branch]
+		if !ok {
+			committed = entry.base
+		}
+		merged, err := mergePendingIntoCommitted(sqlCtx, resolver, entry.base, entry.current, committed)
+		if err != nil {
+			return branches, fmt.Errorf("commitTransaction: merging working set for %q: %w", key.branch, err)
+		}
+		state.workingSets[key.branch] = merged
+		if err := updateWorkingSet(sqlCtx, state.doltDB, merged, key.branch); err != nil {
+			return branches, fmt.Errorf("commitTransaction: persisting working set for %q: %w", key.branch, err)
+		}
+		if state.dirtyBranches != nil {
+			delete(state.dirtyBranches, key.branch)
+		}
+		delete(state.pendingWS, key)
+		branches = append(branches, key.branch)
+	}
+	return branches, nil
+}
+
+// Caller must hold state.mu write lock.
+func (state *dbState) abortPendingForOwner(owner string) {
+	for key := range state.pendingWS {
+		if key.owner == owner {
+			delete(state.pendingWS, key)
+		}
+	}
 }
 
 // headRootValueForBranch returns the doltdb.RootValue at the HEAD of branch.
@@ -412,6 +484,18 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 	}
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
+
+	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
+		key := pendingWSKey{owner, branch}
+		entry, ok := state.pendingWS[key]
+		if !ok {
+			entry = &pendingTxnState{base: ws}
+			state.pendingWS[key] = entry
+		}
+		entry.current = newWS
+		return nil
+	}
+
 	state.workingSets[branch] = newWS
 
 	if skipSync {
