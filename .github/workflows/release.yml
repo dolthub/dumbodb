@@ -9,7 +9,7 @@ on:
         type: string
 
 jobs:
-  build-linux:
+  build-linux-amd64:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "1"
@@ -40,30 +40,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
-      - name: Install ICU and arm64 cross-compiler
-        # dumbodb pulls in github.com/dolthub/go-icu-regex transitively through dolt
-        # so every CGO-enabled build must link against libicui18n/libicuuc/libicudata.
-        # The default amd64 build picks up the host libicu-dev. The arm64 cross-build
-        # additionally needs the C++ cross-compiler (CGo's link step is g++) and
-        # arm64 ICU headers/libs via multiarch.
-        run: |
-          set -e
-          . /etc/os-release
-          sudo dpkg --add-architecture arm64
-          sudo sed -i 's|^deb |deb [arch=amd64] |g' /etc/apt/sources.list
-          if [ -d /etc/apt/sources.list.d ]; then
-            sudo find /etc/apt/sources.list.d -type f -name '*.list' \
-              -exec sed -i 's|^deb |deb [arch=amd64] |g' {} +
-          fi
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${VERSION_CODENAME} main restricted universe multiverse" \
-            | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${VERSION_CODENAME}-updates main restricted universe multiverse" \
-            | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-          sudo apt-get update
-          sudo apt-get install -y \
-            libicu-dev \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libicu-dev:arm64
+      - name: Install ICU
+        # dumbodb pulls in github.com/dolthub/go-icu-regex transitively through
+        # dolt, so every CGO-enabled build must link against
+        # libicui18n / libicuuc / libicudata.
+        run: sudo apt-get update && sudo apt-get install -y libicu-dev
 
       - name: Build linux/amd64
         run: |
@@ -73,27 +54,65 @@ jobs:
             -o dist/dumbodb-linux-amd64 \
             ./cmd/dumbodb/
 
-      - name: Build linux/arm64
-        # CXX is required because CGo's link step uses g++, not gcc -- without
-        # an arm64 g++ the host x86_64 /usr/bin/g++ tries to link arm64 object
-        # files and the linker fails with "Relocations in generic ELF (EM: 183)".
-        # PKG_CONFIG_PATH points pkg-config at the arm64 ICU libs installed via
-        # multiarch.
-        run: |
-          GOOS=linux GOARCH=arm64 \
-            CC=aarch64-linux-gnu-gcc \
-            CXX=aarch64-linux-gnu-g++ \
-            PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
-            go build \
-              -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
-              -o dist/dumbodb-linux-arm64 \
-              ./cmd/dumbodb/
-
-      - name: Upload linux artifacts
+      - name: Upload linux/amd64 artifact
         uses: actions/upload-artifact@v7
         with:
-          name: linux-binaries
-          path: dist/dumbodb-*
+          name: linux-amd64-binary
+          path: dist/dumbodb-linux-amd64
+
+  build-linux-arm64:
+    # Native arm64 runner avoids the cross-compile / multiarch dance. The
+    # previous attempt to cross-build from amd64 hit two issues -- the runner
+    # image now uses deb822 sources (so the .list-targeted sed was a no-op
+    # and the unmodified amd64 repos tried to serve arm64 packages and
+    # 404'd) and CGo's link step needs an arm64 g++ rather than the host
+    # gcc. Running on a real arm64 runner sidesteps both.
+    runs-on: ubuntu-24.04-arm
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify tag exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if ! git tag -l "${{ inputs.tag }}" | grep -q .; then
+            echo "::error::Tag '${{ inputs.tag }}' does not exist. Push the tag first: git tag ${{ inputs.tag }} && git push origin ${{ inputs.tag }}"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Install ICU
+        run: sudo apt-get update && sudo apt-get install -y libicu-dev
+
+      - name: Build linux/arm64
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=arm64 go build \
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+            -o dist/dumbodb-linux-arm64 \
+            ./cmd/dumbodb/
+
+      - name: Upload linux/arm64 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-arm64-binary
+          path: dist/dumbodb-linux-arm64
 
   build-darwin:
     runs-on: macos-latest
@@ -193,7 +212,7 @@ jobs:
           path: dist/dumbodb-*
 
   release:
-    needs: [build-linux, build-darwin, build-windows]
+    needs: [build-linux-amd64, build-linux-arm64, build-darwin, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
