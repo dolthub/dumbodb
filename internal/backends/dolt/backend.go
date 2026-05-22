@@ -298,6 +298,9 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 	b.docLocksMu.Lock()
 	defer b.docLocksMu.Unlock()
 
+	if b.docLocks == nil {
+		b.docLocks = map[string]*DocLockManager{}
+	}
 	m, ok := b.docLocks[key]
 	if !ok {
 		m = NewDocLockManager()

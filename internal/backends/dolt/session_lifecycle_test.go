@@ -61,10 +61,10 @@ func TestOnSessionEndReleasesAllLocks(t *testing.T) {
 
 	mMain := be.docLockManager("mydb", "main")
 	mFeat := be.docLockManager("mydb", "feat")
-	require.NoError(t, mMain.Acquire("ownerX", "col", []hash.Hash{idA}))
-	require.NoError(t, mFeat.Acquire("ownerX", "col", []hash.Hash{idB}))
+	require.NoError(t, mMain.Acquire("ownerX", "col", []hash.Hash{idA}, LockKindUpdate))
+	require.NoError(t, mFeat.Acquire("ownerX", "col", []hash.Hash{idB}, LockKindUpdate))
 
-	require.NoError(t, mMain.Acquire("ownerY", "col", []hash.Hash{idC}))
+	require.NoError(t, mMain.Acquire("ownerY", "col", []hash.Hash{idC}, LockKindUpdate))
 
 	be.OnSessionEnd("ownerX")
 
@@ -83,7 +83,7 @@ func TestOnSessionEndUnknownOwnerIsNoop(t *testing.T) {
 	var idA hash.Hash
 	idA[0] = 0x01
 	m := be.docLockManager("mydb", "main")
-	require.NoError(t, m.Acquire("ownerX", "col", []hash.Hash{idA}))
+	require.NoError(t, m.Acquire("ownerX", "col", []hash.Hash{idA}, LockKindUpdate))
 	be.OnSessionEnd("ownerZ")
 	assert.True(t, m.Holds("ownerX", "col", idA), "ownerX's lock untouched by unrelated OnSessionEnd")
 }

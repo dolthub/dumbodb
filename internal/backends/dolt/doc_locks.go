@@ -28,21 +28,41 @@ import (
 
 var ErrWriteConflict = errors.New("write conflict: document locked by another transaction")
 
+// LockKind distinguishes between locks taken for an insert (a write that
+// creates a previously-nonexistent document) and locks taken for an
+// update or delete (a write to a document that exists in committed state).
+// The distinction matters for non-transactional waiters: under MongoDB's
+// default read concern an uncommitted insert is not visible to outside
+// readers, so a non-txn writer races past an insert-kind lock; whereas
+// an update/delete on a committed document does block the non-txn
+// writer until the holding transaction ends.
+type LockKind int
+
+const (
+	LockKindUpdate LockKind = iota
+	LockKindInsert
+)
+
+type lockEntry struct {
+	owner    string
+	kind     LockKind
+}
+
 type DocLockManager struct {
 	mu    sync.Mutex
 	cond  *sync.Cond
-	locks map[string]map[hash.Hash]string
+	locks map[string]map[hash.Hash]lockEntry
 }
 
 func NewDocLockManager() *DocLockManager {
 	m := &DocLockManager{
-		locks: map[string]map[hash.Hash]string{},
+		locks: map[string]map[hash.Hash]lockEntry{},
 	}
 	m.cond = sync.NewCond(&m.mu)
 	return m
 }
 
-func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash) error {
+func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Hash, kind LockKind) error {
 	if owner == "" {
 		// Empty owner means upstream lost the lsid/conn-id; reject so the bug
 		// surfaces rather than locking under a sentinel value.
@@ -55,18 +75,18 @@ func (m *DocLockManager) Acquire(owner string, collection string, ids []hash.Has
 	collLocks, ok := m.locks[collection]
 	if ok {
 		for _, id := range ids {
-			if existing, held := collLocks[id]; held && existing != owner {
+			if existing, held := collLocks[id]; held && existing.owner != owner {
 				return ErrWriteConflict
 			}
 		}
 	}
 
 	if collLocks == nil {
-		collLocks = map[hash.Hash]string{}
+		collLocks = map[hash.Hash]lockEntry{}
 		m.locks[collection] = collLocks
 	}
 	for _, id := range ids {
-		collLocks[id] = owner
+		collLocks[id] = lockEntry{owner: owner, kind: kind}
 	}
 	return nil
 }
@@ -76,8 +96,8 @@ func (m *DocLockManager) Release(owner string) {
 	defer m.mu.Unlock()
 
 	for coll, collLocks := range m.locks {
-		for id, holder := range collLocks {
-			if holder == owner {
+		for id, entry := range collLocks {
+			if entry.owner == owner {
 				delete(collLocks, id)
 			}
 		}
@@ -123,15 +143,19 @@ func (m *DocLockManager) WaitForRelease(ctx context.Context, collection string, 
 	}
 }
 
-// heldLocked reports whether any of ids in collection are held. Caller must
-// hold m.mu.
+// heldLocked reports whether any of ids in collection are held by an
+// update-kind lock. Insert-kind locks are deliberately invisible to
+// non-transactional waiters because MongoDB's default read concern does
+// not expose uncommitted inserts; a contending non-txn write therefore
+// races past an in-flight insert (matching MongoDB) rather than blocking.
+// Caller must hold m.mu.
 func (m *DocLockManager) heldLocked(collection string, ids []hash.Hash) bool {
 	collLocks, ok := m.locks[collection]
 	if !ok {
 		return false
 	}
 	for _, id := range ids {
-		if _, has := collLocks[id]; has {
+		if entry, has := collLocks[id]; has && entry.kind != LockKindInsert {
 			return true
 		}
 	}
@@ -145,7 +169,7 @@ func (m *DocLockManager) heldLocked(collection string, ids []hash.Hash) bool {
 // contention); non-transactional callers WaitForRelease (block until any
 // holding transaction commits or aborts) so they observe MongoDB's
 // "non-txn write blocks behind open transaction" semantics.
-func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash) error {
+func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection string, ids []hash.Hash, kind LockKind) error {
 	if b.sessionIsolation || len(ids) == 0 {
 		return nil
 	}
@@ -154,7 +178,7 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 	if !inTxn {
 		return mgr.WaitForRelease(ctx, collection, ids)
 	}
-	if err := mgr.Acquire(owner, collection, ids); err != nil {
+	if err := mgr.Acquire(owner, collection, ids, kind); err != nil {
 		if errors.Is(err, ErrWriteConflict) {
 			return backends.NewError(backends.ErrorCodeWriteConflict, err)
 		}
@@ -199,7 +223,7 @@ func (c *collection) acquireInsertLocks(ctx context.Context, docs []*types.Docum
 	if err != nil {
 		return err
 	}
-	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids, LockKindInsert)
 }
 
 func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Document) error {
@@ -210,7 +234,7 @@ func (c *collection) acquireUpdateLocks(ctx context.Context, docs []*types.Docum
 	if err != nil {
 		return err
 	}
-	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids, LockKindUpdate)
 }
 
 func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error {
@@ -221,7 +245,7 @@ func (c *collection) acquireDeleteLocks(ctx context.Context, idVals []any) error
 	if err != nil {
 		return err
 	}
-	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids)
+	return c.db.backend.acquireTxnLocks(ctx, c.db.name, c.db.rootish, c.name, ids, LockKindUpdate)
 }
 
 func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bool {
@@ -232,5 +256,6 @@ func (m *DocLockManager) Holds(owner string, collection string, id hash.Hash) bo
 	if !ok {
 		return false
 	}
-	return collLocks[id] == owner
+	entry, has := collLocks[id]
+	return has && entry.owner == owner
 }
