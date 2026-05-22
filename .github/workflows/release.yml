@@ -40,8 +40,30 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
-      - name: Install arm64 cross-compiler
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install ICU and arm64 cross-compiler
+        # dumbodb pulls in github.com/dolthub/go-icu-regex transitively through dolt
+        # so every CGO-enabled build must link against libicui18n/libicuuc/libicudata.
+        # The default amd64 build picks up the host libicu-dev. The arm64 cross-build
+        # additionally needs the C++ cross-compiler (CGo's link step is g++) and
+        # arm64 ICU headers/libs via multiarch.
+        run: |
+          set -e
+          . /etc/os-release
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's|^deb |deb [arch=amd64] |g' /etc/apt/sources.list
+          if [ -d /etc/apt/sources.list.d ]; then
+            sudo find /etc/apt/sources.list.d -type f -name '*.list' \
+              -exec sed -i 's|^deb |deb [arch=amd64] |g' {} +
+          fi
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${VERSION_CODENAME} main restricted universe multiverse" \
+            | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${VERSION_CODENAME}-updates main restricted universe multiverse" \
+            | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            libicu-dev \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libicu-dev:arm64
 
       - name: Build linux/amd64
         run: |
@@ -52,11 +74,20 @@ jobs:
             ./cmd/dumbodb/
 
       - name: Build linux/arm64
+        # CXX is required because CGo's link step uses g++, not gcc -- without
+        # an arm64 g++ the host x86_64 /usr/bin/g++ tries to link arm64 object
+        # files and the linker fails with "Relocations in generic ELF (EM: 183)".
+        # PKG_CONFIG_PATH points pkg-config at the arm64 ICU libs installed via
+        # multiarch.
         run: |
-          GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build \
-            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
-            -o dist/dumbodb-linux-arm64 \
-            ./cmd/dumbodb/
+          GOOS=linux GOARCH=arm64 \
+            CC=aarch64-linux-gnu-gcc \
+            CXX=aarch64-linux-gnu-g++ \
+            PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+            go build \
+              -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+              -o dist/dumbodb-linux-arm64 \
+              ./cmd/dumbodb/
 
       - name: Upload linux artifacts
         uses: actions/upload-artifact@v7
@@ -85,10 +116,20 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
+      - name: Install ICU
+        # go-icu-regex needs ICU headers and libs (transitively via dolt). macOS
+        # runners do not ship them on the toolchain search path -- install via
+        # brew and point CGo at the cellar.
+        run: brew install icu4c
+
       - name: Build darwin/arm64
         run: |
           mkdir -p dist
-          GOOS=darwin GOARCH=arm64 go build \
+          ICU_PREFIX="$(brew --prefix icu4c)"
+          export CGO_CPPFLAGS="-I${ICU_PREFIX}/include"
+          export CGO_LDFLAGS="-L${ICU_PREFIX}/lib"
+          export PKG_CONFIG_PATH="${ICU_PREFIX}/lib/pkgconfig"
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build \
             -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
             -o dist/dumbodb-darwin-arm64 \
             ./cmd/dumbodb/
@@ -120,15 +161,29 @@ jobs:
           echo "version=$VERSION" >> $env:GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
+      # go-icu-regex's Windows support is MinGW-only (per its README). Install
+      # the MinGW toolchain and ICU via msys2, then run the build inside the
+      # msys2 shell so CC/CXX/etc. resolve to the MinGW binaries.
+      - name: Set up MSYS2 / MinGW with ICU
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-icu
+          update: false
+
       - name: Build windows/amd64
+        shell: msys2 {0}
         run: |
           mkdir -p dist
-          $env:GOOS = "windows"
-          $env:GOARCH = "amd64"
-          $env:CGO_ENABLED = "1"
-          go build `
-            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" `
-            -o dist/dumbodb-windows-amd64.exe `
+          export GOOS=windows
+          export GOARCH=amd64
+          export CGO_ENABLED=1
+          go build \
+            -ldflags "-X github.com/dolthub/dumbodb/internal/version.GitVersion=${{ steps.version.outputs.version }}" \
+            -o dist/dumbodb-windows-amd64.exe \
             ./cmd/dumbodb/
 
       - name: Upload windows artifacts
