@@ -21,7 +21,6 @@ DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity
 - Indexing: Support for secondary indexes on top-level and nested fields to ensure query performance.
 
 #### Limitations & Scope
-- No transaction or session support: Every update is immediately visible to all clients. Planned for v0.5.
 - No Authentication. DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. Do not expose DumboDB instances to untrusted networks. Planned for v0.6.
 - Single Node: Replication (Replica Sets) and Sharding are out of scope. Support not planned.
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
@@ -256,7 +255,6 @@ DumboDB is in active development, and we have a lot of exciting features planned
 - **v0.2**: Garbage Collection and zstd compression. Reduce the footprint of your database. Simplified configuration for user details (name and email) so you don't have to specify them on every commit.
 - **v0.3**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
 - **v0.4**: Add support for Replication (as a secondary backup to your existing MongoDB instance)
-- **v0.5**: Isolated Session and Transaction support.
 - **v0.6**: Add Authentication and Authorization support.
 - **v0.8**: Visualization and operations via a custom Workbench UI.
 - **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
