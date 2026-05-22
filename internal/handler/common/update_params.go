@@ -32,7 +32,7 @@ type UpdateParams struct {
 	Updates []Update `dumbo:"updates"`
 
 	Comment   string `dumbo:"comment,opt"`
-	MaxTimeMS int64  `dumbo:"maxTimeMS,ignored"`
+	MaxTimeMS int64  `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
 	Let *types.Document `dumbo:"let,unimplemented"`
 
