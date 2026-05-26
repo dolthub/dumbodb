@@ -88,30 +88,51 @@ We should audit whether each remaining field is correctly per-database or
 whether it should also move (e.g., `dirtyBranches` looks per-session in
 spirit).
 
-### "Default branch" read sites are background machinery, not user requests
+### Call-site classification
 
-Several call sites do `state.workingSets[defaultBranch].WorkingRoot()` without
-any session context: background flusher (`backend.go:1333,1346`), startup
-table-name listing (`backend.go:592,713`), index persistence
-(`index_persist.go:350`). These run outside any client connection.
+The `state.workingSets[defaultBranch].WorkingRoot()` sites:
 
-Two options:
+| Site | Operation | Has a calling session? | Refactor target |
+|---|---|---|---|
+| `backend.go:592` (`Status`) | Read-only runCommand | Yes | Calling session |
+| `backend.go:713` (`ListDatabases`) | Read-only runCommand | Yes | Calling session |
+| `backend.go:1333,1346` (inside `DumboDBCommit`) | Write (commit) | Yes | Calling session |
+| `backend.go:2557` (`DumboDBReset` soft) | Write | Yes | Calling session |
+| `collection.go:1501, 1789, 1943` (auto-commit) | Write | Yes | Calling session |
+| `index_persist.go:350` (`hydrateAllIndexes`) | Read-only, db-open | No | See below |
 
-1. **Internal session.** The backend holds a long-lived
-   `*dsess.DoltSession` reserved for backend-internal work
-   (`Backend.internalSession`). All "no client" read paths go through it.
-   Already half-built: `Backend.NewSession()` exists and is called from
-   `OnTransactionCommit` (`backend.go:329`) and `doltCommitSessionIsolation`
-   (`commit_session_isolation.go:51`). Promote this to a stable instance
-   instead of a fresh per-call session.
-2. **Direct ref read.** Resolve `working_set/heads/<branch>` against the
-   `DoltDB` directly with no session at all. Simpler, but means two read
-   paths (session-aware for client requests, ref-direct for background).
+Every site except `hydrateAllIndexes` has a calling client session and
+routes through it. There is no need for an internal backend-owned session.
 
-**Recommendation:** option 1. A single internal session keeps the GC walk
-honest (every chunk read happens under some session that participates in
-`VisitGCRoots`) and avoids a second code path. The internal session is
-registered with the GCSafepointController like any other.
+### `hydrateAllIndexes` and the broader version-controlled-metadata problem
+
+`hydrateAllIndexes` reads `workingSets[defaultBranch]` at db open to
+populate `state.indexes`, `state.secIndexMaps`, `state.collIndexAMs`. Those
+are per-database caches of "the indexes that exist for each collection."
+The same pattern holds for `state.uuids`, `state.validators`,
+`state.capped`, `state.views`, `state.timeSeries`, `state.collSchemaHash`:
+all are populated assuming the *default branch's* working root is the
+authoritative source.
+
+This is wrong. Indexes, validators, capped-collection metadata, views, and
+time-series metadata are all stored inside the working root and are
+therefore branch-scoped. A collection can be capped on `main` but not on
+`feat`; an index can exist on one branch and not another. The current
+caches collapse all branches' metadata into one per-database view and lose
+that distinction.
+
+**This is a pre-existing bug, not something this refactor introduces.** It
+is also bigger than this refactor: the right fix is to move every
+metadata cache off `dbState` and onto whatever `branchState` (or its
+DumboDB equivalent) the calling session is operating on, populating each
+on first touch by reading the branch's working root.
+
+**Scope for this refactor:** preserve existing behavior for the metadata
+caches. `hydrateAllIndexes` keeps doing what it does today, but the
+working-root lookup switches from `workingSets[defaultBranch]` to a direct
+`doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+defaultBranch))`
+call. Same wrong shape, different (correct) source. A separate design
+follows up on moving all the metadata caches onto branch-scoped state.
 
 ### Version-control bypass paths (`persistAM`, `setAM`)
 
@@ -185,55 +206,75 @@ already exists; the wiring should be a small adjustment, not new code.
   on every commit; the new model just inserts a `writeSession` step before
   the flush.
 
-## Open Questions
+## Resolved Decisions
 
-1. **Does `Backend.NewSession()` need a long-lived internal session?** Today
-   each call creates a fresh `*dsess.DoltSession`. For background machinery
-   (flusher, startup listing, `OnTransactionCommit` driver) we want one
-   stable internal session that's registered with the GCSafepointController
-   for the lifetime of the backend. Confirm during implementation.
-2. **Does `dirtyBranches` move with the working sets?** It is logically
-   "branches this session has touched and not yet committed." Currently
-   per-database, used by the deferred flusher. Could become per-session
-   (`session.dirtyBranches`) or could stay per-database with locking. Decide
-   when we get to the flusher rewrite.
-3. **Do `persistAM` / `setAM` keep their function signatures, or do callers
-   move to a session-aware API?** Mechanically, both work. Preference is to
-   change the signature so the session is an explicit parameter, making the
-   ownership obvious at every call site.
-4. **What happens to `dbState.workingSet()` and `dbState.setWorkingSet()`
-   accessors (`backend.go:179, 184`)?** Delete them. They are the wrong
-   abstraction post-refactor.
+1. **No long-lived internal session.** Only one read site (`hydrateAllIndexes`
+   at db open) has no calling session, and it resolves the working set
+   directly off `DoltDB`. Every other site is reachable from a real client
+   session. `Backend.NewSession()` keeps creating a fresh session per call
+   for the operations that need an ephemeral one.
+
+2. **`dirtyBranches` is a fsync-coalescing index, and it moves onto the
+   session.** Justification of its existence: it batches `UpdateWorkingSet`
+   (NBS journal fsync) calls for `j:false` writes. When a write comes in with
+   `skipSync=true` (`helpers.go:501`), the in-memory working set is updated
+   but the ref-write is deferred. The flusher loop (`backend.go:504`) drains
+   the set every 100ms, so N writes to the same branch within a window
+   amortize into one fsync.
+
+   Post-refactor, the in-memory working set lives on a session's
+   `branchState`, and dsess already has `branchState.dirty`. The deferred
+   flusher reworks to iterate active sessions in `SessionRegistry` and
+   flush each session's dirty branchStates via dsess's normal commit/flush
+   path. The per-database `dbState.dirtyBranches` field is deleted; the
+   `deferredFlushLoop` and `flushAllDirty` become session-driven.
+
+3. **Session-aware API.** `persistAM` / `setAM` take an explicit session
+   parameter and update the session's branchState. Every caller already has
+   a session in context; making it explicit removes the ambiguity.
+
+4. **Delete `dbState.workingSet()` and `dbState.setWorkingSet()`.** Wrong
+   abstraction post-refactor. Anything else this refactor renders dead
+   (accessors, helpers, the `pendingWSKey` / `pendingTxnState` types, the
+   `OnSessionEnd` / `OnTransactionCommit` per-db iteration helpers if dsess
+   subsumes them) goes with it. No deprecation period; this branch is the
+   transition.
 
 ## Migration Order
 
 A landing order that keeps the tree green at each step:
 
-1. **Internal session.** Promote `Backend.NewSession()` to a single
-   long-lived `Backend.internalSession`. All background callers route
-   through it. No behavior change yet; this just gives us a session to
-   target.
-2. **Read paths.** Convert the `state.workingSets[defaultBranch].WorkingRoot()`
-   read sites to go through a session (the calling client's session if
-   present, the internal session otherwise). `workingSets` is still written
-   the old way; reads now have two paths during the transition.
-3. **`pendingWS` -> session.** Move per-session overlays onto
+1. **Read paths.** Convert the `state.workingSets[defaultBranch].WorkingRoot()`
+   read sites to go through the calling session, except `hydrateAllIndexes`
+   which switches to a direct `doltDB.ResolveWorkingSet` lookup. `workingSets`
+   is still written the old way; reads now have two paths during the
+   transition.
+2. **`pendingWS` -> session.** Move per-session overlays onto
    `branchState.writeSession`. `dumboCommit` (session-isolation mode)
    delegates to dsess's three-way merge instead of `mergePendingIntoCommitted`.
    `OnTransactionCommit` / `OnSessionEnd` drive the owner's session
    directly.
-4. **Write paths.** Convert insert/update/delete in `collection.go` to go
+3. **Write paths.** Convert insert/update/delete in `collection.go` to go
    through `WriteSession.GetTableWriter`. `dbState.workingSets[branch]` is
    no longer written by client operations.
-5. **Version-control paths.** `persistAM` / `setAM` and friends become
-   session-driven. `dumboMerge` / `dumboReset` / `dumboBranch` update the
-   calling session's branchState.
+4. **Version-control paths.** `persistAM` / `setAM` get a session parameter
+   and update the calling session's branchState. `dumboMerge` / `dumboReset`
+   / `dumboBranch` flow through the calling session.
+5. **Flusher.** Rework `deferredFlushLoop` to iterate `SessionRegistry`
+   and flush each session's dirty branchStates via dsess's normal flush
+   path. Delete `dbState.dirtyBranches`.
 6. **Delete the map.** Remove `dbState.workingSets`, `dbState.pendingWS`,
-   `pendingWSKey`, `pendingTxnState`, and the now-unused accessors. Audit
-   `dbState.mu` for any remaining contention hot paths.
-7. **Tests.** Existing session-registry, session-lifecycle, persist, reset,
-   diff, and parity tests must pass at each step. Add focused tests for
-   the cases that today depend on `dbState.mu` cross-session visibility
-   (none should exist; if they do, they are bugs the refactor is fixing).
+   `pendingWSKey`, `pendingTxnState`, `dbState.workingSet()`,
+   `dbState.setWorkingSet()`, and any helpers that are no longer reachable.
+   Audit `dbState.mu` for any remaining contention hot paths.
+7. **Tests.** **Strictly additive: existing tests must not be altered.**
+   Every existing session-registry, session-lifecycle, persist, reset,
+   diff, and parity test must pass unmodified at each step. If a behavior
+   shift would force an existing test to change, that is a signal the
+   refactor has broken a contract the tests were guarding -- stop and
+   reconsider, do not edit the test. New tests are added alongside to
+   cover cases the existing suite did not exercise (cross-session
+   isolation under load, dirty-branch flush serialization through dsess,
+   GC root coverage for in-flight writes).
 
 Each step is its own bd issue with the prior as a dependency.
