@@ -582,22 +582,27 @@ func (b *Backend) Close() {
 }
 
 func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*backends.StatusResult, error) {
+	sess := sessionFromContext(ctx)
+
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	var totalCollections int64
 
-	for _, db := range b.dbs {
+	for dbName, db := range b.dbs {
 		db.mu.RLock()
-		names, err := db.workingSets[defaultBranch].WorkingRoot().GetTableNames(ctx, "", false)
-		count := int64(len(names))
+		ws := db.workingSets[defaultBranch]
 		db.mu.RUnlock()
 
+		rv, err := workingRootViaSession(ctx, sess, ws, dbName, defaultBranch)
 		if err != nil {
 			return nil, err
 		}
-
-		totalCollections += int64(count)
+		names, err := rv.GetTableNames(ctx, "", false)
+		if err != nil {
+			return nil, err
+		}
+		totalCollections += int64(len(names))
 	}
 
 	return &backends.StatusResult{
@@ -710,11 +715,15 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			}
 
 			state.mu.RLock()
-			names, _ := state.workingSets[defaultBranch].WorkingRoot().GetTableNames(ctx, "", false)
-			count := len(names)
+			ws := state.workingSets[defaultBranch]
 			state.mu.RUnlock()
 
-			if count == 0 {
+			rv, err := workingRootViaSession(ctx, sessionFromContext(ctx), ws, dbName, defaultBranch)
+			if err != nil {
+				continue
+			}
+			names, _ := rv.GetTableNames(ctx, "", false)
+			if len(names) == 0 {
 				continue
 			}
 		}
@@ -1325,12 +1334,18 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	if branch == defaultBranch {
+		sess := sessionFromContext(ctx)
+		// db.mu write lock held; safe to read db.workingSets directly.
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			workingAM, amErr := amFromWorkingRoot(ctx, db.workingSets[defaultBranch].WorkingRoot(), db.ns)
+			workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+			if rvErr != nil {
+				return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
+			}
+			workingAM, amErr := amFromWorkingRoot(ctx, workingRV, db.ns)
 			if amErr != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
 			}
@@ -1343,7 +1358,11 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
-		workingAM, amErr := amFromWorkingRoot(ctx, db.workingSets[defaultBranch].WorkingRoot(), db.ns)
+		workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		if rvErr != nil {
+			return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
+		}
+		workingAM, amErr := amFromWorkingRoot(ctx, workingRV, db.ns)
 		if amErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
 		}
@@ -2554,7 +2573,11 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		ws := db.workingSets[defaultBranch]
+		// db.mu write lock held; safe to read db.workingSets directly.
+		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		if wsErr != nil {
+			return nil, fmt.Errorf("DumboDBReset (soft): reading working set: %w", wsErr)
+		}
 		newWS := ws.WithStagedRoot(stagedRV)
 		db.workingSets[defaultBranch] = newWS
 		if err := updateWorkingSet(ctx, db.doltDB, newWS, defaultBranch); err != nil {

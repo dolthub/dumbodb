@@ -1498,7 +1498,12 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	if c.db.backend.autoCommit {
-		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, state.workingSets[c.db.rootish].WorkingRoot(), state.ns)
+		// state.mu write lock held; safe to read state.workingSets directly.
+		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), state.workingSets[c.db.rootish], c.db.name, c.db.rootish)
+		if rvErr != nil {
+			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
+		}
+		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, workingRV, state.ns)
 		msg := fmt.Sprintf("auto: insert into %s", c.name)
 		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
@@ -1786,7 +1791,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	}
 
 	if c.db.backend.autoCommit {
-		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, state.workingSets[c.db.rootish].WorkingRoot(), state.ns)
+		// state.mu write lock held; safe to read state.workingSets directly.
+		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), state.workingSets[c.db.rootish], c.db.name, c.db.rootish)
+		if rvErr != nil {
+			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
+		}
+		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, workingRV, state.ns)
 		msg := fmt.Sprintf("auto: update %s", c.name)
 		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
@@ -1940,7 +1950,12 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	}
 
 	if c.db.backend.autoCommit {
-		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, state.workingSets[c.db.rootish].WorkingRoot(), state.ns)
+		// state.mu write lock held; safe to read state.workingSets directly.
+		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), state.workingSets[c.db.rootish], c.db.name, c.db.rootish)
+		if rvErr != nil {
+			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
+		}
+		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, workingRV, state.ns)
 		msg := fmt.Sprintf("auto: delete from %s", c.name)
 		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
 		if dsErr != nil {
