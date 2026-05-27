@@ -1304,9 +1304,15 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	// Collect unique secondary indexes for this collection.
+	// Collect unique secondary indexes for this collection. Resolve from
+	// the per-branch DTBL so unique-constraint enforcement is consistent
+	// with the rest of the write path.
+	branchInfos, _, err := resolveBranchIndexState(ctx, c, state)
+	if err != nil {
+		return nil, fmt.Errorf("resolving branch index state: %w", err)
+	}
 	var uniqueIndexes []backends.IndexInfo
-	for _, idx := range state.indexes[c.name] {
+	for _, idx := range branchInfos {
 		if idx.Unique {
 			uniqueIndexes = append(uniqueIndexes, idx)
 		}
@@ -1524,57 +1530,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	return &backends.InsertAllResult{}, nil
-}
-
-// updateSecondaryIndexesOnInsert adds entries for the inserted documents to all secondary indexes.
-// Must be called with state.mu held (write lock).
-func (c *collection) updateSecondaryIndexesOnInsert(ctx context.Context, state *dbState, docs []*types.Document) error {
-	secMaps := state.secIndexMaps[c.name]
-	if len(secMaps) == 0 {
-		return nil
-	}
-
-	idxInfos := state.indexes[c.name]
-
-	for idxName, idxMap := range secMaps {
-		var idxInfo *backends.IndexInfo
-		for i := range idxInfos {
-			if idxInfos[i].Name == idxName {
-				idxInfo = &idxInfos[i]
-				break
-			}
-		}
-		if idxInfo == nil {
-			// secIndexMaps and state.indexes drifted: that's a backend
-			// invariant violation, not a per-doc skip.
-			return fmt.Errorf("index %q has a map but no IndexInfo on %q", idxName, c.name)
-		}
-
-		mut := idxMap.Mutate()
-		for _, doc := range docs {
-			docID, err := doc.Get("_id")
-			if err != nil {
-				return fmt.Errorf("secondary index %q: document missing _id: %w", idxName, err)
-			}
-			h, err := hashID(docID)
-			if err != nil {
-				return fmt.Errorf("secondary index %q: hashing _id: %w", idxName, err)
-			}
-			idBytes := h[:]
-			fieldVals := extractIndexFieldValues(doc, *idxInfo)
-			for _, fv := range expandMultiKeyValues(fieldVals) {
-				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
-					return fmt.Errorf("secondary index %q: inserting entry: %w", idxName, err)
-				}
-			}
-		}
-		updated, err := mut.Map(ctx)
-		if err != nil {
-			return fmt.Errorf("secondary index %q: flushing map: %w", idxName, err)
-		}
-		secMaps[idxName] = updated
-	}
-	return nil
 }
 
 // evictCappedDocs removes oldest documents from a capped collection to enforce size and count limits.

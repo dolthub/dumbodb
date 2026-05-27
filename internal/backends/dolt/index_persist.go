@@ -15,25 +15,18 @@
 package dolt
 
 import (
-	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"slices"
 
 	"github.com/FerretDB/wire/wirebson"
-	"github.com/dolthub/dolt/go/gen/fb/serial"
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/hash"
-	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
-	dolttypes "github.com/dolthub/dolt/go/store/types"
 	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
-	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -184,178 +177,3 @@ func readIndexEntryChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (i
 	return entry, nil
 }
 
-// persistIndexes rebuilds state.collIndexAMs[collName] from the current
-// in-memory state.indexes[collName] / state.secIndexMaps[collName].
-//
-// For each registered index it:
-//  1. Writes the prolly.Map root node so cs.Get(mapRoot) works on reopen.
-//  2. Writes a JSON IndexEntry chunk pairing IndexInfo metadata with the map root.
-//  3. Adds (index name -> IndexEntry hash) to a fresh AddressMap.
-//
-// The resulting AddressMap is cached so the next dtblHashForCollection call
-// inlines the up-to-date secondary_indexes bytes into the DTBL.
-//
-// The caller must hold state.mu (write lock).
-func (state *dbState) persistIndexes(ctx context.Context, collName string) error {
-	idxInfos := state.indexes[collName]
-	secMaps := state.secIndexMaps[collName]
-
-	if len(idxInfos) == 0 {
-		delete(state.collIndexAMs, collName)
-		return nil
-	}
-
-	am, err := prolly.NewEmptyAddressMap(state.ns)
-	if err != nil {
-		return fmt.Errorf("creating index AM for %q: %w", collName, err)
-	}
-	edt := am.Editor()
-
-	for _, idx := range idxInfos {
-		m, ok := secMaps[idx.Name]
-		if !ok {
-			return fmt.Errorf("index %q on %q has no in-memory map", idx.Name, collName)
-		}
-
-		ref, err := state.vs.WriteValue(ctx, tree.ValueFromNode(m.Node()))
-		if err != nil {
-			return fmt.Errorf("writing index map root for %q.%q: %w", collName, idx.Name, err)
-		}
-		mapRoot := ref.TargetHash()
-
-		entry, err := indexInfoToEntry(idx, mapRoot)
-		if err != nil {
-			return fmt.Errorf("encoding index entry for %q.%q: %w", collName, idx.Name, err)
-		}
-		entryHash, err := writeIndexEntryChunk(ctx, state.ns, entry)
-		if err != nil {
-			return fmt.Errorf("writing index entry chunk for %q.%q: %w", collName, idx.Name, err)
-		}
-
-		if err := edt.Add(ctx, idx.Name, entryHash); err != nil {
-			return fmt.Errorf("adding %q to index AM: %w", idx.Name, err)
-		}
-	}
-
-	newAM, err := edt.Flush(ctx)
-	if err != nil {
-		return fmt.Errorf("flushing index AM for %q: %w", collName, err)
-	}
-	state.collIndexAMs[collName] = newAM
-	return nil
-}
-
-// loadIndexesFromDTBL parses the SecondaryIndexes AM from the DTBL chunk for
-// collName and hydrates state.indexes[collName], state.secIndexMaps[collName]
-// and state.collIndexAMs[collName].
-//
-// Called once per collection at db open. A legacy TUPM-format collection
-// (no DTBL wrapper) is treated as having no secondary indexes.
-//
-// The caller must hold state.mu (write lock).
-func (state *dbState) loadIndexesFromDTBL(ctx context.Context, collName string, dtblHash hash.Hash) error {
-	if dtblHash.IsEmpty() {
-		return nil
-	}
-
-	chunk, err := state.cs.Get(ctx, dtblHash)
-	if err != nil {
-		return fmt.Errorf("reading DTBL for %q: %w", collName, err)
-	}
-	if len(chunk.Data()) == 0 {
-		return nil
-	}
-	if serial.GetFileID(chunk.Data()) != serial.TableFileID {
-		// Legacy TUPM: no secondary indexes encoded at all.
-		return nil
-	}
-
-	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
-	if err != nil {
-		return fmt.Errorf("parsing DTBL for %q: %w", collName, err)
-	}
-	idxBytes := tbl.SecondaryIndexesBytes()
-	if len(idxBytes) == 0 {
-		return nil
-	}
-
-	amNode, _, err := tree.NodeFromBytes(idxBytes)
-	if err != nil {
-		return fmt.Errorf("parsing index AM node for %q: %w", collName, err)
-	}
-	am, err := prolly.NewAddressMap(amNode, state.ns)
-	if err != nil {
-		return fmt.Errorf("loading index AM for %q: %w", collName, err)
-	}
-
-	cnt, err := am.Count()
-	if err != nil {
-		return fmt.Errorf("counting index AM for %q: %w", collName, err)
-	}
-	if cnt == 0 {
-		return nil
-	}
-
-	infos := make([]backends.IndexInfo, 0, cnt)
-	maps := make(map[string]prolly.Map, cnt)
-
-	if err := am.IterAll(ctx, func(idxName string, entryHash hash.Hash) error {
-		if entryHash.IsEmpty() {
-			return nil
-		}
-		entry, err := readIndexEntryChunk(ctx, state.ns, entryHash)
-		if err != nil {
-			return fmt.Errorf("reading index entry for %q.%q: %w", collName, idxName, err)
-		}
-		idxInfo, mapRoot, err := entryToIndexInfo(entry)
-		if err != nil {
-			return fmt.Errorf("decoding index entry for %q.%q: %w", collName, idxName, err)
-		}
-
-		v, err := state.vs.ReadValue(ctx, mapRoot)
-		if err != nil {
-			return fmt.Errorf("reading secondary index map for %q.%q: %w", collName, idxName, err)
-		}
-		msg, ok := v.(dolttypes.SerialMessage)
-		if !ok {
-			return fmt.Errorf("unexpected value type %T for secondary index map %q.%q", v, collName, idxName)
-		}
-		node, _, err := tree.NodeFromBytes([]byte(msg))
-		if err != nil {
-			return fmt.Errorf("parsing secondary index map node for %q.%q: %w", collName, idxName, err)
-		}
-		secMap := prolly.NewMap(node, state.ns, idxpkg.KeyDescriptor(), idxpkg.ValDescriptor())
-
-		infos = append(infos, idxInfo)
-		maps[idxName] = secMap
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	slices.SortFunc(infos, func(a, b backends.IndexInfo) int {
-		return cmp.Compare(a.Name, b.Name)
-	})
-
-	state.collIndexAMs[collName] = am
-	state.indexes[collName] = infos
-	state.secIndexMaps[collName] = maps
-	return nil
-}
-
-// hydrateAllIndexes loads persisted secondary indexes at db open from
-// the default branch's working set (no session exists yet). The caller
-// must hold state.mu (write lock).
-func (state *dbState) hydrateAllIndexes(ctx context.Context) error {
-	ws, err := state.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+defaultBranch))
-	if err != nil {
-		return fmt.Errorf("hydrateAllIndexes: resolving working set for %q: %w", defaultBranch, err)
-	}
-	am, err := amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
-	if err != nil {
-		return err
-	}
-	return am.IterAll(ctx, func(collName string, dtblHash hash.Hash) error {
-		return state.loadIndexesFromDTBL(ctx, collName, dtblHash)
-	})
-}
