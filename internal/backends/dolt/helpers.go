@@ -354,32 +354,41 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // dsess. The fork point is captured by tx.dbStartPoints when the dsess
 // transaction starts (dispatched from clientconn).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	// In-txn writes accumulate on the session's branchState, never reaching
+	// state.workingSets until commit. So a write inside a txn must source
+	// its starting WS from the session (which has the prior in-tx writes).
+	//
+	// Non-txn writes update state.workingSets[branch] alongside session
+	// SetWorkingSet, and side-channel writes (merge / reset / version-
+	// control ops) bypass the session entirely. For non-tx writes the
+	// dbState cache / disk is the canonical view; reading from the session
+	// would risk returning a branchState that has fallen behind those
+	// side-channel updates.
 	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
-		sess := sessionFromContext(ctx)
-		if sess == nil {
-			return nil, fmt.Errorf("getOrInitBranchWS: in-txn write on %q/%q with no session in context", state.name, branch)
-		}
-		sqlCtx := sqlctx.Wrap(ctx, sess)
-		qualified := qualifiedDbName(state.name, branch)
-		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
-		if err != nil {
-			return nil, fmt.Errorf("getOrInitBranchWS: LookupDbState for %q: %w", qualified, err)
-		}
-		if ok {
-			if ws := sessState.WorkingSet(); ws != nil {
-				return ws, nil
+		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) {
+			sqlCtx := sqlctx.Wrap(ctx, sess)
+			qualified := qualifiedDbName(state.name, branch)
+			sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+			if err != nil {
+				return nil, fmt.Errorf("getOrInitBranchWS: LookupDbState for %q: %w", qualified, err)
 			}
+			if ok {
+				if ws := sessState.WorkingSet(); ws != nil {
+					return ws, nil
+				}
+			}
+			// Branch not yet materialised in the session; seed it from disk
+			// so SetWorkingSet downstream has a branchState to write into.
+			ws, err := state.loadCommittedWS(ctx, branch)
+			if err != nil {
+				return nil, err
+			}
+			if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
+				return nil, fmt.Errorf("getOrInitBranchWS: SetWorkingSet for %q: %w", qualified, err)
+			}
+			return ws, nil
 		}
-		ws, err := state.loadCommittedWS(ctx, branch)
-		if err != nil {
-			return nil, err
-		}
-		if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
-			return nil, fmt.Errorf("getOrInitBranchWS: SetWorkingSet for %q: %w", qualified, err)
-		}
-		return ws, nil
 	}
-
 	return state.loadCommittedWS(ctx, branch)
 }
 
@@ -523,19 +532,45 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
 
-	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
-		sess := sessionFromContext(ctx)
-		if sess == nil {
-			return fmt.Errorf("updateWorkingRoot: in-txn write on %q/%q with no session in context", state.name, branch)
-		}
+	// Route the write through the calling session when one is present so
+	// the session's branchState reflects every uncommitted write (the
+	// contract dsess VisitGCRoots relies on). In-txn writes (session-iso
+	// or inside a wire startTransaction) stop here -- the txn overlay
+	// lives on the session; a later doltCommit / commitTransaction flushes
+	// to disk via the dsess merge path.
+	//
+	// Non-txn writes also go through SetWorkingSet and then immediately
+	// flush to the working-set ref via updateWorkingSet, matching the
+	// auto-commit-per-op durability story. skipSync (j:false) batched
+	// writes defer the ref flush but keep the session as the source of
+	// truth -- the deferredFlushLoop rework (workspace-qsc.5) walks
+	// sessions to drain dirty branchStates.
+	//
+	// In-process callers (diff tests, internal init) hit this with no
+	// session in context; for those we fall back to the legacy
+	// dbState.workingSets shadow path.
+	_, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
+	sess := sessionFromContext(ctx)
+	useSession := sess != nil && dbNameDsessFriendly(state.name)
+	if useSession {
 		sqlCtx := sqlctx.Wrap(ctx, sess)
 		qualified := qualifiedDbName(state.name, branch)
 		if err := sess.SetWorkingSet(sqlCtx, qualified, newWS); err != nil {
 			return fmt.Errorf("updateWorkingRoot: SetWorkingSet for %q: %w", qualified, err)
 		}
+	}
+
+	if inTxn && useSession {
 		return nil
 	}
 
+	// Non-txn writes also keep state.workingSets[branch] in sync as a
+	// read-cache. Reads outside an active txn (cross-session lookups,
+	// background helpers) consult this cache rather than the session,
+	// because dsess's branchState is loaded at txn-start and never
+	// auto-refreshes -- consulting it for non-txn reads would hide writes
+	// made by other sessions. The cache is removed entirely in
+	// workspace-qsc.6 once readers stop using it.
 	state.workingSets[branch] = newWS
 
 	if skipSync {

@@ -17,6 +17,7 @@ package dolt
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
 
@@ -34,6 +35,17 @@ import (
 // symmetrical.
 func qualifiedDbName(dbName, branch string) string {
 	return doltdb.RevisionDbName(dbName, branch)
+}
+
+// dbNameDsessFriendly reports whether a db name is safe to pass through
+// dsess's revision-qualified lookup paths. dsess's SplitRevisionDbName
+// treats "@" and "/" as revision delimiters, so a db name that contains
+// either as part of its literal name (e.g. dumbodb's all-digit-suffix
+// special case, "mydb@1775505756999075683") would be misinterpreted.
+// Callers that build a SetWorkingSet / LookupDbState path must skip the
+// session route for these names and write through the dbState shadow.
+func dbNameDsessFriendly(dbName string) bool {
+	return !strings.ContainsAny(dbName, "/@")
 }
 
 // ensureDsessTxn returns the active dsess transaction, starting one if
@@ -61,45 +73,41 @@ func clearDsessTxn(sqlCtx *sql.Context) {
 	sqlCtx.SetTransaction(nil)
 }
 
-// workingSetViaSession returns the working set for (dbName, branch) viewed
-// through the calling session's branchState. The ws argument is the
-// caller's already-snapshotted in-memory working set from
-// dbState.workingSets[branch] (so the caller owns whatever dbState locking
-// is appropriate at the call site). When sess is non-nil, ws is pushed into
-// the session's branchState via SetWorkingSet so the read reflects
-// in-memory state that has not yet been flushed to the working-set ref
-// (j:false batched writes); the working set is then read back through the
-// session. When sess is nil -- internal callers like handler init or
-// capped cleanup that arrive without a registered client session -- the
-// snapshot is returned directly.
+// workingSetViaSession returns the working set for (dbName, branch). When
+// the calling session has an uncommitted overlay for this (db, branch) --
+// dsess.DirtyBranchRevisions reports it -- the session's branchState is
+// the source of truth and is returned. Otherwise, the dbState snapshot
+// (fallback) is returned: it reflects committed writes from any session
+// and stays current via the commit / non-txn write paths.
 //
-// This is the routing point that workspace-qsc.1 uses to thread every
-// non-bypass read through the session API. The ws snapshot is the
-// transitional shadow path; workspace-qsc.3 removes it once writes flow
-// through the session too.
-func workingSetViaSession(ctx context.Context, sess *dsess.DoltSession, ws *doltdb.WorkingSet, dbName, branch string) (*doltdb.WorkingSet, error) {
-	if ws == nil {
+// We deliberately do NOT trust the session's branchState for "clean"
+// reads, because dsess loads it at lookup time and never refreshes --
+// using it for non-dirty reads would hide writes another session
+// committed to disk.
+func workingSetViaSession(ctx context.Context, sess *dsess.DoltSession, fallback *doltdb.WorkingSet, dbName, branch string) (*doltdb.WorkingSet, error) {
+	if sess != nil {
+		qualified := qualifiedDbName(dbName, branch)
+		qualifiedLower := strings.ToLower(qualified)
+		for _, d := range sess.DirtyBranchRevisions() {
+			if strings.ToLower(d) == qualifiedLower {
+				sqlCtx := sqlctx.Wrap(ctx, sess)
+				sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+				if err != nil {
+					return nil, fmt.Errorf("workingSetViaSession: LookupDbState for %q@%q: %w", dbName, branch, err)
+				}
+				if ok {
+					if ws := sessState.WorkingSet(); ws != nil {
+						return ws, nil
+					}
+				}
+				break
+			}
+		}
+	}
+	if fallback == nil {
 		return nil, fmt.Errorf("workingSetViaSession: no working set for %q@%q", dbName, branch)
 	}
-	if sess == nil {
-		return ws, nil
-	}
-
-	qualified := dbName
-	if branch != defaultBranch {
-		qualified = doltdb.RevisionDbName(dbName, branch)
-	}
-
-	sqlCtx := sqlctx.Wrap(ctx, sess)
-	if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
-		return nil, fmt.Errorf("workingSetViaSession: SetWorkingSet for %q@%q: %w", dbName, branch, err)
-	}
-
-	sessState, _, err := sess.LookupDbState(sqlCtx, qualified)
-	if err != nil {
-		return nil, fmt.Errorf("workingSetViaSession: LookupDbState for %q@%q: %w", dbName, branch, err)
-	}
-	return sessState.WorkingSet(), nil
+	return fallback, nil
 }
 
 // workingRootViaSession is workingSetViaSession that returns just the
