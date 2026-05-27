@@ -2359,35 +2359,37 @@ func lookupFieldFromPrimary(
 }
 
 func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndexesParams) (*backends.ListIndexesResult, error) {
-	_, exists, state, err := c.getMap(ctx)
+	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("collection %q does not exist", c.name))
+	}
+
+	// Only the AM resolution needs state.mu (resolveAM reads state.workingSets).
+	// The downstream chunk-store reads operate on immutable content-addressed
+	// chunks and need no dbState lock.
+	state.mu.RLock()
+	am, err := c.db.resolveAM(ctx, state)
+	state.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
 
-	if !exists {
-		// The collection may have no documents yet but still have secondary indexes
-		// (e.g., created before any inserts). Try to get the database state without
-		// requiring the collection's prolly.Map to exist.
-		state, err = c.db.backend.getOrOpenDB(ctx, c.db.name, false)
-		if err != nil {
-			return nil, err
-		}
+	dtblHash, err := am.Get(ctx, c.name)
+	if err != nil {
+		return nil, err
+	}
+	if dtblHash.IsEmpty() {
+		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("collection %q does not exist", c.name))
+	}
 
-		if state == nil {
-			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-				fmt.Errorf("collection %q does not exist", c.name))
-		}
-
-		// If this collection was never registered (created), it doesn't exist.
-		// Note: a registered collection with 0 secondary indexes (all dropped) still exists.
-		state.mu.RLock()
-		_, registered := state.indexes[c.name]
-		state.mu.RUnlock()
-
-		if !registered {
-			return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
-				fmt.Errorf("collection %q does not exist", c.name))
-		}
+	idxAM, err := indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+	if err != nil {
+		return nil, err
 	}
 
 	indexes := []backends.IndexInfo{
@@ -2397,12 +2399,19 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 		},
 	}
 
-	state.mu.RLock()
-	secondary := make([]backends.IndexInfo, len(state.indexes[c.name]))
-	copy(secondary, state.indexes[c.name])
-	state.mu.RUnlock()
-
-	indexes = append(indexes, secondary...)
+	if err := idxAM.IterAll(ctx, func(name string, entryHash hash.Hash) error {
+		if entryHash.IsEmpty() {
+			return nil
+		}
+		resolved, rerr := resolveIndexEntry(ctx, state.ns, entryHash)
+		if rerr != nil {
+			return rerr
+		}
+		indexes = append(indexes, resolved.info)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 
 	slices.SortFunc(indexes, func(a, b backends.IndexInfo) int {
 		return cmp.Compare(a.Name, b.Name)
