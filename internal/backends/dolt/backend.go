@@ -161,7 +161,6 @@ type dbState struct {
 	collSchemaHash hash.Hash
 	emptyIndexAM   prolly.AddressMap
 	mergeState     *mergeInProgress
-	dirtyBranches  map[string]struct{}
 }
 
 type pendingWSKey struct {
@@ -269,14 +268,21 @@ func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap
 
 // pushWSToSession is the session-routing tail of persistAM / setAM.
 // Sets the calling session's branchState.workingSet so dsess sees the
-// post-op state. No-op when the caller has no session in ctx or when
-// state.name isn't dsess-friendly (contains "@"/"/").
+// post-op state. No-op when the caller has no session in ctx, when the
+// session has no active dsess transaction, or when state.name isn't
+// dsess-friendly (contains "@"/"/").
+//
+// The active-txn gate is load-bearing: deferredFlushLoop walks every
+// dirty session and writes its branchState.workingSet to disk. Without
+// the gate, idle sessions from prior autoCommit writes stay marked dirty
+// with stale WS pointers and the flusher overwrites the latest writer's
+// disk state every tick.
 func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
 	if !dbNameDsessFriendly(s.name) {
 		return
 	}
 	sess := sessionFromContext(ctx)
-	if sess == nil {
+	if sess == nil || sess.GetTransaction() == nil {
 		return
 	}
 	sqlCtx := sqlctx.Wrap(ctx, sess)
@@ -542,11 +548,12 @@ func (b *Backend) sessionSweepLoop() {
 	}
 }
 
-// deferredFlushLoop drains dbState.dirtyBranches on every database at a fixed
-// interval. Each tick picks up any branches whose in-memory AM has advanced
-// past the last UpdateWorkingSet call (the source of the NBS journal fsync)
-// and flushes them. Errors are logged; the loop keeps running so a transient
-// failure on one database doesn't starve the others.
+// deferredFlushLoop walks every active session at a fixed interval and
+// flushes its dirty branchStates to the working-set ref. Coalesces
+// repeated j:false (skipSync) writes against the same branch into one
+// UpdateWorkingSet per tick. Sessions inside an active dsess transaction
+// (session-iso, wire-startTransaction) are skipped -- their overlays are
+// not auto-commitable; the user must explicitly commit.
 func (b *Backend) deferredFlushLoop() {
 	defer close(b.flusherDone)
 
@@ -564,25 +571,62 @@ func (b *Backend) deferredFlushLoop() {
 	}
 }
 
-// flushAllDirty iterates the open databases and drains each one's dirty
-// branches. Takes the backend lock briefly to snapshot the database list so
-// we don't hold it across per-DB flushes.
+// flushAllDirty walks every active session and writes each dirty
+// branchState's working set to the corresponding branch's working-set
+// ref. Sessions with an active dsess transaction are skipped: their
+// dirty overlays belong to the in-progress txn and are only persisted
+// via commit / merge paths. Errors are logged; the loop keeps running so
+// a transient failure on one session doesn't starve the others.
 func (b *Backend) flushAllDirty(ctx context.Context) {
+	if b.sessions == nil {
+		return
+	}
+	shadows := b.sessions.ActiveShadows()
+	if len(shadows) == 0 {
+		return
+	}
+
 	b.mu.RLock()
-	dbs := make([]*dbState, 0, len(b.dbs))
-	for _, db := range b.dbs {
-		dbs = append(dbs, db)
+	dbs := make(map[string]*dbState, len(b.dbs))
+	for name, db := range b.dbs {
+		dbs[name] = db
 	}
 	b.mu.RUnlock()
 
-	for _, db := range dbs {
-		db.mu.Lock()
-		if len(db.dirtyBranches) > 0 {
-			if err := db.flushDirtyBranches(ctx); err != nil {
-				b.l.Warn("deferred flush failed", "err", err)
+	for _, shadow := range shadows {
+		sess := shadow.Session()
+		if sess == nil {
+			continue
+		}
+		if sess.GetTransaction() != nil {
+			// Active dsess txn: don't auto-flush in-flight overlays.
+			continue
+		}
+		sqlCtx := sqlctx.Wrap(ctx, sess)
+		for _, qualified := range sess.DirtyBranchRevisions() {
+			base, branch := doltdb.SplitRevisionDbName(qualified)
+			if branch == "" {
+				branch = defaultBranch
+			}
+			db, ok := dbs[base]
+			if !ok {
+				continue
+			}
+			sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
+			if err != nil || !sok {
+				continue
+			}
+			ws := sessState.WorkingSet()
+			if ws == nil {
+				continue
+			}
+			db.mu.Lock()
+			err = updateWorkingSet(ctx, db.doltDB, ws, branch)
+			db.mu.Unlock()
+			if err != nil {
+				b.l.Warn("deferred flush failed", "db", base, "branch", branch, "err", err)
 			}
 		}
-		db.mu.Unlock()
 	}
 }
 

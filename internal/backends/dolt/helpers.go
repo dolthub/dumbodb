@@ -457,9 +457,6 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 				state.workingSets[branch] = newWS
 			}
 		}
-		if state.dirtyBranches != nil {
-			delete(state.dirtyBranches, branch)
-		}
 		branches = append(branches, branch)
 	}
 	return branches, nil
@@ -532,35 +529,18 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
 
-	// Route the write through the calling session when one is present so
-	// the session's branchState reflects every uncommitted write (the
-	// contract dsess VisitGCRoots relies on). In-txn writes (session-iso
-	// or inside a wire startTransaction) stop here -- the txn overlay
-	// lives on the session; a later doltCommit / commitTransaction flushes
-	// to disk via the dsess merge path.
-	//
-	// Non-txn writes also go through SetWorkingSet and then immediately
-	// flush to the working-set ref via updateWorkingSet, matching the
-	// auto-commit-per-op durability story. skipSync (j:false) batched
-	// writes defer the ref flush but keep the session as the source of
-	// truth -- the deferredFlushLoop rework (workspace-qsc.5) walks
-	// sessions to drain dirty branchStates.
-	//
-	// In-process callers (diff tests, internal init) hit this with no
-	// session in context; for those we fall back to the legacy
-	// dbState.workingSets shadow path.
-	_, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
+	// Active dsess txn: keep the WS on the session; commit/merge persists
+	// it later. No txn (autoCommit) deliberately does NOT mark the session
+	// dirty, because the deferred flusher walks every dirty session and
+	// would overwrite the latest writer's disk state with each idle
+	// session's stale per-session WS snapshot every tick.
 	sess := sessionFromContext(ctx)
-	useSession := sess != nil && dbNameDsessFriendly(state.name)
-	if useSession {
+	if sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) {
 		sqlCtx := sqlctx.Wrap(ctx, sess)
 		qualified := qualifiedDbName(state.name, branch)
 		if err := sess.SetWorkingSet(sqlCtx, qualified, newWS); err != nil {
 			return fmt.Errorf("updateWorkingRoot: SetWorkingSet for %q: %w", qualified, err)
 		}
-	}
-
-	if inTxn && useSession {
 		return nil
 	}
 
@@ -574,19 +554,15 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 	state.workingSets[branch] = newWS
 
 	if skipSync {
-		if state.dirtyBranches == nil {
-			state.dirtyBranches = make(map[string]struct{})
-		}
-		state.dirtyBranches[branch] = struct{}{}
+		// j:false write: defer the working-set ref flush. The deferred
+		// flusher walks sessions via SessionRegistry every
+		// deferredFlushInterval and writes each dirty branchState's WS
+		// to its ref, coalescing repeated writes into one fsync.
 		return nil
 	}
 
 	if err := updateWorkingSet(ctx, state.doltDB, newWS, branch); err != nil {
 		return fmt.Errorf("updating working set: %w", err)
-	}
-
-	if state.dirtyBranches != nil {
-		delete(state.dirtyBranches, branch)
 	}
 	return nil
 }
@@ -616,23 +592,6 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 		rtvlMsg := buildRootValueFlatbuffer(newAM)
 		return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 	}, skipSync)
-}
-
-func (state *dbState) flushDirtyBranches(ctx context.Context) error {
-	if len(state.dirtyBranches) == 0 {
-		return nil
-	}
-	for branch := range state.dirtyBranches {
-		ws, ok := state.workingSets[branch]
-		if !ok {
-			continue
-		}
-		if err := updateWorkingSet(ctx, state.doltDB, ws, branch); err != nil {
-			return fmt.Errorf("updating working set for %q: %w", branch, err)
-		}
-		delete(state.dirtyBranches, branch)
-	}
-	return nil
 }
 
 // headRootAM returns the collections AddressMap from HEAD's rootValue.
