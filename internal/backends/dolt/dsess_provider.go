@@ -26,7 +26,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
@@ -45,7 +45,9 @@ type dumbodbProvider struct {
 	fs      filesys.Filesys
 	txLocks keymutex.Keymutex
 
-	dbLookup func(name string) (*dbState, bool)
+	dbLookup     func(name string) (*dbState, bool)
+	dbNames      func() []string
+	gcController *gcctx.GCSafepointController
 
 	dbCacheMu sync.Mutex
 	dbCache   map[string]sqle.Database
@@ -53,22 +55,25 @@ type dumbodbProvider struct {
 
 var _ dsess.DoltDatabaseProvider = (*dumbodbProvider)(nil)
 
-func newDumbodbProvider(dataDir string, dbLookup func(name string) (*dbState, bool)) (*dumbodbProvider, error) {
+func newDumbodbProvider(dataDir string, dbLookup func(name string) (*dbState, bool), dbNames func() []string, gc *gcctx.GCSafepointController) (*dumbodbProvider, error) {
 	fs, err := filesys.LocalFilesysWithWorkingDir(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("constructing local filesystem for dsess provider: %w", err)
 	}
 	return &dumbodbProvider{
-		dataDir:  dataDir,
+		dataDir:      dataDir,
+		gcController: gc,
 		fs:       fs,
 		txLocks:  keymutex.NewMapped(),
 		dbLookup: dbLookup,
+		dbNames:  dbNames,
 		dbCache:  map[string]sqle.Database{},
 	}, nil
 }
 
 func (p *dumbodbProvider) Database(ctx *sql.Context, name string) (sql.Database, error) {
-	db, ok, err := p.SessionDatabase(ctx, name)
+	baseName, _ := doltdb.SplitRevisionDbName(name)
+	db, ok, err := p.getOrBuildSqleDatabase(ctx, baseName)
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +113,11 @@ func (p *dumbodbProvider) CloneDatabaseFromRemote(_ *sql.Context, _, _, _, _ str
 	return fmt.Errorf("dumbodb provider: CloneDatabaseFromRemote not supported")
 }
 
-func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.SqlDatabase, bool, error) {
-	baseName, _ := doltdb.SplitRevisionDbName(name)
+func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.VersionedDatabase, bool, error) {
+	baseName, rev := doltdb.SplitRevisionDbName(name)
+	if rev == "" {
+		rev = defaultBranch
+	}
 	db, ok, err := p.getOrBuildSqleDatabase(ctx, baseName)
 	if err != nil {
 		return nil, false, err
@@ -117,10 +125,22 @@ func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.
 	if !ok {
 		return nil, false, sql.ErrDatabaseNotFound.New(name)
 	}
-	return db, true, nil
+	// dsess keys branchStates by db.Revision(); without WithBranchRevision
+	// every branch would collapse under the same empty-key bucket.
+	revDb, err := db.WithBranchRevision(doltdb.RevisionDbName(baseName, rev), dsess.SessionDatabaseBranchSpec{
+		RepoState: newSqlCtxRepoStateAdapter(rev),
+		Branch:    rev,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("dumbodb provider: WithBranchRevision for %q: %w", name, err)
+	}
+	return revDb, true, nil
 }
 
-func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.SqlDatabase, bool) {
+// BaseDatabase returns the unqualified base, NOT a WithBranchRevision'd
+// copy. dsess.AddDb keys dbStartPoints by db.Name() without splitting; the
+// base name keeps that key symmetrical with NewDoltTransaction's keying.
+func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.VersionedDatabase, bool) {
 	baseName, _ := doltdb.SplitRevisionDbName(name)
 	db, ok, err := p.getOrBuildSqleDatabase(ctx, baseName)
 	if err != nil || !ok {
@@ -129,14 +149,53 @@ func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.Sql
 	return db, true
 }
 
-func (p *dumbodbProvider) DoltDatabases() []dsess.SqlDatabase {
-	p.dbCacheMu.Lock()
-	defer p.dbCacheMu.Unlock()
-	out := make([]dsess.SqlDatabase, 0, len(p.dbCache))
-	for _, db := range p.dbCache {
+// DoltDatabases enumerates from the backend's open db list (not just
+// provider cache) so StartTransaction's dbStartPoints covers every db.
+func (p *dumbodbProvider) DoltDatabases() []dsess.VersionedDatabase {
+	names := p.dbNames()
+	out := make([]dsess.VersionedDatabase, 0, len(names))
+	for _, name := range names {
+		db, ok, err := p.buildSqleDatabaseNoSession(name)
+		if err != nil || !ok {
+			continue
+		}
 		out = append(out, db)
 	}
 	return out
+}
+
+// buildSqleDatabaseNoSession threads the GC safepoint controller through
+// the context so sqle.NewDatabase's AutoIncrementTracker setup can resolve
+// it via gcctx.GetGCSafepointController instead of dereferencing a
+// *DoltSession that doesn't exist at this layer.
+func (p *dumbodbProvider) buildSqleDatabaseNoSession(baseName string) (sqle.Database, bool, error) {
+	key := strings.ToLower(baseName)
+
+	p.dbCacheMu.Lock()
+	defer p.dbCacheMu.Unlock()
+
+	if db, ok := p.dbCache[key]; ok {
+		return db, true, nil
+	}
+
+	state, ok := p.dbLookup(baseName)
+	if !ok {
+		return sqle.Database{}, false, nil
+	}
+
+	rsrw := newRepoStateAdapter(defaultBranch)
+	dbData := env.DbData[context.Context]{
+		Ddb: state.doltDB,
+		Rsr: rsrw,
+		Rsw: rsrw,
+	}
+	ctx := gcctx.WithGCSafepointController(context.Background(), p.gcController)
+	db, err := sqle.NewDatabase(ctx, baseName, dbData, editor.Options{})
+	if err != nil {
+		return sqle.Database{}, false, fmt.Errorf("constructing sqle.Database for %q (session-less): %w", baseName, err)
+	}
+	p.dbCache[key] = db
+	return db, true, nil
 }
 
 func (p *dumbodbProvider) UndropDatabase(_ *sql.Context, _ string) error { return nil }

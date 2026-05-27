@@ -24,6 +24,7 @@ import (
 
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/gen/fb/serial"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
@@ -342,12 +343,15 @@ func (state *dbState) loadIndexesFromDTBL(ctx context.Context, collName string, 
 	return nil
 }
 
-// hydrateAllIndexes iterates the collections AM and loads any persisted
-// secondary indexes into in-memory state. Called once at db open.
-//
-// The caller must hold state.mu (write lock).
+// hydrateAllIndexes loads persisted secondary indexes at db open from
+// the default branch's working set (no session exists yet). The caller
+// must hold state.mu (write lock).
 func (state *dbState) hydrateAllIndexes(ctx context.Context) error {
-	am, err := amFromWorkingRoot(ctx, state.workingSets[defaultBranch].WorkingRoot(), state.ns)
+	ws, err := state.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+defaultBranch))
+	if err != nil {
+		return fmt.Errorf("hydrateAllIndexes: resolving working set for %q: %w", defaultBranch, err)
+	}
+	am, err := amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	if err != nil {
 		return err
 	}

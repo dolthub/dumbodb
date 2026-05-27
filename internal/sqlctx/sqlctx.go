@@ -9,7 +9,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/branch_control"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/libraries/utils/config"
 )
 
@@ -45,4 +45,14 @@ func Wrap(ctx context.Context, sess *dsess.DoltSession) *sql.Context {
 func New(ctx context.Context, provider dsess.DoltDatabaseProvider, writeSessFunc dsess.WriteSessFunc) (*sql.Context, *dsess.DoltSession) {
 	sess := NewSession(provider, writeSessFunc)
 	return Wrap(ctx, sess), sess
+}
+
+// EnsureTxn returns the session's current tx, starting one if needed.
+// dsess.StartTransaction wipes all per-db heads, so callers must invoke
+// this only at txn-entry boundaries -- never lazily from inside a write.
+func EnsureTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, error) {
+	if tx := sess.GetTransaction(); tx != nil {
+		return tx, nil
+	}
+	return sess.StartTransaction(sqlCtx, sql.ReadWrite)
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha512"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire/wirebson"
@@ -27,6 +28,7 @@ import (
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/pool"
@@ -37,6 +39,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -343,25 +346,40 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 	return prolly.NewAddressMap(amNode, ns)
 }
 
-// getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
-// the doltDB if not already cached. The caller must hold state.mu (write lock).
+// getOrInitBranchWS returns the WorkingSet a write should build on.
+// In-txn: from the session's branchState; non-txn: from cache/disk
+// because the session can lag side-channel writes (merge, reset).
+// Caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
-	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
-		if entry, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
-			return entry.current, nil
+	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
+		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) {
+			sqlCtx := sqlctx.Wrap(ctx, sess)
+			qualified := qualifiedDbName(state.name, branch)
+			sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+			if err != nil {
+				return nil, fmt.Errorf("getOrInitBranchWS: LookupDbState for %q: %w", qualified, err)
+			}
+			if ok {
+				if ws := sessState.WorkingSet(); ws != nil {
+					return ws, nil
+				}
+			}
+			ws, err := state.loadCommittedWS(ctx, branch)
+			if err != nil {
+				return nil, err
+			}
+			if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
+				return nil, fmt.Errorf("getOrInitBranchWS: SetWorkingSet for %q: %w", qualified, err)
+			}
+			return ws, nil
 		}
-		ws, err := state.loadCommittedWS(ctx, branch)
-		if err != nil {
-			return nil, err
-		}
-		state.pendingWS[pendingWSKey{owner, branch}] = &pendingTxnState{base: ws, current: ws}
-		return ws, nil
 	}
-
 	return state.loadCommittedWS(ctx, branch)
 }
 
 func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	// state.workingSets carries cross-session unflushed j:false writes
+	// that aren't on disk yet; check it before falling back to the ref.
 	if ws, ok := state.workingSets[branch]; ok {
 		return ws, nil
 	}
@@ -395,42 +413,39 @@ func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
 	return "", false
 }
 
-// Caller must hold state.mu write lock. sqlCtx is required because the
-// three-way merge runs through dolt's merge.MergeRoots.
-func (state *dbState) commitPendingForOwner(sqlCtx *sql.Context, resolver doltdb.TableResolver, owner string) ([]string, error) {
+// commitDirtyBranchesForSession commits every dirty branch on sess that
+// belongs to this dbState. Caller must hold state.mu write lock.
+func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) ([]string, error) {
 	var branches []string
-	for key, entry := range state.pendingWS {
-		if key.owner != owner {
+	for _, qualified := range sess.DirtyBranchRevisions() {
+		base, branch := doltdb.SplitRevisionDbName(qualified)
+		if branch == "" {
+			branch = defaultBranch
+		}
+		if !strings.EqualFold(base, state.name) {
 			continue
 		}
-		committed, ok := state.workingSets[key.branch]
-		if !ok {
-			committed = entry.base
+		if err := sess.CommitWorkingSet(sqlCtx, qualified, tx); err != nil {
+			return branches, fmt.Errorf("commitTransaction: committing %q: %w", qualified, err)
 		}
-		merged, err := mergePendingIntoCommitted(sqlCtx, resolver, entry.base, entry.current, committed)
-		if err != nil {
-			return branches, fmt.Errorf("commitTransaction: merging working set for %q: %w", key.branch, err)
+		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+		if err == nil && ok {
+			if newWS := sessState.WorkingSet(); newWS != nil {
+				state.workingSets[branch] = newWS
+			}
 		}
-		state.workingSets[key.branch] = merged
-		if err := updateWorkingSet(sqlCtx, state.doltDB, merged, key.branch); err != nil {
-			return branches, fmt.Errorf("commitTransaction: persisting working set for %q: %w", key.branch, err)
-		}
-		if state.dirtyBranches != nil {
-			delete(state.dirtyBranches, key.branch)
-		}
-		delete(state.pendingWS, key)
-		branches = append(branches, key.branch)
+		branches = append(branches, branch)
 	}
 	return branches, nil
 }
 
-// Caller must hold state.mu write lock.
-func (state *dbState) abortPendingForOwner(owner string) {
-	for key := range state.pendingWS {
-		if key.owner == owner {
-			delete(state.pendingWS, key)
-		}
+// rollbackDirtyBranchesForSession is session-wide -- dsess has no per-
+// branch rollback.
+func (state *dbState) rollbackDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) error {
+	if tx == nil {
+		return nil
 	}
+	return sess.Rollback(sqlCtx, tx)
 }
 
 // headRootValueForBranch returns the doltdb.RootValue at the HEAD of branch.
@@ -485,33 +500,30 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
 
-	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
-		key := pendingWSKey{owner, branch}
-		entry, ok := state.pendingWS[key]
-		if !ok {
-			entry = &pendingTxnState{base: ws}
-			state.pendingWS[key] = entry
+	// Active dsess txn: keep the WS on the session; commit/merge persists
+	// it later. No txn (autoCommit) deliberately does NOT mark the session
+	// dirty, because the deferred flusher walks every dirty session and
+	// would overwrite the latest writer's disk state with each idle
+	// session's stale per-session WS snapshot every tick.
+	sess := sessionFromContext(ctx)
+	if sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) {
+		sqlCtx := sqlctx.Wrap(ctx, sess)
+		qualified := qualifiedDbName(state.name, branch)
+		if err := sess.SetWorkingSet(sqlCtx, qualified, newWS); err != nil {
+			return fmt.Errorf("updateWorkingRoot: SetWorkingSet for %q: %w", qualified, err)
 		}
-		entry.current = newWS
 		return nil
 	}
 
 	state.workingSets[branch] = newWS
 
 	if skipSync {
-		if state.dirtyBranches == nil {
-			state.dirtyBranches = make(map[string]struct{})
-		}
-		state.dirtyBranches[branch] = struct{}{}
+		// j:false: defer the ref flush; deferredFlushLoop drains it.
 		return nil
 	}
 
 	if err := updateWorkingSet(ctx, state.doltDB, newWS, branch); err != nil {
 		return fmt.Errorf("updating working set: %w", err)
-	}
-
-	if state.dirtyBranches != nil {
-		delete(state.dirtyBranches, branch)
 	}
 	return nil
 }
@@ -541,23 +553,6 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 		rtvlMsg := buildRootValueFlatbuffer(newAM)
 		return doltdb.NewRootValue(ctx, state.doltDB.ValueReadWriter(), state.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 	}, skipSync)
-}
-
-func (state *dbState) flushDirtyBranches(ctx context.Context) error {
-	if len(state.dirtyBranches) == 0 {
-		return nil
-	}
-	for branch := range state.dirtyBranches {
-		ws, ok := state.workingSets[branch]
-		if !ok {
-			continue
-		}
-		if err := updateWorkingSet(ctx, state.doltDB, ws, branch); err != nil {
-			return fmt.Errorf("updating working set for %q: %w", branch, err)
-		}
-		delete(state.dirtyBranches, branch)
-	}
-	return nil
 }
 
 // headRootAM returns the collections AddressMap from HEAD's rootValue.

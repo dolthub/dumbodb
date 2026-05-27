@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

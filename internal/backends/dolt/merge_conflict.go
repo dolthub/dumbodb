@@ -388,7 +388,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 
 	// Update the in-memory working set AM so that doltDiff and doltStatus
 	// reflect the resolved state immediately.
-	db.setAM(ms.intoBranch, finalAM)
+	db.setAM(ctx, ms.intoBranch, finalAM)
 
 	// Update the working set so that dolt_conflicts SQL tables immediately reflect
 	// the resolved state.

@@ -25,7 +25,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/libraries/utils/keymutex"
 	"github.com/dolthub/dolt/go/store/types"
@@ -39,13 +39,13 @@ func (stubProvider) DbFactoryUrl() string                                { retur
 func (stubProvider) UndropDatabase(*sql.Context, string) error           { return nil }
 func (stubProvider) ListDroppedDatabases(*sql.Context) ([]string, error) { return nil, nil }
 func (stubProvider) PurgeDroppedDatabases(*sql.Context) error            { return nil }
-func (stubProvider) BaseDatabase(*sql.Context, string) (dsess.SqlDatabase, bool) {
+func (stubProvider) BaseDatabase(*sql.Context, string) (dsess.VersionedDatabase, bool) {
 	return nil, false
 }
-func (stubProvider) SessionDatabase(_ *sql.Context, dbName string) (dsess.SqlDatabase, bool, error) {
+func (stubProvider) SessionDatabase(_ *sql.Context, dbName string) (dsess.VersionedDatabase, bool, error) {
 	return nil, false, sql.ErrDatabaseNotFound.New(dbName)
 }
-func (stubProvider) DoltDatabases() []dsess.SqlDatabase { return nil }
+func (stubProvider) DoltDatabases() []dsess.VersionedDatabase { return nil }
 func (stubProvider) DbState(_ *sql.Context, dbName string, _ string) (dsess.InitialDbState, error) {
 	return dsess.InitialDbState{}, sql.ErrDatabaseNotFound.New(dbName)
 }

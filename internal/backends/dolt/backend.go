@@ -56,7 +56,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -127,6 +127,7 @@ type timeSeriesMeta struct {
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	backend *Backend // back-pointer; lets helpers read backend-level config (e.g. sessionIsolation)
+	name    string   // user-visible db name; needed to build qualified names for dsess
 
 	mu    sync.RWMutex
 	dbDir string
@@ -145,8 +146,6 @@ type dbState struct {
 	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
-	pendingWS map[pendingWSKey]*pendingTxnState
-
 	uuids        map[string]string
 	indexes      map[string][]backends.IndexInfo
 	secIndexMaps map[string]map[string]prolly.Map
@@ -160,29 +159,6 @@ type dbState struct {
 	collSchemaHash hash.Hash
 	emptyIndexAM   prolly.AddressMap
 	mergeState     *mergeInProgress
-	dirtyBranches  map[string]struct{}
-}
-
-type pendingWSKey struct {
-	owner  string
-	branch string
-}
-
-// pendingTxnState holds the per-(owner, branch) transaction overlay along
-// with the base working set snapshot taken when the txn first touched the
-// branch. The base is required for three-way merge on commit.
-type pendingTxnState struct {
-	base    *doltdb.WorkingSet
-	current *doltdb.WorkingSet
-}
-
-func (s *dbState) workingSet(branch string) (*doltdb.WorkingSet, bool) {
-	ws, ok := s.workingSets[branch]
-	return ws, ok
-}
-
-func (s *dbState) setWorkingSet(branch string, ws *doltdb.WorkingSet) {
-	s.workingSets[branch] = ws
 }
 
 // getOrInitBranchAM is a bridge for version-control operations that still work
@@ -225,14 +201,14 @@ func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly
 	// the DTBL ArtifactMap, not in the working/staged difference.
 	newWS := ws.WithWorkingRoot(rv).WithStagedRoot(rv)
 	s.workingSets[branch] = newWS
+	s.pushWSToSession(ctx, branch, newWS)
 	return updateWorkingSet(ctx, s.doltDB, newWS, branch)
 }
 
 // setAM is a bridge for version-control operations that still produce raw AMs.
 // Wraps the AM in a RootValue and updates the branch working set.
 // The caller must hold s.mu (write lock).
-func (s *dbState) setAM(branch string, am prolly.AddressMap) {
-	ctx := context.Background()
+func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap) {
 	rtvlMsg := buildRootValueFlatbuffer(am)
 	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 	if err != nil {
@@ -254,7 +230,29 @@ func (s *dbState) setAM(branch string, am prolly.AddressMap) {
 		}
 	}
 	// Only update working root; staged stays where it was (HEAD until explicit stage).
-	s.workingSets[branch] = ws.WithWorkingRoot(rv)
+	newWS := ws.WithWorkingRoot(rv)
+	s.workingSets[branch] = newWS
+	s.pushWSToSession(ctx, branch, newWS)
+}
+
+// pushWSToSession mirrors a side-channel WS update onto the calling
+// session's branchState so VisitGCRoots sees the post-op state.
+//
+// The active-txn gate is load-bearing: deferredFlushLoop walks every
+// dirty session and writes its WS to disk. Without the gate, idle
+// sessions from prior autoCommit writes stay dirty with stale WS
+// pointers and overwrite the latest writer every tick.
+func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
+	if !dbNameDsessFriendly(s.name) {
+		return
+	}
+	sess := sessionFromContext(ctx)
+	if sess == nil || sess.GetTransaction() == nil {
+		return
+	}
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	qualified := qualifiedDbName(s.name, branch)
+	_ = sess.SetWorkingSet(sqlCtx, qualified, newWS)
 }
 
 
@@ -311,57 +309,22 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
-	b.abortPendingForOwner(owner)
+	b.rollbackOwnerTxn(owner)
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
-	type namedDb struct {
-		name string
-		db   *dbState
+	sess := b.sessionForOwner(owner)
+	if sess == nil {
+		b.releaseLocksForOwner(owner)
+		return nil
 	}
-	b.mu.RLock()
-	dbs := make([]namedDb, 0, len(b.dbs))
-	for name, db := range b.dbs {
-		dbs = append(dbs, namedDb{name: name, db: db})
+	tx := sess.GetTransaction()
+	if tx == nil {
+		b.releaseLocksForOwner(owner)
+		return nil
 	}
-	b.mu.RUnlock()
-
-	sess := b.NewSession()
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 
-	var firstErr error
-	for _, nd := range dbs {
-		sqlDB, ok, err := b.provider.getOrBuildSqleDatabase(sqlCtx, nd.name)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if !ok {
-			continue
-		}
-		nd.db.mu.Lock()
-		_, err = nd.db.commitPendingForOwner(sqlCtx, sqlDB.GetTableResolver(), owner)
-		nd.db.mu.Unlock()
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	b.releaseLocksForOwner(owner)
-	return firstErr
-}
-
-func (b *Backend) OnTransactionAbort(owner string) {
-	b.abortPendingForOwner(owner)
-	b.releaseLocksForOwner(owner)
-}
-
-func (b *Backend) SessionIsolation() bool {
-	return b.sessionIsolation
-}
-
-func (b *Backend) abortPendingForOwner(owner string) {
 	b.mu.RLock()
 	dbs := make([]*dbState, 0, len(b.dbs))
 	for _, db := range b.dbs {
@@ -369,11 +332,44 @@ func (b *Backend) abortPendingForOwner(owner string) {
 	}
 	b.mu.RUnlock()
 
+	var firstErr error
 	for _, db := range dbs {
 		db.mu.Lock()
-		db.abortPendingForOwner(owner)
+		_, err := db.commitDirtyBranchesForSession(sqlCtx, sess, tx)
 		db.mu.Unlock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+
+	// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
+	sqlCtx.SetTransaction(nil)
+
+	b.releaseLocksForOwner(owner)
+	return firstErr
+}
+
+func (b *Backend) OnTransactionAbort(owner string) {
+	b.rollbackOwnerTxn(owner)
+	b.releaseLocksForOwner(owner)
+}
+
+func (b *Backend) rollbackOwnerTxn(owner string) {
+	sess := b.sessionForOwner(owner)
+	if sess == nil {
+		return
+	}
+	tx := sess.GetTransaction()
+	if tx == nil {
+		return
+	}
+	sqlCtx := sqlctx.Wrap(context.Background(), sess)
+	_ = sess.Rollback(sqlCtx, tx)
+	sqlCtx.SetTransaction(nil)
+}
+
+func (b *Backend) SessionIsolation() bool {
+	return b.sessionIsolation
 }
 
 func (b *Backend) releaseLocksForOwner(owner string) {
@@ -394,6 +390,16 @@ func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
 	defer b.mu.RUnlock()
 	state, ok := b.dbs[name]
 	return state, ok
+}
+
+func (b *Backend) openDbNames() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]string, 0, len(b.dbs))
+	for name := range b.dbs {
+		out = append(out, name)
+	}
+	return out
 }
 
 // deferredFlushInterval is how often the backend drains per-database dirty
@@ -449,13 +455,12 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		b.sweeperPeriod = defaultSessionSweepPeriod
 	}
 
-	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
+	b.gcController = gcctx.NewGCSafepointController()
+	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess, b.openDbNames, b.gcController)
 	if err != nil {
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
 	}
 	b.provider = provider
-
-	b.gcController = gcctx.NewGCSafepointController()
 	if sessionTimeout <= 0 {
 		sessionTimeout = defaultSessionTimeout
 	}
@@ -496,11 +501,8 @@ func (b *Backend) sessionSweepLoop() {
 	}
 }
 
-// deferredFlushLoop drains dbState.dirtyBranches on every database at a fixed
-// interval. Each tick picks up any branches whose in-memory AM has advanced
-// past the last UpdateWorkingSet call (the source of the NBS journal fsync)
-// and flushes them. Errors are logged; the loop keeps running so a transient
-// failure on one database doesn't starve the others.
+// deferredFlushLoop coalesces j:false writes by walking SessionRegistry
+// every deferredFlushInterval.
 func (b *Backend) deferredFlushLoop() {
 	defer close(b.flusherDone)
 
@@ -518,25 +520,58 @@ func (b *Backend) deferredFlushLoop() {
 	}
 }
 
-// flushAllDirty iterates the open databases and drains each one's dirty
-// branches. Takes the backend lock briefly to snapshot the database list so
-// we don't hold it across per-DB flushes.
+// flushAllDirty flushes every non-in-txn session's dirty branchStates.
+// Sessions inside an active dsess txn are skipped: their overlays belong
+// to the in-progress txn and are persisted via commit/merge.
 func (b *Backend) flushAllDirty(ctx context.Context) {
+	if b.sessions == nil {
+		return
+	}
+	shadows := b.sessions.ActiveShadows()
+	if len(shadows) == 0 {
+		return
+	}
+
 	b.mu.RLock()
-	dbs := make([]*dbState, 0, len(b.dbs))
-	for _, db := range b.dbs {
-		dbs = append(dbs, db)
+	dbs := make(map[string]*dbState, len(b.dbs))
+	for name, db := range b.dbs {
+		dbs[name] = db
 	}
 	b.mu.RUnlock()
 
-	for _, db := range dbs {
-		db.mu.Lock()
-		if len(db.dirtyBranches) > 0 {
-			if err := db.flushDirtyBranches(ctx); err != nil {
-				b.l.Warn("deferred flush failed", "err", err)
+	for _, shadow := range shadows {
+		sess := shadow.Session()
+		if sess == nil {
+			continue
+		}
+		if sess.GetTransaction() != nil {
+			continue
+		}
+		sqlCtx := sqlctx.Wrap(ctx, sess)
+		for _, qualified := range sess.DirtyBranchRevisions() {
+			base, branch := doltdb.SplitRevisionDbName(qualified)
+			if branch == "" {
+				branch = defaultBranch
+			}
+			db, ok := dbs[base]
+			if !ok {
+				continue
+			}
+			sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
+			if err != nil || !sok {
+				continue
+			}
+			ws := sessState.WorkingSet()
+			if ws == nil {
+				continue
+			}
+			db.mu.Lock()
+			err = updateWorkingSet(ctx, db.doltDB, ws, branch)
+			db.mu.Unlock()
+			if err != nil {
+				b.l.Warn("deferred flush failed", "db", base, "branch", branch, "err", err)
 			}
 		}
-		db.mu.Unlock()
 	}
 }
 
@@ -582,22 +617,27 @@ func (b *Backend) Close() {
 }
 
 func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*backends.StatusResult, error) {
+	sess := sessionFromContext(ctx)
+
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	var totalCollections int64
 
-	for _, db := range b.dbs {
+	for dbName, db := range b.dbs {
 		db.mu.RLock()
-		names, err := db.workingSets[defaultBranch].WorkingRoot().GetTableNames(ctx, "", false)
-		count := int64(len(names))
+		ws := db.workingSets[defaultBranch]
 		db.mu.RUnlock()
 
+		rv, err := workingRootViaSession(ctx, sess, ws, dbName, defaultBranch)
 		if err != nil {
 			return nil, err
 		}
-
-		totalCollections += int64(count)
+		names, err := rv.GetTableNames(ctx, "", false)
+		if err != nil {
+			return nil, err
+		}
+		totalCollections += int64(len(names))
 	}
 
 	return &backends.StatusResult{
@@ -710,11 +750,15 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			}
 
 			state.mu.RLock()
-			names, _ := state.workingSets[defaultBranch].WorkingRoot().GetTableNames(ctx, "", false)
-			count := len(names)
+			ws := state.workingSets[defaultBranch]
 			state.mu.RUnlock()
 
-			if count == 0 {
+			rv, err := workingRootViaSession(ctx, sessionFromContext(ctx), ws, dbName, defaultBranch)
+			if err != nil {
+				continue
+			}
+			names, _ := rv.GetTableNames(ctx, "", false)
+			if len(names) == 0 {
 				continue
 			}
 		}
@@ -763,12 +807,35 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 // opening/creating the NBS store if needed.
 // If create is false and the directory doesn't exist, returns nil, nil.
 func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (*dbState, error) {
+	db, opened, err := b.getOrOpenDBLocked(ctx, dbName, create)
+	if err != nil || db == nil {
+		return db, err
+	}
+
+	// Register newly-opened mid-tx db's noms root with the active tx so
+	// TransactionRoot lookups succeed. Outside b.mu because BaseDatabase
+	// recurses into lookupDbStateForDsess.
+	if opened {
+		if sess := sessionFromContext(ctx); sess != nil {
+			if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
+				sqlCtx := sqlctx.Wrap(ctx, sess)
+				if vdb, vok := b.provider.BaseDatabase(sqlCtx, dbName); vok {
+					_ = tx.AddDb(sqlCtx, vdb)
+				}
+			}
+		}
+	}
+
+	return db, nil
+}
+
+func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
 	b.mu.RUnlock()
 
 	if ok {
-		return db, nil
+		return db, false, nil
 	}
 
 	b.mu.Lock()
@@ -776,45 +843,45 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 
 	// Double-check after acquiring write lock.
 	if db, ok := b.dbs[dbName]; ok {
-		return db, nil
+		return db, false, nil
 	}
 
 	dbDir := filepath.Join(b.dataDir, dbName)
 
 	if !create {
 		if _, err := os.Stat(dbDir); os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
 	}
 
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating db directory for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("creating db directory for %q: %w", dbName, err)
 	}
 
 	q := nbs.NewUnlimitedMemQuotaProvider()
 
 	newGenSt, err := nbs.NewLocalJournalingStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, q, false, nil)
 	if err != nil {
-		return nil, fmt.Errorf("opening newgen NBS store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening newgen NBS store for %q: %w", dbName, err)
 	}
 
 	oldgenDir := filepath.Join(dbDir, "oldgen")
 	if err := os.MkdirAll(oldgenDir, 0o755); err != nil {
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("creating oldgen directory for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("creating oldgen directory for %q: %w", dbName, err)
 	}
 
 	oldGenSt, err := nbs.NewLocalStore(ctx, newGenSt.Version(), oldgenDir, defaultMemTableSize, q, false)
 	if err != nil {
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("opening oldgen NBS store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening oldgen NBS store for %q: %w", dbName, err)
 	}
 
 	ghostGen, err := nbs.NewGhostBlockStore(dbDir)
 	if err != nil {
 		_ = oldGenSt.Close()
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("opening ghost block store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening ghost block store for %q: %w", dbName, err)
 	}
 
 	cs := nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen)
@@ -826,7 +893,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	rootHash, err := cs.Root(ctx)
 	if err != nil {
 		_ = cs.Close()
-		return nil, fmt.Errorf("reading root for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("reading root for %q: %w", dbName, err)
 	}
 
 	// Create the value store and higher-level DoltDB. datasDB is the low-level
@@ -835,7 +902,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	doltDBVal, err := doltdb.DoltDBFromCS(cs, dbName)
 	if err != nil {
 		_ = cs.Close()
-		return nil, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
 	}
 	doltDB := doltDBVal
 	datasDB := doltdb.ExposeDatabaseFromDoltDB(doltDB)
@@ -847,20 +914,20 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		am, err = prolly.NewEmptyAddressMap(ns)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 		}
 
 		_, am, err = commitCollectionsAM(ctx, datasDB, datas.Dataset{}, am, "Initialize database")
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("initial commit for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("initial commit for %q: %w", dbName, err)
 		}
 	} else {
 		// Existing database: detect the root chunk format.
 		rootChunk, err := cs.Get(ctx, rootHash)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
 		}
 
 		fileID := serial.GetFileID(rootChunk.Data())
@@ -874,27 +941,27 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			amNode, _, err := tree.NodeFromChunk(&rootChunk)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
 			}
 
 			am, err = prolly.NewAddressMap(amNode, ns)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
 			}
 
 			// Build the STRT structure manually because datas.Database panics on ADRM roots.
 			// We need to do this atomically: write commit + STRT, then swap the NBS root.
 			if err := migrateADRMtoSTRT(ctx, cs, vs, ns, am, rootHash); err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
 			}
 
 			// Now the NBS root is STRT; read the dataset from doltDB normally.
 			mainDS, migErr := datasDB.GetDataset(ctx, mainDataset)
 			if migErr != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
+				return nil, false, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
 			}
 			_ = mainDS // used only to verify migration succeeded
 
@@ -903,7 +970,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			ds, err := datasDB.GetDataset(ctx, mainDataset)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("getting dataset for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("getting dataset for %q: %w", dbName, err)
 			}
 
 			if !ds.HasHead() {
@@ -911,19 +978,19 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 				am, err = prolly.NewEmptyAddressMap(ns)
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
+					return nil, false, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 				}
 			} else {
 				headValue, _, err := ds.MaybeHeadValue()
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("reading head value for %q: %w", dbName, err)
+					return nil, false, fmt.Errorf("reading head value for %q: %w", dbName, err)
 				}
 
 				headMsg, ok := headValue.(dolttypes.SerialMessage)
 				if !ok {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
+					return nil, false, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
 				}
 
 				headFileID := serial.GetFileID([]byte(headMsg))
@@ -938,17 +1005,17 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 						rtvl, fallbackErr := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
 						}
 						amNode, _, fallbackErr := tree.NodeFromBytes(rtvl.TablesBytes())
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 						wsAM, fallbackErr = prolly.NewAddressMap(amNode, ns)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 					}
 					am = wsAM
@@ -960,30 +1027,30 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 					amNode, _, err := tree.NodeFromBytes([]byte(headMsg))
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
 					}
 
 					am, err = prolly.NewAddressMap(amNode, ns)
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
 					}
 
 					ds, am, err = commitCollectionsAM(ctx, datasDB, ds, am, "migrate: wrap collections AM in RTVL")
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
 					}
 
 				default:
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
+					return nil, false, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
 				}
 			}
 
 		default:
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
+			return nil, false, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
 		}
 	}
 
@@ -994,13 +1061,14 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		rv, rvErr := doltdb.NewRootValue(ctx, doltDB.ValueReadWriter(), doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 		if rvErr != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
+			return nil, false, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
 		}
 		mainWS = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
 	}
 
 	db = &dbState{
 		backend:        b,
+		name:           dbName,
 		dbDir:          dbDir,
 		cs:             cs,
 		ns:             ns,
@@ -1008,7 +1076,6 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		doltDB:         doltDB,
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
-		pendingWS:      map[pendingWSKey]*pendingTxnState{},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),
@@ -1026,13 +1093,13 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, fmt.Errorf("writing collection schema chunk: %w", err)
+		return nil, false, fmt.Errorf("writing collection schema chunk: %w", err)
 	}
 	db.collSchemaHash = schemaRef.TargetHash()
 	db.emptyIndexAM, err = prolly.NewEmptyAddressMap(ns)
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, fmt.Errorf("creating empty index address map: %w", err)
+		return nil, false, fmt.Errorf("creating empty index address map: %w", err)
 	}
 
 	b.dbs[dbName] = db
@@ -1052,7 +1119,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	if err := db.hydrateAllIndexes(ctx); err != nil {
 		_ = doltDB.Close()
 		delete(b.dbs, dbName)
-		return nil, fmt.Errorf("hydrating secondary indexes for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("hydrating secondary indexes for %q: %w", dbName, err)
 	}
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
@@ -1065,7 +1132,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		db.mergeState = ms
 	}
 
-	return db, nil
+	return db, true, nil
 }
 
 // commitCollectionsAM creates a new dolt commit with the given collections
@@ -1325,12 +1392,17 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 	}
 
 	if branch == defaultBranch {
+		sess := sessionFromContext(ctx)
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			workingAM, amErr := amFromWorkingRoot(ctx, db.workingSets[defaultBranch].WorkingRoot(), db.ns)
+			workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+			if rvErr != nil {
+				return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
+			}
+			workingAM, amErr := amFromWorkingRoot(ctx, workingRV, db.ns)
 			if amErr != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
 			}
@@ -1343,7 +1415,11 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
-		workingAM, amErr := amFromWorkingRoot(ctx, db.workingSets[defaultBranch].WorkingRoot(), db.ns)
+		workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		if rvErr != nil {
+			return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
+		}
+		workingAM, amErr := amFromWorkingRoot(ctx, workingRV, db.ns)
 		if amErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
 		}
@@ -1486,6 +1562,28 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, fmt.Errorf("DumboDBBranch: creating branch %q: %w", params.Name, err)
 	}
 
+	// Eagerly create the working_set ref; dolt creates it lazily on
+	// checkout, but session-isolation writes without checking out.
+	branchRef := doltref.NewBranchRef(params.Name)
+	if headCommit, hcErr := db.doltDB.ResolveCommitRef(ctx, branchRef); hcErr == nil {
+		if rv, rvErr := headCommit.GetRootValue(ctx); rvErr == nil {
+			wsRef := doltref.NewWorkingSetRef("heads/" + params.Name)
+			emptyWS := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+			_ = updateWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
+		}
+	}
+
+	// Refresh tx.dbStartPoints; otherwise subsequent writes to the new
+	// branch hit "branch not found" against the pre-branch tx snapshot.
+	if sess := sessionFromContext(ctx); sess != nil {
+		if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
+			sqlCtx := sqlctx.Wrap(ctx, sess)
+			if vdb, vok := b.provider.BaseDatabase(sqlCtx, params.DBName); vok {
+				_ = tx.AddDb(sqlCtx, vdb)
+			}
+		}
+	}
+
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
@@ -1622,7 +1720,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		db.mergeState = nil
 
 		// Restore the working set to the pre-merge AM.
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db) // best-effort: ignore error on abort
 
 		return &backends.MergeResult{Message: "merge aborted"}, nil
@@ -1738,15 +1836,15 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if _, ffErr := db.datasDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
-		if params.Into == defaultBranch {
-			ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
-			if ffAMErr != nil {
-				return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
-			}
-			db.setAM(defaultBranch, ffAM)
-			if err := db.persistAM(ctx, defaultBranch, ffAM); err != nil {
-				return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
-			}
+		// Update WS for any Into branch, not just defaultBranch: the
+		// eager working_set ref would otherwise stay at the pre-FF root.
+		ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
+		if ffAMErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
+		}
+		db.setAM(ctx, params.Into, ffAM)
+		if err := db.persistAM(ctx, params.Into, ffAM); err != nil {
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
 		}
 		return &backends.MergeResult{
 			CommitID: fromHash.String(),
@@ -1792,7 +1890,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 		// Update the in-memory branch AM so reads during conflict resolution
 		// reflect the merged state (right-only changes already applied).
-		db.setAM(params.Into, mergedAM)
+		db.setAM(ctx, params.Into, mergedAM)
 
 		// Persist conflict state: write working set and save merge state to disk.
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
@@ -1857,7 +1955,7 @@ func (b *Backend) commitMerge(
 		return nil, fmt.Errorf("commitMerge: no head after merge commit")
 	}
 
-	db.setAM(intoBranch, mergedAM)
+	db.setAM(ctx, intoBranch, mergedAM)
 	if intoBranch == defaultBranch {
 		if err := db.persistAM(ctx, defaultBranch, mergedAM); err != nil {
 			return nil, fmt.Errorf("commitMerge: updating working set: %w", err)
@@ -1915,7 +2013,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		db.mergeState = nil
 
 		// Restore the working set to the pre-pick AM.
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.CherryPickResult{Message: "cherry-pick aborted"}, nil
@@ -2135,7 +2233,7 @@ func (b *Backend) commitCherryPick(
 		return nil, fmt.Errorf("commitCherryPick: no head after cherry-pick commit")
 	}
 
-	db.setAM(branch, pickedAM)
+	db.setAM(ctx, branch, pickedAM)
 	if branch == defaultBranch {
 		if err := db.persistAM(ctx, defaultBranch, pickedAM); err != nil {
 			return nil, fmt.Errorf("commitCherryPick: updating working set: %w", err)
@@ -2547,14 +2645,17 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if err := db.persistAM(ctx, defaultBranch, targetAM); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (hard): %w", err)
 		}
-		db.setAM(defaultBranch, targetAM)
+		db.setAM(ctx, defaultBranch, targetAM)
 	} else {
 		// Soft reset: keep working tree, change staged to target commit.
 		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		ws := db.workingSets[defaultBranch]
+		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		if wsErr != nil {
+			return nil, fmt.Errorf("DumboDBReset (soft): reading working set: %w", wsErr)
+		}
 		newWS := ws.WithStagedRoot(stagedRV)
 		db.workingSets[defaultBranch] = newWS
 		if err := updateWorkingSet(ctx, db.doltDB, newWS, defaultBranch); err != nil {
@@ -2818,7 +2919,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		if _, setErr := db.datasDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, ""); setErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.RebaseResult{
@@ -3208,7 +3309,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		db.mergeState = nil
 
 		// Restore the working set to the pre-revert AM.
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.RevertResult{Message: "revert aborted"}, nil
@@ -3423,7 +3524,7 @@ func (b *Backend) commitRevert(
 		return nil, fmt.Errorf("commitRevert: no head after revert commit")
 	}
 
-	db.setAM(branch, revertedAM)
+	db.setAM(ctx, branch, revertedAM)
 	if branch == defaultBranch {
 		if err := db.persistAM(ctx, defaultBranch, revertedAM); err != nil {
 			return nil, fmt.Errorf("commitRevert: updating working set: %w", err)

@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 // database implements backends.Database.
@@ -62,7 +63,10 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 		if ws, ok := txnVisibleWS(ctx, state, defaultBranch); ok {
 			return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 		}
-		ws := state.workingSets[defaultBranch]
+		ws, err := latestBranchWS(ctx, state, defaultBranch)
+		if err != nil {
+			return prolly.AddressMap{}, err
+		}
 		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
 	if rootishIsReadOnly(db.rootish) {
@@ -74,22 +78,59 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	if ws, ok := txnVisibleWS(ctx, state, db.rootish); ok {
 		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
-	if ws, ok := state.workingSets[db.rootish]; ok {
-		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
+	// Only consult the WS cache for known branches; caret/tilde
+	// traversal rootishes ("main^") aren't there and must fall through
+	// to amFromRootish for commit-hash resolution.
+	if _, ok := state.workingSets[db.rootish]; ok {
+		ws, err := latestBranchWS(ctx, state, db.rootish)
+		if err == nil && ws != nil {
+			return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
+		}
 	}
 	return amFromRootish(ctx, state, db.rootish)
 }
 
+// latestBranchWS returns the latest committed WS for (state, branch).
+// Uncommitted overlays are handled upstream by txnVisibleWS; consulting
+// the session's branchState here would hide commits other sessions made
+// to disk, because dsess never refreshes branchState after lookup.
+func latestBranchWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, error) {
+	return state.loadCommittedWS(ctx, branch)
+}
+
+// txnVisibleWS returns the session's branchState only when DirtyBranch-
+// Revisions reports this (db, branch) as dirty; this gives read-your-own-
+// writes without pinning to a stale txn-start snapshot for clean reads.
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
-	owner, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
-	if !inTxn {
+	sess := sessionFromContext(ctx)
+	if sess == nil {
 		return nil, false
 	}
-	entry, ok := state.pendingWS[pendingWSKey{owner, branch}]
-	if !ok {
+	if !dbNameDsessFriendly(state.name) {
 		return nil, false
 	}
-	return entry.current, true
+	qualified := qualifiedDbName(state.name, branch)
+	qualifiedLower := strings.ToLower(qualified)
+	dirty := false
+	for _, d := range sess.DirtyBranchRevisions() {
+		if strings.ToLower(d) == qualifiedLower {
+			dirty = true
+			break
+		}
+	}
+	if !dirty {
+		return nil, false
+	}
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+	if err != nil || !ok {
+		return nil, false
+	}
+	ws := sessState.WorkingSet()
+	if ws == nil {
+		return nil, false
+	}
+	return ws, true
 }
 
 func (db *database) Collection(name string) (backends.Collection, error) {
