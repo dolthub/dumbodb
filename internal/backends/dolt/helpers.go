@@ -346,24 +346,11 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 	return prolly.NewAddressMap(amNode, ns)
 }
 
-// getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
-// the doltDB if not already cached. The caller must hold state.mu (write lock).
-//
-// In a txn-bound context (default-mode startTransaction or session-isolation
-// mode), the txn overlay lives on the calling session's branchState via
-// dsess. The fork point is captured by tx.dbStartPoints when the dsess
-// transaction starts (dispatched from clientconn).
+// getOrInitBranchWS returns the WorkingSet a write should build on.
+// In-txn: from the session's branchState; non-txn: from cache/disk
+// because the session can lag side-channel writes (merge, reset).
+// Caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
-	// In-txn writes accumulate on the session's branchState, never reaching
-	// state.workingSets until commit. So a write inside a txn must source
-	// its starting WS from the session (which has the prior in-tx writes).
-	//
-	// Non-txn writes update state.workingSets[branch] alongside session
-	// SetWorkingSet, and side-channel writes (merge / reset / version-
-	// control ops) bypass the session entirely. For non-tx writes the
-	// dbState cache / disk is the canonical view; reading from the session
-	// would risk returning a branchState that has fallen behind those
-	// side-channel updates.
 	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
 		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) {
 			sqlCtx := sqlctx.Wrap(ctx, sess)
@@ -377,8 +364,6 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 					return ws, nil
 				}
 			}
-			// Branch not yet materialised in the session; seed it from disk
-			// so SetWorkingSet downstream has a branchState to write into.
 			ws, err := state.loadCommittedWS(ctx, branch)
 			if err != nil {
 				return nil, err
@@ -393,11 +378,8 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 }
 
 func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
-	// state.workingSets is consulted first so cross-session j:false writes
-	// that haven't yet flushed to the working-set ref are still visible to
-	// other readers in the same backend. Removing the cache entirely would
-	// require routing every cross-session read through SessionRegistry, a
-	// bigger reorg than qsc.6 buys us.
+	// state.workingSets carries cross-session unflushed j:false writes
+	// that aren't on disk yet; check it before falling back to the ref.
 	if ws, ok := state.workingSets[branch]; ok {
 		return ws, nil
 	}
@@ -431,15 +413,8 @@ func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
 	return "", false
 }
 
-// commitDirtyBranchesForSession commits every dirty branch on the given
-// session that belongs to this dbState. Each branch is committed via
-// dsess.CommitWorkingSet (the per-(db, branch) variant; CommitTransaction's
-// single-dirty-branch rule does not apply). After each commit, the
-// session's now-clean branchState working set is mirrored back into
-// state.workingSets[branch] so non-session readers (still present until
-// workspace-qsc.6) see the post-merge state.
-//
-// Caller must hold state.mu write lock.
+// commitDirtyBranchesForSession commits every dirty branch on sess that
+// belongs to this dbState. Caller must hold state.mu write lock.
 func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) ([]string, error) {
 	var branches []string
 	for _, qualified := range sess.DirtyBranchRevisions() {
@@ -453,9 +428,6 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		if err := sess.CommitWorkingSet(sqlCtx, qualified, tx); err != nil {
 			return branches, fmt.Errorf("commitTransaction: committing %q: %w", qualified, err)
 		}
-		// Mirror the post-commit working set back into state.workingSets so
-		// non-session readers (workingRootViaSession's snapshot path) see
-		// the merged result. Removed in workspace-qsc.6.
 		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
 		if err == nil && ok {
 			if newWS := sessState.WorkingSet(); newWS != nil {
@@ -467,15 +439,9 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 	return branches, nil
 }
 
-// rollbackDirtyBranchesForSession discards every dirty branch on the given
-// session that belongs to this dbState. Uses dsess.Rollback to drop the
-// session's branchState heads back to the transaction's start point.
-//
-// Caller must hold state.mu write lock.
+// rollbackDirtyBranchesForSession is session-wide -- dsess has no per-
+// branch rollback.
 func (state *dbState) rollbackDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) error {
-	// Rollback is session-wide in dsess; per-(db, branch) selective rollback
-	// would require partitioning the session, which we don't do. The caller
-	// is responsible for ensuring this is the right granularity.
 	if tx == nil {
 		return nil
 	}
@@ -549,20 +515,10 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 		return nil
 	}
 
-	// Non-txn writes also keep state.workingSets[branch] in sync as a
-	// read-cache. Reads outside an active txn (cross-session lookups,
-	// background helpers) consult this cache rather than the session,
-	// because dsess's branchState is loaded at txn-start and never
-	// auto-refreshes -- consulting it for non-txn reads would hide writes
-	// made by other sessions. The cache is removed entirely in
-	// workspace-qsc.6 once readers stop using it.
 	state.workingSets[branch] = newWS
 
 	if skipSync {
-		// j:false write: defer the working-set ref flush. The deferred
-		// flusher walks sessions via SessionRegistry every
-		// deferredFlushInterval and writes each dirty branchState's WS
-		// to its ref, coalescing repeated writes into one fsync.
+		// j:false: defer the ref flush; deferredFlushLoop drains it.
 		return nil
 	}
 

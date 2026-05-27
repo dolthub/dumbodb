@@ -181,10 +181,6 @@ func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (dolt
 // persistAM sets the working root for branch to am and immediately flushes to
 // the doltDB working set. Used by version-control operations that produce a new
 // AM and need it durable. The caller must hold s.mu (write lock).
-//
-// If the caller's ctx carries a registered session, the new working set is
-// also pushed onto that session's branchState so dsess.VisitGCRoots sees
-// the post-op state during a concurrent GC.
 func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly.AddressMap) error {
 	rtvlMsg := buildRootValueFlatbuffer(workingAM)
 	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
@@ -212,9 +208,6 @@ func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly
 // setAM is a bridge for version-control operations that still produce raw AMs.
 // Wraps the AM in a RootValue and updates the branch working set.
 // The caller must hold s.mu (write lock).
-//
-// If the caller's ctx carries a registered session, the new working set is
-// also pushed onto that session's branchState; see persistAM.
 func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap) {
 	rtvlMsg := buildRootValueFlatbuffer(am)
 	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
@@ -242,17 +235,13 @@ func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap
 	s.pushWSToSession(ctx, branch, newWS)
 }
 
-// pushWSToSession is the session-routing tail of persistAM / setAM.
-// Sets the calling session's branchState.workingSet so dsess sees the
-// post-op state. No-op when the caller has no session in ctx, when the
-// session has no active dsess transaction, or when state.name isn't
-// dsess-friendly (contains "@"/"/").
+// pushWSToSession mirrors a side-channel WS update onto the calling
+// session's branchState so VisitGCRoots sees the post-op state.
 //
 // The active-txn gate is load-bearing: deferredFlushLoop walks every
-// dirty session and writes its branchState.workingSet to disk. Without
-// the gate, idle sessions from prior autoCommit writes stay marked dirty
-// with stale WS pointers and the flusher overwrites the latest writer's
-// disk state every tick.
+// dirty session and writes its WS to disk. Without the gate, idle
+// sessions from prior autoCommit writes stay dirty with stale WS
+// pointers and overwrite the latest writer every tick.
 func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
 	if !dbNameDsessFriendly(s.name) {
 		return
@@ -263,9 +252,6 @@ func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *dol
 	}
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 	qualified := qualifiedDbName(s.name, branch)
-	// Ignore errors here: persistAM/setAM run within larger version-control
-	// flows that already report failure; a stale branchState only affects
-	// GC visibility (the disk ref and dbState shadow are authoritative).
 	_ = sess.SetWorkingSet(sqlCtx, qualified, newWS)
 }
 
@@ -356,10 +342,7 @@ func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
 		}
 	}
 
-	// CommitWorkingSet (unlike CommitTransaction) does not reset the
-	// session's ctx.Transaction; clear it explicitly so the next
-	// txn-entry boundary starts a fresh dsess transaction with a fresh
-	// dbStartPoints snapshot.
+	// CommitWorkingSet (unlike CommitTransaction) doesn't reset ctx.Transaction.
 	sqlCtx.SetTransaction(nil)
 
 	b.releaseLocksForOwner(owner)
@@ -371,9 +354,6 @@ func (b *Backend) OnTransactionAbort(owner string) {
 	b.releaseLocksForOwner(owner)
 }
 
-// rollbackOwnerTxn drops the owner session's in-progress dsess transaction,
-// discarding all per-branch overlays back to the tx start point. No-op if
-// the session is gone or has no active tx.
 func (b *Backend) rollbackOwnerTxn(owner string) {
 	sess := b.sessionForOwner(owner)
 	if sess == nil {
@@ -412,9 +392,6 @@ func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
 	return state, ok
 }
 
-// openDbNames returns the names of every db currently held in b.dbs. Used by
-// the dsess provider to enumerate databases at StartTransaction so dbStartPoints
-// covers every open db, not just the ones the cache happens to have built.
 func (b *Backend) openDbNames() []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -524,12 +501,8 @@ func (b *Backend) sessionSweepLoop() {
 	}
 }
 
-// deferredFlushLoop walks every active session at a fixed interval and
-// flushes its dirty branchStates to the working-set ref. Coalesces
-// repeated j:false (skipSync) writes against the same branch into one
-// UpdateWorkingSet per tick. Sessions inside an active dsess transaction
-// (session-iso, wire-startTransaction) are skipped -- their overlays are
-// not auto-commitable; the user must explicitly commit.
+// deferredFlushLoop coalesces j:false writes by walking SessionRegistry
+// every deferredFlushInterval.
 func (b *Backend) deferredFlushLoop() {
 	defer close(b.flusherDone)
 
@@ -547,12 +520,9 @@ func (b *Backend) deferredFlushLoop() {
 	}
 }
 
-// flushAllDirty walks every active session and writes each dirty
-// branchState's working set to the corresponding branch's working-set
-// ref. Sessions with an active dsess transaction are skipped: their
-// dirty overlays belong to the in-progress txn and are only persisted
-// via commit / merge paths. Errors are logged; the loop keeps running so
-// a transient failure on one session doesn't starve the others.
+// flushAllDirty flushes every non-in-txn session's dirty branchStates.
+// Sessions inside an active dsess txn are skipped: their overlays belong
+// to the in-progress txn and are persisted via commit/merge.
 func (b *Backend) flushAllDirty(ctx context.Context) {
 	if b.sessions == nil {
 		return
@@ -575,7 +545,6 @@ func (b *Backend) flushAllDirty(ctx context.Context) {
 			continue
 		}
 		if sess.GetTransaction() != nil {
-			// Active dsess txn: don't auto-flush in-flight overlays.
 			continue
 		}
 		sqlCtx := sqlctx.Wrap(ctx, sess)
@@ -843,22 +812,13 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		return db, err
 	}
 
-	// If this call opened a new db AND the caller has an active dsess
-	// transaction, register the new db's noms-root snapshot with the tx so
-	// TransactionRoot lookups for this db succeed. Without this, dsess's
-	// dbStartPoints would only cover dbs that existed at txn-start; a
-	// database created or opened mid-transaction would otherwise be invisible
-	// to commit/rollback merges. Done outside the b.mu critical section
-	// because b.provider.SessionDatabase recurses back into b.lookupDbStateForDsess
-	// which takes b.mu.RLock.
+	// Register newly-opened mid-tx db's noms root with the active tx so
+	// TransactionRoot lookups succeed. Outside b.mu because BaseDatabase
+	// recurses into lookupDbStateForDsess.
 	if opened {
 		if sess := sessionFromContext(ctx); sess != nil {
 			if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
 				sqlCtx := sqlctx.Wrap(ctx, sess)
-				// BaseDatabase returns the unqualified db; AddDb keys
-				// dbStartPoints by db.Name() (no split), so passing the
-				// base name keeps the key symmetrical with what
-				// NewDoltTransaction populates for pre-existing dbs.
 				if vdb, vok := b.provider.BaseDatabase(sqlCtx, dbName); vok {
 					_ = tx.AddDb(sqlCtx, vdb)
 				}
@@ -869,11 +829,6 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	return db, nil
 }
 
-// getOrOpenDBLocked is the inner half of getOrOpenDB that holds b.mu while
-// building the dbState. Returns (db, opened, err) where opened reports
-// whether a fresh dbState was created on this call (vs returning a cached
-// entry). The caller is responsible for any post-lock work (e.g. registering
-// a freshly opened db with active transactions).
 func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
@@ -1438,7 +1393,6 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 	if branch == defaultBranch {
 		sess := sessionFromContext(ctx)
-		// db.mu write lock held; safe to read db.workingSets directly.
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
@@ -1608,11 +1562,8 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, fmt.Errorf("DumboDBBranch: creating branch %q: %w", params.Name, err)
 	}
 
-	// Eagerly create the working_set ref for the new branch so dsess can
-	// resolve it on lookup. dolt's normal branch-create path creates the
-	// WS lazily on first checkout; our session-isolation flow writes
-	// without ever "checking out", so we create the WS here, seeded from
-	// the branch's HEAD commit.
+	// Eagerly create the working_set ref; dolt creates it lazily on
+	// checkout, but session-isolation writes without checking out.
 	branchRef := doltref.NewBranchRef(params.Name)
 	if headCommit, hcErr := db.doltDB.ResolveCommitRef(ctx, branchRef); hcErr == nil {
 		if rv, rvErr := headCommit.GetRootValue(ctx); rvErr == nil {
@@ -1622,10 +1573,8 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		}
 	}
 
-	// Refresh the calling session's tx.dbStartPoints to include the new
-	// branch's noms-root snapshot. Without this, subsequent writes against
-	// the new branch fail with "branch not found" because the active
-	// transaction's snapshot predates the branch creation.
+	// Refresh tx.dbStartPoints; otherwise subsequent writes to the new
+	// branch hit "branch not found" against the pre-branch tx snapshot.
 	if sess := sessionFromContext(ctx); sess != nil {
 		if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
 			sqlCtx := sqlctx.Wrap(ctx, sess)
@@ -1887,12 +1836,8 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if _, ffErr := db.datasDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
-		// Update the working set for the Into branch so subsequent reads
-		// see the new HEAD. Previously this only ran for defaultBranch,
-		// which left non-default branch FF targets with a stale WS ref
-		// (their WS pointed at the pre-FF root). With the eager WS-ref
-		// creation in DumboDBBranch, the stale WS would otherwise feed
-		// subsequent inserts/commits and lose the FF'd-in changes.
+		// Update WS for any Into branch, not just defaultBranch: the
+		// eager working_set ref would otherwise stay at the pre-FF root.
 		ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
 		if ffAMErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
@@ -2707,7 +2652,6 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		// db.mu write lock held; safe to read db.workingSets directly.
 		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), db.workingSets[defaultBranch], params.DBName, defaultBranch)
 		if wsErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): reading working set: %w", wsErr)

@@ -125,9 +125,8 @@ func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.
 	if !ok {
 		return nil, false, sql.ErrDatabaseNotFound.New(name)
 	}
-	// dsess keys branchStates by db.Revision(); the base db has Revision == ""
-	// which collapses every branch under one empty-key bucket. Set it via
-	// WithBranchRevision so each (db, branch) maps to a distinct branchState.
+	// dsess keys branchStates by db.Revision(); without WithBranchRevision
+	// every branch would collapse under the same empty-key bucket.
 	revDb, err := db.WithBranchRevision(doltdb.RevisionDbName(baseName, rev), dsess.SessionDatabaseBranchSpec{
 		RepoState: newSqlCtxRepoStateAdapter(rev),
 		Branch:    rev,
@@ -138,11 +137,10 @@ func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.
 	return revDb, true, nil
 }
 
+// BaseDatabase returns the unqualified base, NOT a WithBranchRevision'd
+// copy. dsess.AddDb keys dbStartPoints by db.Name() without splitting; the
+// base name keeps that key symmetrical with NewDoltTransaction's keying.
 func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.VersionedDatabase, bool) {
-	// BaseDatabase returns the unqualified base, NOT a WithBranchRevision'd
-	// copy. dsess.AddDb (transactions.go) keys dbStartPoints by db.Name()
-	// without stripping revision; using the base name keeps the key
-	// symmetrical with NewDoltTransaction's baseName-keyed startPoints.
 	baseName, _ := doltdb.SplitRevisionDbName(name)
 	db, ok, err := p.getOrBuildSqleDatabase(ctx, baseName)
 	if err != nil || !ok {
@@ -151,14 +149,9 @@ func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.Ver
 	return db, true
 }
 
+// DoltDatabases enumerates from the backend's open db list (not just
+// provider cache) so StartTransaction's dbStartPoints covers every db.
 func (p *dumbodbProvider) DoltDatabases() []dsess.VersionedDatabase {
-	// dsess uses this at StartTransaction time to snapshot dbStartPoints
-	// for every db under management. The dbCache only has entries that have
-	// already been requested via SessionDatabase, so we walk the backend's
-	// open db list to ensure dsess sees every database. The interface gives
-	// us no sql.Context; sqle.NewDatabase reaches into the GC safepoint
-	// controller via the context, so we embed it directly via gcctx rather
-	// than synthesise a *sql.Context with no session.
 	names := p.dbNames()
 	out := make([]dsess.VersionedDatabase, 0, len(names))
 	for _, name := range names {
@@ -171,12 +164,10 @@ func (p *dumbodbProvider) DoltDatabases() []dsess.VersionedDatabase {
 	return out
 }
 
-// buildSqleDatabaseNoSession is the session-less variant of
-// getOrBuildSqleDatabase used by DoltDatabases. It threads the backend's
-// GCSafepointController into a context.Background so sqle.NewDatabase ->
-// dsess.NewGlobalStateStoreForDb -> dsess.NewAutoIncrementTracker can
-// resolve the GC controller via gcctx.GetGCSafepointController instead of
-// dereferencing a *DoltSession that doesn't exist yet.
+// buildSqleDatabaseNoSession threads the GC safepoint controller through
+// the context so sqle.NewDatabase's AutoIncrementTracker setup can resolve
+// it via gcctx.GetGCSafepointController instead of dereferencing a
+// *DoltSession that doesn't exist at this layer.
 func (p *dumbodbProvider) buildSqleDatabaseNoSession(baseName string) (sqle.Database, bool, error) {
 	key := strings.ToLower(baseName)
 

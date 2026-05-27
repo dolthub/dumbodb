@@ -87,10 +87,9 @@ func (r *repoStateAdapter) UpdateBranch(_ string, _ env.BranchConfig) error {
 	return nil
 }
 
-// sqlCtxRepoStateAdapter wraps repoStateAdapter to satisfy
-// env.RepoStateReadWriter[*sql.Context]. dsess's SessionDatabaseBranchSpec
-// expects the *sql.Context variant; *sql.Context satisfies the
-// context.Context constraint, so every method just delegates.
+// sqlCtxRepoStateAdapter satisfies env.RepoStateReadWriter[*sql.Context]
+// for dsess's SessionDatabaseBranchSpec; methods delegate to the
+// context.Context variant.
 type sqlCtxRepoStateAdapter struct {
 	inner *repoStateAdapter
 }

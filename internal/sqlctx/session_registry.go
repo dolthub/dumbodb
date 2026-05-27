@@ -162,10 +162,8 @@ func (r *SessionRegistry) Len() int {
 	return len(r.sessions)
 }
 
-// ActiveShadows returns a snapshot of every currently-active shadow in the
-// registry. Used by the deferred flusher to walk sessions and flush each
-// session's dirty branchStates. The slice is a copy so the caller can
-// iterate without holding the registry lock.
+// ActiveShadows returns a lock-free copy of every active shadow. Used by
+// the deferred flusher to walk sessions outside the registry lock.
 func (r *SessionRegistry) ActiveShadows() []*Shadow {
 	r.mu.Lock()
 	defer r.mu.Unlock()

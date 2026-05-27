@@ -343,15 +343,9 @@ func (state *dbState) loadIndexesFromDTBL(ctx context.Context, collName string, 
 	return nil
 }
 
-// hydrateAllIndexes iterates the collections AM and loads any persisted
-// secondary indexes into in-memory state. Called once at db open, before
-// any client session exists -- so it resolves the working set ref directly
-// off the DoltDB rather than routing through a session, the only call site
-// that does so. The result still flows into per-database caches keyed off
-// the default branch, which is the broader version-controlled-metadata
-// limitation tracked separately (see workspace-i0u).
-//
-// The caller must hold state.mu (write lock).
+// hydrateAllIndexes loads persisted secondary indexes at db open from
+// the default branch's working set (no session exists yet). The caller
+// must hold state.mu (write lock).
 func (state *dbState) hydrateAllIndexes(ctx context.Context) error {
 	ws, err := state.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+defaultBranch))
 	if err != nil {

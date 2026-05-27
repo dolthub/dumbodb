@@ -34,10 +34,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ctxWithSession builds a context with a registered conninfo + shadow so
-// backend write paths route through the given lsid's DoltSession. The
-// returned context is what dispatchThroughSession sets up on a real wire
-// request.
+// ctxWithSession mirrors dispatchThroughSession's setup.
 func ctxWithSession(t *testing.T, be *Backend, lsid string) context.Context {
 	t.Helper()
 	shadow, err := be.SessionRegistry().Connect(lsid)
@@ -93,20 +90,15 @@ func TestSession_InsertVisibleToVisitGCRoots(t *testing.T) {
 	assert.NotEmpty(t, visited, "VisitGCRoots must surface at least one chunk hash from the in-flight working root")
 }
 
-// TestSession_CrossSessionConcurrentWritesIsolated stresses the qsc.2
-// boundary: two sessions writing concurrently to the same (db, branch)
-// must each see their own writes via the session route without
-// clobbering each other's overlays. The pre-qsc world stored both
-// overlays under dbState.pendingWS keyed by (owner, branch); the
-// post-qsc world stores them on each session's branchState.
+// TestSession_CrossSessionConcurrentWritesIsolated: many sessions
+// writing concurrently to the same (db, branch) must not clobber each
+// other's overlays, and all auto-committed writes must land.
 func TestSession_CrossSessionConcurrentWritesIsolated(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
 	require.NoError(t, err)
 	t.Cleanup(be.Close)
 
 	dbName := "concurrent"
-	// CreateCollection once with a setup session; the workers will share
-	// the collection but use independent sessions.
 	setupCtx := ctxWithSession(t, be, "test-lsid-setup")
 	db, err := be.Database(dbName)
 	require.NoError(t, err)
@@ -156,9 +148,7 @@ func TestSession_CrossSessionConcurrentWritesIsolated(t *testing.T) {
 		t.Errorf("concurrent insert: %v", err)
 	}
 
-	// All writes auto-committed (autoCommit=true). The final state must
-	// contain every (session, op) pair. Reading with the setup session
-	// (which never wrote) confirms cross-session visibility post-commit.
+	// Read from the setup session to verify cross-session visibility.
 	state, ok := be.lookupDbStateForDsess(dbName)
 	require.True(t, ok)
 	state.mu.RLock()

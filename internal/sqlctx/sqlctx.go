@@ -47,11 +47,9 @@ func New(ctx context.Context, provider dsess.DoltDatabaseProvider, writeSessFunc
 	return Wrap(ctx, sess), sess
 }
 
-// EnsureTxn returns the session's current transaction, starting a new one
-// if none is in flight. dsess.StartTransaction wipes all per-db heads, so
-// callers must invoke this only at txn-entry boundaries (wire
-// startTransaction:true frame, or first command in --session-isolation
-// mode), never lazily inside a write.
+// EnsureTxn returns the session's current tx, starting one if needed.
+// dsess.StartTransaction wipes all per-db heads, so callers must invoke
+// this only at txn-entry boundaries -- never lazily from inside a write.
 func EnsureTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, error) {
 	if tx := sess.GetTransaction(); tx != nil {
 		return tx, nil

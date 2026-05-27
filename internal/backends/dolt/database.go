@@ -78,10 +78,9 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	if ws, ok := txnVisibleWS(ctx, state, db.rootish); ok {
 		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
-	// Only consult the working-set cache / ref when the rootish looks like
-	// a known branch. Caret/tilde traversal expressions ("main^",
-	// "main~2") share neither namespace; they're resolved to a commit
-	// hash by amFromRootish.
+	// Only consult the WS cache for known branches; caret/tilde
+	// traversal rootishes ("main^") aren't there and must fall through
+	// to amFromRootish for commit-hash resolution.
 	if _, ok := state.workingSets[db.rootish]; ok {
 		ws, err := latestBranchWS(ctx, state, db.rootish)
 		if err == nil && ws != nil {
@@ -91,24 +90,18 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	return amFromRootish(ctx, state, db.rootish)
 }
 
-// latestBranchWS returns the latest committed working set for (state, branch).
-// It returns the dbState shadow if cached (kept in sync by commit and
-// flush paths), else loads fresh from the working-set ref. Sessions with
-// uncommitted overlays are handled by txnVisibleWS upstream of this; here
-// we deliberately do NOT consult the session's branchState because that
-// cache is established at txn-start and never auto-refreshes -- using it
-// for reads would hide commits made by other sessions to disk.
+// latestBranchWS returns the latest committed WS for (state, branch).
+// Uncommitted overlays are handled upstream by txnVisibleWS; consulting
+// the session's branchState here would hide commits other sessions made
+// to disk, because dsess never refreshes branchState after lookup.
 func latestBranchWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, error) {
 	return state.loadCommittedWS(ctx, branch)
 }
 
+// txnVisibleWS returns the session's branchState only when DirtyBranch-
+// Revisions reports this (db, branch) as dirty; this gives read-your-own-
+// writes without pinning to a stale txn-start snapshot for clean reads.
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
-	// Note: we no longer gate on ownerForTxn (inTxn). Any session with a
-	// dirty branchState for this (db, branch) -- including default-mode
-	// j:false writes that set the dirty bit through sess.SetWorkingSet --
-	// should read through the session so own-write semantics hold. Other
-	// sessions still see disk via the latestBranchWS / loadCommittedWS
-	// path; their DirtyBranchRevisions doesn't include this branch.
 	sess := sessionFromContext(ctx)
 	if sess == nil {
 		return nil, false
@@ -116,13 +109,6 @@ func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.W
 	if !dbNameDsessFriendly(state.name) {
 		return nil, false
 	}
-	// Only return the session's branchState if it has uncommitted writes
-	// on this (db, branch); otherwise return false so the caller falls back
-	// to state.workingSets[branch], which always reflects the latest
-	// committed WS visible across sessions. dsess's branchState is loaded
-	// at txn-start and never auto-refreshes, so an unwritten session would
-	// otherwise stall on its txn-start snapshot and miss other sessions'
-	// committed writes.
 	qualified := qualifiedDbName(state.name, branch)
 	qualifiedLower := strings.ToLower(qualified)
 	dirty := false

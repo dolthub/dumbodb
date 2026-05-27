@@ -620,10 +620,6 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 
 	var resMsg *wire.OpMsg
 	runErr := runFn(time.Now(), func(sess *dsess.DoltSession) error {
-		// Start a dsess transaction at the txn-entry boundary so writes
-		// can land on branchState.workingSet and CommitWorkingSet /
-		// DoltCommit can replay the merge against tx.dbStartPoints.
-		// Lazy here (no-op if already active); cleared after commit/abort.
 		if c.h.SessionIsolation() || conninfo.Get(connCtx).InTransaction() {
 			sqlCtx := sqlctx.Wrap(connCtx, sess)
 			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {

@@ -28,32 +28,19 @@ import (
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
-// qualifiedDbName returns the dsess-style revision-qualified name for
-// (dbName, branch). Always includes the revision suffix so it matches
-// branchState.RevisionDbName() (which uses the same formatter without a
-// default-branch shortcut), making DirtyBranchRevisions comparisons
-// symmetrical.
 func qualifiedDbName(dbName, branch string) string {
 	return doltdb.RevisionDbName(dbName, branch)
 }
 
-// dbNameDsessFriendly reports whether a db name is safe to pass through
-// dsess's revision-qualified lookup paths. dsess's SplitRevisionDbName
-// treats "@" and "/" as revision delimiters, so a db name that contains
-// either as part of its literal name (e.g. dumbodb's all-digit-suffix
-// special case, "mydb@1775505756999075683") would be misinterpreted.
-// Callers that build a SetWorkingSet / LookupDbState path must skip the
-// session route for these names and write through the dbState shadow.
+// dbNameDsessFriendly: dsess.SplitRevisionDbName treats "@" and "/" as
+// revision delimiters, so dumbodb's all-digit-suffix names get
+// misparsed. Callers must skip the session route for those.
 func dbNameDsessFriendly(dbName string) bool {
 	return !strings.ContainsAny(dbName, "/@")
 }
 
-// ensureDsessTxn returns the active dsess transaction, starting one if
-// none is in flight. dsess.StartTransaction clears all per-db heads in the
-// session, so callers MUST invoke this at txn-entry boundaries (wire
-// startTransaction:true, or the first command in session-isolation mode)
-// and never lazily from inside a write -- otherwise read-path state
-// established by qsc.1 would be wiped.
+// ensureDsessTxn: dsess.StartTransaction wipes every per-db branchState,
+// so callers MUST invoke this only at txn-entry boundaries.
 func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, error) {
 	if tx := sess.GetTransaction(); tx != nil {
 		return tx, nil
@@ -65,25 +52,14 @@ func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transacti
 	return tx, nil
 }
 
-// clearDsessTxn drops the current transaction reference from the session
-// after a commit/rollback so the next txn-entry boundary starts a fresh
-// one. CommitWorkingSet/DoltCommit (unlike CommitTransaction) don't reset
-// ctx.Transaction themselves.
 func clearDsessTxn(sqlCtx *sql.Context) {
 	sqlCtx.SetTransaction(nil)
 }
 
-// workingSetViaSession returns the working set for (dbName, branch). When
-// the calling session has an uncommitted overlay for this (db, branch) --
-// dsess.DirtyBranchRevisions reports it -- the session's branchState is
-// the source of truth and is returned. Otherwise, the dbState snapshot
-// (fallback) is returned: it reflects committed writes from any session
-// and stays current via the commit / non-txn write paths.
-//
-// We deliberately do NOT trust the session's branchState for "clean"
-// reads, because dsess loads it at lookup time and never refreshes --
-// using it for non-dirty reads would hide writes another session
-// committed to disk.
+// workingSetViaSession returns the session's branchState only when
+// DirtyBranchRevisions reports the branch as dirty; otherwise returns
+// the fallback. dsess never refreshes branchState after lookup, so a
+// "clean" read from the session would hide writes from other sessions.
 func workingSetViaSession(ctx context.Context, sess *dsess.DoltSession, fallback *doltdb.WorkingSet, dbName, branch string) (*doltdb.WorkingSet, error) {
 	if sess != nil {
 		qualified := qualifiedDbName(dbName, branch)
@@ -110,8 +86,6 @@ func workingSetViaSession(ctx context.Context, sess *dsess.DoltSession, fallback
 	return fallback, nil
 }
 
-// workingRootViaSession is workingSetViaSession that returns just the
-// working root. Most callers only need the root.
 func workingRootViaSession(ctx context.Context, sess *dsess.DoltSession, ws *doltdb.WorkingSet, dbName, branch string) (doltdb.RootValue, error) {
 	out, err := workingSetViaSession(ctx, sess, ws, dbName, branch)
 	if err != nil {
@@ -120,10 +94,6 @@ func workingRootViaSession(ctx context.Context, sess *dsess.DoltSession, ws *dol
 	return out.WorkingRoot(), nil
 }
 
-// sessionFromContext returns the calling client's session if conninfo's
-// cached shadow carries one; otherwise nil. Internal callers (handler
-// setup, capped cleanup) build a fresh ConnInfo with no shadow, so they
-// get nil and read through the dbState snapshot directly.
 func sessionFromContext(ctx context.Context) *dsess.DoltSession {
 	ci := conninfo.GetIfPresent(ctx)
 	if ci == nil {
@@ -136,11 +106,6 @@ func sessionFromContext(ctx context.Context) *dsess.DoltSession {
 	return shadow.Session()
 }
 
-// sessionForOwner returns the live DoltSession registered under the given
-// lsid (owner string), or nil if there is no active session for that lsid.
-// Used by OnTransactionCommit / OnTransactionAbort / OnSessionEnd to drive
-// the owner's session directly without requiring it to be reachable from
-// the current request's conninfo.
 func (b *Backend) sessionForOwner(owner string) *dsess.DoltSession {
 	if b.sessions == nil {
 		return nil
