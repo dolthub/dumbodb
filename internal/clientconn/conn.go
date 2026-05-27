@@ -37,7 +37,7 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
@@ -619,7 +619,17 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	}
 
 	var resMsg *wire.OpMsg
-	runErr := runFn(time.Now(), func(*dsess.DoltSession) error {
+	runErr := runFn(time.Now(), func(sess *dsess.DoltSession) error {
+		// Start a dsess transaction at the txn-entry boundary so writes
+		// can land on branchState.workingSet and CommitWorkingSet /
+		// DoltCommit can replay the merge against tx.dbStartPoints.
+		// Lazy here (no-op if already active); cleared after commit/abort.
+		if c.h.SessionIsolation() || conninfo.Get(connCtx).InTransaction() {
+			sqlCtx := sqlctx.Wrap(connCtx, sess)
+			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {
+				return fmt.Errorf("dispatchThroughSession: %w", txErr)
+			}
+		}
 		var handlerErr error
 		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
 		return handlerErr

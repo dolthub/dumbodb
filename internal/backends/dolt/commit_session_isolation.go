@@ -17,7 +17,13 @@ package dolt
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/dolthub/go-mysql-server/sql"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
@@ -25,9 +31,10 @@ import (
 )
 
 // doltCommitSessionIsolation is the --session-isolation variant of
-// DumboDBCommit. It merges the calling connection's per-branch overlay back
-// into the committed working set via three-way merge and, on success,
-// advances HEAD with a new dolt commit.
+// DumboDBCommit. The per-branch overlay lives on the calling session's
+// branchState (see workspace-qsc.2); CommitWorkingSet runs dsess's
+// three-way merge against current HEAD, the explicit dolt commit on top
+// preserves the user-supplied message/author/timestamp.
 func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backends.CommitParams, db *dbState, branch, message string, ts time.Time) (*backends.CommitResult, error) {
 	ci := conninfo.GetIfPresent(ctx)
 	if ci == nil {
@@ -35,41 +42,85 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 	}
 	owner := ci.Owner()
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	sess := b.sessionForOwner(owner)
+	if sess == nil {
+		return nil, backends.ErrEmptyCommit
+	}
+	tx := sess.GetTransaction()
+	if tx == nil {
+		return nil, backends.ErrEmptyCommit
+	}
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	qualified := qualifiedDbName(params.DBName, branch)
 
-	entry, ok := db.pendingWS[pendingWSKey{owner, branch}]
-	if !ok {
+	// Confirm the session's branchState for this (db, branch) has
+	// uncommitted changes; otherwise there is nothing to commit.
+	sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBCommit: LookupDbState for %q: %w", qualified, err)
+	}
+	if !sok || sessState.WorkingSet() == nil {
 		return nil, backends.ErrEmptyCommit
 	}
 
-	committed, ok := db.workingSets[branch]
-	if !ok {
-		committed = entry.base
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// dsess.commitBranchState ends the session's transaction (ctx.SetTransaction(nil))
+	// and the next command's EnsureTxn will call StartTransaction, which
+	// calls clear() and wipes ALL branchStates. That destroys uncommitted
+	// overlays on branches other than the one being committed -- breaking
+	// dumbodb's per-(session, branch) isolation. Save those overlays
+	// before the commit and restore them after.
+	preservedWSs := make(map[string]*doltdb.WorkingSet)
+	for _, q := range sess.DirtyBranchRevisions() {
+		if strings.EqualFold(q, qualified) {
+			continue
+		}
+		ss, ok, lerr := sess.LookupDbState(sqlCtx, q)
+		if lerr != nil || !ok {
+			continue
+		}
+		if ws := ss.WorkingSet(); ws != nil {
+			preservedWSs[q] = ws
+		}
 	}
 
-	sess := b.NewSession()
-	sqlCtx := sqlctx.Wrap(ctx, sess)
+	// dsess.CommitWorkingSet runs the three-way merge (base from
+	// tx.dbStartPoints, ours from branchState, theirs from current HEAD)
+	// and writes the merged working set to disk. It does NOT update the
+	// session's branchState (commitBranchState only writes back on a
+	// DoltCommit path), so we reload the merged WS from the working_set
+	// ref to feed the dolt commit below.
+	if err := sess.CommitWorkingSet(sqlCtx, qualified, tx); err != nil {
+		// dsess wraps ErrRetryTransaction in sql.ErrLockDeadlock (no %w),
+		// so detect it by message rather than errors.Is. Surface as a
+		// data-conflict error so callers (and the session-isolation
+		// parity tests) see the familiar wording.
+		if strings.Contains(err.Error(), "this transaction conflicts with a committed transaction") {
+			return nil, fmt.Errorf("DumboDBCommit: data conflict during merge: %w", err)
+		}
+		return nil, fmt.Errorf("DumboDBCommit: merging working set: %w", err)
+	}
 
-	sqlDB, sqlOk, err := b.provider.getOrBuildSqleDatabase(sqlCtx, params.DBName)
+	merged, err := db.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+branch))
 	if err != nil {
-		return nil, fmt.Errorf("DumboDBCommit: resolving sqle.Database for %q: %w", params.DBName, err)
-	}
-	if !sqlOk {
-		return nil, fmt.Errorf("DumboDBCommit: sqle.Database not found for %q", params.DBName)
+		return nil, fmt.Errorf("DumboDBCommit: reloading merged working set for %q: %w", branch, err)
 	}
 
-	merged, err := mergePendingIntoCommitted(sqlCtx, sqlDB.GetTableResolver(), entry.base, entry.current, committed)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBCommit: %w", err)
-	}
-
+	// Mirror back into dbState.workingSets for non-session readers (still
+	// present until workspace-qsc.6).
 	db.workingSets[branch] = merged
 
 	mergedAM, err := amFromWorkingRoot(ctx, merged.WorkingRoot(), db.ns)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: deriving merged AM: %w", err)
 	}
+
+	// Advance HEAD with an explicit dolt commit carrying the user-supplied
+	// message/author/timestamp. dsess.DoltCommit would do this in one shot
+	// but requires a PendingCommit constructed from internals; the
+	// AM-based commit helper keeps the existing semantics intact.
 	mainDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: resolving branch dataset %q: %w", branch, err)
@@ -83,7 +134,25 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		return nil, fmt.Errorf("DumboDBCommit: updating working set for %q: %w", branch, err)
 	}
 
-	delete(db.pendingWS, pendingWSKey{owner, branch})
+	// Clear the session's transaction; the next write starts a fresh dsess
+	// txn with a fresh dbStartPoints snapshot covering the new HEAD.
+	sqlCtx.SetTransaction(nil)
+
+	// Restore the preserved overlays from before the commit. Start a fresh
+	// dsess transaction here (rather than waiting for the next command)
+	// so SetWorkingSet has a branchState to write into; the new txn's
+	// dbStartPoints reflects the post-commit noms root so merge bases for
+	// the preserved branches stay current.
+	if len(preservedWSs) > 0 {
+		if _, err := sess.StartTransaction(sqlCtx, sql.ReadWrite); err != nil {
+			return nil, fmt.Errorf("DumboDBCommit: restarting tx for preserved overlays: %w", err)
+		}
+		for q, ws := range preservedWSs {
+			if err := sess.SetWorkingSet(sqlCtx, q, ws); err != nil {
+				return nil, fmt.Errorf("DumboDBCommit: restoring overlay for %q: %w", q, err)
+			}
+		}
+	}
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {

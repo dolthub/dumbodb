@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
 // database implements backends.Database.
@@ -81,15 +82,43 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 }
 
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
-	owner, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
+	_, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
 	if !inTxn {
 		return nil, false
 	}
-	entry, ok := state.pendingWS[pendingWSKey{owner, branch}]
-	if !ok {
+	sess := sessionFromContext(ctx)
+	if sess == nil {
 		return nil, false
 	}
-	return entry.current, true
+	// Only return the session's branchState if it has uncommitted writes
+	// on this (db, branch); otherwise return false so the caller falls back
+	// to state.workingSets[branch], which always reflects the latest
+	// committed WS visible across sessions. dsess's branchState is loaded
+	// at txn-start and never auto-refreshes, so an unwritten session would
+	// otherwise stall on its txn-start snapshot and miss other sessions'
+	// committed writes.
+	qualified := qualifiedDbName(state.name, branch)
+	qualifiedLower := strings.ToLower(qualified)
+	dirty := false
+	for _, d := range sess.DirtyBranchRevisions() {
+		if strings.ToLower(d) == qualifiedLower {
+			dirty = true
+			break
+		}
+	}
+	if !dirty {
+		return nil, false
+	}
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+	if err != nil || !ok {
+		return nil, false
+	}
+	ws := sessState.WorkingSet()
+	if ws == nil {
+		return nil, false
+	}
+	return ws, true
 }
 
 func (db *database) Collection(name string) (backends.Collection, error) {

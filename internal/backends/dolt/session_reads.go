@@ -18,12 +18,48 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dolthub/go-mysql-server/sql"
+
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
+
+// qualifiedDbName returns the dsess-style revision-qualified name for
+// (dbName, branch). Always includes the revision suffix so it matches
+// branchState.RevisionDbName() (which uses the same formatter without a
+// default-branch shortcut), making DirtyBranchRevisions comparisons
+// symmetrical.
+func qualifiedDbName(dbName, branch string) string {
+	return doltdb.RevisionDbName(dbName, branch)
+}
+
+// ensureDsessTxn returns the active dsess transaction, starting one if
+// none is in flight. dsess.StartTransaction clears all per-db heads in the
+// session, so callers MUST invoke this at txn-entry boundaries (wire
+// startTransaction:true, or the first command in session-isolation mode)
+// and never lazily from inside a write -- otherwise read-path state
+// established by qsc.1 would be wiped.
+func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, error) {
+	if tx := sess.GetTransaction(); tx != nil {
+		return tx, nil
+	}
+	tx, err := sess.StartTransaction(sqlCtx, sql.ReadWrite)
+	if err != nil {
+		return nil, fmt.Errorf("ensureDsessTxn: StartTransaction: %w", err)
+	}
+	return tx, nil
+}
+
+// clearDsessTxn drops the current transaction reference from the session
+// after a commit/rollback so the next txn-entry boundary starts a fresh
+// one. CommitWorkingSet/DoltCommit (unlike CommitTransaction) don't reset
+// ctx.Transaction themselves.
+func clearDsessTxn(sqlCtx *sql.Context) {
+	sqlCtx.SetTransaction(nil)
+}
 
 // workingSetViaSession returns the working set for (dbName, branch) viewed
 // through the calling session's branchState. The ws argument is the
@@ -87,6 +123,22 @@ func sessionFromContext(ctx context.Context) *dsess.DoltSession {
 	}
 	shadow, _ := ci.CachedShadow()
 	if shadow == nil {
+		return nil
+	}
+	return shadow.Session()
+}
+
+// sessionForOwner returns the live DoltSession registered under the given
+// lsid (owner string), or nil if there is no active session for that lsid.
+// Used by OnTransactionCommit / OnTransactionAbort / OnSessionEnd to drive
+// the owner's session directly without requiring it to be reachable from
+// the current request's conninfo.
+func (b *Backend) sessionForOwner(owner string) *dsess.DoltSession {
+	if b.sessions == nil {
+		return nil
+	}
+	shadow, ok := b.sessions.Get(owner)
+	if !ok || shadow == nil {
 		return nil
 	}
 	return shadow.Session()

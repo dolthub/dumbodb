@@ -56,7 +56,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -127,6 +127,7 @@ type timeSeriesMeta struct {
 // dbState holds the open Dolt store for a single MongoDB database.
 type dbState struct {
 	backend *Backend // back-pointer; lets helpers read backend-level config (e.g. sessionIsolation)
+	name    string   // user-visible db name; needed to build qualified names for dsess
 
 	mu    sync.RWMutex
 	dbDir string
@@ -311,57 +312,22 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
-	b.abortPendingForOwner(owner)
+	b.rollbackOwnerTxn(owner)
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
-	type namedDb struct {
-		name string
-		db   *dbState
+	sess := b.sessionForOwner(owner)
+	if sess == nil {
+		b.releaseLocksForOwner(owner)
+		return nil
 	}
-	b.mu.RLock()
-	dbs := make([]namedDb, 0, len(b.dbs))
-	for name, db := range b.dbs {
-		dbs = append(dbs, namedDb{name: name, db: db})
+	tx := sess.GetTransaction()
+	if tx == nil {
+		b.releaseLocksForOwner(owner)
+		return nil
 	}
-	b.mu.RUnlock()
-
-	sess := b.NewSession()
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 
-	var firstErr error
-	for _, nd := range dbs {
-		sqlDB, ok, err := b.provider.getOrBuildSqleDatabase(sqlCtx, nd.name)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if !ok {
-			continue
-		}
-		nd.db.mu.Lock()
-		_, err = nd.db.commitPendingForOwner(sqlCtx, sqlDB.GetTableResolver(), owner)
-		nd.db.mu.Unlock()
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	b.releaseLocksForOwner(owner)
-	return firstErr
-}
-
-func (b *Backend) OnTransactionAbort(owner string) {
-	b.abortPendingForOwner(owner)
-	b.releaseLocksForOwner(owner)
-}
-
-func (b *Backend) SessionIsolation() bool {
-	return b.sessionIsolation
-}
-
-func (b *Backend) abortPendingForOwner(owner string) {
 	b.mu.RLock()
 	dbs := make([]*dbState, 0, len(b.dbs))
 	for _, db := range b.dbs {
@@ -369,11 +335,50 @@ func (b *Backend) abortPendingForOwner(owner string) {
 	}
 	b.mu.RUnlock()
 
+	var firstErr error
 	for _, db := range dbs {
 		db.mu.Lock()
-		db.abortPendingForOwner(owner)
+		_, err := db.commitDirtyBranchesForSession(sqlCtx, sess, tx)
 		db.mu.Unlock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+
+	// CommitWorkingSet (unlike CommitTransaction) does not reset the
+	// session's ctx.Transaction; clear it explicitly so the next
+	// txn-entry boundary starts a fresh dsess transaction with a fresh
+	// dbStartPoints snapshot.
+	sqlCtx.SetTransaction(nil)
+
+	b.releaseLocksForOwner(owner)
+	return firstErr
+}
+
+func (b *Backend) OnTransactionAbort(owner string) {
+	b.rollbackOwnerTxn(owner)
+	b.releaseLocksForOwner(owner)
+}
+
+// rollbackOwnerTxn drops the owner session's in-progress dsess transaction,
+// discarding all per-branch overlays back to the tx start point. No-op if
+// the session is gone or has no active tx.
+func (b *Backend) rollbackOwnerTxn(owner string) {
+	sess := b.sessionForOwner(owner)
+	if sess == nil {
+		return
+	}
+	tx := sess.GetTransaction()
+	if tx == nil {
+		return
+	}
+	sqlCtx := sqlctx.Wrap(context.Background(), sess)
+	_ = sess.Rollback(sqlCtx, tx)
+	sqlCtx.SetTransaction(nil)
+}
+
+func (b *Backend) SessionIsolation() bool {
+	return b.sessionIsolation
 }
 
 func (b *Backend) releaseLocksForOwner(owner string) {
@@ -394,6 +399,19 @@ func (b *Backend) lookupDbStateForDsess(name string) (*dbState, bool) {
 	defer b.mu.RUnlock()
 	state, ok := b.dbs[name]
 	return state, ok
+}
+
+// openDbNames returns the names of every db currently held in b.dbs. Used by
+// the dsess provider to enumerate databases at StartTransaction so dbStartPoints
+// covers every open db, not just the ones the cache happens to have built.
+func (b *Backend) openDbNames() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]string, 0, len(b.dbs))
+	for name := range b.dbs {
+		out = append(out, name)
+	}
+	return out
 }
 
 // deferredFlushInterval is how often the backend drains per-database dirty
@@ -449,13 +467,12 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		b.sweeperPeriod = defaultSessionSweepPeriod
 	}
 
-	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess)
+	b.gcController = gcctx.NewGCSafepointController()
+	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess, b.openDbNames, b.gcController)
 	if err != nil {
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)
 	}
 	b.provider = provider
-
-	b.gcController = gcctx.NewGCSafepointController()
 	if sessionTimeout <= 0 {
 		sessionTimeout = defaultSessionTimeout
 	}
@@ -772,12 +789,49 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 // opening/creating the NBS store if needed.
 // If create is false and the directory doesn't exist, returns nil, nil.
 func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (*dbState, error) {
+	db, opened, err := b.getOrOpenDBLocked(ctx, dbName, create)
+	if err != nil || db == nil {
+		return db, err
+	}
+
+	// If this call opened a new db AND the caller has an active dsess
+	// transaction, register the new db's noms-root snapshot with the tx so
+	// TransactionRoot lookups for this db succeed. Without this, dsess's
+	// dbStartPoints would only cover dbs that existed at txn-start; a
+	// database created or opened mid-transaction would otherwise be invisible
+	// to commit/rollback merges. Done outside the b.mu critical section
+	// because b.provider.SessionDatabase recurses back into b.lookupDbStateForDsess
+	// which takes b.mu.RLock.
+	if opened {
+		if sess := sessionFromContext(ctx); sess != nil {
+			if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
+				sqlCtx := sqlctx.Wrap(ctx, sess)
+				// BaseDatabase returns the unqualified db; AddDb keys
+				// dbStartPoints by db.Name() (no split), so passing the
+				// base name keeps the key symmetrical with what
+				// NewDoltTransaction populates for pre-existing dbs.
+				if vdb, vok := b.provider.BaseDatabase(sqlCtx, dbName); vok {
+					_ = tx.AddDb(sqlCtx, vdb)
+				}
+			}
+		}
+	}
+
+	return db, nil
+}
+
+// getOrOpenDBLocked is the inner half of getOrOpenDB that holds b.mu while
+// building the dbState. Returns (db, opened, err) where opened reports
+// whether a fresh dbState was created on this call (vs returning a cached
+// entry). The caller is responsible for any post-lock work (e.g. registering
+// a freshly opened db with active transactions).
+func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create bool) (*dbState, bool, error) {
 	b.mu.RLock()
 	db, ok := b.dbs[dbName]
 	b.mu.RUnlock()
 
 	if ok {
-		return db, nil
+		return db, false, nil
 	}
 
 	b.mu.Lock()
@@ -785,45 +839,45 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 
 	// Double-check after acquiring write lock.
 	if db, ok := b.dbs[dbName]; ok {
-		return db, nil
+		return db, false, nil
 	}
 
 	dbDir := filepath.Join(b.dataDir, dbName)
 
 	if !create {
 		if _, err := os.Stat(dbDir); os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
 	}
 
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating db directory for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("creating db directory for %q: %w", dbName, err)
 	}
 
 	q := nbs.NewUnlimitedMemQuotaProvider()
 
 	newGenSt, err := nbs.NewLocalJournalingStore(ctx, dolttypes.Format_DOLT.VersionString(), dbDir, q, false, nil)
 	if err != nil {
-		return nil, fmt.Errorf("opening newgen NBS store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening newgen NBS store for %q: %w", dbName, err)
 	}
 
 	oldgenDir := filepath.Join(dbDir, "oldgen")
 	if err := os.MkdirAll(oldgenDir, 0o755); err != nil {
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("creating oldgen directory for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("creating oldgen directory for %q: %w", dbName, err)
 	}
 
 	oldGenSt, err := nbs.NewLocalStore(ctx, newGenSt.Version(), oldgenDir, defaultMemTableSize, q, false)
 	if err != nil {
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("opening oldgen NBS store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening oldgen NBS store for %q: %w", dbName, err)
 	}
 
 	ghostGen, err := nbs.NewGhostBlockStore(dbDir)
 	if err != nil {
 		_ = oldGenSt.Close()
 		_ = newGenSt.Close()
-		return nil, fmt.Errorf("opening ghost block store for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening ghost block store for %q: %w", dbName, err)
 	}
 
 	cs := nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen)
@@ -835,7 +889,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	rootHash, err := cs.Root(ctx)
 	if err != nil {
 		_ = cs.Close()
-		return nil, fmt.Errorf("reading root for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("reading root for %q: %w", dbName, err)
 	}
 
 	// Create the value store and higher-level DoltDB. datasDB is the low-level
@@ -844,7 +898,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	doltDBVal, err := doltdb.DoltDBFromCS(cs, dbName)
 	if err != nil {
 		_ = cs.Close()
-		return nil, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("opening DoltDB for %q: %w", dbName, err)
 	}
 	doltDB := doltDBVal
 	datasDB := doltdb.ExposeDatabaseFromDoltDB(doltDB)
@@ -856,20 +910,20 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		am, err = prolly.NewEmptyAddressMap(ns)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 		}
 
 		_, am, err = commitCollectionsAM(ctx, datasDB, datas.Dataset{}, am, "Initialize database")
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("initial commit for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("initial commit for %q: %w", dbName, err)
 		}
 	} else {
 		// Existing database: detect the root chunk format.
 		rootChunk, err := cs.Get(ctx, rootHash)
 		if err != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
+			return nil, false, fmt.Errorf("reading root chunk for %q: %w", dbName, err)
 		}
 
 		fileID := serial.GetFileID(rootChunk.Data())
@@ -883,27 +937,27 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			amNode, _, err := tree.NodeFromChunk(&rootChunk)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("parsing ADRM root node for %q: %w", dbName, err)
 			}
 
 			am, err = prolly.NewAddressMap(amNode, ns)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("loading collections AM from ADRM root for %q: %w", dbName, err)
 			}
 
 			// Build the STRT structure manually because datas.Database panics on ADRM roots.
 			// We need to do this atomically: write commit + STRT, then swap the NBS root.
 			if err := migrateADRMtoSTRT(ctx, cs, vs, ns, am, rootHash); err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("migrating ADRM root for %q: %w", dbName, err)
 			}
 
 			// Now the NBS root is STRT; read the dataset from doltDB normally.
 			mainDS, migErr := datasDB.GetDataset(ctx, mainDataset)
 			if migErr != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
+				return nil, false, fmt.Errorf("getting dataset after migration for %q: %w", dbName, migErr)
 			}
 			_ = mainDS // used only to verify migration succeeded
 
@@ -912,7 +966,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 			ds, err := datasDB.GetDataset(ctx, mainDataset)
 			if err != nil {
 				_ = doltDB.Close()
-				return nil, fmt.Errorf("getting dataset for %q: %w", dbName, err)
+				return nil, false, fmt.Errorf("getting dataset for %q: %w", dbName, err)
 			}
 
 			if !ds.HasHead() {
@@ -920,19 +974,19 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 				am, err = prolly.NewEmptyAddressMap(ns)
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
+					return nil, false, fmt.Errorf("creating empty address map for %q: %w", dbName, err)
 				}
 			} else {
 				headValue, _, err := ds.MaybeHeadValue()
 				if err != nil {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("reading head value for %q: %w", dbName, err)
+					return nil, false, fmt.Errorf("reading head value for %q: %w", dbName, err)
 				}
 
 				headMsg, ok := headValue.(dolttypes.SerialMessage)
 				if !ok {
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
+					return nil, false, fmt.Errorf("unexpected root value type %T for %q", headValue, dbName)
 				}
 
 				headFileID := serial.GetFileID([]byte(headMsg))
@@ -947,17 +1001,17 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 						rtvl, fallbackErr := serial.TryGetRootAsRootValue([]byte(headMsg), serial.MessagePrefixSz)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("parsing RTVL for %q: %w", dbName, fallbackErr)
 						}
 						amNode, _, fallbackErr := tree.NodeFromBytes(rtvl.TablesBytes())
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("parsing collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 						wsAM, fallbackErr = prolly.NewAddressMap(amNode, ns)
 						if fallbackErr != nil {
 							_ = doltDB.Close()
-							return nil, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
+							return nil, false, fmt.Errorf("loading collections AM from RTVL for %q: %w", dbName, fallbackErr)
 						}
 					}
 					am = wsAM
@@ -969,30 +1023,30 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 					amNode, _, err := tree.NodeFromBytes([]byte(headMsg))
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("parsing ADRM from commit for %q: %w", dbName, err)
 					}
 
 					am, err = prolly.NewAddressMap(amNode, ns)
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("loading collections AM from commit for %q: %w", dbName, err)
 					}
 
 					ds, am, err = commitCollectionsAM(ctx, datasDB, ds, am, "migrate: wrap collections AM in RTVL")
 					if err != nil {
 						_ = doltDB.Close()
-						return nil, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
+						return nil, false, fmt.Errorf("RTVL migration commit for %q: %w", dbName, err)
 					}
 
 				default:
 					_ = doltDB.Close()
-					return nil, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
+					return nil, false, fmt.Errorf("unexpected head commit rootValue file ID %q for %q", headFileID, dbName)
 				}
 			}
 
 		default:
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
+			return nil, false, fmt.Errorf("unexpected root chunk file ID %q for %q", fileID, dbName)
 		}
 	}
 
@@ -1003,13 +1057,14 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		rv, rvErr := doltdb.NewRootValue(ctx, doltDB.ValueReadWriter(), doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 		if rvErr != nil {
 			_ = doltDB.Close()
-			return nil, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
+			return nil, false, fmt.Errorf("building initial root value for %q: %w", dbName, rvErr)
 		}
 		mainWS = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
 	}
 
 	db = &dbState{
 		backend:        b,
+		name:           dbName,
 		dbDir:          dbDir,
 		cs:             cs,
 		ns:             ns,
@@ -1035,13 +1090,13 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, fmt.Errorf("writing collection schema chunk: %w", err)
+		return nil, false, fmt.Errorf("writing collection schema chunk: %w", err)
 	}
 	db.collSchemaHash = schemaRef.TargetHash()
 	db.emptyIndexAM, err = prolly.NewEmptyAddressMap(ns)
 	if err != nil {
 		_ = doltDB.Close()
-		return nil, fmt.Errorf("creating empty index address map: %w", err)
+		return nil, false, fmt.Errorf("creating empty index address map: %w", err)
 	}
 
 	b.dbs[dbName] = db
@@ -1061,7 +1116,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 	if err := db.hydrateAllIndexes(ctx); err != nil {
 		_ = doltDB.Close()
 		delete(b.dbs, dbName)
-		return nil, fmt.Errorf("hydrating secondary indexes for %q: %w", dbName, err)
+		return nil, false, fmt.Errorf("hydrating secondary indexes for %q: %w", dbName, err)
 	}
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
@@ -1074,7 +1129,7 @@ func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (
 		db.mergeState = ms
 	}
 
-	return db, nil
+	return db, true, nil
 }
 
 // commitCollectionsAM creates a new dolt commit with the given collections
@@ -1505,6 +1560,33 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return nil, fmt.Errorf("DumboDBBranch: creating branch %q: %w", params.Name, err)
 	}
 
+	// Eagerly create the working_set ref for the new branch so dsess can
+	// resolve it on lookup. dolt's normal branch-create path creates the
+	// WS lazily on first checkout; our session-isolation flow writes
+	// without ever "checking out", so we create the WS here, seeded from
+	// the branch's HEAD commit.
+	branchRef := doltref.NewBranchRef(params.Name)
+	if headCommit, hcErr := db.doltDB.ResolveCommitRef(ctx, branchRef); hcErr == nil {
+		if rv, rvErr := headCommit.GetRootValue(ctx); rvErr == nil {
+			wsRef := doltref.NewWorkingSetRef("heads/" + params.Name)
+			emptyWS := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+			_ = updateWorkingSet(ctx, db.doltDB, emptyWS, params.Name)
+		}
+	}
+
+	// Refresh the calling session's tx.dbStartPoints to include the new
+	// branch's noms-root snapshot. Without this, subsequent writes against
+	// the new branch fail with "branch not found" because the active
+	// transaction's snapshot predates the branch creation.
+	if sess := sessionFromContext(ctx); sess != nil {
+		if tx, ok := sess.GetTransaction().(*dsess.DoltTransaction); ok {
+			sqlCtx := sqlctx.Wrap(ctx, sess)
+			if vdb, vok := b.provider.BaseDatabase(sqlCtx, params.DBName); vok {
+				_ = tx.AddDb(sqlCtx, vdb)
+			}
+		}
+	}
+
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
@@ -1757,15 +1839,19 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if _, ffErr := db.datasDB.SetHead(ctx, intoBranchDS, fromHash, ""); ffErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: advancing branch pointer: %w", ffErr)
 		}
-		if params.Into == defaultBranch {
-			ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
-			if ffAMErr != nil {
-				return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
-			}
-			db.setAM(defaultBranch, ffAM)
-			if err := db.persistAM(ctx, defaultBranch, ffAM); err != nil {
-				return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
-			}
+		// Update the working set for the Into branch so subsequent reads
+		// see the new HEAD. Previously this only ran for defaultBranch,
+		// which left non-default branch FF targets with a stale WS ref
+		// (their WS pointed at the pre-FF root). With the eager WS-ref
+		// creation in DumboDBBranch, the stale WS would otherwise feed
+		// subsequent inserts/commits and lose the FF'd-in changes.
+		ffAM, ffAMErr := amFromCommitHash(ctx, db, fromHash.String())
+		if ffAMErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
+		}
+		db.setAM(params.Into, ffAM)
+		if err := db.persistAM(ctx, params.Into, ffAM); err != nil {
+			return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
 		}
 		return &backends.MergeResult{
 			CommitID: fromHash.String(),

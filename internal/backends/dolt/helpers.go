@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha512"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire/wirebson"
@@ -27,6 +28,7 @@ import (
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/pool"
@@ -37,6 +39,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -345,16 +348,35 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 
 // getOrInitBranchWS returns the *doltdb.WorkingSet for branch, loading it from
 // the doltDB if not already cached. The caller must hold state.mu (write lock).
+//
+// In a txn-bound context (default-mode startTransaction or session-isolation
+// mode), the txn overlay lives on the calling session's branchState via
+// dsess. The fork point is captured by tx.dbStartPoints when the dsess
+// transaction starts (dispatched from clientconn).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
-	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
-		if entry, ok := state.pendingWS[pendingWSKey{owner, branch}]; ok {
-			return entry.current, nil
+	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
+		sess := sessionFromContext(ctx)
+		if sess == nil {
+			return nil, fmt.Errorf("getOrInitBranchWS: in-txn write on %q/%q with no session in context", state.name, branch)
+		}
+		sqlCtx := sqlctx.Wrap(ctx, sess)
+		qualified := qualifiedDbName(state.name, branch)
+		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+		if err != nil {
+			return nil, fmt.Errorf("getOrInitBranchWS: LookupDbState for %q: %w", qualified, err)
+		}
+		if ok {
+			if ws := sessState.WorkingSet(); ws != nil {
+				return ws, nil
+			}
 		}
 		ws, err := state.loadCommittedWS(ctx, branch)
 		if err != nil {
 			return nil, err
 		}
-		state.pendingWS[pendingWSKey{owner, branch}] = &pendingTxnState{base: ws, current: ws}
+		if err := sess.SetWorkingSet(sqlCtx, qualified, ws); err != nil {
+			return nil, fmt.Errorf("getOrInitBranchWS: SetWorkingSet for %q: %w", qualified, err)
+		}
 		return ws, nil
 	}
 
@@ -395,42 +417,58 @@ func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
 	return "", false
 }
 
-// Caller must hold state.mu write lock. sqlCtx is required because the
-// three-way merge runs through dolt's merge.MergeRoots.
-func (state *dbState) commitPendingForOwner(sqlCtx *sql.Context, resolver doltdb.TableResolver, owner string) ([]string, error) {
+// commitDirtyBranchesForSession commits every dirty branch on the given
+// session that belongs to this dbState. Each branch is committed via
+// dsess.CommitWorkingSet (the per-(db, branch) variant; CommitTransaction's
+// single-dirty-branch rule does not apply). After each commit, the
+// session's now-clean branchState working set is mirrored back into
+// state.workingSets[branch] so non-session readers (still present until
+// workspace-qsc.6) see the post-merge state.
+//
+// Caller must hold state.mu write lock.
+func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) ([]string, error) {
 	var branches []string
-	for key, entry := range state.pendingWS {
-		if key.owner != owner {
+	for _, qualified := range sess.DirtyBranchRevisions() {
+		base, branch := doltdb.SplitRevisionDbName(qualified)
+		if branch == "" {
+			branch = defaultBranch
+		}
+		if !strings.EqualFold(base, state.name) {
 			continue
 		}
-		committed, ok := state.workingSets[key.branch]
-		if !ok {
-			committed = entry.base
+		if err := sess.CommitWorkingSet(sqlCtx, qualified, tx); err != nil {
+			return branches, fmt.Errorf("commitTransaction: committing %q: %w", qualified, err)
 		}
-		merged, err := mergePendingIntoCommitted(sqlCtx, resolver, entry.base, entry.current, committed)
-		if err != nil {
-			return branches, fmt.Errorf("commitTransaction: merging working set for %q: %w", key.branch, err)
-		}
-		state.workingSets[key.branch] = merged
-		if err := updateWorkingSet(sqlCtx, state.doltDB, merged, key.branch); err != nil {
-			return branches, fmt.Errorf("commitTransaction: persisting working set for %q: %w", key.branch, err)
+		// Mirror the post-commit working set back into state.workingSets so
+		// non-session readers (workingRootViaSession's snapshot path) see
+		// the merged result. Removed in workspace-qsc.6.
+		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+		if err == nil && ok {
+			if newWS := sessState.WorkingSet(); newWS != nil {
+				state.workingSets[branch] = newWS
+			}
 		}
 		if state.dirtyBranches != nil {
-			delete(state.dirtyBranches, key.branch)
+			delete(state.dirtyBranches, branch)
 		}
-		delete(state.pendingWS, key)
-		branches = append(branches, key.branch)
+		branches = append(branches, branch)
 	}
 	return branches, nil
 }
 
+// rollbackDirtyBranchesForSession discards every dirty branch on the given
+// session that belongs to this dbState. Uses dsess.Rollback to drop the
+// session's branchState heads back to the transaction's start point.
+//
 // Caller must hold state.mu write lock.
-func (state *dbState) abortPendingForOwner(owner string) {
-	for key := range state.pendingWS {
-		if key.owner == owner {
-			delete(state.pendingWS, key)
-		}
+func (state *dbState) rollbackDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) error {
+	// Rollback is session-wide in dsess; per-(db, branch) selective rollback
+	// would require partitioning the session, which we don't do. The caller
+	// is responsible for ensuring this is the right granularity.
+	if tx == nil {
+		return nil
 	}
+	return sess.Rollback(sqlCtx, tx)
 }
 
 // headRootValueForBranch returns the doltdb.RootValue at the HEAD of branch.
@@ -485,14 +523,16 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 
 	newWS := ws.WithWorkingRoot(newRV).WithStagedRoot(stagedRV)
 
-	if owner, ok := ownerForTxn(ctx, state.backend.sessionIsolation); ok {
-		key := pendingWSKey{owner, branch}
-		entry, ok := state.pendingWS[key]
-		if !ok {
-			entry = &pendingTxnState{base: ws}
-			state.pendingWS[key] = entry
+	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
+		sess := sessionFromContext(ctx)
+		if sess == nil {
+			return fmt.Errorf("updateWorkingRoot: in-txn write on %q/%q with no session in context", state.name, branch)
 		}
-		entry.current = newWS
+		sqlCtx := sqlctx.Wrap(ctx, sess)
+		qualified := qualifiedDbName(state.name, branch)
+		if err := sess.SetWorkingSet(sqlCtx, qualified, newWS); err != nil {
+			return fmt.Errorf("updateWorkingRoot: SetWorkingSet for %q: %w", qualified, err)
+		}
 		return nil
 	}
 

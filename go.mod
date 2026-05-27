@@ -6,9 +6,9 @@ require (
 	github.com/AlekSi/pointer v1.2.0
 	github.com/FerretDB/wire v0.0.8
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20260519230928-8132c593d411
+	github.com/dolthub/dolt/go v0.40.5-0.20260527014643-453b288a8123
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260519163920-8a6f65450db7
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260526174314-044bab1ab87a
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/stretchr/testify v1.11.1
@@ -74,11 +74,11 @@ require (
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
-	github.com/dolthub/fslock v0.0.0-20251215194149-ef20baba2318 // indirect
+	github.com/dolthub/fslock v0.0.4 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20260412212219-49724d547866 // indirect
 	github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
-	github.com/dolthub/vitess v0.0.0-20260505163811-77e5224be390 // indirect
+	github.com/dolthub/vitess v0.0.0-20260521165014-2fdb4300ae8d // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/edsrzf/mmap-go v1.2.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.36.0 // indirect
