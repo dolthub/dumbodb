@@ -40,6 +40,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // resolvedIndexEntry is the decoded form of an IndexEntry chunk: the
@@ -153,19 +154,30 @@ func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Ha
 	return actual.(*resolvedIndexEntry), nil
 }
 
-// resolveCollIndexAM is the convenience entry point read paths use: it
-// resolves the (session, branch)-routed AddressMap, looks up collName's
-// DTBL, and returns the secondary_indexes AddressMap. Returns the cached
-// empty AM when the collection does not exist or has no secondary
-// indexes; callers that need to distinguish those cases can branch on
-// (am.Count() == 0).
+// indexAMFromAM returns the per-collection secondary_indexes AddressMap
+// stored under collName in collAM. Convenience for callers that already
+// hold an ADRM (e.g. a merge driver iterating two branches' ADRMs).
+func indexAMFromAM(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collAM prolly.AddressMap, collName string) (prolly.AddressMap, error) {
+	dtblHash, err := collAM.Get(ctx, collName)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	return indexAMForDTBL(ctx, cs, ns, dtblHash)
+}
+
+// resolveCollIndexAM resolves the (session, branch)-routed AddressMap,
+// looks up collName's DTBL, and returns the secondary_indexes
+// AddressMap. Returns the cached empty AM when the collection does not
+// exist or has no secondary indexes; callers that need to distinguish
+// those cases can branch on (am.Count() == 0).
 //
-// Takes state.mu.RLock briefly across resolveAM, releases it before any
-// chunk read. Callers must not hold any dbState lock when calling.
+// The caller must hold at least state.mu.RLock(). Read-path call sites
+// (ListIndexes, tryIndexLookup, tryIndexedCount, DistinctScan, Explain)
+// take RLock around the call; write-path call sites (InsertAll,
+// UpdateAll, DeleteAll, CreateIndexes, DropIndexes) already hold the
+// write lock.
 func resolveCollIndexAM(ctx context.Context, c *collection, state *dbState) (prolly.AddressMap, error) {
-	state.mu.RLock()
 	collAM, err := c.db.resolveAM(ctx, state)
-	state.mu.RUnlock()
 	if err != nil {
 		return prolly.AddressMap{}, err
 	}
@@ -213,6 +225,115 @@ func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backe
 		return nil, nil, err
 	}
 	return infos, maps, nil
+}
+
+// resolveBranchIndexState is the write-path counterpart to resolveIndexes:
+// returns the per-branch index state as (infos in name-sorted order, name
+// -> map). It reads from the session's working root via the resolver
+// chain. Mutating these maps is safe: they are immutable prolly.Map
+// values, so .Mutate() / .Map(ctx) round-trips do not touch any shared
+// state.
+func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, map[string]prolly.Map, error) {
+	infos, maps, err := resolveIndexes(ctx, c, state)
+	if err != nil {
+		return nil, nil, err
+	}
+	byName := make(map[string]prolly.Map, len(infos))
+	for i, info := range infos {
+		byName[info.Name] = maps[i]
+	}
+	return infos, byName, nil
+}
+
+// applyInsertsToIndexes runs each inserted document through every
+// indexed field and adds the corresponding entries to a fresh copy of
+// the input maps. Pure: maps is not mutated; the returned map contains
+// new prolly.Map values for indexes that had any new entries.
+//
+// Used by write paths that previously called updateSecondaryIndexesOnInsert
+// against state.secIndexMaps. The new shape decouples the in-memory
+// mutation from any dbState field so per-branch writes do not collide.
+func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) (map[string]prolly.Map, error) {
+	if len(infos) == 0 {
+		return maps, nil
+	}
+	out := make(map[string]prolly.Map, len(maps))
+	for k, v := range maps {
+		out[k] = v
+	}
+	for _, info := range infos {
+		idxMap, ok := out[info.Name]
+		if !ok {
+			return nil, fmt.Errorf("applyInsertsToIndexes: missing map for %q", info.Name)
+		}
+		mut := idxMap.Mutate()
+		for _, doc := range docs {
+			docID, err := doc.Get("_id")
+			if err != nil {
+				return nil, fmt.Errorf("applyInsertsToIndexes: doc missing _id for index %q: %w", info.Name, err)
+			}
+			h, err := hashID(docID)
+			if err != nil {
+				return nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
+			}
+			idBytes := h[:]
+			fieldVals := extractIndexFieldValues(doc, info)
+			for _, fv := range expandMultiKeyValues(fieldVals) {
+				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
+					return nil, fmt.Errorf("applyInsertsToIndexes: inserting entry into %q: %w", info.Name, err)
+				}
+			}
+		}
+		updated, err := mut.Map(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w", info.Name, err)
+		}
+		out[info.Name] = updated
+	}
+	return out, nil
+}
+
+// buildIndexAM is the pure replacement for persistIndexes: given a set of
+// (IndexInfo, prolly.Map) pairs it writes each map's root to the value
+// store and a per-index JSON IndexEntry chunk, then returns a new
+// AddressMap from index name to IndexEntry hash. No dbState fields are
+// touched. Callers pass the result to dtblHashForCollection.
+func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInfo, maps map[string]prolly.Map) (prolly.AddressMap, error) {
+	if len(infos) == 0 {
+		return emptyIndexAM(state.ns)
+	}
+	am, err := prolly.NewEmptyAddressMap(state.ns)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: %w", err)
+	}
+	edt := am.Editor()
+	for _, idx := range infos {
+		m, ok := maps[idx.Name]
+		if !ok {
+			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: index %q has no map", idx.Name)
+		}
+		ref, err := state.vs.WriteValue(ctx, tree.ValueFromNode(m.Node()))
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: writing index map root for %q: %w", idx.Name, err)
+		}
+		mapRoot := ref.TargetHash()
+		entry, err := indexInfoToEntry(idx, mapRoot)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: encoding entry for %q: %w", idx.Name, err)
+		}
+		entryHash, err := writeIndexEntryChunk(ctx, state.ns, entry)
+		if err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: writing entry chunk for %q: %w", idx.Name, err)
+		}
+		if err := edt.Add(ctx, idx.Name, entryHash); err != nil {
+			return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: adding %q to AM: %w", idx.Name, err)
+		}
+	}
+	newAM, err := edt.Flush(ctx)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: flush: %w", err)
+	}
+	return newAM, nil
 }
 
 // openIndexMap returns a prolly.Map handle for the secondary-index data

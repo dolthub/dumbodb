@@ -269,7 +269,11 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return err
 	}
 
-	dtblHash, err := state.dtblHashForCollection(ctx, params.Name, emptyMap, hash.Hash{})
+	emptyAM, err := emptyIndexAM(state.ns)
+	if err != nil {
+		return err
+	}
+	dtblHash, err := state.dtblHashForCollection(ctx, params.Name, emptyMap, emptyAM, hash.Hash{})
 	if err != nil {
 		return err
 	}

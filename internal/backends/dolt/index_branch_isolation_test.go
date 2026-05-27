@@ -218,7 +218,8 @@ func TestWrite_OnFeat_DoesNotCorruptMainDTBL(t *testing.T) {
 
 	featOnDisk := indexAMOnDisk(t, ctx, b, "testdb", "feat", "items")
 	gotFeat := indexNamesInAM(t, ctx, featOnDisk)
-	wantFeat := []string{"by_name"}
+	// feat inherits by_age from main at branch-from time and adds by_name.
+	wantFeat := []string{"by_age", "by_name"}
 	if !reflect.DeepEqual(gotFeat, wantFeat) {
 		t.Errorf("feat's on-disk DTBL secondary_indexes = %v, want %v", gotFeat, wantFeat)
 	}
