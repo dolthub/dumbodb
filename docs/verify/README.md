@@ -22,6 +22,7 @@ Every verify doc has a matching automated test in `tests/`:
 | rootish.md | versioning_rootish_verify_test.go | TestRootishVerify |
 | status.md | versioning_status_verify_test.go | TestStatusVerify |
 | tag.md | versioning_tag_verify_test.go | TestTagVerify |
+| index-branch-isolation.md | index_branch_isolation_verify_test.go | TestIndexBranchIsolationVerify |
 
 Run all verify tests:
 
