@@ -886,22 +886,25 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		return nil, false, nil
 	}
 
-	state.mu.RLock()
-	secMaps := state.secIndexMaps[c.name]
-	idxInfos := state.indexes[c.name]
-	state.mu.RUnlock()
-
-	if len(secMaps) == 0 || len(idxInfos) == 0 {
+	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(idxInfos) == 0 {
 		return nil, false, nil
 	}
 
-	// Map indexed-leading-field -> IndexInfo. Only single-field indexes are
-	// usable here; compound indexes require key-prefix matching that the
-	// planner doesn't yet do.
-	indexedField := make(map[string]string, len(idxInfos))
-	for _, idx := range idxInfos {
+	// Map indexed-leading-field -> (index name, map index). Only single-field
+	// indexes are usable here; compound indexes require key-prefix matching
+	// that the planner doesn't yet do.
+	type indexedFieldEntry struct {
+		idxName string
+		mapIdx  int
+	}
+	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
+	for i, idx := range idxInfos {
 		if len(idx.Key) == 1 && idx.Key[0].Field != "" {
-			indexedField[idx.Key[0].Field] = idx.Name
+			indexedField[idx.Key[0].Field] = indexedFieldEntry{idxName: idx.Name, mapIdx: i}
 		}
 	}
 	if len(indexedField) == 0 {
@@ -909,10 +912,10 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 
 	var (
-		chosenIdxName string
-		startKey      []byte
-		stopKey       []byte
-		usable        bool
+		chosenMapIdx int
+		startKey     []byte
+		stopKey      []byte
+		usable       bool
 	)
 
 	for _, k := range filter.Keys() {
@@ -926,7 +929,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if strings.ContainsRune(k, '.') {
 			continue
 		}
-		idxName, ok := indexedField[k]
+		entry, ok := indexedField[k]
 		if !ok {
 			continue
 		}
@@ -938,10 +941,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if !ok {
 			continue
 		}
-		if _, mapped := secMaps[idxName]; !mapped {
-			continue
-		}
-		chosenIdxName = idxName
+		chosenMapIdx = entry.mapIdx
 		startKey, stopKey = s, e
 		usable = true
 		break
@@ -951,7 +951,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		return nil, false, nil
 	}
 
-	idxMap := secMaps[chosenIdxName]
+	idxMap := idxMaps[chosenMapIdx]
 
 	// Cap the index range scan at half the collection. The point-fetch cost
 	// per matching id (one prolly tree traversal) dominates the scan path's
@@ -1135,13 +1135,13 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	var idxInfos []backends.IndexInfo
 
 	if state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false); err == nil && state != nil {
-		state.mu.RLock()
-		idxInfos = append(idxInfos, state.indexes[c.name]...)
-		hasMap := make(map[string]bool, len(state.secIndexMaps[c.name]))
-		for k := range state.secIndexMaps[c.name] {
-			hasMap[k] = true
+		// Explain only needs the metadata; resolveIndexes already opens the
+		// map handles which we discard. Cheap enough -- each handle is a
+		// few field assignments around an already-cached root node.
+		resolvedInfos, _, rerr := resolveIndexes(ctx, c, state)
+		if rerr == nil {
+			idxInfos = append(idxInfos, resolvedInfos...)
 		}
-		state.mu.RUnlock()
 
 		// 1. Honor hint if provided.
 		if params != nil {
@@ -1164,10 +1164,8 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			}
 		}
 
-		if indexName != "" && hasMap[indexName] {
+		if indexName != "" {
 			stage = "IXSCAN"
-		} else {
-			indexName = ""
 		}
 	}
 
@@ -2036,28 +2034,24 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
-	state.mu.RLock()
-	secMaps := state.secIndexMaps[c.name]
-	idxInfos := state.indexes[c.name]
-	state.mu.RUnlock()
-
-	if len(secMaps) == 0 || len(idxInfos) == 0 {
+	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(idxInfos) == 0 {
 		return 0, false, nil
 	}
 
-	var idxName string
-	for _, idx := range idxInfos {
+	var idxMap prolly.Map
+	found := false
+	for i, idx := range idxInfos {
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {
-			idxName = idx.Name
+			idxMap = idxMaps[i]
+			found = true
 			break
 		}
 	}
-	if idxName == "" {
-		return 0, false, nil
-	}
-
-	idxMap, ok := secMaps[idxName]
-	if !ok {
+	if !found {
 		return 0, false, nil
 	}
 
@@ -2185,19 +2179,16 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		return &backends.DistinctResult{}, nil
 	}
 
-	state.mu.RLock()
-	idxInfos := append([]backends.IndexInfo(nil), state.indexes[c.name]...)
-	secMaps := make(map[string]prolly.Map, len(state.secIndexMaps[c.name]))
-	for k, v := range state.secIndexMaps[c.name] {
-		secMaps[k] = v
+	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
+	if err != nil {
+		return nil, err
 	}
-	state.mu.RUnlock()
 
 	var (
-		idxName string
-		found   bool
+		idxMap prolly.Map
+		found  bool
 	)
-	for _, idx := range idxInfos {
+	for i, idx := range idxInfos {
 		if len(idx.Key) != 1 {
 			continue
 		}
@@ -2217,18 +2208,13 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		if idx.PartialFilterExpression != nil {
 			continue
 		}
-		if _, mapped := secMaps[idx.Name]; !mapped {
-			continue
-		}
-		idxName = idx.Name
+		idxMap = idxMaps[i]
 		found = true
 		break
 	}
 	if !found {
 		return nil, nil
 	}
-
-	idxMap := secMaps[idxName]
 
 	values, err := scanDistinctFromIndex(ctx, idxMap, m, state.ns, params.Key)
 	if err != nil {

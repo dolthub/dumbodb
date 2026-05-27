@@ -153,6 +153,68 @@ func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Ha
 	return actual.(*resolvedIndexEntry), nil
 }
 
+// resolveCollIndexAM is the convenience entry point read paths use: it
+// resolves the (session, branch)-routed AddressMap, looks up collName's
+// DTBL, and returns the secondary_indexes AddressMap. Returns the cached
+// empty AM when the collection does not exist or has no secondary
+// indexes; callers that need to distinguish those cases can branch on
+// (am.Count() == 0).
+//
+// Takes state.mu.RLock briefly across resolveAM, releases it before any
+// chunk read. Callers must not hold any dbState lock when calling.
+func resolveCollIndexAM(ctx context.Context, c *collection, state *dbState) (prolly.AddressMap, error) {
+	state.mu.RLock()
+	collAM, err := c.db.resolveAM(ctx, state)
+	state.mu.RUnlock()
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	dtblHash, err := collAM.Get(ctx, c.name)
+	if err != nil {
+		return prolly.AddressMap{}, err
+	}
+	return indexAMForDTBL(ctx, state.cs, state.ns, dtblHash)
+}
+
+// resolveIndexes walks the index AM and resolves every entry through
+// the memoized JSON-decode path. Returns parallel slices: the IndexInfo
+// for each index, and the prolly.Map handle. Both slices are in AM-walk
+// order (sorted by index name).
+func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, []prolly.Map, error) {
+	idxAM, err := resolveCollIndexAM(ctx, c, state)
+	if err != nil {
+		return nil, nil, err
+	}
+	cnt, err := idxAM.Count()
+	if err != nil {
+		return nil, nil, err
+	}
+	if cnt == 0 {
+		return nil, nil, nil
+	}
+	infos := make([]backends.IndexInfo, 0, cnt)
+	maps := make([]prolly.Map, 0, cnt)
+	if err := idxAM.IterAll(ctx, func(_ string, entryHash hash.Hash) error {
+		if entryHash.IsEmpty() {
+			return nil
+		}
+		resolved, rerr := resolveIndexEntry(ctx, state.ns, entryHash)
+		if rerr != nil {
+			return rerr
+		}
+		m, merr := openIndexMap(ctx, state.vs, state.ns, resolved.mapRoot)
+		if merr != nil {
+			return merr
+		}
+		infos = append(infos, resolved.info)
+		maps = append(maps, m)
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	return infos, maps, nil
+}
+
 // openIndexMap returns a prolly.Map handle for the secondary-index data
 // stored at mapRoot.
 func openIndexMap(ctx context.Context, vs *dolttypes.ValueStore, ns tree.NodeStore, mapRoot hash.Hash) (prolly.Map, error) {
