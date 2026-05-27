@@ -146,8 +146,6 @@ type dbState struct {
 	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
-	pendingWS map[pendingWSKey]*pendingTxnState
-
 	uuids        map[string]string
 	indexes      map[string][]backends.IndexInfo
 	secIndexMaps map[string]map[string]prolly.Map
@@ -161,28 +159,6 @@ type dbState struct {
 	collSchemaHash hash.Hash
 	emptyIndexAM   prolly.AddressMap
 	mergeState     *mergeInProgress
-}
-
-type pendingWSKey struct {
-	owner  string
-	branch string
-}
-
-// pendingTxnState holds the per-(owner, branch) transaction overlay along
-// with the base working set snapshot taken when the txn first touched the
-// branch. The base is required for three-way merge on commit.
-type pendingTxnState struct {
-	base    *doltdb.WorkingSet
-	current *doltdb.WorkingSet
-}
-
-func (s *dbState) workingSet(branch string) (*doltdb.WorkingSet, bool) {
-	ws, ok := s.workingSets[branch]
-	return ws, ok
-}
-
-func (s *dbState) setWorkingSet(branch string, ws *doltdb.WorkingSet) {
-	s.workingSets[branch] = ws
 }
 
 // getOrInitBranchAM is a bridge for version-control operations that still work
@@ -1145,7 +1121,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		doltDB:         doltDB,
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
-		pendingWS:      map[pendingWSKey]*pendingTxnState{},
 		uuids:          make(map[string]string),
 		indexes:        make(map[string][]backends.IndexInfo),
 		secIndexMaps:   make(map[string]map[string]prolly.Map),

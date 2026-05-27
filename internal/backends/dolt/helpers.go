@@ -393,6 +393,11 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 }
 
 func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	// state.workingSets is consulted first so cross-session j:false writes
+	// that haven't yet flushed to the working-set ref are still visible to
+	// other readers in the same backend. Removing the cache entirely would
+	// require routing every cross-session read through SessionRegistry, a
+	// bigger reorg than qsc.6 buys us.
 	if ws, ok := state.workingSets[branch]; ok {
 		return ws, nil
 	}

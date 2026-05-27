@@ -103,10 +103,12 @@ func latestBranchWS(ctx context.Context, state *dbState, branch string) (*doltdb
 }
 
 func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.WorkingSet, bool) {
-	_, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation)
-	if !inTxn {
-		return nil, false
-	}
+	// Note: we no longer gate on ownerForTxn (inTxn). Any session with a
+	// dirty branchState for this (db, branch) -- including default-mode
+	// j:false writes that set the dirty bit through sess.SetWorkingSet --
+	// should read through the session so own-write semantics hold. Other
+	// sessions still see disk via the latestBranchWS / loadCommittedWS
+	// path; their DirtyBranchRevisions doesn't include this branch.
 	sess := sessionFromContext(ctx)
 	if sess == nil {
 		return nil, false
