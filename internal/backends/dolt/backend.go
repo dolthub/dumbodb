@@ -206,6 +206,10 @@ func amToRootValue(ctx context.Context, db *dbState, am prolly.AddressMap) (dolt
 // persistAM sets the working root for branch to am and immediately flushes to
 // the doltDB working set. Used by version-control operations that produce a new
 // AM and need it durable. The caller must hold s.mu (write lock).
+//
+// If the caller's ctx carries a registered session, the new working set is
+// also pushed onto that session's branchState so dsess.VisitGCRoots sees
+// the post-op state during a concurrent GC.
 func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly.AddressMap) error {
 	rtvlMsg := buildRootValueFlatbuffer(workingAM)
 	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
@@ -226,14 +230,17 @@ func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly
 	// the DTBL ArtifactMap, not in the working/staged difference.
 	newWS := ws.WithWorkingRoot(rv).WithStagedRoot(rv)
 	s.workingSets[branch] = newWS
+	s.pushWSToSession(ctx, branch, newWS)
 	return updateWorkingSet(ctx, s.doltDB, newWS, branch)
 }
 
 // setAM is a bridge for version-control operations that still produce raw AMs.
 // Wraps the AM in a RootValue and updates the branch working set.
 // The caller must hold s.mu (write lock).
-func (s *dbState) setAM(branch string, am prolly.AddressMap) {
-	ctx := context.Background()
+//
+// If the caller's ctx carries a registered session, the new working set is
+// also pushed onto that session's branchState; see persistAM.
+func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap) {
 	rtvlMsg := buildRootValueFlatbuffer(am)
 	rv, err := doltdb.NewRootValue(ctx, s.doltDB.ValueReadWriter(), s.doltDB.NodeStore(), dolttypes.SerialMessage(rtvlMsg))
 	if err != nil {
@@ -255,7 +262,29 @@ func (s *dbState) setAM(branch string, am prolly.AddressMap) {
 		}
 	}
 	// Only update working root; staged stays where it was (HEAD until explicit stage).
-	s.workingSets[branch] = ws.WithWorkingRoot(rv)
+	newWS := ws.WithWorkingRoot(rv)
+	s.workingSets[branch] = newWS
+	s.pushWSToSession(ctx, branch, newWS)
+}
+
+// pushWSToSession is the session-routing tail of persistAM / setAM.
+// Sets the calling session's branchState.workingSet so dsess sees the
+// post-op state. No-op when the caller has no session in ctx or when
+// state.name isn't dsess-friendly (contains "@"/"/").
+func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
+	if !dbNameDsessFriendly(s.name) {
+		return
+	}
+	sess := sessionFromContext(ctx)
+	if sess == nil {
+		return
+	}
+	sqlCtx := sqlctx.Wrap(ctx, sess)
+	qualified := qualifiedDbName(s.name, branch)
+	// Ignore errors here: persistAM/setAM run within larger version-control
+	// flows that already report failure; a stale branchState only affects
+	// GC visibility (the disk ref and dbState shadow are authoritative).
+	_ = sess.SetWorkingSet(sqlCtx, qualified, newWS)
 }
 
 
@@ -1723,7 +1752,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		db.mergeState = nil
 
 		// Restore the working set to the pre-merge AM.
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db) // best-effort: ignore error on abort
 
 		return &backends.MergeResult{Message: "merge aborted"}, nil
@@ -1849,7 +1878,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if ffAMErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: loading AM: %w", ffAMErr)
 		}
-		db.setAM(params.Into, ffAM)
+		db.setAM(ctx, params.Into, ffAM)
 		if err := db.persistAM(ctx, params.Into, ffAM); err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: fast-forward: updating working set: %w", err)
 		}
@@ -1897,7 +1926,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 
 		// Update the in-memory branch AM so reads during conflict resolution
 		// reflect the merged state (right-only changes already applied).
-		db.setAM(params.Into, mergedAM)
+		db.setAM(ctx, params.Into, mergedAM)
 
 		// Persist conflict state: write working set and save merge state to disk.
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
@@ -1962,7 +1991,7 @@ func (b *Backend) commitMerge(
 		return nil, fmt.Errorf("commitMerge: no head after merge commit")
 	}
 
-	db.setAM(intoBranch, mergedAM)
+	db.setAM(ctx, intoBranch, mergedAM)
 	if intoBranch == defaultBranch {
 		if err := db.persistAM(ctx, defaultBranch, mergedAM); err != nil {
 			return nil, fmt.Errorf("commitMerge: updating working set: %w", err)
@@ -2020,7 +2049,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		db.mergeState = nil
 
 		// Restore the working set to the pre-pick AM.
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.CherryPickResult{Message: "cherry-pick aborted"}, nil
@@ -2240,7 +2269,7 @@ func (b *Backend) commitCherryPick(
 		return nil, fmt.Errorf("commitCherryPick: no head after cherry-pick commit")
 	}
 
-	db.setAM(branch, pickedAM)
+	db.setAM(ctx, branch, pickedAM)
 	if branch == defaultBranch {
 		if err := db.persistAM(ctx, defaultBranch, pickedAM); err != nil {
 			return nil, fmt.Errorf("commitCherryPick: updating working set: %w", err)
@@ -2652,7 +2681,7 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if err := db.persistAM(ctx, defaultBranch, targetAM); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (hard): %w", err)
 		}
-		db.setAM(defaultBranch, targetAM)
+		db.setAM(ctx, defaultBranch, targetAM)
 	} else {
 		// Soft reset: keep working tree, change staged to target commit.
 		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)
@@ -2927,7 +2956,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		if _, setErr := db.datasDB.SetHead(ctx, branchDS, ms.rebaseBranchHash, ""); setErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: abort: resetting branch %q to pre-rebase hash: %w", ms.intoBranch, setErr)
 		}
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.RebaseResult{
@@ -3317,7 +3346,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		db.mergeState = nil
 
 		// Restore the working set to the pre-revert AM.
-		db.setAM(ms.intoBranch, ms.premergeAM)
+		db.setAM(ctx, ms.intoBranch, ms.premergeAM)
 		_ = clearMergeState(db)
 
 		return &backends.RevertResult{Message: "revert aborted"}, nil
@@ -3532,7 +3561,7 @@ func (b *Backend) commitRevert(
 		return nil, fmt.Errorf("commitRevert: no head after revert commit")
 	}
 
-	db.setAM(branch, revertedAM)
+	db.setAM(ctx, branch, revertedAM)
 	if branch == defaultBranch {
 		if err := db.persistAM(ctx, defaultBranch, revertedAM); err != nil {
 			return nil, fmt.Errorf("commitRevert: updating working set: %w", err)
