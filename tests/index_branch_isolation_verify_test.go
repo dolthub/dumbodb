@@ -133,8 +133,13 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 		require.Len(t, statusColls, 1, "expected one collection in status")
 		assert.Equal(t, "items", statusColls[0]["name"])
 		assert.Equal(t, "modified", statusColls[0]["status"])
-		assert.Equal(t, []string{"by_name"}, mustStringSlice(t, statusColls[0]["indexesAdded"]),
-			"dumboStatus must surface by_name in indexesAdded before the commit")
+		assert.Equal(t, []string{"by_name"}, mustStringSlice(t, statusColls[0]["addedIndexes"]),
+			"dumboStatus must surface by_name in addedIndexes before the commit")
+		// modifiedIndexes and removedIndexes are always present as empty arrays.
+		assert.Empty(t, mustStringSlice(t, statusColls[0]["modifiedIndexes"]),
+			"modifiedIndexes must be an empty array when nothing modified")
+		assert.Empty(t, mustStringSlice(t, statusColls[0]["removedIndexes"]),
+			"removedIndexes must be an empty array when nothing removed")
 
 		// dumboDiff returns the full index definition (keys + direction).
 		var diffRes bson.M
@@ -142,18 +147,18 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 			"dumboDiff on am before commit must succeed")
 		diffColls := mustArrayOfMaps(t, diffRes["collections"])
 		require.Len(t, diffColls, 1, "expected one collection in diff")
-		diffIndexes := mustArrayOfMaps(t, diffColls[0]["indexes"])
-		require.Len(t, diffIndexes, 1, "expected one index in diff")
-		assert.Equal(t, "by_name", diffIndexes[0]["name"])
-		assert.Equal(t, "added", diffIndexes[0]["status"])
-		// to: must carry the full definition. from: is absent for added.
-		assert.Nil(t, diffIndexes[0]["from"])
-		toDoc := mustMap(t, diffIndexes[0]["to"])
-		assert.Equal(t, "by_name", toDoc["name"])
-		toKeys := mustArrayOfMaps(t, toDoc["keys"])
-		require.Len(t, toKeys, 1, "expected one key field")
-		assert.Equal(t, "name", toKeys[0]["field"])
-		assert.EqualValues(t, 1, toKeys[0]["direction"])
+		addedIdx := mustArrayOfMaps(t, diffColls[0]["addedIndexes"])
+		require.Len(t, addedIdx, 1, "expected one entry in addedIndexes")
+		assert.Equal(t, "by_name", addedIdx[0]["name"])
+		addedKeys := mustArrayOfMaps(t, addedIdx[0]["keys"])
+		require.Len(t, addedKeys, 1, "expected one key field")
+		assert.Equal(t, "name", addedKeys[0]["field"])
+		assert.EqualValues(t, 1, addedKeys[0]["direction"])
+		// The other two index arrays are always present and empty here.
+		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["modifiedIndexes"]),
+			"modifiedIndexes must be an empty array when nothing modified")
+		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["removedIndexes"]),
+			"removedIndexes must be an empty array when nothing removed")
 
 		dumboDBCommit(t, env, dbName+"@am", "am: create by_name", "alice <alice@acme.com>")
 
@@ -307,32 +312,37 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// dumboStatus reports the same name in indexesChanged (not added or deleted).
+		// dumboStatus reports the same name in modifiedIndexes (not added or removed).
 		var statusRes bson.M
 		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboStatus", Value: 1}}).Decode(&statusRes))
 		statusColls := mustArrayOfMaps(t, statusRes["collections"])
 		require.Len(t, statusColls, 1)
-		assert.Nil(t, statusColls[0]["indexesAdded"], "indexesAdded must be absent")
-		assert.Nil(t, statusColls[0]["indexesDeleted"], "indexesDeleted must be absent")
-		assert.Equal(t, []string{"by_x"}, mustStringSlice(t, statusColls[0]["indexesChanged"]))
+		assert.Empty(t, mustStringSlice(t, statusColls[0]["addedIndexes"]),
+			"addedIndexes must be an empty array, not absent")
+		assert.Empty(t, mustStringSlice(t, statusColls[0]["removedIndexes"]),
+			"removedIndexes must be an empty array, not absent")
+		assert.Equal(t, []string{"by_x"}, mustStringSlice(t, statusColls[0]["modifiedIndexes"]))
 
-		// dumboDiff returns one entry with status "modified" carrying both
-		// from (age) and to (name) definitions.
+		// dumboDiff returns one entry in modifiedIndexes carrying both
+		// from (age) and to (name) definitions. addedIndexes and
+		// removedIndexes are always present and empty here.
 		var diffRes bson.M
 		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboDiff", Value: int32(1)}}).Decode(&diffRes))
 		diffColls := mustArrayOfMaps(t, diffRes["collections"])
 		require.Len(t, diffColls, 1)
-		diffIndexes := mustArrayOfMaps(t, diffColls[0]["indexes"])
-		require.Len(t, diffIndexes, 1)
-		assert.Equal(t, "by_x", diffIndexes[0]["name"])
-		assert.Equal(t, "modified", diffIndexes[0]["status"])
+		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["addedIndexes"]))
+		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["removedIndexes"]))
 
-		fromDoc := mustMap(t, diffIndexes[0]["from"])
+		modifiedIdx := mustArrayOfMaps(t, diffColls[0]["modifiedIndexes"])
+		require.Len(t, modifiedIdx, 1)
+		fromDoc := mustMap(t, modifiedIdx[0]["from"])
+		assert.Equal(t, "by_x", fromDoc["name"])
 		fromKeys := mustArrayOfMaps(t, fromDoc["keys"])
 		require.Len(t, fromKeys, 1)
 		assert.Equal(t, "age", fromKeys[0]["field"], "from must reflect the pre-drop key")
 
-		toDoc := mustMap(t, diffIndexes[0]["to"])
+		toDoc := mustMap(t, modifiedIdx[0]["to"])
+		assert.Equal(t, "by_x", toDoc["name"])
 		toKeys := mustArrayOfMaps(t, toDoc["keys"])
 		require.Len(t, toKeys, 1)
 		assert.Equal(t, "name", toKeys[0]["field"], "to must reflect the recreated key")

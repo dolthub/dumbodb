@@ -565,35 +565,45 @@ idb.runCommand({ doltCommit: 1, message: "seed", author: "alice <alice@acme.com>
 idb.items.createIndex({ age: 1 }, { name: "by_age" })
 idb.runCommand({ doltCommit: 1, message: "add by_age", author: "alice <alice@acme.com>" })
 
-// stat shows indexesAdded on the head commit.
+// stat shows addedIndexes on the head commit. modifiedIndexes and
+// removedIndexes are always present as empty arrays.
 idb.runCommand({ doltLog: 1, limit: 1, stat: true })
 // Expected: commits[0].stat[0] = {
 //   name: "items", status: "modified",
 //   added: 0, modified: 0, deleted: 0,
-//   indexesAdded: [ "by_age" ]
+//   addedIndexes: [ "by_age" ],
+//   modifiedIndexes: [],
+//   removedIndexes: []
 // }
 
-// patch shows the full index definition.
+// patch shows the full index definition in addedIndexes. All other
+// change arrays (added/removed/modified docs, modifiedIndexes,
+// removedIndexes) are present as empty arrays.
 idb.runCommand({ doltLog: 1, limit: 1, patch: true })
-// Expected: commits[0].diff[0].indexes = [{
-//   name: "by_age", status: "added",
-//   to: { name: "by_age", keys: [{ field: "age", direction: 1 }] }
-// }]
+// Expected: commits[0].diff[0] = {
+//   ...,
+//   addedIndexes: [
+//     { name: "by_age", keys: [{ field: "age", direction: 1 }] }
+//   ],
+//   modifiedIndexes: [],
+//   removedIndexes: []
+// }
 ```
 
 Key checks:
-- `stat[0].indexesAdded` contains `"by_age"` even though `added/modified/
-  deleted` are all `0`.
-- `diff[0].indexes` is present with one entry: status `"added"`, no
-  `from`, `to` carries the full IndexInfo (name, keys with direction).
+- `stat[0].addedIndexes` contains `"by_age"` even though `added/modified/
+  deleted` are all `0`. `modifiedIndexes` and `removedIndexes` are
+  present as empty arrays.
+- `diff[0].addedIndexes` has one entry: full IndexInfo (name, keys with
+  direction). `modifiedIndexes` and `removedIndexes` are present as
+  empty arrays.
 - The commit is NOT silently dropped from `diff`; before this fix, an
   index-only commit would not appear in patch output because the
   document-level diff was empty.
 
 For the drop+recreate-with-different-spec case, `stat` lists the name in
-`indexesChanged` and `patch` shows a single `indexes[]` entry with
-status `"modified"` carrying both `from` and `to` (see
-`index-branch-isolation.md` Scenario 8).
+`modifiedIndexes` and `patch` shows a single `modifiedIndexes` entry
+with both `from` and `to` (see `index-branch-isolation.md` Scenario 8).
 
 ---
 

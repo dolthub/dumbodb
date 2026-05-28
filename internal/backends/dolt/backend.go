@@ -2302,9 +2302,9 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				}
 
 				// Index lifecycle is content-addressed; the same helper that
-				// powers DumboDBStatus / DumboDBDiff reduces the two DTBLs to
-				// per-index added/deleted/modified.
-				idxDiffs, idxErr := computeIndexDiffs(ctx, db, aHash, bHash)
+				// powers DumboDBStatus / DumboDBDiff reduces the two DTBLs
+				// to per-kind added/modified/removed lists.
+				idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, db, aHash, bHash)
 				if idxErr != nil {
 					return nil, fmt.Errorf("DumboDBLog: index diffs for %q in commit %q: %w", name, ci.Hash.String(), idxErr)
 				}
@@ -2313,21 +2313,16 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
 					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
 					added, modified, deleted, _ := countCollectionMapDiffs(ctx, aMap, bMap)
-					ts := backends.TableStatus{
-						Name: name, Status: status,
-						Added: added, Modified: modified, Deleted: deleted,
-					}
-					for _, d := range idxDiffs {
-						switch d.Status {
-						case "added":
-							ts.IndexesAdded = append(ts.IndexesAdded, d.Name)
-						case "deleted":
-							ts.IndexesDeleted = append(ts.IndexesDeleted, d.Name)
-						case "modified":
-							ts.IndexesChanged = append(ts.IndexesChanged, d.Name)
-						}
-					}
-					info.Stat = append(info.Stat, ts)
+					info.Stat = append(info.Stat, backends.TableStatus{
+						Name:            name,
+						Status:          status,
+						Added:           added,
+						Modified:        modified,
+						Deleted:         deleted,
+						AddedIndexes:    indexNamesOf(idxAdded),
+						ModifiedIndexes: indexChangeNamesOf(idxModified),
+						RemovedIndexes:  indexNamesOf(idxRemoved),
+					})
 				}
 
 				if params.Patch {
@@ -2337,11 +2332,17 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					// Include the collection's diff entry if any document
 					// OR any index changed. An index-only commit was
 					// silently dropped before this check.
-					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 || len(idxDiffs) > 0 {
+					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 ||
+						len(idxAdded) > 0 || len(idxModified) > 0 || len(idxRemoved) > 0 {
 						info.Diff = append(info.Diff, backends.CollectionDiff{
-							Name: name, Status: status,
-							Added: addedDocs, Removed: removedDocs, Modified: modifiedDocs,
-							Indexes: idxDiffs,
+							Name:            name,
+							Status:          status,
+							Added:           addedDocs,
+							Removed:         removedDocs,
+							Modified:        modifiedDocs,
+							AddedIndexes:    idxAdded,
+							ModifiedIndexes: idxModified,
+							RemovedIndexes:  idxRemoved,
 						})
 					}
 				}
@@ -2434,27 +2435,20 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 			return nil, fmt.Errorf("DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
 		}
 
-		idxDiffs, idxErr := computeIndexDiffs(ctx, state, headHash, workingHash)
+		idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, state, headHash, workingHash)
 		if idxErr != nil {
 			return nil, fmt.Errorf("DumboDBStatus: computing index diffs for %q.%q: %w", params.DBName, name, idxErr)
 		}
 
 		ts := backends.TableStatus{
-			Name:     name,
-			Status:   status,
-			Added:    addedCount,
-			Modified: modifiedCount,
-			Deleted:  deletedCount,
-		}
-		for _, d := range idxDiffs {
-			switch d.Status {
-			case "added":
-				ts.IndexesAdded = append(ts.IndexesAdded, d.Name)
-			case "deleted":
-				ts.IndexesDeleted = append(ts.IndexesDeleted, d.Name)
-			case "modified":
-				ts.IndexesChanged = append(ts.IndexesChanged, d.Name)
-			}
+			Name:            name,
+			Status:          status,
+			Added:           addedCount,
+			Modified:        modifiedCount,
+			Deleted:         deletedCount,
+			AddedIndexes:    indexNamesOf(idxAdded),
+			ModifiedIndexes: indexChangeNamesOf(idxModified),
+			RemovedIndexes:  indexNamesOf(idxRemoved),
 		}
 		tables = append(tables, ts)
 	}
@@ -2709,7 +2703,7 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 			return nil, fmt.Errorf("DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
 		}
 
-		idxDiffs, idxErr := computeIndexDiffs(ctx, state, aHash, bHash)
+		idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, state, aHash, bHash)
 		if idxErr != nil {
 			return nil, fmt.Errorf("DumboDBDiff: index diffs for %q in db %q: %w", name, params.DBName, idxErr)
 		}
@@ -2718,17 +2712,20 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		// index-level changes is no diff at all. "added" and "deleted"
 		// collections always surface, even when empty, so the caller can
 		// see the lifecycle event.
-		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 && len(idxDiffs) == 0 {
+		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 &&
+			len(idxAdded) == 0 && len(idxModified) == 0 && len(idxRemoved) == 0 {
 			continue
 		}
 
 		diffs = append(diffs, backends.CollectionDiff{
-			Name:     name,
-			Status:   status,
-			Added:    added,
-			Removed:  removed,
-			Modified: modified,
-			Indexes:  idxDiffs,
+			Name:            name,
+			Status:          status,
+			Added:           added,
+			Removed:         removed,
+			Modified:        modified,
+			AddedIndexes:    idxAdded,
+			ModifiedIndexes: idxModified,
+			RemovedIndexes:  idxRemoved,
 		})
 	}
 

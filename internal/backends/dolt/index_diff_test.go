@@ -49,11 +49,11 @@ func TestStatus_IndexAddedSurfaces(t *testing.T) {
 	if got.Status != "modified" || got.Added != 0 || got.Modified != 0 || got.Deleted != 0 {
 		t.Errorf("expected modified with zero doc changes, got %+v", got)
 	}
-	if !reflect.DeepEqual(got.IndexesAdded, []string{"by_age"}) {
-		t.Errorf("IndexesAdded = %v, want [by_age]", got.IndexesAdded)
+	if !reflect.DeepEqual(got.AddedIndexes, []string{"by_age"}) {
+		t.Errorf("AddedIndexes = %v, want [by_age]", got.AddedIndexes)
 	}
-	if len(got.IndexesChanged) != 0 || len(got.IndexesDeleted) != 0 {
-		t.Errorf("expected no changed/deleted indexes, got changed=%v deleted=%v", got.IndexesChanged, got.IndexesDeleted)
+	if len(got.ModifiedIndexes) != 0 || len(got.RemovedIndexes) != 0 {
+		t.Errorf("expected no modified/removed indexes, got modified=%v removed=%v", got.ModifiedIndexes, got.RemovedIndexes)
 	}
 }
 
@@ -81,8 +81,8 @@ func TestStatus_IndexDeletedSurfaces(t *testing.T) {
 		t.Fatalf("expected one modified collection, got %d", len(res.Tables))
 	}
 	got := res.Tables[0]
-	if !reflect.DeepEqual(got.IndexesDeleted, []string{"by_age"}) {
-		t.Errorf("IndexesDeleted = %v, want [by_age]", got.IndexesDeleted)
+	if !reflect.DeepEqual(got.RemovedIndexes, []string{"by_age"}) {
+		t.Errorf("RemovedIndexes = %v, want [by_age]", got.RemovedIndexes)
 	}
 }
 
@@ -112,11 +112,11 @@ func TestStatus_IndexChangedSurfaces(t *testing.T) {
 		t.Fatalf("expected one modified collection, got %d", len(res.Tables))
 	}
 	got := res.Tables[0]
-	if !reflect.DeepEqual(got.IndexesChanged, []string{"by_x"}) {
-		t.Errorf("IndexesChanged = %v, want [by_x]", got.IndexesChanged)
+	if !reflect.DeepEqual(got.ModifiedIndexes, []string{"by_x"}) {
+		t.Errorf("ModifiedIndexes = %v, want [by_x]", got.ModifiedIndexes)
 	}
-	if len(got.IndexesAdded) != 0 || len(got.IndexesDeleted) != 0 {
-		t.Errorf("expected only IndexesChanged; got added=%v deleted=%v", got.IndexesAdded, got.IndexesDeleted)
+	if len(got.AddedIndexes) != 0 || len(got.RemovedIndexes) != 0 {
+		t.Errorf("expected only ModifiedIndexes; got added=%v removed=%v", got.AddedIndexes, got.RemovedIndexes)
 	}
 }
 
@@ -144,27 +144,21 @@ func TestDiff_IndexAddedSurfaces(t *testing.T) {
 	if got.Name != "items" || got.Status != "modified" {
 		t.Errorf("collection = %+v, want name=items status=modified", got)
 	}
-	if len(got.Indexes) != 1 {
-		t.Fatalf("expected one index diff, got %d", len(got.Indexes))
+	if len(got.AddedIndexes) != 1 {
+		t.Fatalf("expected one added index, got %d", len(got.AddedIndexes))
 	}
-	idx := got.Indexes[0]
-	if idx.Name != "by_age" || idx.Status != "added" {
-		t.Errorf("idx diff = %+v, want name=by_age status=added", idx)
+	if len(got.ModifiedIndexes) != 0 || len(got.RemovedIndexes) != 0 {
+		t.Errorf("expected only AddedIndexes; got modified=%v removed=%v", got.ModifiedIndexes, got.RemovedIndexes)
 	}
-	if idx.From != nil {
-		t.Errorf("expected From=nil for added, got %+v", idx.From)
-	}
-	if idx.To == nil {
-		t.Fatalf("expected To populated for added")
-	}
-	if idx.To.Name != "by_age" || len(idx.To.Key) != 1 || idx.To.Key[0].Field != "age" {
-		t.Errorf("idx.To = %+v, want by_age on field age", idx.To)
+	idx := got.AddedIndexes[0]
+	if idx.Name != "by_age" || len(idx.Key) != 1 || idx.Key[0].Field != "age" {
+		t.Errorf("added index = %+v, want by_age on field age", idx)
 	}
 }
 
 // TestDiff_IndexChangedShowsBothDefinitions: a same-name drop+recreate
-// with a different spec must surface as a "modified" IndexDiff carrying
-// both From (old spec) and To (new spec).
+// with a different spec must surface as a ModifiedIndexes entry
+// carrying both From (old spec) and To (new spec).
 func TestDiff_IndexChangedShowsBothDefinitions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -184,21 +178,25 @@ func TestDiff_IndexChangedShowsBothDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DumboDBDiff: %v", err)
 	}
-	if len(res.Collections) != 1 || len(res.Collections[0].Indexes) != 1 {
-		t.Fatalf("expected one collection with one index diff, got %+v", res.Collections)
+	if len(res.Collections) != 1 {
+		t.Fatalf("expected one collection in diff, got %d", len(res.Collections))
 	}
-	idx := res.Collections[0].Indexes[0]
-	if idx.Status != "modified" {
-		t.Errorf("idx.Status = %q, want modified", idx.Status)
+	got := res.Collections[0]
+	if len(got.AddedIndexes) != 0 || len(got.RemovedIndexes) != 0 {
+		t.Errorf("expected only ModifiedIndexes; got added=%v removed=%v", got.AddedIndexes, got.RemovedIndexes)
 	}
-	if idx.From == nil || idx.To == nil {
-		t.Fatalf("modified diff must include both From and To")
+	if len(got.ModifiedIndexes) != 1 {
+		t.Fatalf("expected one modified index, got %d", len(got.ModifiedIndexes))
 	}
-	if len(idx.From.Key) != 1 || idx.From.Key[0].Field != "age" {
-		t.Errorf("From key = %+v, want field=age", idx.From.Key)
+	ch := got.ModifiedIndexes[0]
+	if ch.From.Name != "by_x" || ch.To.Name != "by_x" {
+		t.Errorf("change names = (%q, %q), want both by_x", ch.From.Name, ch.To.Name)
 	}
-	if len(idx.To.Key) != 1 || idx.To.Key[0].Field != "name" {
-		t.Errorf("To key = %+v, want field=name", idx.To.Key)
+	if len(ch.From.Key) != 1 || ch.From.Key[0].Field != "age" {
+		t.Errorf("From key = %+v, want field=age", ch.From.Key)
+	}
+	if len(ch.To.Key) != 1 || ch.To.Key[0].Field != "name" {
+		t.Errorf("To key = %+v, want field=name", ch.To.Key)
 	}
 }
 
@@ -244,30 +242,31 @@ func TestLog_StatAndPatch_IncludeIndexChanges(t *testing.T) {
 	if len(c3.Stat) != 1 {
 		t.Fatalf("c3 stat: expected one collection, got %d", len(c3.Stat))
 	}
-	if !reflect.DeepEqual(c3.Stat[0].IndexesChanged, []string{"by_age"}) {
-		t.Errorf("c3 stat IndexesChanged = %v, want [by_age]", c3.Stat[0].IndexesChanged)
+	if !reflect.DeepEqual(c3.Stat[0].ModifiedIndexes, []string{"by_age"}) {
+		t.Errorf("c3 stat ModifiedIndexes = %v, want [by_age]", c3.Stat[0].ModifiedIndexes)
 	}
-	if len(c3.Diff) != 1 || len(c3.Diff[0].Indexes) != 1 {
-		t.Fatalf("c3 diff: expected one collection with one index diff, got %+v", c3.Diff)
+	if len(c3.Diff) != 1 || len(c3.Diff[0].ModifiedIndexes) != 1 {
+		t.Fatalf("c3 diff: expected one collection with one modified index, got %+v", c3.Diff)
 	}
-	if c3.Diff[0].Indexes[0].Status != "modified" || c3.Diff[0].Indexes[0].From == nil || c3.Diff[0].Indexes[0].To == nil {
-		t.Errorf("c3 modified index diff malformed: %+v", c3.Diff[0].Indexes[0])
+	ch := c3.Diff[0].ModifiedIndexes[0]
+	if ch.From.Name != "by_age" || ch.To.Name != "by_age" {
+		t.Errorf("c3 modified change names = (%q, %q), want both by_age", ch.From.Name, ch.To.Name)
 	}
 
 	// c2: added by_age. This is the bug fix case -- previously the patch
 	// filter dropped it because addedDocs/removedDocs/modifiedDocs were
 	// all empty.
-	if len(c2.Stat) != 1 || !reflect.DeepEqual(c2.Stat[0].IndexesAdded, []string{"by_age"}) {
-		t.Errorf("c2 stat = %+v, want IndexesAdded=[by_age]", c2.Stat)
+	if len(c2.Stat) != 1 || !reflect.DeepEqual(c2.Stat[0].AddedIndexes, []string{"by_age"}) {
+		t.Errorf("c2 stat = %+v, want AddedIndexes=[by_age]", c2.Stat)
 	}
 	if len(c2.Diff) != 1 {
 		t.Fatalf("c2 diff: expected one collection in patch (was dropped before the fix), got %d", len(c2.Diff))
 	}
-	if len(c2.Diff[0].Indexes) != 1 || c2.Diff[0].Indexes[0].Status != "added" {
-		t.Errorf("c2 diff Indexes = %+v, want one entry with status=added", c2.Diff[0].Indexes)
+	if len(c2.Diff[0].AddedIndexes) != 1 {
+		t.Fatalf("c2 diff AddedIndexes = %+v, want one entry", c2.Diff[0].AddedIndexes)
 	}
-	if c2.Diff[0].Indexes[0].To == nil || c2.Diff[0].Indexes[0].To.Name != "by_age" {
-		t.Errorf("c2 diff added entry missing To: %+v", c2.Diff[0].Indexes[0])
+	if c2.Diff[0].AddedIndexes[0].Name != "by_age" {
+		t.Errorf("c2 added entry name = %q, want by_age", c2.Diff[0].AddedIndexes[0].Name)
 	}
 }
 
@@ -299,22 +298,48 @@ func TestDiff_MultipleIndexChanges(t *testing.T) {
 	if len(res.Collections) != 1 {
 		t.Fatalf("expected one collection in diff, got %d", len(res.Collections))
 	}
-	indexes := res.Collections[0].Indexes
-	names := make([]string, len(indexes))
-	statuses := make([]string, len(indexes))
-	for i, idx := range indexes {
-		names[i] = idx.Name
-		statuses[i] = idx.Status
+	got := res.Collections[0]
+
+	// Each list is itself sorted by name. AddedIndexes carries
+	// "by_name", RemovedIndexes carries "by_age", ModifiedIndexes
+	// carries "by_swap".
+	addedNames := indexInfoNames(got.AddedIndexes)
+	removedNames := indexInfoNames(got.RemovedIndexes)
+	modifiedNames := indexChangeNames(got.ModifiedIndexes)
+	if !sort.StringsAreSorted(addedNames) {
+		t.Errorf("added not sorted: %v", addedNames)
 	}
-	if !sort.StringsAreSorted(names) {
-		t.Errorf("index diffs not sorted by name: %v", names)
+	if !sort.StringsAreSorted(removedNames) {
+		t.Errorf("removed not sorted: %v", removedNames)
 	}
-	wantNames := []string{"by_age", "by_name", "by_swap"}
-	wantStatus := []string{"deleted", "added", "modified"}
-	if !reflect.DeepEqual(names, wantNames) {
-		t.Errorf("names = %v, want %v", names, wantNames)
+	if !sort.StringsAreSorted(modifiedNames) {
+		t.Errorf("modified not sorted: %v", modifiedNames)
 	}
-	if !reflect.DeepEqual(statuses, wantStatus) {
-		t.Errorf("statuses = %v, want %v", statuses, wantStatus)
+	if !reflect.DeepEqual(addedNames, []string{"by_name"}) {
+		t.Errorf("added = %v, want [by_name]", addedNames)
 	}
+	if !reflect.DeepEqual(removedNames, []string{"by_age"}) {
+		t.Errorf("removed = %v, want [by_age]", removedNames)
+	}
+	if !reflect.DeepEqual(modifiedNames, []string{"by_swap"}) {
+		t.Errorf("modified = %v, want [by_swap]", modifiedNames)
+	}
+}
+
+// indexInfoNames extracts names from a []IndexInfo for test assertions.
+func indexInfoNames(infos []backends.IndexInfo) []string {
+	out := make([]string, len(infos))
+	for i, info := range infos {
+		out[i] = info.Name
+	}
+	return out
+}
+
+// indexChangeNames extracts From.Name from each IndexChange.
+func indexChangeNames(changes []backends.IndexChange) []string {
+	out := make([]string, len(changes))
+	for i, c := range changes {
+		out[i] = c.From.Name
+	}
+	return out
 }
