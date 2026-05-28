@@ -698,6 +698,21 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			}
 		}
 	}
+	// Covered-query detection: a find with a single-field IXSCAN whose
+	// projection only references the indexed field with _id explicitly
+	// excluded ({field:1, _id:0}). When covered, the explain tree omits
+	// the FETCH stage and wraps IXSCAN in PROJECTION_COVERED.
+	//
+	// Today this is an explain-shape signal only: the runtime
+	// (tryIndexLookup) still primary-fetches every matching doc. A
+	// runtime "skip the fetch and decode field values from the index
+	// key" optimization is a real performance win but requires
+	// KeyString decoding (workspace-cdq, future). The explain output
+	// stays honest about which queries COULD be covered; users can rely
+	// on PROJECTION_COVERED appearing iff the index key contains all
+	// projected data.
+	covered := false
+
 	// Sort-via-index: when no filter-driven index was chosen and the
 	// query has a single-field non-natural sort, an index on that field
 	// can drive the scan in sorted order without a SORT stage.
@@ -719,12 +734,18 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		sortByIndex = true
 	}
 
+	// Covered: requires a chosen index + a projection that names only
+	// indexed fields and explicitly excludes _id.
+	if indexPicked && params != nil {
+		covered = projectionIsCoveredBy(params.Projection, picked)
+	}
+
 	command := ""
 	if params != nil {
 		command = params.Command
 	}
 
-	winningPlan := buildExplainPlan(command, params, picked, indexPicked, sortByIndex)
+	winningPlan := buildExplainPlan(command, params, picked, indexPicked, sortByIndex, covered)
 
 	qp := must.NotFail(types.NewDocument(
 		"namespace", c.db.name+"."+c.name,
@@ -741,7 +762,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 // (workspace-bbg scope) -- no new planner capabilities (covered queries,
 // compound indexes, OR/AND multi-index, sort via index) are introduced
 // here; those land in their own follow-ups.
-func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked, sortByIndex bool) *explainStage {
+func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked, sortByIndex, covered bool) *explainStage {
 	switch command {
 	case "count":
 		var leaf *explainStage
@@ -774,7 +795,7 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 	default:
 		// "find" and "aggregate" (the latter via pushed-down $match) share
 		// the same shape rules.
-		return buildFindExplainPlan(params, picked, indexPicked, sortByIndex)
+		return buildFindExplainPlan(params, picked, indexPicked, sortByIndex, covered)
 	}
 }
 
@@ -784,7 +805,7 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 // LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK
 // internally) -> PROJECTION_SIMPLE. Covered-query (PROJECTION_COVERED
 // without FETCH) is bucket B and not handled here.
-func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked, sortByIndex bool) *explainStage {
+func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked, sortByIndex, covered bool) *explainStage {
 	var node *explainStage
 	if indexPicked {
 		node = &explainStage{
@@ -792,7 +813,9 @@ func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexI
 			indexName:  picked.Name,
 			keyPattern: keyPatternOf(picked),
 		}
-		node = &explainStage{stage: "FETCH", input: node}
+		if !covered {
+			node = &explainStage{stage: "FETCH", input: node}
+		}
 	} else {
 		node = &explainStage{stage: "COLLSCAN"}
 	}
@@ -814,9 +837,71 @@ func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexI
 		node = &explainStage{stage: "LIMIT", input: node}
 	}
 	if params.Projection != nil && params.Projection.Len() > 0 {
-		node = &explainStage{stage: "PROJECTION_SIMPLE", input: node}
+		projStage := "PROJECTION_SIMPLE"
+		if covered {
+			projStage = "PROJECTION_COVERED"
+		}
+		node = &explainStage{stage: projStage, input: node}
 	}
 	return node
+}
+
+// projectionIsCoveredBy reports whether projection only references
+// fields contained in the picked index's key AND explicitly excludes
+// _id. Required form: {field1: 1, field2: 1, ..., _id: 0} where every
+// projected-in field appears in idx.Key.
+func projectionIsCoveredBy(projection *types.Document, idx backends.IndexInfo) bool {
+	if projection == nil || projection.Len() == 0 {
+		return false
+	}
+	indexed := make(map[string]struct{}, len(idx.Key))
+	for _, k := range idx.Key {
+		indexed[k.Field] = struct{}{}
+	}
+	idExcluded := false
+	for _, k := range projection.Keys() {
+		v, err := projection.Get(k)
+		if err != nil {
+			return false
+		}
+		include, ok := projectionInclusion(v)
+		if !ok {
+			return false
+		}
+		if k == "_id" {
+			if include {
+				return false
+			}
+			idExcluded = true
+			continue
+		}
+		if !include {
+			// {field: 0} is exclusion-style projection; not covered.
+			return false
+		}
+		if _, ok := indexed[k]; !ok {
+			return false
+		}
+	}
+	return idExcluded
+}
+
+// projectionInclusion converts an int/bool projection value to a bool
+// (true=include, false=exclude). Returns ok=false for anything else
+// (e.g. {$slice: ...}, {$elemMatch: ...}) since those are not
+// covered-eligible.
+func projectionInclusion(v any) (bool, bool) {
+	switch x := v.(type) {
+	case int32:
+		return x != 0, true
+	case int64:
+		return x != 0, true
+	case float64:
+		return x != 0, true
+	case bool:
+		return x, true
+	}
+	return false, false
 }
 
 // sortIsSingleField reports whether sort is a single non-$natural key,
