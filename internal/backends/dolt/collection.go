@@ -666,10 +666,14 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	}
 
 	// Picked index: explicit hint wins; otherwise an equality / range
-	// filter on a single-field index.
+	// filter on a single-field index. A {$natural: ...} hint forces a
+	// collection scan and short-circuits all index selection -- MongoDB
+	// treats $natural as "ignore the indexes, walk the storage in
+	// natural order."
 	var picked backends.IndexInfo
 	var indexPicked bool
-	if params != nil {
+	naturalHint := params != nil && hintIsNatural(params.Hint)
+	if !naturalHint && params != nil {
 		if hintName := pickHintedIndex(params.Hint, idxInfos); hintName != "" {
 			for _, idx := range idxInfos {
 				if idx.Name == hintName {
@@ -680,10 +684,10 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			}
 		}
 	}
-	if !indexPicked && params != nil {
+	if !naturalHint && !indexPicked && params != nil {
 		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos)
 	}
-	if !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
+	if !naturalHint && !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
 		// distinct uses a covered index on its key when one exists; the
 		// filter (if any) does not drive selection.
 		for _, idx := range idxInfos {
@@ -803,6 +807,20 @@ func sortIsNatural(sort *types.Document) bool {
 		return false
 	}
 	return sort.Keys()[0] == "$natural"
+}
+
+// hintIsNatural reports whether hint is the {"$natural": <int>}
+// pattern. MongoDB treats this as "scan storage in natural order; do
+// not pick an index regardless of what filter/sort suggests."
+func hintIsNatural(hint any) bool {
+	doc, ok := hint.(*types.Document)
+	if !ok || doc == nil || doc.Len() != 1 {
+		return false
+	}
+	if doc.Keys()[0] != "$natural" {
+		return false
+	}
+	return true
 }
 
 // pickHintedIndex resolves a hint value (either a name string or a key-pattern
