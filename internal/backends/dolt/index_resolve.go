@@ -337,42 +337,45 @@ func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInf
 	return newAM, nil
 }
 
-// computeIndexDiffs compares the secondary-index AMs of two DTBL hashes
-// and returns the per-index lifecycle changes. An index is:
-//   - "added"   when only the b side has it,
-//   - "deleted" when only the a side has it,
-//   - "modified" when both sides carry the same name but different
-//                IndexEntry chunk hashes (drop+recreate with a different
-//                spec).
+// computeIndexChanges compares the secondary-index AMs of two DTBL
+// hashes and returns the per-kind index lifecycle: added, modified, and
+// removed. An index is:
+//   - added    when only the b side has it,
+//   - removed  when only the a side has it,
+//   - modified when both sides carry the same name but different
+//              IndexEntry chunk hashes (drop+recreate with a different
+//              spec).
 //
 // Either hash may be the zero hash (collection absent on that side); in
-// that case the index list for that side is empty.
+// that case the corresponding side's index list is empty.
 //
-// Results are sorted by index name. The IndexInfo pointers in From/To
-// are decoded via resolveIndexEntry (memoized).
-func computeIndexDiffs(ctx context.Context, state *dbState, aDTBL, bDTBL hash.Hash) ([]backends.IndexDiff, error) {
+// All three returned slices are sorted by index name. The IndexInfo
+// values are decoded via resolveIndexEntry (memoized). Each IndexChange
+// in modified carries both the pre-state (From) and post-state (To)
+// definitions; the index name is From.Name == To.Name.
+func computeIndexChanges(ctx context.Context, state *dbState, aDTBL, bDTBL hash.Hash) (added []backends.IndexInfo, modified []backends.IndexChange, removed []backends.IndexInfo, err error) {
 	aAM, err := indexAMForDTBL(ctx, state.cs, state.ns, aDTBL)
 	if err != nil {
-		return nil, fmt.Errorf("computeIndexDiffs: a side: %w", err)
+		return nil, nil, nil, fmt.Errorf("computeIndexChanges: a side: %w", err)
 	}
 	bAM, err := indexAMForDTBL(ctx, state.cs, state.ns, bDTBL)
 	if err != nil {
-		return nil, fmt.Errorf("computeIndexDiffs: b side: %w", err)
+		return nil, nil, nil, fmt.Errorf("computeIndexChanges: b side: %w", err)
 	}
 
 	aEntries := make(map[string]hash.Hash)
-	if err := aAM.IterAll(ctx, func(name string, h hash.Hash) error {
+	if err = aAM.IterAll(ctx, func(name string, h hash.Hash) error {
 		aEntries[name] = h
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("computeIndexDiffs: walking a side: %w", err)
+		return nil, nil, nil, fmt.Errorf("computeIndexChanges: walking a side: %w", err)
 	}
 	bEntries := make(map[string]hash.Hash)
-	if err := bAM.IterAll(ctx, func(name string, h hash.Hash) error {
+	if err = bAM.IterAll(ctx, func(name string, h hash.Hash) error {
 		bEntries[name] = h
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("computeIndexDiffs: walking b side: %w", err)
+		return nil, nil, nil, fmt.Errorf("computeIndexChanges: walking b side: %w", err)
 	}
 
 	allNames := make(map[string]struct{}, len(aEntries)+len(bEntries))
@@ -388,40 +391,63 @@ func computeIndexDiffs(ctx context.Context, state *dbState, aDTBL, bDTBL hash.Ha
 	}
 	sort.Strings(sorted)
 
-	var out []backends.IndexDiff
 	for _, name := range sorted {
 		aH, inA := aEntries[name]
 		bH, inB := bEntries[name]
 		switch {
 		case !inA && inB:
-			info, err := resolveIndexEntry(ctx, state.ns, bH)
-			if err != nil {
-				return nil, fmt.Errorf("computeIndexDiffs: resolving b entry for %q: %w", name, err)
+			info, rerr := resolveIndexEntry(ctx, state.ns, bH)
+			if rerr != nil {
+				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving b entry for %q: %w", name, rerr)
 			}
-			toCopy := info.info
-			out = append(out, backends.IndexDiff{Name: name, Status: "added", To: &toCopy})
+			added = append(added, info.info)
 		case inA && !inB:
-			info, err := resolveIndexEntry(ctx, state.ns, aH)
-			if err != nil {
-				return nil, fmt.Errorf("computeIndexDiffs: resolving a entry for %q: %w", name, err)
+			info, rerr := resolveIndexEntry(ctx, state.ns, aH)
+			if rerr != nil {
+				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving a entry for %q: %w", name, rerr)
 			}
-			fromCopy := info.info
-			out = append(out, backends.IndexDiff{Name: name, Status: "deleted", From: &fromCopy})
+			removed = append(removed, info.info)
 		case aH != bH:
-			aInfo, err := resolveIndexEntry(ctx, state.ns, aH)
-			if err != nil {
-				return nil, fmt.Errorf("computeIndexDiffs: resolving a entry for %q: %w", name, err)
+			aInfo, rerr := resolveIndexEntry(ctx, state.ns, aH)
+			if rerr != nil {
+				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving a entry for %q: %w", name, rerr)
 			}
-			bInfo, err := resolveIndexEntry(ctx, state.ns, bH)
-			if err != nil {
-				return nil, fmt.Errorf("computeIndexDiffs: resolving b entry for %q: %w", name, err)
+			bInfo, rerr := resolveIndexEntry(ctx, state.ns, bH)
+			if rerr != nil {
+				return nil, nil, nil, fmt.Errorf("computeIndexChanges: resolving b entry for %q: %w", name, rerr)
 			}
-			fromCopy := aInfo.info
-			toCopy := bInfo.info
-			out = append(out, backends.IndexDiff{Name: name, Status: "modified", From: &fromCopy, To: &toCopy})
+			modified = append(modified, backends.IndexChange{From: aInfo.info, To: bInfo.info})
 		}
 	}
-	return out, nil
+	return added, modified, removed, nil
+}
+
+// indexNamesOf extracts the Name field from each IndexInfo, in input
+// order. Returns a nil slice for nil input so callers passing a status
+// row through json.Marshal-style code can rely on "always emit []"
+// downstream by len-checking, not nil-checking.
+func indexNamesOf(infos []backends.IndexInfo) []string {
+	if len(infos) == 0 {
+		return nil
+	}
+	out := make([]string, len(infos))
+	for i, info := range infos {
+		out[i] = info.Name
+	}
+	return out
+}
+
+// indexChangeNamesOf extracts the index name from each IndexChange.
+// From.Name == To.Name by construction (same-name drop+recreate).
+func indexChangeNamesOf(changes []backends.IndexChange) []string {
+	if len(changes) == 0 {
+		return nil
+	}
+	out := make([]string, len(changes))
+	for i, c := range changes {
+		out[i] = c.From.Name
+	}
+	return out
 }
 
 // openIndexMap returns a prolly.Map handle for the secondary-index data

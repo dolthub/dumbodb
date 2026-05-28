@@ -661,7 +661,8 @@ func TestLogVerify(t *testing.T) {
 		head := raw["commits"].(bson.A)[0].(bson.M)
 
 		// Stat must reflect the index-only nature: zero doc counts plus
-		// indexesAdded containing by_age.
+		// addedIndexes containing by_age. modifiedIndexes and
+		// removedIndexes are always present as empty arrays.
 		statArr, ok := head["stat"].(bson.A)
 		require.True(t, ok, "stat must be present")
 		require.Len(t, statArr, 1)
@@ -670,10 +671,16 @@ func TestLogVerify(t *testing.T) {
 		assert.EqualValues(t, 0, s["added"])
 		assert.EqualValues(t, 0, s["modified"])
 		assert.EqualValues(t, 0, s["deleted"])
-		idxAdded, ok := s["indexesAdded"].(bson.A)
-		require.True(t, ok, "indexesAdded must surface in stat")
-		require.Len(t, idxAdded, 1)
-		assert.Equal(t, "by_age", idxAdded[0])
+		addedIdx, ok := s["addedIndexes"].(bson.A)
+		require.True(t, ok, "addedIndexes must surface in stat")
+		require.Len(t, addedIdx, 1)
+		assert.Equal(t, "by_age", addedIdx[0])
+		modIdx, ok := s["modifiedIndexes"].(bson.A)
+		require.True(t, ok, "modifiedIndexes must be present as empty array")
+		assert.Empty(t, modIdx)
+		remIdx, ok := s["removedIndexes"].(bson.A)
+		require.True(t, ok, "removedIndexes must be present as empty array")
+		assert.Empty(t, remIdx)
 
 		// Patch must include the commit; before the fix it was silently
 		// dropped because the doc-diff was empty.
@@ -681,20 +688,17 @@ func TestLogVerify(t *testing.T) {
 		require.True(t, ok, "diff must be present")
 		require.Len(t, diffArr, 1, "index-only commit must appear in patch")
 		cd := diffArr[0].(bson.M)
-		indexes, ok := cd["indexes"].(bson.A)
-		require.True(t, ok, "diff[0].indexes must be present")
-		require.Len(t, indexes, 1)
-		idx := indexes[0].(bson.M)
-		assert.Equal(t, "by_age", idx["name"])
-		assert.Equal(t, "added", idx["status"])
-		assert.Nil(t, idx["from"], "no from for added index")
-		to, ok := idx["to"].(bson.M)
-		require.True(t, ok, "to must be present for added index")
-		assert.Equal(t, "by_age", to["name"])
-		toKeys := to["keys"].(bson.A)
-		require.Len(t, toKeys, 1)
-		k := toKeys[0].(bson.M)
+		diffAdded, ok := cd["addedIndexes"].(bson.A)
+		require.True(t, ok, "diff[0].addedIndexes must be present")
+		require.Len(t, diffAdded, 1)
+		addedEntry := diffAdded[0].(bson.M)
+		assert.Equal(t, "by_age", addedEntry["name"])
+		addedKeys := addedEntry["keys"].(bson.A)
+		require.Len(t, addedKeys, 1)
+		k := addedKeys[0].(bson.M)
 		assert.Equal(t, "age", k["field"])
 		assert.EqualValues(t, 1, k["direction"])
+		assert.Empty(t, cd["modifiedIndexes"].(bson.A))
+		assert.Empty(t, cd["removedIndexes"].(bson.A))
 	})
 }

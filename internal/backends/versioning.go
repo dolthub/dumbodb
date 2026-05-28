@@ -219,12 +219,16 @@ type TableStatus struct {
 	Deleted  int
 
 	// Index lifecycle, name-only for the brief view. An index appears in
-	// IndexesChanged when the same name is present on both sides with
+	// ModifiedIndexes when the same name is present on both sides with
 	// different definitions -- i.e. drop+recreate within the uncommitted
 	// working set. Full per-index detail surfaces through DumboDBDiff.
-	IndexesAdded   []string
-	IndexesChanged []string
-	IndexesDeleted []string
+	//
+	// Callers must always emit all three on the wire as empty arrays
+	// when there are no changes of that kind, so consumers do not have
+	// to branch on field presence.
+	AddedIndexes    []string
+	ModifiedIndexes []string
+	RemovedIndexes  []string
 }
 
 type VersioningStatusResult struct {
@@ -267,25 +271,29 @@ type ModifiedDoc struct {
 	Diff []FieldDiff
 }
 
-// IndexDiff represents the change to a single secondary index between two
-// states. Indexes are content-addressed by their full definition, so a
-// "modified" entry means the same name exists on both sides with a
-// different spec -- the index was dropped and recreated.
-type IndexDiff struct {
-	Name   string
-	Status string     // "added", "deleted", or "modified"
-	From   *IndexInfo // pre-state definition; nil when Status == "added"
-	To     *IndexInfo // post-state definition; nil when Status == "deleted"
+// IndexChange represents a secondary index that has the same name on
+// both sides with a different definition. From and To both carry the
+// full IndexInfo. The Name field is implicit (From.Name == To.Name).
+type IndexChange struct {
+	From IndexInfo
+	To   IndexInfo
 }
 
 // CollectionDiff represents the changes to a single collection.
+//
+// The three index slices are symmetric with the three document slices:
+// each lists entries of one kind, with full detail per entry. Callers
+// must always emit all six on the wire as empty arrays when empty, so
+// consumers do not have to branch on field presence.
 type CollectionDiff struct {
-	Name     string
-	Status   string            // "added" (only in b), "deleted" (only in a), or "modified" (in both with doc or index changes)
-	Added    []*types.Document // full documents added in "b"
-	Removed  []*types.Document // full documents removed from "a"
-	Modified []ModifiedDoc     // documents changed between "a" and "b"
-	Indexes  []IndexDiff       // secondary-index lifecycle between "a" and "b"
+	Name            string
+	Status          string            // "added" (only in b), "deleted" (only in a), or "modified" (in both with doc or index changes)
+	Added           []*types.Document // full documents added in "b"
+	Removed         []*types.Document // full documents removed from "a"
+	Modified        []ModifiedDoc     // documents changed between "a" and "b"
+	AddedIndexes    []IndexInfo       // full definitions of indexes added in "b"
+	ModifiedIndexes []IndexChange     // pre/post definitions for indexes whose spec changed
+	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
 }
 
 // DiffResult represents the result of VersioningBackend.DumboDBDiff method.

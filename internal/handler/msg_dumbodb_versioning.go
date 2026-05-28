@@ -111,45 +111,32 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 }
 
 // tableStatusToDoc renders a backends.TableStatus as a wire document.
-// Shared by MsgDumboDBStatus and the Stat block of MsgDumboDBLog so
-// the two surfaces stay consistent (notably for the index-lifecycle
-// fields).
+// Shared by MsgDumboDBStatus and the Stat block of MsgDumboDBLog. The
+// three index name lists are ALWAYS emitted, as empty arrays when
+// nothing of that kind changed, so consumers do not have to branch on
+// field presence.
 func tableStatusToDoc(t backends.TableStatus) *types.Document {
-	pairs := []any{
+	return must.NotFail(types.NewDocument(
 		"name", t.Name,
 		"status", t.Status,
 		"added", int32(t.Added),
 		"modified", int32(t.Modified),
 		"deleted", int32(t.Deleted),
-	}
-	if len(t.IndexesAdded) > 0 {
-		arr := types.MakeArray(len(t.IndexesAdded))
-		for _, n := range t.IndexesAdded {
-			arr.Append(n)
-		}
-		pairs = append(pairs, "indexesAdded", arr)
-	}
-	if len(t.IndexesChanged) > 0 {
-		arr := types.MakeArray(len(t.IndexesChanged))
-		for _, n := range t.IndexesChanged {
-			arr.Append(n)
-		}
-		pairs = append(pairs, "indexesChanged", arr)
-	}
-	if len(t.IndexesDeleted) > 0 {
-		arr := types.MakeArray(len(t.IndexesDeleted))
-		for _, n := range t.IndexesDeleted {
-			arr.Append(n)
-		}
-		pairs = append(pairs, "indexesDeleted", arr)
-	}
-	return must.NotFail(types.NewDocument(pairs...))
+		"addedIndexes", stringArray(t.AddedIndexes),
+		"modifiedIndexes", stringArray(t.ModifiedIndexes),
+		"removedIndexes", stringArray(t.RemovedIndexes),
+	))
 }
 
 // collectionDiffToDoc renders a backends.CollectionDiff as a wire
 // document. Shared by MsgDumboDBDiff and the Patch block of
-// MsgDumboDBLog. The added/removed/modified arrays may be empty (for an
-// index-only diff); the indexes array is populated when present.
+// MsgDumboDBLog. All six change arrays (added/removed/modified for
+// docs and addedIndexes/modifiedIndexes/removedIndexes for indexes)
+// are always emitted, empty when there's no change of that kind.
+//
+// addedIndexes and removedIndexes carry full IndexInfo entries.
+// modifiedIndexes carries {from, to} pairs with the full IndexInfo on
+// each side.
 func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
 	added := types.MakeArray(len(cd.Added))
 	for _, doc := range cd.Added {
@@ -177,31 +164,47 @@ func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
 			"diff", diffArray,
 		)))
 	}
-	pairs := []any{
+
+	addedIdx := types.MakeArray(len(cd.AddedIndexes))
+	for _, info := range cd.AddedIndexes {
+		i := info
+		addedIdx.Append(indexInfoToDoc(&i))
+	}
+	removedIdx := types.MakeArray(len(cd.RemovedIndexes))
+	for _, info := range cd.RemovedIndexes {
+		i := info
+		removedIdx.Append(indexInfoToDoc(&i))
+	}
+	modifiedIdx := types.MakeArray(len(cd.ModifiedIndexes))
+	for _, ch := range cd.ModifiedIndexes {
+		from := ch.From
+		to := ch.To
+		modifiedIdx.Append(must.NotFail(types.NewDocument(
+			"from", indexInfoToDoc(&from),
+			"to", indexInfoToDoc(&to),
+		)))
+	}
+
+	return must.NotFail(types.NewDocument(
 		"name", cd.Name,
 		"status", cd.Status,
 		"added", added,
 		"removed", removed,
 		"modified", modified,
+		"addedIndexes", addedIdx,
+		"modifiedIndexes", modifiedIdx,
+		"removedIndexes", removedIdx,
+	))
+}
+
+// stringArray renders a []string as a wire-array, returning an empty
+// array (not nil) for nil/empty input.
+func stringArray(s []string) *types.Array {
+	arr := types.MakeArray(len(s))
+	for _, v := range s {
+		arr.Append(v)
 	}
-	if len(cd.Indexes) > 0 {
-		indexes := types.MakeArray(len(cd.Indexes))
-		for _, idx := range cd.Indexes {
-			idxPairs := []any{
-				"name", idx.Name,
-				"status", idx.Status,
-			}
-			if idx.From != nil {
-				idxPairs = append(idxPairs, "from", indexInfoToDoc(idx.From))
-			}
-			if idx.To != nil {
-				idxPairs = append(idxPairs, "to", indexInfoToDoc(idx.To))
-			}
-			indexes.Append(must.NotFail(types.NewDocument(idxPairs...)))
-		}
-		pairs = append(pairs, "indexes", indexes)
-	}
-	return must.NotFail(types.NewDocument(pairs...))
+	return arr
 }
 
 // indexInfoToDoc renders an IndexInfo as a wire document for dumboDiff
