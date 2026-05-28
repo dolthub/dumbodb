@@ -545,7 +545,59 @@ Key checks:
 
 ---
 
-## Scenario 12: stat and patch absent when not requested
+## Scenario 12: stat and patch surface index changes
+
+`stat` lists per-collection index lifecycle (added/changed/deleted) and
+`patch` includes a per-index diff carrying the full definition on each
+side. An index-only commit (no document changes) still appears in both
+outputs.
+
+Run this in a fresh database:
+
+```js
+var idb = db.getSiblingDB("logidxvdb")
+idb.dropDatabase()
+
+idb.items.insertOne({ _id: 1, age: 30, name: "alpha" })
+idb.runCommand({ doltCommit: 1, message: "seed", author: "alice <alice@acme.com>" })
+
+// Index-only commit: no documents change, by_age is added.
+idb.items.createIndex({ age: 1 }, { name: "by_age" })
+idb.runCommand({ doltCommit: 1, message: "add by_age", author: "alice <alice@acme.com>" })
+
+// stat shows indexesAdded on the head commit.
+idb.runCommand({ doltLog: 1, limit: 1, stat: true })
+// Expected: commits[0].stat[0] = {
+//   name: "items", status: "modified",
+//   added: 0, modified: 0, deleted: 0,
+//   indexesAdded: [ "by_age" ]
+// }
+
+// patch shows the full index definition.
+idb.runCommand({ doltLog: 1, limit: 1, patch: true })
+// Expected: commits[0].diff[0].indexes = [{
+//   name: "by_age", status: "added",
+//   to: { name: "by_age", keys: [{ field: "age", direction: 1 }] }
+// }]
+```
+
+Key checks:
+- `stat[0].indexesAdded` contains `"by_age"` even though `added/modified/
+  deleted` are all `0`.
+- `diff[0].indexes` is present with one entry: status `"added"`, no
+  `from`, `to` carries the full IndexInfo (name, keys with direction).
+- The commit is NOT silently dropped from `diff`; before this fix, an
+  index-only commit would not appear in patch output because the
+  document-level diff was empty.
+
+For the drop+recreate-with-different-spec case, `stat` lists the name in
+`indexesChanged` and `patch` shows a single `indexes[]` entry with
+status `"modified"` carrying both `from` and `to` (see
+`index-branch-isolation.md` Scenario 8).
+
+---
+
+## Scenario 13: stat and patch absent when not requested
 
 When neither `stat` nor `patch` is passed, commit entries do not include
 `stat` or `diff` fields.

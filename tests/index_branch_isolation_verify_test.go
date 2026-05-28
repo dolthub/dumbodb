@@ -123,6 +123,38 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 			Options: options.Index().SetName("by_name"),
 		})
 		require.NoError(t, err, "createIndex on am must succeed")
+
+		// Before committing: dumboStatus surfaces the uncommitted
+		// index addition on am.
+		var statusRes bson.M
+		require.NoError(t, amDB.RunCommand(ctx, bson.D{{Key: "dumboStatus", Value: 1}}).Decode(&statusRes),
+			"dumboStatus on am before commit must succeed")
+		statusColls := mustArrayOfMaps(t, statusRes["collections"])
+		require.Len(t, statusColls, 1, "expected one collection in status")
+		assert.Equal(t, "items", statusColls[0]["name"])
+		assert.Equal(t, "modified", statusColls[0]["status"])
+		assert.Equal(t, []string{"by_name"}, mustStringSlice(t, statusColls[0]["indexesAdded"]),
+			"dumboStatus must surface by_name in indexesAdded before the commit")
+
+		// dumboDiff returns the full index definition (keys + direction).
+		var diffRes bson.M
+		require.NoError(t, amDB.RunCommand(ctx, bson.D{{Key: "dumboDiff", Value: int32(1)}}).Decode(&diffRes),
+			"dumboDiff on am before commit must succeed")
+		diffColls := mustArrayOfMaps(t, diffRes["collections"])
+		require.Len(t, diffColls, 1, "expected one collection in diff")
+		diffIndexes := mustArrayOfMaps(t, diffColls[0]["indexes"])
+		require.Len(t, diffIndexes, 1, "expected one index in diff")
+		assert.Equal(t, "by_name", diffIndexes[0]["name"])
+		assert.Equal(t, "added", diffIndexes[0]["status"])
+		// to: must carry the full definition. from: is absent for added.
+		assert.Nil(t, diffIndexes[0]["from"])
+		toDoc := mustMap(t, diffIndexes[0]["to"])
+		assert.Equal(t, "by_name", toDoc["name"])
+		toKeys := mustArrayOfMaps(t, toDoc["keys"])
+		require.Len(t, toKeys, 1, "expected one key field")
+		assert.Equal(t, "name", toKeys[0]["field"])
+		assert.EqualValues(t, 1, toKeys[0]["direction"])
+
 		dumboDBCommit(t, env, dbName+"@am", "am: create by_name", "alice <alice@acme.com>")
 
 		assert.Equal(t, []string{"_id_", "by_name"}, indexNamesOf(t, env, dbName+"@am"))
@@ -243,4 +275,114 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 		assert.Equal(t, []string{"_id_", "by_id_name"}, indexNamesOf(t, env, dbName+"@nz"))
 		assert.Equal(t, []int32{212}, idsForName(t, env, dbName+"@nz", "zulu"))
 	})
+
+	// ----------------------------------------------------------------------
+	// Scenario 8: dumboDiff shows index modification (drop + recreate with
+	// different spec). Uses a fresh database isolated from idxisovdb.
+	// ----------------------------------------------------------------------
+	t.Run("Scenario8_IndexModifiedShowsBothDefinitions", func(t *testing.T) {
+		modDbName := fmt.Sprintf("idxmodvrfy%d", rand.Int64N(1_000_000))
+		mdb := env.client.Database(modDbName)
+		require.NoError(t, mdb.Drop(ctx))
+
+		items := mdb.Collection("items")
+		_, err := items.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)},
+			{Key: "age", Value: int32(30)},
+			{Key: "name", Value: "alpha"},
+		})
+		require.NoError(t, err)
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "age", Value: int32(1)}},
+			Options: options.Index().SetName("by_x"),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, modDbName, "seed + by_x on age", "alice <alice@acme.com>")
+
+		// Drop by_x and recreate it with a different key. Uncommitted.
+		require.NoError(t, items.Indexes().DropOne(ctx, "by_x"))
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "name", Value: int32(1)}},
+			Options: options.Index().SetName("by_x"),
+		})
+		require.NoError(t, err)
+
+		// dumboStatus reports the same name in indexesChanged (not added or deleted).
+		var statusRes bson.M
+		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboStatus", Value: 1}}).Decode(&statusRes))
+		statusColls := mustArrayOfMaps(t, statusRes["collections"])
+		require.Len(t, statusColls, 1)
+		assert.Nil(t, statusColls[0]["indexesAdded"], "indexesAdded must be absent")
+		assert.Nil(t, statusColls[0]["indexesDeleted"], "indexesDeleted must be absent")
+		assert.Equal(t, []string{"by_x"}, mustStringSlice(t, statusColls[0]["indexesChanged"]))
+
+		// dumboDiff returns one entry with status "modified" carrying both
+		// from (age) and to (name) definitions.
+		var diffRes bson.M
+		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboDiff", Value: int32(1)}}).Decode(&diffRes))
+		diffColls := mustArrayOfMaps(t, diffRes["collections"])
+		require.Len(t, diffColls, 1)
+		diffIndexes := mustArrayOfMaps(t, diffColls[0]["indexes"])
+		require.Len(t, diffIndexes, 1)
+		assert.Equal(t, "by_x", diffIndexes[0]["name"])
+		assert.Equal(t, "modified", diffIndexes[0]["status"])
+
+		fromDoc := mustMap(t, diffIndexes[0]["from"])
+		fromKeys := mustArrayOfMaps(t, fromDoc["keys"])
+		require.Len(t, fromKeys, 1)
+		assert.Equal(t, "age", fromKeys[0]["field"], "from must reflect the pre-drop key")
+
+		toDoc := mustMap(t, diffIndexes[0]["to"])
+		toKeys := mustArrayOfMaps(t, toDoc["keys"])
+		require.Len(t, toKeys, 1)
+		assert.Equal(t, "name", toKeys[0]["field"], "to must reflect the recreated key")
+	})
+}
+
+// mustArrayOfMaps converts a bson.A into a []bson.M, fataling on a
+// non-array value or non-map element.
+func mustArrayOfMaps(t *testing.T, v interface{}) []bson.M {
+	t.Helper()
+	arr, ok := v.(bson.A)
+	if !ok {
+		t.Fatalf("expected array, got %T: %v", v, v)
+	}
+	out := make([]bson.M, len(arr))
+	for i, el := range arr {
+		m, ok := el.(bson.M)
+		if !ok {
+			t.Fatalf("array element %d: expected map, got %T", i, el)
+		}
+		out[i] = m
+	}
+	return out
+}
+
+// mustMap converts an interface{} into a bson.M, fataling otherwise.
+func mustMap(t *testing.T, v interface{}) bson.M {
+	t.Helper()
+	m, ok := v.(bson.M)
+	if !ok {
+		t.Fatalf("expected map, got %T: %v", v, v)
+	}
+	return m
+}
+
+// mustStringSlice converts a bson.A of strings into []string, fataling
+// otherwise.
+func mustStringSlice(t *testing.T, v interface{}) []string {
+	t.Helper()
+	arr, ok := v.(bson.A)
+	if !ok {
+		t.Fatalf("expected array, got %T: %v", v, v)
+	}
+	out := make([]string, len(arr))
+	for i, el := range arr {
+		s, ok := el.(string)
+		if !ok {
+			t.Fatalf("array element %d: expected string, got %T", i, el)
+		}
+		out[i] = s
+	}
+	return out
 }
