@@ -227,28 +227,23 @@ about which paths are GC-safe.
 This is the load-bearing wrinkle. It needs a sub-task before the
 runCommand can ship.
 
-### `state.workingSets[branch]` cache
+### Branch WS cache and GC root set
 
-`dbState.workingSets[branch]` carries cross-session unflushed j:false
-writes that haven't reached the working-set ref on disk. GC marks
-roots from on-disk refs and from session `branchState.workingSet`. It
-does NOT consult `dbState.workingSets[branch]`. If a chunk is reachable
-only from that cache (j:false write not yet flushed AND no session has
-it marked dirty), GC would sweep it.
+`dbState.branchWS[branch].ws` is a cache of the on-disk
+`working_set/heads/<branch>` ref (workspace-4xp). Every write goes
+through `updateBranchWS`, which atomically advances the entry's
+`ws`/`wsHash` AND `ddb.UpdateWorkingSet` -> `nbs.Commit` -> journal
+fsync. Disk is always at least as fresh as the cache, never behind.
 
-In practice with the qsc fix, j:false skipSync writes still update
-`state.workingSets[branch]` but do not mark sessions dirty (autoCommit
-gate). So the cache is the only retainer until `deferredFlushLoop`
-drains it.
+Consequence: GC's disk-ref walk covers every chunk reachable from
+the cache automatically; the cache itself does not need to be in
+GC's root set. In-txn writes that have not yet reached disk live
+on `session.branchState.workingSet` and are picked up by
+`sess.VisitGCRoots` -- the standard dsess path.
 
-Two options:
-- (A) Force-flush `state.workingSets` to disk at GC start (before
-  `BeginGC` walks roots). Simple; adds one fsync per dirty branch.
-- (B) Have the GC orchestrator also include `state.workingSets`
-  entries as roots, parallel to the on-disk ref walk.
-
-Pick (A). It collapses the special case at a small fsync cost. (B)
-requires `DoltDB.GC` to accept additional roots, which it doesn't.
+No special handling at GC start. The runCommand simply calls
+`ddb.GC`; the safepoint controller stalls in-flight writes; the
+root walk is complete.
 
 ### Cursor state and long-lived reads
 
