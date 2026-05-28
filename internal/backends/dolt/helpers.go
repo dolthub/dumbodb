@@ -309,16 +309,17 @@ func buildValue(jsonHash hash.Hash) (val.Tuple, error) {
 	return tup, nil
 }
 
-// dtblHashForCollection builds a DTBL from a prolly.Map for the named
-// collection, inlining the collection's persisted secondary-index AddressMap
-// (or the shared empty AM if the collection has no secondary indexes).
-// Writes the DTBL to the value store and returns its chunk hash.
-func (state *dbState) dtblHashForCollection(ctx context.Context, collName string, m prolly.Map, artifactsHash hash.Hash) (hash.Hash, error) {
-	idxAM, ok := state.collIndexAMs[collName]
-	if !ok {
-		idxAM = state.emptyIndexAM
-	}
-	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, idxAM, artifactsHash)
+// dtblHashForCollection builds a DTBL from a prolly.Map and a
+// secondary-index AddressMap for the named collection, writes it to the
+// value store, and returns its chunk hash. Callers compute the indexAM
+// from the resolver chain (see index_resolve.go) rather than from a
+// shared dbState cache, so writes on one branch never inline another
+// branch's index AM.
+//
+// Pass the empty AM (emptyIndexAM helper, or any zero-element AM) when
+// the collection has no secondary indexes.
+func (state *dbState) dtblHashForCollection(ctx context.Context, collName string, m prolly.Map, indexAM prolly.AddressMap, artifactsHash hash.Hash) (hash.Hash, error) {
+	dtblMsg := buildDoltTableFlatbuffer(m, state.collSchemaHash, indexAM, artifactsHash)
 	ref, err := state.vs.WriteValue(ctx, dolttypes.SerialMessage(dtblMsg))
 	if err != nil {
 		return hash.Hash{}, fmt.Errorf("writing DTBL: %w", err)

@@ -146,18 +146,14 @@ type dbState struct {
 	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
-	uuids        map[string]string
-	indexes      map[string][]backends.IndexInfo
-	secIndexMaps map[string]map[string]prolly.Map
-	collIndexAMs map[string]prolly.AddressMap
-	validators   map[string]*collectionValidator
-	capped       map[string]*cappedCollectionMeta
+	uuids          map[string]string
+	validators     map[string]*collectionValidator
+	capped         map[string]*cappedCollectionMeta
 	insertionOrder map[string][]any
 	views          map[string]*viewMeta
 	timeSeries     map[string]*timeSeriesMeta
 
 	collSchemaHash hash.Hash
-	emptyIndexAM   prolly.AddressMap
 	mergeState     *mergeInProgress
 }
 
@@ -1077,9 +1073,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
 		uuids:          make(map[string]string),
-		indexes:        make(map[string][]backends.IndexInfo),
-		secIndexMaps:   make(map[string]map[string]prolly.Map),
-		collIndexAMs:   make(map[string]prolly.AddressMap),
 		validators:     make(map[string]*collectionValidator),
 		capped:         make(map[string]*cappedCollectionMeta),
 		insertionOrder: make(map[string][]any),
@@ -1087,8 +1080,8 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		timeSeries:     make(map[string]*timeSeriesMeta),
 	}
 
-	// Initialize DTBL construction helpers: write the shared DSCH chunk once
-	// and create an empty AddressMap for secondary_indexes.
+	// Write the shared DSCH chunk once; the empty secondary-index AM is
+	// memoized per-NodeStore in emptyIndexAMCache (see index_resolve.go).
 	schemaMsg := buildCollectionTableSchema()
 	schemaRef, err := vs.WriteValue(ctx, dolttypes.SerialMessage(schemaMsg))
 	if err != nil {
@@ -1096,11 +1089,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		return nil, false, fmt.Errorf("writing collection schema chunk: %w", err)
 	}
 	db.collSchemaHash = schemaRef.TargetHash()
-	db.emptyIndexAM, err = prolly.NewEmptyAddressMap(ns)
-	if err != nil {
-		_ = doltDB.Close()
-		return nil, false, fmt.Errorf("creating empty index address map: %w", err)
-	}
 
 	b.dbs[dbName] = db
 
@@ -1112,15 +1100,9 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		}
 	}
 
-	// Hydrate persisted secondary indexes from each collection's DTBL so that
-	// listIndexes, unique-constraint enforcement, and tryIndexLookup all work
-	// across restarts. Failures are fatal because silently dropping indexes on
-	// open would corrupt query results and unique-constraint behaviour.
-	if err := db.hydrateAllIndexes(ctx); err != nil {
-		_ = doltDB.Close()
-		delete(b.dbs, dbName)
-		return nil, false, fmt.Errorf("hydrating secondary indexes for %q: %w", dbName, err)
-	}
+	// Secondary indexes resolve per-collection from each branch's DTBL on
+	// first read via the resolver in index_resolve.go; no eager hydration.
+	// See docs/design/branch-scoped-index-metadata.md section 3.5.
 
 	// Restore any in-progress merge/cherry-pick/rebase state persisted from a
 	// previous server session. Errors are non-fatal: if the state file is corrupted

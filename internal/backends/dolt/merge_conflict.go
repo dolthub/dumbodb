@@ -369,7 +369,11 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			return nil, fmt.Errorf("DumboDBResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
-		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newArtHash)
+		curIdxAM, idxErr := indexAMFromAM(ctx, db.cs, db.ns, updatedAM, params.Collection)
+		if idxErr != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: reading current index AM for %q: %w", params.Collection, idxErr)
+		}
+		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, curIdxAM, newArtHash)
 		if hashErr != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
 		}
@@ -518,13 +522,18 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 		newArtHash = ref.TargetHash()
 	}
 
-	// Get the current collection map to rebuild the DTBL.
+	// Get the current collection map and index AM to rebuild the DTBL.
 	collMap, err := collectionMapFromAM(ctx, state, am, collName)
 	if err != nil {
 		return am, fmt.Errorf("opening collection map for %q: %w", collName, err)
 	}
 
-	newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, newArtHash)
+	curIdxAM, err := indexAMFromAM(ctx, state.cs, state.ns, am, collName)
+	if err != nil {
+		return am, fmt.Errorf("reading current index AM for %q: %w", collName, err)
+	}
+
+	newDTBLHash, err := state.dtblHashForCollection(ctx, collName, collMap, curIdxAM, newArtHash)
 	if err != nil {
 		return am, fmt.Errorf("building DTBL for %q: %w", collName, err)
 	}
@@ -832,7 +841,15 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			}
 		}
 
-		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, artHash)
+		// Preserve the into-branch's index AM on the merged DTBL. A proper
+		// per-index merge is workspace-ife scope; this keeps existing
+		// non-merge tests passing without re-introducing the shared
+		// dbState.collIndexAMs read.
+		curIdxAM, idxErr := indexAMFromAM(ctx, state.cs, state.ns, intoAM, name)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("reading into-branch index AM for %q: %w", name, idxErr)
+		}
+		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, curIdxAM, artHash)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
 		}
