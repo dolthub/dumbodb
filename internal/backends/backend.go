@@ -322,6 +322,14 @@ func (bc *backendContract) DumboDBRevert(ctx context.Context, params *RevertPara
 	return nil, newVersioningUnsupportedError("DumboDBRevert")
 }
 
+func (bc *backendContract) DumboDBGC(ctx context.Context, params *GCParams) (*GCResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBGC(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBGC")
+}
+
 func (bc *backendContract) DumboDBTag(ctx context.Context, params *TagParams) (*TagResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBTag(ctx, params)

@@ -407,6 +407,24 @@ type TagResult struct {
 	Tags []TagInfo
 }
 
+// GCMode names the GC strategy: "default" sweeps new-gen and
+// unreferenced old-gen chunks; "full" rewrites every chunk (compacts
+// old-gen even when nothing is unreferenced).
+type GCParams struct {
+	DBName string
+	Mode   string // "default" (zero value) or "full"
+}
+
+type GCResult struct {
+	DB           string // resolved base database name (branch selector stripped)
+	Mode         string // "default" or "full" -- echoes the effective mode
+	DurationMs   int64
+	SizeBefore   uint64
+	SizeAfter    uint64
+	ChunksBefore uint32
+	ChunksAfter  uint32
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dumbodb versioning commands to return an unsupported error.
@@ -476,4 +494,12 @@ type VersioningBackend interface {
 	// created here are visible to the dolt tag CLI and vice versa. Operation is selected
 	// by the combination of TagParams fields; see TagParams documentation.
 	DumboDBTag(context.Context, *TagParams) (*TagResult, error)
+
+	// DumboDBGC runs garbage collection on the database's chunk store.
+	// Every branch in the database is in scope (one chunk store per
+	// logical database). Mode is "default" (sweep new-gen / unreferenced
+	// old-gen) or "full" (rewrite every chunk). Requires a session in
+	// ctx; the calling session participates in the GC safepoint as the
+	// callSession (excluded from the waited set).
+	DumboDBGC(context.Context, *GCParams) (*GCResult, error)
 }

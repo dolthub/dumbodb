@@ -200,6 +200,14 @@ func (b *backend) DumboDBTag(ctx context.Context, params *backends.TagParams) (*
 	return nil, fmt.Errorf("oplog: DumboDBTag: versioning not supported by wrapped backend")
 }
 
+func (b *backend) DumboDBGC(ctx context.Context, params *backends.GCParams) (*backends.GCResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBGC(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBGC: versioning not supported by wrapped backend")
+}
+
 var (
 	_ backends.Backend           = (*backend)(nil)
 	_ backends.VersioningBackend = (*backend)(nil)
