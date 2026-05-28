@@ -796,11 +796,27 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 				break
 			}
 		}
-	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) &&
-		len(picked.Key) >= 1 && picked.Key[0].Field == params.Sort.Keys()[0] {
-		// Filter-driven pick whose leading field happens to satisfy the
-		// sort. SORT stage is unnecessary.
-		sortByIndex = true
+	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) {
+		// Filter-driven pick: the sort is free whenever the sort key is
+		// one of the index's key fields AND every earlier key field is
+		// bound by an equality predicate in the filter (so the scan
+		// emits each remaining suffix in index order). Direction must
+		// agree with the index (ascending sort vs ascending key, etc.).
+		sortField := params.Sort.Keys()[0]
+		sortAsc := sortDirectionAscending(params.Sort)
+		for pos, k := range picked.Key {
+			if k.Field != sortField {
+				continue
+			}
+			if k.Descending == sortAsc {
+				break
+			}
+			if !filterBindsEqualityPrefix(params.Filter, picked.Key[:pos]) {
+				break
+			}
+			sortByIndex = true
+			break
+		}
 	}
 
 	// Covered: requires a chosen index + a projection that names only
@@ -981,6 +997,75 @@ func sortIsSingleField(sort *types.Document) bool {
 	}
 	k := sort.Keys()[0]
 	return k != "$natural" && !strings.ContainsRune(k, '.')
+}
+
+// sortDirectionAscending returns true when the single-field sort is
+// ascending (value > 0). Sort is assumed already single-field per
+// sortIsSingleField.
+func sortDirectionAscending(sort *types.Document) bool {
+	v, err := sort.Get(sort.Keys()[0])
+	if err != nil {
+		return true
+	}
+	switch x := v.(type) {
+	case int32:
+		return x >= 0
+	case int64:
+		return x >= 0
+	case float64:
+		return x >= 0
+	}
+	return true
+}
+
+// filterBindsEqualityPrefix reports whether filter has an equality
+// predicate (a bare scalar or {$eq: scalar}) for every field listed
+// in keys, with no other constraint. An empty keys slice trivially
+// satisfies.
+func filterBindsEqualityPrefix(filter *types.Document, keys []backends.IndexKeyPair) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	if filter == nil {
+		return false
+	}
+	for _, kp := range keys {
+		v, err := filter.Get(kp.Field)
+		if err != nil {
+			return false
+		}
+		if !valueIsScalarEquality(v) {
+			return false
+		}
+	}
+	return true
+}
+
+// valueIsScalarEquality reports whether v is a bare scalar OR a single
+// {$eq: scalar} operator document. Null/array/regex are excluded
+// because their MongoDB match semantics don't fit a byte-level range
+// scan.
+func valueIsScalarEquality(v any) bool {
+	switch x := v.(type) {
+	case *types.Document:
+		if x == nil || x.Len() != 1 || x.Keys()[0] != "$eq" {
+			return false
+		}
+		inner, err := x.Get("$eq")
+		if err != nil {
+			return false
+		}
+		return scalarOK(inner)
+	}
+	return scalarOK(v)
+}
+
+func scalarOK(v any) bool {
+	switch v.(type) {
+	case nil, types.NullType, *types.Array, *types.Document, types.Regex:
+		return false
+	}
+	return true
 }
 
 // sortIsNatural reports whether sort is the single-key {"$natural": ...}
