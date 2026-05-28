@@ -146,6 +146,12 @@ type dbState struct {
 	// current working root; the isolation unit for both writes and reads.
 	workingSets map[string]*doltdb.WorkingSet
 
+	// branchWSMu guards the structure of branchWS (insert only; entries
+	// are never removed). See branch_ws.go for the singleton-per-branch
+	// entry model that replaces workingSets in workspace-4xp.
+	branchWSMu sync.RWMutex
+	branchWS   map[string]*branchWS
+
 	uuids          map[string]string
 	validators     map[string]*collectionValidator
 	capped         map[string]*cappedCollectionMeta
@@ -1072,6 +1078,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		doltDB:         doltDB,
 		datasDB:        datasDB,
 		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
+		branchWS:       make(map[string]*branchWS),
 		uuids:          make(map[string]string),
 		validators:     make(map[string]*collectionValidator),
 		capped:         make(map[string]*cappedCollectionMeta),
