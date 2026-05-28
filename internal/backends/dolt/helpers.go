@@ -379,27 +379,23 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 }
 
 func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
-	// state.workingSets carries cross-session unflushed j:false writes
-	// that aren't on disk yet; check it before falling back to the ref.
-	if ws, ok := state.workingSets[branch]; ok {
+	if ws, err := state.loadBranchWS(ctx, branch); err == nil {
 		return ws, nil
 	}
+	// No working_set ref on disk yet for this branch; initialize from HEAD
+	// and seed the entry so subsequent reads hit the cache.
 	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-	ws, err := state.doltDB.ResolveWorkingSet(ctx, wsRef)
-	if err != nil {
-		// Branch has no working set yet; initialize from HEAD.
-		rv, rvErr := headRootValueForBranch(ctx, state, branch)
-		if rvErr != nil {
-			return nil, fmt.Errorf("initializing working set for %q: %w", branch, rvErr)
-		}
-		ws = doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+	rv, rvErr := headRootValueForBranch(ctx, state, branch)
+	if rvErr != nil {
+		return nil, fmt.Errorf("initializing working set for %q: %w", branch, rvErr)
 	}
-	state.workingSets[branch] = ws
+	ws := doltdb.EmptyWorkingSet(wsRef).WithWorkingRoot(rv).WithStagedRoot(rv)
+	state.setBranchWS(branch, ws)
 	return ws, nil
 }
 
-// GetIfPresent (not Get): background loops (deferredFlushLoop, capped
-// cleanup) run without a ConnInfo and would otherwise panic.
+// GetIfPresent (not Get): background loops (e.g., capped cleanup) run
+// without a ConnInfo and would otherwise panic.
 //
 // In --session-isolation mode every connection is implicitly forked, so
 // the InTransaction check is bypassed.
@@ -481,7 +477,12 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
 			return branches, fmt.Errorf("commitTransaction: updating sess WS for %q: %w", qualified, err)
 		}
-		state.workingSets[branch] = merged
+		// Refresh the singleton entry so non-session readers see the
+		// merged WS and the next updateBranchWS's optimistic lock uses
+		// the post-merge wsHash.
+		if err := state.reloadBranchWSFromDisk(sqlCtx, branch); err != nil {
+			return branches, fmt.Errorf("commitTransaction: refreshing cache for %q: %w", qualified, err)
+		}
 		branches = append(branches, branch)
 	}
 	return branches, nil
@@ -563,14 +564,16 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 		return nil
 	}
 
-	state.workingSets[branch] = newWS
-
-	if skipSync {
-		// j:false: defer the ref flush; deferredFlushLoop drains it.
-		return nil
-	}
-
-	if err := updateWorkingSet(ctx, state.doltDB, newWS, branch); err != nil {
+	// Non-txn: full update (cache + disk + hash refresh). skipSync is
+	// ignored: there is no deferred flusher to drain a cache-only write,
+	// so honoring skipSync here would lose data on server restart. The
+	// wire-level writeConcern.j=false is now a no-op for autoCommit /
+	// non-txn writes; session-isolation may grow a commit-time fsync
+	// skip as a future refinement (see docs/design/branch-ws-singletons.md).
+	_ = skipSync
+	if err := state.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		return newWS, nil
+	}); err != nil {
 		return fmt.Errorf("updating working set: %w", err)
 	}
 	return nil

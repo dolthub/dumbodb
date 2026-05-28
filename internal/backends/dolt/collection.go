@@ -1513,8 +1513,11 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	if c.db.backend.autoCommit {
-		// state.mu write lock held; safe to read state.workingSets directly.
-		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), state.workingSets[c.db.rootish], c.db.name, c.db.rootish)
+		fallbackWS, fbErr := state.loadBranchWS(ctx, c.db.rootish)
+		if fbErr != nil {
+			return nil, fmt.Errorf("auto-commit: loading WS: %w", fbErr)
+		}
+		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), fallbackWS, c.db.name, c.db.rootish)
 		if rvErr != nil {
 			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
 		}
@@ -1753,8 +1756,11 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	}
 
 	if c.db.backend.autoCommit {
-		// state.mu write lock held; safe to read state.workingSets directly.
-		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), state.workingSets[c.db.rootish], c.db.name, c.db.rootish)
+		fallbackWS, fbErr := state.loadBranchWS(ctx, c.db.rootish)
+		if fbErr != nil {
+			return nil, fmt.Errorf("auto-commit: loading WS: %w", fbErr)
+		}
+		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), fallbackWS, c.db.name, c.db.rootish)
 		if rvErr != nil {
 			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
 		}
@@ -1913,8 +1919,11 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	}
 
 	if c.db.backend.autoCommit {
-		// state.mu write lock held; safe to read state.workingSets directly.
-		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), state.workingSets[c.db.rootish], c.db.name, c.db.rootish)
+		fallbackWS, fbErr := state.loadBranchWS(ctx, c.db.rootish)
+		if fbErr != nil {
+			return nil, fmt.Errorf("auto-commit: loading WS: %w", fbErr)
+		}
+		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), fallbackWS, c.db.name, c.db.rootish)
 		if rvErr != nil {
 			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
 		}

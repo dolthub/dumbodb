@@ -142,9 +142,11 @@ type dbState struct {
 	doltDB  *doltdb.DoltDB
 	datasDB datas.Database
 
-	// workingSets is the per-branch in-progress state. Each value is the session's
-	// current working root; the isolation unit for both writes and reads.
-	workingSets map[string]*doltdb.WorkingSet
+	// branchWSMu guards the structure of branchWS (insert only; entries
+	// are never removed). Each entry has its own RWMutex guarding its
+	// ws and wsHash fields. See branch_ws.go.
+	branchWSMu sync.RWMutex
+	branchWS   map[string]*branchWS
 
 	uuids          map[string]string
 	validators     map[string]*collectionValidator
@@ -183,26 +185,23 @@ func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly
 	if err != nil {
 		return err
 	}
-	ws, ok := s.workingSets[branch]
-	if !ok {
-		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		if loaded, loadErr := s.doltDB.ResolveWorkingSet(ctx, wsRef); loadErr == nil {
-			ws = loaded
-		} else {
-			ws = doltdb.EmptyWorkingSet(wsRef)
-		}
+	var newWS *doltdb.WorkingSet
+	if err := s.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		// Set both working and staged to the same root so dolt sees a
+		// clean working tree (no uncommitted diff). Conflict artifacts
+		// are stored in the DTBL ArtifactMap, not in working/staged.
+		newWS = cur.WithWorkingRoot(rv).WithStagedRoot(rv)
+		return newWS, nil
+	}); err != nil {
+		return err
 	}
-	// Set both working and staged to the same root so dolt sees a clean
-	// working tree (no uncommitted diff). Conflict artifacts are stored in
-	// the DTBL ArtifactMap, not in the working/staged difference.
-	newWS := ws.WithWorkingRoot(rv).WithStagedRoot(rv)
-	s.workingSets[branch] = newWS
 	s.pushWSToSession(ctx, branch, newWS)
-	return updateWorkingSet(ctx, s.doltDB, newWS, branch)
+	return nil
 }
 
 // setAM is a bridge for version-control operations that still produce raw AMs.
-// Wraps the AM in a RootValue and updates the branch working set.
+// Wraps the AM in a RootValue and updates the branch working set in memory only;
+// callers persist via persistAM or a separate updateWorkingSet path.
 // The caller must hold s.mu (write lock).
 func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap) {
 	rtvlMsg := buildRootValueFlatbuffer(am)
@@ -210,34 +209,31 @@ func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap
 	if err != nil {
 		return
 	}
-	ws, ok := s.workingSets[branch]
-	if !ok {
-		// New branch not yet cached. Initialize from disk or build a minimal WS.
+	cur, err := s.loadBranchWS(ctx, branch)
+	if err != nil {
+		// Branch may not have an on-disk WS yet (e.g., a freshly
+		// created branch). Build a minimal WS from HEAD.
 		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		if loaded, loadErr := s.doltDB.ResolveWorkingSet(ctx, wsRef); loadErr == nil {
-			ws = loaded
-		} else {
-			// No WS on disk yet; staged stays at HEAD.
-			headRV, headErr := headRootValueForBranch(ctx, s, branch)
-			if headErr != nil {
-				headRV = rv
-			}
-			ws = doltdb.EmptyWorkingSet(wsRef).WithStagedRoot(headRV)
+		headRV, headErr := headRootValueForBranch(ctx, s, branch)
+		if headErr != nil {
+			headRV = rv
 		}
+		cur = doltdb.EmptyWorkingSet(wsRef).WithStagedRoot(headRV)
 	}
 	// Only update working root; staged stays where it was (HEAD until explicit stage).
-	newWS := ws.WithWorkingRoot(rv)
-	s.workingSets[branch] = newWS
+	newWS := cur.WithWorkingRoot(rv)
+	s.setBranchWS(branch, newWS)
 	s.pushWSToSession(ctx, branch, newWS)
 }
 
 // pushWSToSession mirrors a side-channel WS update onto the calling
 // session's branchState so VisitGCRoots sees the post-op state.
 //
-// The active-txn gate is load-bearing: deferredFlushLoop walks every
-// dirty session and writes its WS to disk. Without the gate, idle
-// sessions from prior autoCommit writes stay dirty with stale WS
-// pointers and overwrite the latest writer every tick.
+// The active-txn gate prevents idle sessions from accumulating
+// dirty branchStates with stale WS snapshots, a left-over concern
+// from the qsc.5 flusher era. The flusher is gone, but the gate
+// stays: marking idle sessions dirty makes session.Commit / merge
+// paths behave inconsistently for non-txn writes.
 func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
 	if !dbNameDsessFriendly(s.name) {
 		return
@@ -269,13 +265,6 @@ type Backend struct {
 
 	docLocksMu sync.Mutex
 	docLocks   map[string]*DocLockManager
-
-	// flusherStop is closed by Close to signal the background flusher to
-	// drain any remaining dirty state and exit.
-	flusherStop chan struct{}
-	// flusherDone is closed by the flusher goroutine when it exits, so Close
-	// can wait for the final drain to complete before tearing down dbs.
-	flusherDone chan struct{}
 
 	sweeperStop   chan struct{}
 	sweeperDone   chan struct{}
@@ -398,13 +387,6 @@ func (b *Backend) openDbNames() []string {
 	return out
 }
 
-// deferredFlushInterval is how often the backend drains per-database dirty
-// state from writeConcern j:false / w:0 writes into the dolt working set
-// (and thus through the NBS journal fsync). A short-enough interval keeps
-// the worst-case window of unflushed writes bounded, while still letting
-// many writes amortize over a single fsync.
-const deferredFlushInterval = 100 * time.Millisecond
-
 // parseAuthorString splits a "Name <email>" string into name and email.
 // If the string doesn't contain " <", the whole string is used as both name and email.
 func parseAuthorString(author string) (name, email string) {
@@ -440,8 +422,6 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		sessionIsolation: sessionIsolation,
 		dbs:              make(map[string]*dbState),
 		docLocks:         make(map[string]*DocLockManager),
-		flusherStop:      make(chan struct{}),
-		flusherDone:      make(chan struct{}),
 		sweeperStop:      make(chan struct{}),
 		sweeperDone:      make(chan struct{}),
 	}
@@ -473,7 +453,6 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		return nil, fmt.Errorf("initializing admin database: %w", err)
 	}
 
-	go b.deferredFlushLoop()
 	go b.sessionSweepLoop()
 
 	return b, nil
@@ -497,96 +476,7 @@ func (b *Backend) sessionSweepLoop() {
 	}
 }
 
-// deferredFlushLoop coalesces j:false writes by walking SessionRegistry
-// every deferredFlushInterval.
-func (b *Backend) deferredFlushLoop() {
-	defer close(b.flusherDone)
-
-	ticker := time.NewTicker(deferredFlushInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-b.flusherStop:
-			b.flushAllDirty(context.Background())
-			return
-		case <-ticker.C:
-			b.flushAllDirty(context.Background())
-		}
-	}
-}
-
-// flushAllDirty flushes every non-in-txn session's dirty branchStates.
-// Sessions inside an active dsess txn are skipped: their overlays belong
-// to the in-progress txn and are persisted via commit/merge.
-func (b *Backend) flushAllDirty(ctx context.Context) {
-	if b.sessions == nil {
-		return
-	}
-	shadows := b.sessions.ActiveShadows()
-	if len(shadows) == 0 {
-		return
-	}
-
-	b.mu.RLock()
-	dbs := make(map[string]*dbState, len(b.dbs))
-	for name, db := range b.dbs {
-		dbs[name] = db
-	}
-	b.mu.RUnlock()
-
-	for _, shadow := range shadows {
-		sess := shadow.Session()
-		if sess == nil {
-			continue
-		}
-		if sess.GetTransaction() != nil {
-			continue
-		}
-		sqlCtx := sqlctx.Wrap(ctx, sess)
-		for _, qualified := range sess.DirtyBranchRevisions() {
-			base, branch := doltdb.SplitRevisionDbName(qualified)
-			if branch == "" {
-				branch = defaultBranch
-			}
-			db, ok := dbs[base]
-			if !ok {
-				continue
-			}
-			sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
-			if err != nil || !sok {
-				continue
-			}
-			ws := sessState.WorkingSet()
-			if ws == nil {
-				continue
-			}
-			db.mu.Lock()
-			err = updateWorkingSet(ctx, db.doltDB, ws, branch)
-			db.mu.Unlock()
-			if err != nil {
-				b.l.Warn("deferred flush failed", "db", base, "branch", branch, "err", err)
-			}
-		}
-	}
-}
-
 func (b *Backend) Close() {
-	// Signal the flusher to drain any remaining deferred writes and exit.
-	// Guard against a double close by checking whether it's already closed,
-	// and against tests that bypass NewBackend by skipping if never started.
-	if b.flusherStop != nil {
-		select {
-		case <-b.flusherStop:
-			// already closed
-		default:
-			close(b.flusherStop)
-		}
-		if b.flusherDone != nil {
-			<-b.flusherDone
-		}
-	}
-
 	if b.sweeperStop != nil {
 		select {
 		case <-b.sweeperStop:
@@ -621,10 +511,10 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 	var totalCollections int64
 
 	for dbName, db := range b.dbs {
-		db.mu.RLock()
-		ws := db.workingSets[defaultBranch]
-		db.mu.RUnlock()
-
+		ws, err := db.loadBranchWS(ctx, defaultBranch)
+		if err != nil {
+			return nil, err
+		}
 		rv, err := workingRootViaSession(ctx, sess, ws, dbName, defaultBranch)
 		if err != nil {
 			return nil, err
@@ -745,10 +635,10 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 				continue
 			}
 
-			state.mu.RLock()
-			ws := state.workingSets[defaultBranch]
-			state.mu.RUnlock()
-
+			ws, wsErr := state.loadBranchWS(ctx, defaultBranch)
+			if wsErr != nil {
+				continue
+			}
 			rv, err := workingRootViaSession(ctx, sessionFromContext(ctx), ws, dbName, defaultBranch)
 			if err != nil {
 				continue
@@ -1071,7 +961,7 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		vs:             vs,
 		doltDB:         doltDB,
 		datasDB:        datasDB,
-		workingSets:    map[string]*doltdb.WorkingSet{defaultBranch: mainWS},
+		branchWS:       make(map[string]*branchWS),
 		uuids:          make(map[string]string),
 		validators:     make(map[string]*collectionValidator),
 		capped:         make(map[string]*cappedCollectionMeta),
@@ -1375,12 +1265,16 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 	if branch == defaultBranch {
 		sess := sessionFromContext(ctx)
+		fallbackWS, fbErr := db.loadBranchWS(ctx, defaultBranch)
+		if fbErr != nil {
+			return nil, fmt.Errorf("DumboDBCommit: loading WS for db %q: %w", params.DBName, fbErr)
+		}
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+			workingRV, rvErr := workingRootViaSession(ctx, sess, fallbackWS, params.DBName, defaultBranch)
 			if rvErr != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
 			}
@@ -1397,7 +1291,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
-		workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		workingRV, rvErr := workingRootViaSession(ctx, sess, fallbackWS, params.DBName, defaultBranch)
 		if rvErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
 		}
@@ -1477,8 +1371,8 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		return nil, fmt.Errorf("DumboDBCommit: updating working set for branch %q: %w", branch, err)
 	}
 
-	// Clear the cached branch AM so the next access reloads from the new HEAD.
-	delete(db.workingSets, branch)
+	// Clear the cached branch WS so the next access reloads from the new HEAD.
+	db.clearBranchWS(branch)
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
@@ -1658,8 +1552,8 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 		return nil, fmt.Errorf("DumboDBBranch: deleting branch %q: %w", params.Name, err)
 	}
 
-	// Clear any cached branch AM.
-	delete(db.workingSets, params.Name)
+	// Clear any cached branch WS.
+	db.clearBranchWS(params.Name)
 
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
@@ -2673,13 +2567,17 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		fallbackWS, fbErr := db.loadBranchWS(ctx, defaultBranch)
+		if fbErr != nil {
+			return nil, fmt.Errorf("DumboDBReset (soft): loading working set: %w", fbErr)
+		}
+		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), fallbackWS, params.DBName, defaultBranch)
 		if wsErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): reading working set: %w", wsErr)
 		}
-		newWS := ws.WithStagedRoot(stagedRV)
-		db.workingSets[defaultBranch] = newWS
-		if err := updateWorkingSet(ctx, db.doltDB, newWS, defaultBranch); err != nil {
+		if err := db.updateBranchWS(ctx, defaultBranch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+			return ws.WithStagedRoot(stagedRV), nil
+		}); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (soft): %w", err)
 		}
 	}
