@@ -189,26 +189,23 @@ func (s *dbState) persistAM(ctx context.Context, branch string, workingAM prolly
 	if err != nil {
 		return err
 	}
-	ws, ok := s.workingSets[branch]
-	if !ok {
-		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		if loaded, loadErr := s.doltDB.ResolveWorkingSet(ctx, wsRef); loadErr == nil {
-			ws = loaded
-		} else {
-			ws = doltdb.EmptyWorkingSet(wsRef)
-		}
+	var newWS *doltdb.WorkingSet
+	if err := s.updateBranchWS(ctx, branch, func(cur *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		// Set both working and staged to the same root so dolt sees a
+		// clean working tree (no uncommitted diff). Conflict artifacts
+		// are stored in the DTBL ArtifactMap, not in working/staged.
+		newWS = cur.WithWorkingRoot(rv).WithStagedRoot(rv)
+		return newWS, nil
+	}); err != nil {
+		return err
 	}
-	// Set both working and staged to the same root so dolt sees a clean
-	// working tree (no uncommitted diff). Conflict artifacts are stored in
-	// the DTBL ArtifactMap, not in the working/staged difference.
-	newWS := ws.WithWorkingRoot(rv).WithStagedRoot(rv)
-	s.workingSets[branch] = newWS
 	s.pushWSToSession(ctx, branch, newWS)
-	return updateWorkingSet(ctx, s.doltDB, newWS, branch)
+	return nil
 }
 
 // setAM is a bridge for version-control operations that still produce raw AMs.
-// Wraps the AM in a RootValue and updates the branch working set.
+// Wraps the AM in a RootValue and updates the branch working set in memory only;
+// callers persist via persistAM or a separate updateWorkingSet path.
 // The caller must hold s.mu (write lock).
 func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap) {
 	rtvlMsg := buildRootValueFlatbuffer(am)
@@ -216,24 +213,20 @@ func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap
 	if err != nil {
 		return
 	}
-	ws, ok := s.workingSets[branch]
-	if !ok {
-		// New branch not yet cached. Initialize from disk or build a minimal WS.
+	cur, err := s.loadBranchWS(ctx, branch)
+	if err != nil {
+		// Branch may not have an on-disk WS yet (e.g., a freshly
+		// created branch). Build a minimal WS from HEAD.
 		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
-		if loaded, loadErr := s.doltDB.ResolveWorkingSet(ctx, wsRef); loadErr == nil {
-			ws = loaded
-		} else {
-			// No WS on disk yet; staged stays at HEAD.
-			headRV, headErr := headRootValueForBranch(ctx, s, branch)
-			if headErr != nil {
-				headRV = rv
-			}
-			ws = doltdb.EmptyWorkingSet(wsRef).WithStagedRoot(headRV)
+		headRV, headErr := headRootValueForBranch(ctx, s, branch)
+		if headErr != nil {
+			headRV = rv
 		}
+		cur = doltdb.EmptyWorkingSet(wsRef).WithStagedRoot(headRV)
 	}
 	// Only update working root; staged stays where it was (HEAD until explicit stage).
-	newWS := ws.WithWorkingRoot(rv)
-	s.workingSets[branch] = newWS
+	newWS := cur.WithWorkingRoot(rv)
+	s.setBranchWS(branch, newWS)
 	s.pushWSToSession(ctx, branch, newWS)
 }
 
@@ -627,10 +620,10 @@ func (b *Backend) Status(ctx context.Context, params *backends.StatusParams) (*b
 	var totalCollections int64
 
 	for dbName, db := range b.dbs {
-		db.mu.RLock()
-		ws := db.workingSets[defaultBranch]
-		db.mu.RUnlock()
-
+		ws, err := db.loadBranchWS(ctx, defaultBranch)
+		if err != nil {
+			return nil, err
+		}
 		rv, err := workingRootViaSession(ctx, sess, ws, dbName, defaultBranch)
 		if err != nil {
 			return nil, err
@@ -751,10 +744,10 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 				continue
 			}
 
-			state.mu.RLock()
-			ws := state.workingSets[defaultBranch]
-			state.mu.RUnlock()
-
+			ws, wsErr := state.loadBranchWS(ctx, defaultBranch)
+			if wsErr != nil {
+				continue
+			}
 			rv, err := workingRootViaSession(ctx, sessionFromContext(ctx), ws, dbName, defaultBranch)
 			if err != nil {
 				continue
@@ -1382,12 +1375,16 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 	if branch == defaultBranch {
 		sess := sessionFromContext(ctx)
+		fallbackWS, fbErr := db.loadBranchWS(ctx, defaultBranch)
+		if fbErr != nil {
+			return nil, fmt.Errorf("DumboDBCommit: loading WS for db %q: %w", params.DBName, fbErr)
+		}
 		if !params.AllowEmpty {
 			headAM, err := db.headRootAM(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading HEAD AM for db %q: %w", params.DBName, err)
 			}
-			workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+			workingRV, rvErr := workingRootViaSession(ctx, sess, fallbackWS, params.DBName, defaultBranch)
 			if rvErr != nil {
 				return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
 			}
@@ -1404,7 +1401,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: resolving main dataset for db %q: %w", params.DBName, dsErr)
 		}
-		workingRV, rvErr := workingRootViaSession(ctx, sess, db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		workingRV, rvErr := workingRootViaSession(ctx, sess, fallbackWS, params.DBName, defaultBranch)
 		if rvErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: reading working root for db %q: %w", params.DBName, rvErr)
 		}
@@ -1484,8 +1481,8 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		return nil, fmt.Errorf("DumboDBCommit: updating working set for branch %q: %w", branch, err)
 	}
 
-	// Clear the cached branch AM so the next access reloads from the new HEAD.
-	delete(db.workingSets, branch)
+	// Clear the cached branch WS so the next access reloads from the new HEAD.
+	db.clearBranchWS(branch)
 
 	headHash, ok := newDS.MaybeHeadAddr()
 	if !ok {
@@ -1665,8 +1662,8 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 		return nil, fmt.Errorf("DumboDBBranch: deleting branch %q: %w", params.Name, err)
 	}
 
-	// Clear any cached branch AM.
-	delete(db.workingSets, params.Name)
+	// Clear any cached branch WS.
+	db.clearBranchWS(params.Name)
 
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
@@ -2680,13 +2677,17 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), db.workingSets[defaultBranch], params.DBName, defaultBranch)
+		fallbackWS, fbErr := db.loadBranchWS(ctx, defaultBranch)
+		if fbErr != nil {
+			return nil, fmt.Errorf("DumboDBReset (soft): loading working set: %w", fbErr)
+		}
+		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), fallbackWS, params.DBName, defaultBranch)
 		if wsErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): reading working set: %w", wsErr)
 		}
-		newWS := ws.WithStagedRoot(stagedRV)
-		db.workingSets[defaultBranch] = newWS
-		if err := updateWorkingSet(ctx, db.doltDB, newWS, defaultBranch); err != nil {
+		if err := db.updateBranchWS(ctx, defaultBranch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+			return ws.WithStagedRoot(stagedRV), nil
+		}); err != nil {
 			return nil, fmt.Errorf("DumboDBReset: updating working set (soft): %w", err)
 		}
 	}

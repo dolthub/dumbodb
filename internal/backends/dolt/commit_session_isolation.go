@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
@@ -93,12 +92,13 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		return nil, fmt.Errorf("DumboDBCommit: merging working set: %w", err)
 	}
 
-	merged, err := db.doltDB.ResolveWorkingSet(ctx, doltref.NewWorkingSetRef("heads/"+branch))
-	if err != nil {
+	if err := db.reloadBranchWSFromDisk(ctx, branch); err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: reloading merged working set for %q: %w", branch, err)
 	}
-
-	db.workingSets[branch] = merged
+	merged, err := db.loadBranchWS(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBCommit: loading merged working set for %q: %w", branch, err)
+	}
 
 	mergedAM, err := amFromWorkingRoot(ctx, merged.WorkingRoot(), db.ns)
 	if err != nil {

@@ -78,14 +78,14 @@ func (db *database) resolveAM(ctx context.Context, state *dbState) (prolly.Addre
 	if ws, ok := txnVisibleWS(ctx, state, db.rootish); ok {
 		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
-	// Only consult the WS cache for known branches; caret/tilde
-	// traversal rootishes ("main^") aren't there and must fall through
-	// to amFromRootish for commit-hash resolution.
-	if _, ok := state.workingSets[db.rootish]; ok {
-		ws, err := latestBranchWS(ctx, state, db.rootish)
-		if err == nil && ws != nil {
-			return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
-		}
+	// Consult the WS via the singleton entry, but use loadBranchWS
+	// directly rather than latestBranchWS: the latter falls back to
+	// "initialize a WS from HEAD" for branches with no on-disk ref,
+	// which is wrong for caret/tilde traversal rootishes ("main^")
+	// -- those must fall through to amFromRootish for commit-hash
+	// resolution.
+	if ws, err := state.loadBranchWS(ctx, db.rootish); err == nil && ws != nil {
+		return amFromWorkingRoot(ctx, ws.WorkingRoot(), state.ns)
 	}
 	return amFromRootish(ctx, state, db.rootish)
 }

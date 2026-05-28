@@ -97,6 +97,55 @@ func (s *dbState) loadBranchWS(ctx context.Context, branch string) (*doltdb.Work
 	return ws, nil
 }
 
+// setBranchWS updates the cached WS for branch without writing to
+// disk. entry.wsHash is unchanged (the on-disk WS has not moved),
+// which keeps it correct for the next updateBranchWS's optimistic
+// lock. Used by version-control flows that update the in-memory
+// cache and persist via a separate path (e.g., the setAM/persistAM
+// split, or merge-conflict staging that updates state in-memory
+// before the saved merge-state JSON drives the disk write).
+func (s *dbState) setBranchWS(branch string, ws *doltdb.WorkingSet) {
+	e := s.branchEntry(branch)
+	e.mu.Lock()
+	e.ws = ws
+	e.mu.Unlock()
+}
+
+// clearBranchWS nils the entry's ws and wsHash. Used by branch
+// deletion; the entry pointer stays in the map so a subsequent
+// recreate of the branch name reuses the same entry (loadBranchWS
+// will resolve from disk into it).
+func (s *dbState) clearBranchWS(branch string) {
+	e := s.branchEntry(branch)
+	e.mu.Lock()
+	e.ws = nil
+	e.wsHash = hash.Hash{}
+	e.mu.Unlock()
+}
+
+// reloadBranchWSFromDisk re-resolves the entry from doltDB. Used
+// when an out-of-band path advanced disk and the cache needs to
+// catch up (e.g., after dsess.CommitWorkingSet mirrors a merged WS
+// onto the session, the dbState cache must follow to keep
+// non-session readers current).
+func (s *dbState) reloadBranchWSFromDisk(ctx context.Context, branch string) error {
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	ws, err := s.doltDB.ResolveWorkingSet(ctx, wsRef)
+	if err != nil {
+		return fmt.Errorf("reloadBranchWSFromDisk: resolving %q: %w", branch, err)
+	}
+	h, err := ws.HashOf()
+	if err != nil {
+		return fmt.Errorf("reloadBranchWSFromDisk: hashing %q: %w", branch, err)
+	}
+	e := s.branchEntry(branch)
+	e.mu.Lock()
+	e.ws = ws
+	e.wsHash = h
+	e.mu.Unlock()
+	return nil
+}
+
 // updateBranchWS atomically reads, mutates, and persists the working
 // set for branch. It holds entry.mu.Lock across the whole sequence so
 // two writers on the same branch serialize.
