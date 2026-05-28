@@ -352,17 +352,30 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		return nil, false, nil
 	}
 
-	// Map indexed-leading-field -> (index name, map index). Only single-field
-	// indexes are usable here; compound indexes require key-prefix matching
-	// that the planner doesn't yet do.
+	// Map indexed-leading-field -> (index name, map index, compound).
+	// Single-field indexes are preferred (tighter scan range); compound
+	// indexes are used when no single-field index covers the leading
+	// filter field. The handler re-filters every returned doc against
+	// the full predicate, so suffix-field constraints on a compound
+	// index are correctly applied post-scan.
 	type indexedFieldEntry struct {
-		idxName string
-		mapIdx  int
+		idxName  string
+		mapIdx   int
+		compound bool
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
-		if len(idx.Key) == 1 && idx.Key[0].Field != "" {
-			indexedField[idx.Key[0].Field] = indexedFieldEntry{idxName: idx.Name, mapIdx: i}
+		if len(idx.Key) >= 1 && idx.Key[0].Field != "" {
+			leading := idx.Key[0].Field
+			isCompound := len(idx.Key) > 1
+			cur, have := indexedField[leading]
+			// Prefer single-field over compound when both exist for the
+			// same leading field.
+			if !have || (cur.compound && !isCompound) {
+				indexedField[leading] = indexedFieldEntry{
+					idxName: idx.Name, mapIdx: i, compound: isCompound,
+				}
+			}
 		}
 	}
 	if len(indexedField) == 0 {
@@ -398,6 +411,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		s, e, ok := indexBoundsForFilterValue(v)
 		if !ok {
 			continue
+		}
+		if entry.compound {
+			s, e = compoundLeadingBounds(s, e)
 		}
 		chosenMapIdx = entry.mapIdx
 		startKey, stopKey = s, e
@@ -565,6 +581,38 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	return startKey, stopKey, true
 }
 
+// compoundLeadingBounds rewrites a single-field index bound pair so it
+// scans the leading-field slice of a compound index. A single-field
+// index entry ends in [discriminator(0x04)][primaryID]; a compound
+// entry ends in [KS(v2)..KS(vN)][0x04][primaryID]. The single-field
+// bounds use trailing 0x04/0x05 to bracket the entries with the
+// leading value -- for a compound index those discriminator bytes
+// fall in the wrong position and would miss every entry.
+//
+// The rewrite replaces the trailing discriminator with bytes that sort
+// outside the entire range of KeyString ctype prefixes (which span
+// 0x10..0xF0): 0x00 for "just before any KS(v_next)" and 0xFF for
+// "just after any KS(v_next)". The resulting range is a sound
+// superset of compound entries whose leading field matches the
+// original predicate; suffix-field constraints are left to the
+// handler-level re-filter.
+func compoundLeadingBounds(start, stop []byte) ([]byte, []byte) {
+	rewrite := func(b []byte) []byte {
+		if len(b) == 0 {
+			return b
+		}
+		out := append([]byte(nil), b...)
+		switch out[len(out)-1] {
+		case 0x04:
+			out[len(out)-1] = 0x00
+		case 0x05:
+			out[len(out)-1] = 0xFF
+		}
+		return out
+	}
+	return rewrite(start), rewrite(stop)
+}
+
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
 // multiple bounds on the same side ($gte:1, $gte:5 -> keep the tighter 5).
 func compareScalars(a, b any) int {
@@ -605,9 +653,16 @@ func (s *explainStage) toDoc() *types.Document {
 }
 
 // pickIndexForFilter mirrors tryIndexLookup's index-selection rule for
-// the planner side of explain: a single-field index whose leading field
-// matches a top-level filter field with usable bounds. Returns the
-// chosen IndexInfo (zero-value if none).
+// the planner side of explain: any index whose LEADING field matches a
+// top-level filter field with usable bounds. Single-field and compound
+// indexes are both candidates -- for compound indexes the leading
+// field's bound drives the IXSCAN and the handler re-filters the
+// suffix-field constraints.
+//
+// Preference order: single-field indexes win over compound ones for
+// the same leading field (a single-field index has tighter scan
+// range), matching MongoDB's behaviour where the more selective plan
+// is preferred all else being equal.
 func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
@@ -626,10 +681,24 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 		if _, _, ok := indexBoundsForFilterValue(v); !ok {
 			continue
 		}
+		var single, compound backends.IndexInfo
+		var haveSingle, haveCompound bool
 		for _, idx := range idxInfos {
-			if len(idx.Key) == 1 && idx.Key[0].Field == k {
-				return idx, true
+			if len(idx.Key) >= 1 && idx.Key[0].Field == k {
+				if len(idx.Key) == 1 {
+					single, haveSingle = idx, true
+					break
+				}
+				if !haveCompound {
+					compound, haveCompound = idx, true
+				}
 			}
+		}
+		if haveSingle {
+			return single, true
+		}
+		if haveCompound {
+			return compound, true
 		}
 	}
 	return backends.IndexInfo{}, false
