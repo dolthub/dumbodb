@@ -173,6 +173,63 @@ func TestDumboDBGC_DefaultModeShrinksAfterDelete(t *testing.T) {
 	_ = state
 }
 
+// TestDumboDBGC_FullModePreservesReachableData: full-mode GC rewrites
+// every chunk (it does not skip referenced chunks the way default
+// mode does), so the on-disk layout reorganises even with no garbage
+// to reclaim. The interesting property: every document inserted
+// before GC must still be readable after.
+func TestDumboDBGC_FullModePreservesReachableData(t *testing.T) {
+	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), true, false, 0, 0)
+	require.NoError(t, err)
+	t.Cleanup(be.Close)
+
+	dbName := "gcfull"
+	ctx := ctxWithSession(t, be, "test-lsid-gc-full")
+
+	db, err := be.Database(dbName)
+	require.NoError(t, err)
+	require.NoError(t, db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "items"}))
+	coll, err := db.Collection("items")
+	require.NoError(t, err)
+
+	const N = 100
+	docs := make([]*types.Document, 0, N)
+	for i := 0; i < N; i++ {
+		doc, mErr := types.NewDocument("_id", fmt.Sprintf("id-%d", i), "payload", fmt.Sprintf("padding-payload-for-id-%d", i))
+		require.NoError(t, mErr)
+		docs = append(docs, doc)
+	}
+	_, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: docs})
+	require.NoError(t, err)
+
+	res, err := be.DumboDBGC(ctx, &backends.GCParams{DBName: dbName, Mode: "full"})
+	require.NoError(t, err)
+	require.Equal(t, "full", res.Mode)
+	t.Logf("full-mode GC: chunks %d->%d, size %d->%d, duration=%dms",
+		res.ChunksBefore, res.ChunksAfter, res.SizeBefore, res.SizeAfter, res.DurationMs)
+
+	// Read back: every inserted document must still be queryable.
+	// Full-mode GC failing to preserve referenced chunks would
+	// surface here as a missing read or a chunk-load error.
+	qres, err := coll.Query(ctx, &backends.QueryParams{})
+	require.NoError(t, err)
+	defer qres.Iter.Close()
+
+	seen := make(map[string]bool, N)
+	for {
+		_, gotDoc, qerr := qres.Iter.Next()
+		if qerr != nil {
+			break
+		}
+		id, _ := gotDoc.Get("_id")
+		seen[fmt.Sprintf("%v", id)] = true
+	}
+	require.Equal(t, N, len(seen), "all %d docs must be readable after full-mode GC; got %d", N, len(seen))
+	for i := 0; i < N; i++ {
+		require.True(t, seen[fmt.Sprintf("id-%d", i)], "missing _id=%d after full-mode GC", i)
+	}
+}
+
 // TestDumboDBGC_NoSessionInContextErrors: GC needs a GCRootsProvider
 // for BeginGC's root walk; an in-process call with no session in ctx
 // must fail rather than silently degrade.
