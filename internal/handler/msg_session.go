@@ -62,6 +62,11 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	ci := conninfo.Get(connCtx)
 	if ci.TxnAborted() {
+		// dispatch's EnsureTxn opens a fresh dsess txn before this handler
+		// runs; clear it so it doesn't leak writes into the next command.
+		if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+			sab.OnTransactionAbort(ci.Owner())
+		}
 		ci.SetInTransaction(false)
 		return nil, handlererrors.NewCommandError(
 			handlererrors.ErrorCode(251),
