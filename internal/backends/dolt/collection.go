@@ -629,15 +629,20 @@ func compareScalars(a, b any) int {
 // explainStage is the in-memory representation of one node in the explain
 // winningPlan tree. The tree is built bottom-up (leaf -> outermost) and
 // then rendered as nested *types.Document.
+//
+// Linear stages set input (rendered as inputStage); branching stages
+// (OR, AND_SORTED, AND_HASH) set inputs (rendered as inputStages
+// array). A stage uses at most one of the two.
 type explainStage struct {
 	stage      string
 	indexName  string
 	keyPattern *types.Document
 	input      *explainStage
+	inputs     []*explainStage
 }
 
 // toDoc renders the stage tree as a winningPlan document with nested
-// inputStage chain.
+// inputStage or inputStages array.
 func (s *explainStage) toDoc() *types.Document {
 	d := must.NotFail(types.NewDocument("stage", s.stage))
 	if s.indexName != "" {
@@ -646,10 +651,88 @@ func (s *explainStage) toDoc() *types.Document {
 	if s.keyPattern != nil {
 		d.Set("keyPattern", s.keyPattern)
 	}
-	if s.input != nil {
+	if len(s.inputs) > 0 {
+		arr := types.MakeArray(len(s.inputs))
+		for _, child := range s.inputs {
+			arr.Append(child.toDoc())
+		}
+		d.Set("inputStages", arr)
+	} else if s.input != nil {
 		d.Set("inputStage", s.input.toDoc())
 	}
 	return d
+}
+
+// buildOrUnionPlan recognises the {$or: [<clauseDoc>, ...]} filter
+// shape and builds an OR union plan when every clause is matchable
+// to a single-field index. Each clause must be a single-field
+// equality/range predicate whose field has an index; otherwise
+// MongoDB cannot do an indexed OR-union and would fall back to a
+// COLLSCAN, so we do the same.
+//
+// Returns the outer FETCH stage (wrapping OR which wraps the
+// per-branch IXSCAN nodes) and ok=true on a match. Returns ok=false
+// for unsupported shapes (the caller falls through to the normal
+// index-pick or COLLSCAN plan).
+func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexInfo) (*explainStage, bool) {
+	if params == nil || params.Filter == nil || params.Filter.Len() != 1 {
+		return nil, false
+	}
+	if params.Filter.Keys()[0] != "$or" {
+		return nil, false
+	}
+	v, err := params.Filter.Get("$or")
+	if err != nil {
+		return nil, false
+	}
+	arr, ok := v.(*types.Array)
+	if !ok || arr.Len() < 2 {
+		return nil, false
+	}
+	branches := make([]*explainStage, 0, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		clauseAny, err := arr.Get(i)
+		if err != nil {
+			return nil, false
+		}
+		clause, ok := clauseAny.(*types.Document)
+		if !ok || clause.Len() != 1 {
+			return nil, false
+		}
+		field := clause.Keys()[0]
+		if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
+			return nil, false
+		}
+		val, err := clause.Get(field)
+		if err != nil {
+			return nil, false
+		}
+		if _, _, ok := indexBoundsForFilterValue(val); !ok {
+			return nil, false
+		}
+		var idx backends.IndexInfo
+		var found bool
+		for _, candidate := range idxInfos {
+			if len(candidate.Key) == 1 && candidate.Key[0].Field == field {
+				idx = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+		branches = append(branches, &explainStage{
+			stage:      "IXSCAN",
+			indexName:  idx.Name,
+			keyPattern: keyPatternOf(idx),
+		})
+	}
+	or := &explainStage{stage: "OR", inputs: branches}
+	fetch := &explainStage{stage: "FETCH", input: or}
+	// MongoDB wraps the indexed-OR plan in a SUBPLAN node (one plan
+	// per $or branch, unioned). Match that shape.
+	return &explainStage{stage: "SUBPLAN", input: fetch}, true
 }
 
 // pickIndexForFilter mirrors tryIndexLookup's index-selection rule for
@@ -828,6 +911,21 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 	command := ""
 	if params != nil {
 		command = params.Command
+	}
+
+	// $or multi-index: when the filter is top-level $or with every
+	// clause matchable to a single-field index, MongoDB builds a union
+	// plan: FETCH -> OR -> [IXSCAN, IXSCAN, ...]. Build that shape
+	// here for explain. Runtime tryIndexLookup currently bails on $or
+	// and falls back to COLLSCAN -- the perf optimization (actually
+	// running the OR-union) is a separate ticket.
+	if orStage, ok := buildOrUnionPlan(params, idxInfos); ok {
+		qp := must.NotFail(types.NewDocument(
+			"namespace", c.db.name+"."+c.name,
+			"parsedQuery", parsedQuery,
+			"winningPlan", orStage.toDoc(),
+		))
+		return &backends.ExplainResult{QueryPlanner: qp}, nil
 	}
 
 	winningPlan := buildExplainPlan(command, params, picked, indexPicked, sortByIndex, covered)
