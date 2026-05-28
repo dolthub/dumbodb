@@ -28,6 +28,7 @@ package dolt
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
@@ -334,6 +335,93 @@ func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInf
 		return prolly.AddressMap{}, fmt.Errorf("buildIndexAM: flush: %w", err)
 	}
 	return newAM, nil
+}
+
+// computeIndexDiffs compares the secondary-index AMs of two DTBL hashes
+// and returns the per-index lifecycle changes. An index is:
+//   - "added"   when only the b side has it,
+//   - "deleted" when only the a side has it,
+//   - "modified" when both sides carry the same name but different
+//                IndexEntry chunk hashes (drop+recreate with a different
+//                spec).
+//
+// Either hash may be the zero hash (collection absent on that side); in
+// that case the index list for that side is empty.
+//
+// Results are sorted by index name. The IndexInfo pointers in From/To
+// are decoded via resolveIndexEntry (memoized).
+func computeIndexDiffs(ctx context.Context, state *dbState, aDTBL, bDTBL hash.Hash) ([]backends.IndexDiff, error) {
+	aAM, err := indexAMForDTBL(ctx, state.cs, state.ns, aDTBL)
+	if err != nil {
+		return nil, fmt.Errorf("computeIndexDiffs: a side: %w", err)
+	}
+	bAM, err := indexAMForDTBL(ctx, state.cs, state.ns, bDTBL)
+	if err != nil {
+		return nil, fmt.Errorf("computeIndexDiffs: b side: %w", err)
+	}
+
+	aEntries := make(map[string]hash.Hash)
+	if err := aAM.IterAll(ctx, func(name string, h hash.Hash) error {
+		aEntries[name] = h
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("computeIndexDiffs: walking a side: %w", err)
+	}
+	bEntries := make(map[string]hash.Hash)
+	if err := bAM.IterAll(ctx, func(name string, h hash.Hash) error {
+		bEntries[name] = h
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("computeIndexDiffs: walking b side: %w", err)
+	}
+
+	allNames := make(map[string]struct{}, len(aEntries)+len(bEntries))
+	for n := range aEntries {
+		allNames[n] = struct{}{}
+	}
+	for n := range bEntries {
+		allNames[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(allNames))
+	for n := range allNames {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
+	var out []backends.IndexDiff
+	for _, name := range sorted {
+		aH, inA := aEntries[name]
+		bH, inB := bEntries[name]
+		switch {
+		case !inA && inB:
+			info, err := resolveIndexEntry(ctx, state.ns, bH)
+			if err != nil {
+				return nil, fmt.Errorf("computeIndexDiffs: resolving b entry for %q: %w", name, err)
+			}
+			toCopy := info.info
+			out = append(out, backends.IndexDiff{Name: name, Status: "added", To: &toCopy})
+		case inA && !inB:
+			info, err := resolveIndexEntry(ctx, state.ns, aH)
+			if err != nil {
+				return nil, fmt.Errorf("computeIndexDiffs: resolving a entry for %q: %w", name, err)
+			}
+			fromCopy := info.info
+			out = append(out, backends.IndexDiff{Name: name, Status: "deleted", From: &fromCopy})
+		case aH != bH:
+			aInfo, err := resolveIndexEntry(ctx, state.ns, aH)
+			if err != nil {
+				return nil, fmt.Errorf("computeIndexDiffs: resolving a entry for %q: %w", name, err)
+			}
+			bInfo, err := resolveIndexEntry(ctx, state.ns, bH)
+			if err != nil {
+				return nil, fmt.Errorf("computeIndexDiffs: resolving b entry for %q: %w", name, err)
+			}
+			fromCopy := aInfo.info
+			toCopy := bInfo.info
+			out = append(out, backends.IndexDiff{Name: name, Status: "modified", From: &fromCopy, To: &toCopy})
+		}
+	}
+	return out, nil
 }
 
 // openIndexMap returns a prolly.Map handle for the secondary-index data

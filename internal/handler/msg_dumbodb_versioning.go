@@ -99,45 +99,7 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 	collections := types.MakeArray(len(res.Collections))
 
 	for _, cd := range res.Collections {
-		added := types.MakeArray(len(cd.Added))
-		for _, doc := range cd.Added {
-			added.Append(doc)
-		}
-
-		removed := types.MakeArray(len(cd.Removed))
-		for _, doc := range cd.Removed {
-			removed.Append(doc)
-		}
-
-		modified := types.MakeArray(len(cd.Modified))
-		for _, m := range cd.Modified {
-			diffArray := types.MakeArray(len(m.Diff))
-			for _, fd := range m.Diff {
-				pairs := []any{"type", fd.Type, "path", fd.Path}
-				if fd.Type != "added" {
-					pairs = append(pairs, "from", fd.From)
-				}
-				if fd.Type != "removed" {
-					pairs = append(pairs, "to", fd.To)
-				}
-				diffEntry := must.NotFail(types.NewDocument(pairs...))
-				diffArray.Append(diffEntry)
-			}
-			entry := must.NotFail(types.NewDocument(
-				"_id", m.ID,
-				"diff", diffArray,
-			))
-			modified.Append(entry)
-		}
-
-		collEntry := must.NotFail(types.NewDocument(
-			"name", cd.Name,
-			"status", cd.Status,
-			"added", added,
-			"removed", removed,
-			"modified", modified,
-		))
-		collections.Append(collEntry)
+		collections.Append(collectionDiffToDoc(cd))
 	}
 
 	return documentOpMsg(
@@ -146,6 +108,142 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 			"ok", float64(1),
 		)),
 	)
+}
+
+// tableStatusToDoc renders a backends.TableStatus as a wire document.
+// Shared by MsgDumboDBStatus and the Stat block of MsgDumboDBLog so
+// the two surfaces stay consistent (notably for the index-lifecycle
+// fields).
+func tableStatusToDoc(t backends.TableStatus) *types.Document {
+	pairs := []any{
+		"name", t.Name,
+		"status", t.Status,
+		"added", int32(t.Added),
+		"modified", int32(t.Modified),
+		"deleted", int32(t.Deleted),
+	}
+	if len(t.IndexesAdded) > 0 {
+		arr := types.MakeArray(len(t.IndexesAdded))
+		for _, n := range t.IndexesAdded {
+			arr.Append(n)
+		}
+		pairs = append(pairs, "indexesAdded", arr)
+	}
+	if len(t.IndexesChanged) > 0 {
+		arr := types.MakeArray(len(t.IndexesChanged))
+		for _, n := range t.IndexesChanged {
+			arr.Append(n)
+		}
+		pairs = append(pairs, "indexesChanged", arr)
+	}
+	if len(t.IndexesDeleted) > 0 {
+		arr := types.MakeArray(len(t.IndexesDeleted))
+		for _, n := range t.IndexesDeleted {
+			arr.Append(n)
+		}
+		pairs = append(pairs, "indexesDeleted", arr)
+	}
+	return must.NotFail(types.NewDocument(pairs...))
+}
+
+// collectionDiffToDoc renders a backends.CollectionDiff as a wire
+// document. Shared by MsgDumboDBDiff and the Patch block of
+// MsgDumboDBLog. The added/removed/modified arrays may be empty (for an
+// index-only diff); the indexes array is populated when present.
+func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
+	added := types.MakeArray(len(cd.Added))
+	for _, doc := range cd.Added {
+		added.Append(doc)
+	}
+	removed := types.MakeArray(len(cd.Removed))
+	for _, doc := range cd.Removed {
+		removed.Append(doc)
+	}
+	modified := types.MakeArray(len(cd.Modified))
+	for _, m := range cd.Modified {
+		diffArray := types.MakeArray(len(m.Diff))
+		for _, fd := range m.Diff {
+			fdPairs := []any{"type", fd.Type, "path", fd.Path}
+			if fd.Type != "added" {
+				fdPairs = append(fdPairs, "from", fd.From)
+			}
+			if fd.Type != "removed" {
+				fdPairs = append(fdPairs, "to", fd.To)
+			}
+			diffArray.Append(must.NotFail(types.NewDocument(fdPairs...)))
+		}
+		modified.Append(must.NotFail(types.NewDocument(
+			"_id", m.ID,
+			"diff", diffArray,
+		)))
+	}
+	pairs := []any{
+		"name", cd.Name,
+		"status", cd.Status,
+		"added", added,
+		"removed", removed,
+		"modified", modified,
+	}
+	if len(cd.Indexes) > 0 {
+		indexes := types.MakeArray(len(cd.Indexes))
+		for _, idx := range cd.Indexes {
+			idxPairs := []any{
+				"name", idx.Name,
+				"status", idx.Status,
+			}
+			if idx.From != nil {
+				idxPairs = append(idxPairs, "from", indexInfoToDoc(idx.From))
+			}
+			if idx.To != nil {
+				idxPairs = append(idxPairs, "to", indexInfoToDoc(idx.To))
+			}
+			indexes.Append(must.NotFail(types.NewDocument(idxPairs...)))
+		}
+		pairs = append(pairs, "indexes", indexes)
+	}
+	return must.NotFail(types.NewDocument(pairs...))
+}
+
+// indexInfoToDoc renders an IndexInfo as a wire document for dumboDiff
+// output. Includes the keys (name + asc/desc + special-kind flags) and
+// the unique / sparse / partial flags. Omitted fields take their
+// MongoDB defaults.
+func indexInfoToDoc(info *backends.IndexInfo) *types.Document {
+	keys := types.MakeArray(len(info.Key))
+	for _, kp := range info.Key {
+		kpPairs := []any{"field", kp.Field}
+		switch {
+		case kp.Hashed:
+			kpPairs = append(kpPairs, "kind", "hashed")
+		case kp.Text:
+			kpPairs = append(kpPairs, "kind", "text")
+		case kp.Geo2D:
+			kpPairs = append(kpPairs, "kind", "2d")
+		case kp.Geo2DSphere:
+			kpPairs = append(kpPairs, "kind", "2dsphere")
+		default:
+			direction := int32(1)
+			if kp.Descending {
+				direction = -1
+			}
+			kpPairs = append(kpPairs, "direction", direction)
+		}
+		keys.Append(must.NotFail(types.NewDocument(kpPairs...)))
+	}
+	pairs := []any{
+		"name", info.Name,
+		"keys", keys,
+	}
+	if info.Unique {
+		pairs = append(pairs, "unique", true)
+	}
+	if info.Sparse {
+		pairs = append(pairs, "sparse", true)
+	}
+	if info.PartialFilterExpression != nil {
+		pairs = append(pairs, "partialFilterExpression", info.PartialFilterExpression)
+	}
+	return must.NotFail(types.NewDocument(pairs...))
 }
 
 // branchFromDBName parses the real database name and rootish from an encoded db name.
@@ -1052,13 +1150,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		if len(c.Stat) > 0 {
 			statArr := types.MakeArray(len(c.Stat))
 			for _, s := range c.Stat {
-				statArr.Append(must.NotFail(types.NewDocument(
-					"name", s.Name,
-					"status", s.Status,
-					"added", int32(s.Added),
-					"modified", int32(s.Modified),
-					"deleted", int32(s.Deleted),
-				)))
+				statArr.Append(tableStatusToDoc(s))
 			}
 			entry.Set("stat", statArr)
 		}
@@ -1066,39 +1158,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		if len(c.Diff) > 0 {
 			diffArr := types.MakeArray(len(c.Diff))
 			for _, cd := range c.Diff {
-				addedDocs := types.MakeArray(len(cd.Added))
-				for _, doc := range cd.Added {
-					addedDocs.Append(doc)
-				}
-				removedDocs := types.MakeArray(len(cd.Removed))
-				for _, doc := range cd.Removed {
-					removedDocs.Append(doc)
-				}
-				modifiedDocs := types.MakeArray(len(cd.Modified))
-				for _, m := range cd.Modified {
-					fieldDiffs := types.MakeArray(len(m.Diff))
-					for _, fd := range m.Diff {
-						fdPairs := []any{"type", fd.Type, "path", fd.Path}
-						if fd.Type != "added" {
-							fdPairs = append(fdPairs, "from", fd.From)
-						}
-						if fd.Type != "removed" {
-							fdPairs = append(fdPairs, "to", fd.To)
-						}
-						fieldDiffs.Append(must.NotFail(types.NewDocument(fdPairs...)))
-					}
-					modifiedDocs.Append(must.NotFail(types.NewDocument(
-						"_id", m.ID,
-						"diff", fieldDiffs,
-					)))
-				}
-				diffArr.Append(must.NotFail(types.NewDocument(
-					"name", cd.Name,
-					"status", cd.Status,
-					"added", addedDocs,
-					"removed", removedDocs,
-					"modified", modifiedDocs,
-				)))
+				diffArr.Append(collectionDiffToDoc(cd))
 			}
 			entry.Set("diff", diffArr)
 		}
@@ -1260,14 +1320,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	collections := types.MakeArray(len(res.Tables))
 
 	for _, t := range res.Tables {
-		entry := must.NotFail(types.NewDocument(
-			"name", t.Name,
-			"status", t.Status,
-			"added", int32(t.Added),
-			"modified", int32(t.Modified),
-			"deleted", int32(t.Deleted),
-		))
-		collections.Append(entry)
+		collections.Append(tableStatusToDoc(t))
 	}
 
 	statusDoc := must.NotFail(types.NewDocument(

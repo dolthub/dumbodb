@@ -2407,24 +2407,47 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					status = "modified"
 				}
 
+				// Index lifecycle is content-addressed; the same helper that
+				// powers DumboDBStatus / DumboDBDiff reduces the two DTBLs to
+				// per-index added/deleted/modified.
+				idxDiffs, idxErr := computeIndexDiffs(ctx, db, aHash, bHash)
+				if idxErr != nil {
+					return nil, fmt.Errorf("DumboDBLog: index diffs for %q in commit %q: %w", name, ci.Hash.String(), idxErr)
+				}
+
 				if params.Stat {
 					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
 					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
 					added, modified, deleted, _ := countCollectionMapDiffs(ctx, aMap, bMap)
-					info.Stat = append(info.Stat, backends.TableStatus{
+					ts := backends.TableStatus{
 						Name: name, Status: status,
 						Added: added, Modified: modified, Deleted: deleted,
-					})
+					}
+					for _, d := range idxDiffs {
+						switch d.Status {
+						case "added":
+							ts.IndexesAdded = append(ts.IndexesAdded, d.Name)
+						case "deleted":
+							ts.IndexesDeleted = append(ts.IndexesDeleted, d.Name)
+						case "modified":
+							ts.IndexesChanged = append(ts.IndexesChanged, d.Name)
+						}
+					}
+					info.Stat = append(info.Stat, ts)
 				}
 
 				if params.Patch {
 					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
 					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
 					addedDocs, removedDocs, modifiedDocs, _ := diffCollectionMaps(ctx, db.ns, aMap, bMap)
-					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 {
+					// Include the collection's diff entry if any document
+					// OR any index changed. An index-only commit was
+					// silently dropped before this check.
+					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 || len(idxDiffs) > 0 {
 						info.Diff = append(info.Diff, backends.CollectionDiff{
 							Name: name, Status: status,
 							Added: addedDocs, Removed: removedDocs, Modified: modifiedDocs,
+							Indexes: idxDiffs,
 						})
 					}
 				}
@@ -2517,13 +2540,29 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 			return nil, fmt.Errorf("DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
 		}
 
-		tables = append(tables, backends.TableStatus{
+		idxDiffs, idxErr := computeIndexDiffs(ctx, state, headHash, workingHash)
+		if idxErr != nil {
+			return nil, fmt.Errorf("DumboDBStatus: computing index diffs for %q.%q: %w", params.DBName, name, idxErr)
+		}
+
+		ts := backends.TableStatus{
 			Name:     name,
 			Status:   status,
 			Added:    addedCount,
 			Modified: modifiedCount,
 			Deleted:  deletedCount,
-		})
+		}
+		for _, d := range idxDiffs {
+			switch d.Status {
+			case "added":
+				ts.IndexesAdded = append(ts.IndexesAdded, d.Name)
+			case "deleted":
+				ts.IndexesDeleted = append(ts.IndexesDeleted, d.Name)
+			case "modified":
+				ts.IndexesChanged = append(ts.IndexesChanged, d.Name)
+			}
+		}
+		tables = append(tables, ts)
 	}
 
 	if tables == nil {
@@ -2772,10 +2811,16 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 			return nil, fmt.Errorf("DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
 		}
 
-		// A "modified" collection with no document-level changes is no diff at all.
-		// "added" and "deleted" collections always surface, even when empty, so the
-		// caller can see the lifecycle event.
-		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
+		idxDiffs, idxErr := computeIndexDiffs(ctx, state, aHash, bHash)
+		if idxErr != nil {
+			return nil, fmt.Errorf("DumboDBDiff: index diffs for %q in db %q: %w", name, params.DBName, idxErr)
+		}
+
+		// A "modified" collection with no document-level changes AND no
+		// index-level changes is no diff at all. "added" and "deleted"
+		// collections always surface, even when empty, so the caller can
+		// see the lifecycle event.
+		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 && len(idxDiffs) == 0 {
 			continue
 		}
 
@@ -2785,6 +2830,7 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 			Added:    added,
 			Removed:  removed,
 			Modified: modified,
+			Indexes:  idxDiffs,
 		})
 	}
 

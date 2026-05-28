@@ -37,6 +37,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // logResult holds the decoded top-level response from a dumboDBLog command.
@@ -623,5 +625,76 @@ func TestLogVerify(t *testing.T) {
 		head := commits[0].(bson.M)
 		assert.Nil(t, head["stat"], "stat must be absent when stat flag is not set")
 		assert.Nil(t, head["diff"], "diff must be absent when patch flag is not set")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 14: index-only commit surfaces in both stat and patch
+	// -------------------------------------------------------------------------
+	t.Run("Scenario14_IndexOnlyCommitInStatAndPatch", func(t *testing.T) {
+		idbName := fmt.Sprintf("logidxvrfy%d", rand.Int64N(1_000_000))
+		idb := env.client.Database(idbName)
+		require.NoError(t, idb.Drop(ctx))
+
+		_, err := idb.Collection("items").InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)},
+			{Key: "age", Value: int32(30)},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, idbName, "seed", "alice <alice@acme.com>")
+
+		// Index-only commit: no documents change.
+		_, err = idb.Collection("items").Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "age", Value: int32(1)}},
+			Options: options.Index().SetName("by_age"),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, idbName, "add by_age", "alice <alice@acme.com>")
+
+		var raw bson.M
+		require.NoError(t, idb.RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+			{Key: "stat", Value: true},
+			{Key: "patch", Value: true},
+		}).Decode(&raw))
+
+		head := raw["commits"].(bson.A)[0].(bson.M)
+
+		// Stat must reflect the index-only nature: zero doc counts plus
+		// indexesAdded containing by_age.
+		statArr, ok := head["stat"].(bson.A)
+		require.True(t, ok, "stat must be present")
+		require.Len(t, statArr, 1)
+		s := statArr[0].(bson.M)
+		assert.Equal(t, "items", s["name"])
+		assert.EqualValues(t, 0, s["added"])
+		assert.EqualValues(t, 0, s["modified"])
+		assert.EqualValues(t, 0, s["deleted"])
+		idxAdded, ok := s["indexesAdded"].(bson.A)
+		require.True(t, ok, "indexesAdded must surface in stat")
+		require.Len(t, idxAdded, 1)
+		assert.Equal(t, "by_age", idxAdded[0])
+
+		// Patch must include the commit; before the fix it was silently
+		// dropped because the doc-diff was empty.
+		diffArr, ok := head["diff"].(bson.A)
+		require.True(t, ok, "diff must be present")
+		require.Len(t, diffArr, 1, "index-only commit must appear in patch")
+		cd := diffArr[0].(bson.M)
+		indexes, ok := cd["indexes"].(bson.A)
+		require.True(t, ok, "diff[0].indexes must be present")
+		require.Len(t, indexes, 1)
+		idx := indexes[0].(bson.M)
+		assert.Equal(t, "by_age", idx["name"])
+		assert.Equal(t, "added", idx["status"])
+		assert.Nil(t, idx["from"], "no from for added index")
+		to, ok := idx["to"].(bson.M)
+		require.True(t, ok, "to must be present for added index")
+		assert.Equal(t, "by_age", to["name"])
+		toKeys := to["keys"].(bson.A)
+		require.Len(t, toKeys, 1)
+		k := toKeys[0].(bson.M)
+		assert.Equal(t, "age", k["field"])
+		assert.EqualValues(t, 1, k["direction"])
 	})
 }

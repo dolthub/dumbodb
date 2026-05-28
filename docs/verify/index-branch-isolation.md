@@ -57,9 +57,41 @@ After setup, `idxisovdb` has:
 on `idxisovdb@main` or `idxisovdb@nz`.
 
 ```js
-// Create by_name index only on am.
+// Create by_name index only on am (uncommitted -- about to verify
+// that dumboStatus / dumboDiff surface it before the commit).
 var am = db.getSiblingDB("idxisovdb@am")
 am.items.createIndex({ name: 1 }, { name: "by_name" })
+
+// dumboStatus reports the working-set delta. The "modified" status
+// with zero doc changes plus the indexesAdded list tells the user
+// what is about to be committed.
+am.runCommand({ dumboStatus: 1 })
+// Expected: {
+//   branch: "am", dirty: true, readonly: false,
+//   collections: [{
+//     name: "items", status: "modified",
+//     added: 0, modified: 0, deleted: 0,
+//     indexesAdded: [ "by_name" ]
+//   }],
+//   ok: 1
+// }
+
+// dumboDiff shows the full definition of the new index so the user
+// can confirm the keys and options before committing.
+am.runCommand({ dumboDiff: 1 })
+// Expected: {
+//   collections: [{
+//     name: "items", status: "modified",
+//     added: [], removed: [], modified: [],
+//     indexes: [{
+//       name: "by_name", status: "added",
+//       to: { name: "by_name", keys: [{ field: "name", direction: 1 }] }
+//     }]
+//   }],
+//   ok: 1
+// }
+
+// Now commit and verify the index is durable on am only.
 am.runCommand({ doltCommit: 1, message: "am: create by_name", author: "alice <alice@acme.com>" })
 
 // am sees both indexes.
@@ -76,7 +108,9 @@ db.getSiblingDB("idxisovdb@nz").items.getIndexes().map(i => i.name)
 ```
 
 Key checks:
-- `am` lists `["_id_", "by_name"]`
+- `dumboStatus` shows `indexesAdded: ["by_name"]` on `am` before commit
+- `dumboDiff` shows the full `by_name` definition with status `"added"`
+- `am` lists `["_id_", "by_name"]` after commit
 - `main` lists `["_id_"]`
 - `nz` lists `["_id_"]`
 
@@ -274,6 +308,49 @@ Key checks:
 - Per-branch index state survives a server restart
 - Index lookups on non-default branches return correct results after
   restart, with no warmup step (no eager hydration is required)
+
+---
+
+## Scenario 8: dumboDiff shows index modification (drop + recreate with different spec)
+
+Indexes are content-addressed by their full definition, so dropping
+an index and recreating it under the same name with different keys
+appears in `dumboDiff` as a single `"modified"` entry carrying both
+the pre- and post-definition.
+
+```js
+// Fresh database for this scenario -- isolated from idxisovdb above.
+var mdb = db.getSiblingDB("idxmoddb")
+mdb.dropDatabase()
+
+// Seed a collection with an index on field "age" and commit.
+mdb.items.insertOne({ _id: 1, age: 30, name: "alpha" })
+mdb.items.createIndex({ age: 1 }, { name: "by_x" })
+mdb.runCommand({ doltCommit: 1, message: "seed + by_x on age", author: "alice <alice@acme.com>" })
+
+// Drop by_x and recreate it under the same name with a different field.
+mdb.items.dropIndex("by_x")
+mdb.items.createIndex({ name: 1 }, { name: "by_x" })
+
+// dumboStatus shows the index as "changed" (same name, different spec).
+mdb.runCommand({ dumboStatus: 1 })
+// Expected: collections[0].indexesChanged contains "by_x"
+
+// dumboDiff shows a single "modified" entry with both definitions.
+mdb.runCommand({ dumboDiff: 1 })
+// Expected: collections[0].indexes contains one entry:
+//   {
+//     name: "by_x", status: "modified",
+//     from: { name: "by_x", keys: [{ field: "age", direction: 1 }] },
+//     to:   { name: "by_x", keys: [{ field: "name", direction: 1 }] }
+//   }
+```
+
+Key checks:
+- `dumboStatus` lists `by_x` in `indexesChanged` (not `indexesAdded` or
+  `indexesDeleted`).
+- `dumboDiff` returns one index entry with `status: "modified"` and both
+  `from` (old keys) and `to` (new keys) populated.
 
 ---
 
