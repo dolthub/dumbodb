@@ -40,7 +40,7 @@ func TestCommands_DurableFlag(t *testing.T) {
 	h := handlerForTest(t)
 	cmds := h.Commands()
 
-	durableNames := []string{"doltCommit", "dumboCommit", "commitTransaction"}
+	durableNames := []string{"doltCommit", "dumboCommit", "commitTransaction", "doltGC", "dumboGC"}
 	for _, n := range durableNames {
 		cmd, ok := cmds[n]
 		assert.True(t, ok, "command %q must be registered", n)
@@ -102,6 +102,7 @@ func TestCommands_AliasesShareInstance(t *testing.T) {
 		{"doltRevert", "dumboRevert"},
 		{"doltStatus", "dumboStatus"},
 		{"doltTag", "dumboTag"},
+		{"doltGC", "dumboGC"},
 	}
 
 	for _, group := range aliasGroups {

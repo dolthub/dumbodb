@@ -142,6 +142,7 @@ func (h *Handler) initCommands() {
 	// Durable boundaries: routed through Shadow.Commit (writeMu fence).
 	h.register(&Command{Handler: h.MsgDumboDBCommit, Durable: true, Help: "Commits the current working set on the branch encoded in the database name."}, "doltCommit", "dumboCommit")
 	h.register(&Command{Handler: h.MsgCommitTransaction, Durable: true, Help: "Commits a MongoDB transaction."}, "commitTransaction")
+	h.register(&Command{Handler: h.MsgDumboDBGC, Durable: true, Help: "Runs garbage collection on the database's chunk store. Optional mode: \"default\" or \"full\"."}, "doltGC", "dumboGC")
 
 	// Commands rejected with code 263 OperationNotSupportedInTransaction.
 	h.register(&Command{Handler: h.MsgDrop, BlockedInTxn: true, Help: "Drops the collection."}, "drop")

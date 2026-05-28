@@ -2018,3 +2018,81 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)),
 	)
 }
+
+// MsgDumboDBGC implements the `dumboGC` command. It runs garbage
+// collection on the database's chunk store, sweeping unreachable
+// chunks (default mode) or rewriting every chunk (full mode).
+//
+// Usage:
+//
+//	db.runCommand({dumboGC: 1})                  // default mode
+//	db.runCommand({dumboGC: 1, mode: "full"})    // full compaction
+//
+// The target database is implicit: the runCommand is scoped to one
+// database via getSiblingDB or the connection URI. Branch selectors
+// in the wire name (mydb@feature) collapse to the base database --
+// one chunk store per logical database, holding every branch's
+// chunks, and GC sweeps that store.
+//
+// Response shape:
+//
+//	{ok: 1, db, mode, durationMs, sizeBefore, sizeAfter,
+//	 chunksBefore, chunksAfter}
+//
+// On error: {ok: 0, errmsg, code}.
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDumboDBGC(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, _, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	mode, err := common.GetOptionalParam[string](document, "mode", "")
+	if err != nil {
+		return nil, err
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboGC: versioning is not supported by the current backend",
+		)
+	}
+
+	res, err := vb.DumboDBGC(connCtx, &backends.GCParams{
+		DBName: dbName,
+		Mode:   mode,
+	})
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	// Encode numeric fields as float64 (BSON Double). Int64s
+	// serialize as {"low","high"} via mongosh JSON.stringify, which
+	// most clients have to special-case; double avoids that. Chunk
+	// counts and byte sizes both fit exactly under 2^53.
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"db", res.DB,
+			"mode", res.Mode,
+			"durationMs", float64(res.DurationMs),
+			"sizeBefore", float64(res.SizeBefore),
+			"sizeAfter", float64(res.SizeAfter),
+			"chunksBefore", float64(res.ChunksBefore),
+			"chunksAfter", float64(res.ChunksAfter),
+			"ok", float64(1),
+		)),
+	)
+}
