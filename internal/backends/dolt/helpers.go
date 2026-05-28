@@ -414,9 +414,26 @@ func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
 	return "", false
 }
 
-// commitDirtyBranchesForSession commits every dirty branch on sess that
-// belongs to this dbState. Caller must hold state.mu write lock.
+// commitDirtyBranchesForSession three-way merges each dirty branch's
+// session overlay against the current ref and persists the result.
+// sess.CommitWorkingSet's merger walks tables via the standard RootValue
+// format and drops dumbodb's opaque-AM collection entries on the floor;
+// merge.MergeRoots with the sqle.Database resolver handles them.
+// Caller must hold state.mu write lock.
 func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *dsess.DoltSession, tx sql.Transaction) ([]string, error) {
+	dtx, ok := tx.(*dsess.DoltTransaction)
+	if !ok {
+		return nil, fmt.Errorf("commitTransaction: expected *dsess.DoltTransaction, got %T", tx)
+	}
+	sqlDB, sqlOk, err := state.backend.provider.getOrBuildSqleDatabase(sqlCtx, state.name)
+	if err != nil {
+		return nil, fmt.Errorf("commitTransaction: resolving sqle.Database for %q: %w", state.name, err)
+	}
+	if !sqlOk {
+		return nil, fmt.Errorf("commitTransaction: sqle.Database not found for %q", state.name)
+	}
+	resolver := sqlDB.GetTableResolver()
+
 	var branches []string
 	for _, qualified := range sess.DirtyBranchRevisions() {
 		base, branch := doltdb.SplitRevisionDbName(qualified)
@@ -426,15 +443,45 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 		if !strings.EqualFold(base, state.name) {
 			continue
 		}
-		if err := sess.CommitWorkingSet(sqlCtx, qualified, tx); err != nil {
-			return branches, fmt.Errorf("commitTransaction: committing %q: %w", qualified, err)
+
+		sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
+		if err != nil {
+			return branches, fmt.Errorf("commitTransaction: LookupDbState for %q: %w", qualified, err)
 		}
-		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
-		if err == nil && ok {
-			if newWS := sessState.WorkingSet(); newWS != nil {
-				state.workingSets[branch] = newWS
-			}
+		if !sok {
+			continue
 		}
+		ours := sessState.WorkingSet()
+		if ours == nil {
+			continue
+		}
+
+		startRoot, ok := dtx.GetInitialRoot(state.name)
+		if !ok {
+			return branches, fmt.Errorf("commitTransaction: no initial root for %q", state.name)
+		}
+		wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+		baseWS, err := state.doltDB.ResolveWorkingSetAtRoot(sqlCtx, wsRef, startRoot)
+		if err != nil {
+			return branches, fmt.Errorf("commitTransaction: resolving base WS for %q: %w", branch, err)
+		}
+		theirs, err := state.doltDB.ResolveWorkingSet(sqlCtx, wsRef)
+		if err != nil {
+			return branches, fmt.Errorf("commitTransaction: resolving theirs WS for %q: %w", branch, err)
+		}
+
+		merged, err := mergePendingIntoCommitted(sqlCtx, resolver, baseWS, ours, theirs)
+		if err != nil {
+			return branches, fmt.Errorf("commitTransaction: merging %q: %w", qualified, err)
+		}
+
+		if err := updateWorkingSet(sqlCtx, state.doltDB, merged, branch); err != nil {
+			return branches, fmt.Errorf("commitTransaction: persisting WS for %q: %w", branch, err)
+		}
+		if err := sess.SetWorkingSet(sqlCtx, qualified, merged); err != nil {
+			return branches, fmt.Errorf("commitTransaction: updating sess WS for %q: %w", qualified, err)
+		}
+		state.workingSets[branch] = merged
 		branches = append(branches, branch)
 	}
 	return branches, nil
