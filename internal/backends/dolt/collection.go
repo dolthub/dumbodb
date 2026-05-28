@@ -698,13 +698,33 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			}
 		}
 	}
+	// Sort-via-index: when no filter-driven index was chosen and the
+	// query has a single-field non-natural sort, an index on that field
+	// can drive the scan in sorted order without a SORT stage.
+	sortByIndex := false
+	if !naturalHint && !indexPicked && params != nil && sortIsSingleField(params.Sort) {
+		sortField := params.Sort.Keys()[0]
+		for _, idx := range idxInfos {
+			if len(idx.Key) == 1 && idx.Key[0].Field == sortField {
+				picked = idx
+				indexPicked = true
+				sortByIndex = true
+				break
+			}
+		}
+	} else if indexPicked && params != nil && sortIsSingleField(params.Sort) &&
+		len(picked.Key) >= 1 && picked.Key[0].Field == params.Sort.Keys()[0] {
+		// Filter-driven pick whose leading field happens to satisfy the
+		// sort. SORT stage is unnecessary.
+		sortByIndex = true
+	}
 
 	command := ""
 	if params != nil {
 		command = params.Command
 	}
 
-	winningPlan := buildExplainPlan(command, params, picked, indexPicked)
+	winningPlan := buildExplainPlan(command, params, picked, indexPicked, sortByIndex)
 
 	qp := must.NotFail(types.NewDocument(
 		"namespace", c.db.name+"."+c.name,
@@ -721,7 +741,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 // (workspace-bbg scope) -- no new planner capabilities (covered queries,
 // compound indexes, OR/AND multi-index, sort via index) are introduced
 // here; those land in their own follow-ups.
-func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool) *explainStage {
+func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked, sortByIndex bool) *explainStage {
 	switch command {
 	case "count":
 		var leaf *explainStage
@@ -754,7 +774,7 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 	default:
 		// "find" and "aggregate" (the latter via pushed-down $match) share
 		// the same shape rules.
-		return buildFindExplainPlan(params, picked, indexPicked)
+		return buildFindExplainPlan(params, picked, indexPicked, sortByIndex)
 	}
 }
 
@@ -764,7 +784,7 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 // LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK
 // internally) -> PROJECTION_SIMPLE. Covered-query (PROJECTION_COVERED
 // without FETCH) is bucket B and not handled here.
-func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool) *explainStage {
+func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked, sortByIndex bool) *explainStage {
 	var node *explainStage
 	if indexPicked {
 		node = &explainStage{
@@ -781,7 +801,7 @@ func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexI
 		return node
 	}
 
-	sortPresent := params.Sort != nil && params.Sort.Len() > 0 && !sortIsNatural(params.Sort)
+	sortPresent := params.Sort != nil && params.Sort.Len() > 0 && !sortIsNatural(params.Sort) && !sortByIndex
 	if sortPresent {
 		node = &explainStage{stage: "SORT", input: node}
 	}
@@ -797,6 +817,16 @@ func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexI
 		node = &explainStage{stage: "PROJECTION_SIMPLE", input: node}
 	}
 	return node
+}
+
+// sortIsSingleField reports whether sort is a single non-$natural key,
+// i.e. a candidate for sort-via-index satisfaction.
+func sortIsSingleField(sort *types.Document) bool {
+	if sort == nil || sort.Len() != 1 {
+		return false
+	}
+	k := sort.Keys()[0]
+	return k != "$natural" && !strings.ContainsRune(k, '.')
 }
 
 // sortIsNatural reports whether sort is the single-key {"$natural": ...}
