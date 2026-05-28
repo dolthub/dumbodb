@@ -162,16 +162,3 @@ func (r *SessionRegistry) Len() int {
 	return len(r.sessions)
 }
 
-// ActiveShadows returns a lock-free copy of every active shadow. Used by
-// the deferred flusher to walk sessions outside the registry lock.
-func (r *SessionRegistry) ActiveShadows() []*Shadow {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]*Shadow, 0, len(r.sessions))
-	for _, entry := range r.sessions {
-		if s := entry.shadow.Load(); s != nil && s.Active() {
-			out = append(out, s)
-		}
-	}
-	return out
-}

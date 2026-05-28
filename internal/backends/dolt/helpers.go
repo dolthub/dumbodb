@@ -394,8 +394,8 @@ func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*dolt
 	return ws, nil
 }
 
-// GetIfPresent (not Get): background loops (deferredFlushLoop, capped
-// cleanup) run without a ConnInfo and would otherwise panic.
+// GetIfPresent (not Get): background loops (e.g., capped cleanup) run
+// without a ConnInfo and would otherwise panic.
 //
 // In --session-isolation mode every connection is implicitly forked, so
 // the InTransaction check is bypassed.
@@ -564,15 +564,13 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 		return nil
 	}
 
-	if skipSync {
-		// j:false: defer the ref flush. Cache the new WS in the
-		// singleton entry without touching wsHash so the next
-		// updateBranchWS's optimistic lock still matches disk.
-		state.setBranchWS(branch, newWS)
-		return nil
-	}
-
-	// Non-txn, non-skipSync: full update (cache + disk + hash refresh).
+	// Non-txn: full update (cache + disk + hash refresh). skipSync is
+	// ignored: there is no deferred flusher to drain a cache-only write,
+	// so honoring skipSync here would lose data on server restart. The
+	// wire-level writeConcern.j=false is now a no-op for autoCommit /
+	// non-txn writes; session-isolation may grow a commit-time fsync
+	// skip as a future refinement (see docs/design/branch-ws-singletons.md).
+	_ = skipSync
 	if err := state.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 		return newWS, nil
 	}); err != nil {

@@ -233,10 +233,11 @@ func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap
 // pushWSToSession mirrors a side-channel WS update onto the calling
 // session's branchState so VisitGCRoots sees the post-op state.
 //
-// The active-txn gate is load-bearing: deferredFlushLoop walks every
-// dirty session and writes its WS to disk. Without the gate, idle
-// sessions from prior autoCommit writes stay dirty with stale WS
-// pointers and overwrite the latest writer every tick.
+// The active-txn gate prevents idle sessions from accumulating
+// dirty branchStates with stale WS snapshots, a left-over concern
+// from the qsc.5 flusher era. The flusher is gone, but the gate
+// stays: marking idle sessions dirty makes session.Commit / merge
+// paths behave inconsistently for non-txn writes.
 func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
 	if !dbNameDsessFriendly(s.name) {
 		return
@@ -268,13 +269,6 @@ type Backend struct {
 
 	docLocksMu sync.Mutex
 	docLocks   map[string]*DocLockManager
-
-	// flusherStop is closed by Close to signal the background flusher to
-	// drain any remaining dirty state and exit.
-	flusherStop chan struct{}
-	// flusherDone is closed by the flusher goroutine when it exits, so Close
-	// can wait for the final drain to complete before tearing down dbs.
-	flusherDone chan struct{}
 
 	sweeperStop   chan struct{}
 	sweeperDone   chan struct{}
@@ -397,13 +391,6 @@ func (b *Backend) openDbNames() []string {
 	return out
 }
 
-// deferredFlushInterval is how often the backend drains per-database dirty
-// state from writeConcern j:false / w:0 writes into the dolt working set
-// (and thus through the NBS journal fsync). A short-enough interval keeps
-// the worst-case window of unflushed writes bounded, while still letting
-// many writes amortize over a single fsync.
-const deferredFlushInterval = 100 * time.Millisecond
-
 // parseAuthorString splits a "Name <email>" string into name and email.
 // If the string doesn't contain " <", the whole string is used as both name and email.
 func parseAuthorString(author string) (name, email string) {
@@ -439,8 +426,6 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		sessionIsolation: sessionIsolation,
 		dbs:              make(map[string]*dbState),
 		docLocks:         make(map[string]*DocLockManager),
-		flusherStop:      make(chan struct{}),
-		flusherDone:      make(chan struct{}),
 		sweeperStop:      make(chan struct{}),
 		sweeperDone:      make(chan struct{}),
 	}
@@ -472,7 +457,6 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		return nil, fmt.Errorf("initializing admin database: %w", err)
 	}
 
-	go b.deferredFlushLoop()
 	go b.sessionSweepLoop()
 
 	return b, nil
@@ -496,96 +480,7 @@ func (b *Backend) sessionSweepLoop() {
 	}
 }
 
-// deferredFlushLoop coalesces j:false writes by walking SessionRegistry
-// every deferredFlushInterval.
-func (b *Backend) deferredFlushLoop() {
-	defer close(b.flusherDone)
-
-	ticker := time.NewTicker(deferredFlushInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-b.flusherStop:
-			b.flushAllDirty(context.Background())
-			return
-		case <-ticker.C:
-			b.flushAllDirty(context.Background())
-		}
-	}
-}
-
-// flushAllDirty flushes every non-in-txn session's dirty branchStates.
-// Sessions inside an active dsess txn are skipped: their overlays belong
-// to the in-progress txn and are persisted via commit/merge.
-func (b *Backend) flushAllDirty(ctx context.Context) {
-	if b.sessions == nil {
-		return
-	}
-	shadows := b.sessions.ActiveShadows()
-	if len(shadows) == 0 {
-		return
-	}
-
-	b.mu.RLock()
-	dbs := make(map[string]*dbState, len(b.dbs))
-	for name, db := range b.dbs {
-		dbs[name] = db
-	}
-	b.mu.RUnlock()
-
-	for _, shadow := range shadows {
-		sess := shadow.Session()
-		if sess == nil {
-			continue
-		}
-		if sess.GetTransaction() != nil {
-			continue
-		}
-		sqlCtx := sqlctx.Wrap(ctx, sess)
-		for _, qualified := range sess.DirtyBranchRevisions() {
-			base, branch := doltdb.SplitRevisionDbName(qualified)
-			if branch == "" {
-				branch = defaultBranch
-			}
-			db, ok := dbs[base]
-			if !ok {
-				continue
-			}
-			sessState, sok, err := sess.LookupDbState(sqlCtx, qualified)
-			if err != nil || !sok {
-				continue
-			}
-			ws := sessState.WorkingSet()
-			if ws == nil {
-				continue
-			}
-			db.mu.Lock()
-			err = updateWorkingSet(ctx, db.doltDB, ws, branch)
-			db.mu.Unlock()
-			if err != nil {
-				b.l.Warn("deferred flush failed", "db", base, "branch", branch, "err", err)
-			}
-		}
-	}
-}
-
 func (b *Backend) Close() {
-	// Signal the flusher to drain any remaining deferred writes and exit.
-	// Guard against a double close by checking whether it's already closed,
-	// and against tests that bypass NewBackend by skipping if never started.
-	if b.flusherStop != nil {
-		select {
-		case <-b.flusherStop:
-			// already closed
-		default:
-			close(b.flusherStop)
-		}
-		if b.flusherDone != nil {
-			<-b.flusherDone
-		}
-	}
-
 	if b.sweeperStop != nil {
 		select {
 		case <-b.sweeperStop:
