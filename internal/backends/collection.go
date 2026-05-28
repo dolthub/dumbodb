@@ -187,9 +187,21 @@ func (cc *collectionContract) Count(ctx context.Context, params *CountParams) (*
 }
 
 type ExplainParams struct {
-	Filter *types.Document
-	Sort   *types.Document
-	Limit  int64
+	Filter     *types.Document
+	Sort       *types.Document
+	Projection *types.Document
+	Limit      int64
+	Skip       int64
+
+	// Command is the original wire command being explained ("find", "count",
+	// "distinct", "aggregate"). The backend picks a top-level explain shape
+	// based on this (e.g. count emits a COUNT stage, distinct emits a
+	// DISTINCT_SCAN under PROJECTION_COVERED). Defaults to "find".
+	Command string
+
+	// DistinctKey is the field name passed to the distinct command. Ignored
+	// for other commands.
+	DistinctKey string
 
 	// Hint, when non-nil, requests that the backend plan the query using the
 	// specified index. It may be a document like {field: 1} naming a key
@@ -224,14 +236,10 @@ func (cc *collectionContract) Explain(ctx context.Context, params *ExplainParams
 		params = new(ExplainParams)
 	}
 
-	if params.Sort.Len() != 0 {
-		must.BeTrue(params.Sort.Len() == 1)
-		sortValue := params.Sort.Map()["$natural"].(int64)
-
-		if sortValue != -1 && sortValue != 1 {
-			panic("sort value must be 1 (for ascending) or -1 (for descending)")
-		}
-	}
+	// Explain receives arbitrary sort docs so the backend can render a
+	// SORT stage in the plan tree. The historical "$natural-only"
+	// precondition was tied to the Query path's pushdown gate; it does
+	// not apply to explain.
 
 	res, err := cc.c.Explain(ctx, params)
 	if err != nil {

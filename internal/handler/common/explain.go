@@ -31,11 +31,19 @@ type ExplainParams struct {
 
 	Explain *types.Document `dumbo:"explain"`
 
-	Filter *types.Document `dumbo:"filter,opt"`
-	Sort   *types.Document `dumbo:"sort,opt"`
-	Skip   int64           `dumbo:"skip,opt"`
-	Limit  int64           `dumbo:"limit,opt"`
-	Hint   any             `dumbo:"hint,opt"`
+	Filter     *types.Document `dumbo:"filter,opt"`
+	Sort       *types.Document `dumbo:"sort,opt"`
+	Projection *types.Document `dumbo:"projection,opt"`
+	Skip       int64           `dumbo:"skip,opt"`
+	Limit      int64           `dumbo:"limit,opt"`
+	Hint       any             `dumbo:"hint,opt"`
+
+	// CommandName is the inner sub-command being explained: "find", "count",
+	// "distinct", or "aggregate".
+	CommandName string `dumbo:"-"`
+
+	// DistinctKey is set only when CommandName == "distinct".
+	DistinctKey string `dumbo:"-"`
 
 	StagesDocs []any           `dumbo:"-"`
 	Aggregate  bool            `dumbo:"-"`
@@ -102,14 +110,36 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 		return nil, lazyerrors.Error(err)
 	}
 
+	commandName := cmd.Command()
+
+	// find / aggregate use "filter"; count and distinct use "query".
 	filter, err = GetOptionalParam(explain, "filter", filter)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+	if filter == nil {
+		filter, err = GetOptionalParam(explain, "query", filter)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
 	}
 
 	sort, err = GetOptionalParam(explain, "sort", sort)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	var projection *types.Document
+	projection, err = GetOptionalParam(explain, "projection", projection)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	var distinctKey string
+	if commandName == "distinct" {
+		if k, kerr := GetRequiredParam[string](explain, "key"); kerr == nil {
+			distinctKey = k
+		}
 	}
 
 	var hint any
@@ -176,16 +206,19 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 	}
 
 	return &ExplainParams{
-		DB:         db,
-		Collection: collection,
-		Filter:     filter,
-		Sort:       sort,
-		Skip:       skip,
-		Limit:      limit,
-		StagesDocs: stagesDocs,
-		Aggregate:  cmd.Command() == "aggregate",
-		Command:    cmd,
-		Verbosity:  verbosity,
-		Hint:       hint,
+		DB:          db,
+		Collection:  collection,
+		Filter:      filter,
+		Sort:        sort,
+		Projection:  projection,
+		Skip:        skip,
+		Limit:       limit,
+		CommandName: commandName,
+		DistinctKey: distinctKey,
+		StagesDocs:  stagesDocs,
+		Aggregate:   commandName == "aggregate",
+		Command:     cmd,
+		Verbosity:   verbosity,
+		Hint:        hint,
 	}, nil
 }

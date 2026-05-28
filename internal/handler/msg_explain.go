@@ -96,6 +96,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	qp.Hint = params.Hint
+	qp.Skip = params.Skip
+	qp.Projection = params.Projection
+	qp.Command = params.CommandName
+	qp.DistinctKey = params.DistinctKey
 
 	if !h.EnableNestedPushdown && params.Filter != nil {
 		qp.Filter = params.Filter.DeepCopy()
@@ -135,26 +139,24 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		cInfo = cList.Collections[0]
 	}
 
-	switch {
-	case h.DisablePushdown:
-		// Pushdown disabled
-	case params.Sort.Len() == 0 && cInfo.Capped():
-		// Pushdown default recordID sorting for capped collections
-		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
-	case params.Sort.Len() == 1:
-		if params.Sort.Keys()[0] != "$natural" {
-			break
+	// For Explain we always surface the requested sort to the backend so
+	// the rendered plan tree can include a SORT stage. The historical
+	// $natural-only gate was about pushdown to the Query path; pushdown
+	// is not relevant for explain output.
+	if !h.DisablePushdown {
+		switch {
+		case params.Sort.Len() == 0 && cInfo.Capped():
+			qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
+		case params.Sort.Len() > 0:
+			qp.Sort = params.Sort
 		}
-
-		qp.Sort = params.Sort
 	}
 
-	// Limit pushdown is not applied if:
-	//  - pushdown is disabled;
-	//  - `filter` is set, it must fetch all documents to filter them in memory;
-	//  - `sort` is set, it must fetch all documents and sort them in memory;
-	//  - `skip` is non-zero value, skip pushdown is not supported yet.
-	if !h.DisablePushdown && params.Filter.Len() == 0 && params.Sort.Len() == 0 && params.Skip == 0 {
+	// For Explain we always surface the requested limit to the backend
+	// so the plan tree can include a LIMIT stage. The pushdown gate that
+	// applied at the Query path (no filter / no sort / no skip) is
+	// irrelevant to explain output.
+	if !h.DisablePushdown {
 		qp.Limit = params.Limit
 	}
 

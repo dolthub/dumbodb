@@ -578,81 +578,231 @@ func compareScalars(a, b any) int {
 	}
 }
 
+// explainStage is the in-memory representation of one node in the explain
+// winningPlan tree. The tree is built bottom-up (leaf -> outermost) and
+// then rendered as nested *types.Document.
+type explainStage struct {
+	stage      string
+	indexName  string
+	keyPattern *types.Document
+	input      *explainStage
+}
+
+// toDoc renders the stage tree as a winningPlan document with nested
+// inputStage chain.
+func (s *explainStage) toDoc() *types.Document {
+	d := must.NotFail(types.NewDocument("stage", s.stage))
+	if s.indexName != "" {
+		d.Set("indexName", s.indexName)
+	}
+	if s.keyPattern != nil {
+		d.Set("keyPattern", s.keyPattern)
+	}
+	if s.input != nil {
+		d.Set("inputStage", s.input.toDoc())
+	}
+	return d
+}
+
+// pickIndexForFilter mirrors tryIndexLookup's index-selection rule for
+// the planner side of explain: a single-field index whose leading field
+// matches a top-level filter field with usable bounds. Returns the
+// chosen IndexInfo (zero-value if none).
+func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
+	if filter == nil || filter.Len() == 0 {
+		return backends.IndexInfo{}, false
+	}
+	for _, k := range filter.Keys() {
+		if strings.HasPrefix(k, "$") {
+			return backends.IndexInfo{}, false
+		}
+		if strings.ContainsRune(k, '.') {
+			continue
+		}
+		v, err := filter.Get(k)
+		if err != nil {
+			continue
+		}
+		if _, _, ok := indexBoundsForFilterValue(v); !ok {
+			continue
+		}
+		for _, idx := range idxInfos {
+			if len(idx.Key) == 1 && idx.Key[0].Field == k {
+				return idx, true
+			}
+		}
+	}
+	return backends.IndexInfo{}, false
+}
+
+// keyPatternOf renders an IndexInfo's key as a {field: 1|-1} document
+// matching MongoDB's keyPattern shape.
+func keyPatternOf(idx backends.IndexInfo) *types.Document {
+	kp := types.MakeDocument(len(idx.Key))
+	for _, k := range idx.Key {
+		dir := int32(1)
+		if k.Descending {
+			dir = -1
+		}
+		kp.Set(k.Field, dir)
+	}
+	return kp
+}
+
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
 	parsedQuery := types.MakeDocument(0)
 	if params != nil && params.Filter != nil {
 		parsedQuery = params.Filter.DeepCopy()
 	}
 
-	stage := "COLLSCAN"
-	var indexName string
 	var idxInfos []backends.IndexInfo
-
 	if state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, false); err == nil && state != nil {
-		// Explain only needs the metadata; resolveIndexes already opens the
-		// map handles which we discard. Cheap enough -- each handle is a
-		// few field assignments around an already-cached root node.
 		state.mu.RLock()
 		resolvedInfos, _, rerr := resolveIndexes(ctx, c, state)
 		state.mu.RUnlock()
 		if rerr == nil {
 			idxInfos = append(idxInfos, resolvedInfos...)
 		}
+	}
 
-		// 1. Honor hint if provided.
-		if params != nil {
-			indexName = pickHintedIndex(params.Hint, idxInfos)
-		}
-
-		// 2. Otherwise pick an index that matches a simple equality filter.
-		if indexName == "" && params != nil && params.Filter != nil && params.Filter.Len() == 1 {
-			for _, k := range params.Filter.Keys() {
-				v, _ := params.Filter.Get(k)
-				if _, isDoc := v.(*types.Document); isDoc {
+	// Picked index: explicit hint wins; otherwise an equality / range
+	// filter on a single-field index.
+	var picked backends.IndexInfo
+	var indexPicked bool
+	if params != nil {
+		if hintName := pickHintedIndex(params.Hint, idxInfos); hintName != "" {
+			for _, idx := range idxInfos {
+				if idx.Name == hintName {
+					picked = idx
+					indexPicked = true
 					break
 				}
-				for _, idx := range idxInfos {
-					if len(idx.Key) == 1 && idx.Key[0].Field == k {
-						indexName = idx.Name
-						break
-					}
-				}
 			}
 		}
-
-		if indexName != "" {
-			stage = "IXSCAN"
-		}
 	}
-
-	winningPlan := must.NotFail(types.NewDocument("stage", stage))
-	if indexName != "" {
-		winningPlan.Set("indexName", indexName)
+	if !indexPicked && params != nil {
+		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos)
+	}
+	if !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
+		// distinct uses a covered index on its key when one exists; the
+		// filter (if any) does not drive selection.
 		for _, idx := range idxInfos {
-			if idx.Name != indexName {
-				continue
+			if len(idx.Key) == 1 && idx.Key[0].Field == params.DistinctKey {
+				picked = idx
+				indexPicked = true
+				break
 			}
-			keyPattern := types.MakeDocument(len(idx.Key))
-			for _, kp := range idx.Key {
-				dir := int32(1)
-				if kp.Descending {
-					dir = -1
-				}
-				keyPattern.Set(kp.Field, dir)
-			}
-			winningPlan.Set("keyPattern", keyPattern)
-			break
 		}
 	}
+
+	command := ""
+	if params != nil {
+		command = params.Command
+	}
+
+	winningPlan := buildExplainPlan(command, params, picked, indexPicked)
 
 	qp := must.NotFail(types.NewDocument(
 		"namespace", c.db.name+"."+c.name,
 		"parsedQuery", parsedQuery,
-		"winningPlan", winningPlan,
+		"winningPlan", winningPlan.toDoc(),
 	))
 	return &backends.ExplainResult{
 		QueryPlanner: qp,
 	}, nil
+}
+
+// buildExplainPlan composes the stage tree for the given command and
+// planning choice. Only shapes the planner choices DumboDB already makes
+// (workspace-bbg scope) -- no new planner capabilities (covered queries,
+// compound indexes, OR/AND multi-index, sort via index) are introduced
+// here; those land in their own follow-ups.
+func buildExplainPlan(command string, params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool) *explainStage {
+	switch command {
+	case "count":
+		var leaf *explainStage
+		if indexPicked {
+			leaf = &explainStage{
+				stage:      "COUNT_SCAN",
+				indexName:  picked.Name,
+				keyPattern: keyPatternOf(picked),
+			}
+		} else {
+			leaf = &explainStage{stage: "COLLSCAN"}
+		}
+		return &explainStage{stage: "COUNT", input: leaf}
+
+	case "distinct":
+		// MongoDB emits PROJECTION_COVERED above DISTINCT_SCAN. DumboDB's
+		// DistinctScan path uses the index covering the distinct key; if
+		// no usable index, fall back to COLLSCAN (rare in practice; the
+		// parity test always provides one).
+		if indexPicked {
+			leaf := &explainStage{
+				stage:      "DISTINCT_SCAN",
+				indexName:  picked.Name,
+				keyPattern: keyPatternOf(picked),
+			}
+			return &explainStage{stage: "PROJECTION_COVERED", input: leaf}
+		}
+		return &explainStage{stage: "COLLSCAN"}
+
+	default:
+		// "find" and "aggregate" (the latter via pushed-down $match) share
+		// the same shape rules.
+		return buildFindExplainPlan(params, picked, indexPicked)
+	}
+}
+
+// buildFindExplainPlan composes the stage tree for a find-like query
+// (also used for aggregate with pushed-down $match). Wrapping order
+// from inner to outer: leaf -> FETCH (if IXSCAN) -> SORT -> SKIP ->
+// LIMIT (only when no SORT, because SORT absorbs LIMIT into a TopK
+// internally) -> PROJECTION_SIMPLE. Covered-query (PROJECTION_COVERED
+// without FETCH) is bucket B and not handled here.
+func buildFindExplainPlan(params *backends.ExplainParams, picked backends.IndexInfo, indexPicked bool) *explainStage {
+	var node *explainStage
+	if indexPicked {
+		node = &explainStage{
+			stage:      "IXSCAN",
+			indexName:  picked.Name,
+			keyPattern: keyPatternOf(picked),
+		}
+		node = &explainStage{stage: "FETCH", input: node}
+	} else {
+		node = &explainStage{stage: "COLLSCAN"}
+	}
+
+	if params == nil {
+		return node
+	}
+
+	sortPresent := params.Sort != nil && params.Sort.Len() > 0 && !sortIsNatural(params.Sort)
+	if sortPresent {
+		node = &explainStage{stage: "SORT", input: node}
+	}
+	if params.Skip > 0 {
+		node = &explainStage{stage: "SKIP", input: node}
+	}
+	// MongoDB absorbs LIMIT into SORT (TopK), so it does not emit a
+	// separate LIMIT stage when sort is present.
+	if params.Limit > 0 && !sortPresent {
+		node = &explainStage{stage: "LIMIT", input: node}
+	}
+	if params.Projection != nil && params.Projection.Len() > 0 {
+		node = &explainStage{stage: "PROJECTION_SIMPLE", input: node}
+	}
+	return node
+}
+
+// sortIsNatural reports whether sort is the single-key {"$natural": ...}
+// document, which MongoDB satisfies by collection order with no SORT
+// stage.
+func sortIsNatural(sort *types.Document) bool {
+	if sort == nil || sort.Len() != 1 {
+		return false
+	}
+	return sort.Keys()[0] == "$natural"
 }
 
 // pickHintedIndex resolves a hint value (either a name string or a key-pattern
