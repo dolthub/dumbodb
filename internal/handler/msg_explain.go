@@ -33,6 +33,138 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+// countExplainExecution runs a counting pass against the collection
+// for executionStats verbosity, returning (nReturned,
+// totalDocsExamined, totalKeysExamined).
+//
+// Counting is best-effort: any backend error returns zeros so the
+// caller still produces a structurally valid executionStats document.
+// For find/aggregate the implementation iterates coll.Query's result
+// (each yielded doc counts as one examined doc) and re-applies the
+// filter at the handler level to compute nReturned. When the winning
+// plan tree contains an IXSCAN node every examined doc was reached
+// via the index, so totalKeysExamined = totalDocsExamined.
+//
+// count and distinct commands return zeros today; their dedicated
+// stat surfaces (COUNT_SCAN, DISTINCT_SCAN counters) are a follow-up.
+func countExplainExecution(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, winningPlan *types.Document) (nReturned, totalDocsExamined, totalKeysExamined int32) {
+	if qp.Command != "find" && qp.Command != "aggregate" {
+		return 0, 0, 0
+	}
+	usesIndex := planContainsIndexScan(winningPlan)
+
+	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter})
+	if err != nil || qres == nil || qres.Iter == nil {
+		return 0, 0, 0
+	}
+	defer qres.Iter.Close()
+
+	for {
+		_, doc, err := qres.Iter.Next()
+		if err != nil {
+			break
+		}
+		totalDocsExamined++
+		if qp.Filter == nil || qp.Filter.Len() == 0 {
+			nReturned++
+			continue
+		}
+		match, ferr := common.FilterDocument(doc, qp.Filter)
+		if ferr == nil && match {
+			nReturned++
+		}
+	}
+
+	if usesIndex {
+		totalKeysExamined = totalDocsExamined
+	}
+	return
+}
+
+// buildExecutionStages clones the winningPlan tree shape into the
+// executionStages document expected by the executionStats verbosity.
+// At the root the stage's nReturned reflects the actual result count.
+// Per-stage row flow (nReturned, advanced, ...) at intermediate
+// levels is left at zero -- enough to satisfy stage/indexName parity
+// without implementing full row-counting instrumentation.
+func buildExecutionStages(plan *types.Document, rootStage string, nReturned int32) *types.Document {
+	if plan == nil {
+		return must.NotFail(types.NewDocument(
+			"stage", rootStage,
+			"nReturned", nReturned,
+			"executionTimeMillisEstimate", int64(0),
+		))
+	}
+	return cloneExecutionStage(plan, nReturned)
+}
+
+func cloneExecutionStage(node *types.Document, nReturned int32) *types.Document {
+	d := must.NotFail(types.NewDocument())
+	if s, _ := node.Get("stage"); s != nil {
+		d.Set("stage", s)
+	}
+	d.Set("nReturned", nReturned)
+	d.Set("executionTimeMillisEstimate", int64(0))
+	if v, _ := node.Get("indexName"); v != nil {
+		d.Set("indexName", v)
+	}
+	if v, _ := node.Get("keyPattern"); v != nil {
+		d.Set("keyPattern", v)
+	}
+	if v, _ := node.Get("inputStage"); v != nil {
+		if child, ok := v.(*types.Document); ok {
+			d.Set("inputStage", cloneExecutionStage(child, 0))
+		}
+	}
+	if v, _ := node.Get("inputStages"); v != nil {
+		if arr, ok := v.(*types.Array); ok {
+			out := types.MakeArray(arr.Len())
+			for i := 0; i < arr.Len(); i++ {
+				c, _ := arr.Get(i)
+				if child, ok := c.(*types.Document); ok {
+					out.Append(cloneExecutionStage(child, 0))
+				}
+			}
+			d.Set("inputStages", out)
+		}
+	}
+	return d
+}
+
+// planContainsIndexScan walks the winningPlan tree looking for any
+// node whose stage is IXSCAN, COUNT_SCAN, or DISTINCT_SCAN. Returns
+// true for both inputStage (single-child) and inputStages (branching)
+// nodes so OR/AND multi-index plans count correctly.
+func planContainsIndexScan(plan *types.Document) bool {
+	if plan == nil {
+		return false
+	}
+	if s, _ := plan.Get("stage"); s != nil {
+		if str, ok := s.(string); ok {
+			switch str {
+			case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
+				return true
+			}
+		}
+	}
+	if v, _ := plan.Get("inputStage"); v != nil {
+		if child, ok := v.(*types.Document); ok && planContainsIndexScan(child) {
+			return true
+		}
+	}
+	if v, _ := plan.Get("inputStages"); v != nil {
+		if arr, ok := v.(*types.Array); ok {
+			for i := 0; i < arr.Len(); i++ {
+				c, _ := arr.Get(i)
+				if child, ok := c.(*types.Document); ok && planContainsIndexScan(child) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // MsgExplain implements `explain` command.
 //
 // The passed context is canceled when the client connection is closed.
@@ -175,26 +307,31 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		// Reflect the winning plan's stage in executionStages so the two
 		// halves of the explain response agree on whether an index was used.
 		execStage := "COLLSCAN"
+		var winningPlanDoc *types.Document
 		if wp, _ := res.QueryPlanner.Get("winningPlan"); wp != nil {
-			if winningPlan, ok := wp.(*types.Document); ok {
-				if s, _ := winningPlan.Get("stage"); s != nil {
+			if d, ok := wp.(*types.Document); ok {
+				winningPlanDoc = d
+				if s, _ := d.Get("stage"); s != nil {
 					if str, ok := s.(string); ok && str != "" {
 						execStage = str
 					}
 				}
 			}
 		}
-		executionStages := must.NotFail(types.NewDocument(
-			"stage", execStage,
-			"nReturned", int32(0),
-			"executionTimeMillisEstimate", int64(0),
-		))
+
+		nReturned, totalDocsExamined, totalKeysExamined := countExplainExecution(connCtx, coll, qp, winningPlanDoc)
+
+		// executionStages mirrors the winningPlan tree's shape so
+		// stage / indexName / keyPattern parity holds at every level.
+		// nReturned is reported at the root only -- per-stage row-flow
+		// stats are a follow-up.
+		executionStages := buildExecutionStages(winningPlanDoc, execStage, nReturned)
 		executionStats := must.NotFail(types.NewDocument(
 			"executionSuccess", true,
-			"nReturned", int32(0),
+			"nReturned", nReturned,
 			"executionTimeMillis", int64(0),
-			"totalKeysExamined", int32(0),
-			"totalDocsExamined", int32(0),
+			"totalKeysExamined", totalKeysExamined,
+			"totalDocsExamined", totalDocsExamined,
 			"executionStages", executionStages,
 		))
 		response.Set("executionStats", executionStats)
