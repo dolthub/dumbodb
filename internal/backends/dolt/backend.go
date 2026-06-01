@@ -261,6 +261,11 @@ type Backend struct {
 	provider *dumbodbProvider
 
 	gcController *gcctx.GCSafepointController
+	// backgroundRP is a singleton GCRootsProvider used by
+	// RunUnderGCSafepointKeeper to bracket background mutators
+	// (capped cleanup, etc.). Stable per-Backend so the keeper's
+	// per-session bookkeeping reuses the same entry across ticks.
+	backgroundRP *backgroundGCRootsProvider
 	sessions     *sqlctx.SessionRegistry
 
 	docLocksMu sync.Mutex
@@ -432,6 +437,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 	}
 
 	b.gcController = gcctx.NewGCSafepointController()
+	b.backgroundRP = &backgroundGCRootsProvider{}
 	provider, err := newDumbodbProvider(dataDir, b.lookupDbStateForDsess, b.openDbNames, b.gcController)
 	if err != nil {
 		return nil, fmt.Errorf("constructing dsess provider: %w", err)

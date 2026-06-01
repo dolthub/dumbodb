@@ -6,9 +6,9 @@ require (
 	github.com/AlekSi/pointer v1.2.0
 	github.com/FerretDB/wire v0.0.8
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20260527014643-453b288a8123
+	github.com/dolthub/dolt/go v0.40.5-0.20260528163902-e239b95f042d
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260526174314-044bab1ab87a
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260527162314-8764587064e4
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/stretchr/testify v1.11.1

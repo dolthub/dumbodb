@@ -239,7 +239,7 @@ func (h *Handler) runCappedCleanup() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := h.cleanupAllCappedCollections(context.Background()); err != nil {
+			if err := h.runCappedCleanupTick(context.Background()); err != nil {
 				h.L.Error("Failed to cleanup capped collections.", logging.Error(err))
 			}
 
@@ -248,6 +248,20 @@ func (h *Handler) runCappedCleanup() {
 			return
 		}
 	}
+}
+
+// runCappedCleanupTick wraps cleanupAllCappedCollections in the GC
+// safepoint keeper bracket when the backend implements
+// backends.GCSafepointBackend. The bracket ensures an in-flight GC
+// sweep waits for the tick to release before chunk-store rewrites
+// race the tick's writes.
+func (h *Handler) runCappedCleanupTick(ctx context.Context) error {
+	if gsb, ok := h.b.(backends.GCSafepointBackend); ok {
+		return gsb.RunUnderGCSafepointKeeper(ctx, func() error {
+			return h.cleanupAllCappedCollections(ctx)
+		})
+	}
+	return h.cleanupAllCappedCollections(ctx)
 }
 
 // Close gracefully shutdowns handler.

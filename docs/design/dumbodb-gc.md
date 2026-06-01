@@ -1,9 +1,11 @@
 # DumboDB Garbage Collection
 
 **Status:** Design
-**Date:** 2026-05-27
-**Depends on:** workspace-qsc (closed) -- session-routed writes are the
-prerequisite for `VisitGCRoots` to see in-flight chunks.
+**Date:** 2026-05-28
+**Depends on:** workspace-qsc (closed), workspace-4xp (closed) --
+session-routed writes for in-txn chunks + singleton WS entries with
+inline `nbs.Commit` for autoCommit chunks. Together those make
+`VisitGCRoots` + on-disk ref walk cover everything GC needs.
 
 ## Problem
 
@@ -199,30 +201,29 @@ So the deadlock is avoided as long as we plumb `callSession` correctly
 into both `BeginGC`'s direct visit AND `Waiter(ctx, callSession, ...)`.
 Same as dolt; mirror the structure.
 
-### The deferred flusher and capped cleanup
+### Background loops bypass the keeper
 
-`Backend.deferredFlushLoop` (every 100ms) walks
-`SessionRegistry.ActiveShadows()` and flushes dirty `branchState`s.
-`handler.Handler.cappedCleanup` runs periodic capped-collection
-cleanups that mutate working sets.
+`handler.Handler.cleanupAllCappedCollections` runs on a background
+goroutine that mutates working sets without going through any
+`CommandBegin`/`CommandEnd` bracketing. `GCSafepointController` does
+not see it. If GC is in flight while capped cleanup is mid-write,
+chunks the cleanup has read but not yet committed could be swept.
 
-Both of these run on goroutines that are NOT bracketed by the keeper.
-They take no `CommandBegin`/`CommandEnd`, so `GCSafepointController`
-does not see them. If GC is in flight while a flush is mid-write,
-chunks the flush has read but not yet committed could be swept.
+(Note: the pre-workspace-4xp `Backend.deferredFlushLoop` had the same
+problem, but that loop is gone -- ws-sn.3 removed it when autoCommit
+writes became inline-durable. Capped cleanup is the only remaining
+unbracketed background mutator.)
 
-Fix: bracket these loops with the keeper. Each tick that does work
-must call `b.gcController.SessionCommandBegin(rootsProvider)` /
-`SessionCommandEnd(rootsProvider)` around its work. For the deferred
-flusher, the natural rootsProvider is the per-tick view of session
-state; for capped cleanup, the connection-style ConnInfo it already
-builds.
+Fix: bracket the capped-cleanup tick with the keeper. Each tick that
+does work must call `b.gcController.SessionCommandBegin(rootsProvider)`
+/ `SessionCommandEnd(rootsProvider)` around its work. The natural
+rootsProvider is the per-tick view of session state; the existing
+internal `ConnInfo` the cleanup builds is the obvious carrier.
 
-A simpler alternative is to make these loops idempotent on failure
-and let GC tolerate transient inconsistencies. The keeper bracket is
-the same shape as `Shadow.Use`/`Shadow.Commit` and matches dolt's
-internal pattern; adopting it everywhere is cheaper than reasoning
-about which paths are GC-safe.
+The keeper bracket is the same shape as `Shadow.Use`/`Shadow.Commit`
+uses, which mirrors dolt's internal pattern. Adopting it for the one
+remaining background loop is cheaper than reasoning about which
+paths are GC-safe.
 
 This is the load-bearing wrinkle. It needs a sub-task before the
 runCommand can ship.
@@ -310,30 +311,32 @@ No additional work needed for cursors in v1.
 (These are sub-decisions whose right answer becomes obvious during
 implementation; calling them out so they aren't forgotten.)
 
-- **`StorageSize` / chunk-count APIs.** NBS exposes per-store size
-  and chunk count; the exact method names vary between
-  `nbs.GenerationalNBS` and the wrapping interfaces. Pick at
-  implementation time; if either is unavailable, drop the
-  corresponding field rather than fake it.
-- **Capped cleanup and deferred-flush bracketing.** Lands in its own
-  task before the runCommand task -- the runCommand cannot be safe
-  without it.
+- **Size / chunk-count APIs.** Resolved:
+  `chunks.TableFileStore.Size(ctx) (uint64, error)` (implemented by
+  `nbs.NomsBlockStore`) and `nbs.GenerationalNBS.Count() (uint32,
+  error)`. Both are public and stable.
+- **Capped cleanup bracketing.** Lands in its own task before the
+  runCommand task -- the runCommand cannot be safe without it.
 
 ## Migration Order
 
 The epic decomposes into:
 
-1. **gc.1 -- Keeper-bracket background loops.** Wrap
-   `deferredFlushLoop` and `Handler.cappedCleanup` ticks with
-   `SessionCommandBegin`/`End` so GC's safepoint sees them. No
-   user-visible change.
+1. **gc.1 -- Keeper-bracket the capped-cleanup loop.** Wrap each
+   `Handler.cleanupAllCappedCollections` tick with
+   `gcController.SessionCommandBegin`/`SessionCommandEnd` so GC's
+   safepoint sees it. No user-visible change. (Pre-workspace-4xp
+   this task also covered `deferredFlushLoop`; that loop is gone, so
+   capped cleanup is the only remaining unbracketed mutator.)
 2. **gc.2 -- Backend GC method + safepoint controller.** Add
-   `Backend.DumboDBGC` and `sessionAwareSafepoint`. Force-flush
-   `state.workingSets` at GC start. No wire command yet; tested via go
-   tests.
+   `Backend.DumboDBGC` and `sessionAwareSafepoint` in
+   `internal/backends/dolt/gc.go`. No wire command yet; tested via go
+   tests. (Pre-workspace-4xp this task also force-flushed
+   `state.workingSets` at GC start; that field is gone and inline
+   `nbs.Commit` keeps disk fresh, so no force-flush is needed.)
 3. **gc.3 -- Wire command + handler.** Register `dumboGC` in
-   `handler/commands.go`; build `msg_dolt_gc.go` (or `msg_dumbo_gc.go`)
-   that calls `Backend.DumboDBGC`. Bats coverage.
+   `handler/commands.go`; build `msg_dumbo_gc.go` that decodes
+   `mode` and calls `Backend.DumboDBGC`. Bats coverage.
 4. **gc.4 -- Sweep validation parity test.** Insert a workload, drop
    it, run GC, verify chunk count / store size drops via `dolt sql -q`
    against the underlying store (same shape as `conflicts_native.bats`
