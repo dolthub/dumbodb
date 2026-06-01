@@ -43,6 +43,7 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 | [`dumboConflicts`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboconflicts) | List or inspect conflicts from an in-progress merge/cherry-pick/rebase |
 | [`dumboResolveConflict`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
 | [`dumboTag`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbotag) | Create, list, or delete tags at specific commits |
+| [`dumboGC`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbogc) | Run garbage collection on the database's chunk store |
 
 All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
 

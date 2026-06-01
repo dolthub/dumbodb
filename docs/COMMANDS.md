@@ -38,6 +38,7 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboConflicts` | `dumboConflicts` |
 | `dumboResolveConflict` | `dumboResolveConflict` |
 | `dumboTag` | `dumboTag` |
+| `dumboGC` | `dumboGC` |
 
 ---
 
@@ -1057,3 +1058,73 @@ db.runCommand({ dumboTag: 1, name: "before-refactor", hash: "main~3" })
 ```js
 db.runCommand({ dumboTag: 1, name: "v1.0", delete: true })
 ```
+
+---
+
+## dumboGC
+
+Run garbage collection on the database's chunk store. Sweeps chunks that are no longer reachable from any branch ref or active session, and (in `full` mode) compacts the surviving chunks into archive files in the oldgen store.
+
+**Alias:** `doltGC`
+
+GC scope is the entire underlying chunk store for the database, regardless of which branch the command is invoked against: `db.getSiblingDB("orders@feature").runCommand({dumboGC: 1})` and `db.getSiblingDB("orders@main").runCommand({dumboGC: 1})` have the same effect, because one chunk store backs every branch in a logical database.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `mode` | string | no | `"default"` | `"default"`: sweep new-gen and unreferenced old-gen chunks. `"full"`: also rewrite reachable chunks (compacts the store). |
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `db` | string | Resolved base database name (branch selector stripped) |
+| `mode` | string | Effective mode, `"default"` or `"full"` |
+| `durationMs` | number | Wall-clock duration of the GC pass, in milliseconds |
+| `sizeBefore` | number | Bytes on disk before GC |
+| `sizeAfter` | number | Bytes on disk after GC |
+| `chunksBefore` | number | Chunk count before GC |
+| `chunksAfter` | number | Chunk count after GC |
+| `ok` | number | `1` on success |
+
+All numeric fields are encoded as BSON Doubles. Chunk counts and byte sizes both fit exactly under 2^53.
+
+### Examples
+
+**Default-mode GC (sweep unreachable chunks):**
+
+```js
+db.runCommand({ dumboGC: 1 })
+// {
+//   db: "orders",
+//   mode: "default",
+//   durationMs: 42,
+//   sizeBefore: 9876543,
+//   sizeAfter: 5432109,
+//   chunksBefore: 12345,
+//   chunksAfter: 6789,
+//   ok: 1
+// }
+```
+
+**Full-mode GC (revisit the entire chunk store):**
+
+```js
+db.runCommand({ dumboGC: 1, mode: "full" })
+```
+
+Default mode walks new-gen chunks only -- chunks already promoted to oldgen archives are assumed to still be reachable and are not revisited. Full mode walks the entire chunk store, including oldgen archives, so chunks that survived earlier GCs but have since become unreachable (typically because the branch or tag that kept them alive was deleted) are reclaimed. Use full mode after deleting long-lived branches or tags whose chunks have already been archived; default mode would skip those chunks regardless of reachability.
+
+### Errors
+
+| Condition | Error |
+|-----------|-------|
+| `mode` is not `"default"` or `"full"` | `OperationFailed: DumboDBGC: unknown mode "<value>"` |
+| Target database does not exist | `OperationFailed: DumboDBGC: database "<name>" does not exist` |
+| Command run from a non-session context | `OperationFailed: DumboDBGC: no session in context` |
+
+### Notes
+
+- `dumboGC` is a durable command (routed through the session commit fence), so it is mutually exclusive with other durable commands on the same connection.
+- The calling session is excluded from the GC safepoint's wait set, so the running command does not deadlock on itself. Other connections' in-flight commands are awaited at the pre-finalize safepoint and block briefly until GC completes.
