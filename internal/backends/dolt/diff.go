@@ -351,12 +351,7 @@ func unionCollectionNames(ctx context.Context, aAM, bAM prolly.AddressMap) ([]st
 
 // readDocFromEntry reads a full document from a prolly.Map key+value entry.
 func readDocFromEntry(ctx context.Context, ns tree.NodeStore, k, v val.Tuple) (*types.Document, error) {
-	jsonHash, ok := valDesc.GetJSONAddr(0, v)
-	if !ok {
-		return nil, fmt.Errorf("extracting JSON hash from value tuple")
-	}
-
-	return readDocJSON(ctx, ns, jsonHash)
+	return readDocFromValue(ctx, ns, v)
 }
 
 // diffDocumentPaths computes path-based field diffs between two documents,

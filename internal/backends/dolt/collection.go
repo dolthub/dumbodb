@@ -833,11 +833,7 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 			return nil
 		}
 
-		jsonHash, ok := valDesc.GetJSONAddr(0, v)
-		if !ok {
-			return nil
-		}
-		d, err := readDocJSON(ctx, ns, jsonHash)
+		d, err := readDocFromValue(ctx, ns, v)
 		if err != nil {
 			return err
 		}
@@ -993,12 +989,8 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 			if v == nil {
 				return nil
 			}
-			jsonHash, ok := valDesc.GetJSONAddr(0, v)
-			if !ok {
-				return fmt.Errorf("primary value tuple missing JSON addr")
-			}
 			var decErr error
-			doc, decErr = readDocJSON(ctx, state.ns, jsonHash)
+			doc, decErr = readDocFromValue(ctx, state.ns, v)
 			return decErr
 		}); err != nil {
 			return nil, true, fmt.Errorf("index lookup primary fetch: %w", err)
@@ -1337,13 +1329,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			if v == nil {
 				break
 			}
-			jsonHash, ok := valDesc.GetJSONAddr(0, v)
-			if !ok {
-				continue
-			}
-			existingDoc, err := readDocJSON(ctx, state.ns, jsonHash)
+			existingDoc, err := readDocFromValue(ctx, state.ns, v)
 			if err != nil {
-				return nil, err
+				continue
 			}
 			for i, idx := range uniqueIndexes {
 				// For partial indexes, only include existing docs that satisfy the filter.
@@ -1443,13 +1431,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
-		// Convert document to JSON bytes and write to JSON chunk store.
-		jsonHash, err := writeDocJSON(ctx, state.ns, doc)
-		if err != nil {
-			return nil, err
-		}
-
-		v, err := buildValue(jsonHash)
+		// Convert document to ExtJSON and pack inline (or out-of-band
+		// for oversize docs) in a JsonAdaptiveEnc value tuple.
+		v, err := writeDocToValue(ctx, state.ns, doc)
 		if err != nil {
 			return nil, err
 		}
@@ -1671,8 +1655,8 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		// Locate the existing stored document so a partial update can reuse
 		// its chunks. Capture the existing JSON hash while we're here.
 		var (
-			found        bool
-			existingHash hash.Hash
+			found         bool
+			existingBytes []byte
 		)
 
 		if err := mut.Get(ctx, key, func(k, v val.Tuple) error {
@@ -1680,8 +1664,9 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 				return nil
 			}
 			found = true
-			if addr, ok := valDesc.GetJSONAddr(0, v); ok {
-				existingHash = addr
+			b, err := readJSONBytesFromValue(ctx, state.ns, v)
+			if err == nil {
+				existingBytes = b
 			}
 			return nil
 		}); err != nil {
@@ -1693,29 +1678,29 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		}
 
 		// Prefer a partial update when the handler supplied a trackable
-		// mutation list and the prior document is indexed. Any error in the
-		// partial path falls through to a full rewrite from doc below.
-		var jsonHash hash.Hash
+		// mutation list and the prior document is readable. Any error in
+		// the partial path falls through to a full rewrite from doc.
+		var newBytes []byte
 
 		var mutations []backends.FieldMutation
 		if i < len(params.FieldMutations) {
 			mutations = params.FieldMutations[i]
 		}
 
-		if len(mutations) > 0 && !existingHash.IsEmpty() {
-			if h, err := applyFieldMutations(ctx, state.ns, existingHash, mutations); err == nil {
-				jsonHash = h
+		if len(mutations) > 0 && len(existingBytes) > 0 {
+			if b, err := applyFieldMutations(ctx, state.ns, existingBytes, mutations); err == nil {
+				newBytes = b
 			}
 		}
 
-		if jsonHash.IsEmpty() {
-			jsonHash, err = writeDocJSON(ctx, state.ns, doc)
+		if newBytes == nil {
+			newBytes, err = docToExtJSON(doc)
 			if err != nil {
 				return nil, err
 			}
 		}
 
-		v, err := buildValue(jsonHash)
+		v, err := buildValue(ctx, state.ns, newBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -2299,11 +2284,7 @@ func lookupFieldFromPrimary(
 		if v == nil {
 			return nil
 		}
-		jsonHash, ok := valDesc.GetJSONAddr(0, v)
-		if !ok {
-			return fmt.Errorf("distinct scan primary value missing JSON addr")
-		}
-		d, decErr := readDocJSON(ctx, ns, jsonHash)
+		d, decErr := readDocFromValue(ctx, ns, v)
 		if decErr != nil {
 			return decErr
 		}
@@ -2540,11 +2521,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			return prolly.Map{}, fmt.Errorf("index: primary key tuple missing _id bytes")
 		}
 
-		jsonHash, ok := valDesc.GetJSONAddr(0, v)
-		if !ok {
-			return prolly.Map{}, fmt.Errorf("index: primary value tuple missing JSON addr")
-		}
-		doc, err := readDocJSON(ctx, state.ns, jsonHash)
+		doc, err := readDocFromValue(ctx, state.ns, v)
 		if err != nil {
 			return prolly.Map{}, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
@@ -2711,71 +2688,108 @@ func docHasMinMaxKey(doc *types.Document) bool {
 	return false
 }
 
-// writeDocJSON converts a types.Document to JSON bytes via BSON encoding,
-// writes those bytes to the dolt JSON chunk store, and returns the root hash.
-func writeDocJSON(ctx context.Context, ns tree.NodeStore, doc *types.Document) (hash.Hash, error) {
-	var bsonBytes []byte
+// readJSONBytesFromValue extracts the canonical Extended JSON bytes
+// of a document from a JsonAdaptiveEnc-encoded value tuple. Documents
+// kept inline by the tuple builder return their bytes directly;
+// documents that spilled out-of-band are fetched from the value store.
+func readJSONBytesFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) ([]byte, error) {
+	result, ok, err := valDesc.GetJsonAdaptiveValue(ctx, 0, ns, v)
+	if err != nil {
+		return nil, fmt.Errorf("reading JSON value from tuple: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("value tuple missing JSON field")
+	}
+	switch x := result.(type) {
+	case []byte:
+		return x, nil
+	case *val.JsonAdaptiveStorage:
+		return x.GetBytes(ctx)
+	default:
+		return nil, fmt.Errorf("unexpected JsonAdaptiveValue type %T", result)
+	}
+}
 
+// readDocFromValue decodes a document stored in a JsonAdaptiveEnc value
+// tuple back to a types.Document. Pair with readJSONBytesFromValue when
+// a caller only needs the raw bytes (e.g. for filter pushdown).
+func readDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
+	b, err := readJSONBytesFromValue(ctx, ns, v)
+	if err != nil {
+		return nil, err
+	}
+	return decodeDocFromJSON(b)
+}
+
+// docToExtJSON converts a types.Document to canonical Extended JSON
+// bytes via BSON. Shared by every write path that lands documents in
+// a JsonAdaptiveEnc value tuple; MinKey / MaxKey docs route through
+// the raw-BSON encoder because wirebson does not handle them.
+func docToExtJSON(doc *types.Document) ([]byte, error) {
+	var bsonBytes []byte
 	if docHasMinMaxKey(doc) {
-		// Use raw BSON encoding to handle MinKey/MaxKey (wirebson doesn't support them).
 		var err error
 		bsonBytes, err = bson.FromDocumentRaw(doc)
 		if err != nil {
-			return hash.Hash{}, fmt.Errorf("encoding document with MinKey/MaxKey to BSON: %w", err)
+			return nil, fmt.Errorf("encoding document with MinKey/MaxKey to BSON: %w", err)
 		}
 	} else {
-		// Step 1: Convert types.Document -> wirebson.Document -> BSON bytes.
 		wdoc, err := bson.FromDocument(doc)
 		if err != nil {
-			return hash.Hash{}, fmt.Errorf("encoding document to wirebson: %w", err)
+			return nil, fmt.Errorf("encoding document to wirebson: %w", err)
 		}
-
 		bsonBytes, err = wdoc.Encode()
 		if err != nil {
-			return hash.Hash{}, fmt.Errorf("encoding document to BSON: %w", err)
+			return nil, fmt.Errorf("encoding document to BSON: %w", err)
 		}
 	}
-
-	// Step 2: Convert BSON bytes -> Canonical Extended JSON bytes.
-	// Must use canonical=true to preserve BSON type distinctions (int32 vs int64,
-	// double vs decimal128, etc.) through the JSON roundtrip.
 	jsonBytes, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("converting BSON to JSON: %w", err)
+		return nil, fmt.Errorf("converting BSON to JSON: %w", err)
 	}
-
-	// Step 3: Write JSON bytes to the dolt JSON chunk store.
-	jWrapper := sqltypes.NewLazyJSONDocument(jsonBytes)
-	root, err := tree.SerializeJsonToAddr(ctx, ns, jWrapper)
-	if err != nil {
-		return hash.Hash{}, fmt.Errorf("serializing JSON to addr: %w", err)
-	}
-
-	return root.HashOf(), nil
+	return jsonBytes, nil
 }
 
-// applyFieldMutations mutates the stored JSON document at existingHash
-// field-by-field using Dolt's IndexedJsonDocument.Set / .Remove, which
-// re-chunks only the affected region of the prolly tree and shares every
-// unchanged chunk with the new root. Returns the root hash of the mutated
-// document.
-//
-// Returns an error if the stored document is not in the indexed JSON format
-// (e.g. a legacy multi-chunk blob) or if Set / Remove falls back to an
-// in-memory representation, which would defeat structural sharing. The caller
-// treats any error as a signal to fall back to a full rewrite via
-// writeDocJSON.
-func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash hash.Hash, mutations []backends.FieldMutation) (hash.Hash, error) {
-	wrapper, err := tree.NewJSONDoc(existingHash, ns).ToIndexedJSONDocument(ctx)
+// writeDocToValue is the document-side counterpart to readDocFromValue:
+// turn a types.Document into a JsonAdaptiveEnc-encoded value tuple in
+// one step. The tuple builder keeps the bytes inline when they fit
+// under the adaptive-JSON inline threshold and spills out-of-band via
+// ns otherwise.
+func writeDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document) (val.Tuple, error) {
+	jsonBytes, err := docToExtJSON(doc)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("loading indexed JSON document: %w", err)
+		return nil, err
 	}
+	return buildValue(ctx, ns, jsonBytes)
+}
 
-	idx, ok := wrapper.(tree.IndexedJsonDocument)
-	if !ok {
-		// Legacy non-indexed multi-chunk document: no structural sharing
-		// available.
-		return hash.Hash{}, fmt.Errorf("stored document is not indexed")
+// indexedJSONFromBytes wraps a document's canonical Extended JSON bytes
+// in an IndexedJsonDocument by writing them through Dolt's JSON chunker.
+// Used by the partial-update and merge paths that still rely on
+// IndexedJson semantics; once workspace-110 lands a direct adaptive-JSON
+// mutation path, this wrapper can shrink.
+func indexedJSONFromBytes(ctx context.Context, ns tree.NodeStore, b []byte) (tree.IndexedJsonDocument, error) {
+	wrapper := sqltypes.NewLazyJSONDocument(b)
+	root, err := tree.SerializeJsonToAddr(ctx, ns, wrapper)
+	if err != nil {
+		return tree.IndexedJsonDocument{}, err
+	}
+	return tree.NewIndexedJsonDocument(ctx, root, ns), nil
+}
+
+// applyFieldMutations mutates the document stored as canonical Extended
+// JSON bytes by routing through Dolt's IndexedJsonDocument.Set / .Remove
+// for each field, then materialises the result back to bytes. The
+// caller stores the new bytes inline in a JsonAdaptiveEnc value tuple.
+//
+// The detour through the chunk store is the interim cost of running
+// IndexedJson mutations on documents that live inline in their value
+// tuples; workspace-110 will instrument Dolt's adaptive-JSON mutation
+// path so this function can be replaced with a direct one.
+func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
+	idx, err := indexedJSONFromBytes(ctx, ns, existingBytes)
+	if err != nil {
+		return nil, fmt.Errorf("loading indexed JSON document: %w", err)
 	}
 
 	for _, m := range mutations {
@@ -2786,11 +2800,11 @@ func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash ha
 		if m.Unset {
 			res, _, err := idx.Remove(ctx, path)
 			if err != nil {
-				return hash.Hash{}, err
+				return nil, err
 			}
 			next, ok := res.(tree.IndexedJsonDocument)
 			if !ok {
-				return hash.Hash{}, fmt.Errorf("remove fell back to in-memory document")
+				return nil, fmt.Errorf("remove fell back to in-memory document")
 			}
 			idx = next
 			continue
@@ -2798,27 +2812,21 @@ func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingHash ha
 
 		valJSON, err := marshalExtJSONValue(m.Value)
 		if err != nil {
-			return hash.Hash{}, err
+			return nil, err
 		}
 
 		res, _, err := idx.Set(ctx, path, sqltypes.NewLazyJSONDocument(valJSON))
 		if err != nil {
-			return hash.Hash{}, err
+			return nil, err
 		}
 		next, ok := res.(tree.IndexedJsonDocument)
 		if !ok {
-			return hash.Hash{}, fmt.Errorf("set fell back to in-memory document")
+			return nil, fmt.Errorf("set fell back to in-memory document")
 		}
 		idx = next
 	}
 
-	// SerializeJsonToAddr fast-paths IndexedJsonDocument by returning its
-	// cached root node rather than re-chunking, so this is O(1).
-	root, err := tree.SerializeJsonToAddr(ctx, ns, idx)
-	if err != nil {
-		return hash.Hash{}, err
-	}
-	return root.HashOf(), nil
+	return sqltypes.MarshallJson(ctx, idx)
 }
 
 // marshalExtJSONValue produces the canonical Extended JSON encoding of a
@@ -2867,36 +2875,9 @@ func marshalExtJSONValue(value any) ([]byte, error) {
 	return inner, nil
 }
 
-// readDocJSON reads a JSON document from the dolt chunk store at the given hash
-// and decodes it back to a types.Document.
-func readDocJSON(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*types.Document, error) {
-	jsonBytes, err := readDocJSONBytes(ctx, ns, h)
-	if err != nil {
-		return nil, err
-	}
-	return decodeDocFromJSON(jsonBytes)
-}
-
-// readDocJSONBytes reads the raw canonical Extended JSON bytes for a document.
-// Cheap: just pulls the stored bytes from the chunk store without decoding.
-// Use this when you want to inspect the document (e.g. for filter pushdown)
-// before paying the cost of a full BSON / types.Document decode.
-func readDocJSONBytes(ctx context.Context, ns tree.NodeStore, h hash.Hash) ([]byte, error) {
-	jsonDoc := tree.NewJSONDoc(h, ns)
-	wrapper, err := jsonDoc.ToIndexedJSONDocument(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reading JSON document: %w", err)
-	}
-	jsonBytes, err := sqltypes.MarshallJson(ctx, wrapper)
-	if err != nil {
-		return nil, fmt.Errorf("getting JSON bytes: %w", err)
-	}
-	return jsonBytes, nil
-}
-
 // decodeDocFromJSON converts canonical Extended JSON bytes to a types.Document
-// via a BSON round-trip. This is the expensive half of readDocJSON; skip it
-// when a prefilter has already ruled the document out.
+// via a BSON round-trip. This is the expensive half of readDocFromValue;
+// skip it when a prefilter has already ruled the document out.
 func decodeDocFromJSON(jsonBytes []byte) (*types.Document, error) {
 	var rawBSON mongobson.Raw
 	if err := mongobson.UnmarshalExtJSON(jsonBytes, true, &rawBSON); err != nil {
@@ -3017,30 +2998,21 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 			return struct{}{}, doc, nil
 		}
 
-		// Get JSON hash from value tuple.
-		jsonHash, ok := valDesc.GetJSONAddr(0, v)
-		if !ok {
+		// Read JSON bytes from the JsonAdaptiveEnc value tuple.
+		jsonBytes, err := readJSONBytesFromValue(it.ctx, it.ns, v)
+		if err != nil {
 			continue
 		}
 
 		var doc *types.Document
 		if it.prefilter != nil {
-			jsonBytes, err := readDocJSONBytes(it.ctx, it.ns, jsonHash)
-			if err != nil {
-				return struct{}{}, nil, err
-			}
 			if !it.prefilter(jsonBytes) {
 				continue
 			}
-			doc, err = decodeDocFromJSON(jsonBytes)
-			if err != nil {
-				return struct{}{}, nil, err
-			}
-		} else {
-			doc, err = readDocJSON(it.ctx, it.ns, jsonHash)
-			if err != nil {
-				return struct{}{}, nil, err
-			}
+		}
+		doc, err = decodeDocFromJSON(jsonBytes)
+		if err != nil {
+			return struct{}{}, nil, err
 		}
 
 		doc.SetRecordID(recordID)
