@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Spike test for workspace-9r3: verify val.JsonAdaptiveEnc supports
-// the canonical dumbo document shape and inlines documents of typical
-// size into the row tuple, bypassing the SerializeJsonToAddr chunker
-// that writeDocJSON currently uses. See
+// Asserts that val.JsonAdaptiveEnc inlines canonical dumbo-shape
+// documents directly into the row tuple, never calling the
+// underlying ValueStore.WriteBytes. This is the load-bearing
+// property of the workspace-r11 storage win: documents pack into
+// the row tuple instead of each becoming its own chunk in the
+// content-addressed store. See
 // docs/design/document-storage-parity-with-dolt.md.
 
 package dolt
@@ -35,7 +37,7 @@ import (
 )
 
 // countingValueStore implements val.ValueStore and counts WriteBytes
-// calls. The spike asserts WriteBytes is never invoked while inserting
+// calls. The test asserts WriteBytes is never invoked while inserting
 // documents of typical Mongo size -- a non-zero count would mean the
 // tuple builder spilled the document out-of-band, which is the path
 // we are trying to avoid.
@@ -58,14 +60,14 @@ func (s *countingValueStore) WriteBytes(_ context.Context, v []byte) (hash.Hash,
 	return h, nil
 }
 
-// TestSpikeJsonAdaptiveEnc_InlineRoundTrip writes ten canonical
-// dumbo-shape documents through the JsonAdaptiveEnc tuple-builder
-// path, reads each one back, and asserts (a) round-trip equality
-// and (b) zero writes to the value store. The second assertion is
-// the load-bearing one: writeDocJSON's current path produces one
-// out-of-band JSON chunk per document (one ValueStore.WriteBytes
-// call); the JsonAdaptiveEnc inline path produces none.
-func TestSpikeJsonAdaptiveEnc_InlineRoundTrip(t *testing.T) {
+// TestJsonAdaptiveEnc_InlineRoundTrip writes ten canonical dumbo-shape
+// documents through the JsonAdaptiveEnc tuple-builder path, reads
+// each one back, and asserts (a) round-trip equality and (b) zero
+// writes to the value store. The second assertion is the load-bearing
+// one: the pre-r11 writeDocJSON path produced one out-of-band JSON
+// chunk per document (one ValueStore.WriteBytes call); the
+// JsonAdaptiveEnc inline path dumbo uses now produces none.
+func TestJsonAdaptiveEnc_InlineRoundTrip(t *testing.T) {
 	ctx := sql.NewEmptyContext()
 	vs := &countingValueStore{}
 
@@ -98,8 +100,9 @@ func TestSpikeJsonAdaptiveEnc_InlineRoundTrip(t *testing.T) {
 }
 
 // canonicalDocJSON produces a canonical {_id, email, name, age}
-// Extended-JSON document of roughly 100 bytes, mirroring what
-// writeDocJSON emits after the BSON -> ExtJSON conversion.
+// Extended-JSON document of roughly 100 bytes, mirroring what the
+// dumbo collection's write path emits after the BSON -> ExtJSON
+// conversion.
 func canonicalDocJSON(i int) []byte {
 	m := map[string]any{
 		"_id":   fmt.Sprintf("doc%07d", i),
