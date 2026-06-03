@@ -49,8 +49,12 @@ var emptyArtifactMapSentinel [hash.ByteLen]byte
 // keyDesc describes the key tuple: one binary(20) field for the SHA-512[:20] encoded MongoDB _id.
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
-// valDesc describes the value tuple: one JSONAddr field for the JSON document hash.
-var valDesc = val.NewTupleDescriptor(val.Type{Enc: val.JSONAddrEnc, Nullable: false})
+// valDesc describes the value tuple: one JsonAdaptive field that holds
+// the canonical Extended JSON bytes of the document inline when small
+// enough, with spillover to an out-of-band blob for documents above
+// the tuple-builder's inline threshold. Matches Dolt's storage for new
+// `JSON` columns (see docs/design/document-storage-parity-with-dolt.md).
+var valDesc = val.NewTupleDescriptor(val.Type{Enc: val.JsonAdaptiveEnc, Nullable: false})
 
 // bufPool is a global buffer pool for building tuples.
 var bufPool = pool.NewBuffPool()
@@ -103,7 +107,8 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 //
 // The physical encodings match our prolly.Map descriptors:
 //   - _id VARBINARY PK -> ByteStringEnc (key tuple)
-//   - doc JSON         -> JSONAddrEnc (value tuple, stores hash to JSON prolly tree)
+//   - doc JSON         -> JsonAdaptiveEnc (value tuple, stores document
+//     inline in the tuple; spills out-of-band only for large documents)
 func buildCollectionTableSchema() serial.Message {
 	b := fb.NewBuilder(512)
 
@@ -129,7 +134,7 @@ func buildCollectionTableSchema() serial.Message {
 	serial.ColumnAddName(b, docName)
 	serial.ColumnAddSqlType(b, docSqlType)
 	serial.ColumnAddTag(b, 2) // stable column tag
-	serial.ColumnAddEncoding(b, serial.EncodingJSONAddr)
+	serial.ColumnAddEncoding(b, serial.EncodingJsonAdaptive)
 	serial.ColumnAddPrimaryKey(b, false)
 	serial.ColumnAddNullable(b, false)
 	serial.ColumnAddDisplayOrder(b, 1)
@@ -296,12 +301,17 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 	return tup, nil
 }
 
-// buildValue creates a value tuple storing a hash to a JSON prolly tree.
-func buildValue(jsonHash hash.Hash) (val.Tuple, error) {
-	tb := val.NewTupleBuilder(valDesc, nil)
-	tb.PutJSONAddr(0, jsonHash)
+// buildValue creates a value tuple holding the canonical Extended JSON
+// bytes of a document. The tuple builder keeps the bytes inline when
+// they fit under the JsonAdaptiveEnc inline threshold and spills the
+// document out-of-band via ns otherwise.
+func buildValue(ctx context.Context, ns tree.NodeStore, jsonBytes []byte) (val.Tuple, error) {
+	tb := val.NewTupleBuilder(valDesc, ns)
+	if err := tb.PutAdaptiveJsonFromInline(ctx, 0, jsonBytes); err != nil {
+		return nil, fmt.Errorf("writing inline JSON to value tuple: %w", err)
+	}
 
-	tup, err := tb.Build(context.Background(), bufPool)
+	tup, err := tb.Build(ctx, bufPool)
 	if err != nil {
 		return nil, fmt.Errorf("building value tuple: %w", err)
 	}

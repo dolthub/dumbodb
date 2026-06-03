@@ -294,13 +294,9 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		if params.Value == nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
 		}
-		jsonHash, writeErr := writeDocJSON(ctx, db.ns, params.Value)
+		v, writeErr := writeDocToValue(ctx, db.ns, params.Value)
 		if writeErr != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: writing custom document: %w", writeErr)
-		}
-		v, buildErr := buildValue(jsonHash)
-		if buildErr != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: building value tuple: %w", buildErr)
 		}
 		chosenVal = v
 
@@ -573,17 +569,23 @@ func captureConflictsForCollection(
 			return nil, false, nil
 		}
 
-		// Extract JSON addresses from value tuples.
-		leftAddr, lok := valDesc.GetJSONAddr(0, left)
-		rightAddr, rok := valDesc.GetJSONAddr(0, right)
-		if !lok || !rok {
+		// Extract the inline JSON bytes from both sides, then wrap each
+		// in an IndexedJsonDocument by writing through the JSON chunker.
+		// The detour is the interim cost of running IndexedJson merges
+		// on documents that live inline in JsonAdaptiveEnc value tuples.
+		leftBytes, err := readJSONBytesFromValue(ctx, ns, left)
+		if err != nil {
+			return nil, false, nil
+		}
+		rightBytes, err := readJSONBytesFromValue(ctx, ns, right)
+		if err != nil {
 			return nil, false, nil
 		}
 
 		var baseDoc sql.JSONWrapper
 		if base != nil {
-			if baseAddr, ok := valDesc.GetJSONAddr(0, base); ok {
-				doc, docErr := tree.NewJSONDoc(baseAddr, ns).ToIndexedJSONDocument(ctx)
+			if baseBytes, baseErr := readJSONBytesFromValue(ctx, ns, base); baseErr == nil {
+				doc, docErr := indexedJSONFromBytes(ctx, ns, baseBytes)
 				if docErr != nil {
 					return nil, false, nil
 				}
@@ -592,19 +594,18 @@ func captureConflictsForCollection(
 		}
 		if baseDoc == nil {
 			// No base (both sides added) -- create an empty base.
-			emptyJSON := sqltypes.NewLazyJSONDocument([]byte("{}"))
-			root, serErr := tree.SerializeJsonToAddr(ctx, ns, emptyJSON)
+			doc, serErr := indexedJSONFromBytes(ctx, ns, []byte("{}"))
 			if serErr != nil {
 				return nil, false, nil
 			}
-			baseDoc = tree.NewIndexedJsonDocument(ctx, root, ns)
+			baseDoc = doc
 		}
 
-		leftDoc, err := tree.NewJSONDoc(leftAddr, ns).ToIndexedJSONDocument(ctx)
+		leftDoc, err := indexedJSONFromBytes(ctx, ns, leftBytes)
 		if err != nil {
 			return nil, false, nil
 		}
-		rightDoc, err := tree.NewJSONDoc(rightAddr, ns).ToIndexedJSONDocument(ctx)
+		rightDoc, err := indexedJSONFromBytes(ctx, ns, rightBytes)
 		if err != nil {
 			return nil, false, nil
 		}
@@ -614,12 +615,13 @@ func captureConflictsForCollection(
 			return nil, false, nil
 		}
 
-		// Write the merged JSON and build a value tuple.
-		mergedRoot, err := tree.SerializeJsonToAddr(ctx, ns, mergedDoc)
+		// Materialise the merged document's canonical Extended JSON
+		// bytes and pack them in a JsonAdaptiveEnc value tuple.
+		mergedBytes, err := sqltypes.MarshallJson(ctx, mergedDoc)
 		if err != nil {
 			return nil, false, nil
 		}
-		mergedVal, err := buildValue(mergedRoot.HashOf())
+		mergedVal, err := buildValue(ctx, ns, mergedBytes)
 		if err != nil {
 			return nil, false, nil
 		}
