@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
+	goJSON "encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -1652,11 +1653,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, err
 		}
 
-		// Locate the existing stored document so a partial update can reuse
-		// its chunks. Capture the existing JSON hash while we're here.
+		// Locate the existing stored document so a partial update can
+		// dispatch on its storage shape (inline []byte vs out-of-band
+		// *val.JsonAdaptiveStorage).
 		var (
-			found         bool
-			existingBytes []byte
+			found       bool
+			existingTup val.Tuple
 		)
 
 		if err := mut.Get(ctx, key, func(k, v val.Tuple) error {
@@ -1664,10 +1666,9 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 				return nil
 			}
 			found = true
-			b, err := readJSONBytesFromValue(ctx, state.ns, v)
-			if err == nil {
-				existingBytes = b
-			}
+			// Clone: the tuple's backing buffer is owned by the map
+			// iterator and may be reused after this callback returns.
+			existingTup = append(val.Tuple(nil), v...)
 			return nil
 		}); err != nil {
 			return nil, err
@@ -1687,8 +1688,8 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			mutations = params.FieldMutations[i]
 		}
 
-		if len(mutations) > 0 && len(existingBytes) > 0 {
-			if b, err := applyFieldMutations(ctx, state.ns, existingBytes, mutations); err == nil {
+		if len(mutations) > 0 && existingTup != nil {
+			if b, err := applyFieldMutations(ctx, state.ns, existingTup, mutations); err == nil {
 				newBytes = b
 			}
 		}
@@ -2777,16 +2778,79 @@ func indexedJSONFromBytes(ctx context.Context, ns tree.NodeStore, b []byte) (tre
 	return tree.NewIndexedJsonDocument(ctx, root, ns), nil
 }
 
-// applyFieldMutations mutates the document stored as canonical Extended
-// JSON bytes by routing through Dolt's IndexedJsonDocument.Set / .Remove
-// for each field, then materialises the result back to bytes. The
-// caller stores the new bytes inline in a JsonAdaptiveEnc value tuple.
+// applyFieldMutations mutates the document stored in v's value field
+// by selecting per call between two strategies based on the actual
+// JsonAdaptiveEnc storage shape -- the same split Dolt's own
+// adaptive-JSON UPDATE path uses (see workspace-110 investigation):
 //
-// The detour through the chunk store is the interim cost of running
-// IndexedJson mutations on documents that live inline in their value
-// tuples; workspace-110 will instrument Dolt's adaptive-JSON mutation
-// path so this function can be replaced with a direct one.
-func applyFieldMutations(ctx context.Context, ns tree.NodeStore, existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
+//   - Inline ([]byte from GetJsonAdaptiveValue): parse the existing
+//     Extended JSON to a map, apply each mutation by setting /
+//     removing keys on the map, re-serialise. Zero chunk-store IO
+//     during the mutation; the tuple builder will spill the result
+//     out-of-band if it now exceeds DefaultTupleLengthTarget.
+//
+//   - Out-of-band (*val.JsonAdaptiveStorage from
+//     GetJsonAdaptiveValue): load the bytes from the value store and
+//     route through IndexedJsonDocument.Set / .Remove, which shares
+//     unchanged chunks of the prolly tree.
+func applyFieldMutations(ctx context.Context, ns tree.NodeStore, v val.Tuple, mutations []backends.FieldMutation) ([]byte, error) {
+	result, ok, err := valDesc.GetJsonAdaptiveValue(ctx, 0, ns, v)
+	if err != nil {
+		return nil, fmt.Errorf("reading JSON value from tuple: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("value tuple missing JSON field")
+	}
+
+	switch existing := result.(type) {
+	case []byte:
+		return applyFieldMutationsInline(existing, mutations)
+	case *val.JsonAdaptiveStorage:
+		b, err := existing.GetBytes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reading out-of-band JSON bytes: %w", err)
+		}
+		return applyFieldMutationsOutOfBand(ctx, ns, b, mutations)
+	default:
+		return nil, fmt.Errorf("unexpected JsonAdaptiveValue type %T", result)
+	}
+}
+
+// applyFieldMutationsInline operates entirely on the document bytes:
+// parse the canonical Extended JSON to a map keyed by field name,
+// apply each mutation, re-serialise. RawMessage values keep BSON
+// type wrappers ($numberInt, $oid, ...) intact across the round-trip.
+//
+// Field order is not preserved (Go's encoding/json sorts map keys);
+// this matches Dolt's own MutableJsonDoc -> ToInterface -> JSONDocument
+// path for inline values, which also materialises through a Go map.
+func applyFieldMutationsInline(existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
+	var doc map[string]goJSON.RawMessage
+	if err := goJSON.Unmarshal(existingBytes, &doc); err != nil {
+		return nil, fmt.Errorf("parsing existing JSON: %w", err)
+	}
+
+	for _, m := range mutations {
+		if m.Unset {
+			delete(doc, m.Key)
+			continue
+		}
+		valJSON, err := marshalExtJSONValue(m.Value)
+		if err != nil {
+			return nil, err
+		}
+		doc[m.Key] = goJSON.RawMessage(valJSON)
+	}
+
+	return goJSON.Marshal(doc)
+}
+
+// applyFieldMutationsOutOfBand keeps the IndexedJsonDocument path for
+// documents large enough to have been spilled out-of-band by the
+// tuple builder. Structural sharing of unchanged chunks earns its
+// keep at this size; the chunk-store round-trip is amortised across
+// the saved chunks.
+func applyFieldMutationsOutOfBand(ctx context.Context, ns tree.NodeStore, existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
 	idx, err := indexedJSONFromBytes(ctx, ns, existingBytes)
 	if err != nil {
 		return nil, fmt.Errorf("loading indexed JSON document: %w", err)
