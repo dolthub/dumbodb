@@ -213,19 +213,12 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 }
 
 // buildFieldPredicate builds a sound byte-level predicate for a single
-// top-level {field: value} clause. Returns nil when no sound predicate can
-// be expressed for this clause.
-//
-// Prefilter pushdown is temporarily disabled on the bson-a branch: the
-// historical implementation used ExtJSON byte-substring patterns that
-// no longer appear in the stored BSON bytes. A BSON-element prefilter
-// replacement lands in a follow-on commit; returning nil here forces
-// every document through the full filter path, which is correct but
-// slower. Queries using only `_id` (no document filter) are unaffected.
+// top-level {field: value} clause over bson-a stored bytes (version
+// header + raw BSON). Returns nil when no sound predicate can be
+// expressed for this clause; the iterator falls back to the
+// handler-side filter in that case.
 func buildFieldPredicate(field string, value any) func([]byte) bool {
-	_ = field
-	_ = value
-	return nil
+	return buildBSONFieldPredicate(field, value)
 }
 
 // substringAltsPredicate returns a predicate that passes when any of the

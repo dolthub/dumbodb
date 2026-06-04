@@ -24,29 +24,20 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// skipUntilBSONPrefilter is invoked at the top of every prefilter
-// range test. The bson-a branch disabled the historical ExtJSON
-// prefilter when switching to BSON storage; the BSON-element
-// prefilter that replaces it lands in a follow-on commit. Until
-// then, these tests cannot exercise their target code path (the
-// prefilter returns nil for every filter), so they are deferred.
-func skipUntilBSONPrefilter(t *testing.T) {
-	t.Helper()
-	t.Skip("prefilter disabled on bson-a; BSON-element prefilter lands in a follow-on commit")
-}
-
-// canonicalDoc encodes a mongo bson.D to canonical Extended JSON, matching
-// the bytes the dolt backend stores per document.
+// canonicalDoc encodes a mongo bson.D to bson-a stored bytes (1-byte
+// version header followed by raw BSON), matching the layout the dolt
+// backend writes per document. The fixtures the tests pass through
+// here already have keys in lex order so the encoder's sort pass is
+// a no-op.
 func canonicalDoc(t *testing.T, d mongobson.D) []byte {
 	t.Helper()
 	bs, err := mongobson.Marshal(d)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	out, err := mongobson.MarshalExtJSON(mongobson.Raw(bs), true, false)
-	if err != nil {
-		t.Fatalf("MarshalExtJSON: %v", err)
-	}
+	out := make([]byte, 0, len(bs)+1)
+	out = append(out, bsonFormatVersion)
+	out = append(out, bs...)
 	return out
 }
 
@@ -59,7 +50,6 @@ func rangeOp(t *testing.T, field string, kvs ...any) *types.Document {
 }
 
 func TestRangePrefilter_BasicGtLte(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gt", int32(5), "$lte", int32(10)))
 	if pf == nil {
@@ -84,7 +74,6 @@ func TestRangePrefilter_BasicGtLte(t *testing.T) {
 }
 
 func TestRangePrefilter_AllOperators(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	cases := []struct {
 		name   string
@@ -118,7 +107,6 @@ func TestRangePrefilter_AllOperators(t *testing.T) {
 // Stored field is missing from the doc  -- range filters should not match.
 // The prefilter must return false (proven non-match).
 func TestRangePrefilter_MissingField(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gte", int32(0)))
 	if pf == nil {
@@ -134,7 +122,6 @@ func TestRangePrefilter_MissingField(t *testing.T) {
 // target. The walker MUST look only at depth-1, so the inner copy can't
 // poison the result.
 func TestRangePrefilter_EmbeddedSameName(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gte", int32(50)))
 	if pf == nil {
@@ -163,7 +150,6 @@ func TestRangePrefilter_EmbeddedSameName(t *testing.T) {
 // the predicate must bail to permissive (true)  -- Mongo's range semantics
 // over those types aren't modeled by the byte walker.
 func TestRangePrefilter_AnomalousValueIsPermissive(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gte", int32(0), "$lt", int32(10)))
 	if pf == nil {
@@ -193,7 +179,6 @@ func TestRangePrefilter_AnomalousValueIsPermissive(t *testing.T) {
 // Mixed numeric storage types: filter is int but doc stored as int64 or
 // double. Prefilter must compare numerically.
 func TestRangePrefilter_MixedNumericTypes(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gte", int32(5), "$lt", int32(10)))
 	if pf == nil {
@@ -227,7 +212,6 @@ func TestRangePrefilter_MixedNumericTypes(t *testing.T) {
 // claim to know NaN semantics  -- the handler's FilterIterator will reject
 // downstream because NaN doesn't satisfy any range comparison).
 func TestRangePrefilter_NaNPermissive(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gte", int32(0)))
 	if pf == nil {
@@ -281,7 +265,6 @@ func TestRangePrefilter_TopLevelDollarBails(t *testing.T) {
 
 // Combining range with another field's equality must AND-combine.
 func TestRangePrefilter_CombinedWithEquality(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	filter := must.NotFail(types.NewDocument(
 		"i", must.NotFail(types.NewDocument("$gte", int32(0), "$lt", int32(10))),
@@ -315,7 +298,6 @@ func TestRangePrefilter_CombinedWithEquality(t *testing.T) {
 // Two with equal value but mixed strictness ($gt:5 + $gte:5) must end
 // strict.
 func TestRangePrefilter_BoundIntersection(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gt", int32(3), "$gte", int32(5)))
 	if pf == nil {
@@ -354,7 +336,6 @@ func TestRangePrefilter_BoundIntersection(t *testing.T) {
 // to permissive  -- silent precision loss would otherwise risk a false
 // negative.
 func TestRangePrefilter_HugeInt64Permissive(t *testing.T) {
-	skipUntilBSONPrefilter(t)
 	t.Parallel()
 	// A bound that does fit (small int) so the prefilter is built.
 	pf := buildScanPrefilter(rangeOp(t, "i", "$gt", int32(0)))
@@ -374,39 +355,38 @@ func TestRangePrefilter_HugeInt64Permissive(t *testing.T) {
 	}
 }
 
-// scanTopLevelNumericExtJSON unit-level coverage for the walker, on bytes
-// it is unlikely to encounter naturally (whitespace, escaped non-target
-// keys, top-level keyword values).
-func TestScanTopLevelNumericExtJSON_DirectCases(t *testing.T) {
-	skipUntilBSONPrefilter(t)
+// scanTopLevelBSONNumeric unit-level coverage for the BSON walker,
+// constructed via wirebson to exercise the same shapes the old
+// ExtJSON walker checked (numeric variants, missing fields, non-
+// numeric values that force a bail).
+func TestScanTopLevelBSONNumeric_DirectCases(t *testing.T) {
 	t.Parallel()
 	field := []byte("i")
 
 	cases := []struct {
 		name   string
-		json   string
+		doc    mongobson.D
 		val    float64
 		status rangeProbeStatus
 	}{
-		{"compact-int", `{"i":{"$numberInt":"42"}}`, 42, rangeProbeFound},
-		{"compact-long", `{"i":{"$numberLong":"42"}}`, 42, rangeProbeFound},
-		{"compact-double", `{"i":{"$numberDouble":"3.5"}}`, 3.5, rangeProbeFound},
-		{"with-whitespace", `{ "i" : {"$numberInt":"7"} }`, 7, rangeProbeFound},
-		{"missing", `{"j":{"$numberInt":"1"}}`, 0, rangeProbeMissing},
-		{"empty-object", `{}`, 0, rangeProbeMissing},
-		{"value-string", `{"i":"42"}`, 0, rangeProbeBail},
-		{"value-array", `{"i":[1,2]}`, 0, rangeProbeBail},
-		{"value-subdoc-shape", `{"i":{"x":1}}`, 0, rangeProbeBail},
-		{"value-decimal", `{"i":{"$numberDecimal":"3.14"}}`, 0, rangeProbeBail},
-		{"value-true", `{"i":true}`, 0, rangeProbeBail},
-		{"value-null", `{"i":null}`, 0, rangeProbeBail},
-		{"malformed-no-brace", `"i":1`, 0, rangeProbeBail},
-		{"trailing-junk-skipped", `{"a":[1,2,3],"i":{"$numberInt":"5"}}`, 5, rangeProbeFound},
-		{"escape-in-other-key", `{"a\nb":{"$numberInt":"1"},"i":{"$numberInt":"5"}}`, 0, rangeProbeBail},
+		{"int32-found", mongobson.D{{Key: "i", Value: int32(42)}}, 42, rangeProbeFound},
+		{"int64-found", mongobson.D{{Key: "i", Value: int64(42)}}, 42, rangeProbeFound},
+		{"double-found", mongobson.D{{Key: "i", Value: float64(3.5)}}, 3.5, rangeProbeFound},
+		{"missing", mongobson.D{{Key: "j", Value: int32(1)}}, 0, rangeProbeMissing},
+		{"empty-doc", mongobson.D{}, 0, rangeProbeMissing},
+		{"string-value", mongobson.D{{Key: "i", Value: "42"}}, 0, rangeProbeBail},
+		{"array-value", mongobson.D{{Key: "i", Value: mongobson.A{int32(1), int32(2)}}}, 0, rangeProbeBail},
+		{"subdoc-value", mongobson.D{{Key: "i", Value: mongobson.D{{Key: "x", Value: int32(1)}}}}, 0, rangeProbeBail},
+		{"bool-value", mongobson.D{{Key: "i", Value: true}}, 0, rangeProbeBail},
+		{"null-value", mongobson.D{{Key: "i", Value: nil}}, 0, rangeProbeBail},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotV, gotS := scanTopLevelNumericExtJSON([]byte(tc.json), field)
+			raw, err := mongobson.Marshal(tc.doc)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			gotV, gotS := scanTopLevelBSONNumeric(raw, field)
 			if gotS != tc.status {
 				t.Fatalf("status: got=%v want=%v", gotS, tc.status)
 			}
@@ -414,19 +394,5 @@ func TestScanTopLevelNumericExtJSON_DirectCases(t *testing.T) {
 				t.Fatalf("value: got=%v want=%v", gotV, tc.val)
 			}
 		})
-	}
-}
-
-// String storage where the literal happens to look like a numeric wrapper
-// inside the string body must still bail (the value's outer token is a
-// JSON string, not an object).
-func TestRangePrefilter_StringLookingLikeWrapperBails(t *testing.T) {
-	t.Parallel()
-	// Doc has "i" stored as the string `{"$numberInt":"42"}`. A naive
-	// substring check might "see" a numeric. The walker must not.
-	doc := []byte(`{"i":"{\"$numberInt\":\"42\"}"}`)
-	v, s := scanTopLevelNumericExtJSON(doc, []byte("i"))
-	if s != rangeProbeBail {
-		t.Fatalf("got=(%v,%v) want=bail", v, s)
 	}
 }
