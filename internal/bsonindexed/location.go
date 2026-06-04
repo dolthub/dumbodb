@@ -34,6 +34,14 @@ import (
 // prolly tree's inner address-map nodes.
 type LocationKey []byte
 
+// EndOfDocumentKey is the chunk key used for the final chunk of a
+// document. Encoded as a single 0xFF byte so it lex-sorts after every
+// path-level key (whose state byte is < 0xFF). This sidesteps the
+// prefix-ordering pitfall: a plain {EndOfValue} key would otherwise
+// be a byte-prefix of all field-level end-of-value keys and sort
+// first under naive lex-byte comparison.
+var EndOfDocumentKey = LocationKey{0xFF}
+
 // PathType is the state byte at the head of every Location key. The
 // constants are ordered so that lexicographic byte comparison of
 // LocationKey values matches the natural document traversal order:
