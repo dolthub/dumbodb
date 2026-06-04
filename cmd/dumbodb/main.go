@@ -22,6 +22,8 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
@@ -75,7 +77,17 @@ func run(logger *slog.Logger) error {
 	sessionIsolation := fs.Bool("session-isolation", false, "run in version-control-native isolation mode: per-connection working-set overlay, doltCommit merges, startTransaction rejected")
 	sessionTimeout := fs.Duration("session-timeout", 0, "idle timeout for lsid-keyed sessions; default is 30m (matches MongoDB logicalSessionTimeoutMinutes)")
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
+	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	fs.Parse(os.Args[1:])
+
+	if *pprofAddr != "" {
+		go func() {
+			logger.Info("pprof listening", "addr", *pprofAddr)
+			if err := http.ListenAndServe(*pprofAddr, nil); err != nil {
+				logger.Error("pprof server exited", "err", err)
+			}
+		}()
+	}
 
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
