@@ -38,6 +38,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/bsonindexed"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -2789,19 +2790,42 @@ func applyFieldMutationsInline(existingBytes []byte, mutations []backends.FieldM
 }
 
 // applyFieldMutationsOutOfBand handles documents that spilled out-of-
-// band. Same read-modify-write approach as the inline path; the
-// surgical-splice optimisation via bsonindexed.IndexedBsonDocument
-// is a forthcoming follow-on commit that targets the (a) vs (b)
-// ancestor-patching divergence directly.
+// band. Uses bsonindexed.IndexedBsonDocument's byte-level surgical
+// splice path: each mutation patches only the bytes of the affected
+// container and its ancestor length prefixes; unchanged chunks hash
+// to the same blob and are deduplicated by the chunk store. This is
+// the bson-a structural-sharing property the bake-off measures.
 func applyFieldMutationsOutOfBand(ctx context.Context, ns tree.NodeStore, existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
-	doc, err := bsonToDoc(existingBytes)
+	rawBSON, err := stripVersion(existingBytes)
 	if err != nil {
-		return nil, fmt.Errorf("decoding out-of-band document: %w", err)
+		return nil, fmt.Errorf("decoding out-of-band document version: %w", err)
 	}
-	if err := applyMutationsToDoc(doc, mutations); err != nil {
-		return nil, err
+	idx, err := bsonindexed.Serialize(ctx, ns, rawBSON)
+	if err != nil {
+		return nil, fmt.Errorf("serialising out-of-band document for mutation: %w", err)
 	}
-	return docToBSON(doc)
+	for _, m := range mutations {
+		if m.Unset {
+			idx, err = idx.UnsetField(ctx, m.Key)
+			if err != nil {
+				return nil, fmt.Errorf("unset field %q: %w", m.Key, err)
+			}
+			continue
+		}
+		typeByte, valueBytes, err := encodeBSONValue(m.Value)
+		if err != nil {
+			return nil, fmt.Errorf("encoding mutation value for %q: %w", m.Key, err)
+		}
+		idx, err = idx.SetField(ctx, m.Key, typeByte, valueBytes)
+		if err != nil {
+			return nil, fmt.Errorf("set field %q: %w", m.Key, err)
+		}
+	}
+	merged, err := idx.Bytes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("materialising mutated document: %w", err)
+	}
+	return prependVersion(merged), nil
 }
 
 // applyMutationsToDoc mutates doc in place according to the given

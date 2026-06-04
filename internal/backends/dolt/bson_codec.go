@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
 
@@ -136,6 +137,76 @@ func readBSONDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (
 		return nil, err
 	}
 	return bsonToDoc(stored)
+}
+
+// encodeBSONValue converts a Go value (one of the types
+// FieldMutation.Value can carry) into a (type byte, value bytes)
+// pair suitable for handing to bsonindexed.IndexedBsonDocument's
+// SetField / PushArray APIs. The value bytes are stripped of the
+// BSON type byte and field-name CString so the caller can splice
+// them in alongside an arbitrary field name.
+//
+// Implementation: build a single-field wirebson document, encode it,
+// and extract the value-only span via byte slicing. The encoded
+// document layout is
+//
+//	[4-byte length][type byte][name][0x00][value][0x00]
+//
+// so the value bytes live at [5+len(name)+1, len(raw)-1).
+//
+// MinKey / MaxKey values are handled separately via bson.FromDocumentRaw
+// because wirebson does not encode them.
+func encodeBSONValue(value any) (byte, []byte, error) {
+	const probeName = "v"
+
+	if _, ok := value.(types.MinKeyType); ok {
+		return 0xFF, nil, nil
+	}
+	if _, ok := value.(types.MaxKeyType); ok {
+		return 0x7F, nil, nil
+	}
+
+	// MinKey / MaxKey nested anywhere inside the value forces the raw
+	// encoder path. AnyContainsMinMaxKey scans nested arrays / docs.
+	if bson.AnyContainsMinMaxKey(value) {
+		tmp, err := types.NewDocument(probeName, value)
+		if err != nil {
+			return 0, nil, fmt.Errorf("encoding value with MinKey/MaxKey: %w", err)
+		}
+		raw, err := bson.FromDocumentRaw(tmp)
+		if err != nil {
+			return 0, nil, fmt.Errorf("encoding value with MinKey/MaxKey: %w", err)
+		}
+		return extractValueBytes(raw, probeName)
+	}
+
+	tmp := wirebson.MakeDocument(1)
+	if err := tmp.Add(probeName, value); err != nil {
+		return 0, nil, fmt.Errorf("adding value to wirebson doc: %w", err)
+	}
+	raw, err := tmp.Encode()
+	if err != nil {
+		return 0, nil, fmt.Errorf("encoding wirebson doc: %w", err)
+	}
+	return extractValueBytes([]byte(raw), probeName)
+}
+
+// extractValueBytes pulls the value portion out of a single-field
+// BSON document. The caller guarantees the document was constructed
+// with one field whose name is name.
+func extractValueBytes(raw []byte, name string) (byte, []byte, error) {
+	if len(raw) < 4+1+len(name)+1+1 {
+		return 0, nil, fmt.Errorf("bson value buffer too short: %d", len(raw))
+	}
+	typeByte := raw[4]
+	valueStart := 4 + 1 + len(name) + 1
+	valueEnd := len(raw) - 1
+	if valueEnd < valueStart {
+		return 0, nil, fmt.Errorf("bson value layout invalid")
+	}
+	out := make([]byte, valueEnd-valueStart)
+	copy(out, raw[valueStart:valueEnd])
+	return typeByte, out, nil
 }
 
 // getBSONStoredBytes returns the raw bson-a stored bytes for a value
