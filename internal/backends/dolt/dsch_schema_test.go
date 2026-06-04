@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Schema-shape assertion for workspace-r11: confirms new collections
-// declare the document column with EncodingJsonAdaptive (was
-// EncodingJSONAddr before this task) and the key column with
+// Schema-shape assertion: confirms new collections declare the
+// document column with EncodingBytesAdaptive and the key column with
 // EncodingBytes. The encoding is what tells Dolt how to lay out the
-// stored value, so a regression here puts dumbo back on the per-doc
-// chunker path that the storage-parity investigation flagged.
+// stored value; the bson-a branch uses BytesAdaptive so the inline
+// payload is bson-a-format (1-byte version + raw BSON) and the OOB
+// spillover is a single content-addressed blob.
 
 package dolt
 
@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCollectionTableSchema_UsesJsonAdaptiveEnc(t *testing.T) {
+func TestCollectionTableSchema_UsesBytesAdaptiveEnc(t *testing.T) {
 	msg := buildCollectionTableSchema()
 
 	ts, err := serial.TryGetRootAsTableSchema(msg, serial.MessagePrefixSz)
@@ -47,8 +47,8 @@ func TestCollectionTableSchema_UsesJsonAdaptiveEnc(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "doc", string(c1.Name()))
-	require.Equalf(t, serial.EncodingJsonAdaptive, c1.Encoding(),
-		"doc column encoding must be JsonAdaptive (was %v); JSONAddr puts dumbo back on "+
-			"the per-doc chunker path -- see docs/design/document-storage-parity-with-dolt.md",
+	require.Equalf(t, serial.EncodingBytesAdaptive, c1.Encoding(),
+		"doc column encoding must be BytesAdaptive (got %v); see "+
+			"docs/design/bson-type-fidelity-and-storage-overhead.md",
 		c1.Encoding())
 }

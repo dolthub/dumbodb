@@ -28,10 +28,10 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 	"github.com/dolthub/go-mysql-server/sql"
-	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
 	"github.com/zeebo/xxh3"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 // mergeInProgress holds the state of a merge or cherry-pick that could not be
@@ -560,68 +560,39 @@ func captureConflictsForCollection(
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
-	// Resolve callback: attempt field-level JSON merge using Dolt's
-	// three-way JSON differ. Non-overlapping field changes are merged
-	// automatically; overlapping changes produce a conflict.
+	// Resolve callback: attempt field-level BSON merge. Non-overlapping
+	// field changes are merged automatically; overlapping changes
+	// produce a conflict. Operates on types.Document because that is
+	// the in-memory representation the bson-a codec round-trips
+	// through; a future commit may push this down to the bsonindexed
+	// surgical-splice path.
 	tryMergeJSON := func(_ *sql.Context, left, right, base val.Tuple) (val.Tuple, bool, error) {
-		// If either side is a delete (nil tuple), we can't merge JSON fields.
 		if left == nil || right == nil || len(left) == 0 || len(right) == 0 {
 			return nil, false, nil
 		}
-
-		// Extract the inline JSON bytes from both sides, then wrap each
-		// in an IndexedJsonDocument by writing through the JSON chunker.
-		// The detour is the interim cost of running IndexedJson merges
-		// on documents that live inline in JsonAdaptiveEnc value tuples.
-		leftBytes, err := readJSONBytesFromValue(ctx, ns, left)
+		leftDoc, err := readDocFromValue(ctx, ns, left)
 		if err != nil {
 			return nil, false, nil
 		}
-		rightBytes, err := readJSONBytesFromValue(ctx, ns, right)
+		rightDoc, err := readDocFromValue(ctx, ns, right)
 		if err != nil {
 			return nil, false, nil
 		}
-
-		var baseDoc sql.JSONWrapper
-		if base != nil {
-			if baseBytes, baseErr := readJSONBytesFromValue(ctx, ns, base); baseErr == nil {
-				doc, docErr := indexedJSONFromBytes(ctx, ns, baseBytes)
-				if docErr != nil {
-					return nil, false, nil
-				}
-				baseDoc = doc
+		var baseDoc *types.Document
+		if base != nil && len(base) > 0 {
+			baseDoc, err = readDocFromValue(ctx, ns, base)
+			if err != nil {
+				baseDoc = nil
 			}
 		}
 		if baseDoc == nil {
-			// No base (both sides added) -- create an empty base.
-			doc, serErr := indexedJSONFromBytes(ctx, ns, []byte("{}"))
-			if serErr != nil {
-				return nil, false, nil
-			}
-			baseDoc = doc
+			baseDoc = types.MakeDocument(0)
 		}
-
-		leftDoc, err := indexedJSONFromBytes(ctx, ns, leftBytes)
-		if err != nil {
+		mergedDoc, conflict := mergeBSONDoc(baseDoc, leftDoc, rightDoc)
+		if conflict {
 			return nil, false, nil
 		}
-		rightDoc, err := indexedJSONFromBytes(ctx, ns, rightBytes)
-		if err != nil {
-			return nil, false, nil
-		}
-
-		mergedDoc, conflict, err := mergeJSON(ctx, ns, baseDoc, leftDoc, rightDoc)
-		if err != nil || conflict {
-			return nil, false, nil
-		}
-
-		// Materialise the merged document's canonical Extended JSON
-		// bytes and pack them in a JsonAdaptiveEnc value tuple.
-		mergedBytes, err := sqltypes.MarshallJson(ctx, mergedDoc)
-		if err != nil {
-			return nil, false, nil
-		}
-		mergedVal, err := buildValue(ctx, ns, mergedBytes)
+		mergedVal, err := writeDocToValue(ctx, ns, mergedDoc)
 		if err != nil {
 			return nil, false, nil
 		}

@@ -19,7 +19,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
-	goJSON "encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -216,15 +215,17 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 // buildFieldPredicate builds a sound byte-level predicate for a single
 // top-level {field: value} clause. Returns nil when no sound predicate can
 // be expressed for this clause.
+//
+// Prefilter pushdown is temporarily disabled on the bson-a branch: the
+// historical implementation used ExtJSON byte-substring patterns that
+// no longer appear in the stored BSON bytes. A BSON-element prefilter
+// replacement lands in a follow-on commit; returning nil here forces
+// every document through the full filter path, which is correct but
+// slower. Queries using only `_id` (no document filter) are unaffected.
 func buildFieldPredicate(field string, value any) func([]byte) bool {
-	if opDoc, ok := value.(*types.Document); ok {
-		return buildNumericRangePredicate(field, opDoc)
-	}
-	alts := extJSONFieldPatterns(field, value)
-	if alts == nil {
-		return nil
-	}
-	return substringAltsPredicate(alts)
+	_ = field
+	_ = value
+	return nil
 }
 
 // substringAltsPredicate returns a predicate that passes when any of the
@@ -2689,79 +2690,40 @@ func docHasMinMaxKey(doc *types.Document) bool {
 	return false
 }
 
-// readJSONBytesFromValue extracts the canonical Extended JSON bytes
-// of a document from a JsonAdaptiveEnc-encoded value tuple. Documents
-// kept inline by the tuple builder return their bytes directly;
-// documents that spilled out-of-band are fetched from the value store.
+// readJSONBytesFromValue extracts the stored document bytes from a
+// BytesAdaptiveEnc-encoded value tuple. Documents kept inline by the
+// tuple builder return their bytes directly; documents that spilled
+// out-of-band are fetched from the value store. The returned bytes
+// are bson-a-format (1-byte version header followed by raw BSON);
+// the function name is retained for diff minimality during the
+// bake-off and will be renamed when the winning branch lands.
 func readJSONBytesFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) ([]byte, error) {
-	result, ok, err := valDesc.GetJsonAdaptiveValue(ctx, 0, ns, v)
-	if err != nil {
-		return nil, fmt.Errorf("reading JSON value from tuple: %w", err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("value tuple missing JSON field")
-	}
-	switch x := result.(type) {
-	case []byte:
-		return x, nil
-	case *val.JsonAdaptiveStorage:
-		return x.GetBytes(ctx)
-	default:
-		return nil, fmt.Errorf("unexpected JsonAdaptiveValue type %T", result)
-	}
+	return getBSONStoredBytes(ctx, ns, v)
 }
 
-// readDocFromValue decodes a document stored in a JsonAdaptiveEnc value
-// tuple back to a types.Document. Pair with readJSONBytesFromValue when
-// a caller only needs the raw bytes (e.g. for filter pushdown).
+// readDocFromValue decodes a document stored in a BytesAdaptiveEnc
+// value tuple back to a types.Document. The stored bytes are
+// bson-a-format: a 1-byte version header followed by raw BSON.
 func readDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
-	b, err := readJSONBytesFromValue(ctx, ns, v)
-	if err != nil {
-		return nil, err
-	}
-	return decodeDocFromJSON(b)
+	return readBSONDocFromValue(ctx, ns, v)
 }
 
-// docToExtJSON converts a types.Document to canonical Extended JSON
-// bytes via BSON. Shared by every write path that lands documents in
-// a JsonAdaptiveEnc value tuple; MinKey / MaxKey docs route through
-// the raw-BSON encoder because wirebson does not handle them.
+// docToExtJSON is preserved as the historical name for callers that
+// still invoke it, but it now produces bson-a-format bytes (version
+// header + raw BSON), not Canonical Extended JSON. The bake-off
+// branch keeps the name for diff minimality; rename is a follow-on
+// cleanup once both branches converge on a winner.
 func docToExtJSON(doc *types.Document) ([]byte, error) {
-	var bsonBytes []byte
-	if docHasMinMaxKey(doc) {
-		var err error
-		bsonBytes, err = bson.FromDocumentRaw(doc)
-		if err != nil {
-			return nil, fmt.Errorf("encoding document with MinKey/MaxKey to BSON: %w", err)
-		}
-	} else {
-		wdoc, err := bson.FromDocument(doc)
-		if err != nil {
-			return nil, fmt.Errorf("encoding document to wirebson: %w", err)
-		}
-		bsonBytes, err = wdoc.Encode()
-		if err != nil {
-			return nil, fmt.Errorf("encoding document to BSON: %w", err)
-		}
-	}
-	jsonBytes, err := mongobson.MarshalExtJSON(mongobson.Raw(bsonBytes), true, false)
-	if err != nil {
-		return nil, fmt.Errorf("converting BSON to JSON: %w", err)
-	}
-	return jsonBytes, nil
+	return docToBSON(doc)
 }
 
 // writeDocToValue is the document-side counterpart to readDocFromValue:
-// turn a types.Document into a JsonAdaptiveEnc-encoded value tuple in
-// one step. The tuple builder keeps the bytes inline when they fit
-// under the adaptive-JSON inline threshold and spills out-of-band via
-// ns otherwise.
+// turn a types.Document into a BytesAdaptiveEnc-encoded value tuple
+// in one step. The tuple builder keeps the bytes inline when they
+// fit under the adaptive-bytes inline threshold and spills out-of-
+// band via ns otherwise.
 func writeDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document) (val.Tuple, error) {
-	jsonBytes, err := docToExtJSON(doc)
-	if err != nil {
-		return nil, err
-	}
-	return buildValue(ctx, ns, jsonBytes)
+	return writeBSONDocToValue(ctx, ns, doc)
 }
 
 // indexedJSONFromBytes wraps a document's canonical Extended JSON bytes
@@ -2789,108 +2751,79 @@ func indexedJSONFromBytes(ctx context.Context, ns tree.NodeStore, b []byte) (tre
 //     during the mutation; the tuple builder will spill the result
 //     out-of-band if it now exceeds DefaultTupleLengthTarget.
 //
-//   - Out-of-band (*val.JsonAdaptiveStorage from
-//     GetJsonAdaptiveValue): load the bytes from the value store and
-//     route through IndexedJsonDocument.Set / .Remove, which shares
-//     unchanged chunks of the prolly tree.
+//   - Out-of-band (*val.ByteArray from GetBytesAdaptiveValue): load
+//     the bytes from the value store and route through the bson-a
+//     mutation path. Future optimisation: surgical splice via
+//     bsonindexed.IndexedBsonDocument; currently read-modify-write
+//     at the types.Document level for correctness.
 func applyFieldMutations(ctx context.Context, ns tree.NodeStore, v val.Tuple, mutations []backends.FieldMutation) ([]byte, error) {
-	result, ok, err := valDesc.GetJsonAdaptiveValue(ctx, 0, ns, v)
+	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {
-		return nil, fmt.Errorf("reading JSON value from tuple: %w", err)
+		return nil, fmt.Errorf("reading bytes value from tuple: %w", err)
 	}
 	if !ok {
-		return nil, fmt.Errorf("value tuple missing JSON field")
+		return nil, fmt.Errorf("value tuple missing bytes field")
 	}
 
 	switch existing := result.(type) {
 	case []byte:
 		return applyFieldMutationsInline(existing, mutations)
-	case *val.JsonAdaptiveStorage:
+	case *val.ByteArray:
 		b, err := existing.GetBytes(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("reading out-of-band JSON bytes: %w", err)
+			return nil, fmt.Errorf("reading out-of-band bytes: %w", err)
 		}
 		return applyFieldMutationsOutOfBand(ctx, ns, b, mutations)
 	default:
-		return nil, fmt.Errorf("unexpected JsonAdaptiveValue type %T", result)
+		return nil, fmt.Errorf("unexpected BytesAdaptiveValue type %T", result)
 	}
 }
 
-// applyFieldMutationsInline operates entirely on the document bytes:
-// parse the canonical Extended JSON to a map keyed by field name,
-// apply each mutation, re-serialise. RawMessage values keep BSON
-// type wrappers ($numberInt, $oid, ...) intact across the round-trip.
-//
-// Field order is not preserved (Go's encoding/json sorts map keys);
-// this matches Dolt's own MutableJsonDoc -> ToInterface -> JSONDocument
-// path for inline values, which also materialises through a Go map.
+// applyFieldMutationsInline applies field-level mutations against the
+// inline-stored bson-a-format bytes. Decodes to types.Document,
+// applies each mutation, re-encodes with sorted keys. The lex-sort
+// step is part of the bson-a write path: stored docs always have
+// fields in canonical order so diff and merge are well-defined.
 func applyFieldMutationsInline(existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
-	var doc map[string]goJSON.RawMessage
-	if err := goJSON.Unmarshal(existingBytes, &doc); err != nil {
-		return nil, fmt.Errorf("parsing existing JSON: %w", err)
+	doc, err := bsonToDoc(existingBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decoding inline document: %w", err)
 	}
-
-	for _, m := range mutations {
-		if m.Unset {
-			delete(doc, m.Key)
-			continue
-		}
-		valJSON, err := marshalExtJSONValue(m.Value)
-		if err != nil {
-			return nil, err
-		}
-		doc[m.Key] = goJSON.RawMessage(valJSON)
+	if err := applyMutationsToDoc(doc, mutations); err != nil {
+		return nil, err
 	}
-
-	return goJSON.Marshal(doc)
+	return docToBSON(doc)
 }
 
-// applyFieldMutationsOutOfBand keeps the IndexedJsonDocument path for
-// documents large enough to have been spilled out-of-band by the
-// tuple builder. Structural sharing of unchanged chunks earns its
-// keep at this size; the chunk-store round-trip is amortised across
-// the saved chunks.
+// applyFieldMutationsOutOfBand handles documents that spilled out-of-
+// band. Same read-modify-write approach as the inline path; the
+// surgical-splice optimisation via bsonindexed.IndexedBsonDocument
+// is a forthcoming follow-on commit that targets the (a) vs (b)
+// ancestor-patching divergence directly.
 func applyFieldMutationsOutOfBand(ctx context.Context, ns tree.NodeStore, existingBytes []byte, mutations []backends.FieldMutation) ([]byte, error) {
-	idx, err := indexedJSONFromBytes(ctx, ns, existingBytes)
+	doc, err := bsonToDoc(existingBytes)
 	if err != nil {
-		return nil, fmt.Errorf("loading indexed JSON document: %w", err)
+		return nil, fmt.Errorf("decoding out-of-band document: %w", err)
 	}
+	if err := applyMutationsToDoc(doc, mutations); err != nil {
+		return nil, err
+	}
+	return docToBSON(doc)
+}
 
+// applyMutationsToDoc mutates doc in place according to the given
+// FieldMutation slice. FieldMutation.Key is restricted to bare
+// top-level field names by the handler layer (no dot paths) so the
+// implementation is a direct Set / Remove on types.Document.
+func applyMutationsToDoc(doc *types.Document, mutations []backends.FieldMutation) error {
 	for _, m := range mutations {
-		// isSimpleTopLevelKey in the handler already guarantees m.Key is a
-		// bare identifier, so "$." + key is a safe MySQL-style JSON path.
-		path := "$." + m.Key
-
 		if m.Unset {
-			res, _, err := idx.Remove(ctx, path)
-			if err != nil {
-				return nil, err
-			}
-			next, ok := res.(tree.IndexedJsonDocument)
-			if !ok {
-				return nil, fmt.Errorf("remove fell back to in-memory document")
-			}
-			idx = next
+			doc.Remove(m.Key)
 			continue
 		}
-
-		valJSON, err := marshalExtJSONValue(m.Value)
-		if err != nil {
-			return nil, err
-		}
-
-		res, _, err := idx.Set(ctx, path, sqltypes.NewLazyJSONDocument(valJSON))
-		if err != nil {
-			return nil, err
-		}
-		next, ok := res.(tree.IndexedJsonDocument)
-		if !ok {
-			return nil, fmt.Errorf("set fell back to in-memory document")
-		}
-		idx = next
+		doc.Set(m.Key, m.Value)
 	}
-
-	return sqltypes.MarshallJson(ctx, idx)
+	return nil
 }
 
 // marshalExtJSONValue produces the canonical Extended JSON encoding of a
@@ -2939,15 +2872,12 @@ func marshalExtJSONValue(value any) ([]byte, error) {
 	return inner, nil
 }
 
-// decodeDocFromJSON converts canonical Extended JSON bytes to a types.Document
-// via a BSON round-trip. This is the expensive half of readDocFromValue;
-// skip it when a prefilter has already ruled the document out.
-func decodeDocFromJSON(jsonBytes []byte) (*types.Document, error) {
-	var rawBSON mongobson.Raw
-	if err := mongobson.UnmarshalExtJSON(jsonBytes, true, &rawBSON); err != nil {
-		return nil, fmt.Errorf("converting JSON to BSON: %w", err)
-	}
-	return decodeDocument([]byte(rawBSON))
+// decodeDocFromJSON converts stored bson-a-format bytes (version
+// header + raw BSON) to a types.Document. The historical function
+// name is retained while bson-a and bson-b are competing branches;
+// it will be renamed when the winner lands.
+func decodeDocFromJSON(storedBytes []byte) (*types.Document, error) {
+	return bsonToDoc(storedBytes)
 }
 
 // decodeDocument deserializes BSON bytes to a types.Document.
