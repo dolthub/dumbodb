@@ -148,6 +148,22 @@ func (c *conn) run(ctx context.Context) (err error) {
 
 	ctx = conninfo.Ctx(ctx, connInfo)
 
+	// On connection teardown, mark the lsid bound to this connection for
+	// sweep. Without this hook, every TCP close that didn't first send
+	// endSessions (mid-test hangups, crashes, kill-9, anything where the
+	// driver doesn't get to do graceful cleanup) orphans a sessionEntry
+	// in the registry. With the typical 30-minute idle timeout that's
+	// unbounded growth under churn. The other lsid-release sites
+	// (MsgEndSessions, dispatchThroughSession's lsid-change branch)
+	// cover the graceful path; this defer covers the rest.
+	defer func() {
+		if reg := c.h.SessionRegistry(); reg != nil {
+			if lsid := connInfo.LSID(); lsid != "" {
+				reg.End(lsid)
+			}
+		}
+	}()
+
 	done := make(chan struct{})
 
 	// handle ctx cancellation
@@ -597,6 +613,18 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 
 	shadow, cachedLsid := ci.CachedShadow()
 	if shadow == nil || cachedLsid != lsid {
+		// The connection's lsid changed (the common cases: synthetic id
+		// assigned during handshake, then replaced by the first real
+		// driver-supplied lsid; or pooled implicit sessions rotating
+		// between frames). Mark the previous lsid for sweep before we
+		// take Connect on the new one. Without this, every lsid change
+		// would orphan a sessionEntry (~32KB sql/variables NewSessionMap
+		// + dolt session state) in the registry until the 30-minute
+		// idle timeout, producing slow but unbounded growth even with
+		// MsgEndSessions doing its job.
+		if cachedLsid != "" && cachedLsid != lsid {
+			reg.End(cachedLsid)
+		}
 		s, err := reg.Connect(lsid)
 		if err != nil {
 			return nil, fmt.Errorf("session registry: Connect for %q: %w", lsid, err)

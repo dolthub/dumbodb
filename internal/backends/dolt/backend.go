@@ -300,6 +300,21 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
 	b.rollbackOwnerTxn(owner)
+	// Mark the session for sweep so the registry actually releases the
+	// DoltSession (and its ~32KB sql/variables NewSessionMap, plus
+	// branch-control LoadData state, plus the rest). Without this, every
+	// short-lived mongo client that issues endSessions on Disconnect
+	// leaves a sessionEntry behind in the registry until the 30-minute
+	// idle timeout, producing unbounded memory growth under high session
+	// churn (measured 1.7MB/s growth at 20 sessions/s on bson-b).
+	//
+	// End() only sets lastUsed=0; PurgeNow would deadlock here because
+	// OnSessionEnd is called from inside the very Shadow.Use that owns
+	// writeMu. The next session-sweep tick (default 1m) reaps lastUsed=0
+	// entries cleanly via PurgeNow off the request path.
+	if b.sessions != nil {
+		b.sessions.End(owner)
+	}
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {
