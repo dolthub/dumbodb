@@ -560,12 +560,6 @@ func captureConflictsForCollection(
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
-	// Resolve callback: attempt field-level BSON merge. Non-overlapping
-	// field changes are merged automatically; overlapping changes
-	// produce a conflict. Operates on types.Document because that is
-	// the in-memory representation the bson-a codec round-trips
-	// through; a future commit may push this down to the bsonindexed
-	// surgical-splice path.
 	tryMergeJSON := func(_ *sql.Context, left, right, base val.Tuple) (val.Tuple, bool, error) {
 		if left == nil || right == nil || len(left) == 0 || len(right) == 0 {
 			return nil, false, nil

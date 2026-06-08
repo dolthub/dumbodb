@@ -21,8 +21,6 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 )
 
-// encodeBSON builds a BSON byte buffer from a (key, value) sequence
-// using wirebson, returning the encoded bytes. Test helper.
 func encodeBSON(t *testing.T, fields ...any) []byte {
 	t.Helper()
 	if len(fields)%2 != 0 {
@@ -45,8 +43,6 @@ func encodeBSON(t *testing.T, fields ...any) []byte {
 	return []byte(raw)
 }
 
-// scanAll runs the scanner over buf until io.EOF and returns the
-// emitted (path-state, path-mongo-form) sequence for inspection.
 func scanAll(t *testing.T, buf []byte) []scanEvent {
 	t.Helper()
 	s := NewScanner(buf)
@@ -74,14 +70,12 @@ type scanEvent struct {
 func TestScannerEmptyDoc(t *testing.T) {
 	buf := encodeBSON(t)
 	events := scanAll(t, buf)
-	// Expect: root start (StartOfValue, ""), root end (EndOfValue, "").
 	if len(events) != 2 {
 		t.Fatalf("got %d events, want 2 (start+end). events: %+v", len(events), events)
 	}
+	// Empty doc may emit ObjectInitialElement->EndOfValue or skip to
+	// EndOfValue directly via openRoot's fast path.
 	if events[0].state != ObjectInitialElement && events[0].state != EndOfValue {
-		// An empty doc may emit ObjectInitialElement followed by
-		// EndOfValue, or the openRoot fast-path may emit EndOfValue
-		// directly. Either is acceptable for a doc with no elements.
 		t.Errorf("event[0].state = %v; want ObjectInitialElement or EndOfValue", events[0].state)
 	}
 }
@@ -174,14 +168,9 @@ func TestScannerMixedTypes(t *testing.T) {
 		"n", wirebson.Null,
 	)
 	events := scanAll(t, buf)
-	// 6 elements: each emits one StartOfValue and one EndOfValue,
-	// plus the root ObjectInitialElement and root EndOfValue, plus
-	// optional EndOfValue on null. Total = 1 + 6*2 + 1 = 14.
 	if len(events) != 14 {
 		t.Errorf("event count = %d; want 14. events: %+v", len(events), events)
 	}
-	// Verify the path sequence by extracting just the unique paths in
-	// order of first appearance.
 	seen := []string{}
 	in := map[string]bool{}
 	for _, e := range events {
@@ -196,7 +185,6 @@ func TestScannerMixedTypes(t *testing.T) {
 	}
 }
 
-// eventsEqual reports whether two scanEvent slices are identical.
 func eventsEqual(a, b []scanEvent) bool {
 	if len(a) != len(b) {
 		return false

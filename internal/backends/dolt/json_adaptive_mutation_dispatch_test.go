@@ -12,22 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Asserts that applyFieldMutations dispatches on the actual storage
-// shape of the existing document:
-//
-//   - When the document was stored inline in the value tuple, mutation
-//     must NOT write to the chunk store -- the bytes are parsed,
-//     mutated in memory, and re-serialised entirely within the dumbo
-//     process.
-//
-//   - When the document was spilled out-of-band, mutation must load
-//     the OOB blob from the chunk store. The post-mutation write
-//     count is non-zero because the rewritten document re-spills.
-//
-// Under the bson-a format the inline path goes through bsonToDoc +
-// docToBSON; the OOB path additionally reads the spilled blob. The
-// surgical-splice path via bsonindexed.IndexedBsonDocument is a
-// forthcoming optimisation.
+// Asserts applyFieldMutations dispatches on storage shape: inline
+// mutations write 0 chunks; OOB mutations read the blob and re-spill.
 
 package dolt
 
@@ -42,12 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dumbodb/internal/backends"
-	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// countingNodeStore wraps a real tree.NodeStore and counts every
-// Write / WriteBytes call. The test uses it to assert that the
-// inline mutation branch never touches the underlying chunk store.
 type countingNodeStore struct {
 	tree.NodeStore
 	writes int64
@@ -88,8 +70,6 @@ func TestApplyFieldMutations_InlineDoesNotWriteToChunkStore(t *testing.T) {
 	ctx := context.Background()
 	cns := &countingNodeStore{NodeStore: realNodeStore(t)}
 
-	// Small document well under DefaultTupleLengthTarget (2 KB). The
-	// tuple builder will keep this inline.
 	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "age", int32(30))
 	stored, err := docToBSON(doc)
 	require.NoError(t, err)
@@ -141,8 +121,6 @@ func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	cns := &countingNodeStore{NodeStore: realNodeStore(t)}
 
-	// Document well past DefaultTupleLengthTarget (2 KB) so the
-	// tuple builder spills it out-of-band.
 	pad := makePad(3600)
 	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "data", pad)
 	stored, err := docToBSON(doc)
@@ -152,7 +130,6 @@ func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 	tup, err := buildValue(ctx, cns, stored)
 	require.NoError(t, err)
 
-	// Confirm the tuple builder actually spilled out-of-band.
 	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, cns, tup)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -161,12 +138,6 @@ func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 
 	cns.Reset()
 
-	// Mutation reads from the chunk store (one or more reads), applies
-	// the change in memory, returns new bytes. The current bson-a
-	// path does not write to the chunk store directly; the caller
-	// builds a new tuple via buildValue which performs the write when
-	// the result spills OOB. The surgical-splice optimisation that
-	// would write chunks here is a forthcoming follow-on commit.
 	newBytes, err := applyFieldMutations(ctx, cns, tup, []backends.FieldMutation{
 		{Key: "email", Value: "new@example.com"},
 	})
@@ -176,13 +147,10 @@ func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	email, _ := got.Get("email")
 	require.Equal(t, "new@example.com", email)
-	// And the pad field survives the mutation.
 	gotPad, _ := got.Get("data")
 	require.Equal(t, pad, gotPad)
 }
 
-// makePad returns a deterministic byte-padded string used to inflate
-// test documents past the BytesAdaptive inline threshold.
 func makePad(n int) string {
 	b := make([]byte, n)
 	for i := range b {
@@ -191,6 +159,3 @@ func makePad(n int) string {
 	return string(b)
 }
 
-// mustDoc is preserved here for test legibility; the production
-// helper is in another test file in this package.
-var _ = types.MakeDocument

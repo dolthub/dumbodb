@@ -27,15 +27,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// BSON storage format version. Currently a single byte 0x01 prepended
-// to the document bytes. Reserves room for forward-compatible format
-// changes after the bson-a-vs-bson-b bake-off picks a winner.
+// Stored format: [bsonFormatVersion][raw BSON]. Reserves room for a
+// breaking format change after a wire-format incompatibility.
 const bsonFormatVersion byte = 0x01
 
-// docToBSON converts a types.Document to raw BSON bytes with object
-// fields lex-sorted at every level. Replaces docToExtJSON in the
-// bson-a write path; the version byte is prepended so the stored
-// payload is [0x01][raw-BSON].
+// docToBSON encodes doc with keys lex-sorted at every level (canonical
+// form for diff and merge), prepended with bsonFormatVersion.
 func docToBSON(doc *types.Document) ([]byte, error) {
 	sorted := sortDocumentKeys(doc)
 	if docHasMinMaxKey(sorted) {
@@ -56,8 +53,6 @@ func docToBSON(doc *types.Document) ([]byte, error) {
 	return prependVersion(raw), nil
 }
 
-// bsonToDoc converts stored bson-a bytes back to a types.Document.
-// Replaces decodeDocFromJSON in the read path.
 func bsonToDoc(stored []byte) (*types.Document, error) {
 	raw, err := stripVersion(stored)
 	if err != nil {
@@ -66,9 +61,6 @@ func bsonToDoc(stored []byte) (*types.Document, error) {
 	return decodeDocument(raw)
 }
 
-// prependVersion writes the format version byte in front of raw and
-// returns the combined buffer. The caller must not retain raw after
-// this call returns since the underlying bytes are copied.
 func prependVersion(raw []byte) []byte {
 	out := make([]byte, 0, len(raw)+1)
 	out = append(out, bsonFormatVersion)
@@ -76,10 +68,8 @@ func prependVersion(raw []byte) []byte {
 	return out
 }
 
-// stripVersion returns the raw BSON bytes after the version header.
-// Rejects stored values without a recognised format byte; future
-// format changes are flagged here so older readers fail loudly
-// rather than silently misinterpret the payload.
+// stripVersion rejects unrecognised version bytes so future format
+// changes fail loudly rather than silently misinterpret the payload.
 func stripVersion(stored []byte) ([]byte, error) {
 	if len(stored) < 1 {
 		return nil, fmt.Errorf("bson stored value is empty")
@@ -90,16 +80,10 @@ func stripVersion(stored []byte) ([]byte, error) {
 	return stored[1:], nil
 }
 
-// sortDocumentKeys returns a deep copy of doc with object keys
-// lex-sorted at every level. Array element order is preserved.
-// This is the canonical form the bson-a storage uses; sorting on
-// write makes diff and merge well-defined.
-//
-// The top-level _id field's value is preserved verbatim (no
-// recursion into its keys). MongoDB treats {a:1,b:2} and {b:2,a:1}
-// as distinct _ids -- the hashID for the primary-key index is
-// computed on the original byte order, so the stored value has to
-// agree or post-lookup filter equality fails.
+// sortDocumentKeys deep-copies doc with object keys lex-sorted at every
+// level. Top-level _id is preserved verbatim: MongoDB treats {a:1,b:2}
+// and {b:2,a:1} as distinct _ids, and hashID hashes the original byte
+// order; sorting would break post-lookup filter equality.
 func sortDocumentKeys(doc *types.Document) *types.Document {
 	keys := append([]string(nil), doc.Keys()...)
 	sort.Strings(keys)
@@ -115,9 +99,6 @@ func sortDocumentKeys(doc *types.Document) *types.Document {
 	return out
 }
 
-// sortAnyKeys recurses into nested documents and arrays, returning
-// a value with sorted keys at every level. Scalars are returned
-// unchanged.
 func sortAnyKeys(v any) any {
 	switch t := v.(type) {
 	case *types.Document:
@@ -134,9 +115,6 @@ func sortAnyKeys(v any) any {
 	}
 }
 
-// writeBSONDocToValue writes a types.Document to a value tuple as
-// bson-a-format bytes. Replaces writeDocToValue in the call sites
-// that have moved to the new format.
 func writeBSONDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document) (val.Tuple, error) {
 	stored, err := docToBSON(doc)
 	if err != nil {
@@ -145,8 +123,6 @@ func writeBSONDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Docu
 	return buildValue(ctx, ns, stored)
 }
 
-// readBSONDocFromValue decodes a value tuple's stored bson-a bytes
-// into a types.Document. Replaces readDocFromValue.
 func readBSONDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
 	stored, err := getBSONStoredBytes(ctx, ns, v)
 	if err != nil {
@@ -155,23 +131,10 @@ func readBSONDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (
 	return bsonToDoc(stored)
 }
 
-// encodeBSONValue converts a Go value (one of the types
-// FieldMutation.Value can carry) into a (type byte, value bytes)
-// pair suitable for handing to bsonindexed.IndexedBsonDocument's
-// SetField / PushArray APIs. The value bytes are stripped of the
-// BSON type byte and field-name CString so the caller can splice
-// them in alongside an arbitrary field name.
-//
-// Implementation: build a single-field wirebson document, encode it,
-// and extract the value-only span via byte slicing. The encoded
-// document layout is
-//
-//	[4-byte length][type byte][name][0x00][value][0x00]
-//
-// so the value bytes live at [5+len(name)+1, len(raw)-1).
-//
-// MinKey / MaxKey values are handled separately via bson.FromDocumentRaw
-// because wirebson does not encode them.
+// encodeBSONValue extracts (typeByte, valueBytes) for value by building
+// a single-field wirebson document and slicing out the value span. The
+// returned valueBytes have the BSON type byte and field-name CString
+// stripped so callers can splice them under any field name.
 func encodeBSONValue(value any) (byte, []byte, error) {
 	const probeName = "v"
 
@@ -182,8 +145,8 @@ func encodeBSONValue(value any) (byte, []byte, error) {
 		return 0x7F, nil, nil
 	}
 
-	// MinKey / MaxKey nested anywhere inside the value forces the raw
-	// encoder path. AnyContainsMinMaxKey scans nested arrays / docs.
+	// wirebson does not encode MinKey/MaxKey; route those (even when
+	// nested) through bson.FromDocumentRaw.
 	if bson.AnyContainsMinMaxKey(value) {
 		tmp, err := types.NewDocument(probeName, value)
 		if err != nil {
@@ -207,9 +170,6 @@ func encodeBSONValue(value any) (byte, []byte, error) {
 	return extractValueBytes([]byte(raw), probeName)
 }
 
-// extractValueBytes pulls the value portion out of a single-field
-// BSON document. The caller guarantees the document was constructed
-// with one field whose name is name.
 func extractValueBytes(raw []byte, name string) (byte, []byte, error) {
 	if len(raw) < 4+1+len(name)+1+1 {
 		return 0, nil, fmt.Errorf("bson value buffer too short: %d", len(raw))
@@ -225,9 +185,7 @@ func extractValueBytes(raw []byte, name string) (byte, []byte, error) {
 	return typeByte, out, nil
 }
 
-// getBSONStoredBytes returns the raw bson-a stored bytes for a value
-// tuple (the version header is included so callers can interrogate
-// it directly). Hides the AdaptiveValue inline-vs-OOB dispatch.
+// getBSONStoredBytes hides the inline-vs-OOB dispatch of the value tuple.
 func getBSONStoredBytes(ctx context.Context, ns tree.NodeStore, v val.Tuple) ([]byte, error) {
 	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {

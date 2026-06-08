@@ -138,13 +138,6 @@ func TestFromKeyRoundTrip(t *testing.T) {
 }
 
 func TestCompareLexOrderMatchesTraversalOrder(t *testing.T) {
-	// Construct a set of locations in the order they would naturally
-	// appear during a forward document traversal:
-	//   start of $
-	//   start of $.a, end of $.a (a is a scalar)
-	//   start of $.b, start of $.b.x, end of $.b.x, end of $.b
-	//   start of $.c, start of $.c.0, end of $.c.0, start of $.c.1, end of $.c.1, end of $.c
-	//   end of $
 	build := func(setup func(l *Location)) Location {
 		l := NewRootLocation()
 		setup(&l)
@@ -190,16 +183,12 @@ func TestCompareLexOrderMatchesTraversalOrder(t *testing.T) {
 		build(func(l *Location) { l.AppendObjectKey([]byte("c")); l.SetState(EndOfValue) }),
 		build(func(l *Location) { l.SetState(EndOfValue) }),
 	}
-	// Shuffle the keys, sort using Compare, then verify the original
-	// order is recovered.
 	keys := make([]LocationKey, len(ordered))
 	for i, l := range ordered {
 		keys[i] = l.KeyClone()
 	}
 	shuffled := make([]LocationKey, len(keys))
 	copy(shuffled, keys)
-	// Reverse to maximise the chance of catching a comparator that
-	// happens to be correct under the original order.
 	for i, j := 0, len(shuffled)-1; i < j; i, j = i+1, j-1 {
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}

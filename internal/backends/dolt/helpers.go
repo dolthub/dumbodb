@@ -49,14 +49,11 @@ var emptyArtifactMapSentinel [hash.ByteLen]byte
 // keyDesc describes the key tuple: one binary(20) field for the SHA-512[:20] encoded MongoDB _id.
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
-// valDesc describes the value tuple: one BytesAdaptive field that
-// holds the bson-a-format document bytes (1-byte version header
-// followed by raw BSON) inline when small enough, with spillover to
-// an out-of-band blob for documents above the tuple-builder's inline
-// threshold. See docs/design/bson-type-fidelity-and-storage-overhead.md.
+// valDesc holds the stored document: a bsonFormatVersion byte followed
+// by raw BSON, inline up to the tuple-builder threshold and spilled
+// out-of-band above it.
 var valDesc = val.NewTupleDescriptor(val.Type{Enc: val.BytesAdaptiveEnc, Nullable: false})
 
-// bufPool is a global buffer pool for building tuples.
 var bufPool = pool.NewBuffPool()
 
 // newEmptyMap creates an empty prolly.Map with our schema.
@@ -99,17 +96,9 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	}
 }
 
-// buildCollectionTableSchema builds a DSCH (TableSchema) flatbuffer for the
-// dumbodb collection schema: _id VARBINARY NOT NULL PK, doc VARBINARY NOT NULL.
-//
-// This schema is shared across all collections within a database; the DSCH
-// chunk is written once to the value store and its hash is stored in every DTBL.
-//
-// The physical encodings match our prolly.Map descriptors:
-//   - _id VARBINARY PK -> ByteStringEnc (key tuple)
-//   - doc VARBINARY    -> BytesAdaptiveEnc (value tuple; holds bson-a
-//     format bytes inline when small, spills to a separate blob for
-//     larger documents)
+// buildCollectionTableSchema builds the DSCH flatbuffer for every
+// dumbodb collection: _id binary(20) PK + doc longblob (BytesAdaptive,
+// spills out-of-band above the tuple-builder threshold).
 func buildCollectionTableSchema() serial.Message {
 	b := fb.NewBuilder(512)
 
@@ -302,10 +291,6 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 	return tup, nil
 }
 
-// buildValue creates a value tuple holding the bson-a-format bytes
-// of a document. The tuple builder keeps the bytes inline when they
-// fit under the BytesAdaptiveEnc inline threshold and spills the
-// document out-of-band via ns otherwise.
 func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte) (val.Tuple, error) {
 	tb := val.NewTupleBuilder(valDesc, ns)
 	if err := tb.PutAdaptiveBytesFromInline(ctx, 0, docBytes); err != nil {

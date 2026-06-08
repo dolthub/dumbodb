@@ -23,33 +23,21 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 )
 
-// IndexedBsonDocument is a BSON document stored as a prolly tree of
-// blob chunks, indexed by an AddressMap keyed by document path
-// locations. Leaves contain raw BSON byte substrings (with container
-// length prefixes intact); concatenating leaves in AddressMap key order
-// reproduces the original document.
-//
-// This is the bson-a structural-sharing storage shape. Mutations that
-// change a container's body length must patch each ancestor
-// container's 4-byte little-endian length prefix; see Set / Insert /
-// Remove (forthcoming commits) for the splice algorithm.
+// IndexedBsonDocument is a BSON document stored as a prolly tree of blob
+// chunks indexed by an AddressMap keyed by Location. Leaves contain raw
+// BSON byte substrings (length prefixes intact); concatenating leaves in
+// key order reproduces the original document.
 type IndexedBsonDocument struct {
 	am prolly.AddressMap
 	ns tree.NodeStore
 }
 
-// NewIndexedBsonDocument constructs an IndexedBsonDocument over an
-// existing prolly AddressMap and node store. Used when the tree has
-// already been built; the AddressMap is typically rehydrated from a
-// persisted root via Open.
 func NewIndexedBsonDocument(am prolly.AddressMap, ns tree.NodeStore) IndexedBsonDocument {
 	return IndexedBsonDocument{am: am, ns: ns}
 }
 
-// Open rebuilds an IndexedBsonDocument from the root node of its
-// AddressMap. The root node is the same one returned by AddressMap()'s
-// HashOf(); callers persist that hash externally and rehydrate via
-// Open on read.
+// Open rehydrates a document from the persisted root hash returned by
+// Root().
 func Open(ctx context.Context, ns tree.NodeStore, rootHash hash.Hash) (IndexedBsonDocument, error) {
 	node, err := ns.Read(ctx, rootHash)
 	if err != nil {
@@ -62,27 +50,22 @@ func Open(ctx context.Context, ns tree.NodeStore, rootHash hash.Hash) (IndexedBs
 	return IndexedBsonDocument{am: am, ns: ns}, nil
 }
 
-// Root returns the hash of the AddressMap's root node. Persist this
-// externally so the index can be reopened via Open.
+// Root is the hash to persist externally; pass it back to Open to
+// rehydrate.
 func (d IndexedBsonDocument) Root() hash.Hash {
 	return d.am.HashOf()
 }
 
-// AddressMap exposes the underlying prolly.AddressMap for callers that
-// need to walk it directly (e.g. for diff or merge).
 func (d IndexedBsonDocument) AddressMap() prolly.AddressMap {
 	return d.am
 }
 
-// NodeStore returns the NodeStore the document is backed by.
 func (d IndexedBsonDocument) NodeStore() tree.NodeStore {
 	return d.ns
 }
 
-// Bytes materialises the full BSON byte sequence by walking the
-// AddressMap in key order and concatenating leaf blobs. For bson-a
-// the leaves already contain raw BSON (length prefixes intact) so
-// concatenation alone yields wire-ready bytes.
+// Bytes concatenates leaves in AddressMap key order to yield wire-ready
+// BSON.
 func (d IndexedBsonDocument) Bytes(ctx context.Context) ([]byte, error) {
 	var out []byte
 	err := d.am.IterAll(ctx, func(_ string, addr hash.Hash) error {
@@ -99,8 +82,6 @@ func (d IndexedBsonDocument) Bytes(ctx context.Context) ([]byte, error) {
 	return out, nil
 }
 
-// Count returns the number of leaf chunks in the AddressMap. Useful
-// for tests and for the bake-off's leaves-rewritten instrumentation.
 func (d IndexedBsonDocument) Count(ctx context.Context) (int, error) {
 	return d.am.Count()
 }

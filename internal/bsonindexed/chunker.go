@@ -25,20 +25,11 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 )
 
-// Serialize chunks raw BSON bytes into a prolly tree of blob leaves
-// indexed by Location-keyed AddressMap. The returned IndexedBsonDocument
-// references that tree; the chunk store contents are persisted via ns.
-//
-// Chunk boundaries are chosen by walking the BSON document with the
-// Scanner and, at each named boundary, applying the weibull-shaped
-// content-defined chunking decision used by dolt's prolly tree. Bytes
-// between successive chunk boundaries form the body of a leaf blob;
-// the AddressMap key is the LocationKey at the END of the chunk's
-// span, mirroring dolt's JSON chunker convention.
-//
-// For a document smaller than MinChunkSize the result is a single leaf
-// with the whole document; the AddressMap has one entry keyed by
-// end-of-document.
+// Serialize chunks bsonBytes into a prolly tree of blob leaves indexed
+// by a Location-keyed AddressMap. Boundaries are picked only at
+// EndOfValue (content-defined via CrossesBoundary); a doc under
+// MinChunkSize produces a single trailing leaf keyed by
+// EndOfDocumentKey.
 func Serialize(ctx context.Context, ns tree.NodeStore, bsonBytes []byte) (IndexedBsonDocument, error) {
 	if len(bsonBytes) < 5 {
 		return IndexedBsonDocument{}, fmt.Errorf("bsonindexed: BSON document must be at least 5 bytes, got %d", len(bsonBytes))
@@ -60,13 +51,6 @@ func Serialize(ctx context.Context, ns tree.NodeStore, bsonBytes []byte) (Indexe
 		if err != nil {
 			return IndexedBsonDocument{}, fmt.Errorf("bsonindexed: scanner: %w", err)
 		}
-		// We only consider creating a chunk boundary at the natural
-		// post-element points: EndOfValue. ObjectInitialElement and
-		// ArrayInitialElement boundaries are useful as path landmarks
-		// but a chunk that begins immediately after entering a
-		// container is rare and the cost of an extra split outweighs
-		// the lookup-locality benefit. StartOfValue is observed as
-		// each element opens; we don't chunk there.
 		if s.Path().State() != EndOfValue {
 			continue
 		}
@@ -75,8 +59,6 @@ func Serialize(ctx context.Context, ns tree.NodeStore, bsonBytes []byte) (Indexe
 		if !CrossesBoundary(key, uint32(span)) {
 			continue
 		}
-		// Materialise this chunk: bytes [chunkStart, s.Pos()) and the
-		// LocationKey at the boundary.
 		blobAddr, err := writeBlob(ctx, ns, bsonBytes[chunkStart:s.Pos()])
 		if err != nil {
 			return IndexedBsonDocument{}, err
@@ -86,9 +68,6 @@ func Serialize(ctx context.Context, ns tree.NodeStore, bsonBytes []byte) (Indexe
 		}
 		chunkStart = s.Pos()
 	}
-	// Final chunk: everything from chunkStart to end of document
-	// belongs to one trailing leaf. The end-of-document key is the
-	// special 0xFF byte that sorts after every path-level key.
 	if chunkStart < len(bsonBytes) {
 		blobAddr, err := writeBlob(ctx, ns, bsonBytes[chunkStart:])
 		if err != nil {
@@ -106,9 +85,6 @@ func Serialize(ctx context.Context, ns tree.NodeStore, bsonBytes []byte) (Indexe
 	return IndexedBsonDocument{am: am, ns: ns}, nil
 }
 
-// writeBlob writes a leaf blob containing data and returns the
-// resulting node address. Uses NodeStore.WriteBytes which constructs a
-// Blob serial message under the hood.
 func writeBlob(ctx context.Context, ns tree.NodeStore, data []byte) (hash.Hash, error) {
 	addr, err := ns.WriteBytes(ctx, bytes.Clone(data))
 	if err != nil {

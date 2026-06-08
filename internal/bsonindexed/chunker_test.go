@@ -73,9 +73,6 @@ func TestSerializeRoundTripLargeMultiChunk(t *testing.T) {
 	ctx := context.Background()
 	ns := tree.NewTestNodeStore()
 
-	// Construct a document larger than MinChunkSize so the chunker
-	// has a chance to introduce intermediate leaves. Each "f<N>"
-	// field carries a payload string that pads the doc out.
 	fields := make([]any, 0, 80)
 	for i := 0; i < 40; i++ {
 		fields = append(fields, fmt.Sprintf("f%03d", i), strings.Repeat("x", 200))
@@ -101,8 +98,6 @@ func TestSerializeRoundTripLargeMultiChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count: %v", err)
 	}
-	// We expect at least 2 chunks for a doc larger than MinChunkSize;
-	// exact count depends on the content-defined boundary placement.
 	if count < 2 {
 		t.Errorf("expected >=2 chunks for %d-byte doc, got %d", len(orig), count)
 	}
@@ -112,7 +107,7 @@ func TestSerializeRoundTripLargeMultiChunk(t *testing.T) {
 func TestSerializeRoundTripEmpty(t *testing.T) {
 	ctx := context.Background()
 	ns := tree.NewTestNodeStore()
-	orig := encodeBSON(t) // empty document: 5 bytes (length + terminator)
+	orig := encodeBSON(t)
 
 	idx, err := Serialize(ctx, ns, orig)
 	if err != nil {
@@ -142,8 +137,6 @@ func TestOpenRehydratesIndex(t *testing.T) {
 	}
 	root := idx.Root()
 
-	// Forget the original handle, reopen via Open with just the root
-	// hash and verify the byte-identical document re-emerges.
 	reopened, err := Open(ctx, ns, root)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

@@ -23,34 +23,10 @@ import (
 	"strconv"
 )
 
-// Mutation operations for the bson-a storage format. The byte-level
-// implementation operates directly on raw BSON bytes: splice in a new
-// field's bytes (or splice out an existing field's bytes), then patch
-// each ancestor container's 4-byte little-endian length prefix by the
-// net byte delta.
-//
-// The resulting bytes are handed back to Serialize for re-chunking.
-// Chunks whose contents are unchanged across the mutation hash to the
-// same blob and are deduplicated automatically by the underlying
-// node store; only the chunks that actually changed get new hashes.
-// This is the structural-sharing-across-history property the bson-a
-// vs bson-b bake-off is designed to measure: under (a) every
-// ancestor length-prefix change forces a new chunk hash at the chunk
-// containing that prefix; under (b) the prefixes don't exist in the
-// stored bytes so those chunks remain stable.
-
-// SetField writes the given value at the path. The value bytes must
-// be in BSON wire form for the given type byte (e.g., 4-byte little-
-// endian int32 length + bytes + 0x00 for a string; 4-byte little-
-// endian int32 itself for typeInt32). If the field exists at path it
-// is overwritten; otherwise it is inserted at the lex-sorted position
-// inside its parent container.
-//
-// The path's parent container must exist; intermediate path
-// components must reference existing documents. Setting at a path
-// whose parent doesn't exist (e.g. `a.b.c` when `a` is missing) is
-// not supported here and returns an error -- callers must $set the
-// parent path first.
+// SetField writes valueBytes at path. valueBytes must already be in BSON
+// wire form for typeByte (e.g. int32-length + bytes + 0x00 for a string).
+// The path's parent container must exist; missing intermediates return an
+// error.
 func (d IndexedBsonDocument) SetField(ctx context.Context, path string, typeByte byte, valueBytes []byte) (IndexedBsonDocument, error) {
 	if len(path) > 1 && path[0] == '$' && path[1] == '.' {
 		path = path[2:]
@@ -73,8 +49,7 @@ func (d IndexedBsonDocument) SetField(ctx context.Context, path string, typeByte
 	return Serialize(ctx, d.ns, newBuf)
 }
 
-// UnsetField removes the field at the path. If the path doesn't exist
-// the document is returned unchanged.
+// UnsetField is a no-op if path doesn't exist.
 func (d IndexedBsonDocument) UnsetField(ctx context.Context, path string) (IndexedBsonDocument, error) {
 	if len(path) > 1 && path[0] == '$' && path[1] == '.' {
 		path = path[2:]
@@ -97,9 +72,6 @@ func (d IndexedBsonDocument) UnsetField(ctx context.Context, path string) (Index
 	return Serialize(ctx, d.ns, newBuf)
 }
 
-// PushArray appends an element to the array at the path. The path
-// must refer to an existing array; behaviour for non-existent or
-// non-array paths is the BSON-level error from the walker.
 func (d IndexedBsonDocument) PushArray(ctx context.Context, path string, elemType byte, elemValue []byte) (IndexedBsonDocument, error) {
 	if len(path) > 1 && path[0] == '$' && path[1] == '.' {
 		path = path[2:]
@@ -122,9 +94,7 @@ func (d IndexedBsonDocument) PushArray(ctx context.Context, path string, elemTyp
 	return Serialize(ctx, d.ns, newBuf)
 }
 
-// PopArray removes the last element of the array at the path.
-// Returns the document unchanged if the array is empty or the path
-// doesn't refer to an array.
+// PopArray is a no-op on an empty array.
 func (d IndexedBsonDocument) PopArray(ctx context.Context, path string) (IndexedBsonDocument, error) {
 	if len(path) > 1 && path[0] == '$' && path[1] == '.' {
 		path = path[2:]
@@ -147,20 +117,10 @@ func (d IndexedBsonDocument) PopArray(ctx context.Context, path string) (Indexed
 	return Serialize(ctx, d.ns, newBuf)
 }
 
-// pathWalk descends buf to the parent container of the target path
-// and returns:
-//
-//	parentStart: byte offset of the parent container's first byte
-//	             (i.e. its 4-byte length prefix)
-//	parentEnd:   byte offset of the parent's trailing 0x00 (exclusive
-//	             upper bound of the container body bytes)
-//	parentIsArray: whether the parent is a BSON array container
-//	ancestorPrefixOffsets: byte offsets of each ancestor container's
-//	             length-prefix (root first, deepest last). Includes
-//	             the parent's own length prefix at the end.
-//
-// Path elements before the last are descended; the last element is
-// not consumed here -- callers handle it (look up, insert, replace).
+// pathWalk descends to the parent of target's last element. parentStart
+// is the parent's length-prefix offset; parentEnd is the trailing 0x00.
+// ancestorPrefixOffsets lists every container length-prefix from root to
+// parent inclusive, in descent order.
 func pathWalk(buf []byte, target Location) (parentStart, parentEnd int, parentIsArray bool, ancestorPrefixOffsets []int, err error) {
 	if target.Size() == 0 {
 		return 0, 0, false, nil, fmt.Errorf("bsonindexed: pathWalk requires a non-empty path")
@@ -186,10 +146,6 @@ func pathWalk(buf []byte, target Location) (parentStart, parentEnd int, parentIs
 	return cursorStart, cursorStart + containerLen - 1, cursorIsArray, prefixes, nil
 }
 
-// findFieldWithOffsets is the byte-offset-aware variant of findField.
-// container is the start offset (length-prefix byte) of a BSON
-// container within buf. Returns the type byte, value start offset
-// (absolute in buf), value end offset (absolute), and a found flag.
 func findFieldWithOffsets(buf []byte, container int, el PathElement) (byte, int, int, bool) {
 	if container+5 > len(buf) {
 		return 0, 0, 0, false
@@ -198,7 +154,7 @@ func findFieldWithOffsets(buf []byte, container int, el PathElement) (byte, int,
 	if container+containerLen > len(buf) {
 		return 0, 0, 0, false
 	}
-	end := container + containerLen - 1 // trailing 0x00
+	end := container + containerLen - 1
 	pos := container + 4
 	for pos < end {
 		typeByte := buf[pos]
@@ -226,10 +182,8 @@ func findFieldWithOffsets(buf []byte, container int, el PathElement) (byte, int,
 	return 0, 0, 0, false
 }
 
-// findFieldEntryRange locates the [type, name, value] byte range of
-// the field at el within the container at containerStart. Returns
-// (entryStart, entryEnd, valueStart, ok). Used by mutations that need
-// to splice out or replace the entire field entry.
+// findFieldEntryRange returns the [type, name, value] byte range for the
+// field at el so the caller can splice the entire entry.
 func findFieldEntryRange(buf []byte, container int, el PathElement) (entryStart, entryEnd, valueStart int, ok bool) {
 	if container+5 > len(buf) {
 		return 0, 0, 0, false
@@ -266,18 +220,11 @@ func findFieldEntryRange(buf []byte, container int, el PathElement) (entryStart,
 	return 0, 0, 0, false
 }
 
-// findInsertionPoint returns the byte offset within container where
-// a new field with the given name should be inserted to keep the
-// container's fields in lex-sorted order. The returned offset is the
-// byte where the new field's type byte should land. Used by SetField
-// when the target field doesn't exist yet.
-//
-// For array containers (which use stringified indices as names), the
-// insertion point is always the container's trailing 0x00: array
-// extensions append. The caller decides whether arrays are allowed.
+// findInsertionPoint returns the offset where a new field with newName
+// should be inserted to keep lex order. Arrays always append.
 func findInsertionPoint(buf []byte, container int, newName []byte, isArray bool) int {
 	containerLen := int(binary.LittleEndian.Uint32(buf[container:]))
-	end := container + containerLen - 1 // trailing 0x00
+	end := container + containerLen - 1
 	if isArray {
 		return end
 	}
@@ -301,10 +248,6 @@ func findInsertionPoint(buf []byte, container int, newName []byte, isArray bool)
 	return end
 }
 
-// setFieldInBytes is the byte-splicing core of SetField. Walks to the
-// parent container, finds or makes room for the leaf path element,
-// splices in the new (type, name, value) entry, and patches each
-// ancestor length prefix.
 func setFieldInBytes(buf []byte, target Location, typeByte byte, valueBytes []byte) ([]byte, error) {
 	parentStart, _, parentIsArray, ancestors, err := pathWalk(buf, target)
 	if err != nil {
@@ -322,14 +265,10 @@ func setFieldInBytes(buf []byte, target Location, typeByte byte, valueBytes []by
 	if found {
 		return spliceAndPatch(buf, entryStart, entryEnd, newEntry, ancestors), nil
 	}
-	// Field doesn't exist; insert at lex-sorted position (or append
-	// for an array).
 	insertAt := findInsertionPoint(buf, parentStart, leafName, parentIsArray)
 	return spliceAndPatch(buf, insertAt, insertAt, newEntry, ancestors), nil
 }
 
-// unsetFieldInBytes is the byte-splicing core of UnsetField. If the
-// field doesn't exist, returns the buffer unchanged.
 func unsetFieldInBytes(buf []byte, target Location) ([]byte, error) {
 	parentStart, _, parentIsArray, ancestors, err := pathWalk(buf, target)
 	if err != nil {
@@ -346,15 +285,11 @@ func unsetFieldInBytes(buf []byte, target Location) ([]byte, error) {
 	return spliceAndPatch(buf, entryStart, entryEnd, nil, ancestors), nil
 }
 
-// pushArrayInBytes appends one element to the BSON array at the
-// target path. The element's name in BSON is the next stringified
-// index (current array length).
 func pushArrayInBytes(buf []byte, target Location, elemType byte, elemValue []byte) ([]byte, error) {
 	parentStart, _, _, ancestors, err := pathWalk(buf, target)
 	if err != nil {
 		return nil, err
 	}
-	// Resolve the leaf: must point to an array within the parent.
 	leaf := target.PathElement(target.Size() - 1)
 	typeByte, valueStart, _, ok := findFieldWithOffsets(buf, parentStart, leaf)
 	if !ok {
@@ -365,19 +300,14 @@ func pushArrayInBytes(buf []byte, target Location, elemType byte, elemValue []by
 	}
 	arrayStart := valueStart
 	arrayLen := int(binary.LittleEndian.Uint32(buf[arrayStart:]))
-	arrayEnd := arrayStart + arrayLen - 1 // trailing 0x00
+	arrayEnd := arrayStart + arrayLen - 1
 	nextIdx := countArrayElements(buf, arrayStart)
 	name := []byte(strconv.FormatUint(uint64(nextIdx), 10))
 	newEntry := makeFieldEntry(elemType, name, elemValue)
-	// Splice and include the array itself in the ancestor list (its
-	// length prefix needs patching). pathWalk returned ancestors up
-	// to but not including the array; append arrayStart.
 	allAncestors := append(append([]int(nil), ancestors...), arrayStart)
 	return spliceAndPatch(buf, arrayEnd, arrayEnd, newEntry, allAncestors), nil
 }
 
-// popArrayInBytes removes the last element of the BSON array at the
-// target path. Returns the buffer unchanged if the array is empty.
 func popArrayInBytes(buf []byte, target Location) ([]byte, error) {
 	parentStart, _, _, ancestors, err := pathWalk(buf, target)
 	if err != nil {
@@ -405,30 +335,18 @@ func popArrayInBytes(buf []byte, target Location) ([]byte, error) {
 	return spliceAndPatch(buf, entryStart, entryEnd, nil, allAncestors), nil
 }
 
-// spliceAndPatch produces a new BSON document where buf[start:end] is
-// replaced by replacement, and each ancestor container's length
-// prefix (at the byte offsets in ancestors) is adjusted by the
-// resulting length delta.
-//
-// ancestors must be sorted ascending and must NOT include offsets >=
-// start (those would be inside the splice region and meaningless).
-// The delta is len(replacement) - (end - start).
+// spliceAndPatch replaces buf[start:end] with replacement and adjusts
+// each ancestor container's length prefix by the delta. ancestors must
+// not include offsets >= start.
 func spliceAndPatch(buf []byte, start, end int, replacement []byte, ancestors []int) []byte {
 	delta := len(replacement) - (end - start)
 	if delta == 0 && len(replacement) == 0 {
-		// No-op; return buf unchanged.
 		return buf
 	}
 	newBuf := make([]byte, 0, len(buf)+delta)
 	newBuf = append(newBuf, buf[:start]...)
 	newBuf = append(newBuf, replacement...)
 	newBuf = append(newBuf, buf[end:]...)
-	// Patch each ancestor length prefix. ancestors are absolute
-	// offsets into buf; in newBuf the offsets are the same because
-	// every ancestor is at offset < start. Sort defensively before
-	// patching so we apply deepest-first... actually order doesn't
-	// matter for length-prefix patching since each prefix is
-	// independent.
 	sort.Ints(ancestors)
 	for _, off := range ancestors {
 		if off+4 > len(newBuf) {
@@ -440,9 +358,6 @@ func spliceAndPatch(buf []byte, start, end int, replacement []byte, ancestors []
 	return newBuf
 }
 
-// countArrayElements returns the number of top-level elements in the
-// BSON array starting at arrayStart in buf. Used by PushArray to
-// pick the next array index.
 func countArrayElements(buf []byte, arrayStart int) int {
 	arrayLen := int(binary.LittleEndian.Uint32(buf[arrayStart:]))
 	end := arrayStart + arrayLen - 1
@@ -472,9 +387,6 @@ func countArrayElements(buf []byte, arrayStart int) int {
 	return count
 }
 
-// makeFieldEntry composes a single BSON field entry from its type
-// byte, name (as CString bytes without the trailing 0x00), and
-// already-encoded value bytes.
 func makeFieldEntry(typeByte byte, name []byte, value []byte) []byte {
 	out := make([]byte, 0, 2+len(name)+len(value))
 	out = append(out, typeByte)
@@ -484,9 +396,6 @@ func makeFieldEntry(typeByte byte, name []byte, value []byte) []byte {
 	return out
 }
 
-// elementNameBytes returns the byte form of a PathElement's name --
-// the field name bytes for object keys, or the stringified index for
-// array indices.
 func elementNameBytes(el PathElement) []byte {
 	if el.IsArrayIndex {
 		return []byte(strconv.FormatUint(el.ArrayIndex(), 10))

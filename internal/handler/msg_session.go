@@ -103,17 +103,10 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 	)
 }
 
-// MsgEndSessions implements the `endSessions` command.
-//
-// The wire body's `endSessions` field is an array of `{id: BinData}`
-// entries listing the logical sessions the driver wants to end.
-// Without this parse step the backend only released the session bound
-// to the current connection (ci.Owner()), leaving every other lsid the
-// driver had checked out (one per pooled implicit session) lingering
-// in the registry until the 30-minute idle sweep. Under high session
-// churn (each short-lived mongo.Client creates several implicit
-// lsids during discovery + the operation) that produces the 1.5 MB/s
-// runaway growth users were hitting.
+// MsgEndSessions implements the `endSessions` command. It must release
+// every lsid in the wire body's array, not just ci.Owner(): a pooled
+// driver checks out several implicit sessions per connection and only
+// one of them is the connection's owner.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	ci := conninfo.Get(connCtx)
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
@@ -130,10 +123,8 @@ func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wir
 	)
 }
 
-// endLsidsFromMsg parses the endSessions wire body and marks each
-// listed lsid for sweep on the SessionRegistry. Malformed entries are
-// skipped silently -- MongoDB itself treats endSessions as advisory
-// and a malformed wire frame should never produce a server error.
+// endLsidsFromMsg silently skips malformed entries; endSessions is
+// advisory and a bad wire frame should never produce a server error.
 func endLsidsFromMsg(h *Handler, msg *wire.OpMsg) {
 	reg := h.SessionRegistry()
 	if reg == nil || msg == nil {

@@ -18,33 +18,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"io"
 	"strconv"
 )
 
-// LookupResult is the typed return from a Lookup. TypeByte holds the
-// BSON type byte for the located field; Value holds the raw BSON
-// value bytes (without the type byte or field name). For nested
-// container types (document, array), Value is the entire container
-// including its 4-byte length prefix and trailing 0x00.
-//
-// Found is false if the path does not exist in the document; in that
-// case the other fields are zero values.
+// LookupResult.Value carries the raw BSON value bytes (no type byte or
+// field name). For containers, Value is the entire container including
+// its length prefix and trailing 0x00.
 type LookupResult struct {
 	TypeByte byte
 	Value    []byte
 	Found    bool
 }
 
-// Lookup returns the field at the given mongo dotted path. The path
-// is parsed via FromMongoPath, then the document is walked top-down
-// to locate the field. A leading "$." prefix is accepted for MySQL
-// path parity but stripped before parsing.
-//
-// Implementation: the document is materialised once via Bytes(), then
-// walked by Scanner. For very large documents this is O(doc bytes);
-// future optimisations may use AddressMap to fast-skip to the chunk
-// containing the target path.
+// Lookup returns the field at a mongo dotted path. A leading "$." is
+// accepted for MySQL parity.
 func (d IndexedBsonDocument) Lookup(ctx context.Context, path string) (LookupResult, error) {
 	if len(path) > 1 && path[0] == '$' && path[1] == '.' {
 		path = path[2:]
@@ -60,16 +47,10 @@ func (d IndexedBsonDocument) Lookup(ctx context.Context, path string) (LookupRes
 	return lookupInBytes(buf, loc), nil
 }
 
-// lookupInBytes implements the path walk over fully materialised BSON
-// bytes. Exported via Lookup; broken out for direct testing.
 func lookupInBytes(buf []byte, target Location) LookupResult {
-	// Root lookup returns the whole document.
 	if target.Size() == 0 {
 		return LookupResult{TypeByte: typeDocument, Value: buf, Found: true}
 	}
-	// Descend the path element-by-element, jumping into nested
-	// containers as needed. Each step locates a field within the
-	// current container.
 	cursor := buf
 	for i := 0; i < target.Size(); i++ {
 		el := target.PathElement(i)
@@ -80,9 +61,6 @@ func lookupInBytes(buf []byte, target Location) LookupResult {
 		if i == target.Size()-1 {
 			return LookupResult{TypeByte: typeByte, Value: valueBytes, Found: true}
 		}
-		// Step into nested container. Only documents and arrays are
-		// traversable; scalars at non-terminal positions fail the
-		// lookup.
 		if typeByte != typeDocument && typeByte != typeArray {
 			return LookupResult{}
 		}
@@ -91,15 +69,6 @@ func lookupInBytes(buf []byte, target Location) LookupResult {
 	return LookupResult{}
 }
 
-// findField scans the top-level fields of a BSON container (document
-// or array bytes, including the 4-byte length prefix and trailing
-// 0x00) for a single path element. Returns the field's type byte and
-// value bytes (excluding the type byte and field name; the value
-// alone), and a found flag.
-//
-// For an array container, the path element is treated as an array
-// index and matched against the stringified index that BSON arrays
-// use as field names.
 func findField(container []byte, el PathElement) (byte, []byte, bool) {
 	if len(container) < 5 {
 		return 0, nil, false
@@ -108,7 +77,7 @@ func findField(container []byte, el PathElement) (byte, []byte, bool) {
 	if containerLen > len(container) {
 		return 0, nil, false
 	}
-	end := containerLen - 1 // points at trailing 0x00
+	end := containerLen - 1
 	pos := 4
 	for pos < end {
 		typeByte := container[pos]
@@ -137,9 +106,6 @@ func findField(container []byte, el PathElement) (byte, []byte, bool) {
 	return 0, nil, false
 }
 
-// matchElement reports whether the BSON field name matches the
-// PathElement. Object keys match the bytes directly; array indices
-// match the stringified index.
 func matchElement(name []byte, el PathElement) bool {
 	if el.IsArrayIndex {
 		return bytes.Equal(name, []byte(strconv.FormatUint(el.ArrayIndex(), 10)))
@@ -147,10 +113,6 @@ func matchElement(name []byte, el PathElement) bool {
 	return bytes.Equal(name, el.Key)
 }
 
-// elementValueEnd computes the byte offset just past the end of the
-// value starting at valueStart, given its type byte. Returns false
-// when the buffer is too short. Mirrors the per-type sizing logic in
-// Scanner.consumeValueBody but as a one-shot computation.
 func elementValueEnd(buf []byte, valueStart int, typeByte byte, hardEnd int) (int, bool) {
 	switch typeByte {
 	case typeDouble, typeDate, typeTime, typeInt64:
@@ -221,9 +183,6 @@ func elementValueEnd(buf []byte, valueStart int, typeByte byte, hardEnd int) (in
 	return 0, false
 }
 
-// Has reports whether the given mongo dotted path exists in the
-// document. Convenience wrapper over Lookup that discards the
-// returned value.
 func (d IndexedBsonDocument) Has(ctx context.Context, path string) (bool, error) {
 	r, err := d.Lookup(ctx, path)
 	if err != nil {
@@ -232,10 +191,8 @@ func (d IndexedBsonDocument) Has(ctx context.Context, path string) (bool, error)
 	return r.Found, nil
 }
 
-// LookupRawBytes is a streaming-friendly helper that walks bsonBytes
-// directly without materialising a separate copy. Used by the
-// prefilter path to avoid an extra allocation when the caller already
-// has the document bytes in hand.
+// LookupRawBytes avoids the extra materialisation when the caller
+// already has the document bytes.
 func LookupRawBytes(bsonBytes []byte, path string) (LookupResult, error) {
 	if len(path) > 1 && path[0] == '$' && path[1] == '.' {
 		path = path[2:]
@@ -246,7 +203,3 @@ func LookupRawBytes(bsonBytes []byte, path string) (LookupResult, error) {
 	}
 	return lookupInBytes(bsonBytes, loc), nil
 }
-
-// ensure io is referenced to keep the import in case we later switch
-// to a streaming implementation that needs it.
-var _ = io.EOF

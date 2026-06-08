@@ -108,9 +108,8 @@ func TestLookupNestedObject(t *testing.T) {
 	if !r.Found {
 		t.Fatalf("Lookup(wrap.y) not found")
 	}
-	// String value is length-prefixed: 4-byte LE length + bytes + 0x00.
 	strLen := int(binary.LittleEndian.Uint32(r.Value))
-	if strLen != 5 { // "deep" + NUL terminator
+	if strLen != 5 {
 		t.Errorf("string length = %d; want 5", strLen)
 	}
 	if !bytes.Equal(r.Value[4:4+strLen-1], []byte("deep")) {
@@ -220,8 +219,6 @@ func TestHas(t *testing.T) {
 func TestLookupOnLargeChunkedDoc(t *testing.T) {
 	ctx := context.Background()
 	ns := tree.NewTestNodeStore()
-	// 40 fields with 200-byte payload each forces multi-chunk
-	// chunking; lookup must still find the target.
 	fields := make([]any, 0, 80)
 	for i := 0; i < 40; i++ {
 		fields = append(fields, "f"+twoDigitDecimal(i), int32(i))

@@ -23,15 +23,12 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 )
 
-// int32Value encodes an int32 into BSON-wire-form value bytes.
 func int32Value(v int32) []byte {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, uint32(v))
 	return b
 }
 
-// stringValue encodes a UTF-8 string into BSON-wire-form value bytes
-// (length-prefixed, NUL-terminated).
 func stringValue(s string) []byte {
 	out := make([]byte, 4+len(s)+1)
 	binary.LittleEndian.PutUint32(out, uint32(len(s)+1))
@@ -58,7 +55,6 @@ func TestSetExistingField(t *testing.T) {
 	if !r.Found || int32(binary.LittleEndian.Uint32(r.Value)) != 99 {
 		t.Errorf("a after set = %+v; want int32(99)", r)
 	}
-	// b should be unchanged.
 	r, _ = idx2.Lookup(ctx, "b")
 	if !r.Found || int32(binary.LittleEndian.Uint32(r.Value)) != 2 {
 		t.Errorf("b after set on a = %+v; want int32(2)", r)
@@ -83,7 +79,6 @@ func TestSetNewFieldKeepsLexOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bytes: %v", err)
 	}
-	// Decode via wirebson and check field order.
 	rd, err := wirebson.RawDocument(all).Decode()
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -119,7 +114,6 @@ func TestUnsetField(t *testing.T) {
 	if has {
 		t.Errorf("b still present after unset")
 	}
-	// a and c should still be there.
 	for _, k := range []string{"a", "c"} {
 		ok, err := idx2.Has(ctx, k)
 		if err != nil {
@@ -145,9 +139,6 @@ func TestSetNestedFieldPatchesAncestorLengths(t *testing.T) {
 		t.Fatalf("Serialize: %v", err)
 	}
 
-	// Insert a new field z inside outer with a long string value so
-	// the outer container grows by many bytes; verifies that ancestor
-	// length prefixes are patched correctly.
 	idx2, err := idx.SetField(ctx, "outer.z", typeString, stringValue("a much longer string value"))
 	if err != nil {
 		t.Fatalf("SetField: %v", err)
@@ -225,7 +216,6 @@ func TestPopArray(t *testing.T) {
 func TestDeepNestedMutation(t *testing.T) {
 	ctx := context.Background()
 	ns := tree.NewTestNodeStore()
-	// Build a depth-5 nested structure: { a: { b: { c: { d: { e: 1 } } } } }
 	d5, err := wirebson.NewDocument("e", int32(1))
 	if err != nil {
 		t.Fatalf("d5: %v", err)
@@ -262,10 +252,8 @@ func TestDeepNestedMutation(t *testing.T) {
 	verifyDocLengthPrefix(t, ctx, idx2)
 }
 
-// verifyDocLengthPrefix asserts that the document's root length
-// prefix (first 4 bytes) equals the actual buffer length. This is a
-// cheap sanity check: any miscount in ancestor patching usually
-// shows up as a mismatched root length.
+// verifyDocLengthPrefix is the cheap canary for ancestor-length
+// patching bugs.
 func verifyDocLengthPrefix(t *testing.T, ctx context.Context, idx IndexedBsonDocument) {
 	t.Helper()
 	buf, err := idx.Bytes(ctx)

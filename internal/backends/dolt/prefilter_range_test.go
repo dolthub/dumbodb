@@ -24,11 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// canonicalDoc encodes a mongo bson.D to bson-a stored bytes (1-byte
-// version header followed by raw BSON), matching the layout the dolt
-// backend writes per document. The fixtures the tests pass through
-// here already have keys in lex order so the encoder's sort pass is
-// a no-op.
 func canonicalDoc(t *testing.T, d mongobson.D) []byte {
 	t.Helper()
 	bs, err := mongobson.Marshal(d)
@@ -355,10 +350,6 @@ func TestRangePrefilter_HugeInt64Permissive(t *testing.T) {
 	}
 }
 
-// scanTopLevelBSONNumeric unit-level coverage for the BSON walker,
-// constructed via wirebson to exercise the same shapes the old
-// ExtJSON walker checked (numeric variants, missing fields, non-
-// numeric values that force a bail).
 func TestScanTopLevelBSONNumeric_DirectCases(t *testing.T) {
 	t.Parallel()
 	field := []byte("i")

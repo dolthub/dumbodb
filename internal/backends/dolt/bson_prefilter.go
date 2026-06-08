@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Sound prefilter on bson-a stored bytes: when a predicate returns false
+// the document is guaranteed not to match. False positives are re-checked
+// downstream by the handler's FilterIterator. Unknown version bytes are
+// treated permissively so the iterator falls back to canonical decode.
+
 package dolt
 
 import (
@@ -23,25 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// BSON-element prefilter for the bson-a storage format. Replaces the
-// ExtJSON byte-substring matcher with a structurally aware walker
-// that decodes top-level BSON elements directly.
-//
-// The prefilter is a SOUND optimisation: when it returns false the
-// document is guaranteed not to match, so the iterator can skip it
-// without decoding. False positives (predicate returns true for a
-// doc that doesn't actually match) are handled downstream by the
-// handler's FilterIterator.
-//
-// All predicates operate on bson-a stored bytes (1-byte version
-// header followed by raw BSON). The version byte is stripped before
-// walking; a doc with an unknown version byte is treated permissively
-// (predicate returns true) so the iterator falls back to the
-// canonical decode + filter path.
-
-// BSON element type bytes used by this file. Duplicated from the
-// bsonindexed package to keep the prefilter in-package and avoid the
-// extra import-time coupling.
 const (
 	bsonTypeDouble   byte = 0x01
 	bsonTypeString   byte = 0x02
@@ -61,28 +47,11 @@ const (
 	bsonTypeMaxKey   byte = 0x7F
 )
 
-// buildBSONFieldPredicate replaces the historical extJSONFieldPatterns
-// path. Returns nil when no sound predicate can be expressed for the
-// (field, value) clause; the iterator falls back to a full scan in
-// that case.
-//
-// Supported filter shapes:
-//
-//   - Scalar equality on int32 / int64 / float64 (cross-type numeric
-//     equivalence per mongo's number-coercion rules).
-//   - Scalar equality on string, bool, time.Time, types.ObjectID.
-//   - Numeric range operators {$gt, $gte, $lt, $lte} via the dedicated
-//     range predicate.
-//   - Top-level array containment: {field: scalar} matches a stored
-//     array whose elements include the scalar.
-//
-// Unsupported (returns nil):
-//
-//   - Dotted-path keys (the prefilter only inspects the top level).
-//   - Operator docs other than the numeric range set.
-//   - Regex, $in, $nin, $ne, and other operator filters.
-//   - NaN / +-Inf doubles.
-//   - decimal128 (kept simple; the handler can re-check).
+// buildBSONFieldPredicate returns a sound predicate for (field, value),
+// or nil when no sound predicate can be expressed (dotted paths, regex,
+// $in/$nin/$ne, NaN/Inf, decimal128, ...). Supported: scalar equality on
+// numeric/string/bool/time/ObjectID, numeric range via $gt/$gte/$lt/$lte,
+// and top-level array containment of a scalar.
 func buildBSONFieldPredicate(field string, value any) func([]byte) bool {
 	if opDoc, ok := value.(*types.Document); ok {
 		return buildBSONNumericRangePredicate(field, opDoc)
@@ -106,12 +75,6 @@ func buildBSONFieldPredicate(field string, value any) func([]byte) bool {
 	}
 }
 
-// buildBSONNumericRangePredicate is the BSON analogue of the JSON
-// scanTopLevelNumericExtJSON walker. Compiles {$gt, $gte, $lt, $lte}
-// into running bounds and returns a predicate that walks the stored
-// BSON, locates the top-level numeric field, and tests inclusion.
-// Returns nil for operator docs that mix in unsupported operators
-// or non-numeric bounds.
 func buildBSONNumericRangePredicate(field string, opDoc *types.Document) func([]byte) bool {
 	keys := opDoc.Keys()
 	if len(keys) == 0 {
@@ -183,11 +146,8 @@ func buildBSONNumericRangePredicate(field string, opDoc *types.Document) func([]
 	}
 }
 
-// stripVersionPermissive strips the 1-byte format version. Returns
-// ok=false when the version byte is unrecognised; callers treat that
-// as permissive (predicate returns true). Distinct from
-// bson_codec.stripVersion which errors out -- the prefilter never
-// errors.
+// stripVersionPermissive returns ok=false on unrecognised version bytes;
+// callers treat that as permissive.
 func stripVersionPermissive(stored []byte) ([]byte, bool) {
 	if len(stored) < 1 || stored[0] != bsonFormatVersion {
 		return nil, false
@@ -195,12 +155,8 @@ func stripVersionPermissive(stored []byte) ([]byte, bool) {
 	return stored[1:], true
 }
 
-// normaliseFilterValue converts a filter-side value into a stable
-// shape that the equality walker can compare against. Returns nil
-// for unsupported types so callers can drop the prefilter cleanly.
-// time.Time is returned as-is to preserve the date-vs-int64 type
-// distinction the BSON walker needs; ObjectID is returned as a
-// [12]byte for direct byte comparison.
+// normaliseFilterValue returns nil for types the equality walker does
+// not compare. ObjectID is returned as [12]byte for direct byte compare.
 func normaliseFilterValue(v any) any {
 	switch t := v.(type) {
 	case int32, int64, float64:
@@ -217,12 +173,10 @@ func normaliseFilterValue(v any) any {
 	return nil
 }
 
-// walkTopLevelEquality scans the top-level fields of doc. When it
-// encounters the named field, it compares the stored value against
-// target. For array-typed stored values it additionally tests every
-// element so {tags: "go"} matches a stored ["go", "rust"]. Returns
-// true on match; false on confirmed mismatch; true (permissive) on
-// any structural anomaly (under-sized buffer, unknown type byte).
+// walkTopLevelEquality returns true on match, false on confirmed
+// mismatch, and true (permissive) on any structural anomaly. For
+// array-typed stored values every element is tested so {tags: "go"}
+// matches a stored ["go", "rust"].
 func walkTopLevelEquality(doc []byte, field []byte, target any) bool {
 	if len(doc) < 5 {
 		return true
@@ -259,12 +213,6 @@ func walkTopLevelEquality(doc []byte, field []byte, target any) bool {
 	return false
 }
 
-// bsonValueEqualsOrContains reports whether the BSON value at
-// (typeByte, valueBytes) equals target. For container types it
-// recursively walks elements: array elements are compared (mongo
-// array-contains semantics for {field: scalar}); documents are not
-// considered as "containing" scalars (the prefilter doesn't model
-// sub-document equality).
 func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) bool {
 	if scalarMatch(typeByte, valueBytes, target) {
 		return true
@@ -307,10 +255,8 @@ func bsonValueEqualsOrContains(typeByte byte, valueBytes []byte, target any) boo
 	return false
 }
 
-// scalarMatch reports whether the BSON-typed value bytes equal the
-// normalised target. Numeric equality coerces across int32/int64/
-// double per mongo semantics; string / bool / date / objectid match
-// on their native shape only.
+// scalarMatch coerces across int32/int64/double per mongo's numeric
+// equivalence rules; non-numeric types match on native shape only.
 func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	switch t := target.(type) {
 	case int32:
@@ -324,7 +270,6 @@ func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 		if !ok {
 			return false
 		}
-		// Exact float compare; NaN never matches.
 		if math.IsNaN(t) || math.IsNaN(f) {
 			return false
 		}
@@ -361,10 +306,8 @@ func scalarMatch(typeByte byte, valueBytes []byte, target any) bool {
 	return false
 }
 
-// bsonNumericAsFloat decodes a numeric BSON value to float64. Returns
-// ok=false for non-numeric types or numerics outside the
-// float64-exact range (large int64 that would lose precision is
-// reported as ok=false so the predicate falls back to permissive).
+// bsonNumericAsFloat returns ok=false for int64 values outside the
+// float64-exact range so the predicate falls back to permissive.
 func bsonNumericAsFloat(typeByte byte, valueBytes []byte) (float64, bool) {
 	switch typeByte {
 	case bsonTypeInt32:
@@ -392,10 +335,6 @@ func bsonNumericAsFloat(typeByte byte, valueBytes []byte) (float64, bool) {
 	return 0, false
 }
 
-// bsonValueEnd returns the byte offset just past the end of the BSON
-// value starting at valueStart, given its type byte. Mirrors
-// bsonindexed.elementValueEnd; duplicated here to avoid the cross-
-// package import for one helper.
 func bsonValueEnd(buf []byte, valueStart int, typeByte byte, hardEnd int) (int, bool) {
 	switch typeByte {
 	case bsonTypeDouble, bsonTypeDate, bsonTypeTime, bsonTypeInt64:
@@ -452,11 +391,9 @@ func bsonValueEnd(buf []byte, valueStart int, typeByte byte, hardEnd int) (int, 
 	return 0, false
 }
 
-// scanTopLevelBSONNumeric is the BSON analogue of the JSON walker:
-// finds a top-level numeric field by name and returns its float64
-// value. The status return distinguishes a found numeric, a missing
-// field (range can prove no match), and a structural anomaly that
-// forces the predicate to be permissive.
+// scanTopLevelBSONNumeric locates a numeric field and returns its
+// float64 value. The status return distinguishes found, missing (range
+// can prove no match), and bail (force permissive).
 func scanTopLevelBSONNumeric(doc []byte, field []byte) (float64, rangeProbeStatus) {
 	if len(doc) < 5 {
 		return 0, rangeProbeBail
@@ -500,9 +437,6 @@ func scanTopLevelBSONNumeric(doc []byte, field []byte) (float64, rangeProbeStatu
 	return 0, rangeProbeMissing
 }
 
-// numericBoundFloat64 mirrors the JSON-side numericBoundToFloat64.
-// Converts a bound value to float64 only when the conversion is
-// exact and finite.
 func numericBoundFloat64(v any) (float64, bool) {
 	switch n := v.(type) {
 	case int32:
@@ -522,8 +456,6 @@ func numericBoundFloat64(v any) (float64, bool) {
 	return 0, false
 }
 
-// tightenLo / tightenHi merge a new bound into the running tightest
-// bound. Mirrors the JSON-side helpers.
 func tightenLo(curHas bool, curVal float64, curIncl bool, nv float64, nIncl bool) (float64, bool, bool) {
 	if !curHas || nv > curVal {
 		return nv, nIncl, true

@@ -12,13 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Schema-shape assertion: confirms new collections declare the
-// document column with EncodingBytesAdaptive and the key column with
-// EncodingBytes. The encoding is what tells Dolt how to lay out the
-// stored value; the bson-a branch uses BytesAdaptive so the inline
-// payload is bson-a-format (1-byte version + raw BSON) and the OOB
-// spillover is a single content-addressed blob.
-
 package dolt
 
 import (
