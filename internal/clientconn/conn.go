@@ -148,6 +148,16 @@ func (c *conn) run(ctx context.Context) (err error) {
 
 	ctx = conninfo.Ctx(ctx, connInfo)
 
+	// Catch TCP closes that didn't first send endSessions; otherwise the
+	// bound lsid sits in the registry until the idle sweep.
+	defer func() {
+		if reg := c.h.SessionRegistry(); reg != nil {
+			if lsid := connInfo.LSID(); lsid != "" {
+				reg.End(lsid)
+			}
+		}
+	}()
+
 	done := make(chan struct{})
 
 	// handle ctx cancellation
@@ -597,6 +607,12 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 
 	shadow, cachedLsid := ci.CachedShadow()
 	if shadow == nil || cachedLsid != lsid {
+		// Release the prior lsid (synthetic-to-real upgrade, or pooled
+		// implicit sessions rotating between frames) before opening the
+		// new one.
+		if cachedLsid != "" && cachedLsid != lsid {
+			reg.End(cachedLsid)
+		}
 		s, err := reg.Connect(lsid)
 		if err != nil {
 			return nil, fmt.Errorf("session registry: Connect for %q: %w", lsid, err)

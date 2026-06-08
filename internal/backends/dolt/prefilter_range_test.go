@@ -24,18 +24,15 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// canonicalDoc encodes a mongo bson.D to canonical Extended JSON, matching
-// the bytes the dolt backend stores per document.
 func canonicalDoc(t *testing.T, d mongobson.D) []byte {
 	t.Helper()
 	bs, err := mongobson.Marshal(d)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	out, err := mongobson.MarshalExtJSON(mongobson.Raw(bs), true, false)
-	if err != nil {
-		t.Fatalf("MarshalExtJSON: %v", err)
-	}
+	out := make([]byte, 0, len(bs)+1)
+	out = append(out, bsonFormatVersion)
+	out = append(out, bs...)
 	return out
 }
 
@@ -353,38 +350,34 @@ func TestRangePrefilter_HugeInt64Permissive(t *testing.T) {
 	}
 }
 
-// scanTopLevelNumericExtJSON unit-level coverage for the walker, on bytes
-// it is unlikely to encounter naturally (whitespace, escaped non-target
-// keys, top-level keyword values).
-func TestScanTopLevelNumericExtJSON_DirectCases(t *testing.T) {
+func TestScanTopLevelBSONNumeric_DirectCases(t *testing.T) {
 	t.Parallel()
 	field := []byte("i")
 
 	cases := []struct {
 		name   string
-		json   string
+		doc    mongobson.D
 		val    float64
 		status rangeProbeStatus
 	}{
-		{"compact-int", `{"i":{"$numberInt":"42"}}`, 42, rangeProbeFound},
-		{"compact-long", `{"i":{"$numberLong":"42"}}`, 42, rangeProbeFound},
-		{"compact-double", `{"i":{"$numberDouble":"3.5"}}`, 3.5, rangeProbeFound},
-		{"with-whitespace", `{ "i" : {"$numberInt":"7"} }`, 7, rangeProbeFound},
-		{"missing", `{"j":{"$numberInt":"1"}}`, 0, rangeProbeMissing},
-		{"empty-object", `{}`, 0, rangeProbeMissing},
-		{"value-string", `{"i":"42"}`, 0, rangeProbeBail},
-		{"value-array", `{"i":[1,2]}`, 0, rangeProbeBail},
-		{"value-subdoc-shape", `{"i":{"x":1}}`, 0, rangeProbeBail},
-		{"value-decimal", `{"i":{"$numberDecimal":"3.14"}}`, 0, rangeProbeBail},
-		{"value-true", `{"i":true}`, 0, rangeProbeBail},
-		{"value-null", `{"i":null}`, 0, rangeProbeBail},
-		{"malformed-no-brace", `"i":1`, 0, rangeProbeBail},
-		{"trailing-junk-skipped", `{"a":[1,2,3],"i":{"$numberInt":"5"}}`, 5, rangeProbeFound},
-		{"escape-in-other-key", `{"a\nb":{"$numberInt":"1"},"i":{"$numberInt":"5"}}`, 0, rangeProbeBail},
+		{"int32-found", mongobson.D{{Key: "i", Value: int32(42)}}, 42, rangeProbeFound},
+		{"int64-found", mongobson.D{{Key: "i", Value: int64(42)}}, 42, rangeProbeFound},
+		{"double-found", mongobson.D{{Key: "i", Value: float64(3.5)}}, 3.5, rangeProbeFound},
+		{"missing", mongobson.D{{Key: "j", Value: int32(1)}}, 0, rangeProbeMissing},
+		{"empty-doc", mongobson.D{}, 0, rangeProbeMissing},
+		{"string-value", mongobson.D{{Key: "i", Value: "42"}}, 0, rangeProbeBail},
+		{"array-value", mongobson.D{{Key: "i", Value: mongobson.A{int32(1), int32(2)}}}, 0, rangeProbeBail},
+		{"subdoc-value", mongobson.D{{Key: "i", Value: mongobson.D{{Key: "x", Value: int32(1)}}}}, 0, rangeProbeBail},
+		{"bool-value", mongobson.D{{Key: "i", Value: true}}, 0, rangeProbeBail},
+		{"null-value", mongobson.D{{Key: "i", Value: nil}}, 0, rangeProbeBail},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotV, gotS := scanTopLevelNumericExtJSON([]byte(tc.json), field)
+			raw, err := mongobson.Marshal(tc.doc)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			gotV, gotS := scanTopLevelBSONNumeric(raw, field)
 			if gotS != tc.status {
 				t.Fatalf("status: got=%v want=%v", gotS, tc.status)
 			}
@@ -392,19 +385,5 @@ func TestScanTopLevelNumericExtJSON_DirectCases(t *testing.T) {
 				t.Fatalf("value: got=%v want=%v", gotV, tc.val)
 			}
 		})
-	}
-}
-
-// String storage where the literal happens to look like a numeric wrapper
-// inside the string body must still bail (the value's outer token is a
-// JSON string, not an object).
-func TestRangePrefilter_StringLookingLikeWrapperBails(t *testing.T) {
-	t.Parallel()
-	// Doc has "i" stored as the string `{"$numberInt":"42"}`. A naive
-	// substring check might "see" a numeric. The walker must not.
-	doc := []byte(`{"i":"{\"$numberInt\":\"42\"}"}`)
-	v, s := scanTopLevelNumericExtJSON(doc, []byte("i"))
-	if s != rangeProbeBail {
-		t.Fatalf("got=(%v,%v) want=bail", v, s)
 	}
 }

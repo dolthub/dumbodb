@@ -12,28 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Asserts that applyFieldMutations dispatches on the actual storage
-// shape of the existing document:
-//
-//   - When the document was stored inline in the value tuple, mutation
-//     must NOT write to the chunk store -- the bytes are parsed,
-//     mutated in memory, and re-serialised entirely within the dumbo
-//     process. This matches Dolt's own adaptive-JSON UPDATE path.
-//
-//   - When the document was spilled out-of-band, mutation routes
-//     through IndexedJsonDocument structural sharing, which DOES
-//     touch the chunk store. (At least one Write is expected; the
-//     exact count depends on how the new prolly tree shares chunks.)
-//
-// See workspace-a3u (this dispatch) and workspace-110 (the
-// investigation that produced the design).
+// Asserts applyFieldMutations dispatches on storage shape: inline
+// mutations write 0 chunks; OOB mutations read the blob and re-spill.
 
 package dolt
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -45,9 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// countingNodeStore wraps a real tree.NodeStore and counts every
-// Write / WriteBytes call. The test uses it to assert that the
-// inline mutation branch never touches the underlying chunk store.
 type countingNodeStore struct {
 	tree.NodeStore
 	writes int64
@@ -88,10 +70,10 @@ func TestApplyFieldMutations_InlineDoesNotWriteToChunkStore(t *testing.T) {
 	ctx := context.Background()
 	cns := &countingNodeStore{NodeStore: realNodeStore(t)}
 
-	// Small ExtJSON document well under DefaultTupleLengthTarget (2 KB).
-	// The tuple builder will keep this inline.
-	inlineJSON := []byte(`{"_id":"doc1","email":"old@example.com","age":{"$numberInt":"30"}}`)
-	tup, err := buildValue(ctx, cns, inlineJSON)
+	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "age", int32(30))
+	stored, err := docToBSON(doc)
+	require.NoError(t, err)
+	tup, err := buildValue(ctx, cns, stored)
 	require.NoError(t, err)
 
 	cns.Reset()
@@ -103,18 +85,20 @@ func TestApplyFieldMutations_InlineDoesNotWriteToChunkStore(t *testing.T) {
 
 	require.Equalf(t, int64(0), cns.Writes(),
 		"inline mutation must not touch chunk store; got %d writes", cns.Writes())
-	require.Contains(t, string(newBytes), `"new@example.com"`,
-		"new email value not present in mutated document")
-	require.NotContains(t, string(newBytes), `"old@example.com"`,
-		"old email value still present after $set")
+	got, err := bsonToDoc(newBytes)
+	require.NoError(t, err)
+	email, _ := got.Get("email")
+	require.Equal(t, "new@example.com", email)
 }
 
 func TestApplyFieldMutations_InlineHandlesUnset(t *testing.T) {
 	ctx := context.Background()
 	cns := &countingNodeStore{NodeStore: realNodeStore(t)}
 
-	inlineJSON := []byte(`{"_id":"doc1","email":"old@example.com","disposable":"x"}`)
-	tup, err := buildValue(ctx, cns, inlineJSON)
+	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "disposable", "x")
+	stored, err := docToBSON(doc)
+	require.NoError(t, err)
+	tup, err := buildValue(ctx, cns, stored)
 	require.NoError(t, err)
 
 	cns.Reset()
@@ -125,30 +109,31 @@ func TestApplyFieldMutations_InlineHandlesUnset(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, int64(0), cns.Writes(), "inline $unset must not touch chunk store")
-	require.NotContains(t, string(newBytes), `"disposable"`)
-	require.Contains(t, string(newBytes), `"old@example.com"`)
+	got, err := bsonToDoc(newBytes)
+	require.NoError(t, err)
+	_, err = got.Get("disposable")
+	require.Error(t, err, "disposable field should be removed")
+	email, _ := got.Get("email")
+	require.Equal(t, "old@example.com", email)
 }
 
-func TestApplyFieldMutations_OutOfBandUsesChunkStore(t *testing.T) {
+func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	cns := &countingNodeStore{NodeStore: realNodeStore(t)}
 
-	// Document well past DefaultTupleLengthTarget (2 KB) so the
-	// tuple builder spills it out-of-band.
-	pad := strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", 100) // ~3.6 KB of varied chars
-	largeJSON := []byte(fmt.Sprintf(`{"_id":"doc1","email":"old@example.com","data":%q}`, pad))
-	require.Greater(t, len(largeJSON), 3000, "test setup: large JSON should exceed inline threshold")
+	pad := makePad(3600)
+	doc := mustDoc(t, "_id", "doc1", "email", "old@example.com", "data", pad)
+	stored, err := docToBSON(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(stored), 3000, "test setup: stored doc should exceed inline threshold")
 
-	tup, err := buildValue(ctx, cns, largeJSON)
+	tup, err := buildValue(ctx, cns, stored)
 	require.NoError(t, err)
 
-	// Confirm the tuple builder actually spilled out-of-band: a fresh
-	// GetJsonAdaptiveValue read should return a JsonAdaptiveStorage
-	// rather than a []byte.
-	result, ok, err := valDesc.GetJsonAdaptiveValue(ctx, 0, cns, tup)
+	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, cns, tup)
 	require.NoError(t, err)
 	require.True(t, ok)
-	_, isOutOfBand := result.(*val.JsonAdaptiveStorage)
+	_, isOutOfBand := result.(*val.ByteArray)
 	require.Truef(t, isOutOfBand, "test setup: expected out-of-band storage, got %T", result)
 
 	cns.Reset()
@@ -158,8 +143,19 @@ func TestApplyFieldMutations_OutOfBandUsesChunkStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Greaterf(t, cns.Writes(), int64(0),
-		"out-of-band mutation must touch chunk store (IndexedJsonDocument path); got %d writes",
-		cns.Writes())
-	require.Contains(t, string(newBytes), `"new@example.com"`)
+	got, err := bsonToDoc(newBytes)
+	require.NoError(t, err)
+	email, _ := got.Get("email")
+	require.Equal(t, "new@example.com", email)
+	gotPad, _ := got.Get("data")
+	require.Equal(t, pad, gotPad)
 }
+
+func makePad(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte('a' + (i % 26))
+	}
+	return string(b)
+}
+

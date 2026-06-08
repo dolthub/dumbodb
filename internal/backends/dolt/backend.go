@@ -300,6 +300,13 @@ func (b *Backend) docLockManager(db, branch string) *DocLockManager {
 func (b *Backend) OnSessionEnd(owner string) {
 	b.releaseLocksForOwner(owner)
 	b.rollbackOwnerTxn(owner)
+	// End() only sets lastUsed=0; calling PurgeNow here would deadlock
+	// because OnSessionEnd runs inside the Shadow.Use that owns writeMu.
+	// The 1-minute sweep tick reaps lastUsed=0 entries off the request
+	// path.
+	if b.sessions != nil {
+		b.sessions.End(owner)
+	}
 }
 
 func (b *Backend) OnTransactionCommit(ctx context.Context, owner string) error {

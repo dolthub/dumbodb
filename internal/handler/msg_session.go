@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 
 	"github.com/FerretDB/wire"
@@ -102,7 +103,10 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 	)
 }
 
-// MsgEndSessions implements the `endSessions` command.
+// MsgEndSessions implements the `endSessions` command. It must release
+// every lsid in the wire body's array, not just ci.Owner(): a pooled
+// driver checks out several implicit sessions per connection and only
+// one of them is the connection's owner.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	ci := conninfo.Get(connCtx)
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
@@ -110,9 +114,51 @@ func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 	ci.SetInTransaction(false)
 
+	endLsidsFromMsg(h, msg)
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
 		)),
 	)
+}
+
+// endLsidsFromMsg silently skips malformed entries; endSessions is
+// advisory and a bad wire frame should never produce a server error.
+func endLsidsFromMsg(h *Handler, msg *wire.OpMsg) {
+	reg := h.SessionRegistry()
+	if reg == nil || msg == nil {
+		return
+	}
+	doc, err := opMsgDocument(msg)
+	if err != nil || doc == nil || !doc.Has("endSessions") {
+		return
+	}
+	v, err := doc.Get("endSessions")
+	if err != nil {
+		return
+	}
+	arr, ok := v.(*types.Array)
+	if !ok {
+		return
+	}
+	for i := 0; i < arr.Len(); i++ {
+		entry, err := arr.Get(i)
+		if err != nil {
+			continue
+		}
+		entryDoc, ok := entry.(*types.Document)
+		if !ok || !entryDoc.Has("id") {
+			continue
+		}
+		idVal, err := entryDoc.Get("id")
+		if err != nil {
+			continue
+		}
+		bin, ok := idVal.(types.Binary)
+		if !ok {
+			continue
+		}
+		reg.End(hex.EncodeToString(bin.B))
+	}
 }

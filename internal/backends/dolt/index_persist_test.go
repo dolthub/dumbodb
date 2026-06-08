@@ -236,8 +236,6 @@ func TestListIndexesSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestSecondaryIndexSurvivesDoltCommit covers the do-6geu acceptance:
-// createIndex; doltCommit; reopen; index lookups still work (no full scan).
 func TestSecondaryIndexSurvivesDoltCommit(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-idx-commit-*")
 	if err != nil {
