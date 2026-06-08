@@ -83,9 +83,10 @@ teardown() {
     added_rows="$(echo "$output" | grep -c '^INSERT INTO')"
     [ "$added_rows" -eq 2 ]
 
-    # The doc column should contain alice and bob (JSON is escaped in SQL format).
-    [[ "$output" =~ '\"name\":\"alice\"' ]] || false
-    [[ "$output" =~ '\"name\":\"bob\"' ]] || false
+    # dolt diff renders the doc column (BSON in longblob) as a SQL-escaped
+    # byte blob; string field values appear verbatim inside it.
+    [[ "$output" =~ alice ]] || false
+    [[ "$output" =~ bob ]] || false
 }
 
 @test 'collection schema has _id and doc columns' {
@@ -102,7 +103,7 @@ teardown() {
 
     [ "$status" -eq 0 ]
     [[ "$output" =~ '`_id` binary(20) NOT NULL,' ]] || false
-    [[ "$output" =~ '`doc` json NOT NULL' ]] || false
+    [[ "$output" =~ '`doc` longblob NOT NULL' ]] || false
     [[ "$output" =~ 'PRIMARY KEY (`_id`)' ]] || false
 }
 

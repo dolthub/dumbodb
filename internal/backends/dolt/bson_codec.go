@@ -88,12 +88,22 @@ func stripVersion(stored []byte) ([]byte, error) {
 // lex-sorted at every level. Array element order is preserved.
 // This is the canonical form the bson-a storage uses; sorting on
 // write makes diff and merge well-defined.
+//
+// The top-level _id field's value is preserved verbatim (no
+// recursion into its keys). MongoDB treats {a:1,b:2} and {b:2,a:1}
+// as distinct _ids -- the hashID for the primary-key index is
+// computed on the original byte order, so the stored value has to
+// agree or post-lookup filter equality fails.
 func sortDocumentKeys(doc *types.Document) *types.Document {
 	keys := append([]string(nil), doc.Keys()...)
 	sort.Strings(keys)
 	out := types.MakeDocument(len(keys))
 	for _, k := range keys {
 		v, _ := doc.Get(k)
+		if k == "_id" {
+			out.Set(k, v)
+			continue
+		}
 		out.Set(k, sortAnyKeys(v))
 	}
 	return out
