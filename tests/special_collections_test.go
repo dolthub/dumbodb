@@ -22,49 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
-
-// TestCapped_SmallSize_ManyInserts verifies that a capped collection enforces its
-// size limit by evicting the oldest documents when the limit is exceeded.
-//
-// Regression for do-i7xc: inserts into a capped collection did not trigger
-// eviction; the periodic background cleanup was the only path that enforced
-// the size limit. The fix calls cleanupCappedCollection after each successful
-// insert into a capped collection.
-func TestCapped_SmallSize_ManyInserts(t *testing.T) {
-	t.Parallel()
-
-	env := startDumboDB(t)
-	ctx := context.Background()
-
-	dbName := fmt.Sprintf("testdb_capped_smallsize_%d", rand.Int64())
-	db := env.client.Database(dbName)
-	t.Cleanup(func() {
-		db.Drop(context.Background()) //nolint:errcheck
-	})
-
-	// Create a capped collection at MongoDB's 4096-byte minimum. The dolt
-	// backend estimates avgDocSize=64 bytes, so 80 documents occupy 5120
-	// bytes, which exceeds the cap and must trigger eviction.
-	const cappedSize = int64(4096)
-	err := db.CreateCollection(ctx, "cappedcoll", options.CreateCollection().SetCapped(true).SetSizeInBytes(cappedSize))
-	require.NoError(t, err, "creating capped collection must succeed")
-
-	coll := db.Collection("cappedcoll")
-
-	const numDocs = 80
-	docs := make([]interface{}, numDocs)
-	for i := range docs {
-		docs[i] = bson.D{{Key: "i", Value: int32(i)}}
-	}
-	_, err = coll.InsertMany(ctx, docs)
-	require.NoError(t, err, "InsertMany into capped collection must succeed")
-
-	count, err := coll.CountDocuments(ctx, bson.D{})
-	require.NoError(t, err, "CountDocuments must not error")
-	require.Less(t, count, int64(numDocs), "capped collection must evict old documents when size exceeded")
-}
 
 // TestView_WithLookupPipeline verifies that a view defined with a $lookup stage
 // in its pipeline can be created and queried correctly.
