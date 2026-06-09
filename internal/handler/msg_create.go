@@ -75,39 +75,21 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	// If an already-existing collection is created with explicit options, it's an error.
 	var hasExplicitOptions bool
 
-	var capped bool
 	if v, _ := document.Get("capped"); v != nil {
-		capped, err = handlerparams.GetBoolOptionalParam("capped", v)
+		capped, err := handlerparams.GetBoolOptionalParam("capped", v)
 		if err != nil {
 			return nil, err
+		}
+		if capped {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrInvalidOptions,
+				"capped collections are not supported by DumboDB",
+				"create",
+			)
 		}
 	}
 
-	if capped {
-		hasExplicitOptions = true
-
-		size, _ := document.Get("size")
-		if _, ok := size.(types.NullType); size == nil || ok {
-			msg := "the 'size' field is required when 'capped' is true"
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidOptions, msg, "create")
-		}
-
-		params.CappedSize, err = handlerparams.GetValidatedNumberParamWithMinValue(document.Command(), "size", size, 1)
-		if err != nil {
-			return nil, err
-		}
-
-		// Match MongoDB: enforce a 4096-byte minimum for capped collections and
-		// round larger sizes up to the next 256-byte multiple.
-		params.CappedSize = normalizeCappedSize(params.CappedSize)
-
-		if max, _ := document.Get("max"); max != nil {
-			params.CappedDocuments, err = handlerparams.GetValidatedNumberParamWithMinValue(document.Command(), "max", max, 0)
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else if sizeVal, _ := document.Get("size"); sizeVal != nil {
+	if sizeVal, _ := document.Get("size"); sizeVal != nil {
 		// size was provided without capped=true  -- still counts as explicit options.
 		hasExplicitOptions = true
 	}
@@ -346,25 +328,5 @@ func invalidDatabaseNameMsg(dbName, collectionName string) string {
 
 	// Other invalid characters (slash, backslash, space, null, etc.).
 	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
-}
-
-// normalizeCappedSize applies MongoDB's rounding rules to a capped collection
-// size: a minimum of 4096 bytes, and sizes above that rounded up to the next
-// 256-byte multiple.
-func normalizeCappedSize(size int64) int64 {
-	const (
-		minSize   = int64(4096)
-		alignment = int64(256)
-	)
-
-	if size < minSize {
-		return minSize
-	}
-
-	if rem := size % alignment; rem != 0 {
-		size += alignment - rem
-	}
-
-	return size
 }
 

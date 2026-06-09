@@ -16,113 +16,21 @@ package handler
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dumbodb/internal/backends"
-	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
-	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
-	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgConvertToCapped implements `convertToCapped` command.
 //
-// convertToCapped converts a regular collection to a capped collection by
-// marking it with the specified size limit. The data is preserved.
-//
-// The passed context is canceled when the client connection is closed.
+// DumboDB does not support capped collections: eviction depends on a global
+// insertion order that is not well-defined across branches and merges. The
+// command is rejected unconditionally.
 func (h *Handler) MsgConvertToCapped(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	document, err := opMsgDocument(msg)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	common.Ignored(document, h.L, "writeConcern", "comment")
-
-	command := document.Command()
-
-	dbName, err := common.GetRequiredParam[string](document, "$db")
-	if err != nil {
-		return nil, err
-	}
-
-	collectionName, err := common.GetRequiredParam[string](document, command)
-	if err != nil {
-		return nil, err
-	}
-
-	// size is required and must be > 0.
-	sizeVal, sizeErr := document.Get("size")
-	var cappedSize int64
-
-	if sizeErr != nil || sizeVal == nil || sizeVal == types.Null {
-		cappedSize = 0
-	} else {
-		cappedSize, err = handlerparams.GetWholeNumberParam(sizeVal)
-		if err != nil {
-			cappedSize = 0
-		}
-	}
-
-	if cappedSize <= 0 {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrInvalidOptions,
-			"Capped collection size must be greater than zero",
-			command,
-		)
-	}
-
-	// Match MongoDB: enforce a 4096-byte minimum for capped collections and
-	// round larger sizes up to the next 256-byte multiple.
-	cappedSize = normalizeCappedSize(cappedSize)
-
-	db, err := h.b.Database(dbName)
-	if err != nil {
-		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrInvalidNamespace,
-				fmt.Sprintf("Invalid database specified '%s'", dbName),
-				command,
-			)
-		}
-		return nil, lazyerrors.Error(err)
-	}
-
-	if err = db.CollMod(connCtx, &backends.CollModParams{
-		Name:       collectionName,
-		CappedSize: cappedSize,
-	}); err != nil {
-		switch {
-		case backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist):
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNamespaceNotFound,
-				fmt.Sprintf("database %s not found", dbName),
-				command,
-			)
-		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist):
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrNamespaceNotFound,
-				fmt.Sprintf("source collection %s.%s does not exist", dbName, collectionName),
-				command,
-			)
-		case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrInvalidNamespace,
-				fmt.Sprintf("Invalid collection name: %s", collectionName),
-				command,
-			)
-		default:
-			return nil, lazyerrors.Error(err)
-		}
-	}
-
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"ok", float64(1),
-		)),
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrInvalidOptions,
+		"capped collections are not supported by DumboDB",
+		"convertToCapped",
 	)
 }
