@@ -41,7 +41,6 @@ func TestCollectionTableSchema_UsesBytesAdaptiveEnc(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "doc", string(c1.Name()))
 	require.Equalf(t, serial.EncodingBytesAdaptive, c1.Encoding(),
-		"doc column encoding must be BytesAdaptive (got %v); see "+
-			"docs/design/bson-type-fidelity-and-storage-overhead.md",
+		"doc column encoding must be BytesAdaptive (got %v)",
 		c1.Encoding())
 }
