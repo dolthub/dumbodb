@@ -56,11 +56,16 @@ func main() {
 		sampleInterval = flag.Duration("sample-interval", time.Minute, "memory-sample period")
 		csvPath        = flag.String("csv", "", "if set, append CSV rows here (one per sample)")
 
-		// Workload.
-		sessionWorkers = flag.Int("workers-session", 4, "concurrent connect/ping/disconnect workers")
-		opsWorkers     = flag.Int("workers-ops", 4, "concurrent CRUD workers on a long-lived client")
-		opsInterval    = flag.Duration("ops-interval", time.Second, "delay between ops on each ops worker")
-		sessionDelay   = flag.Duration("session-delay", 250*time.Millisecond, "delay between cycles on each session worker")
+		// Workload pools.
+		sessionWorkers = flag.Int("workers-session", 4, "short-lived connect/ping/disconnect workers")
+		crudWorkers    = flag.Int("workers-crud", 2, "long-lived clients running a mixed-size CRUD rotation")
+		bulkWorkers    = flag.Int("workers-bulk", 1, "InsertMany bulk-write workers")
+		aggWorkers     = flag.Int("workers-agg", 1, "aggregation-pipeline workers (cursor drainers)")
+		indexedWorkers = flag.Int("workers-indexed", 1, "secondary-index create/drop and indexed-find workers")
+		vcsWorkers     = flag.Int("workers-vcs", 1, "commit / branch / merge workers")
+		txnWorkers     = flag.Int("workers-txn", 1, "multi-op session.WithTransaction workers")
+		opsInterval    = flag.Duration("ops-interval", time.Second, "base delay between ops; heavier worker types scale this up internally")
+		sessionDelay   = flag.Duration("session-delay", 250*time.Millisecond, "delay between cycles on each session-churn worker")
 
 		// Detection.
 		slopeWindow      = flag.Duration("slope-window", 6*time.Hour, "rolling window over which the slope is computed")
@@ -111,7 +116,18 @@ func main() {
 	notify := buildNotifier(*alertCmd, *emailFrom, *emailTo, *emailRegn, *emailSubj)
 	detector := newSlopeDetector(*slopeWindow, *slopeThresholdMB, *cooldown)
 
-	wl, err := startWorkload(ctx, addr, *sessionWorkers, *opsWorkers, *sessionDelay, *opsInterval)
+	wl, err := startWorkload(ctx, workloadConfig{
+		URI:            addr,
+		SessionWorkers: *sessionWorkers,
+		CRUDWorkers:    *crudWorkers,
+		BulkWorkers:    *bulkWorkers,
+		AggWorkers:     *aggWorkers,
+		IndexedWorkers: *indexedWorkers,
+		VCSWorkers:     *vcsWorkers,
+		TxnWorkers:     *txnWorkers,
+		SessionDelay:   *sessionDelay,
+		OpsInterval:    *opsInterval,
+	})
 	if err != nil {
 		log.Fatalf("starting workload: %v", err)
 	}
