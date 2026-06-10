@@ -14,13 +14,8 @@
 
 package dolt
 
-// Red-bar tests for behavior B2 (merged indexes are correct) from
+// Behaviors B2 and B4 of
 // docs/design/secondary-index-structural-sharing.md.
-//
-// These fail today: mergeAddressMapsWithConflicts merges only the
-// primary maps and re-attaches the into-branch's index AM, so documents
-// written on the from branch are invisible to index lookups after the
-// merge. They turn green with Phase 3 (workspace-nth).
 
 import (
 	"context"
@@ -30,8 +25,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// mergeBranches merges from into into and fails the test on error or
-// unresolved conflicts.
 func mergeBranches(t *testing.T, b *Backend, dbName, into, from string) {
 	t.Helper()
 	res, err := b.DumboDBMerge(context.Background(), &backends.MergeParams{
@@ -49,30 +42,26 @@ func mergeBranches(t *testing.T, b *Backend, dbName, into, from string) {
 	}
 }
 
-// TestMergedIndexReflectsBothBranches is the disjoint-write scenario:
-// each branch inserts its own documents under a shared index; after the
-// merge, index lookups on the merged branch must find both sides' docs.
+// TestMergedIndexReflectsBothBranches: disjoint writes on two branches;
+// post-merge index lookups must find both sides' docs (B2).
 func TestMergedIndexReflectsBothBranches(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	b := newTestBackend(t)
 
-	// Base: collection with the index and one seed doc, committed on main.
 	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "base"))
 	createIndex(t, ctx, collAt(t, b, "testdb", "main", "items"), "by_field", "field")
 	commitDB(t, b, "testdb", "base: seed + index")
 
 	branchFrom(t, b, "testdb", "main", "feat")
 
-	// Main writes alpha..charlie.
 	mainColl := collAt(t, b, "testdb", "main", "items")
 	for i, v := range []string{"alpha", "bravo", "charlie"} {
 		insertOne(t, ctx, mainColl, mustDoc(t, "_id", int32(10+i), "field", v))
 	}
 	commitBranch(t, b, "testdb", "main", "main: alpha..charlie")
 
-	// Feat writes november..papa.
 	featColl := collAt(t, b, "testdb", "feat", "items")
 	for i, v := range []string{"november", "oscar", "papa"} {
 		insertOne(t, ctx, featColl, mustDoc(t, "_id", int32(20+i), "field", v))
@@ -83,21 +72,19 @@ func TestMergedIndexReflectsBothBranches(t *testing.T) {
 
 	merged := collAt(t, b, "testdb", "main", "items")
 
-	// Sanity: the merged primary holds all 7 documents.
 	allDocs := drainQuery(t, ctx, merged, &backends.QueryParams{})
 	if len(allDocs) != 7 {
 		t.Fatalf("merged primary has %d docs, want 7; merge itself is broken", len(allDocs))
 	}
 
-	// Index lookups must see both sides.
 	cases := []struct {
 		value string
 		want  []int32
 	}{
 		{"base", []int32{1}},
-		{"alpha", []int32{10}},     // into-side write
-		{"november", []int32{20}},  // from-side write -- fails today
-		{"papa", []int32{22}},      // from-side write -- fails today
+		{"alpha", []int32{10}},
+		{"november", []int32{20}},
+		{"papa", []int32{22}},
 	}
 	for _, c := range cases {
 		got := equalityLookupIDs(t, ctx, merged, "field", c.value)
@@ -111,9 +98,8 @@ func TestMergedIndexReflectsBothBranches(t *testing.T) {
 	}
 }
 
-// TestOneSidedIndexCoversMergedDocs is behavior B4: an index created on
-// only one branch since the base must, after the merge, cover documents
-// written on the other branch.
+// TestOneSidedIndexCoversMergedDocs: an index created on one branch
+// since base must cover the other branch's docs post-merge (B4).
 func TestOneSidedIndexCoversMergedDocs(t *testing.T) {
 	t.Parallel()
 
@@ -125,11 +111,9 @@ func TestOneSidedIndexCoversMergedDocs(t *testing.T) {
 
 	branchFrom(t, b, "testdb", "main", "feat")
 
-	// Main creates the index (post-base).
 	createIndex(t, ctx, collAt(t, b, "testdb", "main", "items"), "by_field", "field")
 	commitBranch(t, b, "testdb", "main", "main: create by_field")
 
-	// Feat writes docs without knowing about the index.
 	featColl := collAt(t, b, "testdb", "feat", "items")
 	insertOne(t, ctx, featColl, mustDoc(t, "_id", int32(20), "field", "november"))
 	commitBranch(t, b, "testdb", "feat", "feat: november")

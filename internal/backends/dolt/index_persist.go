@@ -28,9 +28,9 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// indexEntryDoc is the on-disk JSON shape for a single secondary index entry.
-// It pairs the IndexInfo metadata (so listIndexes survives restart) with the
-// 20-byte hash of the index's prolly.Map root chunk (so the data survives too).
+// indexEntryDoc is the on-disk shape for a single secondary index
+// entry (stored as a BSON chunk): the IndexInfo metadata plus the
+// 20-byte hash of the index's prolly.Map root.
 type indexEntryDoc struct {
 	Name           string         `json:"name"`
 	Keys           []indexKeyJSON `json:"keys"`
@@ -42,7 +42,6 @@ type indexEntryDoc struct {
 	MapRoot        string         `json:"map_root"`          // hex-encoded 20-byte hash
 }
 
-// indexKeyJSON mirrors backends.IndexKeyPair for JSON encoding.
 type indexKeyJSON struct {
 	Field       string `json:"field"`
 	Descending  bool   `json:"desc,omitempty"`
@@ -52,8 +51,8 @@ type indexKeyJSON struct {
 	Hashed      bool   `json:"hashed,omitempty"`
 }
 
-// indexInfoToEntry converts a backends.IndexInfo plus the hash of the index's
-// prolly.Map root into the JSON shape stored in the chunk store.
+// indexInfoToEntry converts a backends.IndexInfo plus the index's map
+// root hash into the stored entry shape.
 func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc, error) {
 	keys := make([]indexKeyJSON, len(idx.Key))
 	for i, k := range idx.Key {
@@ -147,8 +146,8 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 	return info, root, nil
 }
 
-// writeIndexEntryChunk serialises an index entry as JSON, stores it in the
-// dolt chunk store via the JSON tree path, and returns the root hash.
+// writeIndexEntryChunk stores the entry as a single BSON chunk and
+// returns its content address.
 func writeIndexEntryChunk(ctx context.Context, ns tree.NodeStore, entry indexEntryDoc) (hash.Hash, error) {
 	doc, err := indexEntryToDocument(entry)
 	if err != nil {
@@ -165,8 +164,6 @@ func writeIndexEntryChunk(ctx context.Context, ns tree.NodeStore, entry indexEnt
 	return addr, nil
 }
 
-// readIndexEntryChunk reads the JSON-encoded index entry stored at h and
-// decodes it.
 func readIndexEntryChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (indexEntryDoc, error) {
 	stored, err := ns.ReadBytes(ctx, h)
 	if err != nil {
@@ -179,9 +176,7 @@ func readIndexEntryChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (i
 	return documentToIndexEntry(doc)
 }
 
-// indexEntryToDocument converts the entry to a types.Document so it
-// rides the same BSON-at-rest codec as document storage. Field names
-// match the historical JSON keys.
+// indexEntryToDocument: field names match the historical JSON keys.
 func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
 	keys := types.MakeArray(len(entry.Keys))
 	for _, k := range entry.Keys {
@@ -214,7 +209,6 @@ func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
 	return doc, nil
 }
 
-// documentToIndexEntry is the inverse of indexEntryToDocument.
 func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
 	var entry indexEntryDoc
 	getString := func(key string) string {

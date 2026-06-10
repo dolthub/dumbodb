@@ -14,11 +14,9 @@
 
 package dolt
 
-// Behavior B7 (Phase 4, workspace-20p) of
-// docs/design/secondary-index-structural-sharing.md: cherry-pick,
-// rebase, and revert flow through the same merge machinery as
-// DumboDBMerge, so they inherit Phase 3's index maintenance. These
-// tests pin one scenario per operation.
+// Behavior B7 of docs/design/secondary-index-structural-sharing.md:
+// cherry-pick, rebase, and revert share the merge machinery and must
+// maintain indexes the same way.
 
 import (
 	"context"
@@ -28,8 +26,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// TestCherryPickMaintainsIndexes: a commit inserting an indexed doc on
-// feat is cherry-picked onto main; main's index must cover it.
 func TestCherryPickMaintainsIndexes(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +37,7 @@ func TestCherryPickMaintainsIndexes(t *testing.T) {
 	commitDB(t, b, "testdb", "base")
 	branchFrom(t, b, "testdb", "main", "feat")
 
-	// Advance main so the pick is a real 3-way apply, not a fast-forward.
+	// Advance main so the pick is a 3-way apply, not a fast-forward.
 	insertOne(t, ctx, collAt(t, b, "testdb", "main", "items"), mustDoc(t, "_id", int32(5), "field", "mainside"))
 	commitBranch(t, b, "testdb", "main", "main: doc 5")
 
@@ -63,9 +59,6 @@ func TestCherryPickMaintainsIndexes(t *testing.T) {
 	}
 }
 
-// TestRevertMaintainsIndexes: reverting the commit that inserted an
-// indexed doc must remove its index entries; reverting a commit that
-// created an index drops the index (the name-level drop case).
 func TestRevertMaintainsIndexes(t *testing.T) {
 	t.Parallel()
 
@@ -99,7 +92,7 @@ func TestRevertMaintainsIndexes(t *testing.T) {
 		t.Errorf("index lookup of kept doc = %v, want [3]", got)
 	}
 
-	// Revert of an index-creating commit: index disappears, docs stay.
+	// Reverting an index-creating commit: index disappears, docs stay.
 	b2 := newTestBackend(t)
 	insertDoc(t, b2, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "base"))
 	commitDB(t, b2, "testdb", "seed")
@@ -125,9 +118,6 @@ func TestRevertMaintainsIndexes(t *testing.T) {
 	}
 }
 
-// TestRebaseMaintainsIndexes: rebasing feat onto an advanced main
-// replays feat's indexed inserts; the rebased branch's index covers
-// both sides' docs.
 func TestRebaseMaintainsIndexes(t *testing.T) {
 	t.Parallel()
 

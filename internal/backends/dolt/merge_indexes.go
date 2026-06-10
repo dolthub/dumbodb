@@ -14,19 +14,11 @@
 
 package dolt
 
-// Secondary-index maintenance for the 3-way collection merge (Phase 3,
-// workspace-nth, behaviors B2-B6 of
-// docs/design/secondary-index-structural-sharing.md).
-//
-// The primary-map merge walks a tree.ThreeWayDiffer and resolves
-// documents (including field-level merging that can produce documents
-// existing on neither parent). Index maintenance rides that same diff
-// stream: each surviving index is seeded from one parent's persisted
-// map -- wholesale chunk reuse with that parent -- and the other
-// side's per-document edits (plus all resolutions) are applied through
-// indexEntriesForDoc. Merging the index maps directly with a 3-way
-// map merge would be wrong: resolved documents' entries exist in
-// neither parent's index.
+// Secondary-index maintenance for the 3-way collection merge
+// (behaviors B2-B6, docs/design/secondary-index-structural-sharing.md).
+// Indexes are merged by riding the primary diff stream, NOT by
+// 3-way-merging the index maps: field-level document resolution can
+// produce docs whose entries exist in neither parent's index.
 
 import (
 	"context"
@@ -41,8 +33,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// indexSetFromAM resolves every entry of a secondary-index AddressMap
-// into name -> resolvedIndexEntry.
 func indexSetFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (map[string]*resolvedIndexEntry, error) {
 	out := make(map[string]*resolvedIndexEntry)
 	if err := am.IterAll(ctx, func(name string, entryHash hash.Hash) error {
@@ -61,9 +51,8 @@ func indexSetFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (
 	return out, nil
 }
 
-// indexSpecEqual compares index DEFINITIONS: name, key fields, unique,
-// sparse, and the partial filter expression. Content (map root) and
-// the sticky Lossy/Multikey flags never count as definition changes.
+// indexSpecEqual compares definitions only: content (map root) and the
+// sticky Lossy/Multikey flags never count as definition changes.
 func indexSpecEqual(a, b backends.IndexInfo) bool {
 	if a.Name != b.Name || a.Unique != b.Unique || a.Sparse != b.Sparse {
 		return false
@@ -84,16 +73,11 @@ func indexSpecEqual(a, b backends.IndexInfo) bool {
 	return aEntry.PartialBSONHex == bEntry.PartialBSONHex
 }
 
-// pendingOwner tracks an entry inserted during the merge, for unique
-// bookkeeping: which primary ID claimed the value, and whether the
-// claiming document is an "ours" (into-side or resolved) document.
 type pendingOwner struct {
 	id   []byte
 	ours bool
 }
 
-// indexMergeSurvivor is one index that survives the name-level
-// reconciliation, with its seeded mutable map and unique bookkeeping.
 type indexMergeSurvivor struct {
 	info     backends.IndexInfo
 	seedMap  prolly.Map
@@ -105,19 +89,9 @@ type indexMergeSurvivor struct {
 	removed map[string]struct{}     // full entry key removed this merge
 }
 
-// reconcileIndexSets implements the design doc's B5 case table over
-// the three sides' index sets. Returns the surviving indexes with
-// their seed side chosen, or an error for competing redefinitions.
-//
-// Survival rules (spec compared against base):
-//   - present on both sides, specs equal: survives (content merge).
-//   - present on both, specs differ: the side whose spec still equals
-//     base's is unaltered and loses to the other side's redefinition;
-//     if neither matches base, error.
-//   - present on one side only: survives if new since base (creation);
-//     dropped silently if base had it and that side's spec is
-//     unaltered relative to base (drop wins); error if the surviving
-//     side also redefined it (competing definition changes).
+// reconcileIndexSets implements the B5 case table (design doc section
+// 2.5): a definition change (drop or redefine) beats an untouched
+// side; competing definition changes are an error.
 func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry) (survivors []*indexMergeSurvivor, seeds map[string]struct {
 	entry    *resolvedIndexEntry
 	seedLeft bool
@@ -151,8 +125,7 @@ func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry
 		switch {
 		case hasInto && hasFrom:
 			if indexSpecEqual(into.info, from.info) {
-				// Ordinary content merge. Seed from FROM, mirroring the
-				// primary merge's seed side.
+				// Seed from FROM, mirroring the primary merge's seed side.
 				seeds[name] = struct {
 					entry    *resolvedIndexEntry
 					seedLeft bool
@@ -163,9 +136,6 @@ func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry
 			fromAltered := !hasBase || !indexSpecEqual(from.info, base.info)
 			switch {
 			case intoAltered && !fromAltered:
-				// Into redefined; from left it untouched. Into's wins;
-				// it must cover from's docs (seeded from INTO, right
-				// edits applied).
 				seeds[name] = struct {
 					entry    *resolvedIndexEntry
 					seedLeft bool
@@ -181,16 +151,12 @@ func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry
 
 		case hasInto:
 			if !hasBase {
-				// Created on into since base; covers into's docs, needs
-				// from's edits.
 				seeds[name] = struct {
 					entry    *resolvedIndexEntry
 					seedLeft bool
 				}{into, true}
 				continue
 			}
-			// From dropped it. Drop wins over an unaltered keeper;
-			// competing definition changes error.
 			if indexSpecEqual(into.info, base.info) {
 				continue // dropped
 			}
@@ -209,15 +175,12 @@ func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry
 			}
 			return nil, nil, fmt.Errorf("index %q was dropped on one branch and redefined on the other; resolve the definitions before merging", name)
 
-		default:
-			// Base only: dropped on both sides.
+		default: // base only: dropped on both sides
 		}
 	}
 	return nil, seeds, nil
 }
 
-// openSurvivors opens each seed's prolly.Map and wraps it in a
-// mutable survivor.
 func openSurvivors(ctx context.Context, state *dbState, seeds map[string]struct {
 	entry    *resolvedIndexEntry
 	seedLeft bool
@@ -250,7 +213,6 @@ func openSurvivors(ctx context.Context, state *dbState, seeds map[string]struct 
 	return out, nil
 }
 
-// deleteDoc removes every entry doc contributed to the survivor.
 func (s *indexMergeSurvivor) deleteDoc(ctx context.Context, doc *types.Document, idBytes []byte) error {
 	if doc == nil {
 		return nil
@@ -272,8 +234,6 @@ func (s *indexMergeSurvivor) deleteDoc(ctx context.Context, doc *types.Document,
 	return nil
 }
 
-// insertDoc adds every entry doc contributes. The caller has already
-// run uniqueCollision when it matters.
 func (s *indexMergeSurvivor) insertDoc(ctx context.Context, doc *types.Document, idBytes []byte, ours bool) error {
 	if doc == nil {
 		return nil
@@ -293,10 +253,8 @@ func (s *indexMergeSurvivor) insertDoc(ctx context.Context, doc *types.Document,
 	return nil
 }
 
-// uniqueCollision reports whether inserting doc would collide with a
-// DIFFERENT document's live entry: an entry pending from this merge,
-// or a seed entry that has not been removed during this merge. Returns
-// the owning primary ID and whether that owner is an "ours" document.
+// uniqueCollision reports a collision against a live entry (pending
+// from this merge, or in the seed and not removed during it).
 func (s *indexMergeSurvivor) uniqueCollision(ctx context.Context, doc *types.Document, idBytes []byte) (ownerID []byte, ownerOurs, collision bool, err error) {
 	if !s.info.Unique || doc == nil {
 		return nil, false, false, nil
@@ -329,24 +287,19 @@ func (s *indexMergeSurvivor) uniqueCollision(ctx context.Context, doc *types.Doc
 			if _, gone := s.removed[full]; gone {
 				continue
 			}
-			// Seed owners are from-side docs for FROM-seeded indexes
-			// and into-side docs for INTO-seeded ones.
 			return id, s.seedLeft, true, nil
 		}
 	}
 	return nil, false, false, nil
 }
 
-// indexMergeApplier coordinates per-document edits across every
-// survivor as the primary differ emits ops.
 type indexMergeApplier struct {
 	state     *dbState
 	survivors []*indexMergeSurvivor
 }
 
-// mergeEditKind classifies the primary differ ops that change the
-// merged map. Convergent ops never reach the applier: both sides made
-// the same change, so every seed already reflects it.
+// Convergent ops never reach the applier: both seeds already reflect
+// them.
 type mergeEditKind int
 
 const (
@@ -356,8 +309,6 @@ const (
 	editKeepOurs                         // divergent conflict, ours kept
 )
 
-// mergeDocEdit carries every decoded version of the document so each
-// survivor can compute its own before-image (the seed side's version).
 type mergeDocEdit struct {
 	kind   mergeEditKind
 	base   *types.Document // nil when absent in the ancestor
@@ -366,18 +317,18 @@ type mergeDocEdit struct {
 	merged *types.Document // editResolved only
 }
 
-// perSurvivor returns the (old, new) pair this survivor must apply,
-// and whether the edit touches it at all.
+// perSurvivor returns the (old, new) pair this survivor must apply; an
+// edit already reflected in the survivor's seed touches nothing.
 func (e mergeDocEdit) perSurvivor(s *indexMergeSurvivor) (old, new *types.Document, touches bool) {
 	switch e.kind {
 	case editLeftChange:
 		if s.seedLeft {
-			return nil, nil, false // already in INTO's seed
+			return nil, nil, false
 		}
 		return e.base, e.left, true
 	case editRightChange:
 		if !s.seedLeft {
-			return nil, nil, false // already in FROM's seed
+			return nil, nil, false
 		}
 		return e.base, e.right, true
 	case editResolved:
@@ -387,33 +338,27 @@ func (e mergeDocEdit) perSurvivor(s *indexMergeSurvivor) (old, new *types.Docume
 		return e.right, e.merged, true
 	case editKeepOurs:
 		if s.seedLeft {
-			return nil, nil, false // ours is what the seed holds
+			return nil, nil, false
 		}
 		return e.right, e.left, true
 	}
 	return nil, nil, false
 }
 
-// incomingOurs reports whether the version being indexed belongs to
-// "ours" for collision-preference purposes.
 func (e mergeDocEdit) incomingOurs() bool {
 	return e.kind != editRightChange
 }
 
-// mergeLoser names a document evicted by a unique-key collision. The
-// caller must remove it from the merged primary map and record the
-// conflict; the applier has already kept its index entries consistent.
+// mergeLoser names a document evicted by a unique-key collision; the
+// caller must remove it from the merged primary and record the conflict.
 type mergeLoser struct {
 	id       []byte // primary id of the losing doc
 	incoming bool   // true when the loser is this edit's own new doc
 }
 
-// apply routes one document edit to every survivor. For unique
-// survivors the incoming version is collision-checked first; "ours
-// wins" (into-side and resolved documents beat from-side ones; between
-// same-side claims the earlier one keeps the key). A non-nil loser
-// tells the caller who to evict; when loser.incoming the edit was NOT
-// applied to any index.
+// apply routes one edit to every survivor. Unique collisions resolve
+// by "ours wins" (earlier claim wins between same-side docs); a
+// non-nil loser means the edit was not applied and the caller evicts.
 func (a *indexMergeApplier) apply(ctx context.Context, edit mergeDocEdit, idBytes []byte) (*mergeLoser, error) {
 	for _, s := range a.survivors {
 		_, newDoc, touches := edit.perSurvivor(s)
@@ -448,9 +393,6 @@ func (a *indexMergeApplier) apply(ctx context.Context, edit mergeDocEdit, idByte
 	return nil, nil
 }
 
-// removeDocEverywhere deletes a losing document's entries from every
-// survivor (used when a unique conflict evicts a doc the seed or an
-// earlier edit had indexed).
 func (a *indexMergeApplier) removeDocEverywhere(ctx context.Context, doc *types.Document, idBytes []byte) error {
 	for _, s := range a.survivors {
 		if err := s.deleteDoc(ctx, doc, idBytes); err != nil {
@@ -460,7 +402,6 @@ func (a *indexMergeApplier) removeDocEverywhere(ctx context.Context, doc *types.
 	return nil
 }
 
-// finalize flushes every survivor and builds the merged index AM.
 func (a *indexMergeApplier) finalize(ctx context.Context) (prolly.AddressMap, error) {
 	infos := make([]backends.IndexInfo, 0, len(a.survivors))
 	maps := make(map[string]prolly.Map, len(a.survivors))

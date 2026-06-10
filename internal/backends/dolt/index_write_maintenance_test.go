@@ -14,12 +14,8 @@
 
 package dolt
 
-// Storage-level tests for Phase 1 (workspace-6h1) of
-// docs/design/secondary-index-structural-sharing.md: behaviors W4
-// (untouched indexes keep their root hash), P2 (update/delete writes
-// share chunks with the pre-write tree), and the stored-content halves
-// of M1/M2 (sparse/partial membership lives in index content). The
-// wire-visible halves are parity families in dumbodb-parity-testing.
+// Behaviors W2-W5, M1/M2 (stored-content halves), and P2 of
+// docs/design/secondary-index-structural-sharing.md.
 
 import (
 	"context"
@@ -31,8 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// updateDoc routes a full-document update through UpdateAll the way the
-// handler would (no field-mutation fast path).
 func updateDoc(t *testing.T, ctx context.Context, coll backends.Collection, doc *types.Document) {
 	t.Helper()
 	if _, err := coll.UpdateAll(ctx, &backends.UpdateAllParams{
@@ -49,8 +43,6 @@ func deleteByID(t *testing.T, ctx context.Context, coll backends.Collection, id 
 	}
 }
 
-// indexEntryCount returns the number of entries in the named index's
-// persisted prolly.Map on the given branch.
 func indexEntryCount(t *testing.T, ctx context.Context, b *Backend, dbName, branch, collName, idxName string) int {
 	t.Helper()
 	m := indexMapOnBranch(t, ctx, b, dbName, branch, collName, idxName)
@@ -61,8 +53,6 @@ func indexEntryCount(t *testing.T, ctx context.Context, b *Backend, dbName, bran
 	return n
 }
 
-// TestUpdateReindexesChangedField is the storage-level W2 check (the
-// wire-level half is the Index_UpdateReindex_* parity family).
 func TestUpdateReindexesChangedField(t *testing.T) {
 	t.Parallel()
 
@@ -87,7 +77,6 @@ func TestUpdateReindexesChangedField(t *testing.T) {
 	}
 }
 
-// TestDeleteRemovesIndexEntries is the storage-level W3 check.
 func TestDeleteRemovesIndexEntries(t *testing.T) {
 	t.Parallel()
 
@@ -109,9 +98,8 @@ func TestDeleteRemovesIndexEntries(t *testing.T) {
 	}
 }
 
-// TestNoopUpdateLeavesIndexRootUnchanged is behavior W4: an update that
-// does not change any indexed field leaves the index storage
-// bit-for-bit identical.
+// W4: an update that does not change any indexed field leaves the
+// index root hash unchanged.
 func TestNoopUpdateLeavesIndexRootUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -125,7 +113,6 @@ func TestNoopUpdateLeavesIndexRootUnchanged(t *testing.T) {
 
 	before := indexMapOnBranch(t, ctx, b, "testdb", "main", "items", "by_field").HashOf()
 
-	// Update touches only the unindexed field.
 	updateDoc(t, ctx, coll,
 		mustDoc(t, "_id", int32(1), "field", "alpha", "other", int32(2)))
 
@@ -135,8 +122,8 @@ func TestNoopUpdateLeavesIndexRootUnchanged(t *testing.T) {
 	}
 }
 
-// TestMultikeyUpdateAdjustsOnlyChangedElements is behavior W5: an array
-// update that keeps most elements only edits the changed entries.
+// W5: an array update that keeps most elements edits only the changed
+// entries.
 func TestMultikeyUpdateAdjustsOnlyChangedElements(t *testing.T) {
 	t.Parallel()
 
@@ -156,7 +143,6 @@ func TestMultikeyUpdateAdjustsOnlyChangedElements(t *testing.T) {
 	coll := collAt(t, b, "testdb", "main", "items")
 	createIndex(t, ctx, coll, "by_tags", "tags")
 
-	// Replace one element: green -> yellow.
 	updateDoc(t, ctx, coll,
 		mustDoc(t, "_id", int32(1), "tags", mkArr("red", "yellow", "blue")))
 
@@ -170,14 +156,12 @@ func TestMultikeyUpdateAdjustsOnlyChangedElements(t *testing.T) {
 			t.Errorf("lookup %q = %v, want %d hit(s)", c.value, got, c.want)
 		}
 	}
-	// Entry count: still exactly 3.
 	if got := indexEntryCount(t, ctx, b, "testdb", "main", "items", "by_tags"); got != 3 {
 		t.Errorf("index entry count = %d, want 3", got)
 	}
 }
 
-// TestSparseIndexMembershipContent is the stored-content half of M1: a
-// sparse index holds entries only for docs that have the field.
+// M1: a sparse index holds entries only for docs that have the field.
 func TestSparseIndexMembershipContent(t *testing.T) {
 	t.Parallel()
 
@@ -196,29 +180,25 @@ func TestSparseIndexMembershipContent(t *testing.T) {
 		t.Fatalf("CreateIndexes: %v", err)
 	}
 
-	// One doc with the field, one without.
 	insertOne(t, ctx, coll, mustDoc(t, "_id", int32(2), "other", int32(7)))
 
 	if got := indexEntryCount(t, ctx, b, "testdb", "main", "items", "by_field_sparse"); got != 1 {
 		t.Errorf("sparse index entry count = %d, want 1 (missing-field doc must not be indexed)", got)
 	}
 
-	// Update adds the field -> entry appears.
 	updateDoc(t, ctx, coll, mustDoc(t, "_id", int32(2), "field", "bravo"))
 	if got := indexEntryCount(t, ctx, b, "testdb", "main", "items", "by_field_sparse"); got != 2 {
 		t.Errorf("sparse index entry count after field add = %d, want 2", got)
 	}
 
-	// Update removes the field -> entry disappears.
 	updateDoc(t, ctx, coll, mustDoc(t, "_id", int32(2), "other", int32(8)))
 	if got := indexEntryCount(t, ctx, b, "testdb", "main", "items", "by_field_sparse"); got != 1 {
 		t.Errorf("sparse index entry count after field unset = %d, want 1", got)
 	}
 }
 
-// TestPartialIndexMembershipContent is the stored-content half of M2:
-// a partial index holds entries only while the doc satisfies the
-// filter, across updates that cross the boundary in both directions.
+// M2: a partial index holds entries only while the doc satisfies the
+// filter, across boundary crossings in both directions.
 func TestPartialIndexMembershipContent(t *testing.T) {
 	t.Parallel()
 
@@ -251,14 +231,12 @@ func TestPartialIndexMembershipContent(t *testing.T) {
 		t.Errorf("partial index entry count = %d, want 1 (non-member must not be indexed)", got)
 	}
 
-	// Member leaves the filter (the design doc's motivating example).
 	updateDoc(t, ctx, coll,
 		mustDoc(t, "_id", int32(1), "field", "alpha", "status", "inactive"))
 	if got := indexEntryCount(t, ctx, b, "testdb", "main", "items", "by_field_partial"); got != 0 {
 		t.Errorf("partial index entry count after member left = %d, want 0", got)
 	}
 
-	// Non-member enters the filter.
 	updateDoc(t, ctx, coll,
 		mustDoc(t, "_id", int32(2), "field", "bravo", "status", "active"))
 	if got := indexEntryCount(t, ctx, b, "testdb", "main", "items", "by_field_partial"); got != 1 {
@@ -266,8 +244,8 @@ func TestPartialIndexMembershipContent(t *testing.T) {
 	}
 }
 
-// TestIndexChunkReuseAcrossWrites is behavior P2 for update and delete:
-// chunks outside the touched key range keep their addresses.
+// P2: chunks outside the touched key range keep their addresses across
+// update and delete.
 func TestIndexChunkReuseAcrossWrites(t *testing.T) {
 	t.Parallel()
 
@@ -278,7 +256,6 @@ func TestIndexChunkReuseAcrossWrites(t *testing.T) {
 	coll := collAt(t, b, "testdb", "main", "items")
 	createIndex(t, ctx, coll, "by_field", "field")
 
-	// Enough entries for a multi-chunk tree.
 	bulkInsert(t, ctx, coll, 1000, 3000, "v")
 
 	before := chunkAddresses(t, ctx, indexMapOnBranch(t, ctx, b, "testdb", "main", "items", "by_field"))
@@ -286,7 +263,6 @@ func TestIndexChunkReuseAcrossWrites(t *testing.T) {
 		t.Fatalf("index tree too small to measure sharing (%d chunks)", len(before))
 	}
 
-	// One update.
 	updateDoc(t, ctx, coll, mustDoc(t, "_id", int32(1000), "field", "zzz-moved"))
 	afterUpdate := chunkAddresses(t, ctx, indexMapOnBranch(t, ctx, b, "testdb", "main", "items", "by_field"))
 	if shared := countSharedChunks(before, afterUpdate); shared == 0 {
@@ -294,7 +270,6 @@ func TestIndexChunkReuseAcrossWrites(t *testing.T) {
 			len(before), len(afterUpdate))
 	}
 
-	// One delete.
 	deleteByID(t, ctx, coll, int32(1001))
 	afterDelete := chunkAddresses(t, ctx, indexMapOnBranch(t, ctx, b, "testdb", "main", "items", "by_field"))
 	if shared := countSharedChunks(afterUpdate, afterDelete); shared == 0 {

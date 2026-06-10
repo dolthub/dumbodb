@@ -14,15 +14,8 @@
 
 package dolt
 
-// Red-bar test for behavior B3 (merged indexes share storage with both
-// parents) from docs/design/secondary-index-structural-sharing.md, plus
-// the chunk-walk helper the rest of the structural-sharing tests build
-// on.
-//
-// Fails today: the merge re-attaches the into-branch's index AM, so the
-// merged index shares everything with the into parent and nothing with
-// the from parent (and misses the from parent's data entirely, B2).
-// Turns green with Phase 3 (workspace-nth).
+// Behavior B3 of docs/design/secondary-index-structural-sharing.md,
+// plus the chunk-walk helpers shared by the structural-sharing tests.
 
 import (
 	"context"
@@ -37,8 +30,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// chunkAddresses returns the set of chunk addresses in the prolly tree:
-// the root address plus every address referenced beneath it.
+// chunkAddresses returns the root address plus every address referenced
+// beneath it.
 func chunkAddresses(t *testing.T, ctx context.Context, m prolly.Map) map[hash.Hash]struct{} {
 	t.Helper()
 	out := map[hash.Hash]struct{}{m.HashOf(): {}}
@@ -51,8 +44,6 @@ func chunkAddresses(t *testing.T, ctx context.Context, m prolly.Map) map[hash.Ha
 	return out
 }
 
-// countSharedChunks returns how many chunk addresses the two trees have
-// in common.
 func countSharedChunks(a, b map[hash.Hash]struct{}) int {
 	n := 0
 	for h := range a {
@@ -63,8 +54,8 @@ func countSharedChunks(a, b map[hash.Hash]struct{}) int {
 	return n
 }
 
-// indexMapOnBranch opens the named index's prolly.Map as persisted in
-// the branch's DTBL, bypassing in-memory state.
+// indexMapOnBranch opens the index map persisted in the branch's DTBL,
+// bypassing in-memory state.
 func indexMapOnBranch(t *testing.T, ctx context.Context, b *Backend, dbName, branch, collName, idxName string) prolly.Map {
 	t.Helper()
 
@@ -92,8 +83,6 @@ func indexMapOnBranch(t *testing.T, ctx context.Context, b *Backend, dbName, bra
 	return m
 }
 
-// bulkInsert inserts n docs with _id starting at idBase and string field
-// values prefix+counter, in one InsertAll batch.
 func bulkInsert(t *testing.T, ctx context.Context, coll backends.Collection, idBase int32, n int, prefix string) {
 	t.Helper()
 	docs := make([]*types.Document, 0, n)
@@ -108,10 +97,8 @@ func bulkInsert(t *testing.T, ctx context.Context, coll backends.Collection, idB
 	}
 }
 
-// TestMergedIndexChunkReuseFromBothParents is the structural bar for
-// the disjoint-range scenario: branch main writes the "a..m" half,
-// branch feat writes the "n..z" half, and the merged index tree must
-// physically reuse leaf chunks from BOTH parents.
+// TestMergedIndexChunkReuseFromBothParents: the merged index tree must
+// physically reuse leaf chunks from BOTH parents (B3).
 func TestMergedIndexChunkReuseFromBothParents(t *testing.T) {
 	t.Parallel()
 
@@ -135,8 +122,7 @@ func TestMergedIndexChunkReuseFromBothParents(t *testing.T) {
 	mainChunks := chunkAddresses(t, ctx, indexMapOnBranch(t, ctx, b, "testdb", "main", "items", "by_field"))
 	featChunks := chunkAddresses(t, ctx, indexMapOnBranch(t, ctx, b, "testdb", "feat", "items", "by_field"))
 
-	// Premise check: each side's index tree must span multiple chunks,
-	// or leaf-level sharing is unmeasurable.
+	// Each side must span multiple chunks or sharing is unmeasurable.
 	if len(mainChunks) < 3 || len(featChunks) < 3 {
 		t.Fatalf("index trees too small to measure sharing (main=%d chunks, feat=%d chunks); raise docsPerSide",
 			len(mainChunks), len(featChunks))

@@ -131,10 +131,9 @@ func indexAMForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	return am, nil
 }
 
-// resolveIndexEntry decodes the IndexEntry JSON chunk at entryHash via
-// the process-wide memo. The returned pointer must not be mutated by the
-// caller. See design 6.5 for why memoizing is safe (chunk bytes are
-// immutable; the captured MatchesPartialFilter closure is pure).
+// resolveIndexEntry decodes the IndexEntry chunk at entryHash via the
+// process-wide memo. The returned pointer must not be mutated. See
+// design 6.5 for why memoizing is safe.
 func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Hash) (*resolvedIndexEntry, error) {
 	if entryHash.IsEmpty() {
 		return nil, fmt.Errorf("resolveIndexEntry: empty hash")
@@ -190,7 +189,7 @@ func resolveCollIndexAM(ctx context.Context, c *collection, state *dbState) (pro
 }
 
 // resolveIndexes walks the index AM and resolves every entry through
-// the memoized JSON-decode path. Returns parallel slices: the IndexInfo
+// the memoized decode path. Returns parallel slices: the IndexInfo
 // for each index, and the prolly.Map handle. Both slices are in AM-walk
 // order (sorted by index name).
 func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, []prolly.Map, error) {
@@ -246,19 +245,11 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 	return infos, byName, nil
 }
 
-// indexEntriesForDoc is the single source of truth for which index
-// entries a document contributes: it applies the index's membership
-// rules, expands multikey arrays, and reports whether the doc makes
-// the index multikey (an array value expanded per element) or lossy
-// (a value the KeyString encoding cannot represent faithfully).
-//
-// Membership: a doc outside a partial index's filter expression
-// contributes no entries (a filter-evaluation error counts as
-// non-membership, mirroring the unique-validation path), and a doc
-// whose indexed fields are all missing contributes nothing to a
-// sparse index. Index content is authoritative for membership --
-// every build, insert, update, delete, and merge path routes through
-// this function.
+// indexEntriesForDoc is the single source of truth for which entries a
+// document contributes: partial/sparse membership (a filter-evaluation
+// error counts as non-membership), multikey expansion, and the
+// Lossy/Multikey flag detection. Every build, insert, update, delete,
+// and merge path routes through it.
 func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool) {
 	if idx.MatchesPartialFilter != nil {
 		match, err := idx.MatchesPartialFilter(doc)
@@ -286,16 +277,9 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 	return rows, multikey, lossy
 }
 
-// applyInsertsToIndexes runs each inserted document through every
-// indexed field and adds the corresponding entries to a fresh copy of
-// the input maps. Pure: neither input slice/map is mutated; the
-// returned infos carry updated Lossy/Multikey flags and the returned
-// map contains new prolly.Map values for indexes that had any new
-// entries.
-//
-// Used by write paths that previously called updateSecondaryIndexesOnInsert
-// against state.secIndexMaps. The new shape decouples the in-memory
-// mutation from any dbState field so per-branch writes do not collide.
+// applyInsertsToIndexes adds each inserted document's entries to a
+// fresh copy of the input maps. Pure: inputs are not mutated; the
+// returned infos carry updated Lossy/Multikey flags.
 func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
 	if len(infos) == 0 {
 		return infos, maps, nil
@@ -339,8 +323,6 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 	return outInfos, out, nil
 }
 
-// entryKeysForRows maps each entry row to its full composite index key
-// bytes (as a map key) for set-difference comparison.
 func entryKeysForRows(rows [][]any, idBytes []byte) map[string][]any {
 	if len(rows) == 0 {
 		return nil
@@ -352,15 +334,9 @@ func entryKeysForRows(rows [][]any, idBytes []byte) map[string][]any {
 	return out
 }
 
-// applyUpdatesToIndexes applies per-document index maintenance for
-// updated documents: for each (oldDoc, newDoc) pair it computes the
-// entry-set difference and deletes/inserts only the changed entries.
-// An update that does not change any indexed entry performs zero edits
-// on that index (the noop short-circuit falls out of the empty
-// difference), so untouched indexes keep their root hash bit for bit.
-//
-// Pure in the same sense as applyInsertsToIndexes; the returned infos
-// carry updated Lossy/Multikey flags from the new document versions.
+// applyUpdatesToIndexes deletes/inserts only the entry-set difference
+// per (oldDoc, newDoc) pair, so an update that does not change an
+// indexed entry leaves that index's root hash untouched. Pure;
 // oldDocs and newDocs are parallel slices.
 func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs, newDocs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
 	if len(infos) == 0 || len(oldDocs) == 0 {
@@ -432,7 +408,7 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 }
 
 // applyDeletesToIndexes removes every entry the deleted documents
-// contributed. Pure in the same sense as applyInsertsToIndexes.
+// contributed. Pure.
 func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs []*types.Document) (map[string]prolly.Map, error) {
 	if len(infos) == 0 || len(oldDocs) == 0 {
 		return maps, nil
@@ -480,7 +456,7 @@ func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 
 // buildIndexAM is the pure replacement for persistIndexes: given a set of
 // (IndexInfo, prolly.Map) pairs it writes each map's root to the value
-// store and a per-index JSON IndexEntry chunk, then returns a new
+// store and a per-index IndexEntry chunk, then returns a new
 // AddressMap from index name to IndexEntry hash. No dbState fields are
 // touched. Callers pass the result to dtblHashForCollection.
 func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInfo, maps map[string]prolly.Map) (prolly.AddressMap, error) {

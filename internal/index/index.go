@@ -110,9 +110,8 @@ func EqualityLookup(ctx context.Context, m prolly.Map, fieldValue any) ([][]byte
 	return RangeLookup(ctx, m, startKey, stopKey)
 }
 
-// EqualityProbeBounds returns the [start, stop) range holding every
-// entry whose (possibly compound) value tuple equals fieldValues,
-// regardless of primary ID. The basis of unique-constraint probes.
+// EqualityProbeBounds returns the [start, stop) range of entries whose
+// value tuple equals fieldValues, regardless of primary ID.
 func EqualityProbeBounds(fieldValues []any) (startKey, stopKey []byte) {
 	prefix := BuildSecondaryKey(fieldValues, nil) // KS(values) || 0x04
 	stop := append([]byte(nil), prefix...)
@@ -120,9 +119,8 @@ func EqualityProbeBounds(fieldValues []any) (startKey, stopKey []byte) {
 	return prefix, stop
 }
 
-// UniqueConflict reports whether the index holds an entry with the
-// given value tuple under a primary ID other than selfID. One bounded
-// range read; O(log N).
+// UniqueConflict reports whether the index holds an entry with this
+// value tuple under a primary ID other than selfID.
 func UniqueConflict(ctx context.Context, m prolly.Map, fieldValues []any, selfID []byte) (bool, error) {
 	start, stop := EqualityProbeBounds(fieldValues)
 	ids, _, err := RangeLookupCapped(ctx, m, start, stop, 2)

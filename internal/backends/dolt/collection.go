@@ -366,17 +366,10 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
-		// A lossy index holds entries at wrong byte positions; any range
-		// over it can silently miss matching documents. Never consult it.
-		if idx.Lossy {
-			continue
-		}
-		// A partial index only covers documents matching its filter
-		// expression; using it for a general query would silently drop
-		// non-member matches. (Sparse is fine: equality/range operators
-		// can never match a missing field, and null operands are
-		// rejected by the bounds builder.)
-		if idx.PartialFilterExpression != nil {
+		// Lossy entries sit at wrong byte positions; partial indexes
+		// would drop non-member matches. (Sparse is fine: no admitted
+		// operator can match a missing field.)
+		if idx.Lossy || idx.PartialFilterExpression != nil {
 			continue
 		}
 		if len(idx.Key) >= 1 && idx.Key[0].Field != "" {
@@ -465,13 +458,8 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		return nil, false, nil
 	}
 
-	// Fetch the actual documents from the primary map. Errors propagate so
-	// callers see real failures instead of empty results that look like a
-	// missing match.
-	//
-	// A multikey index yields one entry per matching array element, so a
-	// range can return the same primary ID more than once -- deduplicate
-	// so the caller sees each document a single time.
+	// Fetch the documents from the primary map, deduplicating IDs: a
+	// multikey range yields one entry per matching array element.
 	seenIDs := make(map[string]struct{}, len(primaryIDBytesList))
 	docs := make([]*types.Document, 0, len(primaryIDBytesList))
 	for _, idBytes := range primaryIDBytesList {
@@ -520,11 +508,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	opDoc, isOp := v.(*types.Document)
 	if !isOp {
-		// Bare scalar equality. types.Null and array equality have semantics
-		// (e.g. matching missing fields, element-wise array match) that the
-		// byte-level index can't reproduce; a bare Regex is a pattern match,
-		// not an equality; Decimal128 has no faithful KeyString encoding.
-		// Skip all of these and let the scan path handle them.
+		// Null/array equality have semantics the byte-level index can't
+		// reproduce; a bare Regex is a pattern match, not an equality;
+		// Decimal128 has no faithful encoding. All fall back to scans.
 		switch v.(type) {
 		case nil, types.NullType, *types.Array, types.Regex, types.Decimal128:
 			return nil, nil, false
@@ -553,9 +539,8 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 			types.Decimal128:
 			return nil, nil, false
 		}
-		// Comparison operators never match NaN, and NaN-relative ranges
-		// have no contiguous byte representation -- reject so the scan
-		// path applies MongoDB's NaN comparison semantics.
+		// Comparison operators never match NaN; let the scan path apply
+		// MongoDB's NaN semantics.
 		if f, isFloat := opVal.(float64); isFloat && math.IsNaN(f) && opKey != "$eq" {
 			return nil, nil, false
 		}
@@ -595,13 +580,9 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 		return nil, nil, false
 	}
 
-	// MongoDB's comparison operators are type-bracketed: {$gt: 5} matches
-	// numbers only, never strings or dates. Clamp each missing side of
-	// the range to the operand's type bracket so the scan neither leaks
-	// into other brackets (wrong indexed counts) nor starts at an
-	// unbounded edge. When both sides are present they must agree on the
-	// bracket -- a cross-bracket range matches nothing index-shaped, so
-	// fall back to the scan path.
+	// Comparison operators are type-bracketed ({$gt: 5} matches numbers
+	// only): clamp missing range sides to the operand's bracket, and
+	// fall back to scans for cross-bracket ranges.
 	var bracketStart, bracketStop []byte
 	if hasLower {
 		s, e, bok := idxpkg.BracketRange(lowerVal)
@@ -1355,10 +1336,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	// Collect unique secondary indexes for this collection. Resolve from
-	// the per-branch DTBL so unique-constraint enforcement is consistent
-	// with the rest of the write path. The maps back the per-row
-	// uniqueness probes -- no collection scan.
 	branchInfos, branchIdxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
@@ -1376,15 +1353,12 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	batchIDs := make([]any, 0, len(params.Docs))
 	// batchHashSet detects in-batch duplicate _id hashes in O(1).
 	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
-	// batchUniqueEntryKeys[i] holds the encoded value prefixes already
-	// claimed by docs in this batch, per unique index, for in-batch
-	// duplicate detection (the index probes only see pre-batch state).
+	// In-batch claims per unique index (probes only see pre-batch state).
 	batchUniqueEntryKeys := make([]map[string]struct{}, len(uniqueIndexes))
 	for i := range batchUniqueEntryKeys {
 		batchUniqueEntryKeys[i] = make(map[string]struct{})
 	}
-	// batchLossyKeys[i] is the value-level fallback set for lossy rows,
-	// compared with indexKeysEqual instead of encoded bytes.
+	// Value-level fallback set for lossy rows.
 	batchLossyKeys := make([][][]any, len(uniqueIndexes))
 
 	for _, doc := range params.Docs {
@@ -1420,11 +1394,8 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			)
 		}
 
-		// Check unique secondary index constraints: one bounded index
-		// probe per entry row instead of the historical whole-primary
-		// scan. indexEntriesForDoc applies membership (sparse / partial)
-		// and multikey expansion, so array elements participate in
-		// uniqueness like MongoDB's.
+		// Unique constraints: one bounded index probe per entry row;
+		// membership and multikey expansion via indexEntriesForDoc.
 		for i, idx := range uniqueIndexes {
 			rows, _, lossy := indexEntriesForDoc(doc, idx)
 			if len(rows) == 0 {
@@ -1432,9 +1403,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			}
 
 			if lossy || idx.Lossy {
-				// A value with no faithful byte encoding (Decimal128):
-				// probes would collide on the collapsed bytes, so fall
-				// back to a value-level comparison scan for this index.
+				// Probes collide on collapsed bytes; compare values.
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
 					return nil, scanErr
@@ -1458,8 +1427,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				continue
 			}
 
-			// Dedupe this doc's own rows first ([5,5] must not
-			// self-conflict), then probe the index and the batch set.
+			// A doc's own duplicate rows ([5,5]) must not self-conflict.
 			docPrefixes := make(map[string]struct{}, len(rows))
 			for _, row := range rows {
 				start, _ := idxpkg.EqualityProbeBounds(row)
@@ -1697,8 +1665,8 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	var updated int32
 
-	// Index state resolved once per batch: backs the per-row unique
-	// probes during the loop and the entry maintenance after it.
+	// Resolved once per batch: backs unique probes and the entry
+	// maintenance after the loop.
 	idxInfos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
@@ -1711,8 +1679,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		}
 	}
 
-	// (oldDoc, newDoc) pairs for secondary-index maintenance, collected
-	// while the primary edits are applied.
 	var idxOldDocs, idxNewDocs []*types.Document
 
 	for i, doc := range params.Docs {
@@ -1780,10 +1746,8 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			}
 		}
 
-		// Decode the before/after documents for index maintenance. The
-		// new doc decodes from newBytes (the bytes actually stored, which
-		// the partial-mutation path may have produced) rather than from
-		// params.Docs.
+		// The new doc decodes from newBytes (what was actually stored;
+		// the partial-mutation path may differ from params.Docs).
 		oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
 		if err != nil {
 			return nil, fmt.Errorf("decoding pre-update document: %w", err)
@@ -1793,9 +1757,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, fmt.Errorf("decoding post-update document: %w", err)
 		}
 
-		// Unique enforcement before the primary edit: an update whose
-		// new unique key collides with a different document is rejected
-		// and the document stays unchanged.
 		if hasUnique {
 			if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h); err != nil {
 				return nil, err
@@ -1826,10 +1787,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
-	// Maintain secondary indexes: delete the entries the old document
-	// versions contributed and insert the new versions' entries, per
-	// the entry-set difference (no-op for indexes the update does not
-	// touch).
 	updatedInfos, updatedIdxMaps, err := applyUpdatesToIndexes(ctx, idxInfos, idxMaps, idxOldDocs, idxNewDocs)
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
@@ -1905,8 +1862,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	var deleted int32
 
-	// Deleted documents, captured before removal for secondary-index
-	// maintenance.
+	// Captured before removal for index maintenance.
 	var idxOldDocs []*types.Document
 
 	if params.RecordIDs != nil {
@@ -2009,8 +1965,6 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, err
 	}
 
-	// Maintain secondary indexes: remove every entry the deleted
-	// documents contributed.
 	idxInfos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
@@ -2139,17 +2093,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	var chosen backends.IndexInfo
 	found := false
 	for i, idx := range idxInfos {
-		// Lossy indexes hold entries at wrong byte positions; counts
-		// over them are wrong in both directions.
-		if idx.Lossy {
-			continue
-		}
-		// Partial indexes only cover member docs; counting their
-		// entries undercounts. Sparse indexes omit missing-field docs,
-		// which no equality/range operator can match -- but a sparse
-		// count is exact only for the operators the bounds builder
-		// admits, which is exactly what reaches RangeCount.
-		if idx.PartialFilterExpression != nil {
+		// Lossy entries sit at wrong byte positions; partial indexes
+		// cover member docs only (counting them undercounts).
+		if idx.Lossy || idx.PartialFilterExpression != nil {
 			continue
 		}
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {
@@ -2168,11 +2114,8 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
-	// A multikey index has one entry per matching array element, so a
-	// RANGE over it counts a document once per element in range. An
-	// EQUALITY count stays exact: per (value, docID) the entry is
-	// unique, so each matching doc contributes exactly one entry for
-	// the probed value.
+	// A multikey range counts a doc once per matching element; equality
+	// counts stay exact (one entry per value+docID).
 	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
 		return 0, false, nil
 	}
@@ -2182,11 +2125,6 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
-	// indexBoundsForFilterValue admits operator docs that combine bounds
-	// like {$gte: 1, $lt: 10}. For a count those are still sound -- the
-	// range bounds are exact for faithfully-encoded values and clamped
-	// to the operand's type bracket, and the bare-scalar path produces
-	// a tight equality range. Lossy content is excluded above.
 	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
 	if err != nil {
 		return 0, false, err
@@ -2706,11 +2644,8 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 	return built, multikey, lossy, nil
 }
 
-// scanUniqueConflict is the value-level fallback for unique validation
-// when a row contains a value with no faithful byte encoding
-// (Decimal128): it scans the primary and compares index key vectors
-// with indexKeysEqual. O(N), but only runs for lossy values; the
-// common path is the O(log N) index probe.
+// scanUniqueConflict is the O(N) value-level fallback for rows with no
+// faithful byte encoding (Decimal128); the common path is the probe.
 func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfHash [20]byte) (bool, error) {
 	newKey := extractIndexKey(doc, idx)
 	iter, err := m.IterAll(ctx)
@@ -2753,10 +2688,8 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 	return false, nil
 }
 
-// validateUniqueOnUpdate rejects an update whose new document version
-// would collide with a different document on any unique index. Same
-// probe strategy as InsertAll; the doc's own existing entries are
-// excluded by primary ID.
+// validateUniqueOnUpdate rejects an update whose new version collides
+// with a different document on any unique index.
 func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfHash [20]byte) error {
 	for _, idx := range infos {
 		if !idx.Unique {

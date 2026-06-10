@@ -14,10 +14,8 @@
 
 package index
 
-// Byte-order tests for the KeyString encoding: MongoDB's cross-type
-// bracket order (behavior T1 in
-// docs/design/secondary-index-structural-sharing.md) and value order
-// inside the numeric bracket across int/double representations (T2).
+// Behaviors T1 and T2 of
+// docs/design/secondary-index-structural-sharing.md.
 
 import (
 	"bytes"
@@ -30,9 +28,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// TestKeyStringTypeBracketOrder walks MongoDB's documented BSON
-// type-comparison order and asserts each adjacent pair sorts correctly
-// at the byte level.
+// Adjacent pairs of MongoDB's documented BSON type-comparison order
+// must sort correctly at the byte level.
 func TestKeyStringTypeBracketOrder(t *testing.T) {
 	t.Parallel()
 
@@ -73,8 +70,6 @@ func TestKeyStringTypeBracketOrder(t *testing.T) {
 	}
 }
 
-// TestMixedNumericByteOrder pins the int/double interleavings the old
-// encoding got wrong: every pair must sort by numeric value.
 func TestMixedNumericByteOrder(t *testing.T) {
 	t.Parallel()
 
@@ -117,8 +112,6 @@ func TestMixedNumericByteOrder(t *testing.T) {
 	}
 }
 
-// TestNumericEqualityUnification asserts that the same numeric value
-// produces identical bytes regardless of BSON representation.
 func TestNumericEqualityUnification(t *testing.T) {
 	t.Parallel()
 
@@ -137,8 +130,6 @@ func TestNumericEqualityUnification(t *testing.T) {
 	}
 }
 
-// TestNumericOrderFuzz cross-checks byte order against numeric order
-// for a deterministic mix of random doubles and ints.
 func TestNumericOrderFuzz(t *testing.T) {
 	t.Parallel()
 
@@ -163,8 +154,6 @@ func TestNumericOrderFuzz(t *testing.T) {
 	}
 }
 
-// TestTimestampRegexEncodingOrder pins value order inside the new
-// Timestamp and Regex brackets.
 func TestTimestampRegexEncodingOrder(t *testing.T) {
 	t.Parallel()
 
@@ -190,7 +179,6 @@ func TestTimestampRegexEncodingOrder(t *testing.T) {
 	}
 }
 
-// TestEncodeValueLossy pins which types are flagged as unfaithful.
 func TestEncodeValueLossy(t *testing.T) {
 	t.Parallel()
 
@@ -210,8 +198,6 @@ func TestEncodeValueLossy(t *testing.T) {
 	}
 }
 
-// TestBracketRangeContainsValues asserts every encodable value falls
-// inside its own bracket range and outside the others'.
 func TestBracketRangeContainsValues(t *testing.T) {
 	t.Parallel()
 
