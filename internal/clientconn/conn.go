@@ -680,13 +680,20 @@ func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name stri
 	return cmd.Handler(connCtx, msg)
 }
 
-// logResponse logs response's header and body and returns the log level that was used.
-//
-// The param `who` will be used in logs and should represent the type of the response,
-// for example "Response" or "Proxy Response".
+// logResponse dumps the header+body at DEBUG (ERROR on closeConn) and
+// returns WARN for ok != 1 so DiffMode diffs surface divergence.
 func (c *conn) logResponse(ctx context.Context, who string, resHeader *wire.MsgHeader, resBody wire.MsgBody, closeConn bool) slog.Level { //nolint:lll // for readability
-	level := slog.LevelDebug
+	dumpLevel := slog.LevelDebug
+	if closeConn {
+		dumpLevel = slog.LevelError
+	}
 
+	if c.l.Enabled(ctx, dumpLevel) {
+		c.l.Log(ctx, dumpLevel, who+" header: "+resHeader.String())
+		c.l.Log(ctx, dumpLevel, who+" message:\n"+resBody.String()+"\n")
+	}
+
+	diffLevel := dumpLevel
 	if resHeader.OpCode == wire.OpCodeMsg {
 		doc := must.NotFail(must.NotFail(resBody.(*wire.OpMsg).RawDocument()).Decode())
 
@@ -702,19 +709,10 @@ func (c *conn) logResponse(ctx context.Context, who string, resHeader *wire.MsgH
 			ok = v == 1
 		}
 
-		if !ok {
-			level = slog.LevelWarn
+		if !ok && diffLevel < slog.LevelWarn {
+			diffLevel = slog.LevelWarn
 		}
 	}
 
-	if closeConn {
-		level = slog.LevelError
-	}
-
-	if c.l.Enabled(ctx, level) {
-		c.l.Log(ctx, level, who+" header: "+resHeader.String())
-		c.l.Log(ctx, level, who+" message:\n"+resBody.String()+"\n")
-	}
-
-	return level
+	return diffLevel
 }

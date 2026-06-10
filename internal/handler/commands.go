@@ -211,7 +211,7 @@ func (h *Handler) initCommands() {
 			durationMs := time.Since(start).Milliseconds()
 
 			if handlerErr != nil {
-				l.WarnContext(ctx, "command error",
+				l.InfoContext(ctx, "command error",
 					slog.String("conn", conn),
 					slog.String("cmd", cmdName),
 					slog.String("db", db),
