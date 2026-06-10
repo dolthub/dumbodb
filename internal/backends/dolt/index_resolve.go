@@ -246,12 +246,30 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 	return infos, byName, nil
 }
 
-// indexEntryRowsForDoc expands doc's indexed field values into entry
-// rows and reports whether the doc makes the index multikey (an array
-// value expanded per element) or lossy (a value the KeyString encoding
-// cannot represent faithfully).
-func indexEntryRowsForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool) {
+// indexEntriesForDoc is the single source of truth for which index
+// entries a document contributes: it applies the index's membership
+// rules, expands multikey arrays, and reports whether the doc makes
+// the index multikey (an array value expanded per element) or lossy
+// (a value the KeyString encoding cannot represent faithfully).
+//
+// Membership: a doc outside a partial index's filter expression
+// contributes no entries (a filter-evaluation error counts as
+// non-membership, mirroring the unique-validation path), and a doc
+// whose indexed fields are all missing contributes nothing to a
+// sparse index. Index content is authoritative for membership --
+// every build, insert, update, delete, and merge path routes through
+// this function.
+func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool) {
+	if idx.MatchesPartialFilter != nil {
+		match, err := idx.MatchesPartialFilter(doc)
+		if err != nil || !match {
+			return nil, false, false
+		}
+	}
 	fieldVals := extractIndexFieldValues(doc, idx)
+	if idx.Sparse && allNull(fieldVals) {
+		return nil, false, false
+	}
 	for _, v := range fieldVals {
 		if _, isArr := v.(*types.Array); isArr {
 			multikey = true
@@ -303,7 +321,7 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h[:]
-			rows, multikey, lossy := indexEntryRowsForDoc(doc, info)
+			rows, multikey, lossy := indexEntriesForDoc(doc, info)
 			outInfos[i].Multikey = outInfos[i].Multikey || multikey
 			outInfos[i].Lossy = outInfos[i].Lossy || lossy
 			for _, fv := range rows {
@@ -319,6 +337,145 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 		out[info.Name] = updated
 	}
 	return outInfos, out, nil
+}
+
+// entryKeysForRows maps each entry row to its full composite index key
+// bytes (as a map key) for set-difference comparison.
+func entryKeysForRows(rows [][]any, idBytes []byte) map[string][]any {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string][]any, len(rows))
+	for _, row := range rows {
+		out[string(idxpkg.BuildSecondaryKey(row, idBytes))] = row
+	}
+	return out
+}
+
+// applyUpdatesToIndexes applies per-document index maintenance for
+// updated documents: for each (oldDoc, newDoc) pair it computes the
+// entry-set difference and deletes/inserts only the changed entries.
+// An update that does not change any indexed entry performs zero edits
+// on that index (the noop short-circuit falls out of the empty
+// difference), so untouched indexes keep their root hash bit for bit.
+//
+// Pure in the same sense as applyInsertsToIndexes; the returned infos
+// carry updated Lossy/Multikey flags from the new document versions.
+// oldDocs and newDocs are parallel slices.
+func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs, newDocs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
+	if len(infos) == 0 || len(oldDocs) == 0 {
+		return infos, maps, nil
+	}
+	if len(oldDocs) != len(newDocs) {
+		return nil, nil, fmt.Errorf("applyUpdatesToIndexes: %d old docs vs %d new docs", len(oldDocs), len(newDocs))
+	}
+	out := make(map[string]prolly.Map, len(maps))
+	for k, v := range maps {
+		out[k] = v
+	}
+	outInfos := append([]backends.IndexInfo(nil), infos...)
+	for i, info := range outInfos {
+		idxMap, ok := out[info.Name]
+		if !ok {
+			return nil, nil, fmt.Errorf("applyUpdatesToIndexes: missing map for %q", info.Name)
+		}
+		mut := idxMap.Mutate()
+		edited := false
+		for d := range oldDocs {
+			docID, err := newDocs[d].Get("_id")
+			if err != nil {
+				return nil, nil, fmt.Errorf("applyUpdatesToIndexes: doc missing _id for index %q: %w", info.Name, err)
+			}
+			h, err := hashID(docID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("applyUpdatesToIndexes: hashing _id for index %q: %w", info.Name, err)
+			}
+			idBytes := h[:]
+
+			oldRows, _, _ := indexEntriesForDoc(oldDocs[d], info)
+			newRows, multikey, lossy := indexEntriesForDoc(newDocs[d], info)
+			outInfos[i].Multikey = outInfos[i].Multikey || multikey
+			outInfos[i].Lossy = outInfos[i].Lossy || lossy
+
+			oldKeys := entryKeysForRows(oldRows, idBytes)
+			newKeys := entryKeysForRows(newRows, idBytes)
+
+			for k, row := range oldKeys {
+				if _, keep := newKeys[k]; keep {
+					continue
+				}
+				if err := idxpkg.DeleteEntry(ctx, mut, row, idBytes); err != nil {
+					return nil, nil, fmt.Errorf("applyUpdatesToIndexes: deleting entry from %q: %w", info.Name, err)
+				}
+				edited = true
+			}
+			for k, row := range newKeys {
+				if _, had := oldKeys[k]; had {
+					continue
+				}
+				if err := idxpkg.InsertEntry(ctx, mut, row, idBytes); err != nil {
+					return nil, nil, fmt.Errorf("applyUpdatesToIndexes: inserting entry into %q: %w", info.Name, err)
+				}
+				edited = true
+			}
+		}
+		if !edited {
+			continue
+		}
+		updated, err := mut.Map(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("applyUpdatesToIndexes: flushing map for %q: %w", info.Name, err)
+		}
+		out[info.Name] = updated
+	}
+	return outInfos, out, nil
+}
+
+// applyDeletesToIndexes removes every entry the deleted documents
+// contributed. Pure in the same sense as applyInsertsToIndexes.
+func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs []*types.Document) (map[string]prolly.Map, error) {
+	if len(infos) == 0 || len(oldDocs) == 0 {
+		return maps, nil
+	}
+	out := make(map[string]prolly.Map, len(maps))
+	for k, v := range maps {
+		out[k] = v
+	}
+	for _, info := range infos {
+		idxMap, ok := out[info.Name]
+		if !ok {
+			return nil, fmt.Errorf("applyDeletesToIndexes: missing map for %q", info.Name)
+		}
+		mut := idxMap.Mutate()
+		edited := false
+		for _, doc := range oldDocs {
+			docID, err := doc.Get("_id")
+			if err != nil {
+				return nil, fmt.Errorf("applyDeletesToIndexes: doc missing _id for index %q: %w", info.Name, err)
+			}
+			h, err := hashID(docID)
+			if err != nil {
+				return nil, fmt.Errorf("applyDeletesToIndexes: hashing _id for index %q: %w", info.Name, err)
+			}
+			idBytes := h[:]
+			rows, _, _ := indexEntriesForDoc(doc, info)
+			for _, row := range rows {
+				if err := idxpkg.DeleteEntry(ctx, mut, row, idBytes); err != nil {
+					return nil, fmt.Errorf("applyDeletesToIndexes: deleting entry from %q: %w", info.Name, err)
+				}
+				edited = true
+			}
+		}
+		if !edited {
+			continue
+		}
+		updated, err := mut.Map(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("applyDeletesToIndexes: flushing map for %q: %w", info.Name, err)
+		}
+		out[info.Name] = updated
+	}
+	return out, nil
 }
 
 // buildIndexAM is the pure replacement for persistIndexes: given a set of

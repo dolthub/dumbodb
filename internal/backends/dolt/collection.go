@@ -371,6 +371,14 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if idx.Lossy {
 			continue
 		}
+		// A partial index only covers documents matching its filter
+		// expression; using it for a general query would silently drop
+		// non-member matches. (Sparse is fine: equality/range operators
+		// can never match a missing field, and null operands are
+		// rejected by the bounds builder.)
+		if idx.PartialFilterExpression != nil {
+			continue
+		}
 		if len(idx.Key) >= 1 && idx.Key[0].Field != "" {
 			leading := idx.Key[0].Field
 			isCompound := len(idx.Key) > 1
@@ -820,7 +828,7 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 		var single, compound backends.IndexInfo
 		var haveSingle, haveCompound bool
 		for _, idx := range idxInfos {
-			if idx.Lossy {
+			if idx.Lossy || idx.PartialFilterExpression != nil {
 				continue
 			}
 			if len(idx.Key) >= 1 && idx.Key[0].Field == k {
@@ -1684,6 +1692,10 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	var updated int32
 
+	// (oldDoc, newDoc) pairs for secondary-index maintenance, collected
+	// while the primary edits are applied.
+	var idxOldDocs, idxNewDocs []*types.Document
+
 	for i, doc := range params.Docs {
 		// Build key from the document's _id field.
 		docID, err := doc.Get("_id")
@@ -1758,6 +1770,21 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, err
 		}
 
+		// Decode the before/after documents for index maintenance. The
+		// new doc decodes from newBytes (the bytes actually stored, which
+		// the partial-mutation path may have produced) rather than from
+		// params.Docs.
+		oldDoc, err := readDocFromValue(ctx, state.ns, existingTup)
+		if err != nil {
+			return nil, fmt.Errorf("decoding pre-update document: %w", err)
+		}
+		newDoc, err := bsonToDoc(newBytes)
+		if err != nil {
+			return nil, fmt.Errorf("decoding post-update document: %w", err)
+		}
+		idxOldDocs = append(idxOldDocs, oldDoc)
+		idxNewDocs = append(idxNewDocs, newDoc)
+
 		updated++
 	}
 
@@ -1770,12 +1797,21 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
-	// UpdateAll does not yet rebuild secondary-index entries (workspace-4ee).
-	// Preserve the current per-branch index AM resolved from disk so the
-	// new DTBL keeps the collection's existing indexes intact.
-	curIdxAM, err := resolveCollIndexAM(ctx, c, state)
+	// Maintain secondary indexes: delete the entries the old document
+	// versions contributed and insert the new versions' entries, per
+	// the entry-set difference (no-op for indexes the update does not
+	// touch).
+	idxInfos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
-		return nil, fmt.Errorf("resolving current index AM: %w", err)
+		return nil, fmt.Errorf("resolving branch index state: %w", err)
+	}
+	updatedInfos, updatedIdxMaps, err := applyUpdatesToIndexes(ctx, idxInfos, idxMaps, idxOldDocs, idxNewDocs)
+	if err != nil {
+		return nil, fmt.Errorf("updating secondary indexes: %w", err)
+	}
+	curIdxAM, err := buildIndexAM(ctx, state, updatedInfos, updatedIdxMaps)
+	if err != nil {
+		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
@@ -1844,6 +1880,10 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 	var deleted int32
 
+	// Deleted documents, captured before removal for secondary-index
+	// maintenance.
+	var idxOldDocs []*types.Document
+
 	if params.RecordIDs != nil {
 		// Delete by RecordID: scan the map and find entries whose derived RecordID matches.
 		// RecordID is derived from the key bytes (see mapIter.Next).
@@ -1859,6 +1899,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 		type toDelete struct {
 			key val.Tuple
+			doc *types.Document
 		}
 		var toDeleteList []toDelete
 
@@ -1881,7 +1922,11 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 
 			rid := keyBytesToRecordID(keyBytes)
 			if _, ok := targetSet[rid]; ok {
-				toDeleteList = append(toDeleteList, toDelete{key: k})
+				doc, derr := readDocFromValue(ctx, state.ns, v)
+				if derr != nil {
+					return nil, fmt.Errorf("decoding document for delete: %w", derr)
+				}
+				toDeleteList = append(toDeleteList, toDelete{key: k, doc: doc})
 			}
 		}
 
@@ -1889,6 +1934,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 			if err := mut.Delete(ctx, td.key); err != nil {
 				return nil, err
 			}
+			idxOldDocs = append(idxOldDocs, td.doc)
 			deleted++
 		}
 	} else {
@@ -1904,15 +1950,19 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 				continue
 			}
 
-			var found bool
+			var oldDoc *types.Document
 			if err := mut.Get(ctx, key, func(k, v val.Tuple) error {
-				found = v != nil
-				return nil
+				if v == nil {
+					return nil
+				}
+				var decErr error
+				oldDoc, decErr = readDocFromValue(ctx, state.ns, v)
+				return decErr
 			}); err != nil {
 				continue
 			}
 
-			if !found {
+			if oldDoc == nil {
 				continue
 			}
 
@@ -1920,6 +1970,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 				return nil, err
 			}
 
+			idxOldDocs = append(idxOldDocs, oldDoc)
 			deleted++
 		}
 	}
@@ -1933,12 +1984,19 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return nil, err
 	}
 
-	// DeleteAll does not yet rebuild secondary-index entries (workspace-4ee).
-	// Preserve the current per-branch index AM so the new DTBL keeps the
-	// collection's existing indexes intact.
-	curIdxAM, err := resolveCollIndexAM(ctx, c, state)
+	// Maintain secondary indexes: remove every entry the deleted
+	// documents contributed.
+	idxInfos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
-		return nil, fmt.Errorf("resolving current index AM: %w", err)
+		return nil, fmt.Errorf("resolving branch index state: %w", err)
+	}
+	updatedIdxMaps, err := applyDeletesToIndexes(ctx, idxInfos, idxMaps, idxOldDocs)
+	if err != nil {
+		return nil, fmt.Errorf("updating secondary indexes: %w", err)
+	}
+	curIdxAM, err := buildIndexAM(ctx, state, idxInfos, updatedIdxMaps)
+	if err != nil {
+		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
 	skipSync := params.SkipDurableSync && !c.db.backend.autoCommit
@@ -2059,6 +2117,14 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		// Lossy indexes hold entries at wrong byte positions; counts
 		// over them are wrong in both directions.
 		if idx.Lossy {
+			continue
+		}
+		// Partial indexes only cover member docs; counting their
+		// entries undercounts. Sparse indexes omit missing-field docs,
+		// which no equality/range operator can match -- but a sparse
+		// count is exact only for the operators the bounds builder
+		// admits, which is exactly what reaches RangeCount.
+		if idx.PartialFilterExpression != nil {
 			continue
 		}
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {
@@ -2598,7 +2664,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			return prolly.Map{}, false, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
-		rows, rowMultikey, rowLossy := indexEntryRowsForDoc(doc, idx)
+		rows, rowMultikey, rowLossy := indexEntriesForDoc(doc, idx)
 		multikey = multikey || rowMultikey
 		lossy = lossy || rowLossy
 		for _, fv := range rows {
