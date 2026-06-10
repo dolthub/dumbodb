@@ -377,9 +377,13 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 // - ErrOperatorWrongLenOfArgs when the operator has an invalid number of arguments.
 // - ErrInvalidPipelineOperator when an the operator does not exist.
 func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
-	projected, err := types.NewDocument("_id", must.NotFail(doc.Get("_id")))
-	if err != nil {
-		return nil, err
+	projected := must.NotFail(types.NewDocument())
+
+	// Seed _id only when the source document has one. Pipeline stages such as a
+	// view's $project {_id: 0} can legitimately yield documents without _id, and
+	// Get("_id") would otherwise panic.
+	if idValue, idErr := doc.Get("_id"); idErr == nil {
+		projected.Set("_id", idValue)
 	}
 
 	projected.SetRecordID(doc.RecordID())

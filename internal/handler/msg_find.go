@@ -91,8 +91,20 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		cInfo = cList.Collections[0]
 	}
 
-	// If the target is a view, redirect to the source collection for reading.
+	// If the target is a view, the read runs as an aggregation over the view's
+	// source collection with the view's defining pipeline applied; the find's
+	// own filter/sort/skip/limit/projection are layered on top below.
+	var (
+		isView       bool
+		viewOn       string
+		viewPipeline *types.Array
+	)
+
 	if cInfo.IsView {
+		isView = true
+		viewOn = cInfo.ViewOn
+		viewPipeline = cInfo.ViewPipeline
+
 		params.Collection = cInfo.ViewOn
 		viewSourceParam := backends.ListCollectionsParams{Name: cInfo.ViewOn}
 		var srcList *backends.ListCollectionsResult
@@ -151,15 +163,25 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}()
 	}
 
-	queryRes, err := coll.Query(ctx, qp)
+	// closer accumulates all things that should be closed / canceled.
+	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
+
+	var srcIter types.DocumentsIterator
+	if isView {
+		srcIter, err = viewSourceIterator(ctx, db, viewOn, viewPipeline, closer)
+	} else {
+		var queryRes *backends.QueryResult
+		if queryRes, err = coll.Query(ctx, qp); err != nil {
+			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
+		}
+		srcIter = queryRes.Iter
+	}
+
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	// closer accumulates all things that should be closed / canceled.
-	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
-
-	iter, err := h.makeFindIter(queryRes.Iter, closer, params)
+	iter, err := h.makeFindIter(srcIter, closer, params)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
