@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -31,6 +32,7 @@ import (
 	"github.com/zeebo/xxh3"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -310,6 +312,81 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: opening collection %q from resolvedAM: %w", params.Collection, err)
 	}
 
+	// Resolution is a write: the chosen document state must be
+	// re-indexed (including partial/sparse membership flips), and the
+	// chosen value must not collide with another doc on a unique index.
+	resolveIdxAM, err := indexAMFromAM(ctx, db.cs, db.ns, ms.resolvedAM, params.Collection)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: reading index AM for %q: %w", params.Collection, err)
+	}
+	idxSet, err := indexSetFromAM(ctx, db, resolveIdxAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: resolving indexes for %q: %w", params.Collection, err)
+	}
+	idxInfos := make([]backends.IndexInfo, 0, len(idxSet))
+	idxMaps := make(map[string]prolly.Map, len(idxSet))
+	for _, entry := range idxSet {
+		m, merr := openIndexMap(ctx, db.vs, db.ns, entry.mapRoot)
+		if merr != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: opening index %q: %w", entry.info.Name, merr)
+		}
+		idxInfos = append(idxInfos, entry.info)
+		idxMaps[entry.info.Name] = m
+	}
+	sort.Slice(idxInfos, func(i, j int) bool { return idxInfos[i].Name < idxInfos[j].Name })
+
+	rawKeyIDBytes, ok := keyDesc.GetBytes(0, target.rawKey)
+	if !ok {
+		return nil, fmt.Errorf("DumboDBResolveConflict: conflict key missing id bytes")
+	}
+	var selfHash [20]byte
+	copy(selfHash[:], rawKeyIDBytes)
+
+	// The document version currently in the merged map (the before
+	// image for index maintenance).
+	var oldDoc *types.Document
+	if err := collMap.Get(ctx, target.rawKey, func(_, v val.Tuple) error {
+		if v == nil {
+			return nil
+		}
+		var derr error
+		oldDoc, derr = readDocFromValue(ctx, db.ns, v)
+		return derr
+	}); err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: reading current document: %w", err)
+	}
+
+	var chosenDoc *types.Document
+	if !deleteDoc {
+		chosenDoc, err = readDocFromValue(ctx, db.ns, chosenVal)
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: decoding chosen document: %w", err)
+		}
+		// Unique enforcement (C4): a resolution that collides with a
+		// different document is rejected; the conflict stays unresolved.
+		for _, idx := range idxInfos {
+			if !idx.Unique {
+				continue
+			}
+			rows, _, lossy := indexEntriesForDoc(chosenDoc, idx)
+			if len(rows) == 0 || lossy || idx.Lossy {
+				continue
+			}
+			for _, row := range rows {
+				conflict, perr := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfHash[:])
+				if perr != nil {
+					return nil, fmt.Errorf("DumboDBResolveConflict: unique probe on %s: %w", idx.Name, perr)
+				}
+				if conflict {
+					return nil, backends.NewError(
+						backends.ErrorCodeInsertDuplicateID,
+						fmt.Errorf("resolution collides with a different document on unique index %s", idx.Name),
+					)
+				}
+			}
+		}
+	}
+
 	mut := collMap.Mutate()
 
 	if deleteDoc {
@@ -325,6 +402,35 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	newCollMap, err := mut.Map(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: flushing collection map for %q: %w", params.Collection, err)
+	}
+
+	// Maintain the indexes for the resolved document state.
+	var resolvedIdxInfos []backends.IndexInfo
+	resolvedIdxMaps := idxMaps
+	if deleteDoc {
+		resolvedIdxInfos = idxInfos
+		if oldDoc != nil {
+			resolvedIdxMaps, err = applyDeletesToIndexes(ctx, idxInfos, idxMaps, []*types.Document{oldDoc})
+			if err != nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: un-indexing deleted document: %w", err)
+			}
+		}
+	} else if oldDoc != nil {
+		resolvedIdxInfos, resolvedIdxMaps, err = applyUpdatesToIndexes(ctx, idxInfos, idxMaps,
+			[]*types.Document{oldDoc}, []*types.Document{chosenDoc})
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: re-indexing resolved document: %w", err)
+		}
+	} else {
+		resolvedIdxInfos, resolvedIdxMaps, err = applyInsertsToIndexes(ctx, idxInfos, idxMaps,
+			[]*types.Document{chosenDoc})
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: indexing resolved document: %w", err)
+		}
+	}
+	newIdxAM, err := buildIndexAM(ctx, db, resolvedIdxInfos, resolvedIdxMaps)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: building index AM: %w", err)
 	}
 
 	// Remove the resolved conflict from the ArtifactMap for this collection.
@@ -365,11 +471,7 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			return nil, fmt.Errorf("DumboDBResolveConflict: deleting collection %q from AM: %w", params.Collection, err)
 		}
 	} else {
-		curIdxAM, idxErr := indexAMFromAM(ctx, db.cs, db.ns, updatedAM, params.Collection)
-		if idxErr != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: reading current index AM for %q: %w", params.Collection, idxErr)
-		}
-		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, curIdxAM, newArtHash)
+		newCollHash, hashErr := db.dtblHashForCollection(ctx, params.Collection, newCollMap, newIdxAM, newArtHash)
 		if hashErr != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: getting DTBL hash for %q: %w", params.Collection, hashErr)
 		}
@@ -553,10 +655,17 @@ func conflictID(rawKey val.Tuple, theirHash hash.Hash) string {
 // captureConflictsForCollection merges two collection maps at document level,
 // capturing conflicts instead of erroring. Returns the partial merged map (keeping
 // "ours" for conflicting documents) and the list of captured conflict entries.
+//
+// When applier is non-nil, every document-level change is also routed
+// through it so the surviving secondary indexes stay consistent with
+// the merged primary (behaviors B2-B6). Unique-key collisions surfaced
+// by the applier evict the losing document ("ours wins") and are
+// recorded as ordinary document conflicts requiring manual resolution.
 func captureConflictsForCollection(
 	ctx context.Context,
 	intoMap, fromMap, baseMap prolly.Map,
 	theirHash hash.Hash,
+	applier *indexMergeApplier,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
@@ -611,6 +720,127 @@ func captureConflictsForCollection(
 	// the into and from maps. Conflicts keep "ours" (left) values.
 	mut := fromMap.Mutate()
 
+	indexing := applier != nil && len(applier.survivors) > 0
+
+	// docOf decodes a primary value tuple; nil tuples decode to nil.
+	docOf := func(tup val.Tuple) (*types.Document, error) {
+		if len(tup) == 0 {
+			return nil, nil
+		}
+		return readDocFromValue(ctx, ns, tup)
+	}
+
+	// applyIndexEdit routes one document change through the survivors,
+	// running the unique-collision eviction protocol: "ours wins"; the
+	// loser leaves the merged primary and becomes an ordinary document
+	// conflict.
+	applyIndexEdit := func(edit mergeDocEdit, key val.Tuple) error {
+		if !indexing {
+			return nil
+		}
+		rawKey := append(val.Tuple(nil), key...)
+		idBytes, ok := keyDesc.GetBytes(0, rawKey)
+		if !ok {
+			return fmt.Errorf("merge index maintenance: primary key tuple missing id bytes")
+		}
+		for attempt := 0; ; attempt++ {
+			if attempt > 2 {
+				return fmt.Errorf("merge index maintenance: unique-collision eviction did not converge")
+			}
+			loser, err := applier.apply(ctx, edit, idBytes)
+			if err != nil {
+				return err
+			}
+			if loser == nil {
+				return nil
+			}
+			if loser.incoming {
+				// This edit's own document loses. Revert the merged
+				// primary to the ours/base state, keep the indexes
+				// consistent, and record a conflict carrying theirs.
+				var baseVal, theirsVal val.Tuple
+				if edit.base != nil {
+					bv, werr := writeDocToValue(ctx, ns, edit.base)
+					if werr != nil {
+						return werr
+					}
+					baseVal = bv
+				}
+				if edit.right != nil {
+					tv, werr := writeDocToValue(ctx, ns, edit.right)
+					if werr != nil {
+						return werr
+					}
+					theirsVal = tv
+				}
+				if baseVal != nil {
+					if err := mut.Put(ctx, key, baseVal); err != nil {
+						return err
+					}
+				} else if err := mut.Delete(ctx, key); err != nil {
+					return err
+				}
+				revert := mergeDocEdit{kind: editKeepOurs, right: edit.right, left: edit.base}
+				if _, err := applier.apply(ctx, revert, idBytes); err != nil {
+					return err
+				}
+				e := &conflictEntry{
+					id:           conflictID(rawKey, theirHash),
+					rawKey:       rawKey,
+					baseRawVal:   baseVal,
+					oursRawVal:   baseVal,
+					theirsRawVal: theirsVal,
+				}
+				e.ourDiffType = "modified"
+				if baseVal == nil {
+					e.ourDiffType = "deleted"
+				}
+				e.theirDiffType = "modified"
+				if edit.base == nil {
+					e.theirDiffType = "added"
+				}
+				entries = append(entries, e)
+				return nil
+			}
+			// The existing claim loses: evict that document from the
+			// merged primary and every survivor, record the conflict,
+			// then retry this edit.
+			loserKey, kerr := buildKey(loser.id)
+			if kerr != nil {
+				return kerr
+			}
+			var loserVal val.Tuple
+			var loserDoc *types.Document
+			if gerr := mut.Get(ctx, loserKey, func(_, v val.Tuple) error {
+				if v == nil {
+					return nil
+				}
+				loserVal = append(val.Tuple(nil), v...)
+				var derr error
+				loserDoc, derr = readDocFromValue(ctx, ns, v)
+				return derr
+			}); gerr != nil {
+				return gerr
+			}
+			if loserDoc == nil {
+				return fmt.Errorf("merge index maintenance: unique collision against a missing document")
+			}
+			if err := applier.removeDocEverywhere(ctx, loserDoc, loser.id); err != nil {
+				return err
+			}
+			if err := mut.Delete(ctx, loserKey); err != nil {
+				return err
+			}
+			entries = append(entries, &conflictEntry{
+				id:            conflictID(loserKey, theirHash),
+				rawKey:        loserKey,
+				theirsRawVal:  loserVal,
+				ourDiffType:   "deleted",
+				theirDiffType: "added",
+			})
+		}
+	}
+
 	sqlCtx := sql.NewEmptyContext()
 	for {
 		diff, err := differ.Next(sqlCtx)
@@ -627,32 +857,70 @@ func captureConflictsForCollection(
 			if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
 				return prolly.Map{}, nil, fmt.Errorf("applying left change: %w", err)
 			}
+			if indexing {
+				baseDoc, derr := docOf(val.Tuple(diff.Base))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				leftDoc, derr := docOf(val.Tuple(diff.Left))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				if err := applyIndexEdit(mergeDocEdit{kind: editLeftChange, base: baseDoc, left: leftDoc}, diff.Key); err != nil {
+					return prolly.Map{}, nil, err
+				}
+			}
 		case tree.DiffOpLeftDelete:
 			if err := mut.Delete(ctx, diff.Key); err != nil {
 				return prolly.Map{}, nil, fmt.Errorf("applying left delete: %w", err)
 			}
+			if indexing {
+				baseDoc, derr := docOf(val.Tuple(diff.Base))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				if err := applyIndexEdit(mergeDocEdit{kind: editLeftChange, base: baseDoc}, diff.Key); err != nil {
+					return prolly.Map{}, nil, err
+				}
+			}
 
-		// Right-only changes: already in the from map, nothing to do.
+		// Right-only changes: already in the from map; INTO-seeded
+		// indexes still need the edits applied.
 		case tree.DiffOpRightAdd, tree.DiffOpRightModify, tree.DiffOpRightDelete:
-			// no-op
+			if indexing {
+				baseDoc, derr := docOf(val.Tuple(diff.Base))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				rightDoc, derr := docOf(val.Tuple(diff.Right))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				if err := applyIndexEdit(mergeDocEdit{kind: editRightChange, base: baseDoc, right: rightDoc}, diff.Key); err != nil {
+					return prolly.Map{}, nil, err
+				}
+			}
 
-		// Convergent edits: both sides made the same change. Already in from map
-		// for add/modify; for delete, already absent.
+		// Convergent edits: both sides made the same change. Already in
+		// the from map (and in both seeds) for add/modify; for delete,
+		// already absent everywhere.
 		case tree.DiffOpConvergentAdd, tree.DiffOpConvergentModify, tree.DiffOpConvergentDelete:
 			// no-op
 
 		// Divergent edits: real conflicts. Keep "ours" (left) value in the merged map.
 		case tree.DiffOpDivergentModifyConflict, tree.DiffOpDivergentDeleteConflict:
-			rawKey := val.Tuple(diff.Key)
+			// Clone everything retained beyond this iteration: the
+			// differ reuses its tuple buffers between Next calls.
+			rawKey := append(val.Tuple(nil), diff.Key...)
 			entry := &conflictEntry{
 				id:     conflictID(rawKey, theirHash),
 				rawKey: rawKey,
 			}
 			if diff.Base != nil {
-				entry.baseRawVal = val.Tuple(diff.Base)
+				entry.baseRawVal = append(val.Tuple(nil), diff.Base...)
 			}
 			if diff.Left != nil {
-				entry.oursRawVal = val.Tuple(diff.Left)
+				entry.oursRawVal = append(val.Tuple(nil), diff.Left...)
 				entry.ourDiffType = "modified"
 				// Override from's value with ours in the merged map.
 				if err := mut.Put(ctx, diff.Key, diff.Left); err != nil {
@@ -666,18 +934,48 @@ func captureConflictsForCollection(
 				}
 			}
 			if diff.Right != nil {
-				entry.theirsRawVal = val.Tuple(diff.Right)
+				entry.theirsRawVal = append(val.Tuple(nil), diff.Right...)
 				entry.theirDiffType = "modified"
 			} else {
 				entry.theirDiffType = "deleted"
 			}
 			entries = append(entries, entry)
+			if indexing {
+				leftDoc, derr := docOf(val.Tuple(diff.Left))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				rightDoc, derr := docOf(val.Tuple(diff.Right))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				if err := applyIndexEdit(mergeDocEdit{kind: editKeepOurs, left: leftDoc, right: rightDoc}, diff.Key); err != nil {
+					return prolly.Map{}, nil, err
+				}
+			}
 
 		// Resolved divergent edits: the JSON field merge succeeded. Apply
 		// the merged value to the map.
 		case tree.DiffOpDivergentModifyResolved:
 			if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
 				return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
+			}
+			if indexing {
+				leftDoc, derr := docOf(val.Tuple(diff.Left))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				rightDoc, derr := docOf(val.Tuple(diff.Right))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				mergedDoc, derr := docOf(val.Tuple(diff.Merged))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				if err := applyIndexEdit(mergeDocEdit{kind: editResolved, left: leftDoc, right: rightDoc, merged: mergedDoc}, diff.Key); err != nil {
+					return prolly.Map{}, nil, err
+				}
 			}
 		case tree.DiffOpDivergentDeleteResolved:
 			// Delete-modify resolved by callback (unlikely for JSON merge).
@@ -688,6 +986,23 @@ func captureConflictsForCollection(
 			} else {
 				if err := mut.Put(ctx, diff.Key, diff.Merged); err != nil {
 					return prolly.Map{}, nil, fmt.Errorf("applying resolved merge: %w", err)
+				}
+			}
+			if indexing {
+				leftDoc, derr := docOf(val.Tuple(diff.Left))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				rightDoc, derr := docOf(val.Tuple(diff.Right))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				mergedDoc, derr := docOf(val.Tuple(diff.Merged))
+				if derr != nil {
+					return prolly.Map{}, nil, derr
+				}
+				if err := applyIndexEdit(mergeDocEdit{kind: editResolved, left: leftDoc, right: rightDoc, merged: mergedDoc}, diff.Key); err != nil {
+					return prolly.Map{}, nil, err
 				}
 			}
 		}
@@ -792,7 +1107,45 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening base collection %q: %w", name, err)
 		}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash)
+		// Reconcile the three sides' index definitions (B5 case table)
+		// and seed each survivor from one parent's persisted map; the
+		// document differ below drives the other side's edits through
+		// them so the merged indexes describe the merged primary.
+		intoIdxAM, idxErr := indexAMForDTBL(ctx, state.cs, state.ns, intoH)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("reading into index AM for %q: %w", name, idxErr)
+		}
+		fromIdxAM, idxErr := indexAMForDTBL(ctx, state.cs, state.ns, fromH)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("reading from index AM for %q: %w", name, idxErr)
+		}
+		baseIdxAM, idxErr := indexAMForDTBL(ctx, state.cs, state.ns, baseH)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("reading base index AM for %q: %w", name, idxErr)
+		}
+		intoSet, idxErr := indexSetFromAM(ctx, state, intoIdxAM)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("resolving into indexes for %q: %w", name, idxErr)
+		}
+		fromSet, idxErr := indexSetFromAM(ctx, state, fromIdxAM)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("resolving from indexes for %q: %w", name, idxErr)
+		}
+		baseSet, idxErr := indexSetFromAM(ctx, state, baseIdxAM)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("resolving base indexes for %q: %w", name, idxErr)
+		}
+		_, seeds, idxErr := reconcileIndexSets(intoSet, fromSet, baseSet)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("merging indexes of %q: %w", name, idxErr)
+		}
+		survivors, idxErr := openSurvivors(ctx, state, seeds)
+		if idxErr != nil {
+			return prolly.AddressMap{}, nil, fmt.Errorf("opening merged indexes of %q: %w", name, idxErr)
+		}
+		applier := &indexMergeApplier{state: state, survivors: survivors}
+
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash, applier)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
@@ -808,15 +1161,11 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			}
 		}
 
-		// Preserve the into-branch's index AM on the merged DTBL. A proper
-		// per-index merge is workspace-ife scope; this keeps existing
-		// non-merge tests passing without re-introducing the shared
-		// dbState.collIndexAMs read.
-		curIdxAM, idxErr := indexAMFromAM(ctx, state.cs, state.ns, intoAM, name)
+		mergedIdxAM, idxErr := applier.finalize(ctx)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading into-branch index AM for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, fmt.Errorf("finalizing merged indexes of %q: %w", name, idxErr)
 		}
-		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, curIdxAM, artHash)
+		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, mergedIdxAM, artHash)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
 		}
