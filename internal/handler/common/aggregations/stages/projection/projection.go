@@ -238,10 +238,18 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 
 // ProjectDocument applies projection to the copy of the document.
 func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Document, error) {
-	projected, err := types.NewDocument("_id", must.NotFail(doc.Get("_id")))
-	if err != nil {
-		return nil, err
+	// _id carries through by default, but only when the input document
+	// actually has it. Pipeline stages can emit documents without _id
+	// (e.g. an earlier {$project: {_id: 0}}, {$group}, {$unwind} of a
+	// projected stream), and a later inclusion $project over those must
+	// not panic -- MongoDB simply yields no _id in that case. An explicit
+	// _id in the projection is still honored below regardless.
+	projected := must.NotFail(types.NewDocument())
+	if idValue, idErr := doc.Get("_id"); idErr == nil {
+		projected.Set("_id", idValue)
 	}
+
+	var err error
 
 	if projection.Has("_id") {
 		idValue := must.NotFail(projection.Get("_id"))
