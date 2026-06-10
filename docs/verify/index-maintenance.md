@@ -1,0 +1,240 @@
+# Index Maintenance Verification
+
+Manual verification guide for secondary-index maintenance on the write
+path: updates and deletes keep indexes truthful, multikey (array)
+indexes adjust per element, and sparse / partial indexes track
+membership as documents change. Work through each scenario top to
+bottom. Each section builds on the previous setup.
+
+These scenarios verify behaviors W2, W3, W5, M1, and M2 from
+`docs/design/secondary-index-structural-sharing.md`.
+
+> **Automated equivalent:** `tests/index_maintenance_verify_test.go`
+> (`TestIndexMaintenanceVerify`) covers every scenario in this
+> document as sequential subtests using the same setup. Run it with:
+> ```
+> go test ./tests/... -run TestIndexMaintenanceVerify -v
+> ```
+
+## Prerequisites
+
+A running DumboDB instance and `mongosh` installed. Connect to your
+instance:
+
+```js
+mongosh mongodb://localhost:27017
+```
+
+Replace `localhost:27017` with your DumboDB address if different.
+
+## How to read the count checks
+
+`db.runCommand({ count: ... })` is answered directly from the index
+when one covers the filter, with no per-document re-check. A stale
+index shows up as a wrong count even when `find` looks right (find
+re-validates each fetched document). Every scenario checks both.
+
+---
+
+## Setup
+
+Run this once before the scenarios below.
+
+```js
+var db = db.getSiblingDB("idxmntvrfy")
+db.dropDatabase()
+
+db.items.insertMany([
+  { _id: 1, name: "alpha",   city: "NYC" },
+  { _id: 2, name: "bravo",   city: "LA"  },
+  { _id: 3, name: "charlie", city: "NYC" }
+])
+db.items.createIndex({ name: 1 }, { name: "by_name" })
+db.items.createIndex({ city: 1 }, { name: "by_city" })
+```
+
+---
+
+## Scenario 1: Update re-indexes the changed field
+
+After `$set` changes an indexed field from "alpha" to "zulu", lookups
+by the new value find the document and lookups by the old value find
+nothing -- in both `find` and `count`.
+
+```js
+db.items.updateOne({ _id: 1 }, { $set: { name: "zulu" } })
+
+db.items.find({ name: "zulu" })
+// Expected: one document: { _id: 1, name: "zulu", city: "NYC" }
+
+db.items.find({ name: "alpha" })
+// Expected: no documents
+
+db.runCommand({ count: "items", query: { name: "zulu" } })
+// Expected: { n: 1, ok: 1 }
+
+db.runCommand({ count: "items", query: { name: "alpha" } })
+// Expected: { n: 0, ok: 1 }
+```
+
+Key checks:
+- `find` by the new value returns `_id: 1`; by the old value returns nothing.
+- Both counts agree with find. A count of 1 for "alpha" means the
+  index still holds the pre-update entry.
+
+---
+
+## Scenario 2: updateMany re-indexes every touched document
+
+```js
+db.items.updateMany({ city: "NYC" }, { $set: { city: "SF" } })
+
+db.runCommand({ count: "items", query: { city: "SF" } })
+// Expected: { n: 2, ok: 1 }   (_id 1 and 3)
+
+db.runCommand({ count: "items", query: { city: "NYC" } })
+// Expected: { n: 0, ok: 1 }
+```
+
+---
+
+## Scenario 3: Delete removes index entries
+
+```js
+db.items.deleteOne({ _id: 2 })
+
+db.items.find({ name: "bravo" })
+// Expected: no documents
+
+db.runCommand({ count: "items", query: { name: "bravo" } })
+// Expected: { n: 0, ok: 1 }
+
+// Delete by an indexed-field filter (rather than by _id).
+db.items.deleteMany({ city: "SF" })
+db.runCommand({ count: "items", query: { city: "SF" } })
+// Expected: { n: 0, ok: 1 }
+
+db.runCommand({ count: "items", query: {} })
+// Expected: { n: 0, ok: 1 }   (all three docs are gone now)
+```
+
+---
+
+## Scenario 4: Multikey (array) updates adjust per element
+
+An indexed array field gets one index entry per element. Replacing one
+element must fix only that element's entry, and a range query must
+return a multi-element document once, not once per matching element.
+
+```js
+db.items.insertMany([
+  { _id: 10, tags: ["red", "green", "blue"] },
+  { _id: 11, tags: ["red"] }
+])
+db.items.createIndex({ tags: 1 }, { name: "by_tags" })
+
+// Replace one element: green -> yellow.
+db.items.updateOne({ _id: 10 }, { $set: { "tags.1": "yellow" } })
+
+db.runCommand({ count: "items", query: { tags: "yellow" } })
+// Expected: { n: 1, ok: 1 }
+db.runCommand({ count: "items", query: { tags: "green" } })
+// Expected: { n: 0, ok: 1 }
+db.runCommand({ count: "items", query: { tags: "red" } })
+// Expected: { n: 2, ok: 1 }   (_id 10 and 11; kept elements intact)
+
+// Range across elements: _id 10 matches via "red", "yellow", AND
+// "blue" but must be returned exactly once.
+db.items.find({ tags: { $gt: "a" } })
+// Expected: two documents (_id 10 once, _id 11 once)
+db.runCommand({ count: "items", query: { tags: { $gt: "a" } } })
+// Expected: { n: 2, ok: 1 }
+```
+
+Key checks:
+- The replaced element ("green") stops matching; the new one
+  ("yellow") starts; untouched elements still match.
+- The range `find` returns `_id: 10` once. Duplicates mean the
+  per-element index entries are leaking through.
+
+---
+
+## Scenario 5: Sparse index tracks field presence across updates
+
+A sparse index covers only documents that have the field. Updates that
+add or unset the field move the document in and out of the index, and
+queries stay truthful throughout.
+
+```js
+db.items.insertMany([
+  { _id: 20, phone: "555-0100" },
+  { _id: 21 }                       // no phone
+])
+db.items.createIndex({ phone: 1 }, { name: "by_phone", sparse: true })
+
+db.runCommand({ count: "items", query: { phone: "555-0100" } })
+// Expected: { n: 1, ok: 1 }
+
+// The field appears on 21...
+db.items.updateOne({ _id: 21 }, { $set: { phone: "555-0200" } })
+db.runCommand({ count: "items", query: { phone: "555-0200" } })
+// Expected: { n: 1, ok: 1 }
+
+// ...and disappears from 20.
+db.items.updateOne({ _id: 20 }, { $unset: { phone: "" } })
+db.items.find({ phone: "555-0100" })
+// Expected: no documents
+db.runCommand({ count: "items", query: { phone: "555-0100" } })
+// Expected: { n: 0, ok: 1 }
+```
+
+---
+
+## Scenario 6: Partial index tracks its filter across updates
+
+A partial index covers only documents matching its filter expression.
+The motivating case: an update flips `status` from "active" to
+"inactive" -- the document must leave the index, and queries on the
+indexed field must still return every matching document regardless of
+index membership.
+
+```js
+db.items.insertMany([
+  { _id: 30, sku: "A-1", status: "active"   },
+  { _id: 31, sku: "B-2", status: "inactive" }
+])
+db.items.createIndex(
+  { sku: 1 },
+  { name: "by_sku_partial",
+    partialFilterExpression: { status: "active" } }
+)
+
+// Member leaves the filter; non-member enters it.
+db.items.updateOne({ _id: 30 }, { $set: { status: "inactive" } })
+db.items.updateOne({ _id: 31 }, { $set: { status: "active" } })
+
+// Queries on sku return all matching docs either way: the planner
+// must not use the partial index for a query its filter does not
+// cover.
+db.items.find({ sku: "A-1" })
+// Expected: one document (_id: 30, now inactive)
+db.items.find({ sku: "B-2" })
+// Expected: one document (_id: 31, now active)
+db.runCommand({ count: "items", query: { sku: "A-1" } })
+// Expected: { n: 1, ok: 1 }
+db.runCommand({ count: "items", query: { sku: "B-2" } })
+// Expected: { n: 1, ok: 1 }
+```
+
+Key checks:
+- No document disappears from `find` results because of partial-index
+  membership; the index covers a subset, queries cover everything.
+
+---
+
+## Not verifiable from mongosh
+
+Two contracts from the same design doc are storage-level and have no
+wire-visible signal: a no-op update leaving the index root hash
+untouched (W4), and chunk-level structural sharing across writes (P2).
+They are covered by `internal/backends/dolt/index_write_maintenance_test.go`.

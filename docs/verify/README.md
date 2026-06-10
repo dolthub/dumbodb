@@ -25,6 +25,8 @@ Every verify doc has a matching automated test in `tests/`:
 | status.md | versioning_status_verify_test.go | TestStatusVerify |
 | tag.md | versioning_tag_verify_test.go | TestTagVerify |
 | index-branch-isolation.md | index_branch_isolation_verify_test.go | TestIndexBranchIsolationVerify |
+| index-maintenance.md | index_maintenance_verify_test.go | TestIndexMaintenanceVerify |
+| index-merge.md | index_merge_verify_test.go | TestIndexMergeVerify |
 
 Run all verify tests:
 
