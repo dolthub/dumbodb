@@ -363,25 +363,30 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		idxName  string
 		mapIdx   int
 		compound bool
+		rank     int
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
-		// Lossy entries sit at wrong byte positions; partial indexes
-		// would drop non-member matches. (Sparse is fine: no admitted
-		// operator can match a missing field.)
-		if idx.Lossy || idx.PartialFilterExpression != nil {
+		// Lossy entries sit at wrong byte positions; never usable.
+		// (Sparse is fine: no admitted operator can match a missing
+		// field.) A partial index is usable only when the filter
+		// implies its partial condition, so every matching document
+		// lies within it; otherwise it would drop non-member matches.
+		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
 			continue
 		}
-		if len(idx.Key) >= 1 && idx.Key[0].Field != "" {
-			leading := idx.Key[0].Field
-			isCompound := len(idx.Key) > 1
-			cur, have := indexedField[leading]
-			// Prefer single-field over compound when both exist for the
-			// same leading field.
-			if !have || (cur.compound && !isCompound) {
-				indexedField[leading] = indexedFieldEntry{
-					idxName: idx.Name, mapIdx: i, compound: isCompound,
-				}
+		partial := idx.PartialFilterExpression != nil
+		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
+			continue
+		}
+		leading := idx.Key[0].Field
+		isCompound := len(idx.Key) > 1
+		rank := indexRank(isCompound, partial)
+		// Lower rank wins: single-field over compound, non-partial over
+		// partial.
+		if cur, have := indexedField[leading]; !have || rank < cur.rank {
+			indexedField[leading] = indexedFieldEntry{
+				idxName: idx.Name, mapIdx: i, compound: isCompound, rank: rank,
 			}
 		}
 	}
@@ -788,6 +793,76 @@ func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexI
 // the same leading field (a single-field index has tighter scan
 // range), matching MongoDB's behaviour where the more selective plan
 // is preferred all else being equal.
+// partialFilterScalar extracts the scalar a condition pins a field to:
+// a bare scalar v, or {$eq: scalar}. Returns ok=false for any other
+// shape (other operators, arrays, null, regex, documents).
+func partialFilterScalar(v any) (any, bool) {
+	if doc, isDoc := v.(*types.Document); isDoc {
+		if doc.Len() != 1 || doc.Keys()[0] != "$eq" {
+			return nil, false
+		}
+		inner, err := doc.Get("$eq")
+		if err != nil {
+			return nil, false
+		}
+		v = inner
+	}
+	switch v.(type) {
+	case nil, types.NullType, *types.Array, *types.Document, types.Regex:
+		return nil, false
+	}
+	return v, true
+}
+
+// filterImpliesPartial reports whether filter guarantees every
+// condition in a partial index's filter expression pfe: each
+// {field: scalar} (or {field: {$eq: scalar}}) in pfe must appear as the
+// identical scalar equality in filter. Only scalar-equality partial
+// conditions are recognized; any other shape yields false, leaving the
+// index unused (a sound collection scan). When true, every document
+// matching filter lies within the partial index, so scanning the index
+// and re-filtering is sound.
+func filterImpliesPartial(filter, pfe *types.Document) bool {
+	if pfe == nil || pfe.Len() == 0 {
+		return true
+	}
+	if filter == nil {
+		return false
+	}
+	for _, pk := range pfe.Keys() {
+		pv, err := pfe.Get(pk)
+		if err != nil {
+			return false
+		}
+		ps, ok := partialFilterScalar(pv)
+		if !ok {
+			return false
+		}
+		fv, err := filter.Get(pk)
+		if err != nil {
+			return false
+		}
+		fs, ok := partialFilterScalar(fv)
+		if !ok || compareScalars(ps, fs) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// indexRank orders index candidates for the same leading field: lower
+// wins. Single-field beats compound; non-partial beats partial.
+func indexRank(compound, partial bool) int {
+	r := 0
+	if compound {
+		r += 2
+	}
+	if partial {
+		r += 1
+	}
+	return r
+}
+
 func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
@@ -806,27 +881,26 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 		if _, _, ok := indexBoundsForFilterValue(v); !ok {
 			continue
 		}
-		var single, compound backends.IndexInfo
-		var haveSingle, haveCompound bool
+		// Pick the best-ranked index whose leading field is k. A partial
+		// index is eligible only when the filter implies its partial
+		// condition (so the query's matches all lie within it).
+		best := -1
+		var bestIdx backends.IndexInfo
 		for _, idx := range idxInfos {
-			if idx.Lossy || idx.PartialFilterExpression != nil {
+			if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field != k {
 				continue
 			}
-			if len(idx.Key) >= 1 && idx.Key[0].Field == k {
-				if len(idx.Key) == 1 {
-					single, haveSingle = idx, true
-					break
-				}
-				if !haveCompound {
-					compound, haveCompound = idx, true
-				}
+			partial := idx.PartialFilterExpression != nil
+			if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
+				continue
+			}
+			rank := indexRank(len(idx.Key) > 1, partial)
+			if best == -1 || rank < best {
+				best, bestIdx = rank, idx
 			}
 		}
-		if haveSingle {
-			return single, true
-		}
-		if haveCompound {
-			return compound, true
+		if best != -1 {
+			return bestIdx, true
 		}
 	}
 	return backends.IndexInfo{}, false
@@ -2093,9 +2167,14 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	var chosen backends.IndexInfo
 	found := false
 	for i, idx := range idxInfos {
-		// Lossy entries sit at wrong byte positions; partial indexes
-		// cover member docs only (counting them undercounts).
-		if idx.Lossy || idx.PartialFilterExpression != nil {
+		// Lossy entries sit at wrong byte positions. A partial index is
+		// usable only when the filter implies its partial condition, so
+		// the counted entries are exactly the matching documents;
+		// otherwise it would undercount (it omits non-member docs).
+		if idx.Lossy {
+			continue
+		}
+		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
 			continue
 		}
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {

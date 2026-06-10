@@ -224,11 +224,18 @@ db.items.find({ phone: "555-0200" }).explain().queryPlanner.winningPlan
 
 ## Scenario 6: Partial index tracks its filter across updates
 
-A partial index covers only documents matching its filter expression.
-The motivating case: an update flips `status` from "active" to
-"inactive" -- the document must leave the index, and queries on the
-indexed field must still return every matching document regardless of
-index membership.
+A partial index is keyed on one field but only contains documents
+matching its filter expression. Here it is keyed on `sku` and contains
+only `status:"active"` documents. Two facts drive the scenario:
+
+- The planner uses the index only for a query that both filters `sku`
+  (the key) AND includes `status:"active"` (the partial condition).
+  With that condition present, every matching document is guaranteed to
+  be in the index, so the scan is sound. Without it -- a `sku`-only
+  query -- the planner must decline, because documents with that `sku`
+  but `status:"inactive"` live outside the index and would be missed.
+- An update that flips `status` moves a document in or out of the
+  index, observable through the index-using query.
 
 ```js
 db.items.insertMany([
@@ -241,37 +248,47 @@ db.items.createIndex(
     partialFilterExpression: { status: "active" } }
 )
 
-// Member leaves the filter; non-member enters it.
+// The covered query (filters sku AND includes the partial condition)
+// uses the index and finds the active A-1 doc.
+db.items.find({ sku: "A-1", status: "active" }).explain().queryPlanner.winningPlan
+// Expected: { stage: "FETCH", inputStage: { stage: "IXSCAN", indexName: "by_sku_partial", keyPattern: { sku: 1 } } }
+db.items.find({ sku: "A-1", status: "active" }).toArray().map(d => d._id)
+// Expected: [ 30 ]
+
+// The uncovered query (sku only) is DECLINED -- using the partial
+// index would miss inactive A-1 docs -- so it scans.
+db.items.find({ sku: "A-1" }).explain().queryPlanner.winningPlan
+// Expected: { stage: "COLLSCAN" }
+
+// Now flip membership: 30 leaves the filter, 31 enters it.
 db.items.updateOne({ _id: 30 }, { $set: { status: "inactive" } })
 db.items.updateOne({ _id: 31 }, { $set: { status: "active" } })
 
-// Queries on sku return all matching docs either way: the planner
-// must not use the partial index for a query its filter does not
-// cover.
-db.items.find({ sku: "A-1" })
-// Expected: one document (_id: 30, now inactive)
-db.items.find({ sku: "B-2" })
-// Expected: one document (_id: 31, now active)
-db.runCommand({ count: "items", query: { sku: "A-1" } })
-// Expected: { n: 1, ok: 1 }
-db.runCommand({ count: "items", query: { sku: "B-2" } })
-// Expected: { n: 1, ok: 1 }
+// The same index-using query now reflects the new membership: no
+// active A-1 doc remains, and B-2 has entered the index.
+db.items.find({ sku: "A-1", status: "active" }).toArray().map(d => d._id)
+// Expected: [ ]
+db.items.find({ sku: "B-2", status: "active" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN(by_sku_partial) under FETCH
+db.items.find({ sku: "B-2", status: "active" }).toArray().map(d => d._id)
+// Expected: [ 31 ]
 
-// The planner must DECLINE the partial index for a general sku query:
-// the index covers only status:"active" docs, so using it would drop
-// the others. The plan is a collection scan.
-db.items.find({ sku: "A-1" }).explain().queryPlanner.winningPlan
-// Expected: { stage: "COLLSCAN" }
+// An uncovered query still scans and still returns everything,
+// regardless of membership -- the document is not gone, just no longer
+// in the partial index.
+db.items.find({ sku: "A-1" }).toArray().map(d => d._id)
+// Expected: [ 30 ]
 ```
 
 Key checks:
-- No document disappears from `find` results because of partial-index
-  membership; the index covers a subset, queries cover everything.
-- The plan is `COLLSCAN`, not `IXSCAN(by_sku_partial)`. An `IXSCAN`
-  here would be a correctness bug: the partial index omits the
-  inactive documents, so the query would silently miss them. (This
-  matches MongoDB, which also declines a partial index for a query
-  its filter does not cover.)
+- The covered query (`sku` + `status:"active"`) uses
+  `IXSCAN(by_sku_partial)`; the `sku`-only query is correctly declined
+  to `COLLSCAN`. An `IXSCAN` for the `sku`-only query would be a
+  correctness bug -- it would silently miss the inactive docs the
+  index omits. Both match MongoDB.
+- The membership flip is visible through the index-using query: A-1
+  drops out, B-2 appears. The document is not deleted -- the `sku`-only
+  scan still finds A-1 -- it just left the partial index.
 
 ---
 

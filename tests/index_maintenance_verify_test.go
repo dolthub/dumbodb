@@ -203,6 +203,22 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		coveredA1 := bson.D{{Key: "sku", Value: "A-1"}, {Key: "status", Value: "active"}}
+		coveredB2 := bson.D{{Key: "sku", Value: "B-2"}, {Key: "status", Value: "active"}}
+		skuOnlyA1 := bson.D{{Key: "sku", Value: "A-1"}}
+
+		// Covered query (sku + partial condition) uses the index; sku-only
+		// is declined to a scan (using the index would miss inactive docs).
+		wpCovered := idxvWinningPlan(t, db, "items", coveredA1)
+		assert.Equal(t, "by_sku_partial", idxvIxscanName(wpCovered),
+			"covered query must use the partial index: %v", wpCovered)
+		assert.Equal(t, []int32{30}, idxvFindIDs(t, db, "items", coveredA1))
+
+		wpUncovered := idxvWinningPlan(t, db, "items", skuOnlyA1)
+		assert.Equal(t, "COLLSCAN", wpUncovered["stage"],
+			"sku-only query must be declined to a scan: %v", wpUncovered)
+
+		// Flip membership: 30 leaves the filter, 31 enters it.
 		_, err = items.UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(30)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "inactive"}}}})
@@ -212,14 +228,15 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "active"}}}})
 		require.NoError(t, err)
 
-		assert.Equal(t, []int32{30}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "A-1"}}))
-		assert.Equal(t, []int32{31}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "B-2"}}))
-		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "sku", Value: "A-1"}}))
-		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "sku", Value: "B-2"}}))
+		// The index-using query reflects the new membership.
+		assert.Empty(t, idxvFindIDs(t, db, "items", coveredA1),
+			"no active A-1 doc remains after the flip")
+		wpB2 := idxvWinningPlan(t, db, "items", coveredB2)
+		assert.Equal(t, "by_sku_partial", idxvIxscanName(wpB2),
+			"covered B-2 query must use the partial index: %v", wpB2)
+		assert.Equal(t, []int32{31}, idxvFindIDs(t, db, "items", coveredB2))
 
-		// The planner must decline the partial index for a general sku
-		// query (it omits inactive docs); the plan is a collection scan.
-		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "sku", Value: "A-1"}})
-		assert.Equal(t, "COLLSCAN", wp["stage"], "partial index must not be chosen for an uncovered query: %v", wp)
+		// The document is not gone -- a sku-only scan still finds A-1.
+		assert.Equal(t, []int32{30}, idxvFindIDs(t, db, "items", skuOnlyA1))
 	})
 }
