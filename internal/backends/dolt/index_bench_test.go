@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -498,5 +499,40 @@ func TestIndexLookup_Bench_Sanity(t *testing.T) {
 	rangeRes.Iter.Close()
 	if got != 100 {
 		t.Errorf("range candidate count: want 100, got %d", got)
+	}
+}
+
+// BenchmarkInsertWithUniqueIndex measures single-document insert cost
+// against pre-seeded collections of different sizes, with a unique
+// index on the insert's field. Behavior P1 of
+// docs/design/secondary-index-structural-sharing.md: per-insert cost
+// must not scale with collection size (the historical implementation
+// scanned and decoded the whole primary per insert batch; the probe
+// implementation does one bounded index read per row).
+func BenchmarkInsertWithUniqueIndex(b *testing.B) {
+	for _, n := range []int{1000, 8000} {
+		b.Run(fmt.Sprintf("seed_%d", n), func(b *testing.B) {
+			coll, ctx := seedBenchCollection(b, n)
+			if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+				Indexes: []backends.IndexInfo{{
+					Name:   "by_i_unique",
+					Key:    []backends.IndexKeyPair{{Field: "i"}},
+					Unique: true,
+				}},
+			}); err != nil {
+				b.Fatalf("CreateIndexes: %v", err)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				id := int32(1_000_000 + i)
+				doc := must.NotFail(types.NewDocument("_id", id, "i", id))
+				if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{
+					Docs:            []*types.Document{doc},
+					SkipDurableSync: true,
+				}); err != nil {
+					b.Fatalf("InsertAll: %v", err)
+				}
+			}
+		})
 	}
 }

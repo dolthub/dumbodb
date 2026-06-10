@@ -1357,8 +1357,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	// Collect unique secondary indexes for this collection. Resolve from
 	// the per-branch DTBL so unique-constraint enforcement is consistent
-	// with the rest of the write path.
-	branchInfos, _, err := resolveBranchIndexState(ctx, c, state)
+	// with the rest of the write path. The maps back the per-row
+	// uniqueness probes -- no collection scan.
+	branchInfos, branchIdxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
 	}
@@ -1369,50 +1370,22 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		}
 	}
 
-	// For each unique index, gather the key values of all existing documents.
-	// existingUniqueKeys[i] holds the composite keys for unique index i.
-	existingUniqueKeys := make([][][]any, len(uniqueIndexes))
-	if len(uniqueIndexes) > 0 {
-		iter, err := m.IterAll(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for {
-			_, v, err := iter.Next(ctx)
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				return nil, err
-			}
-			if v == nil {
-				break
-			}
-			existingDoc, err := readDocFromValue(ctx, state.ns, v)
-			if err != nil {
-				continue
-			}
-			for i, idx := range uniqueIndexes {
-				// For partial indexes, only include existing docs that satisfy the filter.
-				if idx.MatchesPartialFilter != nil {
-					matches, filterErr := idx.MatchesPartialFilter(existingDoc)
-					if filterErr != nil || !matches {
-						continue
-					}
-				}
-				existingUniqueKeys[i] = append(existingUniqueKeys[i], extractIndexKey(existingDoc, idx))
-			}
-		}
-	}
-
 	mut := m.Mutate()
 
 	// batchIDs tracks docIDs inserted in this batch for capped-collection ordering.
 	batchIDs := make([]any, 0, len(params.Docs))
 	// batchHashSet detects in-batch duplicate _id hashes in O(1).
 	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
-	// batchUniqueKeys[i] holds composite keys for unique index i from docs in this batch.
-	batchUniqueKeys := make([][][]any, len(uniqueIndexes))
+	// batchUniqueEntryKeys[i] holds the encoded value prefixes already
+	// claimed by docs in this batch, per unique index, for in-batch
+	// duplicate detection (the index probes only see pre-batch state).
+	batchUniqueEntryKeys := make([]map[string]struct{}, len(uniqueIndexes))
+	for i := range batchUniqueEntryKeys {
+		batchUniqueEntryKeys[i] = make(map[string]struct{})
+	}
+	// batchLossyKeys[i] is the value-level fallback set for lossy rows,
+	// compared with indexKeysEqual instead of encoded bytes.
+	batchLossyKeys := make([][][]any, len(uniqueIndexes))
 
 	for _, doc := range params.Docs {
 		// Extract the _id from this document.
@@ -1447,42 +1420,74 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			)
 		}
 
-		// Check unique secondary index constraints.
+		// Check unique secondary index constraints: one bounded index
+		// probe per entry row instead of the historical whole-primary
+		// scan. indexEntriesForDoc applies membership (sparse / partial)
+		// and multikey expansion, so array elements participate in
+		// uniqueness like MongoDB's.
 		for i, idx := range uniqueIndexes {
-			// For partial indexes, only documents that satisfy the partial filter
-			// expression are indexed. Skip uniqueness checks for non-matching docs.
-			if idx.MatchesPartialFilter != nil {
-				matches, filterErr := idx.MatchesPartialFilter(doc)
-				if filterErr != nil || !matches {
-					continue
-				}
-			}
-
-			newKey := extractIndexKey(doc, idx)
-
-			// For sparse indexes, documents where all indexed fields are missing
-			// are not indexed and thus do not participate in uniqueness checks.
-			if idx.Sparse && allNull(newKey) {
+			rows, _, lossy := indexEntriesForDoc(doc, idx)
+			if len(rows) == 0 {
 				continue
 			}
 
-			for _, existKey := range existingUniqueKeys[i] {
-				if indexKeysEqual(newKey, existKey) {
+			if lossy || idx.Lossy {
+				// A value with no faithful byte encoding (Decimal128):
+				// probes would collide on the collapsed bytes, so fall
+				// back to a value-level comparison scan for this index.
+				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
+				if scanErr != nil {
+					return nil, scanErr
+				}
+				if conflict {
+					return nil, backends.NewError(
+						backends.ErrorCodeInsertDuplicateID,
+						fmt.Errorf("duplicate key for unique index %s", idx.Name),
+					)
+				}
+				newKey := extractIndexKey(doc, idx)
+				for _, batchKey := range batchLossyKeys[i] {
+					if indexKeysEqual(newKey, batchKey) {
+						return nil, backends.NewError(
+							backends.ErrorCodeInsertDuplicateID,
+							fmt.Errorf("duplicate key for unique index %s", idx.Name),
+						)
+					}
+				}
+				batchLossyKeys[i] = append(batchLossyKeys[i], newKey)
+				continue
+			}
+
+			// Dedupe this doc's own rows first ([5,5] must not
+			// self-conflict), then probe the index and the batch set.
+			docPrefixes := make(map[string]struct{}, len(rows))
+			for _, row := range rows {
+				start, _ := idxpkg.EqualityProbeBounds(row)
+				docPrefixes[string(start)] = struct{}{}
+			}
+			for prefix := range docPrefixes {
+				if _, claimed := batchUniqueEntryKeys[i][prefix]; claimed {
 					return nil, backends.NewError(
 						backends.ErrorCodeInsertDuplicateID,
 						fmt.Errorf("duplicate key for unique index %s", idx.Name),
 					)
 				}
 			}
-			for _, batchKey := range batchUniqueKeys[i] {
-				if indexKeysEqual(newKey, batchKey) {
+			for _, row := range rows {
+				conflict, probeErr := idxpkg.UniqueConflict(ctx, branchIdxMaps[idx.Name], row, h[:])
+				if probeErr != nil {
+					return nil, fmt.Errorf("unique probe on %s: %w", idx.Name, probeErr)
+				}
+				if conflict {
 					return nil, backends.NewError(
 						backends.ErrorCodeInsertDuplicateID,
 						fmt.Errorf("duplicate key for unique index %s", idx.Name),
 					)
 				}
 			}
-			batchUniqueKeys[i] = append(batchUniqueKeys[i], newKey)
+			for prefix := range docPrefixes {
+				batchUniqueEntryKeys[i][prefix] = struct{}{}
+			}
 		}
 
 		key, err := buildKey(h[:])
@@ -1692,6 +1697,20 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 
 	var updated int32
 
+	// Index state resolved once per batch: backs the per-row unique
+	// probes during the loop and the entry maintenance after it.
+	idxInfos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
+	if err != nil {
+		return nil, fmt.Errorf("resolving branch index state: %w", err)
+	}
+	hasUnique := false
+	for _, idx := range idxInfos {
+		if idx.Unique {
+			hasUnique = true
+			break
+		}
+	}
+
 	// (oldDoc, newDoc) pairs for secondary-index maintenance, collected
 	// while the primary edits are applied.
 	var idxOldDocs, idxNewDocs []*types.Document
@@ -1761,15 +1780,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			}
 		}
 
-		v, err := buildValue(ctx, state.ns, newBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := mut.Put(ctx, key, v); err != nil {
-			return nil, err
-		}
-
 		// Decode the before/after documents for index maintenance. The
 		// new doc decodes from newBytes (the bytes actually stored, which
 		// the partial-mutation path may have produced) rather than from
@@ -1782,6 +1792,25 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		if err != nil {
 			return nil, fmt.Errorf("decoding post-update document: %w", err)
 		}
+
+		// Unique enforcement before the primary edit: an update whose
+		// new unique key collides with a different document is rejected
+		// and the document stays unchanged.
+		if hasUnique {
+			if err := c.validateUniqueOnUpdate(ctx, state, m, idxInfos, idxMaps, newDoc, h); err != nil {
+				return nil, err
+			}
+		}
+
+		v, err := buildValue(ctx, state.ns, newBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := mut.Put(ctx, key, v); err != nil {
+			return nil, err
+		}
+
 		idxOldDocs = append(idxOldDocs, oldDoc)
 		idxNewDocs = append(idxNewDocs, newDoc)
 
@@ -1801,10 +1830,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	// versions contributed and insert the new versions' entries, per
 	// the entry-set difference (no-op for indexes the update does not
 	// touch).
-	idxInfos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
-	if err != nil {
-		return nil, fmt.Errorf("resolving branch index state: %w", err)
-	}
 	updatedInfos, updatedIdxMaps, err := applyUpdatesToIndexes(ctx, idxInfos, idxMaps, idxOldDocs, idxNewDocs)
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
@@ -2679,6 +2704,95 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		return prolly.Map{}, false, false, fmt.Errorf("index: flushing map: %w", err)
 	}
 	return built, multikey, lossy, nil
+}
+
+// scanUniqueConflict is the value-level fallback for unique validation
+// when a row contains a value with no faithful byte encoding
+// (Decimal128): it scans the primary and compares index key vectors
+// with indexKeysEqual. O(N), but only runs for lossy values; the
+// common path is the O(log N) index probe.
+func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfHash [20]byte) (bool, error) {
+	newKey := extractIndexKey(doc, idx)
+	iter, err := m.IterAll(ctx)
+	if err != nil {
+		return false, err
+	}
+	for {
+		k, v, err := iter.Next(ctx)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return false, err
+		}
+		if v == nil {
+			break
+		}
+		idBytes, ok := keyDesc.GetBytes(0, k)
+		if ok && bytes.Equal(idBytes, selfHash[:]) {
+			continue
+		}
+		existingDoc, err := readDocFromValue(ctx, state.ns, v)
+		if err != nil {
+			continue
+		}
+		if idx.MatchesPartialFilter != nil {
+			matches, ferr := idx.MatchesPartialFilter(existingDoc)
+			if ferr != nil || !matches {
+				continue
+			}
+		}
+		existKey := extractIndexKey(existingDoc, idx)
+		if idx.Sparse && allNull(existKey) {
+			continue
+		}
+		if indexKeysEqual(newKey, existKey) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// validateUniqueOnUpdate rejects an update whose new document version
+// would collide with a different document on any unique index. Same
+// probe strategy as InsertAll; the doc's own existing entries are
+// excluded by primary ID.
+func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState, m prolly.Map, infos []backends.IndexInfo, idxMaps map[string]prolly.Map, newDoc *types.Document, selfHash [20]byte) error {
+	for _, idx := range infos {
+		if !idx.Unique {
+			continue
+		}
+		rows, _, lossy := indexEntriesForDoc(newDoc, idx)
+		if len(rows) == 0 {
+			continue
+		}
+		if lossy || idx.Lossy {
+			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
+			if err != nil {
+				return err
+			}
+			if conflict {
+				return backends.NewError(
+					backends.ErrorCodeInsertDuplicateID,
+					fmt.Errorf("duplicate key for unique index %s", idx.Name),
+				)
+			}
+			continue
+		}
+		for _, row := range rows {
+			conflict, err := idxpkg.UniqueConflict(ctx, idxMaps[idx.Name], row, selfHash[:])
+			if err != nil {
+				return fmt.Errorf("unique probe on %s: %w", idx.Name, err)
+			}
+			if conflict {
+				return backends.NewError(
+					backends.ErrorCodeInsertDuplicateID,
+					fmt.Errorf("duplicate key for unique index %s", idx.Name),
+				)
+			}
+		}
+	}
+	return nil
 }
 
 // extractIndexFieldValues returns the field values for the given index, in key order.
