@@ -15,18 +15,28 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"html"
+	"image"
+	"image/color"
+	"image/png"
 	"strings"
-	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
-// htmlReport builds a self-contained HTML email body: a styled stats
-// header followed by an inline SVG line chart of RSS over time.
-// Inline SVG is supported by Gmail web, Outlook 365, Apple Mail, and
-// every modern client we care about; the text body remains the
-// fallback for everything else.
-func htmlReport(title string, stats []string, samples []sample) string {
+// chartCID is the Content-ID under which the PNG attachment is
+// referenced from the HTML body.
+const chartCID = "soak-chart@dumbodb"
+
+// htmlReport builds the HTML body: stats table + an <img cid:> tag
+// for the chart. The caller attaches the PNG bytes separately in a
+// multipart/related MIME wrapper.
+func htmlReport(title string, stats []string, hasChart bool) string {
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;font-size:13px;color:#333;margin:16px">`)
 	fmt.Fprintf(&b, `<h2 style="margin:0 0 8px 0;font-size:15px">%s</h2>`, html.EscapeString(title))
@@ -38,25 +48,24 @@ func htmlReport(title string, stats []string, samples []sample) string {
 			html.EscapeString(strings.TrimSpace(k)), html.EscapeString(strings.TrimSpace(v)))
 	}
 	b.WriteString(`</table>`)
-	if chart := svgChart(samples, 640, 240); chart != "" {
-		b.WriteString(chart)
+	if hasChart {
+		fmt.Fprintf(&b, `<img src="cid:%s" alt="RSS over time" style="display:block;max-width:100%%;border:1px solid #ddd"/>`, chartCID)
 	}
 	b.WriteString(`</body></html>`)
 	return b.String()
 }
 
-// svgChart renders an RSS-over-time line chart as an inline SVG.
-// Returns empty string for too-few samples to plot. Y is RSS in MB; X
-// is wall-clock from the first to last sample.
-func svgChart(samples []sample, width, height int) string {
+// pngChart renders an RSS-over-time line chart to PNG. Returns nil
+// for too-few samples. Stdlib + basicfont, no external deps.
+func pngChart(samples []sample, width, height int) []byte {
 	if len(samples) < 2 {
-		return ""
+		return nil
 	}
 	t0 := samples[0].t
 	tEnd := samples[len(samples)-1].t
 	durSec := tEnd.Sub(t0).Seconds()
 	if durSec <= 0 {
-		return ""
+		return nil
 	}
 
 	minY, maxY := samples[0].rssKB, samples[0].rssKB
@@ -82,58 +91,234 @@ func svgChart(samples []sample, width, height int) string {
 		leftMargin   = 70
 		rightMargin  = 20
 		topMargin    = 16
-		bottomMargin = 32
+		bottomMargin = 28
 	)
 	plotW := width - leftMargin - rightMargin
 	plotH := height - topMargin - bottomMargin
 
-	var pts strings.Builder
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	fill(img, image.Rect(0, 0, width, height), color.NRGBA{0xfa, 0xfa, 0xfa, 0xff})
+
+	gridColor := color.NRGBA{0xdd, 0xdd, 0xdd, 0xff}
+	labelColor := color.NRGBA{0x66, 0x66, 0x66, 0xff}
+	lineColor := color.NRGBA{0x00, 0x66, 0xcc, 0xff}
+
+	for _, v := range []int64{yMin, (yMin + yMax) / 2, yMax} {
+		y := topMargin + plotH - int(float64(plotH)*float64(v-yMin)/float64(yMax-yMin))
+		drawHLine(img, leftMargin, leftMargin+plotW, y, gridColor)
+		label := fmt.Sprintf("%d MB", v/1024)
+		drawString(img, leftMargin-6-7*len(label), y+5, label, labelColor)
+	}
+	drawString(img, leftMargin, topMargin+plotH+16, t0.UTC().Format("15:04:05"), labelColor)
+	endLabel := tEnd.UTC().Format("15:04:05")
+	drawString(img, leftMargin+plotW-7*len(endLabel), topMargin+plotH+16, endLabel, labelColor)
+
+	var px, py int
 	for i, s := range samples {
 		x := leftMargin + int(float64(plotW)*s.t.Sub(t0).Seconds()/durSec)
 		y := topMargin + plotH - int(float64(plotH)*float64(s.rssKB-yMin)/float64(yMax-yMin))
 		if i > 0 {
-			pts.WriteByte(' ')
+			drawLine(img, px, py, x, y, lineColor)
+			drawLine(img, px, py+1, x, y+1, lineColor)
 		}
-		fmt.Fprintf(&pts, "%d,%d", x, y)
+		px, py = x, y
 	}
-
-	yLabel := func(kb int64) string { return fmt.Sprintf("%d MB", kb/1024) }
-	xLabel := func(t time.Time) string { return t.UTC().Format("15:04:05Z") }
-	mid := (yMin + yMax) / 2
-
-	var s strings.Builder
-	fmt.Fprintf(&s, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" style="border:1px solid #ddd;background:#fafafa">`, width, height, width, height)
-	// Y-axis gridlines + labels at min, mid, max.
-	for _, p := range []struct {
-		v   int64
-		lbl string
-	}{
-		{yMax, yLabel(yMax)},
-		{mid, yLabel(mid)},
-		{yMin, yLabel(yMin)},
-	} {
-		y := topMargin + plotH - int(float64(plotH)*float64(p.v-yMin)/float64(yMax-yMin))
-		fmt.Fprintf(&s, `<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#e0e0e0"/>`,
-			leftMargin, y, leftMargin+plotW, y)
-		fmt.Fprintf(&s, `<text x="%d" y="%d" font-size="11" font-family="monospace" fill="#666" text-anchor="end">%s</text>`,
-			leftMargin-6, y+4, p.lbl)
-	}
-	// X axis labels at endpoints.
-	fmt.Fprintf(&s, `<text x="%d" y="%d" font-size="11" font-family="monospace" fill="#666">%s</text>`,
-		leftMargin, height-bottomMargin/2+4, xLabel(t0))
-	fmt.Fprintf(&s, `<text x="%d" y="%d" font-size="11" font-family="monospace" fill="#666" text-anchor="end">%s</text>`,
-		leftMargin+plotW, height-bottomMargin/2+4, xLabel(tEnd))
-	// The polyline itself.
-	fmt.Fprintf(&s, `<polyline points="%s" stroke="#0066cc" fill="none" stroke-width="2"/>`, pts.String())
-	// Endpoint dots so a single-segment chart is visible.
-	for i := range samples {
-		if i != 0 && i != len(samples)-1 {
-			continue
-		}
+	for _, i := range []int{0, len(samples) - 1} {
 		x := leftMargin + int(float64(plotW)*samples[i].t.Sub(t0).Seconds()/durSec)
 		y := topMargin + plotH - int(float64(plotH)*float64(samples[i].rssKB-yMin)/float64(yMax-yMin))
-		fmt.Fprintf(&s, `<circle cx="%d" cy="%d" r="3" fill="#0066cc"/>`, x, y)
+		fillDot(img, x, y, 3, lineColor)
 	}
-	s.WriteString(`</svg>`)
-	return s.String()
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+func fill(img *image.RGBA, r image.Rectangle, c color.NRGBA) {
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			img.Set(x, y, c)
+		}
+	}
+}
+
+func drawHLine(img *image.RGBA, x0, x1, y int, c color.NRGBA) {
+	for x := x0; x <= x1; x++ {
+		img.Set(x, y, c)
+	}
+}
+
+// drawLine is Bresenham's; adequate for non-AA chart strokes.
+func drawLine(img *image.RGBA, x0, y0, x1, y1 int, c color.NRGBA) {
+	dx := abs(x1 - x0)
+	dy := abs(y1 - y0)
+	sx := 1
+	if x0 > x1 {
+		sx = -1
+	}
+	sy := 1
+	if y0 > y1 {
+		sy = -1
+	}
+	err := dx - dy
+	for {
+		img.Set(x0, y0, c)
+		if x0 == x1 && y0 == y1 {
+			return
+		}
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x0 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+func fillDot(img *image.RGBA, cx, cy, r int, c color.NRGBA) {
+	for dy := -r; dy <= r; dy++ {
+		for dx := -r; dx <= r; dx++ {
+			if dx*dx+dy*dy <= r*r {
+				img.Set(cx+dx, cy+dy, c)
+			}
+		}
+	}
+}
+
+func drawString(img *image.RGBA, x, y int, s string, c color.NRGBA) {
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(c),
+		Face: basicfont.Face7x13,
+		Dot:  fixed.P(x, y),
+	}
+	d.DrawString(s)
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// sparkline renders an N-column Unicode-block trend chart of the
+// samples scaled to their own min/max. Drops into the plain-text body
+// so consumers of -alert-cmd still see the trend.
+func sparkline(samples []sample, columns int) string {
+	if len(samples) < 2 || columns < 2 {
+		return ""
+	}
+	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	var minY, maxY int64 = samples[0].rssKB, samples[0].rssKB
+	for _, s := range samples {
+		if s.rssKB < minY {
+			minY = s.rssKB
+		}
+		if s.rssKB > maxY {
+			maxY = s.rssKB
+		}
+	}
+	if maxY == minY {
+		return strings.Repeat(string(blocks[3]), columns)
+	}
+	t0 := samples[0].t
+	dur := samples[len(samples)-1].t.Sub(t0)
+	if dur <= 0 {
+		return ""
+	}
+	sums := make([]float64, columns)
+	counts := make([]int, columns)
+	for _, s := range samples {
+		off := s.t.Sub(t0)
+		b := int(float64(columns) * float64(off) / float64(dur))
+		if b >= columns {
+			b = columns - 1
+		}
+		if b < 0 {
+			b = 0
+		}
+		sums[b] += float64(s.rssKB)
+		counts[b]++
+	}
+	var out strings.Builder
+	var lastIdx int
+	for i := 0; i < columns; i++ {
+		var idx int
+		if counts[i] == 0 {
+			idx = lastIdx
+		} else {
+			avg := sums[i] / float64(counts[i])
+			norm := (avg - float64(minY)) / float64(maxY-minY)
+			idx = int(norm * 7.999)
+			if idx < 0 {
+				idx = 0
+			}
+			if idx > 7 {
+				idx = 7
+			}
+			lastIdx = idx
+		}
+		out.WriteRune(blocks[idx])
+	}
+	return out.String()
+}
+
+// buildRawEmail composes the MIME message SES needs when we have a
+// PNG to embed. Structure: multipart/related wrapping a single
+// text/html part plus the PNG attachment. When pngBytes is nil this
+// degrades to a single-part text/html message.
+func buildRawEmail(from, to, subject, htmlBody string, pngBytes []byte) []byte {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	b.WriteString("MIME-Version: 1.0\r\n")
+
+	if pngBytes == nil {
+		// Single-part text/html.
+		b.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
+		b.WriteString("Content-Transfer-Encoding: 8bit\r\n\r\n")
+		b.WriteString(htmlBody)
+		b.WriteString("\r\n")
+		return b.Bytes()
+	}
+
+	const boundary = "rel-boundary-dumbodb-soak"
+	fmt.Fprintf(&b, "Content-Type: multipart/related; boundary=\"%s\"\r\n\r\n", boundary)
+
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
+	b.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
+	b.WriteString("Content-Transfer-Encoding: 8bit\r\n\r\n")
+	b.WriteString(htmlBody)
+	b.WriteString("\r\n")
+
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
+	b.WriteString("Content-Type: image/png\r\n")
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
+	fmt.Fprintf(&b, "Content-ID: <%s>\r\n", chartCID)
+	b.WriteString("Content-Disposition: inline; filename=\"chart.png\"\r\n\r\n")
+	writeBase64Wrapped(&b, pngBytes)
+
+	fmt.Fprintf(&b, "--%s--\r\n", boundary)
+	return b.Bytes()
+}
+
+// writeBase64Wrapped emits base64 in 76-char lines, the MIME standard
+// line length.
+func writeBase64Wrapped(b *bytes.Buffer, data []byte) {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	for i := 0; i < len(encoded); i += 76 {
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		b.WriteString(encoded[i:end])
+		b.WriteString("\r\n")
+	}
 }

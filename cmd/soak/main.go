@@ -113,7 +113,7 @@ func main() {
 	}
 	defer writer.Close()
 
-	notify := buildNotifier(*alertCmd, *emailFrom, *emailTo, *emailRegn, *emailSubj)
+	notify := buildNotifier(*alertCmd, *emailFrom, *emailTo, *emailRegn)
 	detector := newSlopeDetector(*slopeWindow, *slopeThresholdMB, *cooldown)
 
 	wl, err := startWorkload(ctx, workloadConfig{
@@ -164,7 +164,12 @@ func main() {
 		// by the same signal that's tearing us down.
 		sctx, scancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer scancel()
-		notify(sctx, subj, text, htmlBody)
+		notify(sctx, alertMessage{
+			Subject:  subj,
+			TextBody: text,
+			HTMLBody: htmlBody,
+			ChartPNG: pngChart(allSamples, 640, 240),
+		})
 	}()
 
 	for {
@@ -191,9 +196,15 @@ func main() {
 				continue
 			}
 			alertCount++
-			text, htmlBody := alertReport(hostname, pid, addr, alert, detector.recent(), wl.cycleCount(), wl.errCount())
+			recent := detector.recent()
+			text, htmlBody := alertReport(hostname, pid, addr, alert, recent, wl.cycleCount(), wl.errCount())
 			log.Printf("ALERT: %s", strings.ReplaceAll(strings.TrimSpace(text), "\n", " | "))
-			notify(ctx, *emailSubj, text, htmlBody)
+			notify(ctx, alertMessage{
+				Subject:  *emailSubj,
+				TextBody: text,
+				HTMLBody: htmlBody,
+				ChartPNG: pngChart(recent, 640, 200),
+			})
 		}
 	}
 }
@@ -254,7 +265,7 @@ func alertReport(host string, pid int, addr string, a alert, recent []sample, cy
 			a.slopeMBPerHour, roundDuration(a.window), a.thresholdMBPerHour),
 		fmt.Sprintf("cycles: %d (errors %d) since startup", cycles, errs),
 	}
-	return textBlock(title, stats, recent), htmlReport(title, stats, recent)
+	return textBlock(title, stats, recent), htmlReport(title, stats, len(recent) >= 2)
 }
 
 // summaryReport renders the end-of-run summary email as both plain
@@ -280,22 +291,21 @@ func summaryReport(host string, pid int, addr string, startedAt, endedAt time.Ti
 		stats = append(stats, fmt.Sprintf("rss: first=%d kB, last=%d kB, delta=%+d kB (%+.2f MB/hour)",
 			first.RssKB, last.RssKB, deltaKB, ratePerHour))
 	}
-	return textBlock(title, stats, allSamples), htmlReport(title, stats, allSamples)
+	return textBlock(title, stats, allSamples), htmlReport(title, stats, len(allSamples) >= 2)
 }
 
-// textBlock renders the plain-text view shared by alertCmd consumers
-// and the fallback path for non-HTML email clients.
+// textBlock renders the plain-text view consumed by -alert-cmd and
+// any future plain-text fallback. Replaces the per-sample dump with
+// a single Unicode-block sparkline so the body stays bounded even on
+// long runs.
 func textBlock(title string, stats []string, samples []sample) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, title)
 	for _, s := range stats {
 		fmt.Fprintf(&b, "  %s\n", s)
 	}
-	if len(samples) > 0 {
-		fmt.Fprintln(&b, "  samples:")
-		for _, s := range samples {
-			fmt.Fprintf(&b, "    %s  rss=%6d kB\n", s.t.UTC().Format(time.RFC3339), s.rssKB)
-		}
+	if line := sparkline(samples, 60); line != "" {
+		fmt.Fprintf(&b, "  trend:  %s\n", line)
 	}
 	return b.String()
 }
