@@ -101,6 +101,9 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		assert.Empty(t, idxvFindIDs(t, db, "items", bson.D{{Key: "name", Value: "alpha"}}))
 		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "name", Value: "zulu"}}))
 		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "name", Value: "alpha"}}))
+
+		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "name", Value: "zulu"}})
+		assert.Equal(t, "by_name", idxvIxscanName(wp), "re-indexed value must be served by the index: %v", wp)
 	})
 
 	t.Run("Scenario2_UpdateManyReindexesEveryDoc", func(t *testing.T) {
@@ -149,6 +152,11 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		assert.Equal(t, []int32{10, 11}, idxvFindIDs(t, db, "items", rangeFilter),
 			"multi-element doc must be returned exactly once")
 		assert.EqualValues(t, 2, idxvCount(t, db, "items", rangeFilter))
+
+		eqPlan := idxvWinningPlan(t, db, "items", bson.D{{Key: "tags", Value: "yellow"}})
+		assert.Equal(t, "by_tags", idxvIxscanName(eqPlan), "equality lookup must use by_tags: %v", eqPlan)
+		rangePlan := idxvWinningPlan(t, db, "items", rangeFilter)
+		assert.Equal(t, "by_tags", idxvIxscanName(rangePlan), "range lookup must use by_tags: %v", rangePlan)
 	})
 
 	t.Run("Scenario5_SparseIndexTracksFieldPresence", func(t *testing.T) {
@@ -177,6 +185,9 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, idxvFindIDs(t, db, "items", bson.D{{Key: "phone", Value: "555-0100"}}))
 		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "phone", Value: "555-0100"}}))
+
+		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "phone", Value: "555-0200"}})
+		assert.Equal(t, "by_phone", idxvIxscanName(wp), "sparse index must serve equality lookups: %v", wp)
 	})
 
 	t.Run("Scenario6_PartialIndexTracksFilter", func(t *testing.T) {
@@ -205,5 +216,10 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		assert.Equal(t, []int32{31}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "B-2"}}))
 		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "sku", Value: "A-1"}}))
 		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "sku", Value: "B-2"}}))
+
+		// The planner must decline the partial index for a general sku
+		// query (it omits inactive docs); the plan is a collection scan.
+		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "sku", Value: "A-1"}})
+		assert.Equal(t, "COLLSCAN", wp["stage"], "partial index must not be chosen for an uncovered query: %v", wp)
 	})
 }

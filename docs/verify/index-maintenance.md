@@ -27,12 +27,22 @@ mongosh mongodb://localhost:27017
 
 Replace `localhost:27017` with your DumboDB address if different.
 
-## How to read the count checks
+## How to read the checks
 
-`db.runCommand({ count: ... })` is answered directly from the index
-when one covers the filter, with no per-document re-check. A stale
-index shows up as a wrong count even when `find` looks right (find
-re-validates each fetched document). Every scenario checks both.
+Three probes appear throughout:
+
+- `db.runCommand({ count: ... })` is answered directly from the index
+  when one covers the filter, with no per-document re-check. A stale
+  index shows up as a wrong count even when `find` looks right (find
+  re-validates each fetched document).
+- `db.items.find({...})` returns the documents; compare the `_id`s.
+- `db.items.find({...}).explain().queryPlanner.winningPlan` shows the
+  plan the query planner chose. A plan of `FETCH -> IXSCAN` with the
+  expected `indexName` proves the index is being used; a bare
+  `COLLSCAN` means the planner walked the whole collection. `explain`
+  answers "is the planner using the index", `count` answers "does the
+  index return the right documents" -- a merge or update bug can break
+  one without the other, so the scenarios check both.
 
 ---
 
@@ -75,12 +85,22 @@ db.runCommand({ count: "items", query: { name: "zulu" } })
 
 db.runCommand({ count: "items", query: { name: "alpha" } })
 // Expected: { n: 0, ok: 1 }
+
+// The lookup is served by the by_name index, not a scan.
+db.items.find({ name: "zulu" }).explain().queryPlanner.winningPlan
+// Expected:
+// {
+//   stage: "FETCH",
+//   inputStage: { stage: "IXSCAN", indexName: "by_name", keyPattern: { name: 1 } }
+// }
 ```
 
 Key checks:
 - `find` by the new value returns `_id: 1`; by the old value returns nothing.
 - Both counts agree with find. A count of 1 for "alpha" means the
   index still holds the pre-update entry.
+- The plan is `FETCH -> IXSCAN(by_name)`. If it shows `COLLSCAN`, the
+  re-indexed entry was found by scanning, not through the index.
 
 ---
 
@@ -149,6 +169,12 @@ db.items.find({ tags: { $gt: "a" } })
 // Expected: two documents (_id 10 once, _id 11 once)
 db.runCommand({ count: "items", query: { tags: { $gt: "a" } } })
 // Expected: { n: 2, ok: 1 }
+
+// Both the equality and the range lookup are served by by_tags.
+db.items.find({ tags: "yellow" }).explain().queryPlanner.winningPlan
+// Expected: { stage: "FETCH", inputStage: { stage: "IXSCAN", indexName: "by_tags", keyPattern: { tags: 1 } } }
+db.items.find({ tags: { $gt: "a" } }).explain().queryPlanner.winningPlan
+// Expected: { stage: "FETCH", inputStage: { stage: "IXSCAN", indexName: "by_tags", keyPattern: { tags: 1 } } }
 ```
 
 Key checks:
@@ -156,6 +182,8 @@ Key checks:
   ("yellow") starts; untouched elements still match.
 - The range `find` returns `_id: 10` once. Duplicates mean the
   per-element index entries are leaking through.
+- Both plans are `FETCH -> IXSCAN(by_tags)`. The range still rides the
+  index; the dedup happens above the scan, not by avoiding it.
 
 ---
 
@@ -186,6 +214,10 @@ db.items.find({ phone: "555-0100" })
 // Expected: no documents
 db.runCommand({ count: "items", query: { phone: "555-0100" } })
 // Expected: { n: 0, ok: 1 }
+
+// A sparse index still serves equality lookups on the field.
+db.items.find({ phone: "555-0200" }).explain().queryPlanner.winningPlan
+// Expected: { stage: "FETCH", inputStage: { stage: "IXSCAN", indexName: "by_phone", keyPattern: { phone: 1 } } }
 ```
 
 ---
@@ -224,11 +256,22 @@ db.runCommand({ count: "items", query: { sku: "A-1" } })
 // Expected: { n: 1, ok: 1 }
 db.runCommand({ count: "items", query: { sku: "B-2" } })
 // Expected: { n: 1, ok: 1 }
+
+// The planner must DECLINE the partial index for a general sku query:
+// the index covers only status:"active" docs, so using it would drop
+// the others. The plan is a collection scan.
+db.items.find({ sku: "A-1" }).explain().queryPlanner.winningPlan
+// Expected: { stage: "COLLSCAN" }
 ```
 
 Key checks:
 - No document disappears from `find` results because of partial-index
   membership; the index covers a subset, queries cover everything.
+- The plan is `COLLSCAN`, not `IXSCAN(by_sku_partial)`. An `IXSCAN`
+  here would be a correctness bug: the partial index omits the
+  inactive documents, so the query would silently miss them. (This
+  matches MongoDB, which also declines a partial index for a query
+  its filter does not cover.)
 
 ---
 
