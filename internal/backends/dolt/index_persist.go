@@ -17,13 +17,11 @@ package dolt
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
-	sqltypes "github.com/dolthub/go-mysql-server/sql/types"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
@@ -152,33 +150,124 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 // writeIndexEntryChunk serialises an index entry as JSON, stores it in the
 // dolt chunk store via the JSON tree path, and returns the root hash.
 func writeIndexEntryChunk(ctx context.Context, ns tree.NodeStore, entry indexEntryDoc) (hash.Hash, error) {
-	jsonBytes, err := json.Marshal(entry)
+	doc, err := indexEntryToDocument(entry)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("encoding index entry JSON: %w", err)
+		return hash.Hash{}, err
 	}
-	wrapper := sqltypes.NewLazyJSONDocument(jsonBytes)
-	root, err := tree.SerializeJsonToAddr(ctx, ns, wrapper)
+	stored, err := docToBSON(doc)
 	if err != nil {
-		return hash.Hash{}, fmt.Errorf("serialising index entry JSON: %w", err)
+		return hash.Hash{}, fmt.Errorf("encoding index entry BSON: %w", err)
 	}
-	return root.HashOf(), nil
+	addr, err := ns.WriteBytes(ctx, stored)
+	if err != nil {
+		return hash.Hash{}, fmt.Errorf("writing index entry chunk: %w", err)
+	}
+	return addr, nil
 }
 
 // readIndexEntryChunk reads the JSON-encoded index entry stored at h and
 // decodes it.
 func readIndexEntryChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (indexEntryDoc, error) {
-	jsonDoc := tree.NewJSONDoc(h, ns)
-	wrapper, err := jsonDoc.ToIndexedJSONDocument(ctx)
+	stored, err := ns.ReadBytes(ctx, h)
 	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("loading index entry JSON: %w", err)
+		return indexEntryDoc{}, fmt.Errorf("reading index entry chunk: %w", err)
 	}
-	jsonBytes, err := sqltypes.MarshallJson(ctx, wrapper)
+	doc, err := bsonToDoc(stored)
 	if err != nil {
-		return indexEntryDoc{}, fmt.Errorf("marshalling index entry JSON: %w", err)
+		return indexEntryDoc{}, fmt.Errorf("decoding index entry BSON: %w", err)
 	}
+	return documentToIndexEntry(doc)
+}
+
+// indexEntryToDocument converts the entry to a types.Document so it
+// rides the same BSON-at-rest codec as document storage. Field names
+// match the historical JSON keys.
+func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
+	keys := types.MakeArray(len(entry.Keys))
+	for _, k := range entry.Keys {
+		kd, err := types.NewDocument(
+			"field", k.Field,
+			"desc", k.Descending,
+			"text", k.Text,
+			"geo2d", k.Geo2D,
+			"geo2dsphere", k.Geo2DSphere,
+			"hashed", k.Hashed,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("encoding index key pair: %w", err)
+		}
+		keys.Append(kd)
+	}
+	doc, err := types.NewDocument(
+		"name", entry.Name,
+		"keys", keys,
+		"unique", entry.Unique,
+		"sparse", entry.Sparse,
+		"partial", entry.PartialBSONHex,
+		"lossy", entry.Lossy,
+		"multikey", entry.Multikey,
+		"map_root", entry.MapRoot,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("encoding index entry document: %w", err)
+	}
+	return doc, nil
+}
+
+// documentToIndexEntry is the inverse of indexEntryToDocument.
+func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
 	var entry indexEntryDoc
-	if err := json.Unmarshal(jsonBytes, &entry); err != nil {
-		return indexEntryDoc{}, fmt.Errorf("decoding index entry JSON: %w", err)
+	getString := func(key string) string {
+		v, err := doc.Get(key)
+		if err != nil {
+			return ""
+		}
+		s, _ := v.(string)
+		return s
+	}
+	getBool := func(d *types.Document, key string) bool {
+		v, err := d.Get(key)
+		if err != nil {
+			return false
+		}
+		b, _ := v.(bool)
+		return b
+	}
+	entry.Name = getString("name")
+	entry.Unique = getBool(doc, "unique")
+	entry.Sparse = getBool(doc, "sparse")
+	entry.PartialBSONHex = getString("partial")
+	entry.Lossy = getBool(doc, "lossy")
+	entry.Multikey = getBool(doc, "multikey")
+	entry.MapRoot = getString("map_root")
+
+	keysVal, err := doc.Get("keys")
+	if err != nil {
+		return indexEntryDoc{}, fmt.Errorf("index entry document missing keys")
+	}
+	arr, ok := keysVal.(*types.Array)
+	if !ok {
+		return indexEntryDoc{}, fmt.Errorf("index entry keys is %T, want array", keysVal)
+	}
+	for i := 0; i < arr.Len(); i++ {
+		kv, _ := arr.Get(i)
+		kd, ok := kv.(*types.Document)
+		if !ok {
+			return indexEntryDoc{}, fmt.Errorf("index entry key %d is %T, want document", i, kv)
+		}
+		fieldVal, ferr := kd.Get("field")
+		if ferr != nil {
+			return indexEntryDoc{}, fmt.Errorf("index entry key %d missing field", i)
+		}
+		field, _ := fieldVal.(string)
+		entry.Keys = append(entry.Keys, indexKeyJSON{
+			Field:       field,
+			Descending:  getBool(kd, "desc"),
+			Text:        getBool(kd, "text"),
+			Geo2D:       getBool(kd, "geo2d"),
+			Geo2DSphere: getBool(kd, "geo2dsphere"),
+			Hashed:      getBool(kd, "hashed"),
+		})
 	}
 	return entry, nil
 }

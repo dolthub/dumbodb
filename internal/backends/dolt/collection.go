@@ -1774,7 +1774,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		}
 
 		if newBytes == nil {
-			newBytes, err = docToExtJSON(doc)
+			newBytes, err = docToBSON(doc)
 			if err != nil {
 				return nil, err
 			}
@@ -2942,16 +2942,8 @@ func docHasMinMaxKey(doc *types.Document) bool {
 	return false
 }
 
-func readJSONBytesFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) ([]byte, error) {
-	return getBSONStoredBytes(ctx, ns, v)
-}
-
 func readDocFromValue(ctx context.Context, ns tree.NodeStore, v val.Tuple) (*types.Document, error) {
 	return readBSONDocFromValue(ctx, ns, v)
-}
-
-func docToExtJSON(doc *types.Document) ([]byte, error) {
-	return docToBSON(doc)
 }
 
 func writeDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document) (val.Tuple, error) {
@@ -3158,7 +3150,7 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 		}
 
 		// Read JSON bytes from the JsonAdaptiveEnc value tuple.
-		jsonBytes, err := readJSONBytesFromValue(it.ctx, it.ns, v)
+		jsonBytes, err := getBSONStoredBytes(it.ctx, it.ns, v)
 		if err != nil {
 			continue
 		}
