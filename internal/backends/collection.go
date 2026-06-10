@@ -475,6 +475,20 @@ type IndexInfo struct {
 	Sparse                bool // true if the index only covers documents with the indexed field(s)
 	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
 
+	// Lossy is set when the index has ever stored an entry for a value
+	// the KeyString encoding cannot represent faithfully (Decimal128).
+	// A lossy index gives wrong answers for both lookups and counts, so
+	// the planner never consults it. Sticky until the index is rebuilt.
+	Lossy bool
+
+	// Multikey is set when the index has ever expanded an array value
+	// into per-element entries. A multikey index is fine for lookups
+	// (the handler re-validates and the backend deduplicates document
+	// IDs) but raw range-entry counts would count one document once per
+	// matching element, so count fast paths skip range filters on it.
+	// Sticky until the index is rebuilt.
+	Multikey bool
+
 	// MatchesPartialFilter, when non-nil, reports whether doc satisfies the partial
 	// filter expression. If nil, all documents are considered as matching (no partial
 	// filter). Set by the handler layer at index creation time, and reattached by

@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -365,6 +366,11 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
+		// A lossy index holds entries at wrong byte positions; any range
+		// over it can silently miss matching documents. Never consult it.
+		if idx.Lossy {
+			continue
+		}
 		if len(idx.Key) >= 1 && idx.Key[0].Field != "" {
 			leading := idx.Key[0].Field
 			isCompound := len(idx.Key) > 1
@@ -454,8 +460,17 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	// Fetch the actual documents from the primary map. Errors propagate so
 	// callers see real failures instead of empty results that look like a
 	// missing match.
+	//
+	// A multikey index yields one entry per matching array element, so a
+	// range can return the same primary ID more than once -- deduplicate
+	// so the caller sees each document a single time.
+	seenIDs := make(map[string]struct{}, len(primaryIDBytesList))
 	docs := make([]*types.Document, 0, len(primaryIDBytesList))
 	for _, idBytes := range primaryIDBytesList {
+		if _, dup := seenIDs[string(idBytes)]; dup {
+			continue
+		}
+		seenIDs[string(idBytes)] = struct{}{}
 		key, err := buildKey(idBytes)
 		if err != nil {
 			return nil, true, fmt.Errorf("index lookup building key: %w", err)
@@ -499,10 +514,11 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	if !isOp {
 		// Bare scalar equality. types.Null and array equality have semantics
 		// (e.g. matching missing fields, element-wise array match) that the
-		// byte-level index can't reproduce  -- skip and let the scan path
-		// handle them.
+		// byte-level index can't reproduce; a bare Regex is a pattern match,
+		// not an equality; Decimal128 has no faithful KeyString encoding.
+		// Skip all of these and let the scan path handle them.
 		switch v.(type) {
-		case nil, types.NullType, *types.Array:
+		case nil, types.NullType, *types.Array, types.Regex, types.Decimal128:
 			return nil, nil, false
 		}
 		return idxpkg.LowerBoundInclusive(v), idxpkg.UpperBoundInclusive(v), true
@@ -525,7 +541,14 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 			return nil, nil, false
 		}
 		switch opVal.(type) {
-		case *types.Document, *types.Array, nil, types.NullType, types.Regex:
+		case *types.Document, *types.Array, nil, types.NullType, types.Regex,
+			types.Decimal128:
+			return nil, nil, false
+		}
+		// Comparison operators never match NaN, and NaN-relative ranges
+		// have no contiguous byte representation -- reject so the scan
+		// path applies MongoDB's NaN comparison semantics.
+		if f, isFloat := opVal.(float64); isFloat && math.IsNaN(f) && opKey != "$eq" {
 			return nil, nil, false
 		}
 		switch opKey {
@@ -564,12 +587,40 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 		return nil, nil, false
 	}
 
+	// MongoDB's comparison operators are type-bracketed: {$gt: 5} matches
+	// numbers only, never strings or dates. Clamp each missing side of
+	// the range to the operand's type bracket so the scan neither leaks
+	// into other brackets (wrong indexed counts) nor starts at an
+	// unbounded edge. When both sides are present they must agree on the
+	// bracket -- a cross-bracket range matches nothing index-shaped, so
+	// fall back to the scan path.
+	var bracketStart, bracketStop []byte
+	if hasLower {
+		s, e, bok := idxpkg.BracketRange(lowerVal)
+		if !bok {
+			return nil, nil, false
+		}
+		bracketStart, bracketStop = s, e
+	}
+	if hasUpper {
+		s, e, bok := idxpkg.BracketRange(upperVal)
+		if !bok {
+			return nil, nil, false
+		}
+		if hasLower && (bracketStart[0] != s[0]) {
+			return nil, nil, false
+		}
+		bracketStart, bracketStop = s, e
+	}
+
 	if hasLower {
 		if lowerInclusive {
 			startKey = idxpkg.LowerBoundInclusive(lowerVal)
 		} else {
 			startKey = idxpkg.LowerBoundExclusive(lowerVal)
 		}
+	} else {
+		startKey = bracketStart
 	}
 	if hasUpper {
 		if upperInclusive {
@@ -577,6 +628,8 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 		} else {
 			stopKey = idxpkg.UpperBoundExclusive(upperVal)
 		}
+	} else {
+		stopKey = bracketStop
 	}
 	return startKey, stopKey, true
 }
@@ -767,6 +820,9 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 		var single, compound backends.IndexInfo
 		var haveSingle, haveCompound bool
 		for _, idx := range idxInfos {
+			if idx.Lossy {
+				continue
+			}
 			if len(idx.Key) >= 1 && idx.Key[0].Field == k {
 				if len(idx.Key) == 1 {
 					single, haveSingle = idx, true
@@ -1469,11 +1525,11 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
 	}
-	updatedIdxMaps, err := applyInsertsToIndexes(ctx, infos, idxMaps, params.Docs)
+	updatedInfos, updatedIdxMaps, err := applyInsertsToIndexes(ctx, infos, idxMaps, params.Docs)
 	if err != nil {
 		return nil, fmt.Errorf("updating secondary indexes: %w", err)
 	}
-	newIdxAM, err := buildIndexAM(ctx, state, infos, updatedIdxMaps)
+	newIdxAM, err := buildIndexAM(ctx, state, updatedInfos, updatedIdxMaps)
 	if err != nil {
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
@@ -1997,10 +2053,17 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	}
 
 	var idxMap prolly.Map
+	var chosen backends.IndexInfo
 	found := false
 	for i, idx := range idxInfos {
+		// Lossy indexes hold entries at wrong byte positions; counts
+		// over them are wrong in both directions.
+		if idx.Lossy {
+			continue
+		}
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {
 			idxMap = idxMaps[i]
+			chosen = idx
 			found = true
 			break
 		}
@@ -2014,19 +2077,25 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		return 0, false, nil
 	}
 
+	// A multikey index has one entry per matching array element, so a
+	// RANGE over it counts a document once per element in range. An
+	// EQUALITY count stays exact: per (value, docID) the entry is
+	// unique, so each matching doc contributes exactly one entry for
+	// the probed value.
+	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
+		return 0, false, nil
+	}
+
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
 	if !ok {
 		return 0, false, nil
 	}
 
 	// indexBoundsForFilterValue admits operator docs that combine bounds
-	// like {$gte: 1, $lt: 10}. For a count those are still sound  -- the
-	// returned range is exactly the matching index entries. But it also
-	// admits the bare-scalar case where the index range may include
-	// false positives if the index encoding loses information. Today
-	// indexBoundsForFilterValue's bare-scalar path defers to
-	// idxpkg.LowerBoundInclusive / UpperBoundInclusive which produce a
-	// tight equality range, so the count is exact.
+	// like {$gte: 1, $lt: 10}. For a count those are still sound -- the
+	// range bounds are exact for faithfully-encoded values and clamped
+	// to the operand's type bracket, and the bare-scalar path produces
+	// a tight equality range. Lossy content is excluded above.
 	n, err := idxpkg.RangeCount(ctx, idxMap, startKey, stopKey)
 	if err != nil {
 		return 0, false, err
@@ -2146,6 +2215,11 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 	)
 	for i, idx := range idxInfos {
 		if len(idx.Key) != 1 {
+			continue
+		}
+		// Lossy indexes hold entries at wrong byte positions (and the
+		// values behind them are not what the entry bytes claim).
+		if idx.Lossy {
 			continue
 		}
 		kp := idx.Key[0]
@@ -2391,12 +2465,14 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		if _, exists := infoByName[idx.Name]; exists {
 			continue
 		}
-		infoByName[idx.Name] = idx
 		// Build prolly.Map for the new index by scanning the primary map.
-		idxMap, buildErr := c.buildSecondaryIndex(ctx, state, idx)
+		idxMap, multikey, lossy, buildErr := c.buildSecondaryIndex(ctx, state, idx)
 		if buildErr != nil {
 			return nil, fmt.Errorf("building secondary index %q on %q: %w", idx.Name, c.name, buildErr)
 		}
+		idx.Multikey = idx.Multikey || multikey
+		idx.Lossy = idx.Lossy || lossy
+		infoByName[idx.Name] = idx
 		curMaps[idx.Name] = idxMap
 	}
 
@@ -2465,10 +2541,13 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 
 // buildSecondaryIndex scans the primary map and builds a secondary index prolly.Map.
 // Must be called with state.mu held (write lock).
-func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (prolly.Map, error) {
+// buildSecondaryIndex scans the primary map and builds the index's
+// prolly.Map. The returned flags report whether any scanned document
+// made the index multikey or lossy (see backends.IndexInfo).
+func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (m prolly.Map, multikey, lossy bool, err error) {
 	idxMap, err := idxpkg.NewEmptyMap(ctx, state.ns)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("index: creating empty map: %w", err)
+		return prolly.Map{}, false, false, fmt.Errorf("index: creating empty map: %w", err)
 	}
 
 	// If the collection does not exist yet (no primary map), the index is
@@ -2477,24 +2556,24 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 	// real failures and propagate.
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("index: resolving branch AM: %w", err)
+		return prolly.Map{}, false, false, fmt.Errorf("index: resolving branch AM: %w", err)
 	}
 	rootHash, err := am.Get(ctx, c.name)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("index: looking up collection in AM: %w", err)
+		return prolly.Map{}, false, false, fmt.Errorf("index: looking up collection in AM: %w", err)
 	}
 	if rootHash.IsEmpty() {
-		return idxMap, nil
+		return idxMap, false, false, nil
 	}
 	primaryMap, err := openCollection(ctx, state.cs, state.ns, rootHash)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("index: opening primary map: %w", err)
+		return prolly.Map{}, false, false, fmt.Errorf("index: opening primary map: %w", err)
 	}
 
 	mut := idxMap.Mutate()
 	iter, err := primaryMap.IterAll(ctx)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("index: iterating primary: %w", err)
+		return prolly.Map{}, false, false, fmt.Errorf("index: iterating primary: %w", err)
 	}
 
 	for {
@@ -2503,7 +2582,7 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 			if err == io.EOF {
 				break
 			}
-			return prolly.Map{}, err
+			return prolly.Map{}, false, false, err
 		}
 		if v == nil {
 			break
@@ -2511,27 +2590,29 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 
 		idBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
-			return prolly.Map{}, fmt.Errorf("index: primary key tuple missing _id bytes")
+			return prolly.Map{}, false, false, fmt.Errorf("index: primary key tuple missing _id bytes")
 		}
 
 		doc, err := readDocFromValue(ctx, state.ns, v)
 		if err != nil {
-			return prolly.Map{}, fmt.Errorf("index: reading document for build scan: %w", err)
+			return prolly.Map{}, false, false, fmt.Errorf("index: reading document for build scan: %w", err)
 		}
 
-		fieldVals := extractIndexFieldValues(doc, idx)
-		for _, fv := range expandMultiKeyValues(fieldVals) {
+		rows, rowMultikey, rowLossy := indexEntryRowsForDoc(doc, idx)
+		multikey = multikey || rowMultikey
+		lossy = lossy || rowLossy
+		for _, fv := range rows {
 			if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
-				return prolly.Map{}, fmt.Errorf("index: inserting entry: %w", err)
+				return prolly.Map{}, false, false, fmt.Errorf("index: inserting entry: %w", err)
 			}
 		}
 	}
 
 	built, err := mut.Map(ctx)
 	if err != nil {
-		return prolly.Map{}, fmt.Errorf("index: flushing map: %w", err)
+		return prolly.Map{}, false, false, fmt.Errorf("index: flushing map: %w", err)
 	}
-	return built, nil
+	return built, multikey, lossy, nil
 }
 
 // extractIndexFieldValues returns the field values for the given index, in key order.

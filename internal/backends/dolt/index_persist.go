@@ -39,6 +39,8 @@ type indexEntryDoc struct {
 	Unique         bool           `json:"unique,omitempty"`
 	Sparse         bool           `json:"sparse,omitempty"`
 	PartialBSONHex string         `json:"partial,omitempty"` // hex-encoded BSON of PartialFilterExpression
+	Lossy          bool           `json:"lossy,omitempty"`   // index stored a value with no faithful encoding
+	Multikey       bool           `json:"multikey,omitempty"` // index expanded an array value into per-element entries
 	MapRoot        string         `json:"map_root"`          // hex-encoded 20-byte hash
 }
 
@@ -84,6 +86,8 @@ func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc,
 		Unique:         idx.Unique,
 		Sparse:         idx.Sparse,
 		PartialBSONHex: pfHex,
+		Lossy:          idx.Lossy,
+		Multikey:       idx.Multikey,
 		MapRoot:        hex.EncodeToString(mapRoot[:]),
 	}, nil
 }
@@ -133,6 +137,8 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 		Unique:                  d.Unique,
 		Sparse:                  d.Sparse,
 		PartialFilterExpression: pf,
+		Lossy:                   d.Lossy,
+		Multikey:                d.Multikey,
 	}
 	if pf != nil {
 		captured := pf

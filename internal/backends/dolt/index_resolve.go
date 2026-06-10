@@ -246,52 +246,79 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 	return infos, byName, nil
 }
 
+// indexEntryRowsForDoc expands doc's indexed field values into entry
+// rows and reports whether the doc makes the index multikey (an array
+// value expanded per element) or lossy (a value the KeyString encoding
+// cannot represent faithfully).
+func indexEntryRowsForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool) {
+	fieldVals := extractIndexFieldValues(doc, idx)
+	for _, v := range fieldVals {
+		if _, isArr := v.(*types.Array); isArr {
+			multikey = true
+		}
+	}
+	rows = expandMultiKeyValues(fieldVals)
+	for _, row := range rows {
+		for _, v := range row {
+			if idxpkg.EncodeValueLossy(v) {
+				lossy = true
+			}
+		}
+	}
+	return rows, multikey, lossy
+}
+
 // applyInsertsToIndexes runs each inserted document through every
 // indexed field and adds the corresponding entries to a fresh copy of
-// the input maps. Pure: maps is not mutated; the returned map contains
-// new prolly.Map values for indexes that had any new entries.
+// the input maps. Pure: neither input slice/map is mutated; the
+// returned infos carry updated Lossy/Multikey flags and the returned
+// map contains new prolly.Map values for indexes that had any new
+// entries.
 //
 // Used by write paths that previously called updateSecondaryIndexesOnInsert
 // against state.secIndexMaps. The new shape decouples the in-memory
 // mutation from any dbState field so per-branch writes do not collide.
-func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) (map[string]prolly.Map, error) {
+func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
 	if len(infos) == 0 {
-		return maps, nil
+		return infos, maps, nil
 	}
 	out := make(map[string]prolly.Map, len(maps))
 	for k, v := range maps {
 		out[k] = v
 	}
-	for _, info := range infos {
+	outInfos := append([]backends.IndexInfo(nil), infos...)
+	for i, info := range outInfos {
 		idxMap, ok := out[info.Name]
 		if !ok {
-			return nil, fmt.Errorf("applyInsertsToIndexes: missing map for %q", info.Name)
+			return nil, nil, fmt.Errorf("applyInsertsToIndexes: missing map for %q", info.Name)
 		}
 		mut := idxMap.Mutate()
 		for _, doc := range docs {
 			docID, err := doc.Get("_id")
 			if err != nil {
-				return nil, fmt.Errorf("applyInsertsToIndexes: doc missing _id for index %q: %w", info.Name, err)
+				return nil, nil, fmt.Errorf("applyInsertsToIndexes: doc missing _id for index %q: %w", info.Name, err)
 			}
 			h, err := hashID(docID)
 			if err != nil {
-				return nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
+				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h[:]
-			fieldVals := extractIndexFieldValues(doc, info)
-			for _, fv := range expandMultiKeyValues(fieldVals) {
+			rows, multikey, lossy := indexEntryRowsForDoc(doc, info)
+			outInfos[i].Multikey = outInfos[i].Multikey || multikey
+			outInfos[i].Lossy = outInfos[i].Lossy || lossy
+			for _, fv := range rows {
 				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
-					return nil, fmt.Errorf("applyInsertsToIndexes: inserting entry into %q: %w", info.Name, err)
+					return nil, nil, fmt.Errorf("applyInsertsToIndexes: inserting entry into %q: %w", info.Name, err)
 				}
 			}
 		}
 		updated, err := mut.Map(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w", info.Name, err)
+			return nil, nil, fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w", info.Name, err)
 		}
 		out[info.Name] = updated
 	}
-	return out, nil
+	return outInfos, out, nil
 }
 
 // buildIndexAM is the pure replacement for persistIndexes: given a set of
