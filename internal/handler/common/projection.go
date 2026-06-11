@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -204,10 +205,17 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				validated.Set(key, value)
 
 			default:
-				return nil, false, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrNotImplemented,
-					fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
-				)
+				if !operators.IsOperator(value) {
+					return nil, false, handlererrors.NewCommandErrorMsg(
+						handlererrors.ErrNotImplemented,
+						fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
+					)
+				}
+				if _, err := operators.NewOperator(value); err != nil {
+					return nil, false, err
+				}
+				inclusionField = true
+				validated.Set(key, value)
 			}
 
 		case *types.Array, string, types.Binary, types.ObjectID,
@@ -410,10 +418,21 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 				applyMetaProjection(key, metaType, projected)
 
 			default:
-				return nil, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrCommandNotFound,
-					fmt.Sprintf("projection %s is not supported", types.FormatAnyValue(value)),
-				)
+				if !operators.IsOperator(value) {
+					return nil, handlererrors.NewCommandErrorMsg(
+						handlererrors.ErrCommandNotFound,
+						fmt.Sprintf("projection %s is not supported", types.FormatAnyValue(value)),
+					)
+				}
+				op, err := operators.NewOperator(value)
+				if err != nil {
+					return nil, err
+				}
+				result, err := op.Process(doc)
+				if err != nil {
+					return nil, err
+				}
+				projected.Set(key, result)
 			}
 
 		case *types.Array, string, types.Binary, types.ObjectID,

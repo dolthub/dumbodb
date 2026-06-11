@@ -242,6 +242,9 @@ const (
 	// ErrAggregateInvalidExpression indicates that projection expression does not exist.
 	ErrAggregateInvalidExpression = ErrorCode(31325) // Location31325
 
+	// ErrBSONSizeRequiresDocument indicates that $bsonSize received a non-document argument.
+	ErrBSONSizeRequiresDocument = ErrorCode(31393) // Location31393
+
 	// ErrWrongPositionalOperatorLocation indicates that there can only be one positional
 	// operator at the end.
 	ErrWrongPositionalOperatorLocation = ErrorCode(31394) // Location31394
