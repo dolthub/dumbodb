@@ -49,6 +49,14 @@ func (h *Handler) MsgGetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, lazyerrors.Error(err)
 	}
 
+	if db, _ := document.Get("$db"); db != "admin" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrUnauthorized,
+			"getParameter may only be run against the admin database.",
+			"getParameter",
+		)
+	}
+
 	getParameter := must.NotFail(document.Get("getParameter"))
 
 	showDetails, allParameters, err := extractGetParameter(getParameter)
