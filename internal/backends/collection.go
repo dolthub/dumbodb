@@ -79,6 +79,10 @@ type QueryParams struct {
 	Sort   *types.Document
 	Limit  int64
 
+	// Hint forces index selection: a name string or key-pattern document
+	// selects that index; {$natural: <int>} forces a collection scan.
+	Hint any
+
 	OnlyRecordIDs bool
 	Comment       string
 	// CaseInsensitive is set when the query runs under a collation whose

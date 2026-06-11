@@ -274,6 +274,7 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	qp := &backends.QueryParams{
 		Comment:         params.Comment,
 		CaseInsensitive: params.ParsedCollation.CaseInsensitive(),
+		Hint:            params.Hint,
 	}
 
 	var err error

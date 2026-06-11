@@ -102,9 +102,13 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}, nil
 	}
 
+	// A {$natural: ...} hint forces a collection scan: skip both the secondary
+	// index lookup and the _id point lookup below.
+	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
+
 	// spike/index-poc: attempt secondary index lookup for simple equality queries.
-	if params != nil && params.Filter != nil && params.Sort.Len() == 0 {
-		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter); used {
+	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 {
+		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint); used {
 			if err != nil {
 				return nil, err
 			}
@@ -131,7 +135,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// Fast path: if the filter pins _id to a concrete scalar value, use the
 	// primary-key point lookup instead of a full collection scan. The handler's
 	// downstream FilterIterator applies any remaining predicates.
-	if params != nil && params.Filter != nil {
+	if !naturalHint && params != nil && params.Filter != nil {
 		if idVal, ok := simpleIDEquality(params.Filter); ok {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
@@ -338,7 +342,7 @@ func (it *singleDocIter) Close() {}
 //
 // Returns (nil, false, nil) if no suitable index was found (caller should fall
 // back to the full scan).
-func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document) ([]*types.Document, bool, error) {
+func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document, hint any) ([]*types.Document, bool, error) {
 	if filter == nil || filter.Len() == 0 {
 		return nil, false, nil
 	}
@@ -352,6 +356,12 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	if len(idxInfos) == 0 {
 		return nil, false, nil
 	}
+
+	// A hint naming a specific index forces selection: only that index is a
+	// candidate, matching what Explain reports (and MongoDB). When the hinted
+	// index does not cover the filter with a usable range, selection falls
+	// through to a collection scan -- results are unaffected either way.
+	hintedName := backends.MatchHintedIndex(hint, idxInfos)
 
 	// Map indexed-leading-field -> (index name, map index, compound).
 	// Single-field indexes are preferred (tighter scan range); compound
@@ -367,6 +377,10 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
+		// When a hint names an index, it is the only candidate considered.
+		if hintedName != "" && idx.Name != hintedName {
+			continue
+		}
 		// Lossy entries sit at wrong byte positions; never usable.
 		// (Sparse is fine: no admitted operator can match a missing
 		// field.) A partial index is usable only when the filter
