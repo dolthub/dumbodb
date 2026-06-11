@@ -662,6 +662,14 @@ func (h *Handler) aggregateDatabase(_ context.Context, document *types.Document,
 		)
 	}
 
+	if stageName == "$currentOp" && dbName != "admin" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidNamespace,
+			"$currentOp must be run against the 'admin' database with {aggregate: 1}",
+			document.Command(),
+		)
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"cursor", must.NotFail(types.NewDocument(
