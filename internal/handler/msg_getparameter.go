@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/FerretDB/wire"
 
@@ -28,6 +29,16 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+var getParameterMetaKeys = map[string]struct{}{
+	"getParameter":  {},
+	"$db":           {},
+	"comment":       {},
+	"lsid":          {},
+	"$clusterTime":  {},
+	"$readPreference": {},
+	"maxTimeMS":     {},
+}
 
 // MsgGetParameter implements `getParameter` command.
 //
@@ -52,6 +63,12 @@ func (h *Handler) MsgGetParameter(connCtx context.Context, msg *wire.OpMsg) (*wi
 	resDoc, err := selectParameters(document, parameters, showDetails, allParameters)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if unknown := unknownGetParameterKeys(document, parameters); len(unknown) > 0 {
+		h.L.InfoContext(connCtx, "getParameter: unknown keys requested",
+			slog.Any("keys", unknown),
+		)
 	}
 
 	if resDoc.Len() < 1 {
@@ -124,4 +141,18 @@ func extractGetParameter(getParameter any) (showDetails, allParameters bool, err
 	}
 
 	return showDetails, allParameters, nil
+}
+
+func unknownGetParameterKeys(request, knownParams *types.Document) []string {
+	var unknown []string
+	for _, k := range request.Keys() {
+		if _, meta := getParameterMetaKeys[k]; meta {
+			continue
+		}
+		if knownParams.Has(k) {
+			continue
+		}
+		unknown = append(unknown, k)
+	}
+	return unknown
 }
