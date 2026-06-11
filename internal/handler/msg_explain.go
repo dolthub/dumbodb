@@ -217,6 +217,11 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	// A hint naming an index that does not exist is an error, matching MongoDB.
+	if err = validateHintExists(connCtx, coll, params.Hint, document.Command()); err != nil {
+		return nil, err
+	}
+
 	qp := new(backends.ExplainParams)
 
 	if params.Aggregate {

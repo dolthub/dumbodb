@@ -1295,55 +1295,15 @@ func sortIsNatural(sort *types.Document) bool {
 	return sort.Keys()[0] == "$natural"
 }
 
-// hintIsNatural reports whether hint is the {"$natural": <int>}
-// pattern. MongoDB treats this as "scan storage in natural order; do
-// not pick an index regardless of what filter/sort suggests."
+// hintIsNatural reports whether hint is the {"$natural": <int>} pattern.
 func hintIsNatural(hint any) bool {
-	doc, ok := hint.(*types.Document)
-	if !ok || doc == nil || doc.Len() != 1 {
-		return false
-	}
-	if doc.Keys()[0] != "$natural" {
-		return false
-	}
-	return true
+	return backends.HintIsNatural(hint)
 }
 
 // pickHintedIndex resolves a hint value (either a name string or a key-pattern
 // document) to a matching index name, or returns "" if no index matches.
 func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
-	if hint == nil {
-		return ""
-	}
-	switch h := hint.(type) {
-	case string:
-		for _, idx := range idxInfos {
-			if idx.Name == h {
-				return idx.Name
-			}
-		}
-	case *types.Document:
-		if h == nil || h.Len() == 0 {
-			return ""
-		}
-		hintKeys := h.Keys()
-		for _, idx := range idxInfos {
-			if len(idx.Key) != len(hintKeys) {
-				continue
-			}
-			match := true
-			for i, k := range hintKeys {
-				if idx.Key[i].Field != k {
-					match = false
-					break
-				}
-			}
-			if match {
-				return idx.Name
-			}
-		}
-	}
-	return ""
+	return backends.MatchHintedIndex(hint, idxInfos)
 }
 
 // extractIndexKey returns a composite key for the given index extracted from doc.
