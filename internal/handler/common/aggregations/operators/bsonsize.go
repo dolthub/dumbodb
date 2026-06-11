@@ -40,7 +40,7 @@ func newBsonSize(args ...any) (Operator, error) {
 }
 
 func (b *bsonSizeOp) Process(doc *types.Document) (any, error) {
-	v, err := evalArgValueWithRoot(b.arg, doc)
+	v, err := evalArgValue(b.arg, doc)
 	if err != nil {
 		return nil, err
 	}
