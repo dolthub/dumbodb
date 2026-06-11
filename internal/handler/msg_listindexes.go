@@ -114,6 +114,11 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 			indexDoc.Set("unique", index.Unique)
 		}
 
+		// sparse is reported only when set, matching MongoDB
+		if index.Sparse && index.Name != backends.DefaultIndexName {
+			indexDoc.Set("sparse", index.Sparse)
+		}
+
 		firstBatch.Append(indexDoc)
 	}
 
