@@ -21,12 +21,62 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+// findProjectionAllowedOperators gates which aggregation operators may appear
+// as top-level projection-value operators in find. The set is intentionally
+// narrow -- adding an operator requires verifying its result shape and a
+// parity test against MongoDB.
+var findProjectionAllowedOperators = map[string]bool{
+	"$bsonSize": true,
+}
+
+// findProjectionPathExists reports whether the path referenced by a "$..."
+// projection expression resolves to a value present in doc. Used to
+// distinguish null-valued fields (project null) from missing fields
+// (omit), since both flatten to types.Null through EvalArgValue.
+func findProjectionPathExists(expr string, doc *types.Document) bool {
+	if strings.HasPrefix(expr, "$$") {
+		rest := strings.TrimPrefix(expr, "$$")
+		varName := rest
+		sub := ""
+		if i := strings.Index(rest, "."); i >= 0 {
+			varName = rest[:i]
+			sub = rest[i+1:]
+		}
+		switch varName {
+		case "ROOT", "CURRENT":
+			if sub == "" {
+				return true
+			}
+			path, err := types.NewPathFromString(sub)
+			if err != nil {
+				return false
+			}
+			_, err = doc.GetByPath(path)
+			return err == nil
+		default:
+			_, err := doc.Get("$$" + varName)
+			return err == nil
+		}
+	}
+
+	if !strings.HasPrefix(expr, "$") {
+		return false
+	}
+	path, err := types.NewPathFromString(strings.TrimPrefix(expr, "$"))
+	if err != nil {
+		return false
+	}
+	_, err = doc.GetByPath(path)
+	return err == nil
+}
 
 // ValidateProjection check projection document.
 // Document fields could be either included or excluded but not both.
@@ -204,10 +254,17 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				validated.Set(key, value)
 
 			default:
-				return nil, false, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrNotImplemented,
-					fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
-				)
+				if !findProjectionAllowedOperators[opKey] {
+					return nil, false, handlererrors.NewCommandErrorMsg(
+						handlererrors.ErrNotImplemented,
+						fmt.Sprintf("projection expression %s is not supported", types.FormatAnyValue(value)),
+					)
+				}
+				if _, err := operators.NewOperator(value); err != nil {
+					return nil, false, err
+				}
+				inclusionField = true
+				validated.Set(key, value)
 			}
 
 		case *types.Array, string, types.Binary, types.ObjectID,
@@ -410,14 +467,39 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 				applyMetaProjection(key, metaType, projected)
 
 			default:
-				return nil, handlererrors.NewCommandErrorMsg(
-					handlererrors.ErrCommandNotFound,
-					fmt.Sprintf("projection %s is not supported", types.FormatAnyValue(value)),
-				)
+				if !findProjectionAllowedOperators[opKey] {
+					return nil, handlererrors.NewCommandErrorMsg(
+						handlererrors.ErrCommandNotFound,
+						fmt.Sprintf("projection %s is not supported", types.FormatAnyValue(value)),
+					)
+				}
+				op, err := operators.NewOperator(value)
+				if err != nil {
+					return nil, err
+				}
+				result, err := op.Process(doc)
+				if err != nil {
+					return nil, err
+				}
+				projected.Set(key, result)
 			}
 
-		case *types.Array, string, types.Binary, types.ObjectID,
-			time.Time, types.NullType, types.Regex, types.Timestamp: // all these types are treated as new fields value
+		case string:
+			if strings.HasPrefix(value, "$") {
+				resolved, err := operators.EvalArgValue(value, doc)
+				if err != nil {
+					return nil, err
+				}
+				if resolved == types.Null && !findProjectionPathExists(value, doc) {
+					continue
+				}
+				projected.Set(key, resolved)
+				continue
+			}
+			projected.Set(key, value)
+
+		case *types.Array, types.Binary, types.ObjectID,
+			time.Time, types.NullType, types.Regex, types.Timestamp:
 			projected.Set(key, value)
 
 		case bool: // field: bool

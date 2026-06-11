@@ -115,10 +115,16 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 	res.Set("minWireVersion", common.MinWireVersion)
 	res.Set("maxWireVersion", common.MaxWireVersion)
 	res.Set("readOnly", false)
-	res.Set("topologyVersion", must.NotFail(types.NewDocument(
-		"processId", h.processID,
-		"counter", int64(0),
-	)))
+	// topologyVersion is deliberately omitted. Emitting it advertises
+	// awaitable ("streaming") hello monitoring (maxWireVersion >= 9):
+	// drivers then send an awaitable hello carrying maxAwaitTimeMS +
+	// exhaustAllowed and expect the server to hold the request open.
+	// This handler does not await, so a streaming monitor gets an
+	// instant non-exhaust reply, judges the connection broken, drops it
+	// every heartbeat, cycles the server to Unknown, and clears the
+	// client connection pool (observed with MongoDB Compass). Without
+	// topologyVersion, drivers fall back to polling monitoring, which
+	// this handler serves correctly.
 
 	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
 		res.Set("saslSupportedMechs", resSupportedMechs)

@@ -41,7 +41,7 @@ func (m *mergeObjects) Process(doc *types.Document) (any, error) {
 	}
 
 	for _, arg := range m.args {
-		val, err := evalArgValueWithRoot(arg, doc)
+		val, err := evalArgValue(arg, doc)
 		if err != nil {
 			// null/missing arguments are ignored
 			continue
@@ -59,16 +59,6 @@ func (m *mergeObjects) Process(doc *types.Document) (any, error) {
 	}
 
 	return result, nil
-}
-
-// evalArgValueWithRoot is like evalArgValue but also handles the $$ROOT system
-// variable by returning the current document.
-func evalArgValueWithRoot(arg any, doc *types.Document) (any, error) {
-	if s, ok := arg.(string); ok && s == "$$ROOT" {
-		return doc.DeepCopy(), nil
-	}
-
-	return evalArgValue(arg, doc)
 }
 
 var (

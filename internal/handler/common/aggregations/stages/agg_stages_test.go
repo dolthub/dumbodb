@@ -411,8 +411,6 @@ func TestAggStage_unsupportedErrors_indexStats(t *testing.T) {
 	}
 }
 
-// TestAggStage_unsupportedErrors_search verifies that $search returns
-// ErrSearchNotEnabled (code 31082)  -- Atlas Search is not available in this deployment.
 func TestAggStage_unsupportedErrors_search(t *testing.T) {
 	t.Parallel()
 
@@ -430,9 +428,35 @@ func TestAggStage_unsupportedErrors_search(t *testing.T) {
 		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
 	}
 
-	const wantCode = handlererrors.ErrSearchNotEnabled
-	if cmdErr.Code() != wantCode {
-		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", cmdErr.Code(), wantCode)
+	if got, want := cmdErr.Code(), handlererrors.ErrSearchNotEnabled; got != want {
+		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", got, want)
+	}
+	const wantMsg = "$search is not supported by DumboDB."
+	if got := cmdErr.Err().Error(); got != wantMsg {
+		t.Errorf("error message = %q, want %q", got, wantMsg)
+	}
+}
+
+func TestAggStage_unsupportedErrors_listSearchIndexes(t *testing.T) {
+	t.Parallel()
+
+	stageDoc := must.NotFail(types.NewDocument("$listSearchIndexes", must.NotFail(types.NewDocument())))
+	_, err := stages.NewStage(stageDoc)
+	if err == nil {
+		t.Fatal("expected error for $listSearchIndexes, got nil")
+	}
+
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("expected *handlererrors.CommandError, got %T: %v", err, err)
+	}
+
+	if got, want := cmdErr.Code(), handlererrors.ErrSearchNotEnabled; got != want {
+		t.Errorf("error code = %d, want %d (ErrSearchNotEnabled)", got, want)
+	}
+	const wantMsg = "$listSearchIndexes is not supported by DumboDB."
+	if got := cmdErr.Err().Error(); got != wantMsg {
+		t.Errorf("error message = %q, want %q", got, wantMsg)
 	}
 }
 

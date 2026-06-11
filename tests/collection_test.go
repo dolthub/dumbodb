@@ -722,6 +722,15 @@ func TestDB_RunCommand_Hello(t *testing.T) {
 	// localTime must be present (bson.DateTime is an int64 alias decoded from BSON UTC datetime).
 	_, ok = m["localTime"]
 	assert.True(t, ok, "localTime must be present in hello response")
+
+	// topologyVersion must be ABSENT. Advertising it tells drivers the
+	// server supports awaitable ("streaming") hello monitoring, which
+	// this server does not implement; a streaming monitor then drops its
+	// connection every heartbeat and the client clears its connection
+	// pool (observed breaking MongoDB Compass). Omitting it keeps drivers
+	// on polling monitoring.
+	_, hasTopo := m["topologyVersion"]
+	assert.False(t, hasTopo, "hello must not advertise topologyVersion (no streaming monitoring support)")
 }
 
 // TestDB_RunCommand_IsMaster verifies that the deprecated isMaster command

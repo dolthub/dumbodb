@@ -97,6 +97,7 @@ func (h *Handler) initCommands() {
 		"listIndexes":             {Handler: h.MsgListIndexes, Help: "Returns a summary of indexes of the specified collection."},
 		"logout":                  {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Logs out from the current session."},
 		"startSession":            {Handler: h.MsgStartSession, anonymous: true, Help: "Creates a new server session."},
+		"top":                     {Handler: h.MsgTop, Help: "Returns per-collection usage statistics (degenerate -- DumboDB does not track per-op counters)."},
 		"createSearchIndexes":     {Handler: h.MsgCreateSearchIndexes, Help: "Creates Atlas Search indexes (not supported)."},
 		"listSearchIndexes":       {Handler: h.MsgListSearchIndexes, Help: "Lists Atlas Search indexes (not supported)."},
 		"dropSearchIndex":         {Handler: h.MsgDropSearchIndex, Help: "Drops an Atlas Search index (not supported)."},
@@ -211,7 +212,7 @@ func (h *Handler) initCommands() {
 			durationMs := time.Since(start).Milliseconds()
 
 			if handlerErr != nil {
-				l.WarnContext(ctx, "command error",
+				l.InfoContext(ctx, "command error",
 					slog.String("conn", conn),
 					slog.String("cmd", cmdName),
 					slog.String("db", db),

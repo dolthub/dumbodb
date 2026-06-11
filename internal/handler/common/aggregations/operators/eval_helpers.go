@@ -23,16 +23,22 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+// EvalArgValue is the exported view of evalArgValue, for callers outside this
+// package that need to evaluate aggregation-style expressions (e.g. find
+// projection resolving "$$ROOT" and "$field" expressions).
+func EvalArgValue(arg any, doc *types.Document) (any, error) {
+	return evalArgValue(arg, doc)
+}
+
 // evalArgValue resolves an operator argument to its concrete value against the document.
 // Supports:
 //   - *types.Document with operator -> evaluates nested operator
-//   - *types.Document without operator -> returns doc as-is
-//   - string starting with "$$" -> variable reference (looked up as "$$name" key in doc)
-//   - string starting with "$" -> field path expression
-//   - string not starting with "$" -> literal string value
+//   - *types.Document without operator -> evaluates each value as an expression
+//   - "$$ROOT" / "$$CURRENT" -> the current document (with optional ".field" traversal)
+//   - other "$$name" -> variable bound by $filter/$map/$let in the doc
+//   - "$path" -> field-path expression
+//   - other string -> literal
 //   - any other value -> literal value
-//
-// Missing field paths return types.Null.
 func evalArgValue(arg any, doc *types.Document) (any, error) {
 	switch v := arg.(type) {
 	case *types.Document:
@@ -50,45 +56,49 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 
 	case string:
 		if strings.HasPrefix(v, "$$") {
-			// Variable reference: look up "$$name" key stored in the document by $filter/$map/$reduce/$let.
-			// Handle dotted paths: "$$varname.field.sub" -> resolve $$varname then traverse field.sub.
 			withoutPrefix := strings.TrimPrefix(v, "$$")
+			varName := withoutPrefix
+			fieldPath := ""
 			if dotIdx := strings.Index(withoutPrefix, "."); dotIdx >= 0 {
-				varKey := "$$" + withoutPrefix[:dotIdx]
-				fieldPath := withoutPrefix[dotIdx+1:]
+				varName = withoutPrefix[:dotIdx]
+				fieldPath = withoutPrefix[dotIdx+1:]
+			}
 
-				varVal, err := doc.Get(varKey)
+			var base any
+			switch varName {
+			case "ROOT", "CURRENT":
+				base = doc.DeepCopy()
+			default:
+				val, err := doc.Get("$$" + varName)
 				if err != nil {
-					// Unknown variable  -- treat as a literal string.
+					if fieldPath != "" {
+						return types.Null, nil
+					}
 					return v, nil
 				}
-
-				varDoc, ok := varVal.(*types.Document)
-				if !ok {
-					return types.Null, nil
-				}
-
-				path, err := types.NewPathFromString(fieldPath)
-				if err != nil {
-					return types.Null, nil
-				}
-
-				result, err := varDoc.GetByPath(path)
-				if err != nil {
-					return types.Null, nil
-				}
-
-				return result, nil
+				base = val
 			}
 
-			val, err := doc.Get(v)
+			if fieldPath == "" {
+				return base, nil
+			}
+
+			baseDoc, ok := base.(*types.Document)
+			if !ok {
+				return types.Null, nil
+			}
+
+			path, err := types.NewPathFromString(fieldPath)
 			if err != nil {
-				// Unknown variable  -- treat as a literal system variable string (e.g. $$PRUNE, $$KEEP,
-				// $$DESCEND, $$REMOVE) so that operators like $redact can inspect the value.
-				return v, nil
+				return types.Null, nil
 			}
 
-			return val, nil
+			result, err := baseDoc.GetByPath(path)
+			if err != nil {
+				return types.Null, nil
+			}
+
+			return result, nil
 		}
 
 		if strings.HasPrefix(v, "$") {

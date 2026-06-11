@@ -94,15 +94,19 @@ func newFill(stage *types.Document) (aggregations.Stage, error) {
 	)
 }
 
-// newSearch returns a SearchNotEnabled error for the $search aggregation stage.
-// $search requires Atlas Search which is not available in this deployment.
 func newSearch(stage *types.Document) (aggregations.Stage, error) {
 	return nil, handlererrors.NewCommandErrorMsgWithArgument(
 		handlererrors.ErrSearchNotEnabled,
-		"Using $search and $vectorSearch aggregation stages requires additional configuration. "+
-			"Please connect to Atlas or an AtlasCLI local deployment to enable."+
-			"For more information on how to connect, see https://dochub.mongodb.org/core/atlas-cli-deploy-local-reqs.",
+		"$search is not supported by DumboDB.",
 		"$search (stage)",
+	)
+}
+
+func newListSearchIndexes(stage *types.Document) (aggregations.Stage, error) {
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrSearchNotEnabled,
+		"$listSearchIndexes is not supported by DumboDB.",
+		"$listSearchIndexes (stage)",
 	)
 }
 

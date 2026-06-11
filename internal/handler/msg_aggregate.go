@@ -74,13 +74,28 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	var ok bool
 	var cName string
+	var dbLevel bool
 
-	if cName, ok = collectionParam.(string); !ok {
+	switch v := collectionParam.(type) {
+	case string:
+		cName, ok = v, true
+	case int32:
+		dbLevel, ok = v == 1, v == 1
+	case int64:
+		dbLevel, ok = v == 1, v == 1
+	case float64:
+		dbLevel, ok = v == 1, v == 1
+	}
+	if !ok {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrFailedToParse,
+			handlererrors.ErrBadValue,
 			"Invalid command format: the 'aggregate' field must specify a collection name or 1",
 			document.Command(),
 		)
+	}
+
+	if dbLevel {
+		return h.aggregateDatabase(connCtx, document, dbName)
 	}
 
 	// Validate rootish before backend access so invalid forms (HEAD, reflog, range)
@@ -581,6 +596,86 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				"firstBatch", firstBatch,
 				"id", cursorID,
 				"ns", dbName+"."+cName,
+			)),
+			"ok", float64(1),
+		)),
+	)
+}
+
+var dbLevelSourceStages = map[string]struct{}{
+	"$currentOp":         {},
+	"$documents":         {},
+	"$listLocalSessions": {},
+	"$listSessions":      {},
+	"$changeStream":      {},
+}
+
+func (h *Handler) aggregateDatabase(_ context.Context, document *types.Document, dbName string) (*wire.OpMsg, error) {
+	v, _ := document.Get("cursor")
+	if v == nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse,
+			"The 'cursor' option is required, except for aggregate with the explain argument",
+			document.Command(),
+		)
+	}
+	if _, ok := v.(*types.Document); !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrTypeMismatch,
+			"cursor field must be missing or an object",
+			document.Command(),
+		)
+	}
+
+	pipeline, err := common.GetRequiredParam[*types.Array](document, "pipeline")
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrTypeMismatch,
+			"'pipeline' option must be specified as an array",
+			document.Command(),
+		)
+	}
+
+	if pipeline.Len() == 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidNamespace,
+			"{aggregate: 1} is not valid for an empty pipeline.",
+			document.Command(),
+		)
+	}
+
+	firstStage, ok := must.NotFail(pipeline.Get(0)).(*types.Document)
+	if !ok || firstStage.Len() == 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrTypeMismatch,
+			"Each element of the 'pipeline' array must be an object",
+			document.Command(),
+		)
+	}
+
+	stageName := firstStage.Command()
+	if _, dbOK := dbLevelSourceStages[stageName]; !dbOK {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidNamespace,
+			fmt.Sprintf("{aggregate: 1} is not valid for '%s'; a collection is required.", stageName),
+			document.Command(),
+		)
+	}
+
+	if stageName == "$currentOp" && dbName != "admin" {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidNamespace,
+			"$currentOp must be run against the 'admin' database with {aggregate: 1}",
+			document.Command(),
+		)
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"cursor", must.NotFail(types.NewDocument(
+				"firstBatch", must.NotFail(types.NewArray()),
+				"id", int64(0),
+				"ns", dbName+".$cmd.aggregate",
 			)),
 			"ok", float64(1),
 		)),
