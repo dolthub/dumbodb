@@ -46,6 +46,7 @@ var Stages = map[string]newStageFunc{
 	"$redact":      newRedact,
 	"$replaceRoot": newReplaceRoot,
 	"$replaceWith": newReplaceWith,
+	"$listSearchIndexes": newListSearchIndexes,
 	"$search":           newSearch,
 	"$set":              newSet,
 	"$sample":           newSample,
