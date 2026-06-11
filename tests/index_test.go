@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -33,61 +32,56 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// TestIndex_TTL_CreateOne verifies that a TTL index (expireAfterSeconds) can be created (do-81xd).
+// requireTTLRejected asserts err is MongoDB's InvalidOptions (72) error that
+// dumbodb returns for an unsupported TTL (expireAfterSeconds) request.
+func requireTTLRejected(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	var cmdErr mongo.CommandError
+	require.ErrorAs(t, err, &cmdErr)
+	require.Equalf(t, int32(72), cmdErr.Code, "want InvalidOptions (72): %v", err)
+}
+
+// TestIndex_TTL_CreateOne verifies that creating a TTL index (expireAfterSeconds)
+// is rejected. TTL is unsupported by design: a wall-clock sweeper that deletes
+// data conflicts with version control.
 func TestIndex_TTL_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	expireAfter := int32(3600)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	name, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-	require.Equal(t, "createdAt_1", name)
+		Options: options.Index().SetExpireAfterSeconds(int32(3600)),
+	})
+	requireTTLRejected(t, err)
 }
 
-// TestIndex_TTL_ZeroSeconds verifies TTL index with expireAfterSeconds=0 (do-81xd).
+// TestIndex_TTL_ZeroSeconds verifies a TTL index with expireAfterSeconds=0 is rejected.
 func TestIndex_TTL_ZeroSeconds(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	expireAfter := int32(0)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "expireAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	name, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-	require.Equal(t, "expireAt_1", name)
+		Options: options.Index().SetExpireAfterSeconds(int32(0)),
+	})
+	requireTTLRejected(t, err)
 }
 
-// TestIndex_TTL_InsertDocs verifies that inserts work on a TTL-indexed collection (do-81xd).
+// TestIndex_TTL_InsertDocs verifies a TTL index request is rejected, so no
+// TTL-indexed collection is ever created.
 func TestIndex_TTL_InsertDocs(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	expireAfter := int32(3600)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "ts", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	_, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-
-	_, err = coll.InsertOne(ctx, bson.D{
-		{Key: "ts", Value: time.Now()},
-		{Key: "data", Value: "fresh"},
+		Options: options.Index().SetExpireAfterSeconds(int32(3600)),
 	})
-	require.NoError(t, err)
-
-	count, err := coll.CountDocuments(ctx, bson.D{})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	requireTTLRejected(t, err)
 }
 
 // TestIndex_Partial_CreateOne verifies that a partial index can be created (do-81xd).
@@ -323,58 +317,32 @@ func TestIndex_IndexStats_NoIndexes(t *testing.T) {
 	require.Equal(t, 1, len(stats))
 }
 
-// TestIndex_TTL_InsertAndVerifyNotExpiredYet verifies that a document inserted into a
-// TTL-indexed collection is still present immediately after insertion (do-x0vc).
+// TestIndex_TTL_InsertAndVerifyNotExpiredYet verifies a TTL index request is
+// rejected rather than silently accepted.
 func TestIndex_TTL_InsertAndVerifyNotExpiredYet(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	expireAfter := int32(3600)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	_, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-
-	_, err = coll.InsertOne(ctx, bson.D{
-		{Key: "createdAt", Value: time.Now()},
-		{Key: "payload", Value: "not-yet-expired"},
+		Options: options.Index().SetExpireAfterSeconds(int32(3600)),
 	})
-	require.NoError(t, err)
-
-	// Document should still be visible immediately (TTL expiry runs on a background task).
-	count, err := coll.CountDocuments(ctx, bson.D{{Key: "payload", Value: "not-yet-expired"}})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	requireTTLRejected(t, err)
 }
 
-// TestIndex_TTL_OnNestedDateField verifies that a TTL index can be created on a nested
-// date field (do-x0vc).
+// TestIndex_TTL_OnNestedDateField verifies a TTL index on a nested date field
+// is also rejected.
 func TestIndex_TTL_OnNestedDateField(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	coll := env.collection(t)
 
-	expireAfter := int32(86400)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "meta.expiresAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	name, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-	require.Equal(t, "meta.expiresAt_1", name)
-
-	_, err = coll.InsertOne(ctx, bson.D{
-		{Key: "meta", Value: bson.D{{Key: "expiresAt", Value: time.Now().Add(24 * time.Hour)}}},
-		{Key: "data", Value: "alive"},
+		Options: options.Index().SetExpireAfterSeconds(int32(86400)),
 	})
-	require.NoError(t, err)
-
-	count, err := coll.CountDocuments(ctx, bson.D{{Key: "data", Value: "alive"}})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	requireTTLRejected(t, err)
 }
 
 // TestIndex_Partial_OnlyIndexesMatchingDocs verifies that a partial index can be created

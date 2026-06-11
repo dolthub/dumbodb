@@ -392,10 +392,20 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 				}
 			}
 
-		case "expireAfterSeconds", "hidden", "storageEngine",
+		case "expireAfterSeconds":
+			// TTL indexes are rejected rather than silently accepted: a
+			// wall-clock sweeper that deletes data conflicts with version
+			// control. Matches the createCollection rejection.
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrInvalidOptions,
+				"TTL indexes (expireAfterSeconds) are not supported by DumboDB",
+				command,
+			)
+
+		case "hidden", "storageEngine",
 			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
 			// Accepted but not enforced  -- stored index behaves as a regular index.
-			// TTL expiry, collation enforcement, etc. are not yet implemented.
+			// collation enforcement, etc. are not yet implemented.
 
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(

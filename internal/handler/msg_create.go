@@ -46,7 +46,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		"indexOptionDefaults",
 		"writeConcern",
 		"comment",
-		"expireAfterSeconds",
 		"collation",
 	}
 	common.Ignored(document, h.L, ignoredFields...)
@@ -87,6 +86,18 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				"create",
 			)
 		}
+	}
+
+	// TTL is rejected rather than silently ignored: a wall-clock sweeper that
+	// deletes data conflicts with version control (a historical checkout would
+	// lose its still-live-at-the-time documents). Covers both regular and
+	// time-series collections, which both carry a top-level expireAfterSeconds.
+	if v, _ := document.Get("expireAfterSeconds"); v != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrInvalidOptions,
+			"TTL (expireAfterSeconds) is not supported by DumboDB",
+			"create",
+		)
 	}
 
 	if sizeVal, _ := document.Get("size"); sizeVal != nil {
