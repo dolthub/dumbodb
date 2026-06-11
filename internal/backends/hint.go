@@ -74,6 +74,17 @@ func MatchHintedIndex(hint any, idxInfos []IndexInfo) string {
 					match = false
 					break
 				}
+				// A numeric hint direction (1 / -1) must match the index key's
+				// direction, matching MongoDB's exact key-pattern requirement.
+				// Non-numeric values (e.g. "2dsphere", "text", "hashed") are
+				// matched on field name only -- the key model does not record
+				// the special index type.
+				if hv, err := h.Get(k); err == nil {
+					if desc, ok := hintDirectionDescending(hv); ok && desc != idx.Key[i].Descending {
+						match = false
+						break
+					}
+				}
 			}
 
 			if match {
@@ -83,4 +94,19 @@ func MatchHintedIndex(hint any, idxInfos []IndexInfo) string {
 	}
 
 	return ""
+}
+
+// hintDirectionDescending interprets a key-pattern hint value as a sort
+// direction. ok is true only for the numeric forms 1 (ascending) and -1
+// (descending).
+func hintDirectionDescending(v any) (descending, ok bool) {
+	switch n := v.(type) {
+	case int32:
+		return n < 0, n == 1 || n == -1
+	case int64:
+		return n < 0, n == 1 || n == -1
+	case float64:
+		return n < 0, n == 1 || n == -1
+	}
+	return false, false
 }

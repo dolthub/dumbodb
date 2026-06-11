@@ -269,7 +269,7 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 	rows = expandMultiKeyValues(fieldVals)
 	for _, row := range rows {
 		for _, v := range row {
-			if idxpkg.EncodeValueLossy(v) {
+			if idxpkg.ValueLossy(v) {
 				lossy = true
 			}
 		}

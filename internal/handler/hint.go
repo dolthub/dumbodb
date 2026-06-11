@@ -19,6 +19,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 // validateHintExists returns MongoDB's error when hint names an index that does
@@ -32,11 +33,16 @@ func validateHintExists(ctx context.Context, coll backends.Collection, hint any,
 
 	idxRes, err := coll.ListIndexes(ctx, nil)
 	if err != nil {
-		// The collection does not exist (or its indexes are otherwise
-		// unavailable). MongoDB does not validate a hint against a
-		// non-existent collection -- the query simply returns no documents --
-		// so skip validation here and let the query itself proceed.
-		return nil //nolint:nilerr // intentionally skip hint validation when indexes are unavailable
+		// MongoDB does not validate a hint against a non-existent namespace
+		// (the query just returns no documents), so skip validation when the
+		// collection or database does not exist. Any other error is a real
+		// backend failure and must propagate rather than letting an
+		// unvalidated hint through.
+		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) ||
+			backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseDoesNotExist) {
+			return nil
+		}
+		return lazyerrors.Error(err)
 	}
 
 	if backends.MatchHintedIndex(hint, idxRes.Indexes) == "" {

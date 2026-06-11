@@ -183,6 +183,35 @@ func EncodeValueLossy(v any) bool {
 	return true
 }
 
+// ValueLossy reports whether v cannot be faithfully represented by the
+// KeyString encoding, so an index containing it must not be consulted by the
+// planner. This is EncodeValueLossy plus a value-aware check for
+// large-magnitude integral float64s: encodeFloat64 takes the integer part
+// through a uint64/int64 conversion, and Go's float-to-integer conversion is
+// implementation-defined when the value is out of range. Such doubles would
+// otherwise corrupt index ordering and unique-key semantics.
+func ValueLossy(v any) bool {
+	if EncodeValueLossy(v) {
+		return true
+	}
+
+	f, ok := v.(float64)
+	if !ok {
+		return false
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f == 0 {
+		return false
+	}
+	// Non-integral doubles have |f| < 2^52 and encode safely. Integral doubles
+	// in [MinInt64, MaxUint64] also encode without overflow; beyond that the
+	// integer-part conversion in encodeFloat64 overflows.
+	const (
+		maxEncodable = float64(1<<63) * 2 // 2^64
+		minEncodable = float64(-(1 << 63)) // math.MinInt64
+	)
+	return f == math.Trunc(f) && (f >= maxEncodable || f < minEncodable)
+}
+
 func appendEscaped(out []byte, s string) []byte {
 	for i := 0; i < len(s); i++ {
 		b := s[i]

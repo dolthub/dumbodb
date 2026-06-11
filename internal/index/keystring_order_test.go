@@ -245,3 +245,34 @@ func TestBracketRangeContainsValues(t *testing.T) {
 		}
 	}
 }
+
+// TestValueLossy_LargeFloat64 pins that large-magnitude integral doubles --
+// whose integer part falls outside the encodable int64/uint64 range -- are
+// flagged lossy, so an index containing them is not consulted (encodeFloat64
+// would otherwise perform an out-of-range float-to-integer conversion).
+func TestValueLossy_LargeFloat64(t *testing.T) {
+	cases := []struct {
+		v     any
+		lossy bool
+	}{
+		{1.5, false},
+		{0.0, false},
+		{float64(9e18), false},   // < MaxInt64: integer fast path
+		{float64(-9e18), false},  // > MinInt64
+		{float64(5e19), true},    // > MaxUint64: uint64 overflow
+		{float64(1e25), true},
+		{float64(-1e25), true},   // < MinInt64
+		{float64(1e30), true},
+		{math.Inf(1), false},
+		{math.Inf(-1), false},
+		{math.NaN(), false},
+		{int32(42), false},
+		{int64(1 << 40), false},
+		{"str", false},
+	}
+	for _, c := range cases {
+		if got := ValueLossy(c.v); got != c.lossy {
+			t.Errorf("ValueLossy(%v) = %v, want %v", c.v, got, c.lossy)
+		}
+	}
+}
