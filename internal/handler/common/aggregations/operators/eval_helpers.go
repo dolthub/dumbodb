@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -62,6 +63,13 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			if dotIdx := strings.Index(withoutPrefix, "."); dotIdx >= 0 {
 				varName = withoutPrefix[:dotIdx]
 				fieldPath = withoutPrefix[dotIdx+1:]
+			}
+
+			if varName == "" {
+				return nil, handlererrors.NewCommandErrorMsg(
+					handlererrors.ErrFailedToParse,
+					"empty variable names are not allowed",
+				)
 			}
 
 			var base any
