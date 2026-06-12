@@ -566,7 +566,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	docs, err := iterator.ConsumeValuesN(cursor, int(batchSize))
 	if err != nil {
 		h.cursors.CloseAndRemove(cursor)
-		return nil, handleMaxTimeMSError(err, maxTimeMS, "aggregate")
+		return nil, wrapAggregateExecutorError(handleMaxTimeMSError(err, maxTimeMS, "aggregate"))
 	}
 
 	h.L.DebugContext(
@@ -1013,6 +1013,32 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 }
 
 // buildMergeKey builds a string key for a document based on the given field names.
+// wrapAggregateExecutorError wraps a CommandError surfaced during aggregate
+// iteration with the "PlanExecutor error during aggregation :: caused by ::"
+// prefix MongoDB uses for runtime evaluation errors. Parse-style errors
+// (bad field path, undefined variable, empty variable name) and errors
+// already carrying the prefix pass through unmodified.
+func wrapAggregateExecutorError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		return err
+	}
+	if executorWrapSkip[cmdErr.Code()] {
+		return err
+	}
+	inner := cmdErr.Err().Error()
+	if strings.Contains(inner, "PlanExecutor error during aggregation") {
+		return err
+	}
+	return handlererrors.NewCommandErrorMsg(
+		cmdErr.Code(),
+		"PlanExecutor error during aggregation :: caused by :: "+inner,
+	)
+}
+
 // This key is used to match incoming documents against existing documents in $merge.
 func buildMergeKey(doc *types.Document, fields []string) string {
 	if len(fields) == 1 {
