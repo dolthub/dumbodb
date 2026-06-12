@@ -16,9 +16,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -37,10 +41,13 @@ type alertMessage struct {
 
 type notifier func(ctx context.Context, msg alertMessage)
 
-func buildNotifier(alertCmd, emailFrom, emailTo, emailRegion string) notifier {
+func buildNotifier(alertCmd, emailFrom, emailTo, emailRegion, reportDir string) notifier {
 	backends := []notifier{}
 	if alertCmd != "" {
 		backends = append(backends, cmdNotifier(alertCmd))
+	}
+	if reportDir != "" {
+		backends = append(backends, fileNotifier(reportDir))
 	}
 	if emailFrom != "" && emailTo != "" {
 		backends = append(backends, sesNotifier(emailFrom, emailTo, emailRegion))
@@ -49,6 +56,37 @@ func buildNotifier(alertCmd, emailFrom, emailTo, emailRegion string) notifier {
 		for _, b := range backends {
 			b(ctx, msg)
 		}
+	}
+}
+
+// fileNotifier writes each report locally instead of mailing it,
+// for unattended runs that lack SES credentials. Each invocation
+// produces report-NNN.{txt,html,png} under dir; report-latest.*
+// always points at the most recent so a tail-friendly path exists.
+func fileNotifier(dir string) notifier {
+	var seq atomic.Int64
+	return func(ctx context.Context, msg alertMessage) {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Printf("report-dir: %v", err)
+			return
+		}
+		n := seq.Add(1)
+		writeFile := func(name string, data []byte) {
+			if len(data) == 0 {
+				return
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+				log.Printf("report-dir write %s: %v", name, err)
+			}
+		}
+		seqName := fmt.Sprintf("report-%03d", n)
+		writeFile(seqName+".txt", []byte(msg.TextBody))
+		writeFile(seqName+".html", []byte(msg.HTMLBody))
+		writeFile(seqName+".png", msg.ChartPNG)
+		writeFile("report-latest.txt", []byte(msg.TextBody))
+		writeFile("report-latest.html", []byte(msg.HTMLBody))
+		writeFile("report-latest.png", msg.ChartPNG)
+		log.Printf("report written: %s/%s.{txt,html,png}", dir, seqName)
 	}
 }
 

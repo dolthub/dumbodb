@@ -154,8 +154,11 @@ func (w *workload) runBulkWorker(ctx context.Context, uri, collName string, work
 			w.errors.Add(1)
 		}
 		w.cycles.Add(1)
-		// Bulk inserts are heavier; back off proportionally.
-		if !sleep(ctx, opsInterval*5) {
+		// One batch per opsInterval. With the default batch size and
+		// interval this drives roughly 100 inserts/sec into the shared
+		// collection, fast enough to warm it to the trim cap within
+		// ~30 min.
+		if !sleep(ctx, opsInterval) {
 			return
 		}
 	}
@@ -398,6 +401,100 @@ func (w *workload) runTxnWorker(ctx context.Context, uri, collName string, worke
 			return
 		}
 	}
+}
+
+// trimBaseRatePerSec is the steady-state deletion rate (docs/sec) the
+// trim worker targets at the cap. It is matched to the bulk worker's
+// approximate insert rate so deletions balance inserts once the
+// collection is full. It only shapes the approach to the cap; the
+// overflow term in trimBudget enforces the cap for any actual insert
+// rate.
+const trimBaseRatePerSec = 100.0
+
+// runTrimWorker holds the shared collection near cap by deleting
+// documents at a rate that ramps with how full the collection is:
+// nothing while it fills (so warmup stays fast), rising to the insert
+// rate as it nears cap, and the full overflow above cap. This converts
+// the otherwise monotonically growing collection into a steady-state
+// population so aggregation memory plateaus instead of growing without
+// bound. A cap of 0 disables trimming.
+func (w *workload) runTrimWorker(ctx context.Context, uri, collName string, cap int, interval time.Duration) {
+	defer w.wg.Done()
+	if cap <= 0 {
+		return
+	}
+	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	if err != nil {
+		w.errors.Add(1)
+		return
+	}
+	defer client.Disconnect(context.Background())
+	coll := client.Database("soak").Collection(collName)
+	lowWater := cap / 2
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		count, err := coll.EstimatedDocumentCount(cctx)
+		if err != nil {
+			w.errors.Add(1)
+		} else if del := trimBudget(int(count), cap, lowWater, interval); del > 0 {
+			if err := deleteOldest(cctx, coll, del); err != nil {
+				w.errors.Add(1)
+			}
+		}
+		cancel()
+		w.cycles.Add(1)
+		if !sleep(ctx, interval) {
+			return
+		}
+	}
+}
+
+// trimBudget returns how many documents to delete this tick. It is 0
+// below lowWater, ramps linearly from 0 at lowWater to one interval's
+// worth of trimBaseRatePerSec at cap, and adds the full overflow above
+// cap so the collection is pulled back to cap within a tick or two
+// regardless of how fast inserts run.
+func trimBudget(count, cap, lowWater int, interval time.Duration) int {
+	if count <= lowWater {
+		return 0
+	}
+	base := trimBaseRatePerSec * interval.Seconds()
+	if count <= cap {
+		frac := float64(count-lowWater) / float64(cap-lowWater)
+		return int(frac * base)
+	}
+	return (count - cap) + int(base)
+}
+
+// deleteOldest deletes n documents in collection key order. Mongo's
+// delete command cannot limit a multi-delete to n, so we enumerate n
+// _ids first (projection-only find) and delete them in one DeleteMany.
+// Key order trims the oldest bulk batches first, since their _ids are
+// monotonic in batch sequence.
+func deleteOldest(ctx context.Context, coll *mongo.Collection, n int) error {
+	cur, err := coll.Find(ctx, bson.M{}, options.Find().SetLimit(int64(n)).SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	var ids []any
+	for cur.Next(ctx) {
+		var d struct {
+			ID any `bson:"_id"`
+		}
+		if err := cur.Decode(&d); err == nil {
+			ids = append(ids, d.ID)
+		}
+	}
+	cur.Close(ctx)
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err = coll.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	return err
 }
 
 // sleep returns false if ctx fires before the delay elapses, so the

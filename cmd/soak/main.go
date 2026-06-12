@@ -66,25 +66,35 @@ func main() {
 		txnWorkers     = flag.Int("workers-txn", 1, "multi-op session.WithTransaction workers")
 		opsInterval    = flag.Duration("ops-interval", time.Second, "base delay between ops; heavier worker types scale this up internally")
 		sessionDelay   = flag.Duration("session-delay", 250*time.Millisecond, "delay between cycles on each session-churn worker")
+		collectionCap  = flag.Int("collection-cap", 100000, "hold the shared collection near this many docs via a trim worker; 0 disables trimming and lets it grow unbounded")
+		trimInterval   = flag.Duration("trim-interval", time.Second, "how often the trim worker checks the collection size and deletes the overflow")
 
 		// Detection.
 		slopeWindow      = flag.Duration("slope-window", 6*time.Hour, "rolling window over which the slope is computed")
 		slopeThresholdMB = flag.Float64("slope-threshold-mb-per-hour", 1.0, "MB/hour of sustained growth that triggers an alert")
 		cooldown         = flag.Duration("cooldown", 24*time.Hour, "minimum delay between alerts")
 
-		// Email alerting (required: the soak has no value running unattended without it).
-		emailFrom = flag.String("email-from", "", "SES verified From address (required)")
-		emailTo   = flag.String("email-to", "", "alert recipient(s), comma-separated (required)")
+		// Email alerting via SES.
+		emailFrom = flag.String("email-from", "", "SES verified From address")
+		emailTo   = flag.String("email-to", "", "alert recipient(s), comma-separated")
 		emailRegn = flag.String("email-region", "", "AWS region for SES; default chain region used when blank")
 		emailSubj = flag.String("email-subject", "dumbodb soak alert", "Subject line for SES alerts")
+
+		// Local report sink for runs without SES credentials. Writes each
+		// alert/summary report (text, html, png) into this directory.
+		reportDir = flag.String("report-dir", "", "if set, write each report locally instead of (or in addition to) mailing it")
 
 		// Optional secondary alert channel (e.g. local mailx, ntfy, curl-to-webhook).
 		alertCmd = flag.String("alert-cmd", "", "shell command to run on each alert in addition to email; body on stdin")
 	)
 	flag.Parse()
 
-	if *emailFrom == "" || *emailTo == "" {
-		log.Fatal("-email-from and -email-to are required")
+	// The soak has no value running unattended without a sink for its
+	// reports, but any one of SES, a local report dir, or an alert
+	// command satisfies that.
+	emailEnabled := *emailFrom != "" && *emailTo != ""
+	if !emailEnabled && *reportDir == "" && *alertCmd == "" {
+		log.Fatal("configure at least one report sink: -email-from/-email-to, -report-dir, or -alert-cmd")
 	}
 	if (*attachAddr == "") != (*attachPid == 0) {
 		log.Fatal("-attach-addr and -attach-pid must be set together (or not at all)")
@@ -113,7 +123,7 @@ func main() {
 	}
 	defer writer.Close()
 
-	notify := buildNotifier(*alertCmd, *emailFrom, *emailTo, *emailRegn)
+	notify := buildNotifier(*alertCmd, *emailFrom, *emailTo, *emailRegn, *reportDir)
 	detector := newSlopeDetector(*slopeWindow, *slopeThresholdMB, *cooldown)
 
 	wl, err := startWorkload(ctx, workloadConfig{
@@ -127,6 +137,8 @@ func main() {
 		TxnWorkers:     *txnWorkers,
 		SessionDelay:   *sessionDelay,
 		OpsInterval:    *opsInterval,
+		CollectionCap:  *collectionCap,
+		TrimInterval:   *trimInterval,
 	})
 	if err != nil {
 		log.Fatalf("starting workload: %v", err)
