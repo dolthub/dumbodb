@@ -50,11 +50,15 @@ func translateExpressionError(err error) error {
 }
 
 // findProjectionAllowedOperators gates which aggregation operators may appear
-// as top-level projection-value operators in find. The set is intentionally
-// narrow -- adding an operator requires verifying its result shape and a
-// parity test against MongoDB.
+// as top-level projection-value operators in find. Adding an operator
+// requires verifying its result shape via a parity test against MongoDB.
 var findProjectionAllowedOperators = map[string]bool{
+	"$add":      true,
 	"$bsonSize": true,
+	"$ifNull":   true,
+	"$literal":  true,
+	"$toString": true,
+	"$type":     true,
 }
 
 // findProjectionPathExists reports whether the path referenced by a "$..."
