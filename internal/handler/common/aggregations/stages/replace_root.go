@@ -100,21 +100,11 @@ func (r *replaceRoot) Process(_ context.Context, iter types.DocumentsIterator, c
 func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, error) {
 	switch e := expr.(type) {
 	case string:
-		// Field path expression like "$subdoc".
-		fieldExpr, err := aggregations.NewExpression(e, nil)
+		val, err := operators.EvalArgValue(e, doc)
 		if err != nil {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrFailedToParse,
 				fmt.Sprintf("invalid expression for $replaceRoot: %s", e),
-				"$replaceRoot (stage)",
-			)
-		}
-
-		val, err := fieldExpr.Evaluate(doc)
-		if err != nil {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrOperationFailed,
-				"'newRoot' expression for $replaceRoot must evaluate to an object",
 				"$replaceRoot (stage)",
 			)
 		}

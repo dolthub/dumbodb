@@ -362,20 +362,11 @@ func processPipelineUpdate(doc *types.Document, pipeline *types.Array) (bool, er
 func evaluateReplaceExpr(expr any, doc *types.Document) (*types.Document, error) {
 	switch e := expr.(type) {
 	case string:
-		fieldExpr, err := aggregations.NewExpression(e, nil)
+		val, err := operators.EvalArgValue(e, doc)
 		if err != nil {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrFailedToParse,
 				fmt.Sprintf("invalid expression for $replaceWith: %s", e),
-				"$replaceWith (stage)",
-			)
-		}
-
-		val, err := fieldExpr.Evaluate(doc)
-		if err != nil {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrOperationFailed,
-				"'newRoot' expression for $replaceWith must evaluate to an object",
 				"$replaceWith (stage)",
 			)
 		}

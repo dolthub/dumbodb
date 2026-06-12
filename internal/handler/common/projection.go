@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -29,18 +30,32 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// findProjectionAllowedOperators gates which aggregation operators may appear
-// as top-level projection-value operators in find. The set is intentionally
-// narrow -- adding an operator requires verifying its result shape and a
-// parity test against MongoDB.
-var findProjectionAllowedOperators = map[string]bool{
-	"$bsonSize": true,
+func translateExpressionError(err error) error {
+	var exErr *aggregations.ExpressionError
+	if !errors.As(err, &exErr) {
+		return err
+	}
+	switch exErr.Code() {
+	case aggregations.ErrEmptyFieldPath:
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrGroupInvalidFieldPath,
+			"'$' by itself is not a valid FieldPath",
+		)
+	}
+	return err
 }
 
-// findProjectionPathExists reports whether the path referenced by a "$..."
-// projection expression resolves to a value present in doc. Used to
-// distinguish null-valued fields (project null) from missing fields
-// (omit), since both flatten to types.Null through EvalArgValue.
+var findProjectionAllowedOperators = map[string]bool{
+	"$add":      true,
+	"$bsonSize": true,
+	"$ifNull":   true,
+	"$literal":  true,
+	"$toString": true,
+	"$type":     true,
+}
+
+// Distinguishes null-valued fields (project null) from missing fields
+// (omit), since EvalArgValue collapses both to types.Null.
 func findProjectionPathExists(expr string, doc *types.Document) bool {
 	if strings.HasPrefix(expr, "$$") {
 		rest := strings.TrimPrefix(expr, "$$")
@@ -488,7 +503,7 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 			if strings.HasPrefix(value, "$") {
 				resolved, err := operators.EvalArgValue(value, doc)
 				if err != nil {
-					return nil, err
+					return nil, translateExpressionError(err)
 				}
 				if resolved == types.Null && !findProjectionPathExists(value, doc) {
 					continue

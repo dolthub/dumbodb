@@ -192,7 +192,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	docs, err := iterator.ConsumeValuesN(c, int(params.BatchSize))
 	if err != nil {
 		h.cursors.CloseAndRemove(c)
-		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
+		return nil, wrapFindExecutorError(handleMaxTimeMSError(err, params.MaxTimeMS, "find"), params.DB+"."+params.Collection)
 	}
 
 	h.L.DebugContext(
@@ -501,6 +501,34 @@ func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
 }
 
 var _ types.DocumentsIterator = (*minMaxIter)(nil)
+
+func wrapFindExecutorError(err error, ns string) error {
+	if err == nil {
+		return nil
+	}
+	var cmdErr *handlererrors.CommandError
+	if !errors.As(err, &cmdErr) {
+		return err
+	}
+	if executorWrapSkip[cmdErr.Code()] {
+		return err
+	}
+	inner := cmdErr.Err().Error()
+	if strings.Contains(inner, "Executor error during") {
+		return err
+	}
+	return handlererrors.NewCommandErrorMsg(
+		cmdErr.Code(),
+		"Executor error during find command: "+ns+" :: caused by :: "+inner,
+	)
+}
+
+var executorWrapSkip = map[handlererrors.ErrorCode]bool{
+	handlererrors.ErrBadValue:               true,
+	handlererrors.ErrFailedToParse:          true,
+	handlererrors.ErrGroupInvalidFieldPath:  true,
+	handlererrors.ErrGroupUndefinedVariable: true,
+}
 
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.
 // The MaxTimeMSExpired error won't be returned if maxTimeMS wasn't set.
