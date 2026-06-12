@@ -25,22 +25,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// EvalArgValue is the exported view of evalArgValue, for callers outside this
-// package that need to evaluate aggregation-style expressions (e.g. find
-// projection resolving "$$ROOT" and "$field" expressions).
 func EvalArgValue(arg any, doc *types.Document) (any, error) {
 	return evalArgValue(arg, doc)
 }
 
-// evalArgValue resolves an operator argument to its concrete value against the document.
-// Supports:
-//   - *types.Document with operator -> evaluates nested operator
-//   - *types.Document without operator -> evaluates each value as an expression
-//   - "$$ROOT" / "$$CURRENT" -> the current document (with optional ".field" traversal)
-//   - other "$$name" -> variable bound by $filter/$map/$let in the doc
-//   - "$path" -> field-path expression
-//   - other string -> literal
-//   - any other value -> literal value
 func evalArgValue(arg any, doc *types.Document) (any, error) {
 	switch v := arg.(type) {
 	case *types.Document:
@@ -53,7 +41,6 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			return op.Process(doc)
 		}
 
-		// Non-operator document: treat as an expression object  -- each value is an expression.
 		return evalDocumentExpressions(v, doc)
 
 	case string:
@@ -80,13 +67,9 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			case "NOW":
 				base = time.Now().UTC()
 			case "REMOVE":
-				// Sentinel: callers (e.g. projection) treat null + no source path as "omit".
 				base = types.Null
 			case "PRUNE", "KEEP", "DESCEND":
-				// $redact constants. evalArgValue is context-blind; $redact's
-				// evalRedactExpr checks the resulting string. In non-$redact
-				// contexts MongoDB errors here as "undefined variable"; we
-				// accept the divergence rather than break $redact + $cond.
+				// $redact reads these as literal strings to decide its action.
 				base = v
 			default:
 				val, err := doc.Get("$$" + varName)
@@ -134,7 +117,6 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 
 			val, err := expr.Evaluate(doc)
 			if err != nil {
-				// missing field evaluates to null
 				return types.Null, nil
 			}
 
@@ -148,10 +130,6 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 	}
 }
 
-// evalDocumentExpressions evaluates each value of a non-operator expression document as an
-// expression against doc, returning a new document with the resolved values. This matches
-// MongoDB's behavior where `{key: "$field"}` inside an expression context produces
-// `{key: <value of $field>}`.
 func evalDocumentExpressions(expr *types.Document, doc *types.Document) (*types.Document, error) {
 	result := must.NotFail(types.NewDocument())
 

@@ -30,10 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// translateExpressionError maps an aggregations.ExpressionError (raised by
-// EvalArgValue while parsing a projection-value expression) to the
-// MongoDB-compatible wire error code expected at the find-projection layer.
-// Non-expression errors are returned unchanged.
 func translateExpressionError(err error) error {
 	var exErr *aggregations.ExpressionError
 	if !errors.As(err, &exErr) {
@@ -49,9 +45,6 @@ func translateExpressionError(err error) error {
 	return err
 }
 
-// findProjectionAllowedOperators gates which aggregation operators may appear
-// as top-level projection-value operators in find. Adding an operator
-// requires verifying its result shape via a parity test against MongoDB.
 var findProjectionAllowedOperators = map[string]bool{
 	"$add":      true,
 	"$bsonSize": true,
@@ -61,10 +54,8 @@ var findProjectionAllowedOperators = map[string]bool{
 	"$type":     true,
 }
 
-// findProjectionPathExists reports whether the path referenced by a "$..."
-// projection expression resolves to a value present in doc. Used to
-// distinguish null-valued fields (project null) from missing fields
-// (omit), since both flatten to types.Null through EvalArgValue.
+// Distinguishes null-valued fields (project null) from missing fields
+// (omit), since EvalArgValue collapses both to types.Null.
 func findProjectionPathExists(expr string, doc *types.Document) bool {
 	if strings.HasPrefix(expr, "$$") {
 		rest := strings.TrimPrefix(expr, "$$")

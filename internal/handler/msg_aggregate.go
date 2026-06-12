@@ -1012,12 +1012,6 @@ func makeMergeWriter(b backends.Backend, currentDB string) stages.MergeFunc { //
 	}
 }
 
-// buildMergeKey builds a string key for a document based on the given field names.
-// wrapAggregateExecutorError wraps a CommandError surfaced during aggregate
-// iteration with the "PlanExecutor error during aggregation :: caused by ::"
-// prefix MongoDB uses for runtime evaluation errors. Parse-style errors
-// (bad field path, undefined variable, empty variable name) and errors
-// already carrying the prefix pass through unmodified.
 func wrapAggregateExecutorError(err error) error {
 	if err == nil {
 		return nil

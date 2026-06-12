@@ -24,9 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgTop returns a degenerate per-collection counter table. DumboDB does
-// not track operation counts; the response shape matches MongoDB so
-// Compass renders cleanly.
 func (h *Handler) MsgTop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

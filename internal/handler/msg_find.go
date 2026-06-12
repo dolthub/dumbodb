@@ -502,11 +502,6 @@ func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
 
 var _ types.DocumentsIterator = (*minMaxIter)(nil)
 
-// wrapFindExecutorError wraps a CommandError surfaced during find iteration
-// with the "Executor error during find command: <ns> :: caused by :: ..."
-// prefix MongoDB uses for runtime evaluation errors. Parse-style errors
-// (bad field path, undefined variable, empty variable name) and errors
-// already carrying the prefix pass through unmodified, matching MongoDB.
 func wrapFindExecutorError(err error, ns string) error {
 	if err == nil {
 		return nil
@@ -528,14 +523,10 @@ func wrapFindExecutorError(err error, ns string) error {
 	)
 }
 
-// executorWrapSkip lists CommandError codes that MongoDB does NOT wrap with
-// the executor-prefix even when they surface during iteration. These are
-// parse/resolve errors that MongoDB attributes to the planner, not the
-// executor.
 var executorWrapSkip = map[handlererrors.ErrorCode]bool{
-	handlererrors.ErrFailedToParse:          true, // 9
-	handlererrors.ErrGroupInvalidFieldPath:  true, // 16872
-	handlererrors.ErrGroupUndefinedVariable: true, // 17276
+	handlererrors.ErrFailedToParse:          true,
+	handlererrors.ErrGroupInvalidFieldPath:  true,
+	handlererrors.ErrGroupUndefinedVariable: true,
 }
 
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.
