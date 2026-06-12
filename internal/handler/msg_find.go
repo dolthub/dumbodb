@@ -524,6 +524,7 @@ func wrapFindExecutorError(err error, ns string) error {
 }
 
 var executorWrapSkip = map[handlererrors.ErrorCode]bool{
+	handlererrors.ErrBadValue:               true,
 	handlererrors.ErrFailedToParse:          true,
 	handlererrors.ErrGroupInvalidFieldPath:  true,
 	handlererrors.ErrGroupUndefinedVariable: true,
