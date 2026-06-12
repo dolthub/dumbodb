@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -28,6 +29,25 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+// translateExpressionError maps an aggregations.ExpressionError (raised by
+// EvalArgValue while parsing a projection-value expression) to the
+// MongoDB-compatible wire error code expected at the find-projection layer.
+// Non-expression errors are returned unchanged.
+func translateExpressionError(err error) error {
+	var exErr *aggregations.ExpressionError
+	if !errors.As(err, &exErr) {
+		return err
+	}
+	switch exErr.Code() {
+	case aggregations.ErrEmptyFieldPath:
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrGroupInvalidFieldPath,
+			"'$' by itself is not a valid FieldPath",
+		)
+	}
+	return err
+}
 
 // findProjectionAllowedOperators gates which aggregation operators may appear
 // as top-level projection-value operators in find. The set is intentionally
@@ -488,7 +508,7 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 			if strings.HasPrefix(value, "$") {
 				resolved, err := operators.EvalArgValue(value, doc)
 				if err != nil {
-					return nil, err
+					return nil, translateExpressionError(err)
 				}
 				if resolved == types.Null && !findProjectionPathExists(value, doc) {
 					continue
