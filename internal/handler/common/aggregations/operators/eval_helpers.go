@@ -17,6 +17,7 @@ package operators
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -76,6 +77,11 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			switch varName {
 			case "ROOT", "CURRENT":
 				base = doc.DeepCopy()
+			case "NOW":
+				base = time.Now().UTC()
+			case "REMOVE":
+				// Sentinel: callers (e.g. projection) treat null + no source path as "omit".
+				base = types.Null
 			default:
 				val, err := doc.Get("$$" + varName)
 				if err != nil {
