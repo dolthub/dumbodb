@@ -82,13 +82,19 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			case "REMOVE":
 				// Sentinel: callers (e.g. projection) treat null + no source path as "omit".
 				base = types.Null
+			case "PRUNE", "KEEP", "DESCEND":
+				// $redact constants. evalArgValue is context-blind; $redact's
+				// evalRedactExpr checks the resulting string. In non-$redact
+				// contexts MongoDB errors here as "undefined variable"; we
+				// accept the divergence rather than break $redact + $cond.
+				base = v
 			default:
 				val, err := doc.Get("$$" + varName)
 				if err != nil {
-					if fieldPath != "" {
-						return types.Null, nil
-					}
-					return v, nil
+					return nil, handlererrors.NewCommandErrorMsg(
+						handlererrors.ErrGroupUndefinedVariable,
+						"Use of undefined variable: "+varName,
+					)
 				}
 				base = val
 			}
