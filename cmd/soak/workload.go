@@ -44,6 +44,8 @@ type workloadConfig struct {
 	TxnWorkers     int
 	SessionDelay   time.Duration
 	OpsInterval    time.Duration
+	CollectionCap  int
+	TrimInterval   time.Duration
 }
 
 func (w *workload) cycleCount() int64 { return w.cycles.Load() }
@@ -92,6 +94,10 @@ func startWorkload(parent context.Context, cfg workloadConfig) (*workload, error
 	for i := 0; i < cfg.TxnWorkers; i++ {
 		w.wg.Add(1)
 		go w.runTxnWorker(ctx, cfg.URI, collName, i, cfg.OpsInterval)
+	}
+	if cfg.CollectionCap > 0 {
+		w.wg.Add(1)
+		go w.runTrimWorker(ctx, cfg.URI, collName, cfg.CollectionCap, cfg.TrimInterval)
 	}
 	return w, nil
 }
