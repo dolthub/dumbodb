@@ -18,10 +18,34 @@ import (
 	"math"
 	"math/big"
 
+	"github.com/cockroachdb/apd/v3"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+// decimal128Context divides with IEEE 754-2008 decimal128 semantics.
+var decimal128Context = apd.Context{
+	Precision:   34,
+	MaxExponent: 6144,
+	MinExponent: -6143,
+	Rounding:    apd.RoundHalfEven,
+}
+
+func decimalToAPD(d types.Decimal128) (*apd.Decimal, bool) {
+	coeff, exp, err := bson.NewDecimal128(d.H, d.L).BigInt()
+	if err != nil {
+		return nil, false
+	}
+
+	out := new(apd.Decimal)
+	out.Form = apd.Finite
+	out.Negative = coeff.Sign() < 0
+	out.Coeff.SetMathBigInt(new(big.Int).Abs(coeff))
+	out.Exponent = int32(exp)
+
+	return out, true
+}
 
 // SumNumbers accumulate numbers and returns the result of summation.
 // The result has the same type as the input, except when the result
@@ -197,55 +221,53 @@ func avgDecimal128(vs []any) types.Decimal128 {
 // of precision. Shared by the batch (avgDecimal128) and incremental (NumberAvg)
 // paths so they produce identical results.
 func avgFromDecimalSum(sum types.Decimal128, count int64) types.Decimal128 {
-	p := bson.NewDecimal128(sum.H, sum.L)
-
-	m, exp, err := p.BigInt()
-	if err != nil {
-		// NaN or Inf  -- return zero.
+	dividend, ok := decimalToAPD(sum)
+	if !ok {
 		return decimalZero()
 	}
 
-	// Divide: scale m up by 10^34 to preserve 34 digits of precision,
-	// then integer-divide by count. Result exponent = exp - 34.
-	const precisionDigits = 34
+	quo := new(apd.Decimal)
+	cond, err := decimal128Context.Quo(quo, dividend, apd.New(count, 0))
+	if err != nil {
+		return decimalZero()
+	}
 
-	ten := big.NewInt(10)
-	factor := new(big.Int).Exp(ten, big.NewInt(precisionDigits), nil)
-	scaled := new(big.Int).Mul(m, factor)
-	quotient := new(big.Int).Quo(scaled, big.NewInt(count))
+	if quo.Form != apd.Finite {
+		return decimalZero()
+	}
 
-	resultExp := exp - precisionDigits
+	coeff := quo.Coeff.MathBigInt()
+	exp := int(quo.Exponent)
 
-	// Normalize: strip trailing zeros from the mantissa added by the precision
-	// scaling step, so the result is compact (e.g. "20" not "20.0000...0").
-	// After stripping, re-expand if the exponent would become positive so that
-	// "20" is represented as mantissa=20/exp=0 rather than mantissa=2/exp=1
-	// (which round-trips as "2E+1" instead of the more readable "20").
-	if quotient.Sign() != 0 {
-		rem := new(big.Int)
+	// Reduce an exact quotient to the IEEE divide ideal exponent (exp(dividend),
+	// since count's is 0) so the representation matches MongoDB: 75, not 75.000...0.
+	if !cond.Inexact() {
+		ideal := int(dividend.Exponent)
+		if coeff.Sign() == 0 {
+			exp = ideal
+		} else {
+			ten := big.NewInt(10)
+			rem := new(big.Int)
 
-		for {
-			q, r := new(big.Int).DivMod(quotient, ten, rem)
-			if r.Sign() != 0 {
-				break
+			for exp < ideal {
+				q, r := new(big.Int).QuoRem(coeff, ten, rem)
+				if r.Sign() != 0 {
+					break
+				}
+
+				coeff = q
+				exp++
 			}
-
-			quotient = q
-			resultExp++
-		}
-
-		// If stripping produced a positive exponent, re-expand to exp=0
-		// so the decimal driver formats the value without scientific notation.
-		if resultExp > 0 {
-			factor := new(big.Int).Exp(ten, big.NewInt(int64(resultExp)), nil)
-			quotient.Mul(quotient, factor)
-			resultExp = 0
 		}
 	}
 
-	result, ok := bson.ParseDecimal128FromBigInt(quotient, resultExp)
+	if quo.Negative {
+		coeff = new(big.Int).Neg(coeff)
+	}
+
+	result, ok := bson.ParseDecimal128FromBigInt(coeff, exp)
 	if !ok {
-		result, _ = bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+		return decimalZero()
 	}
 
 	h, l := result.GetBytes()

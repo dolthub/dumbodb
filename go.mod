@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.29.8
 	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.62.4
+	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/dlclark/regexp2 v1.11.5
 	github.com/dolthub/dolt/go v0.40.5-0.20260528163902-e239b95f042d
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
@@ -73,7 +74,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.1.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
-	github.com/cockroachdb/apd/v3 v3.2.3 // indirect
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
