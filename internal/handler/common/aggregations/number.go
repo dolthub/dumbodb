@@ -166,6 +166,14 @@ func AvgNumbers(vs ...any) any {
 	return sum / float64(count)
 }
 
+// decimalZero returns Decimal128 zero.
+func decimalZero() types.Decimal128 {
+	p, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
+	h, l := p.GetBytes()
+
+	return types.Decimal128{H: h, L: l}
+}
+
 // avgDecimal128 computes the average of numeric values using Decimal128 arithmetic.
 // Called when at least one element is types.Decimal128.
 func avgDecimal128(vs []any) types.Decimal128 {
@@ -179,22 +187,22 @@ func avgDecimal128(vs []any) types.Decimal128 {
 	}
 
 	if count == 0 {
-		p, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
-		h, l := p.GetBytes()
-
-		return types.Decimal128{H: h, L: l}
+		return decimalZero()
 	}
 
-	sum := sumDecimal128(vs)
+	return avgFromDecimalSum(sumDecimal128(vs), count)
+}
+
+// avgFromDecimalSum divides a Decimal128 sum by count, preserving 34 digits
+// of precision. Shared by the batch (avgDecimal128) and incremental (NumberAvg)
+// paths so they produce identical results.
+func avgFromDecimalSum(sum types.Decimal128, count int64) types.Decimal128 {
 	p := bson.NewDecimal128(sum.H, sum.L)
 
 	m, exp, err := p.BigInt()
 	if err != nil {
 		// NaN or Inf  -- return zero.
-		p2, _ := bson.ParseDecimal128FromBigInt(big.NewInt(0), 0)
-		h, l := p2.GetBytes()
-
-		return types.Decimal128{H: h, L: l}
+		return decimalZero()
 	}
 
 	// Divide: scale m up by 10^34 to preserve 34 digits of precision,
@@ -407,4 +415,229 @@ func sumDecimal128(vs []any) types.Decimal128 {
 	h, l := p.GetBytes()
 
 	return types.Decimal128{H: h, L: l}
+}
+
+// decimalSum incrementally accumulates Decimal128 values, producing the same
+// total as sumDecimal128 over the same sequence. Integer-mantissa addition at a
+// common minimum exponent is associative, so the incremental and batch results
+// match exactly.
+type decimalSum struct {
+	totalM *big.Int
+	minExp int
+	any    bool
+}
+
+func (s *decimalSum) addDecimalVal(dv decimalVal) {
+	if !s.any {
+		s.totalM = new(big.Int).Set(dv.m)
+		s.minExp = dv.exp
+		s.any = true
+
+		return
+	}
+
+	ten := big.NewInt(10)
+
+	if dv.exp < s.minExp {
+		factor := new(big.Int).Exp(ten, big.NewInt(int64(s.minExp-dv.exp)), nil)
+		s.totalM.Mul(s.totalM, factor)
+		s.minExp = dv.exp
+		s.totalM.Add(s.totalM, dv.m)
+
+		return
+	}
+
+	scaled := new(big.Int).Set(dv.m)
+
+	if dv.exp > s.minExp {
+		factor := new(big.Int).Exp(ten, big.NewInt(int64(dv.exp-s.minExp)), nil)
+		scaled.Mul(scaled, factor)
+	}
+
+	s.totalM.Add(s.totalM, scaled)
+}
+
+func (s *decimalSum) add(v any) {
+	if dv, ok := toDecimalVal(v); ok {
+		s.addDecimalVal(dv)
+	}
+}
+
+func (s *decimalSum) result() types.Decimal128 {
+	if !s.any {
+		return decimalZero()
+	}
+
+	p, ok := bson.ParseDecimal128FromBigInt(s.totalM, s.minExp)
+	if !ok {
+		return decimalZero()
+	}
+
+	h, l := p.GetBytes()
+
+	return types.Decimal128{H: h, L: l}
+}
+
+// NumberSum incrementally sums numbers with the same type-promotion and
+// Decimal128 semantics as SumNumbers, in O(1) space. Pre-decimal int and
+// float64 values are folded via big.Int / float64 and converted to Decimal128
+// only when a Decimal128 value first appears; all-int, all-float, all-decimal,
+// and int+decimal groups match SumNumbers exactly, while a group mixing
+// multiple float64 values with a Decimal128 may differ in the last ULP.
+type NumberSum struct {
+	intSum     *big.Int
+	floatSum   float64
+	hasInt     bool
+	hasInt64   bool
+	hasFloat64 bool
+	sawDecimal bool
+	dec        decimalSum
+	count      int64
+}
+
+// NewNumberSum returns a zeroed incremental summer.
+func NewNumberSum() *NumberSum {
+	return &NumberSum{intSum: big.NewInt(0)}
+}
+
+// Count returns the number of numeric values folded so far.
+func (s *NumberSum) Count() int64 { return s.count }
+
+// Add folds one value; non-numeric values are ignored.
+func (s *NumberSum) Add(v any) {
+	switch n := v.(type) {
+	case int32:
+		s.count++
+		if s.sawDecimal {
+			s.dec.add(v)
+			return
+		}
+		s.hasInt = true
+		s.intSum.Add(s.intSum, big.NewInt(int64(n)))
+	case int64:
+		s.count++
+		if s.sawDecimal {
+			s.dec.add(v)
+			return
+		}
+		s.hasInt = true
+		s.hasInt64 = true
+		s.intSum.Add(s.intSum, big.NewInt(n))
+	case float64:
+		s.count++
+		if s.sawDecimal {
+			s.dec.add(v)
+			return
+		}
+		s.hasFloat64 = true
+		s.floatSum += n
+	case types.Decimal128:
+		s.count++
+		if !s.sawDecimal {
+			s.promoteToDecimal()
+		}
+		s.dec.add(v)
+	default:
+		// ignore non-number
+	}
+}
+
+// promoteToDecimal seeds the decimal accumulator from the running int and
+// float sums when the first Decimal128 value arrives.
+func (s *NumberSum) promoteToDecimal() {
+	s.sawDecimal = true
+
+	if s.hasInt {
+		s.dec.addDecimalVal(decimalVal{new(big.Int).Set(s.intSum), 0})
+	}
+
+	if s.hasFloat64 {
+		s.dec.add(s.floatSum)
+	}
+}
+
+// Result returns the sum with SumNumbers' type rules. Empty input yields int32(0).
+func (s *NumberSum) Result() any {
+	if s.sawDecimal {
+		return s.dec.result()
+	}
+
+	if s.hasFloat64 || !s.intSum.IsInt64() {
+		intAsFloat, _ := new(big.Float).SetInt(s.intSum).Float64()
+
+		return intAsFloat + s.floatSum
+	}
+
+	integer := s.intSum.Int64()
+
+	if !s.hasInt64 && integer <= math.MaxInt32 && integer >= math.MinInt32 {
+		return int32(integer)
+	}
+
+	return integer
+}
+
+// NumberAvg incrementally averages numbers with the same semantics as
+// AvgNumbers, in O(1) space: float64 running sum for non-decimal input, and a
+// Decimal128 running sum once any Decimal128 appears. Returns types.Null for
+// zero numeric values.
+type NumberAvg struct {
+	floatSum   float64
+	count      int64
+	sawDecimal bool
+	dec        decimalSum
+}
+
+// NewNumberAvg returns a zeroed incremental averager.
+func NewNumberAvg() *NumberAvg { return &NumberAvg{} }
+
+// Add folds one value; non-numeric values are ignored.
+func (a *NumberAvg) Add(v any) {
+	switch n := v.(type) {
+	case int32:
+		if a.sawDecimal {
+			a.dec.add(v)
+		} else {
+			a.floatSum += float64(n)
+		}
+		a.count++
+	case int64:
+		if a.sawDecimal {
+			a.dec.add(v)
+		} else {
+			a.floatSum += float64(n)
+		}
+		a.count++
+	case float64:
+		if a.sawDecimal {
+			a.dec.add(v)
+		} else {
+			a.floatSum += n
+		}
+		a.count++
+	case types.Decimal128:
+		if !a.sawDecimal {
+			a.sawDecimal = true
+			if a.count > 0 {
+				a.dec.add(a.floatSum)
+			}
+		}
+		a.dec.add(v)
+		a.count++
+	default:
+		// ignore non-number
+	}
+}
+
+// Result returns the average, or types.Null when no numeric values were folded.
+func (a *NumberAvg) Result() any {
+	if a.count == 0 {
+		return types.Null
+	}
+
+	if a.sawDecimal {
+		return avgFromDecimalSum(a.dec.result(), a.count)
+	}
+
+	return a.floatSum / float64(a.count)
 }

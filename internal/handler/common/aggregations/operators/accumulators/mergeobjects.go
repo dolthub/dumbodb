@@ -15,13 +15,11 @@
 package accumulators
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -74,57 +72,58 @@ func newMergeObjectsAccumulator(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (m *mergeObjectsAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
-
-	result, err := types.NewDocument()
-	if err != nil {
-		return nil, err
-	}
-
-	for {
-		_, doc, err := iter.Next()
-
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		var val any
-
-		switch {
-		case m.isRoot:
-			val = doc
-		case m.operator != nil:
-			var opErr error
-			val, opErr = m.operator.Process(doc)
-			if opErr != nil {
-				continue
-			}
-		case m.expression != nil:
-			var exprErr error
-			val, exprErr = m.expression.Evaluate(doc)
-			if exprErr != nil {
-				continue
-			}
-		default:
-			continue
-		}
-
-		src, ok := val.(*types.Document)
-		if !ok {
-			continue
-		}
-
-		for _, k := range src.Keys() {
-			result.Set(k, must.NotFail(src.Get(k)))
-		}
-	}
-
-	return result, nil
+func (m *mergeObjectsAccumulator) New() Accumulation {
+	return &mergeObjectsState{spec: m, result: must.NotFail(types.NewDocument())}
 }
 
-var _ Accumulator = (*mergeObjectsAccumulator)(nil)
+type mergeObjectsState struct {
+	spec   *mergeObjectsAccumulator
+	result *types.Document
+}
+
+func (s *mergeObjectsState) Accumulate(doc *types.Document) error {
+	m := s.spec
+
+	var val any
+
+	switch {
+	case m.isRoot:
+		val = doc
+	case m.operator != nil:
+		v, opErr := m.operator.Process(doc)
+		if opErr != nil {
+			return nil
+		}
+
+		val = v
+	case m.expression != nil:
+		v, exprErr := m.expression.Evaluate(doc)
+		if exprErr != nil {
+			return nil
+		}
+
+		val = v
+	default:
+		return nil
+	}
+
+	src, ok := val.(*types.Document)
+	if !ok {
+		return nil
+	}
+
+	for _, k := range src.Keys() {
+		s.result.Set(k, must.NotFail(src.Get(k)))
+	}
+
+	return nil
+}
+
+func (s *mergeObjectsState) Result() (any, error) {
+	return s.result, nil
+}
+
+var (
+	_ Accumulator  = (*mergeObjectsAccumulator)(nil)
+	_ Accumulation = (*mergeObjectsState)(nil)
+)

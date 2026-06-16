@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type addToSetAccumulator struct {
@@ -56,41 +55,41 @@ func newAddToSet(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (a *addToSetAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (a *addToSetAccumulator) New() Accumulation {
+	// $addToSet retains the distinct set of projected values, so its result
+	// grows with the number of distinct values. It retains values, never documents.
+	return &addToSetState{spec: a, result: types.MakeArray(0)}
+}
 
-	result := types.MakeArray(0)
+type addToSetState struct {
+	spec   *addToSetAccumulator
+	result *types.Array
+}
 
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
+func (s *addToSetState) Accumulate(doc *types.Document) error {
+	var val any
 
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		var val any
-
-		if a.isConst {
-			val = a.constant
+	if s.spec.isConst {
+		val = s.spec.constant
+	} else {
+		v, evalErr := s.spec.expression.Evaluate(doc)
+		if evalErr != nil {
+			// missing field: treat as null
+			val = types.Null
 		} else {
-			v, evalErr := a.expression.Evaluate(doc)
-			if evalErr != nil {
-				// missing field: treat as null
-				val = types.Null
-			} else {
-				val = v
-			}
-		}
-
-		if !containsValue(result, val) {
-			result.Append(val)
+			val = v
 		}
 	}
 
-	return result, nil
+	if !containsValue(s.result, val) {
+		s.result.Append(val)
+	}
+
+	return nil
+}
+
+func (s *addToSetState) Result() (any, error) {
+	return s.result, nil
 }
 
 // containsValue returns true if the array already contains a value equal to val
@@ -118,5 +117,6 @@ func containsValue(arr *types.Array, val any) bool {
 }
 
 var (
-	_ Accumulator = (*addToSetAccumulator)(nil)
+	_ Accumulator  = (*addToSetAccumulator)(nil)
+	_ Accumulation = (*addToSetState)(nil)
 )

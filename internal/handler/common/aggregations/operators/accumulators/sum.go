@@ -21,7 +21,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
@@ -80,59 +79,53 @@ func newSum(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (s *sum) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (s *sum) New() Accumulation {
+	return &sumState{spec: s, acc: aggregations.NewNumberSum()}
+}
 
-	var numbers []any
+type sumState struct {
+	spec *sum
+	acc  *aggregations.NumberSum
+}
 
-	for {
-		_, doc, err := iter.Next()
+func (st *sumState) Accumulate(doc *types.Document) error {
+	s := st.spec
 
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
+	switch {
+	case s.operator != nil:
+		v, err := s.operator.Process(doc)
 		if err != nil {
-			return nil, lazyerrors.Error(err)
+			return err
 		}
 
-		switch {
-		case s.operator != nil:
-			v, err := s.operator.Process(doc)
-			if err != nil {
-				return nil, err
-			}
+		st.acc.Add(v)
 
-			numbers = append(numbers, v)
+		return nil
 
-			continue
-
-		case s.expression != nil:
-			value, err := s.expression.Evaluate(doc)
-
-			// sum fields that exist
-			if err == nil {
-				numbers = append(numbers, value)
-			}
-
-			continue
+	case s.expression != nil:
+		// sum fields that exist
+		if value, err := s.expression.Evaluate(doc); err == nil {
+			st.acc.Add(value)
 		}
 
-		switch number := s.number.(type) {
-		case float64, int32, int64:
-			// For number types, the result is equivalent of iterator len*number,
-			// with conversion handled upon overflow of int32 and int64.
-			// For example, { $sum: 1 } is equivalent of { $count: { } }.
-			numbers = append(numbers, number)
-		default:
-			// $sum returns 0 on non-existent and non-numeric field.
-			return int32(0), nil
-		}
+		return nil
 	}
 
-	return aggregations.SumNumbers(numbers...), nil
+	// Constant: { $sum: 1 } folds the same value per document (equivalent to
+	// $count). Non-numeric constants contribute nothing, so Result stays int32(0).
+	switch s.number.(type) {
+	case float64, int32, int64:
+		st.acc.Add(s.number)
+	}
+
+	return nil
+}
+
+func (st *sumState) Result() (any, error) {
+	return st.acc.Result(), nil
 }
 
 var (
-	_ Accumulator = (*sum)(nil)
+	_ Accumulator  = (*sum)(nil)
+	_ Accumulation = (*sumState)(nil)
 )

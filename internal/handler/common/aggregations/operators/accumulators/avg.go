@@ -15,13 +15,9 @@
 package accumulators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type avg struct {
@@ -55,40 +51,40 @@ func newAvg(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (a *avg) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
-
-	var numbers []any
-
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		if a.expression != nil {
-			value, err := a.expression.Evaluate(doc)
-			if err == nil {
-				numbers = append(numbers, value)
-			}
-
-			continue
-		}
-
-		switch number := a.number.(type) {
-		case float64, int32, int64:
-			numbers = append(numbers, number)
-		}
-	}
-
-	return aggregations.AvgNumbers(numbers...), nil
+func (a *avg) New() Accumulation {
+	return &avgState{spec: a, acc: aggregations.NewNumberAvg()}
 }
 
+type avgState struct {
+	spec *avg
+	acc  *aggregations.NumberAvg
+}
+
+func (st *avgState) Accumulate(doc *types.Document) error {
+	a := st.spec
+
+	if a.expression != nil {
+		// average fields that exist
+		if value, err := a.expression.Evaluate(doc); err == nil {
+			st.acc.Add(value)
+		}
+
+		return nil
+	}
+
+	switch a.number.(type) {
+	case float64, int32, int64:
+		st.acc.Add(a.number)
+	}
+
+	return nil
+}
+
+func (st *avgState) Result() (any, error) {
+	return st.acc.Result(), nil
+}
 
 var (
-	_ Accumulator = (*avg)(nil)
+	_ Accumulator  = (*avg)(nil)
+	_ Accumulation = (*avgState)(nil)
 )

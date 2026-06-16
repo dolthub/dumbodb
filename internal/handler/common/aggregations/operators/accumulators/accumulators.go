@@ -35,11 +35,50 @@ import (
 // It takes the arguments extracted from the accumulator document.
 type newAccumulatorFunc func(args ...any) (Accumulator, error)
 
-// Accumulator is a common interface for aggregation accumulation operators.
+// Accumulator is the parsed, immutable spec for one accumulation (e.g.
+// {$sum: "$x"}). It is parsed once per $group/$bucket field and creates fresh
+// per-group accumulation state via New, so documents are folded incrementally
+// rather than buffered.
 type Accumulator interface {
-	// Accumulate documents and returns the result of applying operator.
-	// It should always close iterator.
-	Accumulate(iter types.DocumentsIterator) (any, error)
+	// New returns a fresh, zero-state Accumulation for a single group.
+	New() Accumulation
+}
+
+// Accumulation folds the documents of a single group and produces the
+// accumulated result. It is stateful and not safe for concurrent use; one
+// instance is created per group.
+type Accumulation interface {
+	// Accumulate folds one document into the running state.
+	Accumulate(doc *types.Document) error
+	// Result returns the accumulated value. Called once after the last Accumulate.
+	Result() (any, error)
+}
+
+// Accumulate is a helper that folds every document from iter through a fresh
+// Accumulation built from acc, then returns the result. It always closes iter.
+// Used by stages that must buffer their input for other reasons ($bucket,
+// $bucketAuto); $group folds incrementally without it.
+func Accumulate(acc Accumulator, iter types.DocumentsIterator) (any, error) {
+	defer iter.Close()
+
+	state := acc.New()
+
+	for {
+		_, doc, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		if err := state.Accumulate(doc); err != nil {
+			return nil, err
+		}
+	}
+
+	return state.Result()
 }
 
 func NewAccumulator(stage, key string, value any) (Accumulator, error) {

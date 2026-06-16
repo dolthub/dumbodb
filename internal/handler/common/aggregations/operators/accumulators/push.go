@@ -15,15 +15,12 @@
 package accumulators
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -64,42 +61,44 @@ func newPush(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (p *pushAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (p *pushAccumulator) New() Accumulation {
+	// $push must retain every projected value, so its result array grows with
+	// the group size. It retains values, never documents.
+	return &pushState{spec: p, result: types.MakeArray(0)}
+}
 
-	result := types.MakeArray(0)
+type pushState struct {
+	spec   *pushAccumulator
+	result *types.Array
+}
 
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
+func (s *pushState) Accumulate(doc *types.Document) error {
+	p := s.spec
 
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		if p.docExpr != nil {
-			result.Append(evalDocTemplateExpr(p.docExpr, doc))
-			continue
-		}
-
-		if p.isConst {
-			result.Append(p.constant)
-			continue
-		}
-
-		val, evalErr := p.expression.Evaluate(doc)
-		if evalErr != nil {
-			// missing field: push null
-			result.Append(types.Null)
-			continue
-		}
-
-		result.Append(val)
+	if p.docExpr != nil {
+		s.result.Append(evalDocTemplateExpr(p.docExpr, doc))
+		return nil
 	}
 
-	return result, nil
+	if p.isConst {
+		s.result.Append(p.constant)
+		return nil
+	}
+
+	val, evalErr := p.expression.Evaluate(doc)
+	if evalErr != nil {
+		// missing field: push null
+		s.result.Append(types.Null)
+		return nil
+	}
+
+	s.result.Append(val)
+
+	return nil
+}
+
+func (s *pushState) Result() (any, error) {
+	return s.result, nil
 }
 
 // evalDocTemplateExpr evaluates a document template expression against an input document.
@@ -161,5 +160,6 @@ func evalDocTemplateExpr(tmpl, doc *types.Document) *types.Document {
 }
 
 var (
-	_ Accumulator = (*pushAccumulator)(nil)
+	_ Accumulator  = (*pushAccumulator)(nil)
+	_ Accumulation = (*pushState)(nil)
 )
