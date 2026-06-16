@@ -128,43 +128,98 @@ func newGroup(stage *types.Document) (aggregations.Stage, error) {
 }
 
 func (g *group) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	groupedDocuments, err := g.groupDocuments(iter)
-	if err != nil {
-		return nil, err
+	defer iter.Close()
+
+	// Fold each document into its group's accumulators as it streams; documents
+	// are never retained, so memory scales with the number of groups (and any
+	// inherently-retaining accumulators like $push), not the input size.
+	gm := newGroupMap(g.groupBy)
+
+	for {
+		_, doc, err := iter.Next()
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		groupKey, err := g.evalGroupKey(doc)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := gm.accumulate(groupKey, doc); err != nil {
+			// existing accumulators rarely return error
+			return nil, processGroupStageError(err)
+		}
 	}
 
 	var res []*types.Document
 
-	for _, groupedDocument := range groupedDocuments {
-		doc := must.NotFail(types.NewDocument("_id", groupedDocument.groupID))
+	for i := range gm.docs {
+		grp := &gm.docs[i]
 
-		for _, accumulation := range g.groupBy {
-			groupIter := iterator.Values(iterator.ForSlice(groupedDocument.documents))
-			out, err := accumulation.accumulator.Accumulate(groupIter)
+		doc := must.NotFail(types.NewDocument("_id", grp.groupID))
+
+		for j, acc := range grp.accs {
+			out, err := acc.Result()
 			if err != nil {
-				// existing accumulators do not return error
 				return nil, processGroupStageError(err)
 			}
 
-			if doc.Has(accumulation.outputField) {
+			field := g.groupBy[j].outputField
+
+			if doc.Has(field) {
 				// document has duplicate key
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrStageIndexedStringVectorDuplicate,
-					fmt.Sprintf("duplicate field: %s", accumulation.outputField),
+					fmt.Sprintf("duplicate field: %s", field),
 					"$group (stage)",
 				)
 			}
 
-			doc.Set(accumulation.outputField, out)
+			doc.Set(field, out)
 		}
 
 		res = append(res, doc)
 	}
 
-	iter = iterator.Values(iterator.ForSlice(res))
-	closer.Add(iter)
+	resIter := iterator.Values(iterator.ForSlice(res))
+	closer.Add(resIter)
 
-	return iter, nil
+	return resIter, nil
+}
+
+// evalGroupKey computes the _id group key for one document. It mirrors the type
+// handling of the group expression: documents are evaluated recursively,
+// "$field" strings resolve via the precompiled expression (missing -> null),
+// and other literal BSON types are used as-is.
+func (g *group) evalGroupKey(doc *types.Document) (any, error) {
+	switch groupKey := g.groupExpression.(type) {
+	case *types.Document:
+		return evaluateDocument(groupKey, doc, false)
+	case *types.Array, float64, types.Binary, types.ObjectID, bool, time.Time, types.NullType,
+		types.Regex, int32, types.Timestamp, int64:
+		return groupKey, nil
+	case string:
+		// g.groupExprCompiled is set iff groupKey is a valid "$path"
+		// expression; a plain literal leaves it nil and is used as-is.
+		if g.groupExprCompiled == nil {
+			return groupKey, nil
+		}
+
+		val, err := g.groupExprCompiled.Evaluate(doc)
+		if err != nil {
+			// $group treats non-existent fields as nulls
+			return types.Null, nil
+		}
+
+		return val, nil
+	default:
+		panic(fmt.Sprintf("unexpected type %[1]T (%#[1]v)", groupKey))
+	}
 }
 
 // validateGroupKey returns error on invalid group key.
@@ -229,58 +284,6 @@ func validateGroupKey(groupKey any) error {
 	}
 
 	return nil
-}
-
-// groupDocuments groups documents into groups using group key. If group key contains expressions
-// or operators, they are evaluated before using it as the group key of documents.
-func (g *group) groupDocuments(iter types.DocumentsIterator) ([]groupedDocuments, error) {
-	defer iter.Close()
-
-	var m groupMap
-
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		switch groupKey := g.groupExpression.(type) {
-		case *types.Document:
-			val, err := evaluateDocument(groupKey, doc, false)
-			if err != nil {
-				// operator and expression errors are validated in newGroup
-				return nil, lazyerrors.Error(err)
-			}
-
-			m.addOrAppend(val, doc)
-		case *types.Array, float64, types.Binary, types.ObjectID, bool, time.Time, types.NullType,
-			types.Regex, int32, types.Timestamp, int64:
-			m.addOrAppend(groupKey, doc)
-		case string:
-			// g.groupExprCompiled is set iff groupKey is a valid "$path"
-			// expression; a plain literal leaves it nil and is added as-is.
-			if g.groupExprCompiled == nil {
-				m.addOrAppend(groupKey, doc)
-				continue
-			}
-
-			val, err := g.groupExprCompiled.Evaluate(doc)
-			if err != nil {
-				// $group treats non-existent fields as nulls
-				val = types.Null
-			}
-
-			m.addOrAppend(val, doc)
-		default:
-			panic(fmt.Sprintf("unexpected type %[1]T (%#[1]v)", groupKey))
-		}
-	}
-
-	return m.docs, nil
 }
 
 // evaluateDocument recursively evaluates document's field expressions and operators.
@@ -358,11 +361,13 @@ func evaluateDocument(expr, doc *types.Document, nestedField bool) (any, error) 
 }
 
 type groupedDocuments struct {
-	groupID   any
-	documents []*types.Document
+	groupID any
+	// accs holds one live accumulation per groupBy spec, folded as documents
+	// stream in. Documents themselves are not retained.
+	accs []accumulators.Accumulation
 }
 
-// groupMap holds groups of documents.
+// groupMap holds the running accumulators for each group.
 //
 // Group keys can be any BSON type (including arrays and binaries) and
 // numeric types are grouped numerically regardless of int/int64/float  -- so
@@ -370,25 +375,43 @@ type groupedDocuments struct {
 // For hashable, comparably-typed keys (strings, bools, int32/int64, ObjectID)
 // a fast path map indexes into docs, cutting O(n*k) group lookups to O(n).
 type groupMap struct {
-	docs []groupedDocuments
-	// fast indexes groupedDocuments by key for keys that cannot collide
-	// with numerically-equal keys of another Go type. Numeric keys are
+	specs []groupBy
+	docs  []groupedDocuments
+	// fast indexes docs by key for keys that cannot collide with
+	// numerically-equal keys of another Go type. Numeric keys are
 	// intentionally excluded because CompareForAggregation treats
 	// int32(1)/int64(1)/float64(1.0) as equal.
 	fast map[any]int
 }
 
-// addOrAppend adds a groupID documents pair if the groupID does not exist,
-// if the groupID exists it appends the documents to the slice.
-func (m *groupMap) addOrAppend(groupKey any, docs ...*types.Document) {
+func newGroupMap(specs []groupBy) *groupMap {
+	return &groupMap{specs: specs}
+}
+
+// accumulate routes doc into its group (creating the group and its fresh
+// accumulators on first sight) and folds doc through each accumulator.
+func (m *groupMap) accumulate(groupKey any, doc *types.Document) error {
+	idx := m.index(groupKey)
+
+	for _, acc := range m.docs[idx].accs {
+		if err := acc.Accumulate(doc); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// index returns the slot for groupKey, creating a new group with fresh
+// accumulators when none exists yet.
+func (m *groupMap) index(groupKey any) int {
 	if hashable, key := hashableGroupKey(groupKey); hashable {
 		if m.fast == nil {
 			m.fast = make(map[any]int)
 		}
 
 		if i, ok := m.fast[key]; ok {
-			m.docs[i].documents = append(m.docs[i].documents, docs...)
-			return
+			return i
 		}
 
 		// No entry yet  -- but a numeric-equal entry might already exist in
@@ -396,18 +419,15 @@ func (m *groupMap) addOrAppend(groupKey any, docs ...*types.Document) {
 		// Scan once to stay consistent with CompareForAggregation semantics.
 		for i, g := range m.docs {
 			if types.CompareForAggregation(groupKey, g.groupID) == types.Equal {
-				m.docs[i].documents = append(m.docs[i].documents, docs...)
 				m.fast[key] = i
-				return
+				return i
 			}
 		}
 
-		m.fast[key] = len(m.docs)
-		m.docs = append(m.docs, groupedDocuments{
-			groupID:   groupKey,
-			documents: docs,
-		})
-		return
+		i := m.newGroup(groupKey)
+		m.fast[key] = i
+
+		return i
 	}
 
 	for i, g := range m.docs {
@@ -416,15 +436,24 @@ func (m *groupMap) addOrAppend(groupKey any, docs ...*types.Document) {
 		// Compare is used to check if groupID exists in groupMap, because
 		// numbers are grouped for the same value regardless of their number type.
 		if types.CompareForAggregation(groupKey, g.groupID) == types.Equal {
-			m.docs[i].documents = append(m.docs[i].documents, docs...)
-			return
+			return i
 		}
 	}
 
-	m.docs = append(m.docs, groupedDocuments{
-		groupID:   groupKey,
-		documents: docs,
-	})
+	return m.newGroup(groupKey)
+}
+
+// newGroup appends a group for groupKey with a fresh accumulation per spec and
+// returns its index.
+func (m *groupMap) newGroup(groupKey any) int {
+	accs := make([]accumulators.Accumulation, len(m.specs))
+	for i := range m.specs {
+		accs[i] = m.specs[i].accumulator.New()
+	}
+
+	m.docs = append(m.docs, groupedDocuments{groupID: groupKey, accs: accs})
+
+	return len(m.docs) - 1
 }
 
 // hashableGroupKey returns true and a map-friendly key when groupKey is a

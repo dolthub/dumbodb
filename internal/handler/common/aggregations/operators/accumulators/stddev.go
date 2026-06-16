@@ -15,14 +15,11 @@
 package accumulators
 
 import (
-	"errors"
 	"math"
 
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type stdDevPopAccumulator struct {
@@ -56,19 +53,8 @@ func newStdDevPop(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (s *stdDevPopAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
-
-	nums, err := collectNumericValues(iter, s.expression, s.number)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(nums) == 0 {
-		return types.Null, nil
-	}
-
-	return stdDevPop(nums), nil
+func (s *stdDevPopAccumulator) New() Accumulation {
+	return &stdDevState{expression: s.expression, number: s.number, sample: false}
 }
 
 type stdDevSampAccumulator struct {
@@ -102,60 +88,61 @@ func newStdDevSamp(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (s *stdDevSampAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (s *stdDevSampAccumulator) New() Accumulation {
+	return &stdDevState{expression: s.expression, number: s.number, sample: true}
+}
 
-	nums, err := collectNumericValues(iter, s.expression, s.number)
-	if err != nil {
-		return nil, err
+// stdDevState collects numeric values for a group and computes the standard
+// deviation at the end. The two-pass mean/variance computation is retained for
+// numerical parity, so this accumulator holds the group's numeric values (not
+// its documents). A numerically-stable online variant is a future optimization.
+type stdDevState struct {
+	expression *aggregations.Expression
+	number     any
+	sample     bool
+	nums       []float64
+}
+
+func (s *stdDevState) Accumulate(doc *types.Document) error {
+	var val any
+
+	if s.expression != nil {
+		v, evalErr := s.expression.Evaluate(doc)
+		if evalErr != nil {
+			return nil
+		}
+
+		val = v
+	} else {
+		val = s.number
 	}
 
-	if len(nums) < 2 {
+	switch v := val.(type) {
+	case float64:
+		s.nums = append(s.nums, v)
+	case int32:
+		s.nums = append(s.nums, float64(v))
+	case int64:
+		s.nums = append(s.nums, float64(v))
+	}
+
+	return nil
+}
+
+func (s *stdDevState) Result() (any, error) {
+	if s.sample {
+		if len(s.nums) < 2 {
+			return types.Null, nil
+		}
+
+		return stdDevSamp(s.nums), nil
+	}
+
+	if len(s.nums) == 0 {
 		return types.Null, nil
 	}
 
-	return stdDevSamp(nums), nil
-}
-
-// collectNumericValues iterates documents, evaluating expression or using the constant,
-// and returns only numeric (float64) values.
-func collectNumericValues(iter types.DocumentsIterator, expr *aggregations.Expression, constant any) ([]float64, error) {
-	var nums []float64
-
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		var val any
-
-		if expr != nil {
-			v, evalErr := expr.Evaluate(doc)
-			if evalErr != nil {
-				continue
-			}
-
-			val = v
-		} else {
-			val = constant
-		}
-
-		switch v := val.(type) {
-		case float64:
-			nums = append(nums, v)
-		case int32:
-			nums = append(nums, float64(v))
-		case int64:
-			nums = append(nums, float64(v))
-		}
-	}
-
-	return nums, nil
+	return stdDevPop(s.nums), nil
 }
 
 // stdDevPop computes population standard deviation.
@@ -203,6 +190,7 @@ func stdDevSamp(nums []float64) float64 {
 }
 
 var (
-	_ Accumulator = (*stdDevPopAccumulator)(nil)
-	_ Accumulator = (*stdDevSampAccumulator)(nil)
+	_ Accumulator  = (*stdDevPopAccumulator)(nil)
+	_ Accumulator  = (*stdDevSampAccumulator)(nil)
+	_ Accumulation = (*stdDevState)(nil)
 )

@@ -15,13 +15,9 @@
 package accumulators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type firstAccumulator struct {
@@ -56,32 +52,45 @@ func newFirst(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (f *firstAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (f *firstAccumulator) New() Accumulation {
+	return &firstState{spec: f}
+}
 
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
+type firstState struct {
+	spec   *firstAccumulator
+	result any
+	seen   bool
+}
 
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		if f.isConst {
-			return f.constant, nil
-		}
-
-		val, evalErr := f.expression.Evaluate(doc)
-		if evalErr != nil {
-			return types.Null, nil
-		}
-
-		return val, nil
+func (s *firstState) Accumulate(doc *types.Document) error {
+	if s.seen {
+		return nil
 	}
 
-	return types.Null, nil
+	s.seen = true
+
+	if s.spec.isConst {
+		s.result = s.spec.constant
+		return nil
+	}
+
+	val, evalErr := s.spec.expression.Evaluate(doc)
+	if evalErr != nil {
+		s.result = types.Null
+		return nil
+	}
+
+	s.result = val
+
+	return nil
+}
+
+func (s *firstState) Result() (any, error) {
+	if !s.seen {
+		return types.Null, nil
+	}
+
+	return s.result, nil
 }
 
 type lastAccumulator struct {
@@ -116,45 +125,45 @@ func newLast(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (l *lastAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (l *lastAccumulator) New() Accumulation {
+	return &lastState{spec: l, result: types.Null}
+}
 
-	var result any = types.Null
-	var hasDoc bool
+type lastState struct {
+	spec   *lastAccumulator
+	result any
+	seen   bool
+}
 
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
+func (s *lastState) Accumulate(doc *types.Document) error {
+	s.seen = true
 
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		hasDoc = true
-
-		if l.isConst {
-			result = l.constant
-			continue
-		}
-
-		val, evalErr := l.expression.Evaluate(doc)
-		if evalErr != nil {
-			result = types.Null
-		} else {
-			result = val
-		}
+	if s.spec.isConst {
+		s.result = s.spec.constant
+		return nil
 	}
 
-	if !hasDoc {
+	val, evalErr := s.spec.expression.Evaluate(doc)
+	if evalErr != nil {
+		s.result = types.Null
+	} else {
+		s.result = val
+	}
+
+	return nil
+}
+
+func (s *lastState) Result() (any, error) {
+	if !s.seen {
 		return types.Null, nil
 	}
 
-	return result, nil
+	return s.result, nil
 }
 
 var (
-	_ Accumulator = (*firstAccumulator)(nil)
-	_ Accumulator = (*lastAccumulator)(nil)
+	_ Accumulator  = (*firstAccumulator)(nil)
+	_ Accumulator  = (*lastAccumulator)(nil)
+	_ Accumulation = (*firstState)(nil)
+	_ Accumulation = (*lastState)(nil)
 )

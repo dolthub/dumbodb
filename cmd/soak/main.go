@@ -66,7 +66,7 @@ func main() {
 		txnWorkers     = flag.Int("workers-txn", 1, "multi-op session.WithTransaction workers")
 		opsInterval    = flag.Duration("ops-interval", time.Second, "base delay between ops; heavier worker types scale this up internally")
 		sessionDelay   = flag.Duration("session-delay", 250*time.Millisecond, "delay between cycles on each session-churn worker")
-		collectionCap  = flag.Int("collection-cap", 100000, "hold the shared collection near this many docs via a trim worker; 0 disables trimming and lets it grow unbounded")
+		collectionCap  = flag.Int("collection-cap", 0, "if >0, hold the shared collection near this many docs via a trim worker; 0 (default) lets it grow unbounded to stress the aggregators")
 		trimInterval   = flag.Duration("trim-interval", time.Second, "how often the trim worker checks the collection size and deletes the overflow")
 
 		// Detection.

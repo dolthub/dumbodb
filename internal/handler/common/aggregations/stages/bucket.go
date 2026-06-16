@@ -282,7 +282,7 @@ func appendBucketOutput(doc *types.Document, output []bucketOutput, groupDocs []
 
 	for _, out := range output {
 		iter := iterator.Values(iterator.ForSlice(groupDocs))
-		val, err := out.accumulator.Accumulate(iter)
+		val, err := accumulators.Accumulate(out.accumulator, iter)
 
 		if err != nil {
 			val = types.Null

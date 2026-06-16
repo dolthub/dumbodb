@@ -15,13 +15,9 @@
 package accumulators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
-	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
 type minAccumulator struct {
@@ -54,55 +50,61 @@ func newMin(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (m *minAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
+func (m *minAccumulator) New() Accumulation {
+	return &extremeState{expression: m.expression, number: m.number, want: types.Less}
+}
 
-	var result any
+func (m *maxAccumulator) New() Accumulation {
+	return &extremeState{expression: m.expression, number: m.number, want: types.Greater}
+}
 
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
+// extremeState folds the running $min or $max. want is the comparison result
+// (types.Less for $min, types.Greater for $max) that replaces the running value.
+type extremeState struct {
+	expression *aggregations.Expression
+	number     any
+	want       types.CompareResult
+	result     any
+}
+
+func (s *extremeState) Accumulate(doc *types.Document) error {
+	var val any
+
+	if s.expression != nil {
+		v, evalErr := s.expression.Evaluate(doc)
+		if evalErr != nil {
+			// missing field: skip (treat as absent)
+			return nil
 		}
 
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		var val any
-
-		if m.expression != nil {
-			v, evalErr := m.expression.Evaluate(doc)
-			if evalErr != nil {
-				// missing field: skip (treat as absent)
-				continue
-			}
-
-			val = v
-		} else {
-			val = m.number
-		}
-
-		// Skip null values ($min ignores nulls)
-		if _, isNull := val.(types.NullType); isNull {
-			continue
-		}
-
-		if result == nil {
-			result = val
-			continue
-		}
-
-		if types.CompareOrder(val, result, types.Ascending) == types.Less {
-			result = val
-		}
+		val = v
+	} else {
+		val = s.number
 	}
 
-	if result == nil {
+	// Skip null values ($min/$max ignore nulls)
+	if _, isNull := val.(types.NullType); isNull {
+		return nil
+	}
+
+	if s.result == nil {
+		s.result = val
+		return nil
+	}
+
+	if types.CompareOrder(val, s.result, types.Ascending) == s.want {
+		s.result = val
+	}
+
+	return nil
+}
+
+func (s *extremeState) Result() (any, error) {
+	if s.result == nil {
 		return types.Null, nil
 	}
 
-	return result, nil
+	return s.result, nil
 }
 
 type maxAccumulator struct {
@@ -134,58 +136,8 @@ func newMax(args ...any) (Accumulator, error) {
 	return accumulator, nil
 }
 
-func (m *maxAccumulator) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
-
-	var result any
-
-	for {
-		_, doc, err := iter.Next()
-		if errors.Is(err, iterator.ErrIteratorDone) {
-			break
-		}
-
-		if err != nil {
-			return nil, lazyerrors.Error(err)
-		}
-
-		var val any
-
-		if m.expression != nil {
-			v, evalErr := m.expression.Evaluate(doc)
-			if evalErr != nil {
-				// missing field: skip (treat as absent)
-				continue
-			}
-
-			val = v
-		} else {
-			val = m.number
-		}
-
-		// Skip null values ($max ignores nulls)
-		if _, isNull := val.(types.NullType); isNull {
-			continue
-		}
-
-		if result == nil {
-			result = val
-			continue
-		}
-
-		if types.CompareOrder(val, result, types.Ascending) == types.Greater {
-			result = val
-		}
-	}
-
-	if result == nil {
-		return types.Null, nil
-	}
-
-	return result, nil
-}
-
 var (
-	_ Accumulator = (*minAccumulator)(nil)
-	_ Accumulator = (*maxAccumulator)(nil)
+	_ Accumulator  = (*minAccumulator)(nil)
+	_ Accumulator  = (*maxAccumulator)(nil)
+	_ Accumulation = (*extremeState)(nil)
 )

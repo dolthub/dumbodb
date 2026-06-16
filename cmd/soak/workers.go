@@ -154,11 +154,8 @@ func (w *workload) runBulkWorker(ctx context.Context, uri, collName string, work
 			w.errors.Add(1)
 		}
 		w.cycles.Add(1)
-		// One batch per opsInterval. With the default batch size and
-		// interval this drives roughly 100 inserts/sec into the shared
-		// collection, fast enough to warm it to the trim cap within
-		// ~30 min.
-		if !sleep(ctx, opsInterval) {
+		// Bulk inserts are heavier; back off proportionally.
+		if !sleep(ctx, opsInterval*5) {
 			return
 		}
 	}
@@ -202,7 +199,7 @@ func (w *workload) runAggWorker(ctx context.Context, uri, collName string, worke
 }
 
 func randomPipeline(r *rand.Rand) mongo.Pipeline {
-	switch r.Intn(4) {
+	switch r.Intn(5) {
 	case 0:
 		return mongo.Pipeline{
 			{{"$match", bson.M{"score": bson.M{"$gte": r.Intn(500)}}}},
@@ -216,10 +213,19 @@ func randomPipeline(r *rand.Rand) mongo.Pipeline {
 			{{"$limit", 20}},
 		}
 	case 2:
+		// Top-K over the whole collection: $sort directly followed by $limit
+		// exercises the bounded-heap coalescence.
 		return mongo.Pipeline{
 			{{"$sort", bson.M{"score": -1}}},
 			{{"$limit", 50}},
 			{{"$project", bson.M{"email": 1, "score": 1}}},
+		}
+	case 3:
+		// $sort + $skip + $limit exercises the skip+limit coalescence branch.
+		return mongo.Pipeline{
+			{{"$sort", bson.M{"score": -1, "_id": 1}}},
+			{{"$skip", 100}},
+			{{"$limit", 25}},
 		}
 	default:
 		return mongo.Pipeline{

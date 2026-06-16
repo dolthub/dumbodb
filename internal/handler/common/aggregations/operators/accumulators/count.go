@@ -15,11 +15,8 @@
 package accumulators
 
 import (
-	"errors"
-
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
-	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
 type count struct{}
@@ -46,25 +43,22 @@ func newCount(args ...any) (Accumulator, error) {
 	return new(count), nil
 }
 
-func (c *count) Accumulate(iter types.DocumentsIterator) (any, error) {
-	defer iter.Close()
-	var count int32
+func (c *count) New() Accumulation { return &countState{} }
 
-	for {
-		_, _, err := iter.Next()
-		if err != nil {
-			if errors.Is(err, iterator.ErrIteratorDone) {
-				break
-			}
+type countState struct {
+	n int32
+}
 
-			return nil, err
-		}
-		count++
-	}
+func (s *countState) Accumulate(_ *types.Document) error {
+	s.n++
+	return nil
+}
 
-	return count, nil
+func (s *countState) Result() (any, error) {
+	return s.n, nil
 }
 
 var (
 	_ Accumulator = (*count)(nil)
+	_ Accumulation = (*countState)(nil)
 )
