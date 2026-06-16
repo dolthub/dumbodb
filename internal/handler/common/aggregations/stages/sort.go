@@ -26,12 +26,20 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 )
 
-// sort represents $sort stage.
+// sort represents $sort stage. limit is the top-K bound when a $limit (or
+// $skip + $limit) immediately follows; 0 means an unbounded full sort.
 type sort struct {
 	fields *types.Document
+	limit  int64
 }
 
 func newSort(stage *types.Document) (aggregations.Stage, error) {
+	return NewSortStage(stage, 0)
+}
+
+// NewSortStage builds a $sort stage that keeps only the first limit documents
+// (in sort order) when limit > 0, bounding memory for a following $limit.
+func NewSortStage(stage *types.Document, limit int64) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$sort")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -49,9 +57,9 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 		)
 	}
 
-
 	return &sort{
 		fields: fields,
+		limit:  limit,
 	}, nil
 }
 
@@ -59,7 +67,7 @@ func newSort(stage *types.Document) (aggregations.Stage, error) {
 //
 // If sort path is invalid, it returns a possibly wrapped types.PathError.
 func (s *sort) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	iter, err := common.SortIterator(iter, closer, s.fields)
+	iter, err := common.TopKIterator(iter, closer, s.fields, s.limit)
 	if err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {

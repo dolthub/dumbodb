@@ -269,6 +269,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			// $indexStats requires collection access to retrieve index metadata.
 			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost)
 
+		case "$sort":
+			// Coalesce a following $limit (or $skip + $limit) into a top-K bound
+			// so $sort holds only the needed documents instead of the whole input.
+			s, err = stages.NewSortStage(d, sortLimitBound(aggregationStages, i))
+
 		default:
 			s, err = stages.NewStage(d)
 		}
@@ -689,6 +694,60 @@ type stagesDocumentsParams struct {
 }
 
 // processStagesDocuments retrieves the documents from the database and then processes them through the stages.
+// sortLimitBound returns the top-K bound a $sort at index i may use when a
+// $limit (optionally preceded by a $skip) immediately follows it, else 0. This
+// mirrors MongoDB's sort+limit and sort+skip+limit coalescence.
+func sortLimitBound(aggregationStages []any, i int) int64 {
+	next := stageDocAt(aggregationStages, i+1)
+	if next == nil {
+		return 0
+	}
+
+	switch next.Command() {
+	case "$limit":
+		if l, ok := stageInt64(next, "$limit", common.GetLimitStageParam); ok {
+			return l
+		}
+	case "$skip":
+		after := stageDocAt(aggregationStages, i+2)
+		if after == nil || after.Command() != "$limit" {
+			return 0
+		}
+
+		s, sok := stageInt64(next, "$skip", common.GetSkipStageParam)
+		l, lok := stageInt64(after, "$limit", common.GetLimitStageParam)
+		if sok && lok {
+			return s + l
+		}
+	}
+
+	return 0
+}
+
+func stageDocAt(aggregationStages []any, i int) *types.Document {
+	if i < 0 || i >= len(aggregationStages) {
+		return nil
+	}
+
+	d, _ := aggregationStages[i].(*types.Document)
+
+	return d
+}
+
+func stageInt64(d *types.Document, key string, parse func(any) (int64, error)) (int64, bool) {
+	v, err := d.Get(key)
+	if err != nil {
+		return 0, false
+	}
+
+	n, err := parse(v)
+	if err != nil {
+		return 0, false
+	}
+
+	return n, true
+}
+
 func processStagesDocuments(ctx context.Context, closer *iterator.MultiCloser, p *stagesDocumentsParams) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	queryRes, err := p.c.Query(ctx, p.qp)
 	if err != nil {
