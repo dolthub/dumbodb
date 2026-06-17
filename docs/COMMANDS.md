@@ -25,20 +25,20 @@ Every `dumbo*` command has an identical `dolt*` alias:
 
 | Primary | Alias |
 |---------|-------|
-| `dumboCommit` | `dumboCommit` |
-| `dumboBranch` | `dumboBranch` |
-| `dumboMerge` | `dumboMerge` |
-| `dumboCherryPick` | `dumboCherryPick` |
-| `dumboRebase` | `dumboRebase` |
-| `dumboLog` | `dumboLog` |
-| `dumboStatus` | `dumboStatus` |
-| `dumboDiff` | `dumboDiff` |
-| `dumboReset` | `dumboReset` |
-| `dumboRevert` | `dumboRevert` |
-| `dumboConflicts` | `dumboConflicts` |
-| `dumboResolveConflict` | `dumboResolveConflict` |
-| `dumboTag` | `dumboTag` |
-| `dumboGC` | `dumboGC` |
+| `dumboCommit` | `doltCommit` |
+| `dumboBranch` | `doltBranch` |
+| `dumboMerge` | `doltMerge` |
+| `dumboCherryPick` | `doltCherryPick` |
+| `dumboRebase` | `doltRebase` |
+| `dumboLog` | `doltLog` |
+| `dumboStatus` | `doltStatus` |
+| `dumboDiff` | `doltDiff` |
+| `dumboReset` | `doltReset` |
+| `dumboRevert` | `doltRevert` |
+| `dumboConflicts` | `doltConflicts` |
+| `dumboResolveConflict` | `doltResolveConflict` |
+| `dumboTag` | `doltTag` |
+| `dumboGC` | `doltGC` |
 
 ---
 
