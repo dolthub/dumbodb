@@ -108,7 +108,7 @@ Expected (order matches the input `targets`):
 
 Key checks:
 - `base` is `{ target: "main", hash: "<32-char hash>" }`.
-- Each `targets` entry carries `target`, `hash` (32 chars), `commitsAhead`, `commitsBehind`.
+- Each `targets` entry carries `target` (string), `hash` (32-char string), and `commitsAhead`/`commitsBehind` (int32).
 - A branch compared to itself (`main` vs `main`) is `0 / 0`.
 
 ---
@@ -189,14 +189,14 @@ db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, targets: ["b1"
 
 ## Quick Reference
 
-| Field | Meaning |
-|---|---|
-| `base.target` | the base refspec, echoed verbatim |
-| `base.hash` | resolved commit hash of the base |
-| `targets[].target` | the target refspec, echoed verbatim (`HEAD~1` stays `HEAD~1`) |
-| `targets[].hash` | resolved commit hash of the target |
-| `targets[].commitsAhead` | commits reachable from the target but not the base |
-| `targets[].commitsBehind` | commits reachable from the base but not the target |
+| Field | Type | Meaning |
+|---|---|---|
+| `base.target` | string | the base refspec, echoed verbatim |
+| `base.hash` | string | resolved commit hash of the base |
+| `targets[].target` | string | the target refspec, echoed verbatim (`HEAD~1` stays `HEAD~1`) |
+| `targets[].hash` | string | resolved commit hash of the target |
+| `targets[].commitsAhead` | int32 | commits reachable from the target but not the base |
+| `targets[].commitsBehind` | int32 | commits reachable from the base but not the target |
 
 - `base` is required; `targets` is an array of refspecs (or a single string).
 - A refspec is a commit hash, branch name, tag name, ancestor expression

@@ -1348,8 +1348,8 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 		targetsArr.Append(must.NotFail(types.NewDocument(
 			"target", shown,
 			"hash", e.Hash,
-			"commitsAhead", int64(e.CommitsAhead),
-			"commitsBehind", int64(e.CommitsBehind),
+			"commitsAhead", e.CommitsAhead,
+			"commitsBehind", e.CommitsBehind,
 		)))
 	}
 

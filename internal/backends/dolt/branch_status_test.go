@@ -92,7 +92,7 @@ func branchStatusMap(t *testing.T, b *Backend, dbName, base string, targets ...s
 	return res, m
 }
 
-func assertAheadBehind(t *testing.T, m map[string]backends.BranchStatusEntry, target string, ahead, behind uint64) {
+func assertAheadBehind(t *testing.T, m map[string]backends.BranchStatusEntry, target string, ahead, behind int32) {
 	t.Helper()
 	e, ok := m[target]
 	if !ok {

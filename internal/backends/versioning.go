@@ -448,8 +448,8 @@ type BranchStatusParams struct {
 type BranchStatusEntry struct {
 	Target        string
 	Hash          string
-	CommitsAhead  uint64
-	CommitsBehind uint64
+	CommitsAhead  int32
+	CommitsBehind int32
 }
 
 // BranchStatusResult represents the result of VersioningBackend.DumboDBBranchStatus.
