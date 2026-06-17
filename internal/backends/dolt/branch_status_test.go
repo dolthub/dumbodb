@@ -114,21 +114,14 @@ func initBaseline(t *testing.T) *Backend {
 	return b
 }
 
-// TestDumboDBBranchStatus_DivergentGraph ports dolt's first scenario:
+// TestDumboDBBranchStatus_DivergentGraph ports dolt's first scenario (time flows
+// left to right; anc is the shared baseline):
 //
+//	          * b1 --- * b2
+//	         /
 //	* anc
-//	|\
-//	| * b1
-//	| |
-//	| * b2
-//	|
-//	* main
-//	 \
-//	  * b3
-//	  |
-//	  * b4
-//	   \
-//	    * b5
+//	         \
+//	          * main --- * b3 --- * b4 --- * b5
 func TestDumboDBBranchStatus_DivergentGraph(t *testing.T) {
 	b := initBaseline(t)
 
@@ -193,17 +186,14 @@ func TestDumboDBBranchStatus_DivergentGraph(t *testing.T) {
 }
 
 // TestDumboDBBranchStatus_Merge ports dolt's merge scenario: ahead/behind before
-// and after merging b1 into b2.
+// and after merging b1 into b2 (time flows left to right; anc is the shared
+// baseline, branch heads are labeled in parentheses):
 //
-//	* ---
-//	|\   \
-//	| *   * b2c1
-//	| |   |
-//	| * b1 * b2c2
-//	|     |
-//	* m1  * b2c3 (b2)
-//	|
-//	* m2 (main)
+//	          * b1c1 --- * b1c2              (b1)
+//	         /
+//	* anc --- * m1 --- * m2                  (main)
+//	         \
+//	          * b2c1 --- * b2c2 --- * b2c3   (b2)
 func TestDumboDBBranchStatus_Merge(t *testing.T) {
 	b := initBaseline(t)
 
