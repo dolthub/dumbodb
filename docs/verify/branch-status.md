@@ -33,22 +33,16 @@ Replace `localhost:27017` with your DumboDB address if different.
 
 ## Setup: Build a divergent commit graph
 
-Run this once before the scenarios below. It reproduces this graph:
+Run this once before the scenarios below. It reproduces this graph (time flows
+left to right; each node is labeled with the branch whose HEAD it is, and `anc`
+is the shared baseline commit):
 
 ```
+          * b1 --- * b2
+         /
 * anc
-|\
-| * b1
-| |
-| * b2
-|
-* main
- \
-  * b3
-  |
-  * b4
-   \
-    * b5
+         \
+          * main --- * b3 --- * b4 --- * b5
 ```
 
 ```js
