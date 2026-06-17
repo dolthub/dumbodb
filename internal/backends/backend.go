@@ -330,6 +330,14 @@ func (bc *backendContract) DumboDBGC(ctx context.Context, params *GCParams) (*GC
 	return nil, newVersioningUnsupportedError("DumboDBGC")
 }
 
+func (bc *backendContract) DumboDBBranchStatus(ctx context.Context, params *BranchStatusParams) (*BranchStatusResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBBranchStatus(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBBranchStatus")
+}
+
 func (bc *backendContract) DumboDBTag(ctx context.Context, params *TagParams) (*TagResult, error) {
 	if vb, ok := bc.b.(VersioningBackend); ok {
 		return vb.DumboDBTag(ctx, params)

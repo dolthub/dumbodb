@@ -429,6 +429,37 @@ type GCResult struct {
 	ChunksAfter  uint32
 }
 
+// BranchStatusParams represents the parameters of VersioningBackend.DumboDBBranchStatus.
+//
+// Base and each entry of Targets are rootish expressions (commit hash, branch name,
+// tag name, or ancestor expression like "main~2"). The backend reports, for each
+// target, how many commits it is ahead and behind the base.
+type BranchStatusParams struct {
+	DBName  string
+	Base    string   // base refspec to compare each target against
+	Targets []string // target refspecs; empty yields an empty result
+}
+
+// BranchStatusEntry is the ahead/behind result for a single target refspec.
+//
+// Target echoes the input refspec verbatim (e.g. "HEAD~1" stays "HEAD~1"); Hash is
+// the 32-character commit the refspec resolved to. CommitsAhead counts commits
+// reachable from the target but not the base; CommitsBehind counts the reverse.
+type BranchStatusEntry struct {
+	Target        string
+	Hash          string
+	CommitsAhead  uint64
+	CommitsBehind uint64
+}
+
+// BranchStatusResult represents the result of VersioningBackend.DumboDBBranchStatus.
+// BaseTarget echoes the input base refspec; BaseHash is its resolved commit hash.
+type BranchStatusResult struct {
+	BaseTarget string
+	BaseHash   string
+	Entries    []BranchStatusEntry
+}
+
 // VersioningBackend is an optional interface for backends that support Dolt versioning operations.
 // The handler checks for this interface via type assertion; backends that don't implement it
 // will cause the dumbodb versioning commands to return an unsupported error.
@@ -506,4 +537,9 @@ type VersioningBackend interface {
 	// ctx; the calling session participates in the GC safepoint as the
 	// callSession (excluded from the waited set).
 	DumboDBGC(context.Context, *GCParams) (*GCResult, error)
+
+	// DumboDBBranchStatus reports how many commits each target refspec is ahead and
+	// behind the base refspec, computed as the symmetric difference of their commit
+	// ancestor sets. An empty Targets list yields an empty result.
+	DumboDBBranchStatus(context.Context, *BranchStatusParams) (*BranchStatusResult, error)
 }

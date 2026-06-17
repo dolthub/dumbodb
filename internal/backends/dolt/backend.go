@@ -2444,6 +2444,99 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	return &backends.LogResult{Commits: commits, Next: next}, nil
 }
 
+// inclusiveAncestorSet returns the set of commit hashes reachable from h, including
+// h itself. It reuses Dolt's precomputed parents closure (datas.NewParentsClosure +
+// prolly.CommitClosure.AsHashSet), the same machinery backing doltdb.Commit.GetCommitClosure.
+func inclusiveAncestorSet(ctx context.Context, db *dbState, h hash.Hash) (hash.HashSet, error) {
+	commit, err := datas.LoadCommitAddr(ctx, db.vs, h)
+	if err != nil {
+		return nil, fmt.Errorf("loading commit %q: %w", h, err)
+	}
+	sv, ok := commit.NomsValue().(dolttypes.SerialMessage)
+	if !ok {
+		return nil, fmt.Errorf("commit %q lacks a commit closure", h)
+	}
+	closure, err := datas.NewParentsClosure(ctx, commit, sv, db.vs, db.ns)
+	if err != nil {
+		return nil, fmt.Errorf("reading commit closure for %q: %w", h, err)
+	}
+	ancestors, err := closure.AsHashSet(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("materializing commit closure for %q: %w", h, err)
+	}
+	ancestors.Insert(h)
+	return ancestors, nil
+}
+
+// DumboDBBranchStatus implements backends.VersioningBackend.
+//
+// It ports dolt_branch_status: for each target refspec it counts commits reachable
+// from the target but not the base (ahead) and the reverse (behind), using the
+// commit ancestor sets. Refspecs are resolved with resolveRootishToCommitHash.
+func (b *Backend) DumboDBBranchStatus(ctx context.Context, params *backends.BranchStatusParams) (*backends.BranchStatusResult, error) {
+	db, err := b.getOrOpenDB(ctx, params.DBName, false)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranchStatus: opening db %q: %w", params.DBName, err)
+	}
+	if db == nil {
+		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
+			fmt.Errorf("DumboDBBranchStatus: database %q does not exist", params.DBName))
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	baseHash, err := resolveRootishToCommitHash(ctx, db, params.Base)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranchStatus: resolving base %q: %w", params.Base, err)
+	}
+
+	result := &backends.BranchStatusResult{
+		BaseTarget: params.Base,
+		BaseHash:   baseHash.String(),
+	}
+	if len(params.Targets) == 0 {
+		return result, nil
+	}
+
+	baseAncestors, err := inclusiveAncestorSet(ctx, db, baseHash)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranchStatus: base %q: %w", params.Base, err)
+	}
+
+	for _, target := range params.Targets {
+		targetHash, tErr := resolveRootishToCommitHash(ctx, db, target)
+		if tErr != nil {
+			return nil, fmt.Errorf("DumboDBBranchStatus: resolving target %q: %w", target, tErr)
+		}
+
+		entry := backends.BranchStatusEntry{Target: target, Hash: targetHash.String()}
+		if targetHash.Equal(baseHash) {
+			result.Entries = append(result.Entries, entry)
+			continue
+		}
+
+		targetAncestors, aErr := inclusiveAncestorSet(ctx, db, targetHash)
+		if aErr != nil {
+			return nil, fmt.Errorf("DumboDBBranchStatus: target %q: %w", target, aErr)
+		}
+
+		for h := range targetAncestors {
+			if !baseAncestors.Has(h) {
+				entry.CommitsAhead++
+			}
+		}
+		for h := range baseAncestors {
+			if !targetAncestors.Has(h) {
+				entry.CommitsBehind++
+			}
+		}
+		result.Entries = append(result.Entries, entry)
+	}
+
+	return result, nil
+}
+
 // DumboDBStatus implements backends.VersioningBackend.
 //
 // It returns the list of collections with uncommitted changes on the working set,

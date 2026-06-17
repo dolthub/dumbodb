@@ -208,6 +208,14 @@ func (b *backend) DumboDBGC(ctx context.Context, params *backends.GCParams) (*ba
 	return nil, fmt.Errorf("oplog: DumboDBGC: versioning not supported by wrapped backend")
 }
 
+func (b *backend) DumboDBBranchStatus(ctx context.Context, params *backends.BranchStatusParams) (*backends.BranchStatusResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBBranchStatus(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBBranchStatus: versioning not supported by wrapped backend")
+}
+
 var (
 	_ backends.Backend           = (*backend)(nil)
 	_ backends.VersioningBackend = (*backend)(nil)
