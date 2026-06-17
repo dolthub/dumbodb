@@ -2483,8 +2483,11 @@ func (b *Backend) DumboDBBranchStatus(ctx context.Context, params *backends.Bran
 			fmt.Errorf("DumboDBBranchStatus: database %q does not exist", params.DBName))
 	}
 
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+	// No db.mu: this reads only immutable, content-addressed history. Ref
+	// resolution (datasDB.GetDataset) and closure reads (vs/ns) are serialized by
+	// the chunk store's own RWMutex, and the store handles are never reassigned
+	// after open. A concurrent commit may advance a ref between resolutions, which
+	// only yields a consistent older/newer snapshot -- fine for a read-only report.
 
 	baseHash, err := resolveRootishToCommitHash(ctx, db, params.Base)
 	if err != nil {
