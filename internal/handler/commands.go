@@ -128,6 +128,7 @@ func (h *Handler) initCommands() {
 
 	// DumboDB version-control commands accept both dolt* and dumbo* prefixes.
 	h.register(&Command{Handler: h.MsgDumboDBBranch, Help: "Creates a new DumboDB branch from the current branch encoded in the database name."}, "doltBranch", "dumboBranch")
+	h.register(&Command{Handler: h.MsgDumboDBBranchStatus, Help: "Reports how many commits each target refspec is ahead and behind a base refspec."}, "doltBranchStatus", "dumboBranchStatus")
 	h.register(&Command{Handler: h.MsgDumboDBCherryPick, Help: "Applies the diff introduced by the named commit onto the current branch encoded in the database name."}, "doltCherryPick", "dumboCherryPick")
 	h.register(&Command{Handler: h.MsgDumboDBConflicts, Help: "Returns conflict information for the current in-progress merge on the branch encoded in the database name."}, "doltConflicts", "dumboConflicts")
 	h.register(&Command{Handler: h.MsgDumboDBDiff, Help: "Returns document-level diff between two states for the branch encoded in the database name."}, "doltDiff", "dumboDiff")

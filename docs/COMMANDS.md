@@ -27,6 +27,7 @@ Every `dumbo*` command has an identical `dolt*` alias:
 |---------|-------|
 | `dumboCommit` | `doltCommit` |
 | `dumboBranch` | `doltBranch` |
+| `dumboBranchStatus` | `doltBranchStatus` |
 | `dumboMerge` | `doltMerge` |
 | `dumboCherryPick` | `doltCherryPick` |
 | `dumboRebase` | `doltRebase` |
@@ -160,6 +161,81 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 - Branch creation works from any rootish: branch name, commit hash, or `branch~N` ancestor expression.
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
+
+---
+
+## dumboBranchStatus
+
+Reports how many commits each target refspec is ahead and behind a base refspec.
+"Ahead" counts commits reachable from the target but not the base; "behind" counts
+the reverse. Read-only.
+
+**Alias:** `doltBranchStatus`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `base` | string | **yes** |  -- | Base refspec to compare each target against |
+| `targets` | array of strings, or string | **yes** |  -- | Target refspecs; a single string is treated as a one-element array. Must name at least one target |
+
+A refspec is a commit hash, branch name, tag name, ancestor expression (`main~2`,
+`b2^1`), `HEAD`, or `HEAD~N`. `HEAD`/`HEAD~N` resolve against the branch encoded in
+the database name.
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `base` | object | `{ target, hash }` for the base refspec |
+| `targets` | array | One entry per target, in request order |
+| `ok` | number | `1` on success |
+
+### Target entry
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `target` | string | The target refspec, echoed verbatim (`HEAD~1` stays `HEAD~1`) |
+| `hash` | string | Resolved commit hash (32-char base32) |
+| `commitsAhead` | int32 | Commits reachable from the target but not the base |
+| `commitsBehind` | int32 | Commits reachable from the base but not the target |
+
+The `base` object has the same `target` (verbatim) and `hash` fields.
+
+### Example
+
+```js
+db.getSiblingDB("orders@main").runCommand({
+  dumboBranchStatus: 1,
+  base: "main",
+  targets: ["feature", "HEAD~1"]
+})
+// {
+//   base: { target: "main", hash: "<hash>" },
+//   targets: [
+//     { target: "feature", hash: "<hash>", commitsAhead: 2, commitsBehind: 1 },
+//     { target: "HEAD~1",  hash: "<hash>", commitsAhead: 0, commitsBehind: 1 }
+//   ],
+//   ok: 1
+// }
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| `base` missing | `BadValue: required parameter "base" is missing` |
+| `targets` missing | `Location40414: BSON field 'dumboBranchStatus.targets' is missing but a required field` |
+| `targets` empty (`[]`) | `BadValue: dumboBranchStatus: at least one target is required` |
+| Empty-string target | `BadValue: dumboBranchStatus: rootish must not be empty` |
+| Target/base cannot be resolved | `OperationFailed: ... resolving target ...` |
+
+### Notes
+
+- Comparing a refspec to itself yields `commitsAhead: 0, commitsBehind: 0`.
+- Tags resolve to their target commit, so they report the same counts as the commit they point at.
+- A merge commit is ahead by every commit reachable from it but not the base -- the merged-in branch commits plus the merge commit itself, not just the merge commit.
+- The order of `targets` in the response matches the request order.
 
 ---
 

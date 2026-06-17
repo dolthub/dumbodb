@@ -1227,6 +1227,147 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 	return documentOpMsg(reply)
 }
 
+// MsgDumboDBBranchStatus implements the `dumboBranchStatus` command.
+//
+// It reports, for each target refspec, how many commits it is ahead and behind the
+// base refspec. Refspecs are commit hashes, branch/tag names, ancestor expressions,
+// or HEAD/HEAD~N (resolved against the connection's branch).
+//
+// Usage:
+//
+//	db.getSiblingDB("mydb@main").runCommand({dumboBranchStatus: 1, base: "main", targets: ["feature", "HEAD~1"]})
+//
+// Both base and targets are required; targets must name at least one refspec. A
+// single target string is accepted and normalized to a one-element array. The
+// response echoes each input refspec verbatim alongside its resolved commit hash:
+//
+//	{ base: {target, hash}, targets: [{target, hash, commitsAhead, commitsBehind}], ok: 1 }
+//
+// The passed context is canceled when the client connection is closed.
+func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	encodedDB, err := common.GetRequiredParam[string](document, "$db")
+	if err != nil {
+		return nil, err
+	}
+
+	dbName, branch, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return nil, err
+	}
+
+	base, err := common.GetRequiredParam[string](document, "base")
+	if err != nil {
+		return nil, err
+	}
+
+	tv, _ := document.Get("targets")
+	if tv == nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrMissingField,
+			"BSON field 'dumboBranchStatus.targets' is missing but a required field",
+			"targets")
+	}
+	var origTargets []string
+	switch t := tv.(type) {
+	case *types.Array:
+		for i := 0; i < t.Len(); i++ {
+			elem, gErr := t.Get(i)
+			if gErr != nil {
+				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, gErr.Error())
+			}
+			s, ok := elem.(string)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrTypeMismatch, "dumboBranchStatus: each target must be a string", "targets")
+			}
+			origTargets = append(origTargets, s)
+		}
+	case string:
+		origTargets = []string{t}
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrTypeMismatch, "dumboBranchStatus: targets must be a string or array of strings", "targets")
+	}
+	if len(origTargets) == 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "dumboBranchStatus: at least one target is required", "targets")
+	}
+
+	rewriteHead := func(s, argName string) (string, error) {
+		if perr := parseRootish(s); perr != nil {
+			return "", handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, "dumboBranchStatus: "+perr.Error(), argName)
+		}
+		if s == "HEAD" {
+			return branch, nil
+		}
+		if strings.HasPrefix(s, "HEAD~") {
+			return branch + s[len("HEAD"):], nil
+		}
+		return s, nil
+	}
+
+	resolvedBase, err := rewriteHead(base, "base")
+	if err != nil {
+		return nil, err
+	}
+
+	resolvedTargets := make([]string, len(origTargets))
+	for i, target := range origTargets {
+		resolvedTargets[i], err = rewriteHead(target, "targets")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	vb := h.versioningBackend()
+	if vb == nil {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboBranchStatus: versioning is not supported by the current backend",
+		)
+	}
+
+	res, err := vb.DumboDBBranchStatus(connCtx, &backends.BranchStatusParams{
+		DBName:  dbName,
+		Base:    resolvedBase,
+		Targets: resolvedTargets,
+	})
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	targetsArr := types.MakeArray(len(res.Entries))
+	for i, e := range res.Entries {
+		shown := e.Target
+		if i < len(origTargets) {
+			shown = origTargets[i]
+		}
+		targetsArr.Append(must.NotFail(types.NewDocument(
+			"target", shown,
+			"hash", e.Hash,
+			"commitsAhead", e.CommitsAhead,
+			"commitsBehind", e.CommitsBehind,
+		)))
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"base", must.NotFail(types.NewDocument(
+				"target", base,
+				"hash", res.BaseHash,
+			)),
+			"targets", targetsArr,
+			"ok", float64(1),
+		)),
+	)
+}
+
 // MsgDumboDBReset implements the `dumboDBReset` command.
 //
 // It moves the branch HEAD to the specified commit hash. Two modes:

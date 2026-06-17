@@ -91,6 +91,7 @@ func TestCommands_AliasesShareInstance(t *testing.T) {
 		{"isMaster", "ismaster"},
 		{"doltCommit", "dumboCommit"},
 		{"doltBranch", "dumboBranch"},
+		{"doltBranchStatus", "dumboBranchStatus"},
 		{"doltCherryPick", "dumboCherryPick"},
 		{"doltConflicts", "dumboConflicts"},
 		{"doltDiff", "dumboDiff"},
