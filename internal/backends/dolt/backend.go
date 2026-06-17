@@ -2194,12 +2194,16 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		if dsErr != nil {
 			return nil, fmt.Errorf("DumboDBLog: listing branches for all: %w", dsErr)
 		}
-		_ = dsMap.IterAll(ctx, func(datasetID string, headAddr hash.Hash) error {
+		// A failed iteration must be surfaced: silently swallowing it could seed
+		// only some branch heads and return an incomplete log.
+		if iterErr := dsMap.IterAll(ctx, func(datasetID string, headAddr hash.Hash) error {
 			if strings.HasPrefix(datasetID, "refs/heads/") {
 				addSeed(headAddr)
 			}
 			return nil
-		})
+		}); iterErr != nil {
+			return nil, fmt.Errorf("DumboDBLog: iterating branches for all: %w", iterErr)
+		}
 		if len(seeds) == 0 {
 			// No branch refs found; fall back to the connection branch HEAD.
 			h, rErr := resolveRootishToCommitHash(ctx, db, params.Branch)

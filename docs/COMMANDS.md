@@ -521,8 +521,6 @@ log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branc
 - `refs` appears only on commits that are the HEAD of one or more branches. The connection branch gets both `"HEAD"` and its bare name; other branches get only the bare name.
 - Merge commits include `parent2`.
 - `from` starts traversal at the given commit(s); the walk still visits both parents of any merge commit reachable from that start.
-- "Touched" is evaluated against the first parent, so a merge commit qualifies when its result changes a matching document relative to parent1 (not parent2).
-- An `_id` filter is the cleanest case: `_id` is immutable, so every insert, modification, and delete of that document is a touch.
 
 ---
 

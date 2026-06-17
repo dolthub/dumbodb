@@ -15,11 +15,11 @@
 package tests
 
 // TestLogPaginationVerify is the automated analog of
-// docs/verify/log-pagination-filtering.md. Part A covers frontier pagination
-// (from-array, next); Part B covers commit filtering (touched semantics, OR,
-// limit-counts-matches, _id follow-document). Commits are made sequentially so
-// later commits carry later timestamps, which (with height-primary ordering)
-// reproduces the documented walk order deterministically.
+// docs/verify/log-pagination-filtering.md. It covers frontier pagination:
+// from-array seeds, the next frontier, and the all flag. Commits are made
+// sequentially so later commits carry later timestamps, which (with
+// height-primary ordering) reproduces the documented walk order
+// deterministically. Commit filtering is not yet shipped.
 
 import (
 	"context"
