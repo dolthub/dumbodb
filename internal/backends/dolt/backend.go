@@ -45,6 +45,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -2173,31 +2174,80 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		limit = 20
 	}
 
-	// Determine starting commit hash.
-	var startHash hash.Hash
-	if params.From != "" {
-		var ok bool
-		startHash, ok = hash.MaybeParse(params.From)
-		if !ok {
-			return nil, fmt.Errorf("DumboDBLog: invalid from hash %q", params.From)
+	// Resolve the seed frontier. params.From is a set of commit hashes (the
+	// frontier returned as Next on a previous page); empty means start at the
+	// connection branch HEAD. Seeds are deduped so an overlapping frontier (a
+	// commit and one of its ancestors) does not double-seed the iterator.
+	var seeds []hash.Hash
+	seedSeen := make(map[string]bool)
+	addSeed := func(h hash.Hash) {
+		if s := h.String(); !seedSeen[s] {
+			seedSeen[s] = true
+			seeds = append(seeds, h)
 		}
-		// Validate that the from hash resolves to an actual commit so the caller
-		// gets a clear error rather than an empty result.
-		if _, loadErr := datas.LoadCommitAddr(ctx, db.vs, startHash); loadErr != nil {
-			if loadErr == datas.ErrCommitNotFound {
-				return nil, fmt.Errorf("DumboDBLog: commit not found: %q", params.From)
+	}
+	switch {
+	case params.All:
+		// Seed with every branch HEAD so the walk spans the whole commit DAG
+		// (git log --all, branches only). Tags are excluded.
+		dsMap, dsErr := db.datasDB.Datasets(ctx)
+		if dsErr != nil {
+			return nil, fmt.Errorf("DumboDBLog: listing branches for all: %w", dsErr)
+		}
+		// A failed iteration must be surfaced: silently swallowing it could seed
+		// only some branch heads and return an incomplete log.
+		if iterErr := dsMap.IterAll(ctx, func(datasetID string, headAddr hash.Hash) error {
+			if strings.HasPrefix(datasetID, "refs/heads/") {
+				addSeed(headAddr)
 			}
-			return nil, fmt.Errorf("DumboDBLog: loading commit %q: %w", startHash, loadErr)
+			return nil
+		}); iterErr != nil {
+			return nil, fmt.Errorf("DumboDBLog: iterating branches for all: %w", iterErr)
 		}
-	} else {
+		if len(seeds) == 0 {
+			// No branch refs found; fall back to the connection branch HEAD.
+			h, rErr := resolveRootishToCommitHash(ctx, db, params.Branch)
+			if rErr != nil {
+				return nil, fmt.Errorf("DumboDBLog: resolving branch %q: %w", params.Branch, rErr)
+			}
+			addSeed(h)
+		}
+
+	case len(params.From) > 0:
+		for _, from := range params.From {
+			h, ok := hash.MaybeParse(from)
+			if !ok {
+				return nil, fmt.Errorf("DumboDBLog: invalid from hash %q", from)
+			}
+			// Validate that the from hash resolves to an actual commit so the
+			// caller gets a clear error rather than an empty result.
+			if _, loadErr := datas.LoadCommitAddr(ctx, db.vs, h); loadErr != nil {
+				if loadErr == datas.ErrCommitNotFound {
+					return nil, fmt.Errorf("DumboDBLog: commit not found: %q", from)
+				}
+				return nil, fmt.Errorf("DumboDBLog: loading commit %q: %w", h, loadErr)
+			}
+			addSeed(h)
+		}
+
+	default:
 		// Resolve the connection's branch (or rootish expression) to its HEAD
 		// commit.
 		h, rErr := resolveRootishToCommitHash(ctx, db, params.Branch)
 		if rErr != nil {
 			return nil, fmt.Errorf("DumboDBLog: resolving branch %q: %w", params.Branch, rErr)
 		}
-		startHash = h
+		addSeed(h)
 	}
+
+	// discovered tracks every commit ever pushed onto the iterator's queue:
+	// the seeds plus the parents of every commit we examine. The frontier
+	// returned as Next is discovered minus the commits we examined.
+	discovered := make(map[string]bool, len(seeds))
+	for _, h := range seeds {
+		discovered[h.String()] = true
+	}
+	examined := make(map[string]bool)
 
 	// Build a map from commit hash string -> ref labels by iterating over all
 	// branch datasets.  The connection branch (ConnBranch) gets "HEAD -> <name>",
@@ -2228,7 +2278,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	// commit are walked. The resolver uses the same ValueStore we write to, so
 	// it sees every commit DumboDB has created.
 	resolver := &doltHashResolver{vs: db.vs, ns: db.ns}
-	itr, err := commitgraph.GetTopologicalOrderIterator(ctx, resolver, []hash.Hash{startHash}, nil)
+	itr, err := commitgraph.GetTopologicalOrderIterator(ctx, resolver, seeds, nil)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBLog: building topological iterator: %w", err)
 	}
@@ -2244,6 +2294,14 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		}
 		if ci.IsGhost {
 			continue
+		}
+
+		// Record this commit as examined and push its parents onto the
+		// discovered set, mirroring the iterator's queue. The frontier (Next)
+		// is discovered minus examined.
+		examined[ci.Hash.String()] = true
+		for _, p := range ci.Parents {
+			discovered[p.String()] = true
 		}
 
 		author := ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">"
@@ -2365,7 +2423,25 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 		commits = append(commits, info)
 	}
 
-	return &backends.LogResult{Commits: commits}, nil
+	// The frontier for the next page is every discovered commit we did not
+	// examine. Ghost entries (e.g. parents missing from a shallow store) are
+	// dropped so the caller does not re-seed a commit that yields nothing.
+	var next []string
+	for h := range discovered {
+		if examined[h] {
+			continue
+		}
+		ph, ok := hash.MaybeParse(h)
+		if ok {
+			if ci, rErr := resolver.ResolveCommitHash(ctx, ph); rErr == nil && ci.IsGhost {
+				continue
+			}
+		}
+		next = append(next, h)
+	}
+	sort.Strings(next)
+
+	return &backends.LogResult{Commits: commits, Next: next}, nil
 }
 
 // DumboDBStatus implements backends.VersioningBackend.

@@ -1062,7 +1062,7 @@ func TestDumboDBLogFromHash(t *testing.T) {
 	}
 
 	// Starting from commit one's hash should return commit one + init commit only.
-	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: res1.CommitID})
+	res, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: []string{res1.CommitID}})
 	if err != nil {
 		t.Fatalf("DumboDBLog from hash: %v", err)
 	}
@@ -1092,7 +1092,7 @@ func TestDumboDBLogFromUnknownHash(t *testing.T) {
 	// A syntactically valid but non-existent hash (32 hex bytes = 64 chars).
 	unknownHash := "0000000000000000000000000000000000000000000000000000000000000001"
 
-	_, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: unknownHash})
+	_, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "testdb", Branch: "main", From: []string{unknownHash}})
 	if err == nil {
 		t.Error("expected error for unknown from hash, got nil")
 	}

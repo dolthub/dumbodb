@@ -1076,9 +1076,35 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	from, err := common.GetOptionalParam[string](document, "from", "")
-	if err != nil {
-		return nil, err
+	// "from" accepts a single hash string or an array of hash strings (the
+	// frontier seed set returned as "next" on a prior page).
+	var fromSeeds []string
+	if v, _ := document.Get("from"); v != nil {
+		switch fv := v.(type) {
+		case string:
+			if fv != "" {
+				fromSeeds = []string{fv}
+			}
+		case *types.Array:
+			for i := 0; i < fv.Len(); i++ {
+				el, _ := fv.Get(i)
+				s, ok := el.(string)
+				if !ok {
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrTypeMismatch,
+						"dumboLog: 'from' array elements must be commit hash strings",
+						"from",
+					)
+				}
+				fromSeeds = append(fromSeeds, s)
+			}
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"dumboLog: 'from' must be a commit hash string or an array of strings",
+				"from",
+			)
+		}
 	}
 
 	stat, err := common.GetOptionalBoolOrIntParam(document, "stat", false)
@@ -1089,6 +1115,21 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 	patch, err := common.GetOptionalBoolOrIntParam(document, "patch", false)
 	if err != nil {
 		return nil, err
+	}
+
+	all, err := common.GetOptionalBoolOrIntParam(document, "all", false)
+	if err != nil {
+		return nil, err
+	}
+
+	// "all" seeds the walk with every branch HEAD; it owns the seed set, so it
+	// cannot be combined with an explicit "from".
+	if all && len(fromSeeds) > 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboLog: 'all' and 'from' are mutually exclusive",
+			"all",
+		)
 	}
 
 	vb := h.versioningBackend()
@@ -1114,9 +1155,10 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Branch:     branch,
 		ConnBranch: branch,
 		Limit:      limit,
-		From:       from,
+		From:       fromSeeds,
 		Stat:       stat,
 		Patch:      patch,
+		All:        all,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
@@ -1169,12 +1211,20 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		commits.Append(entry)
 	}
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"commits", commits,
-			"ok", float64(1),
-		)),
-	)
+	reply := must.NotFail(types.NewDocument("commits", commits))
+
+	// "next" is the frontier seed set for the following page; omitted when the
+	// traversal is exhausted.
+	if len(res.Next) > 0 {
+		nextArr := types.MakeArray(len(res.Next))
+		for _, h := range res.Next {
+			nextArr.Append(h)
+		}
+		reply.Set("next", nextArr)
+	}
+
+	reply.Set("ok", float64(1))
+	return documentOpMsg(reply)
 }
 
 // MsgDumboDBReset implements the `dumboDBReset` command.

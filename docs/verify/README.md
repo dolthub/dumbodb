@@ -15,6 +15,7 @@ Every verify doc has a matching automated test in `tests/`:
 | commit.md | versioning_commit_verify_test.go | TestCommitVerify |
 | diff.md | versioning_diff_verify_test.go | TestDiffVerify |
 | log.md | versioning_log_verify_test.go | TestLogVerify |
+| log-pagination-filtering.md | versioning_log_pagination_verify_test.go | TestLogPaginationVerify |
 | merge.md | versioning_merge_verify_test.go | TestMergeVerify |
 | rebase.md | versioning_rebase_verify_test.go | TestRebaseVerify |
 | reset.md | versioning_reset_verify_test.go | TestResetVerify |

@@ -25,20 +25,20 @@ Every `dumbo*` command has an identical `dolt*` alias:
 
 | Primary | Alias |
 |---------|-------|
-| `dumboCommit` | `dumboCommit` |
-| `dumboBranch` | `dumboBranch` |
-| `dumboMerge` | `dumboMerge` |
-| `dumboCherryPick` | `dumboCherryPick` |
-| `dumboRebase` | `dumboRebase` |
-| `dumboLog` | `dumboLog` |
-| `dumboStatus` | `dumboStatus` |
-| `dumboDiff` | `dumboDiff` |
-| `dumboReset` | `dumboReset` |
-| `dumboRevert` | `dumboRevert` |
-| `dumboConflicts` | `dumboConflicts` |
-| `dumboResolveConflict` | `dumboResolveConflict` |
-| `dumboTag` | `dumboTag` |
-| `dumboGC` | `dumboGC` |
+| `dumboCommit` | `doltCommit` |
+| `dumboBranch` | `doltBranch` |
+| `dumboMerge` | `doltMerge` |
+| `dumboCherryPick` | `doltCherryPick` |
+| `dumboRebase` | `doltRebase` |
+| `dumboLog` | `doltLog` |
+| `dumboStatus` | `doltStatus` |
+| `dumboDiff` | `doltDiff` |
+| `dumboReset` | `doltReset` |
+| `dumboRevert` | `doltRevert` |
+| `dumboConflicts` | `doltConflicts` |
+| `dumboResolveConflict` | `doltResolveConflict` |
+| `dumboTag` | `doltTag` |
+| `dumboGC` | `doltGC` |
 
 ---
 
@@ -416,7 +416,8 @@ timestamp first.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `limit` | int32 | no | unset (default 20) | Maximum number of commits to return. `0` explicitly requests an empty list. |
-| `from` | string | no | HEAD | Start traversal from this commit hash instead of HEAD |
+| `from` | string or array of strings | no | HEAD | Seed commit(s) for the traversal frontier. A single hash starts there (and still walks both parents of merges); an array seeds the walk with every listed commit. Pass back a prior response's `next` to page. |
+| `all` | bool | no | `false` | Seed the walk with the HEAD of every branch, so it spans all branches (`git log --all`; tags excluded). Mutually exclusive with `from`. |
 | `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`) |
 | `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`) |
 
@@ -425,6 +426,7 @@ timestamp first.
 | Field | Type | Description |
 |-------|------|-------------|
 | `commits` | array | List of commit objects (see below) |
+| `next` | array of strings | **Only when more history remains.** The frontier seed set for the next page; pass it back as `from`. Omitted when the traversal is exhausted. |
 | `ok` | number | `1` |
 
 ### Commit object fields
@@ -473,16 +475,52 @@ db.getSiblingDB("orders@main").runCommand({ dumboLog: 1, limit: 2 })
 // }
 ```
 
+### Pagination
+
+The traversal boundary of a commit DAG is a *set* of commits (the frontier),
+not a single pointer, so pagination uses a seed set rather than `skip`. Each
+response carries `next` (the frontier) while more history remains; feed it
+back as `from` to fetch the following page, and stop when `next` is absent:
+
+```js
+const log = db.getSiblingDB("orders@main")
+let from = undefined
+do {
+  const page = log.runCommand({ dumboLog: 1, limit: 50, ...(from && { from }) })
+  for (const c of page.commits) print(c.commitId, c.message)
+  from = page.next            // array of hashes, or undefined at the end
+} while (from)
+```
+
+`next` is a transparent array of commit hashes (order is not significant);
+across pages the commits tile the history exactly once, in the same order as
+an unpaginated walk.
+
+To page across **all** branches, start with `all: true` instead of `from`
+(they are mutually exclusive); it seeds the first page with every branch HEAD,
+and subsequent pages continue from `next` as usual:
+
+```js
+log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branches
+```
+
+> **Filtering** (restricting the log to commits that touched specific
+> documents) is planned but not yet available. It is being designed as a
+> simple `collection:_id` filter.
+
 ### Error cases
 
-None specific to this command; missing backend support returns `OperationFailed`.
+- `all` together with `from` returns `BadValue` (they are mutually exclusive).
+- A `from` array element that is not a string returns `TypeMismatch`; an
+  unparseable or unknown commit hash returns `OperationFailed`.
+- Missing backend support returns `OperationFailed`.
 
 ### Notes
 
 - Every database is initialized with a root `"Initialize database"` commit; the root commit has no `parent1`.
 - `refs` appears only on commits that are the HEAD of one or more branches. The connection branch gets both `"HEAD"` and its bare name; other branches get only the bare name.
 - Merge commits include `parent2`.
-- `from` starts traversal at the given commit; the walk still visits both parents of any merge commit reachable from that start.
+- `from` starts traversal at the given commit(s); the walk still visits both parents of any merge commit reachable from that start.
 
 ---
 
