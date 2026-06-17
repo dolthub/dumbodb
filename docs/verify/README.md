@@ -11,6 +11,7 @@ Every verify doc has a matching automated test in `tests/`:
 | Document | Test file | Test function |
 |----------|-----------|---------------|
 | branch.md | versioning_branch_verify_test.go | TestBranchVerify |
+| branch-status.md | versioning_branch_status_verify_test.go | TestBranchStatusVerify |
 | cherry-pick.md | versioning_cherry_pick_verify_test.go | TestCherryPickVerify |
 | commit.md | versioning_commit_verify_test.go | TestCommitVerify |
 | diff.md | versioning_diff_verify_test.go | TestDiffVerify |
