@@ -169,11 +169,12 @@ type ResolveConflictResult struct{}
 type LogParams struct {
 	DBName     string
 	Branch     string
-	ConnBranch string // branch name from the connection's encoded db name (used for HEAD -> decoration)
+	ConnBranch string   // branch name from the connection's encoded db name (used for HEAD -> decoration)
 	Limit      int32
-	From       string // optional: start traversal from this commit hash instead of HEAD
-	Stat       bool   // when true, include per-collection change counts for each commit
-	Patch      bool   // when true, include full document-level diffs for each commit
+	From       []string // optional: seed commit hashes for the traversal frontier; empty means start at HEAD
+	Stat       bool     // when true, include per-collection change counts for each commit
+	Patch      bool     // when true, include full document-level diffs for each commit
+	All        bool     // when true, seed the walk with every branch HEAD (mutually exclusive with From)
 }
 
 // CommitInfo represents a single commit entry returned by DumboDBLog.
@@ -194,6 +195,9 @@ type CommitInfo struct {
 
 type LogResult struct {
 	Commits []CommitInfo
+	// Next is the frontier seed set for the following page (the commits discovered
+	// but not yet examined). Empty when the traversal is exhausted.
+	Next []string
 }
 
 type VersioningStatusParams struct {
