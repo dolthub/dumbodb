@@ -2521,16 +2521,17 @@ func (b *Backend) DumboDBBranchStatus(ctx context.Context, params *backends.Bran
 			return nil, fmt.Errorf("DumboDBBranchStatus: target %q: %w", target, aErr)
 		}
 
+		// ahead = |target \ base|, behind = |base \ target|. Both derive from the
+		// intersection size, so scan only the target set per target rather than
+		// also re-scanning the base set every iteration.
+		shared := 0
 		for h := range targetAncestors {
-			if !baseAncestors.Has(h) {
-				entry.CommitsAhead++
+			if baseAncestors.Has(h) {
+				shared++
 			}
 		}
-		for h := range baseAncestors {
-			if !targetAncestors.Has(h) {
-				entry.CommitsBehind++
-			}
-		}
+		entry.CommitsAhead = int32(len(targetAncestors) - shared)
+		entry.CommitsBehind = int32(len(baseAncestors) - shared)
 		result.Entries = append(result.Entries, entry)
 	}
 

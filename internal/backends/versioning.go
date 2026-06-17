@@ -442,9 +442,11 @@ type BranchStatusParams struct {
 
 // BranchStatusEntry is the ahead/behind result for a single target refspec.
 //
-// Target echoes the input refspec verbatim (e.g. "HEAD~1" stays "HEAD~1"); Hash is
-// the 32-character commit the refspec resolved to. CommitsAhead counts commits
-// reachable from the target but not the base; CommitsBehind counts the reverse.
+// Target echoes the corresponding BranchStatusParams.Targets entry verbatim (e.g.
+// "main~2"); the caller is responsible for any HEAD/HEAD~N rewriting before
+// invoking the backend. Hash is the 32-character commit the refspec resolved to.
+// CommitsAhead counts commits reachable from the target but not the base;
+// CommitsBehind counts the reverse.
 type BranchStatusEntry struct {
 	Target        string
 	Hash          string
