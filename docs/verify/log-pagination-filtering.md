@@ -4,10 +4,6 @@ Manual verification guide for `doltLog` **frontier pagination**: `from` as a
 seed array, `next` in the response, and `all` to span every branch. Work
 through each scenario top to bottom in `mongosh`.
 
-> **Design reference:** `docs/design/dumbolog-dag-pagination.md` is the spec
-> these scenarios verify. Read it for the algorithm and correctness
-> argument.
->
 > **Automated equivalent:** `tests/versioning_log_pagination_verify_test.go`
 > (`TestLogPaginationVerify`). The manual run below relies on wall-clock
 > commit order (later commits get later timestamps), which produces the same
@@ -277,4 +273,4 @@ Notes:
   timestamp. This is height-primary ordering, which can differ from git's
   default date ordering.
 - Commit filtering (restricting the log to commits that touched specific
-  documents) is planned but not yet available; see the design doc.
+  documents) is planned but not yet available.

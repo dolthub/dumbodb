@@ -506,7 +506,7 @@ log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branc
 
 > **Filtering** (restricting the log to commits that touched specific
 > documents) is planned but not yet available. It is being designed as a
-> simple `collection:_id` filter; see `docs/design/dumbolog-dag-pagination.md`.
+> simple `collection:_id` filter.
 
 ### Error cases
 
