@@ -1132,6 +1132,75 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
+	// "filters" is an array of single-key {collection: id} entries. The value is
+	// an _id, or an array of _ids. An _id may be any valid BSON _id type --
+	// number, string, ObjectId, date, decimal, document/subdocument, etc. The
+	// one type that is never a valid _id is an array, which is exactly why the
+	// array form is unambiguously the id-list. A commit is returned only if it
+	// touched (vs parent1) one of those documents in that collection.
+	var filters map[string][]any
+	wholeColls := map[string]bool{}
+	if fv, _ := document.Get("filters"); fv != nil {
+		arr, ok := fv.(*types.Array)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"dumboLog: 'filters' must be an array of {collection: id} documents",
+				"filters",
+			)
+		}
+		for i := 0; i < arr.Len(); i++ {
+			el, _ := arr.Get(i)
+			elDoc, ok := el.(*types.Document)
+			if !ok || len(elDoc.Keys()) != 1 {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"dumboLog: each 'filters' entry must be a single {collection: id} document",
+					"filters",
+				)
+			}
+			coll := elDoc.Keys()[0]
+			val, _ := elDoc.Get(coll)
+
+			if filters == nil {
+				filters = make(map[string][]any)
+			}
+
+			var ids []any
+			if list, isArr := val.(*types.Array); isArr {
+				if list.Len() == 0 {
+					// Empty array: whole-collection wildcard (any _id). An empty
+					// array is never a valid _id, so this is unambiguous.
+					wholeColls[coll] = true
+				}
+				// Non-empty array: an id-list. Each element is itself an _id and
+				// so must not be an array (arrays are not valid _ids).
+				for j := 0; j < list.Len(); j++ {
+					idv, _ := list.Get(j)
+					if _, bad := idv.(*types.Array); bad {
+						return nil, handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrBadValue,
+							"dumboLog: '"+coll+"' _id list elements must be _ids, not arrays",
+							"filters",
+						)
+					}
+					ids = append(ids, idv)
+				}
+			} else {
+				// Any single non-array value is one _id (document _ids included).
+				ids = append(ids, val)
+			}
+
+			filters[coll] = append(filters[coll], ids...)
+		}
+
+		// A whole-collection wildcard subsumes any specific _ids listed for the
+		// same collection: an empty id list signals "match any _id".
+		for coll := range wholeColls {
+			filters[coll] = nil
+		}
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -1159,6 +1228,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Stat:       stat,
 		Patch:      patch,
 		All:        all,
+		Filters:    filters,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())

@@ -494,8 +494,9 @@ timestamp first.
 | `limit` | int32 | no | unset (default 20) | Maximum number of commits to return. `0` explicitly requests an empty list. |
 | `from` | string or array of strings | no | HEAD | Seed commit(s) for the traversal frontier. A single hash starts there (and still walks both parents of merges); an array seeds the walk with every listed commit. Pass back a prior response's `next` to page. |
 | `all` | bool | no | `false` | Seed the walk with the HEAD of every branch, so it spans all branches (`git log --all`; tags excluded). Mutually exclusive with `from`. |
-| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`) |
-| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`) |
+| `filters` | array | no | unset | List of `{collection: _id}` entries; returns only commits that touched one of those documents (see Filtering). The value is a single `_id` or an array of `_id`s. |
+| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
+| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
 
 ### Response fields
 
@@ -580,12 +581,56 @@ and subsequent pages continue from `next` as usual:
 log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branches
 ```
 
-> **Filtering** (restricting the log to commits that touched specific
-> documents) is planned but not yet available. It is being designed as a
-> simple `collection:_id` filter.
+### Filtering
+
+`filters` restricts the log to commits that **touched** specific documents,
+identified by collection and `_id`. It is an array of single-key
+`{collection: _id}` entries; the value is one `_id`, or an array of `_id`s. A
+commit is included if it added, removed, or modified (versus its first parent)
+one of those documents in that collection, for **any** listed entry (OR).
+
+```js
+// history of one document (the common case):
+log.runCommand({ dumboLog: 1, filters: [ { orders: 42 } ] })
+
+// several documents, possibly across collections (OR):
+log.runCommand({ dumboLog: 1, filters: [ { orders: [1, 2] }, { users: 7 } ] })
+
+// _id can be any valid _id type, including a subdocument:
+log.runCommand({ dumboLog: 1, filters: [ { events: { region: "us", seq: 5 } } ] })
+
+// whole collection: an empty array matches any _id (every commit touching it):
+log.runCommand({ dumboLog: 1, filters: [ { orders: [] } ] })
+```
+
+An **empty array** value is the whole-collection wildcard: the commit qualifies
+if it touched any document in that collection. (An empty array is never a valid
+`_id`, so this is unambiguous; a whole-collection entry subsumes any specific
+`_id`s listed for the same collection.)
+
+An `_id` value may be **any valid BSON `_id` type** -- number, string,
+`ObjectId`, date, decimal, or a document/subdocument -- and is matched with the
+same equality `find({_id: ...})` uses: numeric cross-type coercion
+(`int`/`long`/`double`), and exact, field-order-sensitive equality for document
+`_id`s. The only type that is never a valid `_id` is an array, which is why an
+array value is unambiguously the id-list form. Because `_id` is immutable,
+every insert, update, and delete of a document is a touch -- the filter cleanly
+answers "show me the commits in this document's history."
+
+With `filters` active, `limit` counts matching commits: the walk continues
+past non-matching commits until `limit` matches are found. `next` is
+positioned after the last commit examined, so paging does not re-scan skipped
+commits, and `filters` composes with `from` and `all`.
+
+When `stat`/`patch` is requested with `filters`, the output is **scoped** to
+the matched documents -- only the filtered collections, and within them only
+the requested `_id`s that changed (like `git log -p -- path`).
 
 ### Error cases
 
+- `filters` that is not an array, an entry that is not a single-key document,
+  or an `_id`-list element that is itself an array, returns `TypeMismatch` /
+  `BadValue`.
 - `all` together with `from` returns `BadValue` (they are mutually exclusive).
 - A `from` array element that is not a string returns `TypeMismatch`; an
   unparseable or unknown commit hash returns `OperationFailed`.

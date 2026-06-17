@@ -2249,6 +2249,14 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	}
 	examined := make(map[string]bool)
 
+	// Build per-collection {_id: {$in: [...]}} filter docs once. When set, the
+	// walk includes only commits that touched one of the requested documents,
+	// and Stat/Patch output is scoped to those documents.
+	idFilters, err := idFilterDocs(params.Filters)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBLog: building id filters: %w", err)
+	}
+
 	// Build a map from commit hash string -> ref labels by iterating over all
 	// branch datasets.  The connection branch (ConnBranch) gets "HEAD -> <name>",
 	// every other branch gets its bare name.
@@ -2298,10 +2306,24 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 
 		// Record this commit as examined and push its parents onto the
 		// discovered set, mirroring the iterator's queue. The frontier (Next)
-		// is discovered minus examined.
+		// is discovered minus examined -- non-matching commits below are still
+		// examined so the frontier advances past them.
 		examined[ci.Hash.String()] = true
 		for _, p := range ci.Parents {
 			discovered[p.String()] = true
+		}
+
+		// Apply the _id filter. A non-matching commit is examined but not
+		// returned; the loop keeps walking because len(commits) only counts
+		// matches, so Limit counts matching commits.
+		if len(idFilters) > 0 {
+			matched, fErr := commitTouchesFilter(ctx, db, ci, idFilters)
+			if fErr != nil {
+				return nil, fmt.Errorf("DumboDBLog: filtering commit %q: %w", ci.Hash.String(), fErr)
+			}
+			if !matched {
+				continue
+			}
 		}
 
 		author := ci.Meta.Author.Name + " <" + ci.Meta.Author.Email + ">"
@@ -2370,6 +2392,45 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					status = "deleted"
 				default:
 					status = "modified"
+				}
+
+				// Filtered path: scope stat/patch to the matched documents in
+				// the filtered collections only. Collections not named in the
+				// filter, and non-matching document changes, are omitted; index
+				// changes are not document matches and are dropped here.
+				if len(idFilters) > 0 {
+					filter, ok := idFilters[name]
+					if !ok {
+						continue
+					}
+					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
+					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
+					addedDocs, removedDocs, modifiedDocs, sErr := scopedCollectionDiff(ctx, db.ns, aMap, bMap, filter)
+					if sErr != nil {
+						return nil, fmt.Errorf("DumboDBLog: scoped diff for %q in commit %q: %w", name, ci.Hash.String(), sErr)
+					}
+					if len(addedDocs)+len(removedDocs)+len(modifiedDocs) == 0 {
+						continue
+					}
+					if params.Stat {
+						info.Stat = append(info.Stat, backends.TableStatus{
+							Name:     name,
+							Status:   status,
+							Added:    len(addedDocs),
+							Modified: len(modifiedDocs),
+							Deleted:  len(removedDocs),
+						})
+					}
+					if params.Patch {
+						info.Diff = append(info.Diff, backends.CollectionDiff{
+							Name:     name,
+							Status:   status,
+							Added:    addedDocs,
+							Removed:  removedDocs,
+							Modified: modifiedDocs,
+						})
+					}
+					continue
 				}
 
 				// Index lifecycle is content-addressed; the same helper that

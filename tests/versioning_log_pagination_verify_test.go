@@ -189,4 +189,106 @@ func TestLogPaginationVerify(t *testing.T) {
 		require.Error(t, env.client.Database(pgdb).RunCommand(ctx, cmd).Err(), "all + from must be rejected")
 	})
 
+	// -------------------------------------------------------------------------
+	// Part B: collection:_id filtering.
+	// -------------------------------------------------------------------------
+	fdb := fmt.Sprintf("logfiltv%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(fdb).Drop(ctx))
+	fb := env.client.Database(fdb)
+
+	_, err := fb.Collection("orders").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c1 add orders 1,2", "a <a@x.io>")
+	_, err = fb.Collection("users").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alice"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c2 add user 1", "a <a@x.io>")
+	_, err = fb.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "status", Value: "pending"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c3 add order 3", "a <a@x.io>")
+	_, err = fb.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
+	require.NoError(t, err)
+	_, err = fb.Collection("orders").UpdateByID(ctx, int32(2), bson.D{{Key: "$set", Value: bson.D{{Key: "region", Value: "eu"}}}})
+	require.NoError(t, err)
+	_, err = fb.Collection("users").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "alicia"}}}})
+	require.NoError(t, err)
+	c4 := dumboDBCommit(t, env, fdb, "c4 mixed edit", "a <a@x.io>")
+	_, err = fb.Collection("orders").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c5 delete order 1", "a <a@x.io>")
+
+	fmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B1_FollowOneDocument", func(t *testing.T) {
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}}})
+		assert.Equal(t, []string{"c5 delete order 1", "c4 mixed edit", "c1 add orders 1,2"}, fmsgs(raw))
+	})
+
+	t.Run("B2_IDListAndOR", func(t *testing.T) {
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{int32(1), int32(3)}}},
+		}}})
+		assert.Equal(t, []string{"c5 delete order 1", "c4 mixed edit", "c3 add order 3", "c1 add orders 1,2"}, fmsgs(raw))
+
+		raw = runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: int32(3)}}, bson.D{{Key: "users", Value: int32(1)}},
+		}}})
+		assert.Equal(t, []string{"c4 mixed edit", "c3 add order 3", "c2 add user 1"}, fmsgs(raw))
+	})
+
+	t.Run("B2b_WholeCollection", func(t *testing.T) {
+		// Empty array = any _id in orders: every commit that touched orders.
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{}}},
+		}}})
+		assert.Equal(t, []string{
+			"c5 delete order 1", "c4 mixed edit", "c3 add order 3", "c1 add orders 1,2",
+		}, fmsgs(raw))
+	})
+
+	t.Run("B3_ScopedPatch", func(t *testing.T) {
+		raw := runLog(t, env, fdb, bson.D{
+			{Key: "from", Value: c4}, {Key: "limit", Value: int32(1)},
+			{Key: "patch", Value: true}, {Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}},
+		})
+		diff := raw["commits"].(bson.A)[0].(bson.M)["diff"].(bson.A)
+		require.Len(t, diff, 1, "scoped to orders only")
+		assert.Equal(t, "orders", diff[0].(bson.M)["name"])
+		mods := diff[0].(bson.M)["modified"].(bson.A)
+		require.Len(t, mods, 1, "only order 1, not order 2")
+		assert.EqualValues(t, 1, mods[0].(bson.M)["_id"])
+	})
+
+	t.Run("B4_Errors", func(t *testing.T) {
+		// not an array
+		require.Error(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.D{{Key: "orders", Value: int32(1)}}},
+		}).Err())
+		// id-list element that is itself an array (arrays are never valid _ids)
+		require.Error(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+				bson.D{{Key: "orders", Value: bson.A{bson.A{int32(1)}}}},
+			}},
+		}).Err())
+	})
+
+	t.Run("B5_DocumentID", func(t *testing.T) {
+		// A subdocument _id is a valid filter value (matches nothing here).
+		var raw bson.M
+		require.NoError(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+				bson.D{{Key: "orders", Value: bson.D{{Key: "a", Value: int32(1)}}}},
+			}},
+		}).Decode(&raw))
+		assert.Empty(t, raw["commits"].(bson.A))
+	})
 }

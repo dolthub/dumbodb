@@ -1,18 +1,14 @@
-# doltLog Pagination Verification
+# doltLog Pagination and Filtering Verification
 
-Manual verification guide for `doltLog` **frontier pagination**: `from` as a
-seed array, `next` in the response, and `all` to span every branch. Work
-through each scenario top to bottom in `mongosh`.
+Manual verification guide for `doltLog` **frontier pagination** (`from` as a
+seed array, `next` in the response, `all` to span every branch) and
+**`collection:_id` filtering** (Part B). Work through each scenario top to
+bottom in `mongosh`.
 
 > **Automated equivalent:** `tests/versioning_log_pagination_verify_test.go`
 > (`TestLogPaginationVerify`). The manual run below relies on wall-clock
 > commit order (later commits get later timestamps), which produces the same
 > height-primary ordering the automated test asserts.
->
-> **Commit filtering** (restricting the log to commits that touched specific
-> documents) is planned but not yet shipped; it is being redesigned as a
-> simple `collection:_id` filter. Filtering scenarios will be added here when
-> that feature lands.
 
 ## Prerequisites
 
@@ -258,6 +254,101 @@ Key checks:
 
 ---
 
+# Part B: `collection:_id` filtering
+
+`filters` is an array of `{collection: _id}` entries; the value is one `_id`,
+or an array of `_id`s. A commit is returned only if it added, removed, or
+modified (vs its first parent) one of those documents, in any listed entry
+(OR). Because `_id` is immutable, every change to a document is a touch.
+
+An `_id` may be any valid BSON `_id` type -- number, string, `ObjectId`, date,
+decimal, or a document/subdocument (e.g. `{ events: { region: "us", seq: 5 } }`)
+-- matched as `find({_id: ...})` would, with field-order-sensitive equality for
+document `_id`s. Only an array is never a valid `_id`, so an array value is
+always the id-list form.
+
+## Setup: several documents per collection
+
+```js
+var ff = db.getSiblingDB("logfilter")
+ff.dropDatabase()
+
+ff.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
+ff.runCommand({ doltCommit: 1, message: "c1 add orders 1,2", author: "a <a@x.io>" })
+
+ff.users.insertOne({ _id: 1, name: "alice" })
+ff.runCommand({ doltCommit: 1, message: "c2 add user 1", author: "a <a@x.io>" })
+
+ff.orders.insertOne({ _id: 3, status: "pending" })
+ff.runCommand({ doltCommit: 1, message: "c3 add order 3", author: "a <a@x.io>" })
+
+// mixed: change order 1 (matched), order 2 (not matched), user 1 (other collection)
+ff.orders.updateOne({ _id: 1 }, { $set: { note: "x" } })
+ff.orders.updateOne({ _id: 2 }, { $set: { region: "eu" } })
+ff.users.updateOne({ _id: 1 }, { $set: { name: "alicia" } })
+ff.runCommand({ doltCommit: 1, message: "c4 mixed edit", author: "a <a@x.io>" })
+
+ff.orders.deleteOne({ _id: 1 })
+ff.runCommand({ doltCommit: 1, message: "c5 delete order 1", author: "a <a@x.io>" })
+```
+
+## Scenario B1: follow one document
+
+```js
+ff.runCommand({ doltLog: 1, filters: [ { orders: 1 } ] })
+```
+
+Key checks:
+- Returns `c5` (delete), `c4` (modify), `c1` (add) -- every change to order 1.
+- `c3` (added order 3) and the users commits are **excluded**.
+
+## Scenario B2: id-list sugar and per-collection OR
+
+```js
+ff.runCommand({ doltLog: 1, filters: [ { orders: [1, 3] } ] })   // c5, c4, c3, c1
+ff.runCommand({ doltLog: 1, filters: [ { orders: 3 }, { users: 1 } ] })  // c4, c3, c2
+```
+
+Key checks:
+- `{ orders: [1, 3] }` returns commits touching order 1 or 3 (OR over ids).
+- `[{orders:3},{users:1}]` ORs across collections; the second query returns
+  `c4` (touched user 1), `c3` (order 3), `c2` (user 1).
+
+## Scenario B2b: whole collection (empty array)
+
+An empty array matches any `_id` -- every commit that touched the collection.
+
+```js
+ff.runCommand({ doltLog: 1, filters: [ { orders: [] } ] })   // c5, c4, c3, c1
+```
+
+Key checks:
+- Returns every commit that touched `orders` (`c5`, `c4`, `c3`, `c1`); the
+  users-only commits are excluded.
+- An empty array is never a valid `_id`, so there is no collision with a real
+  document.
+
+## Scenario B3: scoped stat/patch
+
+`c4` changed order 1 (matched), order 2 (not), and user 1 (other collection).
+
+```js
+ff.runCommand({ doltLog: 1, limit: 1, patch: true, filters: [ { orders: 1 } ] })
+```
+
+Key checks:
+- The single returned commit (`c5` is HEAD-most match; use `from` to target
+  `c4` if needed) reports `diff` for **only** the `orders` collection, and
+  within it only the matched `_id` -- order 2 and the user change are absent.
+
+## Scenario B4: errors
+
+- `filters` not an array, an entry with more than one key, or an id-list
+  element that is itself an array, is rejected. (A document value is a valid
+  `_id`, not an error.)
+
+---
+
 ## Quick Reference
 
 | Command | Result |
@@ -265,6 +356,9 @@ Key checks:
 | `{ doltLog: 1, from: ["<h1>", "<h2>"] }` | Walk seeded with multiple frontier commits |
 | `{ doltLog: 1, limit: N }` then `from: response.next` | Page through history; stop when `next` is absent |
 | `{ doltLog: 1, all: true }` | Walk seeded with every branch HEAD (mutually exclusive with `from`) |
+| `{ doltLog: 1, filters: [ { coll: id } ] }` | Commits that touched that document |
+| `{ doltLog: 1, filters: [ { coll: [id1, id2] }, { other: id } ] }` | OR over ids and collections |
+| `{ doltLog: 1, filters: [ { coll: [] } ] }` | Commits that touched any document in `coll` |
 
 Notes:
 - `next` is an array of seed hashes; order within it is not significant.
@@ -272,5 +366,6 @@ Notes:
 - The walk is height-first (commit generation), ties broken by newer
   timestamp. This is height-primary ordering, which can differ from git's
   default date ordering.
-- Commit filtering (restricting the log to commits that touched specific
-  documents) is planned but not yet available.
+- `filters` matches by collection and `_id` only (immutable identity); with a
+  filter, `limit` counts matching commits and `stat`/`patch` are scoped to the
+  matched documents.

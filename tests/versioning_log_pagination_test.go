@@ -187,3 +187,168 @@ func TestLogAllHandler(t *testing.T) {
 		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 }
+
+func TestLogIDFilterHandler(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("logidf%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	orders := env.client.Database(dbName).Collection("orders")
+	users := env.client.Database(dbName).Collection("users")
+
+	// c1: orders 1,2 ; c2: users 1 ; c3: order 3 ; c4: modify order 1 + user 1 ; c5: delete order 1
+	_, err := orders.InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c1", "a <a@x.io>")
+	_, err = users.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alice"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c2", "a <a@x.io>")
+	_, err = orders.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "status", Value: "pending"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c3", "a <a@x.io>")
+	_, err = orders.UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
+	require.NoError(t, err)
+	_, err = users.UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "alicia"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c4", "a <a@x.io>")
+	_, err = orders.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c5", "a <a@x.io>")
+
+	msgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("FollowOneDocument", func(t *testing.T) {
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}}})
+		assert.Equal(t, []string{"c5", "c4", "c1"}, msgs(raw))
+	})
+
+	t.Run("IDListSugar", func(t *testing.T) {
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{int32(1), int32(3)}}},
+		}}})
+		assert.Equal(t, []string{"c5", "c4", "c3", "c1"}, msgs(raw))
+	})
+
+	t.Run("WholeCollection", func(t *testing.T) {
+		// Empty array = any _id in orders: c5, c4, c3, c1 (the orders commits).
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{}}},
+		}}})
+		assert.Equal(t, []string{"c5", "c4", "c3", "c1"}, msgs(raw))
+	})
+
+	t.Run("MultiCollectionOR", func(t *testing.T) {
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: int32(3)}},
+			bson.D{{Key: "users", Value: int32(1)}},
+		}}})
+		assert.Equal(t, []string{"c4", "c3", "c2"}, msgs(raw))
+	})
+
+	t.Run("ScopedPatch", func(t *testing.T) {
+		// c4 changed order 1 (matched), user 1 (other coll). Scope to orders/1.
+		raw := runLog(t, env, dbName, bson.D{
+			{Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}},
+			{Key: "patch", Value: true}, {Key: "limit", Value: int32(1)},
+		})
+		diff := raw["commits"].(bson.A)[0].(bson.M)["diff"].(bson.A)
+		require.Len(t, diff, 1)
+		assert.Equal(t, "orders", diff[0].(bson.M)["name"])
+	})
+
+	t.Run("NotAnArray_Errors", func(t *testing.T) {
+		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.D{{Key: "orders", Value: int32(1)}}}}
+		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+	})
+
+	t.Run("DocumentValueIsAValidID", func(t *testing.T) {
+		// A document value is a subdocument _id, NOT a query predicate -- it must
+		// be accepted (and simply match nothing here, since no such _id exists).
+		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.D{{Key: "a", Value: int32(1)}}}},
+		}}}
+		var raw bson.M
+		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, cmd).Decode(&raw))
+		assert.Empty(t, raw["commits"].(bson.A))
+	})
+
+	t.Run("IDListArrayElement_Errors", func(t *testing.T) {
+		// An array can never be an _id, so an array element inside the id-list
+		// is invalid.
+		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{bson.A{int32(1)}}}},
+		}}}
+		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+	})
+
+	t.Run("MultiKeyEntry_Errors", func(t *testing.T) {
+		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: int32(1)}, {Key: "users", Value: int32(1)}},
+		}}}
+		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+	})
+}
+
+func TestLogIDFilterHandler_ExoticIDs(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("logidx%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	c := env.client.Database(dbName).Collection("items")
+
+	oid := bson.NewObjectID()
+	subID := bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: "x"}} // document _id
+
+	_, err := c.InsertOne(ctx, bson.D{{Key: "_id", Value: oid}, {Key: "v", Value: 1}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "add-oid", "a <a@x.io>")
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: subID}, {Key: "v", Value: 1}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "add-subdoc", "a <a@x.io>")
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(7)}, {Key: "v", Value: 1}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "add-int", "a <a@x.io>")
+
+	msg1 := func(raw bson.M) string {
+		arr := raw["commits"].(bson.A)
+		require.Len(t, arr, 1)
+		return arr[0].(bson.M)["message"].(string)
+	}
+
+	t.Run("ObjectIDFilter", func(t *testing.T) {
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "items", Value: oid}}}}})
+		assert.Equal(t, "add-oid", msg1(raw))
+	})
+
+	t.Run("DocumentIDFilter", func(t *testing.T) {
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "items", Value: subID}}}}})
+		assert.Equal(t, "add-subdoc", msg1(raw))
+	})
+
+	t.Run("DocumentIDFieldOrderSignificant", func(t *testing.T) {
+		// {b:"x",a:1} is a different _id from {a:1,b:"x"}; matches nothing here.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "items", Value: bson.D{{Key: "b", Value: "x"}, {Key: "a", Value: int32(1)}}}},
+		}}})
+		assert.Empty(t, raw["commits"].(bson.A))
+	})
+
+	t.Run("MixedIDListSugar", func(t *testing.T) {
+		// array of mixed-type _ids: ObjectId + int.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "items", Value: bson.A{oid, int32(7)}}},
+		}}})
+		arr := raw["commits"].(bson.A)
+		require.Len(t, arr, 2) // add-int and add-oid
+	})
+}
