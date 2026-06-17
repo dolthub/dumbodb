@@ -227,6 +227,59 @@ func TestDumboDBBranchStatus_Merge(t *testing.T) {
 	assertAheadBehind(t, m4, "b2", 4, 0)
 }
 
+// TestDumboDBBranchStatus_MergeCommitAsTarget verifies that a merge commit is
+// counted as ahead by every commit reachable from it but not the base -- the
+// merged-in branch commits plus the merge commit itself, not just the merge.
+//
+// Graph: merge b2 (one commit off anc) into a branch off main (one commit off
+// anc). The merge is 2 ahead of main: the b2 commit and the merge commit.
+//
+//	          * b2
+//	         /     \
+//	* anc            \
+//	         \         \
+//	          * main --- * merge   (merge is 2 ahead of main)
+func TestDumboDBBranchStatus_MergeCommitAsTarget(t *testing.T) {
+	b := initBaseline(t)
+
+	bsBranch(t, b, "testdb", "main", "b2") // b2 from anc
+	emptyCommit(t, b, "testdb", "main", "main")
+	emptyCommit(t, b, "testdb", "b2", "b2")
+
+	bsBranch(t, b, "testdb", "main", "rel") // rel from main
+	mergeBranch(t, b, "testdb", "rel", "b2")
+
+	_, m := branchStatusMap(t, b, "testdb", "main", "rel")
+	assertAheadBehind(t, m, "rel", 2, 0)
+}
+
+// TestDumboDBBranchStatus_MergeCommitDeeperGraph is the same idea over a longer
+// main line and a two-commit feature branch. The merge is 3 ahead of main: the
+// two feature commits plus the merge commit.
+//
+//	          * b1 --- * b2
+//	         /            \
+//	* anc                  \
+//	         \               \
+//	          * x1 --- * x2 --- * main --- * merge   (merge is 3 ahead of main)
+func TestDumboDBBranchStatus_MergeCommitDeeperGraph(t *testing.T) {
+	b := initBaseline(t)
+
+	bsBranch(t, b, "testdb", "main", "feat") // feat from anc
+	emptyCommit(t, b, "testdb", "feat", "b1")
+	emptyCommit(t, b, "testdb", "feat", "b2")
+
+	emptyCommit(t, b, "testdb", "main", "x1")
+	emptyCommit(t, b, "testdb", "main", "x2")
+	emptyCommit(t, b, "testdb", "main", "main")
+
+	bsBranch(t, b, "testdb", "main", "rel") // rel from main
+	mergeBranch(t, b, "testdb", "rel", "feat")
+
+	_, m := branchStatusMap(t, b, "testdb", "main", "rel")
+	assertAheadBehind(t, m, "rel", 3, 0)
+}
+
 // TestDumboDBBranchStatus_SelfAndEmpty verifies the boundary cases: a base-only
 // call yields no entries, and comparing a ref against itself is (0, 0).
 func TestDumboDBBranchStatus_SelfAndEmpty(t *testing.T) {

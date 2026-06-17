@@ -1237,7 +1237,8 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 //
 //	db.getSiblingDB("mydb@main").runCommand({dumboBranchStatus: 1, base: "main", targets: ["feature", "HEAD~1"]})
 //
-// A single target string is accepted and normalized to a one-element array. The
+// Both base and targets are required; targets must name at least one refspec. A
+// single target string is accepted and normalized to a one-element array. The
 // response echoes each input refspec verbatim alongside its resolved commit hash:
 //
 //	{ base: {target, hash}, targets: [{target, hash, commitsAhead, commitsBehind}], ok: 1 }
@@ -1264,30 +1265,39 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 		return nil, err
 	}
 
-	// targets accepts an array of strings or a single string (normalized to a
-	// one-element array). Absent targets yields an empty result (base-only).
+	// targets is required: an array of strings or a single string (normalized to
+	// a one-element array). At least one target must be supplied.
+	tv, _ := document.Get("targets")
+	if tv == nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrMissingField,
+			"BSON field 'dumboBranchStatus.targets' is missing but a required field",
+			"targets")
+	}
 	var origTargets []string
-	if tv, _ := document.Get("targets"); tv != nil {
-		switch t := tv.(type) {
-		case *types.Array:
-			for i := 0; i < t.Len(); i++ {
-				elem, gErr := t.Get(i)
-				if gErr != nil {
-					return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, gErr.Error())
-				}
-				s, ok := elem.(string)
-				if !ok {
-					return nil, handlererrors.NewCommandErrorMsgWithArgument(
-						handlererrors.ErrTypeMismatch, "dumboBranchStatus: each target must be a string", "targets")
-				}
-				origTargets = append(origTargets, s)
+	switch t := tv.(type) {
+	case *types.Array:
+		for i := 0; i < t.Len(); i++ {
+			elem, gErr := t.Get(i)
+			if gErr != nil {
+				return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, gErr.Error())
 			}
-		case string:
-			origTargets = []string{t}
-		default:
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch, "dumboBranchStatus: targets must be a string or array of strings", "targets")
+			s, ok := elem.(string)
+			if !ok {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrTypeMismatch, "dumboBranchStatus: each target must be a string", "targets")
+			}
+			origTargets = append(origTargets, s)
 		}
+	case string:
+		origTargets = []string{t}
+	default:
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrTypeMismatch, "dumboBranchStatus: targets must be a string or array of strings", "targets")
+	}
+	if len(origTargets) == 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue, "dumboBranchStatus: at least one target is required", "targets")
 	}
 
 	// rewriteHead validates a refspec and rewrites HEAD/HEAD~N to the connection's

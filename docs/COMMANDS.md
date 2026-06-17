@@ -177,7 +177,7 @@ the reverse. Read-only.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `base` | string | **yes** |  -- | Base refspec to compare each target against |
-| `targets` | array of strings, or string | no | `[]` | Target refspecs; a single string is treated as a one-element array. Absent yields an empty result |
+| `targets` | array of strings, or string | **yes** |  -- | Target refspecs; a single string is treated as a one-element array. Must name at least one target |
 
 A refspec is a commit hash, branch name, tag name, ancestor expression (`main~2`,
 `b2^1`), `HEAD`, or `HEAD~N`. `HEAD`/`HEAD~N` resolve against the branch encoded in
@@ -225,6 +225,8 @@ db.getSiblingDB("orders@main").runCommand({
 | Condition | Error |
 |-----------|-------|
 | `base` missing | `BadValue: required parameter "base" is missing` |
+| `targets` missing | `Location40414: BSON field 'dumboBranchStatus.targets' is missing but a required field` |
+| `targets` empty (`[]`) | `BadValue: dumboBranchStatus: at least one target is required` |
 | Empty-string target | `BadValue: dumboBranchStatus: rootish must not be empty` |
 | Target/base cannot be resolved | `OperationFailed: ... resolving target ...` |
 
@@ -232,6 +234,7 @@ db.getSiblingDB("orders@main").runCommand({
 
 - Comparing a refspec to itself yields `commitsAhead: 0, commitsBehind: 0`.
 - Tags resolve to their target commit, so they report the same counts as the commit they point at.
+- A merge commit is ahead by every commit reachable from it but not the base -- the merged-in branch commits plus the merge commit itself, not just the merge commit.
 - The order of `targets` in the response matches the request order.
 
 ---

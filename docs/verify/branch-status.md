@@ -165,12 +165,47 @@ db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main", 
 
 ---
 
-## Scenario 5: Empty results and errors
+## Scenario 5: A merge commit counts all the commits it brings in
+
+Merge `b2` into a fresh branch `rel` cut from `main`, then compare `rel` against
+`main`. A merge commit is "ahead" by every commit reachable from it but not from the
+base -- the merged-in branch commits **and** the merge commit itself, not just the
+merge commit.
+
+`b2` is `anc -> b1 -> b2`; `main` is `anc -> main`. Merging `b2` into `rel` (which
+starts at `main`) gives:
+
+```
+          * b1 --- * b2
+         /            \
+* anc                  \
+         \               \
+          * main --- * rel (merge)   (rel is 3 ahead of main: b1, b2, and the merge)
+```
 
 ```js
-// No targets -> empty list, but base still resolves.
+// Cut rel from main, then merge b2 into it.
+db.getSiblingDB("bsdemo@main").runCommand({ doltBranch: 1, branch: "rel" })
+db.getSiblingDB("bsdemo@rel").runCommand({ doltMerge: 1, merge_in: "b2" })
+
+db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main", targets: ["rel"] })
+```
+
+Expected: `rel` -> `commitsAhead: 3, commitsBehind: 0`. The three commits ahead are
+`b1`, `b2`, and the merge commit.
+
+---
+
+## Scenario 6: Errors
+
+```js
+// Missing targets -> error (targets is required).
 db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main" })
-// Expected: { base: { target: "main", hash: "..." }, targets: [], ok: 1 }
+// Expected: command error (targets is a required field)
+
+// Empty targets array -> error (at least one target required).
+db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main", targets: [] })
+// Expected: command error (BadValue)
 
 // Empty-string target -> error (not a valid refspec).
 db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main", targets: [""] })
@@ -198,8 +233,11 @@ db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, targets: ["b1"
 | `targets[].commitsAhead` | int32 | commits reachable from the target but not the base |
 | `targets[].commitsBehind` | int32 | commits reachable from the base but not the target |
 
-- `base` is required; `targets` is an array of refspecs (or a single string).
+- `base` and `targets` are both required; `targets` is an array of refspecs (or a
+  single string) naming at least one target.
 - A refspec is a commit hash, branch name, tag name, ancestor expression
   (`main~2`, `b2^1`), `HEAD`, or `HEAD~N`.
 - Comparing a refspec to itself yields `0 / 0`.
+- A merge commit is ahead by every commit it brings in (the merged-in branch
+  commits plus the merge commit), not just the merge commit.
 - Order of `targets` in the response matches the order of the request.

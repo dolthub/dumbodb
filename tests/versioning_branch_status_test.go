@@ -272,8 +272,18 @@ func TestBranchStatus_Errors(t *testing.T) {
 	}).Err()
 	require.Error(t, err, "unknown target must error")
 
-	// No targets -> empty result, base still resolved.
-	baseDoc, m := bsStatus(t, env, dbName, "main", nil)
-	assert.Empty(t, m, "no targets yields no entries")
-	assert.Len(t, baseDoc["hash"], 32, "base still resolves with no targets")
+	// Missing targets -> error (targets is required).
+	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "dumboBranchStatus", Value: int32(1)},
+		{Key: "base", Value: "main"},
+	}).Err()
+	require.Error(t, err, "missing targets must error")
+
+	// Empty targets array -> error (at least one target required).
+	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+		{Key: "dumboBranchStatus", Value: int32(1)},
+		{Key: "base", Value: "main"},
+		{Key: "targets", Value: bson.A{}},
+	}).Err()
+	require.Error(t, err, "empty targets array must error")
 }

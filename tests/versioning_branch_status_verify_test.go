@@ -108,13 +108,34 @@ func TestBranchStatusVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 5: Empty results and errors
+	// Scenario 5: A merge commit counts all the commits it brings in
 	// -------------------------------------------------------------------------
-	t.Run("Scenario5_EmptyAndErrors", func(t *testing.T) {
-		// No targets -> empty list, base still resolves.
-		baseDoc, m := bsStatus(t, env, connMain, "main", nil)
-		assert.Empty(t, m)
-		assert.Len(t, baseDoc["hash"], 32)
+	t.Run("Scenario5_MergeCommit", func(t *testing.T) {
+		// Cut rel from main, merge b2 into it. b2 is anc->b1->b2; main is anc->main.
+		// rel is therefore 3 ahead of main: b1, b2, and the merge commit.
+		bsBranchCreate(t, env, dbName, "main", "rel")
+		bsMerge(t, env, dbName, "rel", "b2")
+
+		_, m := bsStatus(t, env, connMain, "main", bson.A{"rel"})
+		bsAssert(t, m, "rel", 3, 0)
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 6: Errors
+	// -------------------------------------------------------------------------
+	t.Run("Scenario6_Errors", func(t *testing.T) {
+		// Missing targets -> error (targets is required).
+		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+			{Key: "dumboBranchStatus", Value: int32(1)},
+			{Key: "base", Value: "main"},
+		}).Err())
+
+		// Empty targets array -> error.
+		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+			{Key: "dumboBranchStatus", Value: int32(1)},
+			{Key: "base", Value: "main"},
+			{Key: "targets", Value: bson.A{}},
+		}).Err())
 
 		// Empty-string target -> error.
 		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
