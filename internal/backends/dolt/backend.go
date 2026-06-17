@@ -2483,12 +2483,8 @@ func (b *Backend) DumboDBBranchStatus(ctx context.Context, params *backends.Bran
 			fmt.Errorf("DumboDBBranchStatus: database %q does not exist", params.DBName))
 	}
 
-	// No db.mu: this reads only immutable, content-addressed history. Ref
-	// resolution (datasDB.GetDataset) and closure reads (vs/ns) are serialized by
-	// the chunk store's own RWMutex, and the store handles are never reassigned
-	// after open. A concurrent commit may advance a ref between resolutions, which
-	// only yields a consistent older/newer snapshot -- fine for a read-only report.
-
+	// No db.mu: reads only immutable, content-addressed history; the chunk store
+	// serializes ref and closure reads internally.
 	baseHash, err := resolveRootishToCommitHash(ctx, db, params.Base)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranchStatus: resolving base %q: %w", params.Base, err)
@@ -2524,9 +2520,6 @@ func (b *Backend) DumboDBBranchStatus(ctx context.Context, params *backends.Bran
 			return nil, fmt.Errorf("DumboDBBranchStatus: target %q: %w", target, aErr)
 		}
 
-		// ahead = |target \ base|, behind = |base \ target|. Both derive from the
-		// intersection size, so scan only the target set per target rather than
-		// also re-scanning the base set every iteration.
 		shared := 0
 		for h := range targetAncestors {
 			if baseAncestors.Has(h) {

@@ -169,17 +169,14 @@ func TestBranchStatus_DivergentGraph(t *testing.T) {
 	bsAssert(t, m, "b4", 2, 0)
 	bsAssert(t, m, "b5", 3, 0)
 
-	// Tags resolve like their target branches.
 	_, mt := bsStatus(t, env, connDB, "main", bson.A{"t1", "t5"})
 	bsAssert(t, mt, "t1", 1, 1)
 	bsAssert(t, mt, "t5", 3, 0)
 
-	// A bare commit hash echoes back verbatim.
 	_, mh := bsStatus(t, env, connDB, "main", bson.A{b5Hash})
 	bsAssert(t, mh, b5Hash, 3, 0)
 	assert.Equal(t, b5Hash, mh[b5Hash].hash)
 
-	// A single target string is normalized to a one-element array.
 	_, ms := bsStatus(t, env, connDB, "main", "b5")
 	bsAssert(t, ms, "b5", 3, 0)
 }
@@ -195,12 +192,10 @@ func TestBranchStatus_HeadResolution(t *testing.T) {
 	dumboDBCommitAllowEmpty(t, env, dbName+"@b5", "c2")
 	dumboDBCommitAllowEmpty(t, env, dbName+"@b5", "c3")
 
-	// Connection branch is b5; HEAD/HEAD~N resolve against b5.
 	_, m := bsStatus(t, env, dbName+"@b5", "main", bson.A{"HEAD", "HEAD~1", "HEAD~2"})
 	bsAssert(t, m, "HEAD", 3, 0)
 	bsAssert(t, m, "HEAD~1", 2, 0)
 	bsAssert(t, m, "HEAD~2", 1, 0)
-	// Targets echo verbatim, not the rewritten branch name.
 	_, ok := m["HEAD"]
 	assert.True(t, ok, "HEAD must echo verbatim")
 }
@@ -246,14 +241,12 @@ func TestBranchStatus_Errors(t *testing.T) {
 	dbName := bsNewDB(t, env)
 	ctx := context.Background()
 
-	// Missing base.
 	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "targets", Value: bson.A{"main"}},
 	}).Err()
 	require.Error(t, err, "missing base must error")
 
-	// Empty-string target.
 	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
@@ -264,7 +257,6 @@ func TestBranchStatus_Errors(t *testing.T) {
 	require.True(t, ok, "expected mongo.CommandError, got %T", err)
 	assert.EqualValues(t, 2, cmdErr.Code, "empty target -> BadValue (rejected by parseRootish)")
 
-	// Unknown target.
 	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
@@ -272,14 +264,12 @@ func TestBranchStatus_Errors(t *testing.T) {
 	}).Err()
 	require.Error(t, err, "unknown target must error")
 
-	// Missing targets -> error (targets is required).
 	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
 	}).Err()
 	require.Error(t, err, "missing targets must error")
 
-	// Empty targets array -> error (at least one target required).
 	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},

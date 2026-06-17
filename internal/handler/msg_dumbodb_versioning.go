@@ -1265,8 +1265,6 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 		return nil, err
 	}
 
-	// targets is required: an array of strings or a single string (normalized to
-	// a one-element array). At least one target must be supplied.
 	tv, _ := document.Get("targets")
 	if tv == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -1300,9 +1298,6 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 			handlererrors.ErrBadValue, "dumboBranchStatus: at least one target is required", "targets")
 	}
 
-	// rewriteHead validates a refspec and rewrites HEAD/HEAD~N to the connection's
-	// branch so the backend's rootish resolver sees a concrete reference, matching
-	// MsgDumboDBReset.
 	rewriteHead := func(s, argName string) (string, error) {
 		if perr := parseRootish(s); perr != nil {
 			return "", handlererrors.NewCommandErrorMsgWithArgument(
@@ -1347,10 +1342,8 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	// Echo the original (verbatim) base refspec; report the resolved hash.
 	targetsArr := types.MakeArray(len(res.Entries))
 	for i, e := range res.Entries {
-		// res.Entries is ordered to match the input targets; echo the verbatim refspec.
 		shown := e.Target
 		if i < len(origTargets) {
 			shown = origTargets[i]

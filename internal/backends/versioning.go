@@ -436,8 +436,8 @@ type GCResult struct {
 // target, how many commits it is ahead and behind the base.
 type BranchStatusParams struct {
 	DBName  string
-	Base    string   // base refspec to compare each target against
-	Targets []string // target refspecs; empty yields an empty result
+	Base    string
+	Targets []string
 }
 
 // BranchStatusEntry is the ahead/behind result for a single target refspec.
@@ -540,8 +540,6 @@ type VersioningBackend interface {
 	// callSession (excluded from the waited set).
 	DumboDBGC(context.Context, *GCParams) (*GCResult, error)
 
-	// DumboDBBranchStatus reports how many commits each target refspec is ahead and
-	// behind the base refspec, computed as the symmetric difference of their commit
-	// ancestor sets. An empty Targets list yields an empty result.
+	// DumboDBBranchStatus reports how many commits each target refspec is ahead and behind the base refspec.
 	DumboDBBranchStatus(context.Context, *BranchStatusParams) (*BranchStatusResult, error)
 }

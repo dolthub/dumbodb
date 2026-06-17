@@ -159,7 +159,6 @@ func TestDumboDBBranchStatus_DivergentGraph(t *testing.T) {
 	assertAheadBehind(t, m, "b4", 2, 0)
 	assertAheadBehind(t, m, "b5", 3, 0)
 
-	// Tags resolve the same as their target branches.
 	_, mt := branchStatusMap(t, b, "testdb", "main", "t1", "t2", "t3", "t4", "t5")
 	assertAheadBehind(t, mt, "t1", 1, 1)
 	assertAheadBehind(t, mt, "t2", 2, 1)
@@ -167,17 +166,14 @@ func TestDumboDBBranchStatus_DivergentGraph(t *testing.T) {
 	assertAheadBehind(t, mt, "t4", 2, 0)
 	assertAheadBehind(t, mt, "t5", 3, 0)
 
-	// b2 as base, b5 as target.
 	_, m2 := branchStatusMap(t, b, "testdb", "b2", "b5")
 	assertAheadBehind(t, m2, "b5", 4, 2)
 
-	// Ancestor expressions resolve relative to the named branch.
 	_, m3 := branchStatusMap(t, b, "testdb", "main", "b5", "b5~1", "b5~2")
 	assertAheadBehind(t, m3, "b5", 3, 0)
 	assertAheadBehind(t, m3, "b5~1", 2, 0)
 	assertAheadBehind(t, m3, "b5~2", 1, 0)
 
-	// A bare commit hash is a valid refspec, and its resolved hash echoes back.
 	_, m4 := branchStatusMap(t, b, "testdb", "main", b5Hash)
 	assertAheadBehind(t, m4, b5Hash, 3, 0)
 	if m4[b5Hash].Hash != b5Hash {

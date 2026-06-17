@@ -38,7 +38,6 @@ func TestBranchStatusVerify(t *testing.T) {
 
 	dbName := fmt.Sprintf("bsvrfy%d", rand.Int64N(1_000_000))
 
-	// Setup: build the divergent commit graph from docs/verify/branch-status.md.
 	require.NoError(t, env.client.Database(dbName).Drop(ctx))
 	_, err := env.client.Database(dbName).Collection("seed").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
@@ -61,9 +60,6 @@ func TestBranchStatusVerify(t *testing.T) {
 
 	connMain := dbName + "@main"
 
-	// -------------------------------------------------------------------------
-	// Scenario 1: Ahead/behind across branches
-	// -------------------------------------------------------------------------
 	t.Run("Scenario1_AcrossBranches", func(t *testing.T) {
 		baseDoc, m := bsStatus(t, env, connMain, "main", bson.A{"main", "b1", "b2", "b3", "b4", "b5"})
 		assert.Equal(t, "main", baseDoc["target"])
@@ -76,18 +72,12 @@ func TestBranchStatusVerify(t *testing.T) {
 		bsAssert(t, m, "b5", 3, 0)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 2: Tags resolve like their target commits
-	// -------------------------------------------------------------------------
 	t.Run("Scenario2_Tags", func(t *testing.T) {
 		_, m := bsStatus(t, env, connMain, "main", bson.A{"t1", "t5"})
 		bsAssert(t, m, "t1", 1, 1)
 		bsAssert(t, m, "t5", 3, 0)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 3: HEAD and HEAD~N resolve against the connection's branch
-	// -------------------------------------------------------------------------
 	t.Run("Scenario3_HeadResolution", func(t *testing.T) {
 		_, m := bsStatus(t, env, dbName+"@b5", "main", bson.A{"HEAD", "HEAD~1", "HEAD~2"})
 		bsAssert(t, m, "HEAD", 3, 0)
@@ -95,9 +85,6 @@ func TestBranchStatusVerify(t *testing.T) {
 		bsAssert(t, m, "HEAD~2", 1, 0)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 4: Single target string and commit hash
-	// -------------------------------------------------------------------------
 	t.Run("Scenario4_SingleStringAndHash", func(t *testing.T) {
 		_, ms := bsStatus(t, env, connMain, "main", "b5")
 		bsAssert(t, ms, "b5", 3, 0)
@@ -107,12 +94,8 @@ func TestBranchStatusVerify(t *testing.T) {
 		assert.Equal(t, b5Head, mh[b5Head].hash, "bare hash echoes and resolves to itself")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 5: A merge commit counts all the commits it brings in
-	// -------------------------------------------------------------------------
+	// rel = merge of b2 (anc->b1->b2) into main (anc->main): 3 ahead (b1, b2, merge).
 	t.Run("Scenario5_MergeCommit", func(t *testing.T) {
-		// Cut rel from main, merge b2 into it. b2 is anc->b1->b2; main is anc->main.
-		// rel is therefore 3 ahead of main: b1, b2, and the merge commit.
 		bsBranchCreate(t, env, dbName, "main", "rel")
 		bsMerge(t, env, dbName, "rel", "b2")
 
@@ -120,38 +103,35 @@ func TestBranchStatusVerify(t *testing.T) {
 		bsAssert(t, m, "rel", 3, 0)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 6: Errors
-	// -------------------------------------------------------------------------
 	t.Run("Scenario6_Errors", func(t *testing.T) {
-		// Missing targets -> error (targets is required).
+		// missing targets
 		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 		}).Err())
 
-		// Empty targets array -> error.
+		// empty targets array
 		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 			{Key: "targets", Value: bson.A{}},
 		}).Err())
 
-		// Empty-string target -> error.
+		// empty-string target
 		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 			{Key: "targets", Value: bson.A{""}},
 		}).Err())
 
-		// Unknown target -> error.
+		// unknown target
 		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 			{Key: "targets", Value: bson.A{"no-such-branch"}},
 		}).Err())
 
-		// Missing base -> error.
+		// missing base
 		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "targets", Value: bson.A{"b1"}},
