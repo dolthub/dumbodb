@@ -175,6 +175,26 @@ type LogParams struct {
 	Stat       bool     // when true, include per-collection change counts for each commit
 	Patch      bool     // when true, include full document-level diffs for each commit
 	All        bool     // when true, seed the walk with every branch HEAD (mutually exclusive with From)
+
+	// Filters restricts the log to commits that touched (added/removed/modified
+	// vs parent1) a matching document in any listed collection (OR across
+	// collections and across each collection's matchers). Nil/empty map means no
+	// filtering. When set, Stat/Patch output is scoped to the matched documents.
+	Filters map[string]CommitFilter
+}
+
+// CommitFilter selects documents within one collection for the dumboLog filter.
+// All, IDs, and Queries OR together.
+type CommitFilter struct {
+	// All matches any document in the collection (whole-collection wildcard).
+	All bool
+	// IDs are explicit _id values to match (any valid BSON _id type).
+	IDs []any
+	// Queries are find()-style predicates ($match), each resolved ONCE against
+	// the collection at the connection branch's HEAD into a set of _ids, then
+	// matched by identity. A query that resolves to no _ids matches nothing
+	// (distinct from All).
+	Queries []*types.Document
 }
 
 // CommitInfo represents a single commit entry returned by DumboDBLog.

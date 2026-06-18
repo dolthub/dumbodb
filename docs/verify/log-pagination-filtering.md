@@ -1,18 +1,14 @@
-# doltLog Pagination Verification
+# doltLog Pagination and Filtering Verification
 
-Manual verification guide for `doltLog` **frontier pagination**: `from` as a
-seed array, `next` in the response, and `all` to span every branch. Work
-through each scenario top to bottom in `mongosh`.
+Manual verification guide for `doltLog` **frontier pagination** (`from` as a
+seed array, `next` in the response, `all` to span every branch) and
+**`collection:_id` filtering** (Part B). Work through each scenario top to
+bottom in `mongosh`.
 
 > **Automated equivalent:** `tests/versioning_log_pagination_verify_test.go`
 > (`TestLogPaginationVerify`). The manual run below relies on wall-clock
 > commit order (later commits get later timestamps), which produces the same
 > height-primary ordering the automated test asserts.
->
-> **Commit filtering** (restricting the log to commits that touched specific
-> documents) is planned but not yet shipped; it is being redesigned as a
-> simple `collection:_id` filter. Filtering scenarios will be added here when
-> that feature lands.
 
 ## Prerequisites
 
@@ -258,6 +254,240 @@ Key checks:
 
 ---
 
+# Part B: `collection:_id` filtering
+
+`filters` is an array of `{collection: _id}` entries; the value is one `_id`,
+or an array of `_id`s. A commit is returned only if it added, removed, or
+modified (vs its first parent) one of those documents, in any listed entry
+(OR). Because `_id` is immutable, every change to a document is a touch.
+
+An `_id` may be any valid BSON `_id` type -- number, string, `ObjectId`, date,
+decimal, or a document/subdocument (e.g. `{ events: { region: "us", seq: 5 } }`)
+-- matched as `find({_id: ...})` would, with field-order-sensitive equality for
+document `_id`s. Only an array is never a valid `_id`, so an array value is
+always the id-list form.
+
+## Setup: several documents per collection
+
+```js
+var ff = db.getSiblingDB("logfilter")
+ff.dropDatabase()
+
+ff.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
+ff.runCommand({ doltCommit: 1, message: "c1 add orders 1,2", author: "a <a@x.io>" })
+
+ff.users.insertOne({ _id: 1, name: "alice" })
+ff.runCommand({ doltCommit: 1, message: "c2 add user 1", author: "a <a@x.io>" })
+
+ff.orders.insertOne({ _id: 3, status: "pending" })
+ff.runCommand({ doltCommit: 1, message: "c3 add order 3", author: "a <a@x.io>" })
+
+// mixed: change order 1 (matched), order 2 (not matched), user 1 (other collection)
+ff.orders.updateOne({ _id: 1 }, { $set: { note: "x" } })
+ff.orders.updateOne({ _id: 2 }, { $set: { region: "eu" } })
+ff.users.updateOne({ _id: 1 }, { $set: { name: "alicia" } })
+ff.runCommand({ doltCommit: 1, message: "c4 mixed edit", author: "a <a@x.io>" })
+
+ff.orders.deleteOne({ _id: 1 })
+ff.runCommand({ doltCommit: 1, message: "c5 delete order 1", author: "a <a@x.io>" })
+```
+
+## Scenario B1: follow one document
+
+```js
+ff.runCommand({ doltLog: 1, filters: [ { orders: 1 } ] })
+```
+
+Key checks:
+- Returns `c5` (delete), `c4` (modify), `c1` (add) -- every change to order 1.
+- `c3` (added order 3) and the users commits are **excluded**.
+
+## Scenario B2: id-list sugar and per-collection OR
+
+```js
+ff.runCommand({ doltLog: 1, filters: [ { orders: [1, 3] } ] })   // c5, c4, c3, c1
+ff.runCommand({ doltLog: 1, filters: [ { orders: 3 }, { users: 1 } ] })  // c4, c3, c2
+```
+
+Key checks:
+- `{ orders: [1, 3] }` returns commits touching order 1 or 3 (OR over ids).
+- `[{orders:3},{users:1}]` ORs across collections; the second query returns
+  `c4` (touched user 1), `c3` (order 3), `c2` (user 1).
+
+## Scenario B2b: whole collection (collection-name string)
+
+A bare collection-name string entry matches any `_id` -- every commit that
+touched the collection.
+
+```js
+ff.runCommand({ doltLog: 1, filters: [ "orders" ] })   // c5, c4, c3, c1
+```
+
+Key checks:
+- Returns every commit that touched `orders` (`c5`, `c4`, `c3`, `c1`); the
+  users-only commits are excluded.
+- A string entry is distinct from a `{collection: id}` document, so there is no
+  ambiguity. (An empty `_id` array -- `[ { orders: [] } ]` -- is rejected; use
+  the string form.)
+
+## Scenario B3: scoped stat/patch
+
+`c4` changed order 1 (matched), order 2 (not), and user 1 (other collection).
+
+```js
+ff.runCommand({ doltLog: 1, limit: 1, patch: true, filters: [ { orders: 1 } ] })
+```
+
+Key checks:
+- The single returned commit (`c5` is HEAD-most match; use `from` to target
+  `c4` if needed) reports `diff` for **only** the `orders` collection, and
+  within it only the matched `_id` -- order 2 and the user change are absent.
+
+## Scenario B4: errors
+
+- `filters` not an array, an entry with more than one key, or an id-list
+  element that is itself an array, is rejected. (A document value is a valid
+  `_id`, not an error.)
+
+## Scenario B5: non-integer `_id`s (ObjectId and document)
+
+`_id` can be any valid BSON type. Build a collection whose documents use an
+`ObjectId` `_id` and a subdocument `_id`, and filter by each.
+
+```js
+var nf = db.getSiblingDB("logfilter_ids")
+nf.dropDatabase()
+
+const oid = ObjectId()
+nf.events.insertOne({ _id: oid, kind: "login" })
+nf.runCommand({ doltCommit: 1, message: "e1 add oid event", author: "a <a@x.io>" })
+
+nf.events.insertOne({ _id: { region: "us", seq: 5 }, kind: "order" })
+nf.runCommand({ doltCommit: 1, message: "e2 add subdoc event", author: "a <a@x.io>" })
+
+// modify the ObjectId-keyed doc -- a second touch of that _id
+nf.events.updateOne({ _id: oid }, { $set: { kind: "logout" } })
+nf.runCommand({ doltCommit: 1, message: "e3 modify oid event", author: "a <a@x.io>" })
+```
+
+Filter by the `ObjectId` `_id`:
+
+```js
+nf.runCommand({ doltLog: 1, filters: [ { events: oid } ] })   // e3, e1
+```
+
+Key checks:
+- Returns `e3` (modify) and `e1` (add) -- both touches of the `ObjectId`-keyed
+  document. The subdocument-keyed `e2` is excluded.
+
+Filter by the document `_id` (field order is significant):
+
+```js
+nf.runCommand({ doltLog: 1, filters: [ { events: { region: "us", seq: 5 } } ] })   // e2
+nf.runCommand({ doltLog: 1, filters: [ { events: { seq: 5, region: "us" } } ] })   // [] (different _id)
+```
+
+Key checks:
+- `{ region: "us", seq: 5 }` returns `e2` (the subdocument-keyed insert).
+- `{ seq: 5, region: "us" }` -- same fields, different order -- is a **different
+  `_id`** and matches nothing, exactly as `find({_id: ...})` would behave.
+
+## Scenario B6: `$match` query (per-commit, touched)
+
+A list element can be a `{$match: <query>}` predicate. It is evaluated **per
+commit**: a commit is included when it touched (added/removed/modified vs its
+parent) a document satisfying the query. For a modification, either the pre- or
+the post-image may satisfy it. `$match`es and explicit `_id`s OR.
+
+```js
+var mf = db.getSiblingDB("logfilter_match")
+mf.dropDatabase()
+
+mf.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
+mf.runCommand({ doltCommit: 1, message: "m1 add 1,2", author: "a <a@x.io>" })
+mf.orders.insertOne({ _id: 3, status: "pending" })
+mf.runCommand({ doltCommit: 1, message: "m2 add 3", author: "a <a@x.io>" })
+mf.orders.updateOne({ _id: 1 }, { $set: { status: "shipped" } })   // pending -> shipped
+mf.runCommand({ doltCommit: 1, message: "m3 ship 1", author: "a <a@x.io>" })
+
+mf.runCommand({ doltLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
+```
+
+Key checks:
+- Returns `m3`, `m2`, `m1`:
+  - `m1` added order 1 (pending),
+  - `m2` added order 3 (pending),
+  - `m3` shipped order 1 -- included because its **pre-image** was pending (the
+    commit that moves a doc *out* of the matched set still matches).
+- A commit that does not touch `orders` is never included, even if a pending
+  order exists in its snapshot (presence alone is not a match).
+- A `$`-operator other than `$match` is rejected.
+
+## Scenario B7: `$match` with an operator (`$gt`)
+
+`$match` accepts the full `find()` operator set -- range, regex, `$in`, etc.
+This example uses `$gt`; try `$gte`/`$lt`/`$regex`/`$exists` the same way.
+
+```js
+var gf = db.getSiblingDB("logfilter_gt")
+gf.dropDatabase()
+
+gf.orders.insertOne({ _id: 1, amount: 50 })
+gf.runCommand({ doltCommit: 1, message: "g1 add cheap order", author: "a <a@x.io>" })
+gf.orders.insertOne({ _id: 2, amount: 300 })
+gf.runCommand({ doltCommit: 1, message: "g2 add pricey order", author: "a <a@x.io>" })
+gf.orders.updateOne({ _id: 1 }, { $set: { amount: 500 } })   // 50 -> 500, crosses 100
+gf.runCommand({ doltCommit: 1, message: "g3 bump order 1", author: "a <a@x.io>" })
+
+gf.runCommand({ doltLog: 1, filters: [ { orders: [ { $match: { amount: { $gt: 100 } } } ] } ] })
+```
+
+Key checks:
+- Returns `g3`, `g2`:
+  - `g2` added order 2 at 300 (`> 100`),
+  - `g3` bumped order 1 from 50 to 500 -- included via its **post-image**
+    (now `> 100`), the mirror of B6's pre-image case.
+- `g1` is **excluded**: it added order 1 at 50, which is not `> 100`.
+
+## Scenario B8: `$changed` -- a field that changed (any value)
+
+`{ field: {$changed: true} }` inside a `$match` matches when that field differs
+between the commit and its parent, regardless of values. It combines with value
+conditions (implicit AND).
+
+```js
+var cf = db.getSiblingDB("logfilter_changed")
+cf.dropDatabase()
+
+cf.orders.insertMany([
+  { _id: 1, customer: "4242", status: "pending" },
+  { _id: 2, customer: "9999", status: "pending" }
+])
+cf.runCommand({ doltCommit: 1, message: "k1 add", author: "a <a@x.io>" })
+cf.orders.updateOne({ _id: 1 }, { $set: { status: "shipped" } })   // status changed
+cf.runCommand({ doltCommit: 1, message: "k2 ship o1", author: "a <a@x.io>" })
+cf.orders.updateOne({ _id: 1 }, { $set: { note: "x" } })           // status NOT changed
+cf.runCommand({ doltCommit: 1, message: "k3 note o1", author: "a <a@x.io>" })
+
+// commits where status changed (k1 add counts; k2 ships; k3 only touched note):
+cf.runCommand({ doltLog: 1, filters: [ { orders: [ { $match: { status: { $changed: true } } } ] } ] })
+
+// status changed AND that order's customer is 4242:
+cf.runCommand({ doltLog: 1, filters: [ { orders: [
+  { $match: { status: { $changed: true }, customer: "4242" } }
+] } ] })
+```
+
+Key checks:
+- The first query returns `k2`, `k1` -- `k1` added the orders (presence counts),
+  `k2` changed status; `k3` (only `note` changed) is **excluded**.
+- The second returns `k2`, `k1` for order 1 only; an order-2 status change would
+  be excluded by the `customer: "4242"` value condition.
+- `$changed` combines with value conditions (AND) and `$and`/`$or`; it is a
+  `$match` extension, not a real `find()` operator.
+
+---
+
 ## Quick Reference
 
 | Command | Result |
@@ -265,6 +495,11 @@ Key checks:
 | `{ doltLog: 1, from: ["<h1>", "<h2>"] }` | Walk seeded with multiple frontier commits |
 | `{ doltLog: 1, limit: N }` then `from: response.next` | Page through history; stop when `next` is absent |
 | `{ doltLog: 1, all: true }` | Walk seeded with every branch HEAD (mutually exclusive with `from`) |
+| `{ doltLog: 1, filters: [ { coll: id } ] }` | Commits that touched that document |
+| `{ doltLog: 1, filters: [ { coll: [id1, id2] }, { other: id } ] }` | OR over ids and collections |
+| `{ doltLog: 1, filters: [ "coll" ] }` | Commits that touched any document in `coll` (whole collection) |
+| `{ doltLog: 1, filters: [ { coll: [ { $match: {<query>} } ] } ] }` | Commits that touched a doc matching `<query>` (per commit) |
+| `{ ... $match: { field: { $changed: true } } ... }` | Commits where `field` changed vs parent (any value; combines with value conditions) |
 
 Notes:
 - `next` is an array of seed hashes; order within it is not significant.
@@ -272,5 +507,7 @@ Notes:
 - The walk is height-first (commit generation), ties broken by newer
   timestamp. This is height-primary ordering, which can differ from git's
   default date ordering.
-- Commit filtering (restricting the log to commits that touched specific
-  documents) is planned but not yet available.
+- `filters` selects commits that touched matching documents -- by `_id`
+  (identity), whole collection, or a per-commit `$match` predicate. With a
+  filter, `limit` counts matching commits and `stat`/`patch` are scoped to the
+  matched documents.

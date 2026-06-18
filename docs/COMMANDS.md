@@ -494,8 +494,9 @@ timestamp first.
 | `limit` | int32 | no | unset (default 20) | Maximum number of commits to return. `0` explicitly requests an empty list. |
 | `from` | string or array of strings | no | HEAD | Seed commit(s) for the traversal frontier. A single hash starts there (and still walks both parents of merges); an array seeds the walk with every listed commit. Pass back a prior response's `next` to page. |
 | `all` | bool | no | `false` | Seed the walk with the HEAD of every branch, so it spans all branches (`git log --all`; tags excluded). Mutually exclusive with `from`. |
-| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`) |
-| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`) |
+| `filters` | array | no | unset | Entries are a collection-name string (whole collection) or a `{collection: spec}` document; returns only commits that touched matching documents (see Filtering). `spec` is a single `_id`, an array of `_id`s, or a `{$match: <query>}` predicate. |
+| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
+| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
 
 ### Response fields
 
@@ -559,10 +560,9 @@ response carries `next` (the frontier) while more history remains; feed it
 back as `from` to fetch the following page, and stop when `next` is absent:
 
 ```js
-const log = db.getSiblingDB("orders@main")
 let from = undefined
 do {
-  const page = log.runCommand({ dumboLog: 1, limit: 50, ...(from && { from }) })
+  const page = db.runCommand({ dumboLog: 1, limit: 50, ...(from && { from }) })
   for (const c of page.commits) print(c.commitId, c.message)
   from = page.next            // array of hashes, or undefined at the end
 } while (from)
@@ -577,15 +577,131 @@ To page across **all** branches, start with `all: true` instead of `from`
 and subsequent pages continue from `next` as usual:
 
 ```js
-log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branches
+db.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branches
 ```
 
-> **Filtering** (restricting the log to commits that touched specific
-> documents) is planned but not yet available. It is being designed as a
-> simple `collection:_id` filter.
+### Filtering
+
+`filters` restricts the log to commits that **touched** matching documents,
+identified by collection and either an `_id` or a `$match` query. It is an array
+of single-key `{collection: spec}` entries; the spec is one `_id`, an array of
+`_id`s, or a `$match` query (see below). A commit is included if it added,
+removed, or modified (versus its first parent) one of those documents in that
+collection, for **any** listed entry (OR).
+
+An `_id` value may be **any valid BSON `_id` type** -- number, string,
+`ObjectId`, date, decimal, or a document/subdocument -- and is matched with the
+same equality `find({_id: ...})` uses: numeric cross-type coercion
+(`int`/`long`/`double`), and exact, field-order-sensitive equality for document
+`_id`s. The only type that is never a valid `_id` is an array, which is why an
+array value is unambiguously the id-list form. Because `_id` is immutable,
+every insert, update, and delete of a document is a touch -- the filter cleanly
+answers "show me the commits in this document's history."
+
+```js
+// history of one document (the common case):
+db.runCommand({ dumboLog: 1, filters: [ { orders: 42 } ] })
+
+// several documents, possibly across collections (OR):
+db.runCommand({ dumboLog: 1, filters: [ { orders: [1, 2] }, { users: 7 } ] })
+
+// _id can be any valid _id type, including a subdocument:
+db.runCommand({ dumboLog: 1, filters: [ { events: { region: "us", seq: 5 } } ] })
+
+// whole collection: a bare collection-name string matches any _id:
+db.runCommand({ dumboLog: 1, filters: [ "orders" ] })
+
+// whole collection OR a specific doc in another collection:
+db.runCommand({ dumboLog: 1, filters: [ "orders", { users: 7 } ] })
+```
+
+A **bare collection-name string** entry is the whole-collection wildcard: the
+commit qualifies if it touched any document in that collection. A string entry
+is distinct from a `{collection: id}` document, so there's no ambiguity, and a
+whole-collection entry subsumes any specific `_id`s listed for the same
+collection.
+
+A list element may also be a **`{$match: <query>}`** predicate. Unlike an
+`_id`, a `$match` is evaluated **per commit**: a commit is included when it
+**touched** (added, removed, or modified versus its first parent) a document
+satisfying the query.
+
+```js
+// commits that touched an order while it was pending:
+db.runCommand({ dumboLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
+```
+
+`$match` elements, explicit `_id`s, and id-lists in the same entry OR together.
+For AND, put the conditions in a single `$match` query: its fields are ANDed
+(e.g. `{ $match: { status: "pending", customer: "4242" } }`), and it supports
+the usual `find()` boolean operators (`$and`/`$or`/`$nor`) internally for
+anything more complex.
+
+**Touched mechanics.** For a modified document, `$match` matches if
+**either** the pre-image (parent) **or** the post-image (this commit) satisfies
+the query. Consequences worth knowing:
+
+- A commit that changes a document *out of* the matched set is still included
+  -- e.g. under `{status:"pending"}`, the commit that ships a pending order
+  matches via its pre-image.
+- A commit is included only if it *touched* a document the filter matches; a
+  matching document merely existing in the commit's snapshot is not enough
+  (presence alone is not a match).
+- `stat`/`patch` for an included commit are scoped to the documents that
+  matched at that commit (the same pre/post-image rule).
+
+Only `$match` is supported as a list operator; any other `$`-operator is
+rejected. `$`-prefixed field names are never valid in an `_id`, which is what
+lets `{$match: ...}` coexist unambiguously with `_id`s (including composite
+document `_id`s).
+
+**`$changed` -- match a field that changed.** Inside a `$match`, a field may use
+the `{$changed: true}` qualifier, which matches when that field **differs**
+between the commit and its first parent -- regardless of the values. Unlike a
+value predicate (which inspects a single image), `$changed` is a property of the
+before/after pair, so no value matcher (`$regex`, `$exists`, ...) can express
+it.
+
+```js
+// commits where an order's status field changed (any value -> any value):
+filters: [ { orders: [ { $match: { status: { $changed: true } } } ] } ]
+
+// status changed AND that order belongs to a specific customer:
+filters: [ { orders: [ { $match: { status: { $changed: true }, customer: "4242" } } ] } ]
+
+// (status changed OR priority is high) for that customer -- full $and/$or nesting:
+filters: [ { orders: [ { $match: { customer: "4242", $or: [
+  { status: { $changed: true } },
+  { priority: "high" }
+] } } ] } ]
+```
+
+`$changed` semantics:
+- **Presence-counting**: a value change, a field added, a field removed, and a
+  whole-document add or delete all count as the field changing.
+- **Nested**: `{ "shipping.carrier": { $changed: true } }` matches a change to
+  that nested field; a change to an enclosing object (or the whole document)
+  also counts as the nested field changing.
+- Combines with value conditions (implicit AND) and `$and`/`$or`/`$nor`
+  nesting; AND binds within a single document.
+- `$changed` is a DumboDB extension to `$match` only -- it is not supported as a
+  `find()` operator, and its value must be `true`.
+
+With `filters` active, `limit` counts matching commits: the walk continues
+past non-matching commits until `limit` matches are found. `next` is
+positioned after the last commit examined, so paging does not re-scan skipped
+commits, and `filters` composes with `from` and `all`.
+
+When `stat`/`patch` is requested with `filters`, the output is **scoped** to
+the matched documents -- only the filtered collections, and within them only
+the requested `_id`s that changed (like `git log -p -- path`).
 
 ### Error cases
 
+- `filters` that is not an array, an entry that is neither a collection-name
+  string nor a single-key document, an empty `_id` array, an `_id`-list element
+  that is itself an array, or a `$`-operator other than `$match`, returns
+  `TypeMismatch` / `BadValue`.
 - `all` together with `from` returns `BadValue` (they are mutually exclusive).
 - A `from` array element that is not a string returns `TypeMismatch`; an
   unparseable or unknown commit hash returns `OperationFailed`.

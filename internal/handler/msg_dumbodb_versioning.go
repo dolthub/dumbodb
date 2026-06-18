@@ -1049,6 +1049,19 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 	)
 }
 
+// docHasOperatorKey reports whether any top-level field name begins with '$'.
+// MongoDB forbids '$'-prefixed field names in stored documents (and thus in
+// _ids), so this cleanly distinguishes a filter operator like {$match: ...}
+// from a composite _id document.
+func docHasOperatorKey(d *types.Document) bool {
+	for _, k := range d.Keys() {
+		if strings.HasPrefix(k, "$") {
+			return true
+		}
+	}
+	return false
+}
+
 // MsgDumboDBLog implements the `dumboDBLog` command.
 //
 // It returns the commit history for the branch encoded in $db (format: "dbname@branch").
@@ -1074,6 +1087,13 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 	limit, err := common.GetOptionalParam[int32](document, "limit", int32(0))
 	if err != nil {
 		return nil, err
+	}
+	if limit < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboLog: 'limit' must not be negative",
+			"limit",
+		)
 	}
 
 	// "from" accepts a single hash string or an array of hash strings (the
@@ -1132,6 +1152,113 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
+	// "filters" is an array whose elements are either:
+	//   - a collection-name string -> the whole-collection wildcard (match any
+	//     _id in that collection), or
+	//   - a single-key {collection: spec} document, where spec is an _id, an
+	//     array of _ids, or a {$match: <query>} predicate.
+	// An _id may be any valid BSON _id type (number, string, ObjectId, date,
+	// decimal, document/subdocument). An array is never a valid _id, which is
+	// why the array form is unambiguously the id-list. A commit is returned only
+	// if it touched (vs parent1) a matching document in that collection.
+	var filters map[string]backends.CommitFilter
+	if fv, _ := document.Get("filters"); fv != nil {
+		arr, ok := fv.(*types.Array)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"dumboLog: 'filters' must be an array",
+				"filters",
+			)
+		}
+		for i := 0; i < arr.Len(); i++ {
+			el, _ := arr.Get(i)
+
+			// A bare string element is the whole-collection wildcard.
+			if collName, isStr := el.(string); isStr {
+				if filters == nil {
+					filters = make(map[string]backends.CommitFilter)
+				}
+				cf := filters[collName]
+				cf.All = true
+				filters[collName] = cf
+				continue
+			}
+
+			elDoc, ok := el.(*types.Document)
+			if !ok || len(elDoc.Keys()) != 1 {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(
+					handlererrors.ErrBadValue,
+					"dumboLog: each 'filters' entry must be a collection name string or a single {collection: id} document",
+					"filters",
+				)
+			}
+			coll := elDoc.Keys()[0]
+			val, _ := elDoc.Get(coll)
+
+			cf := filters[coll]
+
+			// addElem classifies one non-array value: a {$match: <query>} doc, a
+			// composite _id document, or a scalar _id.
+			addElem := func(v any) error {
+				if d, isDoc := v.(*types.Document); isDoc && docHasOperatorKey(d) {
+					if len(d.Keys()) != 1 || d.Keys()[0] != "$match" {
+						return handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrBadValue,
+							"dumboLog: only $match is supported as a filter operator for '"+coll+"'",
+							"filters",
+						)
+					}
+					q, _ := d.Get("$match")
+					qd, ok := q.(*types.Document)
+					if !ok {
+						return handlererrors.NewCommandErrorMsgWithArgument(
+							handlererrors.ErrBadValue,
+							"dumboLog: $match value for '"+coll+"' must be a query document",
+							"filters",
+						)
+					}
+					cf.Queries = append(cf.Queries, qd)
+					return nil
+				}
+				if _, isArr := v.(*types.Array); isArr {
+					return handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"dumboLog: '"+coll+"' _id must not be an array",
+						"filters",
+					)
+				}
+				// Scalar, or a document without operator keys: a (possibly
+				// composite) _id.
+				cf.IDs = append(cf.IDs, v)
+				return nil
+			}
+
+			if list, isArr := val.(*types.Array); isArr {
+				if list.Len() == 0 {
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"dumboLog: empty _id list for '"+coll+"'; pass the collection name as a string to match the whole collection",
+						"filters",
+					)
+				}
+				for j := 0; j < list.Len(); j++ {
+					ev, _ := list.Get(j)
+					if err := addElem(ev); err != nil {
+						return nil, err
+					}
+				}
+			} else if err := addElem(val); err != nil {
+				return nil, err
+			}
+
+			if filters == nil {
+				filters = make(map[string]backends.CommitFilter)
+			}
+			filters[coll] = cf
+		}
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -1159,6 +1286,7 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		Stat:       stat,
 		Patch:      patch,
 		All:        all,
+		Filters:    filters,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())

@@ -189,4 +189,260 @@ func TestLogPaginationVerify(t *testing.T) {
 		require.Error(t, env.client.Database(pgdb).RunCommand(ctx, cmd).Err(), "all + from must be rejected")
 	})
 
+	// -------------------------------------------------------------------------
+	// Part B: collection:_id filtering.
+	// -------------------------------------------------------------------------
+	fdb := fmt.Sprintf("logfiltv%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(fdb).Drop(ctx))
+	fb := env.client.Database(fdb)
+
+	_, err := fb.Collection("orders").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c1 add orders 1,2", "a <a@x.io>")
+	_, err = fb.Collection("users").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alice"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c2 add user 1", "a <a@x.io>")
+	_, err = fb.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "status", Value: "pending"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c3 add order 3", "a <a@x.io>")
+	_, err = fb.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
+	require.NoError(t, err)
+	_, err = fb.Collection("orders").UpdateByID(ctx, int32(2), bson.D{{Key: "$set", Value: bson.D{{Key: "region", Value: "eu"}}}})
+	require.NoError(t, err)
+	_, err = fb.Collection("users").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "alicia"}}}})
+	require.NoError(t, err)
+	c4 := dumboDBCommit(t, env, fdb, "c4 mixed edit", "a <a@x.io>")
+	_, err = fb.Collection("orders").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, fdb, "c5 delete order 1", "a <a@x.io>")
+
+	fmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B1_FollowOneDocument", func(t *testing.T) {
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}}})
+		assert.Equal(t, []string{"c5 delete order 1", "c4 mixed edit", "c1 add orders 1,2"}, fmsgs(raw))
+	})
+
+	t.Run("B2_IDListAndOR", func(t *testing.T) {
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{int32(1), int32(3)}}},
+		}}})
+		assert.Equal(t, []string{"c5 delete order 1", "c4 mixed edit", "c3 add order 3", "c1 add orders 1,2"}, fmsgs(raw))
+
+		raw = runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: int32(3)}}, bson.D{{Key: "users", Value: int32(1)}},
+		}}})
+		assert.Equal(t, []string{"c4 mixed edit", "c3 add order 3", "c2 add user 1"}, fmsgs(raw))
+	})
+
+	t.Run("B2b_WholeCollection", func(t *testing.T) {
+		// Bare collection-name string = any _id in orders: every orders commit.
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{"orders"}}})
+		assert.Equal(t, []string{
+			"c5 delete order 1", "c4 mixed edit", "c3 add order 3", "c1 add orders 1,2",
+		}, fmsgs(raw))
+	})
+
+	t.Run("B3_ScopedPatch", func(t *testing.T) {
+		raw := runLog(t, env, fdb, bson.D{
+			{Key: "from", Value: c4}, {Key: "limit", Value: int32(1)},
+			{Key: "patch", Value: true}, {Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}},
+		})
+		diff := raw["commits"].(bson.A)[0].(bson.M)["diff"].(bson.A)
+		require.Len(t, diff, 1, "scoped to orders only")
+		assert.Equal(t, "orders", diff[0].(bson.M)["name"])
+		mods := diff[0].(bson.M)["modified"].(bson.A)
+		require.Len(t, mods, 1, "only order 1, not order 2")
+		assert.EqualValues(t, 1, mods[0].(bson.M)["_id"])
+	})
+
+	t.Run("B4_Errors", func(t *testing.T) {
+		// not an array
+		require.Error(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.D{{Key: "orders", Value: int32(1)}}},
+		}).Err())
+		// id-list element that is itself an array (arrays are never valid _ids)
+		require.Error(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+				bson.D{{Key: "orders", Value: bson.A{bson.A{int32(1)}}}},
+			}},
+		}).Err())
+	})
+
+	// Scenario B5: non-integer _ids (ObjectId and document). Fresh database.
+	nfdb := fmt.Sprintf("logfiltids%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(nfdb).Drop(ctx))
+	nf := env.client.Database(nfdb)
+	oid := bson.NewObjectID()
+	subID := bson.D{{Key: "region", Value: "us"}, {Key: "seq", Value: int32(5)}}
+
+	_, err = nf.Collection("events").InsertOne(ctx, bson.D{{Key: "_id", Value: oid}, {Key: "kind", Value: "login"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, nfdb, "e1 add oid event", "a <a@x.io>")
+	_, err = nf.Collection("events").InsertOne(ctx, bson.D{{Key: "_id", Value: subID}, {Key: "kind", Value: "order"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, nfdb, "e2 add subdoc event", "a <a@x.io>")
+	_, err = nf.Collection("events").UpdateOne(ctx, bson.D{{Key: "_id", Value: oid}}, bson.D{{Key: "$set", Value: bson.D{{Key: "kind", Value: "logout"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, nfdb, "e3 modify oid event", "a <a@x.io>")
+
+	nmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B5_ObjectIDFilter", func(t *testing.T) {
+		raw := runLog(t, env, nfdb, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "events", Value: oid}}}}})
+		assert.Equal(t, []string{"e3 modify oid event", "e1 add oid event"}, nmsgs(raw))
+	})
+
+	t.Run("B5_DocumentIDFilter", func(t *testing.T) {
+		raw := runLog(t, env, nfdb, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "events", Value: subID}}}}})
+		assert.Equal(t, []string{"e2 add subdoc event"}, nmsgs(raw))
+	})
+
+	t.Run("B5_DocumentIDFieldOrderSignificant", func(t *testing.T) {
+		// Same fields, different order -> a different _id -> matches nothing.
+		raw := runLog(t, env, nfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "events", Value: bson.D{{Key: "seq", Value: int32(5)}, {Key: "region", Value: "us"}}}},
+		}}})
+		assert.Empty(t, raw["commits"].(bson.A))
+	})
+
+	// Scenario B6: $match applied per commit (touched). Fresh database.
+	mfdb := fmt.Sprintf("logfiltmatch%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(mfdb).Drop(ctx))
+	mf := env.client.Database(mfdb)
+	_, err = mf.Collection("orders").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, mfdb, "m1 add 1,2", "a <a@x.io>")
+	_, err = mf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "status", Value: "pending"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, mfdb, "m2 add 3", "a <a@x.io>")
+	_, err = mf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, mfdb, "m3 ship 1", "a <a@x.io>")
+
+	mmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B6_MatchTouchedPerCommit", func(t *testing.T) {
+		// Touched {status:pending}: m1 (add o1 pending), m2 (add o3),
+		// m3 (modify o1 pending->shipped, pre-image pending).
+		raw := runLog(t, env, mfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}}}}},
+		}}})
+		assert.Equal(t, []string{"m3 ship 1", "m2 add 3", "m1 add 1,2"}, mmsgs(raw))
+	})
+
+	t.Run("B6_MultipleMatchOR", func(t *testing.T) {
+		raw := runLog(t, env, mfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}},
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "shipped"}}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"m3 ship 1", "m2 add 3", "m1 add 1,2"}, mmsgs(raw))
+	})
+
+	// Scenario B7: $match with an operator ($gt). Fresh database.
+	gfdb := fmt.Sprintf("logfiltgt%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(gfdb).Drop(ctx))
+	gf := env.client.Database(gfdb)
+	_, err = gf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "amount", Value: int32(50)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, gfdb, "g1 add cheap order", "a <a@x.io>")
+	_, err = gf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "amount", Value: int32(300)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, gfdb, "g2 add pricey order", "a <a@x.io>")
+	_, err = gf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "amount", Value: int32(500)}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, gfdb, "g3 bump order 1", "a <a@x.io>")
+
+	t.Run("B7_MatchOperatorGt", func(t *testing.T) {
+		// $gt 100 touched: g2 (added 300), g3 (50->500, post-image > 100).
+		// g1 (added at 50) is excluded.
+		raw := runLog(t, env, gfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "amount", Value: bson.D{{Key: "$gt", Value: int32(100)}}}}}},
+			}}},
+		}}})
+		arr := raw["commits"].(bson.A)
+		got := make([]string, len(arr))
+		for i, c := range arr {
+			got[i] = c.(bson.M)["message"].(string)
+		}
+		assert.Equal(t, []string{"g3 bump order 1", "g2 add pricey order"}, got)
+	})
+
+	// Scenario B8: $changed field qualifier. Fresh database.
+	cfdb := fmt.Sprintf("logfiltchanged%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(cfdb).Drop(ctx))
+	cf := env.client.Database(cfdb)
+	_, err = cf.Collection("orders").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "customer", Value: "4242"}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "customer", Value: "9999"}, {Key: "status", Value: "pending"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, cfdb, "k1 add", "a <a@x.io>")
+	_, err = cf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, cfdb, "k2 ship o1", "a <a@x.io>")
+	_, err = cf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, cfdb, "k3 note o1", "a <a@x.io>")
+
+	cmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B8_ChangedAnyValue", func(t *testing.T) {
+		// status changed: k1 (add, presence), k2 (ship); k3 (note only) excluded.
+		raw := runLog(t, env, cfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: bson.D{{Key: "$changed", Value: true}}}}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"k2 ship o1", "k1 add"}, cmsgs(raw))
+	})
+
+	t.Run("B8_ChangedAndCustomer", func(t *testing.T) {
+		raw := runLog(t, env, cfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{
+					{Key: "status", Value: bson.D{{Key: "$changed", Value: true}}},
+					{Key: "customer", Value: "4242"},
+				}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"k2 ship o1", "k1 add"}, cmsgs(raw))
+	})
 }

@@ -15,10 +15,8 @@
 package dolt
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -322,6 +320,15 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 
 // unionCollectionNames returns the sorted union of collection names present in
 // either aAM or bAM.
+//
+// This iterates both address maps in full rather than using a structural-
+// sharing diff. That is intentional: the cost is O(number of collections),
+// not O(number of documents) -- callers then skip unchanged collections by
+// comparing each collection's content address before diffing its documents
+// (see DumboDBLog stat/patch and DumboDBDiff). prolly.AddressMap also exposes
+// no public diff primitive (only IterAll/Get), so a DiffMaps-style walk is not
+// available here. The document-level diffs that do scale with collection size
+// use forEachCollectionChange (collection_diff.go).
 func unionCollectionNames(ctx context.Context, aAM, bAM prolly.AddressMap) ([]string, error) {
 	seen := make(map[string]struct{})
 
@@ -535,119 +542,50 @@ func diffCollectionMaps(
 	ns tree.NodeStore,
 	aMap, bMap prolly.Map,
 ) (added []*types.Document, removed []*types.Document, modified []backends.ModifiedDoc, err error) {
-	iterA, err := aMap.IterAll(ctx)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("iterating a map: %w", err)
-	}
-
-	iterB, err := bMap.IterAll(ctx)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("iterating b map: %w", err)
-	}
-
-	kA, vA, errA := iterA.Next(ctx)
-	kB, vB, errB := iterB.Next(ctx)
-
-	for {
-		doneA := errA == io.EOF
-		doneB := errB == io.EOF
-
-		if doneA && doneB {
-			break
-		}
-
-		if errA != nil && !doneA {
-			return nil, nil, nil, fmt.Errorf("iterating a map: %w", errA)
-		}
-
-		if errB != nil && !doneB {
-			return nil, nil, nil, fmt.Errorf("iterating b map: %w", errB)
-		}
-
-		switch {
-		case doneA:
-			// All remaining B entries are new (added).
-			doc, readErr := readDocFromEntry(ctx, ns, kB, vB)
+	// Walk only the changed documents via prolly's structural-sharing diff.
+	// Diffs arrive in key order, matching the previous merge-walk output order.
+	err = forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
+		switch c.kind {
+		case collAdded:
+			doc, readErr := readDocFromEntry(ctx, ns, c.key, c.to)
 			if readErr != nil {
-				return nil, nil, nil, readErr
+				return false, readErr
 			}
-
 			added = append(added, doc)
-			kB, vB, errB = iterB.Next(ctx)
 
-		case doneB:
-			// All remaining A entries have been deleted (removed).
-			doc, readErr := readDocFromEntry(ctx, ns, kA, vA)
+		case collRemoved:
+			doc, readErr := readDocFromEntry(ctx, ns, c.key, c.from)
 			if readErr != nil {
-				return nil, nil, nil, readErr
+				return false, readErr
 			}
-
 			removed = append(removed, doc)
-			kA, vA, errA = iterA.Next(ctx)
 
-		default:
-			cmp := bytes.Compare(kA, kB)
-
-			switch {
-			case cmp < 0:
-				// kA is not in B -> removed.
-				doc, readErr := readDocFromEntry(ctx, ns, kA, vA)
-				if readErr != nil {
-					return nil, nil, nil, readErr
-				}
-
-				removed = append(removed, doc)
-				kA, vA, errA = iterA.Next(ctx)
-
-			case cmp > 0:
-				// kB is not in A -> added.
-				doc, readErr := readDocFromEntry(ctx, ns, kB, vB)
-				if readErr != nil {
-					return nil, nil, nil, readErr
-				}
-
-				added = append(added, doc)
-				kB, vB, errB = iterB.Next(ctx)
-
-			default:
-				// Same key. The prolly-map value stores the JSON content hash,
-				// so a byte-level comparison quickly detects any change without
-				// deserializing either document.
-				if !bytes.Equal(vA, vB) {
-					docA, readErr := readDocFromEntry(ctx, ns, kA, vA)
-					if readErr != nil {
-						return nil, nil, nil, readErr
-					}
-
-					docB, readErr := readDocFromEntry(ctx, ns, kB, vB)
-					if readErr != nil {
-						return nil, nil, nil, readErr
-					}
-
-					id, idErr := docA.Get("_id")
-					if idErr != nil {
-						return nil, nil, nil, idErr
-					}
-
-					fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
-					if diffErr != nil {
-						return nil, nil, nil, diffErr
-					}
-
-					if len(fieldDiffs) > 0 {
-						modified = append(modified, backends.ModifiedDoc{
-							ID:   id,
-							Diff: fieldDiffs,
-						})
-					}
-				}
-
-				kA, vA, errA = iterA.Next(ctx)
-				kB, vB, errB = iterB.Next(ctx)
+		case collModified:
+			docA, readErr := readDocFromEntry(ctx, ns, c.key, c.from)
+			if readErr != nil {
+				return false, readErr
+			}
+			docB, readErr := readDocFromEntry(ctx, ns, c.key, c.to)
+			if readErr != nil {
+				return false, readErr
+			}
+			id, idErr := docA.Get("_id")
+			if idErr != nil {
+				return false, idErr
+			}
+			fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
+			if diffErr != nil {
+				return false, diffErr
+			}
+			if len(fieldDiffs) > 0 {
+				modified = append(modified, backends.ModifiedDoc{ID: id, Diff: fieldDiffs})
 			}
 		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, nil, nil, err
 	}
-
 	return added, removed, modified, nil
 }
 
@@ -662,60 +600,21 @@ func countCollectionMapDiffs(
 	ctx context.Context,
 	aMap, bMap prolly.Map,
 ) (added, modified, deleted int, err error) {
-	iterA, err := aMap.IterAll(ctx)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("iterating a map: %w", err)
-	}
-
-	iterB, err := bMap.IterAll(ctx)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("iterating b map: %w", err)
-	}
-
-	kA, vA, errA := iterA.Next(ctx)
-	kB, vB, errB := iterB.Next(ctx)
-
-	for {
-		doneA := errA == io.EOF
-		doneB := errB == io.EOF
-
-		if doneA && doneB {
-			break
-		}
-
-		if errA != nil && !doneA {
-			return 0, 0, 0, fmt.Errorf("iterating a map: %w", errA)
-		}
-
-		if errB != nil && !doneB {
-			return 0, 0, 0, fmt.Errorf("iterating b map: %w", errB)
-		}
-
-		switch {
-		case doneA:
+	// Counting needs no document decode: tally per change type from the
+	// structural-sharing diff (which visits only changed entries).
+	err = forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
+		switch c.kind {
+		case collAdded:
 			added++
-			kB, vB, errB = iterB.Next(ctx)
-		case doneB:
+		case collRemoved:
 			deleted++
-			kA, vA, errA = iterA.Next(ctx)
-		default:
-			cmp := bytes.Compare(kA, kB)
-			switch {
-			case cmp < 0:
-				deleted++
-				kA, vA, errA = iterA.Next(ctx)
-			case cmp > 0:
-				added++
-				kB, vB, errB = iterB.Next(ctx)
-			default:
-				if !bytes.Equal(vA, vB) {
-					modified++
-				}
-				kA, vA, errA = iterA.Next(ctx)
-				kB, vB, errB = iterB.Next(ctx)
-			}
+		case collModified:
+			modified++
 		}
+		return false, nil
+	})
+	if err != nil {
+		return 0, 0, 0, err
 	}
-
 	return added, modified, deleted, nil
 }

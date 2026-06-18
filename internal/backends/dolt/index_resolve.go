@@ -353,6 +353,12 @@ func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInf
 // values are decoded via resolveIndexEntry (memoized). Each IndexChange
 // in modified carries both the pre-state (From) and post-state (To)
 // definitions; the index name is From.Name == To.Name.
+//
+// This walks both index address maps in full rather than using a structural-
+// sharing diff. That is intentional: the cost is O(number of indexes on the
+// collection), not O(number of documents), and prolly.AddressMap exposes no
+// public diff primitive. Only the document-level diffs (forEachCollectionChange
+// in collection_diff.go) scale with collection size and use prolly.DiffMaps.
 func computeIndexChanges(ctx context.Context, state *dbState, aDTBL, bDTBL hash.Hash) (added []backends.IndexInfo, modified []backends.IndexChange, removed []backends.IndexInfo, err error) {
 	aAM, err := indexAMForDTBL(ctx, state.cs, state.ns, aDTBL)
 	if err != nil {
