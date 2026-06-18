@@ -15,10 +15,8 @@
 package dolt
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -593,60 +591,21 @@ func countCollectionMapDiffs(
 	ctx context.Context,
 	aMap, bMap prolly.Map,
 ) (added, modified, deleted int, err error) {
-	iterA, err := aMap.IterAll(ctx)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("iterating a map: %w", err)
-	}
-
-	iterB, err := bMap.IterAll(ctx)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("iterating b map: %w", err)
-	}
-
-	kA, vA, errA := iterA.Next(ctx)
-	kB, vB, errB := iterB.Next(ctx)
-
-	for {
-		doneA := errA == io.EOF
-		doneB := errB == io.EOF
-
-		if doneA && doneB {
-			break
-		}
-
-		if errA != nil && !doneA {
-			return 0, 0, 0, fmt.Errorf("iterating a map: %w", errA)
-		}
-
-		if errB != nil && !doneB {
-			return 0, 0, 0, fmt.Errorf("iterating b map: %w", errB)
-		}
-
-		switch {
-		case doneA:
+	// Counting needs no document decode: tally per change type from the
+	// structural-sharing diff (which visits only changed entries).
+	err = forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
+		switch c.kind {
+		case collAdded:
 			added++
-			kB, vB, errB = iterB.Next(ctx)
-		case doneB:
+		case collRemoved:
 			deleted++
-			kA, vA, errA = iterA.Next(ctx)
-		default:
-			cmp := bytes.Compare(kA, kB)
-			switch {
-			case cmp < 0:
-				deleted++
-				kA, vA, errA = iterA.Next(ctx)
-			case cmp > 0:
-				added++
-				kB, vB, errB = iterB.Next(ctx)
-			default:
-				if !bytes.Equal(vA, vB) {
-					modified++
-				}
-				kA, vA, errA = iterA.Next(ctx)
-				kB, vB, errB = iterB.Next(ctx)
-			}
+		case collModified:
+			modified++
 		}
+		return false, nil
+	})
+	if err != nil {
+		return 0, 0, 0, err
 	}
-
 	return added, modified, deleted, nil
 }
