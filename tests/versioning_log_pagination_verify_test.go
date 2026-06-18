@@ -281,14 +281,47 @@ func TestLogPaginationVerify(t *testing.T) {
 		}).Err())
 	})
 
-	t.Run("B5_DocumentID", func(t *testing.T) {
-		// A subdocument _id is a valid filter value (matches nothing here).
-		var raw bson.M
-		require.NoError(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
-			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
-				bson.D{{Key: "orders", Value: bson.D{{Key: "a", Value: int32(1)}}}},
-			}},
-		}).Decode(&raw))
+	// Scenario B5: non-integer _ids (ObjectId and document). Fresh database.
+	nfdb := fmt.Sprintf("logfiltids%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(nfdb).Drop(ctx))
+	nf := env.client.Database(nfdb)
+	oid := bson.NewObjectID()
+	subID := bson.D{{Key: "region", Value: "us"}, {Key: "seq", Value: int32(5)}}
+
+	_, err = nf.Collection("events").InsertOne(ctx, bson.D{{Key: "_id", Value: oid}, {Key: "kind", Value: "login"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, nfdb, "e1 add oid event", "a <a@x.io>")
+	_, err = nf.Collection("events").InsertOne(ctx, bson.D{{Key: "_id", Value: subID}, {Key: "kind", Value: "order"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, nfdb, "e2 add subdoc event", "a <a@x.io>")
+	_, err = nf.Collection("events").UpdateOne(ctx, bson.D{{Key: "_id", Value: oid}}, bson.D{{Key: "$set", Value: bson.D{{Key: "kind", Value: "logout"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, nfdb, "e3 modify oid event", "a <a@x.io>")
+
+	nmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B5_ObjectIDFilter", func(t *testing.T) {
+		raw := runLog(t, env, nfdb, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "events", Value: oid}}}}})
+		assert.Equal(t, []string{"e3 modify oid event", "e1 add oid event"}, nmsgs(raw))
+	})
+
+	t.Run("B5_DocumentIDFilter", func(t *testing.T) {
+		raw := runLog(t, env, nfdb, bson.D{{Key: "filters", Value: bson.A{bson.D{{Key: "events", Value: subID}}}}})
+		assert.Equal(t, []string{"e2 add subdoc event"}, nmsgs(raw))
+	})
+
+	t.Run("B5_DocumentIDFieldOrderSignificant", func(t *testing.T) {
+		// Same fields, different order -> a different _id -> matches nothing.
+		raw := runLog(t, env, nfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "events", Value: bson.D{{Key: "seq", Value: int32(5)}, {Key: "region", Value: "us"}}}},
+		}}})
 		assert.Empty(t, raw["commits"].(bson.A))
 	})
 }

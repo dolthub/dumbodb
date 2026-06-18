@@ -347,6 +347,49 @@ Key checks:
   element that is itself an array, is rejected. (A document value is a valid
   `_id`, not an error.)
 
+## Scenario B5: non-integer `_id`s (ObjectId and document)
+
+`_id` can be any valid BSON type. Build a collection whose documents use an
+`ObjectId` `_id` and a subdocument `_id`, and filter by each.
+
+```js
+var nf = db.getSiblingDB("logfilter_ids")
+nf.dropDatabase()
+
+const oid = ObjectId()
+nf.events.insertOne({ _id: oid, kind: "login" })
+nf.runCommand({ doltCommit: 1, message: "e1 add oid event", author: "a <a@x.io>" })
+
+nf.events.insertOne({ _id: { region: "us", seq: 5 }, kind: "order" })
+nf.runCommand({ doltCommit: 1, message: "e2 add subdoc event", author: "a <a@x.io>" })
+
+// modify the ObjectId-keyed doc -- a second touch of that _id
+nf.events.updateOne({ _id: oid }, { $set: { kind: "logout" } })
+nf.runCommand({ doltCommit: 1, message: "e3 modify oid event", author: "a <a@x.io>" })
+```
+
+Filter by the `ObjectId` `_id`:
+
+```js
+nf.runCommand({ doltLog: 1, filters: [ { events: oid } ] })   // e3, e1
+```
+
+Key checks:
+- Returns `e3` (modify) and `e1` (add) -- both touches of the `ObjectId`-keyed
+  document. The subdocument-keyed `e2` is excluded.
+
+Filter by the document `_id` (field order is significant):
+
+```js
+nf.runCommand({ doltLog: 1, filters: [ { events: { region: "us", seq: 5 } } ] })   // e2
+nf.runCommand({ doltLog: 1, filters: [ { events: { seq: 5, region: "us" } } ] })   // [] (different _id)
+```
+
+Key checks:
+- `{ region: "us", seq: 5 }` returns `e2` (the subdocument-keyed insert).
+- `{ seq: 5, region: "us" }` -- same fields, different order -- is a **different
+  `_id`** and matches nothing, exactly as `find({_id: ...})` would behave.
+
 ---
 
 ## Quick Reference
