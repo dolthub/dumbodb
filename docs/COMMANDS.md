@@ -560,10 +560,9 @@ response carries `next` (the frontier) while more history remains; feed it
 back as `from` to fetch the following page, and stop when `next` is absent:
 
 ```js
-const log = db.getSiblingDB("orders@main")
 let from = undefined
 do {
-  const page = log.runCommand({ dumboLog: 1, limit: 50, ...(from && { from }) })
+  const page = db.runCommand({ dumboLog: 1, limit: 50, ...(from && { from }) })
   for (const c of page.commits) print(c.commitId, c.message)
   from = page.next            // array of hashes, or undefined at the end
 } while (from)
