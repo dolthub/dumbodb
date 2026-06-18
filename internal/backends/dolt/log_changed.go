@@ -15,8 +15,10 @@
 package dolt
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -69,4 +71,144 @@ func changedSetMatches(set map[string]struct{}, fieldKey string) bool {
 // continues x with a field ("x.f") or array element ("x[0]") component.
 func pathIsAncestor(x, y string) bool {
 	return strings.HasPrefix(y, x+".") || strings.HasPrefix(y, x+"[")
+}
+
+// matchFilterUsesChanged reports whether a $match query contains any
+// {field: {$changed: ...}} qualifier, recursively (including under
+// $and/$or/$nor). Callers use this to choose the $changed-aware evaluator over
+// the plain FilterDocument fast path.
+func matchFilterUsesChanged(filter *types.Document) bool {
+	for _, k := range filter.Keys() {
+		v, _ := filter.Get(k)
+		switch k {
+		case "$and", "$or", "$nor":
+			if arr, ok := v.(*types.Array); ok {
+				for i := 0; i < arr.Len(); i++ {
+					e, _ := arr.Get(i)
+					if sub, ok := e.(*types.Document); ok && matchFilterUsesChanged(sub) {
+						return true
+					}
+				}
+			}
+		default:
+			if spec, ok := v.(*types.Document); ok && spec.Has("$changed") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// evalMatchAgainstImage evaluates a $match query against a single document image
+// plus the set of field paths that changed for this document. It handles the
+// boolean operators $and/$or/$nor itself and delegates value clauses (and the
+// non-$changed remainder of a field spec) to the real find() matcher, so value
+// semantics are identical to find(). A {field: {$changed: true}} clause is
+// satisfied per changedSetMatches.
+//
+// The $changed result is a property of the pre<->post pair, so it is the same
+// regardless of which image this is evaluated against; callers OR the result
+// over the pre- and post-images to keep the existing match-either-image rule.
+func evalMatchAgainstImage(image, filter *types.Document, changed map[string]struct{}) (bool, error) {
+	result := true
+	var residuePairs []any
+
+	for _, k := range filter.Keys() {
+		v, _ := filter.Get(k)
+
+		switch k {
+		case "$and", "$or", "$nor":
+			arr, ok := v.(*types.Array)
+			if !ok {
+				return false, fmt.Errorf("%s requires an array", k)
+			}
+			ok, err := evalBoolArray(k, arr, image, changed)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				result = false
+			}
+
+		default:
+			spec, isDoc := v.(*types.Document)
+			if isDoc && spec.Has("$changed") {
+				cv, _ := spec.Get("$changed")
+				if b, ok := cv.(bool); !ok || !b {
+					return false, fmt.Errorf("$changed for field %q must be true", k)
+				}
+				if !changedSetMatches(changed, k) {
+					result = false
+				}
+				// Any remaining operators on the same field still apply to the
+				// image as ordinary value conditions.
+				if rem := docWithoutKey(spec, "$changed"); rem != nil {
+					residuePairs = append(residuePairs, k, rem)
+				}
+			} else {
+				residuePairs = append(residuePairs, k, v)
+			}
+		}
+	}
+
+	if !result {
+		return false, nil
+	}
+	if len(residuePairs) > 0 {
+		residue, err := types.NewDocument(residuePairs...)
+		if err != nil {
+			return false, err
+		}
+		ok, err := backends.MatchPartialFilter(image, residue)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// evalBoolArray evaluates a $and/$or/$nor array of sub-filters.
+func evalBoolArray(op string, arr *types.Array, image *types.Document, changed map[string]struct{}) (bool, error) {
+	anyMatch := false
+	allMatch := true
+	for i := 0; i < arr.Len(); i++ {
+		e, _ := arr.Get(i)
+		sub, ok := e.(*types.Document)
+		if !ok {
+			return false, fmt.Errorf("%s array elements must be documents", op)
+		}
+		m, err := evalMatchAgainstImage(image, sub, changed)
+		if err != nil {
+			return false, err
+		}
+		anyMatch = anyMatch || m
+		allMatch = allMatch && m
+	}
+	switch op {
+	case "$and":
+		return allMatch, nil
+	case "$or":
+		return anyMatch, nil
+	default: // $nor
+		return !anyMatch, nil
+	}
+}
+
+// docWithoutKey returns a copy of d with omit removed, or nil if nothing remains.
+func docWithoutKey(d *types.Document, omit string) *types.Document {
+	var pairs []any
+	for _, k := range d.Keys() {
+		if k == omit {
+			continue
+		}
+		v, _ := d.Get(k)
+		pairs = append(pairs, k, v)
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	return must.NotFail(types.NewDocument(pairs...))
 }
