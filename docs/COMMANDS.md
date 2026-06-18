@@ -638,9 +638,42 @@ the query. Consequences worth knowing:
 - `stat`/`patch` for an included commit are scoped to the documents that
   matched at that commit (the same pre/post-image rule).
 
-Only `$match` is supported; any other `$`-operator is rejected. `$`-prefixed
-field names are never valid in an `_id`, which is what lets `{$match: ...}`
-coexist unambiguously with `_id`s (including composite document `_id`s).
+Only `$match` is supported as a list operator; any other `$`-operator is
+rejected. `$`-prefixed field names are never valid in an `_id`, which is what
+lets `{$match: ...}` coexist unambiguously with `_id`s (including composite
+document `_id`s).
+
+**`$changed` -- match a field that changed.** Inside a `$match`, a field may use
+the `{$changed: true}` qualifier, which matches when that field **differs**
+between the commit and its first parent -- regardless of the values. Unlike a
+value predicate (which inspects a single image), `$changed` is a property of the
+before/after pair, so no value matcher (`$regex`, `$exists`, ...) can express
+it.
+
+```js
+// commits where an order's status field changed (any value -> any value):
+filters: [ { orders: [ { $match: { status: { $changed: true } } } ] } ]
+
+// status changed AND that order belongs to a specific customer:
+filters: [ { orders: [ { $match: { status: { $changed: true }, customer: "4242" } } ] } ]
+
+// (status changed OR priority is high) for that customer -- full $and/$or nesting:
+filters: [ { orders: [ { $match: { customer: "4242", $or: [
+  { status: { $changed: true } },
+  { priority: "high" }
+] } } ] } ]
+```
+
+`$changed` semantics:
+- **Presence-counting**: a value change, a field added, a field removed, and a
+  whole-document add or delete all count as the field changing.
+- **Nested**: `{ "shipping.carrier": { $changed: true } }` matches a change to
+  that nested field; a change to an enclosing object (or the whole document)
+  also counts as the nested field changing.
+- Combines with value conditions (implicit AND) and `$and`/`$or`/`$nor`
+  nesting; AND binds within a single document.
+- `$changed` is a DumboDB extension to `$match` only -- it is not a real
+  `find()` operator, and its value must be `true`.
 
 An `_id` value may be **any valid BSON `_id` type** -- number, string,
 `ObjectId`, date, decimal, or a document/subdocument -- and is matched with the

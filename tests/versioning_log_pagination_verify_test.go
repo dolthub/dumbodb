@@ -397,4 +397,52 @@ func TestLogPaginationVerify(t *testing.T) {
 		}
 		assert.Equal(t, []string{"g3 bump order 1", "g2 add pricey order"}, got)
 	})
+
+	// Scenario B8: $changed field qualifier. Fresh database.
+	cfdb := fmt.Sprintf("logfiltchanged%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(cfdb).Drop(ctx))
+	cf := env.client.Database(cfdb)
+	_, err = cf.Collection("orders").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "customer", Value: "4242"}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "customer", Value: "9999"}, {Key: "status", Value: "pending"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, cfdb, "k1 add", "a <a@x.io>")
+	_, err = cf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, cfdb, "k2 ship o1", "a <a@x.io>")
+	_, err = cf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, cfdb, "k3 note o1", "a <a@x.io>")
+
+	cmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B8_ChangedAnyValue", func(t *testing.T) {
+		// status changed: k1 (add, presence), k2 (ship); k3 (note only) excluded.
+		raw := runLog(t, env, cfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: bson.D{{Key: "$changed", Value: true}}}}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"k2 ship o1", "k1 add"}, cmsgs(raw))
+	})
+
+	t.Run("B8_ChangedAndCustomer", func(t *testing.T) {
+		raw := runLog(t, env, cfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{
+					{Key: "status", Value: bson.D{{Key: "$changed", Value: true}}},
+					{Key: "customer", Value: "4242"},
+				}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"k2 ship o1", "k1 add"}, cmsgs(raw))
+	})
 }

@@ -449,6 +449,43 @@ Key checks:
     (now `> 100`), the mirror of B6's pre-image case.
 - `g1` is **excluded**: it added order 1 at 50, which is not `> 100`.
 
+## Scenario B8: `$changed` -- a field that changed (any value)
+
+`{ field: {$changed: true} }` inside a `$match` matches when that field differs
+between the commit and its parent, regardless of values. It combines with value
+conditions (implicit AND).
+
+```js
+var cf = db.getSiblingDB("logfilter_changed")
+cf.dropDatabase()
+
+cf.orders.insertMany([
+  { _id: 1, customer: "4242", status: "pending" },
+  { _id: 2, customer: "9999", status: "pending" }
+])
+cf.runCommand({ doltCommit: 1, message: "k1 add", author: "a <a@x.io>" })
+cf.orders.updateOne({ _id: 1 }, { $set: { status: "shipped" } })   // status changed
+cf.runCommand({ doltCommit: 1, message: "k2 ship o1", author: "a <a@x.io>" })
+cf.orders.updateOne({ _id: 1 }, { $set: { note: "x" } })           // status NOT changed
+cf.runCommand({ doltCommit: 1, message: "k3 note o1", author: "a <a@x.io>" })
+
+// commits where status changed (k1 add counts; k2 ships; k3 only touched note):
+cf.runCommand({ doltLog: 1, filters: [ { orders: [ { $match: { status: { $changed: true } } } ] } ] })
+
+// status changed AND that order's customer is 4242:
+cf.runCommand({ doltLog: 1, filters: [ { orders: [
+  { $match: { status: { $changed: true }, customer: "4242" } }
+] } ] })
+```
+
+Key checks:
+- The first query returns `k2`, `k1` -- `k1` added the orders (presence counts),
+  `k2` changed status; `k3` (only `note` changed) is **excluded**.
+- The second returns `k2`, `k1` for order 1 only; an order-2 status change would
+  be excluded by the `customer: "4242"` value condition.
+- `$changed` combines with value conditions (AND) and `$and`/`$or`; it is a
+  `$match` extension, not a real `find()` operator.
+
 ---
 
 ## Quick Reference
@@ -462,6 +499,7 @@ Key checks:
 | `{ doltLog: 1, filters: [ { coll: [id1, id2] }, { other: id } ] }` | OR over ids and collections |
 | `{ doltLog: 1, filters: [ "coll" ] }` | Commits that touched any document in `coll` (whole collection) |
 | `{ doltLog: 1, filters: [ { coll: [ { $match: {<query>} } ] } ] }` | Commits that touched a doc matching `<query>` (per commit) |
+| `{ ... $match: { field: { $changed: true } } ... }` | Commits where `field` changed vs parent (any value; combines with value conditions) |
 
 Notes:
 - `next` is an array of seed hashes; order within it is not significant.
