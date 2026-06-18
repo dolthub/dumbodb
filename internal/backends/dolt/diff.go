@@ -320,6 +320,15 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 
 // unionCollectionNames returns the sorted union of collection names present in
 // either aAM or bAM.
+//
+// This iterates both address maps in full rather than using a structural-
+// sharing diff. That is intentional: the cost is O(number of collections),
+// not O(number of documents) -- callers then skip unchanged collections by
+// comparing each collection's content address before diffing its documents
+// (see DumboDBLog stat/patch and DumboDBDiff). prolly.AddressMap also exposes
+// no public diff primitive (only IterAll/Get), so a DiffMaps-style walk is not
+// available here. The document-level diffs that do scale with collection size
+// use forEachCollectionChange (collection_diff.go).
 func unionCollectionNames(ctx context.Context, aAM, bAM prolly.AddressMap) ([]string, error) {
 	seen := make(map[string]struct{})
 
