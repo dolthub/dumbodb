@@ -1088,6 +1088,13 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if err != nil {
 		return nil, err
 	}
+	if limit < 0 {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboLog: 'limit' must not be negative",
+			"limit",
+		)
+	}
 
 	// "from" accepts a single hash string or an array of hash strings (the
 	// frontier seed set returned as "next" on a prior page).

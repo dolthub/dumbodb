@@ -156,6 +156,21 @@ func TestLogPaginationHandler(t *testing.T) {
 	})
 }
 
+// TestLogNegativeLimitRejected verifies a negative limit is rejected rather than
+// silently treated as the default limit (workspace-9eg).
+func TestLogNegativeLimitRejected(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("logneg%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	_, err := env.client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c1", "a <a@x.io>")
+
+	cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(-3)}}
+	require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+}
+
 func TestLogAllHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
