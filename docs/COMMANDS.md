@@ -631,9 +631,11 @@ satisfying the query.
 log.runCommand({ dumboLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
 ```
 
-`$match` elements, explicit `_id`s, and id-lists in the same entry OR together,
-and a `$match` query supports the usual `find()` boolean operators
-(`$and`/`$or`/`$nor`) internally.
+`$match` elements, explicit `_id`s, and id-lists in the same entry OR together.
+For AND, put the conditions in a single `$match` query: its fields are ANDed
+(e.g. `{ $match: { status: "pending", customer: "4242" } }`), and it supports
+the usual `find()` boolean operators (`$and`/`$or`/`$nor`) internally for
+anything more complex.
 
 **Touched mechanics.** For a modified document, `$match` matches if
 **either** the pre-image (parent) **or** the post-image (this commit) satisfies
