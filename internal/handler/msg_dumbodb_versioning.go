@@ -1145,29 +1145,44 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
-	// "filters" is an array of single-key {collection: id} entries. The value is
-	// an _id, or an array of _ids. An _id may be any valid BSON _id type --
-	// number, string, ObjectId, date, decimal, document/subdocument, etc. The
-	// one type that is never a valid _id is an array, which is exactly why the
-	// array form is unambiguously the id-list. A commit is returned only if it
-	// touched (vs parent1) one of those documents in that collection.
+	// "filters" is an array whose elements are either:
+	//   - a collection-name string -> the whole-collection wildcard (match any
+	//     _id in that collection), or
+	//   - a single-key {collection: spec} document, where spec is an _id, an
+	//     array of _ids, or a {$match: <query>} predicate.
+	// An _id may be any valid BSON _id type (number, string, ObjectId, date,
+	// decimal, document/subdocument). An array is never a valid _id, which is
+	// why the array form is unambiguously the id-list. A commit is returned only
+	// if it touched (vs parent1) a matching document in that collection.
 	var filters map[string]backends.CommitFilter
 	if fv, _ := document.Get("filters"); fv != nil {
 		arr, ok := fv.(*types.Array)
 		if !ok {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrTypeMismatch,
-				"dumboLog: 'filters' must be an array of {collection: id} documents",
+				"dumboLog: 'filters' must be an array",
 				"filters",
 			)
 		}
 		for i := 0; i < arr.Len(); i++ {
 			el, _ := arr.Get(i)
+
+			// A bare string element is the whole-collection wildcard.
+			if collName, isStr := el.(string); isStr {
+				if filters == nil {
+					filters = make(map[string]backends.CommitFilter)
+				}
+				cf := filters[collName]
+				cf.All = true
+				filters[collName] = cf
+				continue
+			}
+
 			elDoc, ok := el.(*types.Document)
 			if !ok || len(elDoc.Keys()) != 1 {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrBadValue,
-					"dumboLog: each 'filters' entry must be a single {collection: id} document",
+					"dumboLog: each 'filters' entry must be a collection name string or a single {collection: id} document",
 					"filters",
 				)
 			}
@@ -1214,9 +1229,11 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 			if list, isArr := val.(*types.Array); isArr {
 				if list.Len() == 0 {
-					// Empty array: whole-collection wildcard (any _id). An empty
-					// array is never a valid _id, so this is unambiguous.
-					cf.All = true
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(
+						handlererrors.ErrBadValue,
+						"dumboLog: empty _id list for '"+coll+"'; pass the collection name as a string to match the whole collection",
+						"filters",
+					)
 				}
 				for j := 0; j < list.Len(); j++ {
 					ev, _ := list.Get(j)

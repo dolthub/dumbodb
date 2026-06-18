@@ -246,10 +246,8 @@ func TestLogPaginationVerify(t *testing.T) {
 	})
 
 	t.Run("B2b_WholeCollection", func(t *testing.T) {
-		// Empty array = any _id in orders: every commit that touched orders.
-		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{
-			bson.D{{Key: "orders", Value: bson.A{}}},
-		}}})
+		// Bare collection-name string = any _id in orders: every orders commit.
+		raw := runLog(t, env, fdb, bson.D{{Key: "filters", Value: bson.A{"orders"}}})
 		assert.Equal(t, []string{
 			"c5 delete order 1", "c4 mixed edit", "c3 add order 3", "c1 add orders 1,2",
 		}, fmsgs(raw))

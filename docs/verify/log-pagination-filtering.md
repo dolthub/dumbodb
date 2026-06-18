@@ -314,19 +314,21 @@ Key checks:
 - `[{orders:3},{users:1}]` ORs across collections; the second query returns
   `c4` (touched user 1), `c3` (order 3), `c2` (user 1).
 
-## Scenario B2b: whole collection (empty array)
+## Scenario B2b: whole collection (collection-name string)
 
-An empty array matches any `_id` -- every commit that touched the collection.
+A bare collection-name string entry matches any `_id` -- every commit that
+touched the collection.
 
 ```js
-ff.runCommand({ doltLog: 1, filters: [ { orders: [] } ] })   // c5, c4, c3, c1
+ff.runCommand({ doltLog: 1, filters: [ "orders" ] })   // c5, c4, c3, c1
 ```
 
 Key checks:
 - Returns every commit that touched `orders` (`c5`, `c4`, `c3`, `c1`); the
   users-only commits are excluded.
-- An empty array is never a valid `_id`, so there is no collision with a real
-  document.
+- A string entry is distinct from a `{collection: id}` document, so there is no
+  ambiguity. (An empty `_id` array -- `[ { orders: [] } ]` -- is rejected; use
+  the string form.)
 
 ## Scenario B3: scoped stat/patch
 
@@ -436,7 +438,7 @@ Key checks:
 | `{ doltLog: 1, all: true }` | Walk seeded with every branch HEAD (mutually exclusive with `from`) |
 | `{ doltLog: 1, filters: [ { coll: id } ] }` | Commits that touched that document |
 | `{ doltLog: 1, filters: [ { coll: [id1, id2] }, { other: id } ] }` | OR over ids and collections |
-| `{ doltLog: 1, filters: [ { coll: [] } ] }` | Commits that touched any document in `coll` |
+| `{ doltLog: 1, filters: [ "coll" ] }` | Commits that touched any document in `coll` (whole collection) |
 | `{ doltLog: 1, filters: [ { coll: [ { $match: {<query>} } ] } ] }` | History of docs matching `<query>` at HEAD |
 
 Notes:

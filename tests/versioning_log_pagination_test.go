@@ -240,11 +240,17 @@ func TestLogIDFilterHandler(t *testing.T) {
 	})
 
 	t.Run("WholeCollection", func(t *testing.T) {
-		// Empty array = any _id in orders: c5, c4, c3, c1 (the orders commits).
-		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
-			bson.D{{Key: "orders", Value: bson.A{}}},
-		}}})
+		// Bare collection-name string = any _id in orders: c5, c4, c3, c1.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{"orders"}}})
 		assert.Equal(t, []string{"c5", "c4", "c3", "c1"}, msgs(raw))
+	})
+
+	t.Run("EmptyArrayRejected", func(t *testing.T) {
+		// The old empty-array wildcard is no longer accepted; use the string.
+		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{}}},
+		}}}
+		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 
 	t.Run("MultiCollectionOR", func(t *testing.T) {
