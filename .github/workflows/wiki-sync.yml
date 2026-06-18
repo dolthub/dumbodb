@@ -39,27 +39,19 @@ jobs:
           # Command reference
           cp docs/COMMANDS.md wiki/Commands.md
 
-          # Sidebar: simple navigation with command links
-          cat > wiki/_Sidebar.md << 'SIDEBAR'
-          ### Navigation
-          - [[Home]]
-          - [[Commands]]
-
-          ### Commands
-          - [[dumboCommit|Commands#dumbocommit]]
-          - [[dumboBranch|Commands#dumbobranch]]
-          - [[dumboMerge|Commands#dumbomerge]]
-          - [[dumboCherryPick|Commands#dumbocherrypick]]
-          - [[dumboRebase|Commands#dumborebase]]
-          - [[dumboLog|Commands#dumbolog]]
-          - [[dumboStatus|Commands#dumbostatus]]
-          - [[dumboDiff|Commands#dumbodiff]]
-          - [[dumboReset|Commands#dumboreset]]
-          - [[dumboRevert|Commands#dumborevert]]
-          - [[dumboConflicts|Commands#dumboconflicts]]
-          - [[dumboResolveConflict|Commands#dumboresolveconflict]]
-          - [[dumboTag|Commands#dumbotag]]
-          SIDEBAR
+          # Sidebar: navigation generated from the dumbo* command sections in
+          # COMMANDS.md so it never drifts from the actual command set.
+          {
+            echo "### Navigation"
+            echo "- [[Home]]"
+            echo "- [[Commands]]"
+            echo ""
+            echo "### Commands"
+            grep '^## dumbo' docs/COMMANDS.md | sed -E 's/^## (dumbo[A-Za-z]+).*/\1/' | while read -r cmd; do
+              anchor=$(echo "$cmd" | tr '[:upper:]' '[:lower:]')
+              echo "- [[$cmd|Commands#$anchor]]"
+            done
+          } > wiki/_Sidebar.md
 
       - name: Commit and push to wiki
         run: |
