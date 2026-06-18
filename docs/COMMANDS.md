@@ -583,11 +583,12 @@ log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branc
 
 ### Filtering
 
-`filters` restricts the log to commits that **touched** specific documents,
-identified by collection and `_id`. It is an array of single-key
-`{collection: _id}` entries; the value is one `_id`, or an array of `_id`s. A
-commit is included if it added, removed, or modified (versus its first parent)
-one of those documents in that collection, for **any** listed entry (OR).
+`filters` restricts the log to commits that **touched** matching documents,
+identified by collection and either an `_id` or a `$match` query. It is an array
+of single-key `{collection: spec}` entries; the spec is one `_id`, an array of
+`_id`s, or a `$match` query (see below). A commit is included if it added,
+removed, or modified (versus its first parent) one of those documents in that
+collection, for **any** listed entry (OR).
 
 An `_id` value may be **any valid BSON `_id` type** -- number, string,
 `ObjectId`, date, decimal, or a document/subdocument -- and is matched with the
