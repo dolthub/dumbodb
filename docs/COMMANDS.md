@@ -612,26 +612,35 @@ is distinct from a `{collection: id}` document, so there's no ambiguity; a
 whole-collection entry subsumes any specific `_id`s listed for the same
 collection. An empty `_id` array is rejected -- use the string form.)
 
-A list element may also be a **`{$match: <query>}`** predicate. Each `$match`
-is resolved **once** against the collection at the connection branch's HEAD
-into the set of matching `_id`s, which are then filtered by identity (so it
-behaves exactly like passing those `_id`s explicitly). `$match` elements,
-explicit `_id`s, and id-lists in the same entry all OR together:
+A list element may also be a **`{$match: <query>}`** predicate. Unlike an
+`_id`, a `$match` is evaluated **per commit**: a commit is included when it
+**touched** (added, removed, or modified versus its first parent) a document
+satisfying the query. `$match` elements, explicit `_id`s, and id-lists in the
+same entry all OR together:
 
 ```js
-// orders pending OR with that customer now, then their full history:
+// commits that changed an order while it was pending, or with that customer:
 log.runCommand({ dumboLog: 1, filters: [ { orders: [
   { $match: { status: "pending" } },
   { $match: { customer: "4242" } }
 ] } ] })
 ```
 
-Because `$match` resolves at HEAD, it answers "the history of the documents
-that match this query *now*" -- a document deleted before HEAD is not in the
-resolved set. A `$match` resolving to no documents matches nothing (distinct
-from the whole-collection string form). Only `$match` is supported; any other
-`$`-operator is rejected. `$`-prefixed field names are never valid in an `_id`,
-which is what lets `{$match: ...}` coexist unambiguously with composite `_id`s.
+**Touched mechanics (read this).** For a modified document, `$match` matches if
+**either** the pre-image (parent) **or** the post-image (this commit) satisfies
+the query. Consequences worth knowing:
+
+- A commit that changes a document *out of* the matched set is still included
+  -- e.g. under `{status:"pending"}`, the commit that ships a pending order
+  matches via its pre-image.
+- A commit that does not touch the collection is never included, even if a
+  matching document exists in its snapshot (presence alone is not a match).
+- `stat`/`patch` for an included commit are scoped to the documents that
+  matched at that commit (the same pre/post-image rule).
+
+Only `$match` is supported; any other `$`-operator is rejected. `$`-prefixed
+field names are never valid in an `_id`, which is what lets `{$match: ...}`
+coexist unambiguously with `_id`s (including composite document `_id`s).
 
 An `_id` value may be **any valid BSON `_id` type** -- number, string,
 `ObjectId`, date, decimal, or a document/subdocument -- and is matched with the

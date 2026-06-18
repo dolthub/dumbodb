@@ -318,35 +318,43 @@ func logCF(t *testing.T, b *Backend, db string, filters map[string]backends.Comm
 	return res
 }
 
-// TestLogIDFilter_Match covers $match: a find() predicate resolved once at HEAD
-// to a set of _ids, then matched by identity.
+// TestLogIDFilter_Match covers $match: a find() predicate applied per commit
+// against the parent1 diff (touched semantics). A commit is included when it
+// touched a document matching the query (pre- or post-image for modifications).
 func TestLogIDFilter_Match(t *testing.T) {
 	b := newTestBackend(t)
 	h := buildFilterHistory(t, b, "fm")
 	byHash := nameMap(h)
 
-	// At HEAD: o2 (shipped) and o3 (pending) exist; o1 was deleted (c5).
-	// $match {status:"pending"} resolves to {o3} -> commits touching o3: c3.
+	// $match {status:"pending"} touched: c1 (add o1 pending), c3 (add o3),
+	// c4 (modify o1, stays pending), c5 (delete o1, pre pending). c2/c6 = users.
 	got := names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
 		"orders": {Queries: []*types.Document{mustDoc(t, "status", "pending")}},
 	}).Commits))
-	if want := []string{"c3"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("$match status=pending: got %v want %v (HEAD-resolved to o3)", got, want)
+	if want := []string{"c5", "c4", "c3", "c1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("$match status=pending (touched): got %v want %v", got, want)
 	}
 
-	// Multiple $match OR: status=shipped ({o2}) OR status=pending ({o3}) ->
-	// commits touching o2 or o3: c4(o2), c3(o3), c1(o2).
+	// Multiple $match OR: pending {c5,c4,c3,c1} OR shipped {c4,c1} -> same union.
 	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
 		"orders": {Queries: []*types.Document{
 			mustDoc(t, "status", "shipped"),
 			mustDoc(t, "status", "pending"),
 		}},
 	}).Commits))
-	if want := []string{"c4", "c3", "c1"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"c5", "c4", "c3", "c1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("$match OR: got %v want %v", got, want)
 	}
 
-	// $match unioned with an explicit _id: pending ({o3}) OR _id:1 -> c5,c4,c3,c1.
+	// $match shipped alone touched: c1 (add o2 shipped), c4 (modify o2).
+	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
+		"orders": {Queries: []*types.Document{mustDoc(t, "status", "shipped")}},
+	}).Commits))
+	if want := []string{"c4", "c1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("$match status=shipped (touched): got %v want %v", got, want)
+	}
+
+	// $match OR an explicit _id: pending {c5,c4,c3,c1} OR _id:1 {c5,c4,c1}.
 	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
 		"orders": {IDs: []any{int64(1)}, Queries: []*types.Document{mustDoc(t, "status", "pending")}},
 	}).Commits))
@@ -354,11 +362,11 @@ func TestLogIDFilter_Match(t *testing.T) {
 		t.Fatalf("$match + _id: got %v want %v", got, want)
 	}
 
-	// A $match that resolves to nothing matches nothing (NOT whole-collection).
+	// A $match no document ever matched touches nothing.
 	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
 		"orders": {Queries: []*types.Document{mustDoc(t, "status", "cancelled")}},
 	}).Commits))
 	if len(got) != 0 {
-		t.Fatalf("$match resolving to nothing should match nothing, got %v", got)
+		t.Fatalf("$match matching no touched doc should return nothing, got %v", got)
 	}
 }

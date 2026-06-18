@@ -392,16 +392,17 @@ func TestLogMatchHandler(t *testing.T) {
 		return out
 	}
 
-	t.Run("MatchResolvesAtHead", func(t *testing.T) {
-		// At HEAD pending = {o3} (o1 is now shipped). History of o3: c2.
+	t.Run("MatchTouchedPerCommit", func(t *testing.T) {
+		// Touched {status:pending}: c1 (add o1 pending), c2 (add o3),
+		// c3 (modify o1 pending->shipped, pre pending). c4 = users only.
 		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}}}}},
 		}}})
-		assert.Equal(t, []string{"c2"}, msgs(raw))
+		assert.Equal(t, []string{"c3", "c2", "c1"}, msgs(raw))
 	})
 
 	t.Run("MultipleMatchOR", func(t *testing.T) {
-		// pending {o3} OR shipped {o1,o2} -> commits touching o1/o2/o3: c3,c2,c1.
+		// pending {c3,c2,c1} OR shipped {c3(o1->shipped),c1(o2 added)} -> c3,c2,c1.
 		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.A{
 				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}},
@@ -412,7 +413,7 @@ func TestLogMatchHandler(t *testing.T) {
 	})
 
 	t.Run("MatchMixedWithID", func(t *testing.T) {
-		// pending {o3} OR _id 1 -> c3(o1), c2(o3), c1(o1).
+		// pending {c3,c2,c1} OR _id 1 {c1,c3} -> c3,c2,c1.
 		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.A{
 				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}},

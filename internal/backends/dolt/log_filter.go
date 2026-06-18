@@ -17,7 +17,6 @@ package dolt
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -31,37 +30,22 @@ import (
 )
 
 // buildLogFilterDocs turns the per-collection CommitFilter into a per-collection
-// filter document used by the walk. Each collection's $match Queries are first
-// resolved ONCE, against the collection at the connection branch's HEAD, into a
-// set of _ids that are unioned with the explicit IDs. The result per collection:
-//   - All           -> `{}` (matches every document)
-//   - otherwise     -> `{_id: {$in: [ids...]}}` (empty list matches nothing)
+// filter document evaluated against each walked commit's parent1 diff (touched
+// semantics). A commit matches the collection when it added/removed/modified a
+// document satisfying the filter. Per collection:
+//   - All     -> `{}` (matches every document, i.e. any change to the collection)
+//   - else    -> the OR of `{_id: {$in: [ids...]}}` (when IDs is non-empty) and
+//                each $match query. With a single clause that clause is used
+//                directly; with several they are wrapped in `$or`.
 //
-// Routing _id membership through the registered find() matcher gives MongoDB
-// _id equality for free -- numeric cross-type coercion, ObjectId, document _ids.
-func buildLogFilterDocs(ctx context.Context, db *dbState, branch string, filters map[string]backends.CommitFilter) (map[string]*types.Document, error) {
+// $match queries are NOT resolved at HEAD: each is applied per commit, so a
+// commit is included when it touched a document matching the query (with the
+// usual pre/post-image rule for modifications). Routing through the registered
+// find() matcher gives full _id equality (coercion, ObjectId, document _ids)
+// and full query-operator support for free.
+func buildLogFilterDocs(filters map[string]backends.CommitFilter) (map[string]*types.Document, error) {
 	if len(filters) == 0 {
 		return nil, nil
-	}
-
-	// Resolve the HEAD address map once; only needed if some collection carries
-	// $match queries.
-	var headAM prolly.AddressMap
-	headLoaded := false
-	loadHead := func() error {
-		if headLoaded {
-			return nil
-		}
-		h, err := resolveRootishToCommitHash(ctx, db, branch)
-		if err != nil {
-			return fmt.Errorf("resolving HEAD for $match: %w", err)
-		}
-		headAM, err = amFromCommitHash(ctx, db, h.String())
-		if err != nil {
-			return fmt.Errorf("loading HEAD address map for $match: %w", err)
-		}
-		headLoaded = true
-		return nil
 	}
 
 	out := make(map[string]*types.Document, len(filters))
@@ -71,73 +55,42 @@ func buildLogFilterDocs(ctx context.Context, db *dbState, branch string, filters
 			continue
 		}
 
-		ids := append([]any(nil), cf.IDs...)
-		for _, q := range cf.Queries {
-			if err := loadHead(); err != nil {
+		var clauses []any
+		if len(cf.IDs) > 0 {
+			arr, err := types.NewArray(cf.IDs...)
+			if err != nil {
 				return nil, err
 			}
-			resolved, err := resolveQueryIDs(ctx, db, headAM, coll, q)
+			inDoc, err := types.NewDocument("$in", arr)
 			if err != nil {
-				return nil, fmt.Errorf("resolving $match for %q: %w", coll, err)
+				return nil, err
 			}
-			ids = append(ids, resolved...)
+			idDoc, err := types.NewDocument("_id", inDoc)
+			if err != nil {
+				return nil, err
+			}
+			clauses = append(clauses, idDoc)
+		}
+		for _, q := range cf.Queries {
+			clauses = append(clauses, q)
 		}
 
-		arr, err := types.NewArray(ids...)
-		if err != nil {
-			return nil, err
+		switch len(clauses) {
+		case 0:
+			// No IDs and no queries: match nothing.
+			emptyArr := must.NotFail(types.NewArray())
+			out[coll] = must.NotFail(types.NewDocument("_id", must.NotFail(types.NewDocument("$in", emptyArr))))
+		case 1:
+			out[coll] = clauses[0].(*types.Document)
+		default:
+			orArr, err := types.NewArray(clauses...)
+			if err != nil {
+				return nil, err
+			}
+			out[coll] = must.NotFail(types.NewDocument("$or", orArr))
 		}
-		inDoc, err := types.NewDocument("$in", arr)
-		if err != nil {
-			return nil, err
-		}
-		filterDoc, err := types.NewDocument("_id", inDoc)
-		if err != nil {
-			return nil, err
-		}
-		out[coll] = filterDoc
 	}
 	return out, nil
-}
-
-// resolveQueryIDs scans the collection as it exists at headAM and returns the
-// _ids of all documents matching the find()-style query. This is the one-time
-// resolution of a $match predicate to a set of identities.
-func resolveQueryIDs(ctx context.Context, db *dbState, headAM prolly.AddressMap, coll string, query *types.Document) ([]any, error) {
-	m, err := collectionMapFromAM(ctx, db, headAM, coll)
-	if err != nil {
-		return nil, err
-	}
-	iter, err := m.IterAll(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var ids []any
-	for {
-		k, v, iErr := iter.Next(ctx)
-		if iErr == io.EOF {
-			break
-		}
-		if iErr != nil {
-			return nil, iErr
-		}
-		doc, rErr := readDocFromEntry(ctx, db.ns, k, v)
-		if rErr != nil {
-			return nil, rErr
-		}
-		ok, mErr := backends.MatchPartialFilter(doc, query)
-		if mErr != nil {
-			return nil, mErr
-		}
-		if ok {
-			id, idErr := doc.Get("_id")
-			if idErr != nil {
-				return nil, idErr
-			}
-			ids = append(ids, id)
-		}
-	}
-	return ids, nil
 }
 
 // commitTouchesFilter reports whether commit ci added, removed, or modified

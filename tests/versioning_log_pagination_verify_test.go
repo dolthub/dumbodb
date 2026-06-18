@@ -323,7 +323,7 @@ func TestLogPaginationVerify(t *testing.T) {
 		assert.Empty(t, raw["commits"].(bson.A))
 	})
 
-	// Scenario B6: $match resolved once at HEAD. Fresh database.
+	// Scenario B6: $match applied per commit (touched). Fresh database.
 	mfdb := fmt.Sprintf("logfiltmatch%d", rand.Int64N(1_000_000))
 	require.NoError(t, env.client.Database(mfdb).Drop(ctx))
 	mf := env.client.Database(mfdb)
@@ -349,12 +349,13 @@ func TestLogPaginationVerify(t *testing.T) {
 		return out
 	}
 
-	t.Run("B6_MatchResolvedAtHead", func(t *testing.T) {
-		// At HEAD only order 3 is pending; its history is m2.
+	t.Run("B6_MatchTouchedPerCommit", func(t *testing.T) {
+		// Touched {status:pending}: m1 (add o1 pending), m2 (add o3),
+		// m3 (modify o1 pending->shipped, pre-image pending).
 		raw := runLog(t, env, mfdb, bson.D{{Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}}}}},
 		}}})
-		assert.Equal(t, []string{"m2 add 3"}, mmsgs(raw))
+		assert.Equal(t, []string{"m3 ship 1", "m2 add 3", "m1 add 1,2"}, mmsgs(raw))
 	})
 
 	t.Run("B6_MultipleMatchOR", func(t *testing.T) {
