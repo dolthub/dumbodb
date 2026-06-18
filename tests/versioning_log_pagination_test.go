@@ -430,3 +430,67 @@ func TestLogMatchHandler(t *testing.T) {
 		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 }
+
+func TestLogChangedHandler(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("logchg%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	orders := env.client.Database(dbName).Collection("orders")
+
+	// c1 add o1{cust 4242, pending}, o2{cust 9999, pending}
+	_, err := orders.InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "customer", Value: "4242"}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "customer", Value: "9999"}, {Key: "status", Value: "pending"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c1 add", "a <a@x.io>")
+	// c2: o1 status -> shipped (status changed, customer 4242)
+	_, err = orders.UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c2 ship o1", "a <a@x.io>")
+	// c3: o2 status -> shipped (status changed, customer 9999)
+	_, err = orders.UpdateByID(ctx, int32(2), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c3 ship o2", "a <a@x.io>")
+	// c4: o1 note (status NOT changed)
+	_, err = orders.UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c4 note o1", "a <a@x.io>")
+
+	msgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("ChangedAnyValue", func(t *testing.T) {
+		// commits where status changed: c1(add, presence), c2, c3. c4 (note only) excluded.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: bson.D{{Key: "$changed", Value: true}}}}}}}},
+		}}})
+		assert.Equal(t, []string{"c3 ship o2", "c2 ship o1", "c1 add"}, msgs(raw))
+	})
+
+	t.Run("ChangedAndCustomer", func(t *testing.T) {
+		// status changed AND customer 4242: c2 (o1), c1 (o1 added pending, presence). Not c3 (o2/9999).
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.D{{Key: "$match", Value: bson.D{
+				{Key: "status", Value: bson.D{{Key: "$changed", Value: true}}},
+				{Key: "customer", Value: "4242"},
+			}}}}},
+		}}})
+		assert.Equal(t, []string{"c2 ship o1", "c1 add"}, msgs(raw))
+	})
+
+	t.Run("NoteChangedExcludesStatusOnly", func(t *testing.T) {
+		// only c4 changed note.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.D{{Key: "$match", Value: bson.D{{Key: "note", Value: bson.D{{Key: "$changed", Value: true}}}}}}}},
+		}}})
+		assert.Equal(t, []string{"c4 note o1"}, msgs(raw))
+	})
+}

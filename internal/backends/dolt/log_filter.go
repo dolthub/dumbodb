@@ -24,7 +24,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
-	"github.com/dolthub/dolt/go/store/val"
 )
 
 // buildLogFilterDocs turns the per-collection CommitFilter into a per-collection
@@ -155,35 +154,20 @@ func anyChangedDocMatches(
 	aMap, bMap prolly.Map,
 	filter *types.Document,
 ) (bool, error) {
-	testEntry := func(v val.Tuple) (bool, error) {
-		doc, readErr := readDocFromEntry(ctx, ns, nil, v)
-		if readErr != nil {
-			return false, readErr
-		}
-		return backends.MatchPartialFilter(doc, filter)
-	}
-
+	useChanged := matchFilterUsesChanged(filter)
 	matched := false
 	err := forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
-		// added -> post-image; removed -> pre-image; modified -> either image.
-		var imgs []val.Tuple
-		switch c.kind {
-		case collAdded:
-			imgs = []val.Tuple{c.to}
-		case collRemoved:
-			imgs = []val.Tuple{c.from}
-		case collModified:
-			imgs = []val.Tuple{c.from, c.to}
+		docA, docB, dErr := decodeChange(ctx, ns, c)
+		if dErr != nil {
+			return false, dErr
 		}
-		for _, v := range imgs {
-			ok, tErr := testEntry(v)
-			if tErr != nil {
-				return false, tErr
-			}
-			if ok {
-				matched = true
-				return true, nil // stop at first match
-			}
+		ok, mErr := docsMatchFilter(docA, docB, filter, useChanged)
+		if mErr != nil {
+			return false, mErr
+		}
+		if ok {
+			matched = true
+			return true, nil // stop at first match
 		}
 		return false, nil
 	})
@@ -204,56 +188,37 @@ func scopedCollectionDiff(
 	aMap, bMap prolly.Map,
 	filter *types.Document,
 ) (added []*types.Document, removed []*types.Document, modified []backends.ModifiedDoc, err error) {
-	readMatch := func(v val.Tuple) (*types.Document, bool, error) {
-		doc, rErr := readDocFromEntry(ctx, ns, nil, v)
-		if rErr != nil {
-			return nil, false, rErr
-		}
-		ok, mErr := backends.MatchPartialFilter(doc, filter)
-		return doc, ok, mErr
-	}
+	useChanged := matchFilterUsesChanged(filter)
 
 	err = forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
+		docA, docB, dErr := decodeChange(ctx, ns, c)
+		if dErr != nil {
+			return false, dErr
+		}
+		ok, mErr := docsMatchFilter(docA, docB, filter, useChanged)
+		if mErr != nil {
+			return false, mErr
+		}
+		if !ok {
+			return false, nil
+		}
+
 		switch c.kind {
 		case collAdded:
-			doc, ok, mErr := readMatch(c.to)
-			if mErr != nil {
-				return false, mErr
-			}
-			if ok {
-				added = append(added, doc)
-			}
-
+			added = append(added, docB)
 		case collRemoved:
-			doc, ok, mErr := readMatch(c.from)
-			if mErr != nil {
-				return false, mErr
-			}
-			if ok {
-				removed = append(removed, doc)
-			}
-
+			removed = append(removed, docA)
 		case collModified:
-			docA, matchA, mErr := readMatch(c.from)
-			if mErr != nil {
-				return false, mErr
+			id, idErr := docB.Get("_id")
+			if idErr != nil {
+				return false, idErr
 			}
-			docB, matchB, mErr := readMatch(c.to)
-			if mErr != nil {
-				return false, mErr
+			fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
+			if diffErr != nil {
+				return false, diffErr
 			}
-			if matchA || matchB {
-				id, idErr := docB.Get("_id")
-				if idErr != nil {
-					return false, idErr
-				}
-				fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
-				if diffErr != nil {
-					return false, diffErr
-				}
-				if len(fieldDiffs) > 0 {
-					modified = append(modified, backends.ModifiedDoc{ID: id, Diff: fieldDiffs})
-				}
+			if len(fieldDiffs) > 0 {
+				modified = append(modified, backends.ModifiedDoc{ID: id, Diff: fieldDiffs})
 			}
 		}
 		return false, nil

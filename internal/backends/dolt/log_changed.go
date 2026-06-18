@@ -15,12 +15,15 @@
 package dolt
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
+
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 )
 
 // changedFieldPaths returns the set of JSON-path field locations that differ
@@ -211,4 +214,61 @@ func docWithoutKey(d *types.Document, omit string) *types.Document {
 		return nil
 	}
 	return must.NotFail(types.NewDocument(pairs...))
+}
+
+// decodeChange decodes a changed document's pre- and post-images. Either may be
+// nil: docA is nil for an added document, docB is nil for a removed one.
+func decodeChange(ctx context.Context, ns tree.NodeStore, c collChange) (docA, docB *types.Document, err error) {
+	if c.from != nil {
+		if docA, err = readDocFromEntry(ctx, ns, nil, c.from); err != nil {
+			return nil, nil, err
+		}
+	}
+	if c.to != nil {
+		if docB, err = readDocFromEntry(ctx, ns, nil, c.to); err != nil {
+			return nil, nil, err
+		}
+	}
+	return docA, docB, nil
+}
+
+// docsMatchFilter reports whether a changed document (pre-image docA, post-image
+// docB; nil where absent) satisfies the filter. When the filter uses $changed,
+// it is evaluated against each present image with the changed-path set (matched
+// if either image satisfies it, preserving the match-either-image rule). When
+// it does not, value matching is delegated directly to the find() matcher.
+func docsMatchFilter(docA, docB *types.Document, filter *types.Document, useChanged bool) (bool, error) {
+	if useChanged {
+		set, err := changedFieldPaths(docA, docB)
+		if err != nil {
+			return false, err
+		}
+		for _, img := range []*types.Document{docA, docB} {
+			if img == nil {
+				continue
+			}
+			ok, err := evalMatchAgainstImage(img, filter, set)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	for _, img := range []*types.Document{docA, docB} {
+		if img == nil {
+			continue
+		}
+		ok, err := backends.MatchPartialFilter(img, filter)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
