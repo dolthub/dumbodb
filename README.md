@@ -32,6 +32,7 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 |---------|-------------|
 | [`dumboCommit`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbocommit) | Commit the current working set with a message and author |
 | [`dumboBranch`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbobranch) | Create or delete a branch |
+| [`dumboBranchStatus`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbobranchstatus) | Report how many commits each target refspec is ahead and behind a base refspec |
 | [`dumboMerge`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbomerge) | Merge a source branch into the current branch |
 | [`dumboCherryPick`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbocherrypick) | Apply one commit's diff onto the current branch |
 | [`dumboRebase`](https://github.com/dolthub/dumbodb/wiki/Commands#dumborebase) | Reapply branch commits onto another branch tip, rewriting history |
