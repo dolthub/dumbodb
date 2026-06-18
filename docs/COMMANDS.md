@@ -589,6 +589,15 @@ identified by collection and `_id`. It is an array of single-key
 commit is included if it added, removed, or modified (versus its first parent)
 one of those documents in that collection, for **any** listed entry (OR).
 
+An `_id` value may be **any valid BSON `_id` type** -- number, string,
+`ObjectId`, date, decimal, or a document/subdocument -- and is matched with the
+same equality `find({_id: ...})` uses: numeric cross-type coercion
+(`int`/`long`/`double`), and exact, field-order-sensitive equality for document
+`_id`s. The only type that is never a valid `_id` is an array, which is why an
+array value is unambiguously the id-list form. Because `_id` is immutable,
+every insert, update, and delete of a document is a touch -- the filter cleanly
+answers "show me the commits in this document's history."
+
 ```js
 // history of one document (the common case):
 log.runCommand({ dumboLog: 1, filters: [ { orders: 42 } ] })
@@ -607,26 +616,26 @@ log.runCommand({ dumboLog: 1, filters: [ "orders", { users: 7 } ] })
 ```
 
 A **bare collection-name string** entry is the whole-collection wildcard: the
-commit qualifies if it touched any document in that collection. (A string entry
-is distinct from a `{collection: id}` document, so there's no ambiguity; a
+commit qualifies if it touched any document in that collection. A string entry
+is distinct from a `{collection: id}` document, so there's no ambiguity, and a
 whole-collection entry subsumes any specific `_id`s listed for the same
-collection. An empty `_id` array is rejected -- use the string form.)
+collection.
 
 A list element may also be a **`{$match: <query>}`** predicate. Unlike an
 `_id`, a `$match` is evaluated **per commit**: a commit is included when it
 **touched** (added, removed, or modified versus its first parent) a document
-satisfying the query. `$match` elements, explicit `_id`s, and id-lists in the
-same entry all OR together:
+satisfying the query.
 
 ```js
-// commits that changed an order while it was pending, or with that customer:
-log.runCommand({ dumboLog: 1, filters: [ { orders: [
-  { $match: { status: "pending" } },
-  { $match: { customer: "4242" } }
-] } ] })
+// commits that touched an order while it was pending:
+log.runCommand({ dumboLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
 ```
 
-**Touched mechanics (read this).** For a modified document, `$match` matches if
+`$match` elements, explicit `_id`s, and id-lists in the same entry OR together,
+and a `$match` query supports the usual `find()` boolean operators
+(`$and`/`$or`/`$nor`) internally.
+
+**Touched mechanics.** For a modified document, `$match` matches if
 **either** the pre-image (parent) **or** the post-image (this commit) satisfies
 the query. Consequences worth knowing:
 
@@ -672,17 +681,8 @@ filters: [ { orders: [ { $match: { customer: "4242", $or: [
   also counts as the nested field changing.
 - Combines with value conditions (implicit AND) and `$and`/`$or`/`$nor`
   nesting; AND binds within a single document.
-- `$changed` is a DumboDB extension to `$match` only -- it is not a real
+- `$changed` is a DumboDB extension to `$match` only -- it is not supported as a
   `find()` operator, and its value must be `true`.
-
-An `_id` value may be **any valid BSON `_id` type** -- number, string,
-`ObjectId`, date, decimal, or a document/subdocument -- and is matched with the
-same equality `find({_id: ...})` uses: numeric cross-type coercion
-(`int`/`long`/`double`), and exact, field-order-sensitive equality for document
-`_id`s. The only type that is never a valid `_id` is an array, which is why an
-array value is unambiguously the id-list form. Because `_id` is immutable,
-every insert, update, and delete of a document is a touch -- the filter cleanly
-answers "show me the commits in this document's history."
 
 With `filters` active, `limit` counts matching commits: the walk continues
 past non-matching commits until `limit` matches are found. `next` is
@@ -696,9 +696,9 @@ the requested `_id`s that changed (like `git log -p -- path`).
 ### Error cases
 
 - `filters` that is not an array, an entry that is neither a collection-name
-  string nor a single-key document, an empty `_id` array (use the string form),
-  an `_id`-list element that is itself an array, or a `$`-operator other than
-  `$match`, returns `TypeMismatch` / `BadValue`.
+  string nor a single-key document, an empty `_id` array, an `_id`-list element
+  that is itself an array, or a `$`-operator other than `$match`, returns
+  `TypeMismatch` / `BadValue`.
 - `all` together with `from` returns `BadValue` (they are mutually exclusive).
 - A `from` array element that is not a string returns `TypeMismatch`; an
   unparseable or unknown commit hash returns `OperationFailed`.
