@@ -22,6 +22,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/types"
+
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
 )
@@ -242,4 +245,58 @@ func mustDB(t *testing.T, b *Backend, name string) *dbState {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
 	return db
+}
+
+// TestForEachCollectionChange_VisitsOnlyChanges is the performance guard: a
+// single-document change in a large collection must invoke the callback once,
+// not once per document. Because every converted diff path (diffCollectionMaps,
+// countCollectionMapDiffs, scopedCollectionDiff, anyChangedDocMatches) routes
+// through forEachCollectionChange, this proves their cost is O(changes), not
+// O(collection size) -- the structural-sharing property of the prolly model.
+// The old dual-IterAll merge-walk would have visited all N entries here.
+func TestForEachCollectionChange_VisitsOnlyChanges(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+	const db = "cdperf"
+	const N = 5000
+
+	docs := make([]*types.Document, N)
+	for i := 0; i < N; i++ {
+		docs[i] = mustDoc(t, "_id", int64(i), "v", int64(1))
+	}
+	if _, err := collAt(t, b, db, "main", "c").InsertAll(ctx, &backends.InsertAllParams{Docs: docs}); err != nil {
+		t.Fatalf("InsertAll: %v", err)
+	}
+	hBase := commitTS(t, b, db, "main", "base", 10_000)
+
+	updateDoc(t, b, db, "main", "c", mustDoc(t, "_id", int64(N/2), "v", int64(2)))
+	hMod := commitTS(t, b, db, "main", "mod", 20_000)
+
+	insertOne(t, ctx, collAt(t, b, db, "main", "c"), mustDoc(t, "_id", int64(N), "v", int64(1)))
+	hAdd := commitTS(t, b, db, "main", "add", 30_000)
+
+	deleteID(t, b, db, "main", "c", int64(0))
+	hDel := commitTS(t, b, db, "main", "del", 40_000)
+
+	countChanges := func(fromH, toH string) int {
+		n := 0
+		if err := forEachCollectionChange(ctx, collMapAt(t, b, db, fromH, "c"), collMapAt(t, b, db, toH, "c"),
+			func(collChange) (bool, error) { n++; return false, nil }); err != nil {
+			t.Fatalf("forEachCollectionChange: %v", err)
+		}
+		return n
+	}
+
+	for _, tc := range []struct {
+		name     string
+		from, to string
+	}{
+		{"modify", hBase, hMod},
+		{"add", hMod, hAdd},
+		{"delete", hAdd, hDel},
+	} {
+		if n := countChanges(tc.from, tc.to); n != 1 {
+			t.Fatalf("%s: a 1-doc change in a %d-doc collection visited %d changes; want 1 (a full scan would visit ~%d)", tc.name, N, n, N)
+		}
+	}
 }
