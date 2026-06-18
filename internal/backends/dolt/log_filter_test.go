@@ -370,3 +370,48 @@ func TestLogIDFilter_Match(t *testing.T) {
 		t.Fatalf("$match matching no touched doc should return nothing, got %v", got)
 	}
 }
+
+// TestLogIDFilter_MatchRangeAndRegex confirms $match inherits the full find()
+// operator set -- range ($gte/$lte) and regex ($regex/$options) -- for free,
+// since it routes the query through common.FilterDocument.
+func TestLogIDFilter_MatchRangeAndRegex(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+	const db = "fmr"
+	h := map[string]string{}
+	oc := func() backends.Collection { return collAt(t, b, db, "main", "orders") }
+
+	insertOne(t, ctx, oc(), mustDoc(t, "_id", int64(1), "amount", int64(50), "name", "alice"))
+	h["c1"] = commitTS(t, b, db, "main", "c1", 10_000)
+	insertOne(t, ctx, oc(), mustDoc(t, "_id", int64(2), "amount", int64(150), "name", "bob"))
+	h["c2"] = commitTS(t, b, db, "main", "c2", 20_000)
+	insertOne(t, ctx, oc(), mustDoc(t, "_id", int64(3), "amount", int64(200), "name", "alvin"))
+	h["c3"] = commitTS(t, b, db, "main", "c3", 30_000)
+	byHash := nameMap(h)
+
+	matchQ := func(q *types.Document) []string {
+		return names(byHash, idsOf(logCF(t, b, db, map[string]backends.CommitFilter{
+			"orders": {Queries: []*types.Document{q}},
+		}).Commits))
+	}
+
+	// Range: amount >= 100 -> o2(150), o3(200). c1(50) excluded.
+	if got := matchQ(mustDoc(t, "amount", mustDoc(t, "$gte", int64(100)))); !reflect.DeepEqual(got, []string{"c3", "c2"}) {
+		t.Fatalf("$gte range: got %v", got)
+	}
+
+	// Bounded range: 100 <= amount <= 180 -> only o2(150).
+	if got := matchQ(mustDoc(t, "amount", mustDoc(t, "$gte", int64(100), "$lte", int64(180)))); !reflect.DeepEqual(got, []string{"c2"}) {
+		t.Fatalf("bounded range: got %v", got)
+	}
+
+	// Regex: name ^al -> alice(c1), alvin(c3). bob(c2) excluded.
+	if got := matchQ(mustDoc(t, "name", mustDoc(t, "$regex", "^al"))); !reflect.DeepEqual(got, []string{"c3", "c1"}) {
+		t.Fatalf("$regex: got %v", got)
+	}
+
+	// Regex with case-insensitive option.
+	if got := matchQ(mustDoc(t, "name", mustDoc(t, "$regex", "^AL", "$options", "i"))); !reflect.DeepEqual(got, []string{"c3", "c1"}) {
+		t.Fatalf("$regex /i: got %v", got)
+	}
+}
