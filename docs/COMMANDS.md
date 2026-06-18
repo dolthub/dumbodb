@@ -644,8 +644,9 @@ the query. Consequences worth knowing:
 - A commit that changes a document *out of* the matched set is still included
   -- e.g. under `{status:"pending"}`, the commit that ships a pending order
   matches via its pre-image.
-- A commit that does not touch the collection is never included, even if a
-  matching document exists in its snapshot (presence alone is not a match).
+- A commit is included only if it *touched* a document the filter matches; a
+  matching document merely existing in the commit's snapshot is not enough
+  (presence alone is not a match).
 - `stat`/`patch` for an included commit are scoped to the documents that
   matched at that commit (the same pre/post-image rule).
 
