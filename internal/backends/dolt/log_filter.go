@@ -15,9 +15,7 @@
 package dolt
 
 import (
-	"bytes"
 	"context"
-	"io"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -157,84 +155,42 @@ func anyChangedDocMatches(
 	aMap, bMap prolly.Map,
 	filter *types.Document,
 ) (bool, error) {
-	iterA, err := aMap.IterAll(ctx)
-	if err != nil {
-		return false, err
-	}
-	iterB, err := bMap.IterAll(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	kA, vA, errA := iterA.Next(ctx)
-	kB, vB, errB := iterB.Next(ctx)
-
-	testEntry := func(k, v val.Tuple) (bool, error) {
-		doc, readErr := readDocFromEntry(ctx, ns, k, v)
+	testEntry := func(v val.Tuple) (bool, error) {
+		doc, readErr := readDocFromEntry(ctx, ns, nil, v)
 		if readErr != nil {
 			return false, readErr
 		}
 		return backends.MatchPartialFilter(doc, filter)
 	}
 
-	for {
-		doneA := errA == io.EOF
-		doneB := errB == io.EOF
-		if doneA && doneB {
-			break
+	matched := false
+	err := forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
+		// added -> post-image; removed -> pre-image; modified -> either image.
+		var imgs []val.Tuple
+		switch c.kind {
+		case collAdded:
+			imgs = []val.Tuple{c.to}
+		case collRemoved:
+			imgs = []val.Tuple{c.from}
+		case collModified:
+			imgs = []val.Tuple{c.from, c.to}
 		}
-		if errA != nil && !doneA {
-			return false, errA
-		}
-		if errB != nil && !doneB {
-			return false, errB
-		}
-
-		switch {
-		case doneA:
-			if ok, tErr := testEntry(kB, vB); tErr != nil || ok {
-				return ok, tErr
+		for _, v := range imgs {
+			ok, tErr := testEntry(v)
+			if tErr != nil {
+				return false, tErr
 			}
-			kB, vB, errB = iterB.Next(ctx)
-
-		case doneB:
-			if ok, tErr := testEntry(kA, vA); tErr != nil || ok {
-				return ok, tErr
-			}
-			kA, vA, errA = iterA.Next(ctx)
-
-		default:
-			switch cmp := bytes.Compare(kA, kB); {
-			case cmp < 0:
-				if ok, tErr := testEntry(kA, vA); tErr != nil || ok {
-					return ok, tErr
-				}
-				kA, vA, errA = iterA.Next(ctx)
-
-			case cmp > 0:
-				if ok, tErr := testEntry(kB, vB); tErr != nil || ok {
-					return ok, tErr
-				}
-				kB, vB, errB = iterB.Next(ctx)
-
-			default:
-				// Same key; modified when the content hashes differ. A modified
-				// document matches if either image matches the filter.
-				if !bytes.Equal(vA, vB) {
-					if ok, tErr := testEntry(kA, vA); tErr != nil || ok {
-						return ok, tErr
-					}
-					if ok, tErr := testEntry(kB, vB); tErr != nil || ok {
-						return ok, tErr
-					}
-				}
-				kA, vA, errA = iterA.Next(ctx)
-				kB, vB, errB = iterB.Next(ctx)
+			if ok {
+				matched = true
+				return true, nil // stop at first match
 			}
 		}
+		return false, nil
+	})
+	if err != nil {
+		return false, err
 	}
-
-	return false, nil
+	return matched, nil
 }
 
 // scopedCollectionDiff is diffCollectionMaps restricted to documents matching
@@ -248,20 +204,8 @@ func scopedCollectionDiff(
 	aMap, bMap prolly.Map,
 	filter *types.Document,
 ) (added []*types.Document, removed []*types.Document, modified []backends.ModifiedDoc, err error) {
-	iterA, err := aMap.IterAll(ctx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	iterB, err := bMap.IterAll(ctx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	kA, vA, errA := iterA.Next(ctx)
-	kB, vB, errB := iterB.Next(ctx)
-
-	readMatch := func(k, v val.Tuple) (*types.Document, bool, error) {
-		doc, rErr := readDocFromEntry(ctx, ns, k, v)
+	readMatch := func(v val.Tuple) (*types.Document, bool, error) {
+		doc, rErr := readDocFromEntry(ctx, ns, nil, v)
 		if rErr != nil {
 			return nil, false, rErr
 		}
@@ -269,91 +213,53 @@ func scopedCollectionDiff(
 		return doc, ok, mErr
 	}
 
-	for {
-		doneA := errA == io.EOF
-		doneB := errB == io.EOF
-		if doneA && doneB {
-			break
-		}
-		if errA != nil && !doneA {
-			return nil, nil, nil, errA
-		}
-		if errB != nil && !doneB {
-			return nil, nil, nil, errB
-		}
-
-		switch {
-		case doneA:
-			doc, ok, mErr := readMatch(kB, vB)
+	err = forEachCollectionChange(ctx, aMap, bMap, func(c collChange) (bool, error) {
+		switch c.kind {
+		case collAdded:
+			doc, ok, mErr := readMatch(c.to)
 			if mErr != nil {
-				return nil, nil, nil, mErr
+				return false, mErr
 			}
 			if ok {
 				added = append(added, doc)
 			}
-			kB, vB, errB = iterB.Next(ctx)
 
-		case doneB:
-			doc, ok, mErr := readMatch(kA, vA)
+		case collRemoved:
+			doc, ok, mErr := readMatch(c.from)
 			if mErr != nil {
-				return nil, nil, nil, mErr
+				return false, mErr
 			}
 			if ok {
 				removed = append(removed, doc)
 			}
-			kA, vA, errA = iterA.Next(ctx)
 
-		default:
-			switch cmp := bytes.Compare(kA, kB); {
-			case cmp < 0:
-				doc, ok, mErr := readMatch(kA, vA)
-				if mErr != nil {
-					return nil, nil, nil, mErr
+		case collModified:
+			docA, matchA, mErr := readMatch(c.from)
+			if mErr != nil {
+				return false, mErr
+			}
+			docB, matchB, mErr := readMatch(c.to)
+			if mErr != nil {
+				return false, mErr
+			}
+			if matchA || matchB {
+				id, idErr := docB.Get("_id")
+				if idErr != nil {
+					return false, idErr
 				}
-				if ok {
-					removed = append(removed, doc)
+				fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
+				if diffErr != nil {
+					return false, diffErr
 				}
-				kA, vA, errA = iterA.Next(ctx)
-
-			case cmp > 0:
-				doc, ok, mErr := readMatch(kB, vB)
-				if mErr != nil {
-					return nil, nil, nil, mErr
+				if len(fieldDiffs) > 0 {
+					modified = append(modified, backends.ModifiedDoc{ID: id, Diff: fieldDiffs})
 				}
-				if ok {
-					added = append(added, doc)
-				}
-				kB, vB, errB = iterB.Next(ctx)
-
-			default:
-				if !bytes.Equal(vA, vB) {
-					docA, matchA, mErr := readMatch(kA, vA)
-					if mErr != nil {
-						return nil, nil, nil, mErr
-					}
-					docB, matchB, mErr := readMatch(kB, vB)
-					if mErr != nil {
-						return nil, nil, nil, mErr
-					}
-					if matchA || matchB {
-						id, idErr := docB.Get("_id")
-						if idErr != nil {
-							return nil, nil, nil, idErr
-						}
-						fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
-						if diffErr != nil {
-							return nil, nil, nil, diffErr
-						}
-						if len(fieldDiffs) > 0 {
-							modified = append(modified, backends.ModifiedDoc{ID: id, Diff: fieldDiffs})
-						}
-					}
-				}
-				kA, vA, errA = iterA.Next(ctx)
-				kB, vB, errB = iterB.Next(ctx)
 			}
 		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, nil, nil, err
 	}
-
 	return added, removed, modified, nil
 }
