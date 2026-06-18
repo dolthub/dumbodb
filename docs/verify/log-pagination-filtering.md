@@ -423,6 +423,32 @@ Key checks:
   order exists in its snapshot (presence alone is not a match).
 - A `$`-operator other than `$match` is rejected.
 
+## Scenario B7: `$match` with an operator (`$gt`)
+
+`$match` accepts the full `find()` operator set -- range, regex, `$in`, etc.
+This example uses `$gt`; try `$gte`/`$lt`/`$regex`/`$exists` the same way.
+
+```js
+var gf = db.getSiblingDB("logfilter_gt")
+gf.dropDatabase()
+
+gf.orders.insertOne({ _id: 1, amount: 50 })
+gf.runCommand({ doltCommit: 1, message: "g1 add cheap order", author: "a <a@x.io>" })
+gf.orders.insertOne({ _id: 2, amount: 300 })
+gf.runCommand({ doltCommit: 1, message: "g2 add pricey order", author: "a <a@x.io>" })
+gf.orders.updateOne({ _id: 1 }, { $set: { amount: 500 } })   // 50 -> 500, crosses 100
+gf.runCommand({ doltCommit: 1, message: "g3 bump order 1", author: "a <a@x.io>" })
+
+gf.runCommand({ doltLog: 1, filters: [ { orders: [ { $match: { amount: { $gt: 100 } } } ] } ] })
+```
+
+Key checks:
+- Returns `g3`, `g2`:
+  - `g2` added order 2 at 300 (`> 100`),
+  - `g3` bumped order 1 from 50 to 500 -- included via its **post-image**
+    (now `> 100`), the mirror of B6's pre-image case.
+- `g1` is **excluded**: it added order 1 at 50, which is not `> 100`.
+
 ---
 
 ## Quick Reference

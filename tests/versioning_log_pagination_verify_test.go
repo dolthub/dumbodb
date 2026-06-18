@@ -367,4 +367,34 @@ func TestLogPaginationVerify(t *testing.T) {
 		}}})
 		assert.Equal(t, []string{"m3 ship 1", "m2 add 3", "m1 add 1,2"}, mmsgs(raw))
 	})
+
+	// Scenario B7: $match with an operator ($gt). Fresh database.
+	gfdb := fmt.Sprintf("logfiltgt%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(gfdb).Drop(ctx))
+	gf := env.client.Database(gfdb)
+	_, err = gf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "amount", Value: int32(50)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, gfdb, "g1 add cheap order", "a <a@x.io>")
+	_, err = gf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "amount", Value: int32(300)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, gfdb, "g2 add pricey order", "a <a@x.io>")
+	_, err = gf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "amount", Value: int32(500)}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, gfdb, "g3 bump order 1", "a <a@x.io>")
+
+	t.Run("B7_MatchOperatorGt", func(t *testing.T) {
+		// $gt 100 touched: g2 (added 300), g3 (50->500, post-image > 100).
+		// g1 (added at 50) is excluded.
+		raw := runLog(t, env, gfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "amount", Value: bson.D{{Key: "$gt", Value: int32(100)}}}}}},
+			}}},
+		}}})
+		arr := raw["commits"].(bson.A)
+		got := make([]string, len(arr))
+		for i, c := range arr {
+			got[i] = c.(bson.M)["message"].(string)
+		}
+		assert.Equal(t, []string{"g3 bump order 1", "g2 add pricey order"}, got)
+	})
 }
