@@ -390,6 +390,41 @@ Key checks:
 - `{ seq: 5, region: "us" }` -- same fields, different order -- is a **different
   `_id`** and matches nothing, exactly as `find({_id: ...})` would behave.
 
+## Scenario B6: `$match` query (resolved once at HEAD)
+
+A list element can be a `{$match: <query>}` predicate. Each `$match` is resolved
+once, against the collection at the connection branch's HEAD, into a set of
+`_id`s; their history is then returned. `$match`es and explicit `_id`s OR.
+
+```js
+var mf = db.getSiblingDB("logfilter_match")
+mf.dropDatabase()
+
+mf.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
+mf.runCommand({ doltCommit: 1, message: "m1 add 1,2", author: "a <a@x.io>" })
+mf.orders.insertOne({ _id: 3, status: "pending" })
+mf.runCommand({ doltCommit: 1, message: "m2 add 3", author: "a <a@x.io>" })
+mf.orders.updateOne({ _id: 1 }, { $set: { status: "shipped" } })   // 1 no longer pending
+mf.runCommand({ doltCommit: 1, message: "m3 ship 1", author: "a <a@x.io>" })
+
+// At HEAD, pending = {3} only (1 was shipped in m3). History of order 3: m2.
+mf.runCommand({ doltLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
+
+// pending {3} OR shipped {1,2} -> commits touching 1/2/3: m3, m2, m1
+mf.runCommand({ doltLog: 1, filters: [ { orders: [
+  { $match: { status: "pending" } },
+  { $match: { status: "shipped" } }
+] } ] })
+```
+
+Key checks:
+- The first query returns only `m2` -- `$match` resolves `status:"pending"`
+  against HEAD (where only order 3 is pending), then returns order 3's history.
+- The second returns `m3`, `m2`, `m1` (union of the resolved id sets).
+- A `$match` that matches nothing at HEAD returns no commits (it is **not** a
+  whole-collection wildcard).
+- A `$`-operator other than `$match` is rejected.
+
 ---
 
 ## Quick Reference
@@ -402,6 +437,7 @@ Key checks:
 | `{ doltLog: 1, filters: [ { coll: id } ] }` | Commits that touched that document |
 | `{ doltLog: 1, filters: [ { coll: [id1, id2] }, { other: id } ] }` | OR over ids and collections |
 | `{ doltLog: 1, filters: [ { coll: [] } ] }` | Commits that touched any document in `coll` |
+| `{ doltLog: 1, filters: [ { coll: [ { $match: {<query>} } ] } ] }` | History of docs matching `<query>` at HEAD |
 
 Notes:
 - `next` is an array of seed hashes; order within it is not significant.

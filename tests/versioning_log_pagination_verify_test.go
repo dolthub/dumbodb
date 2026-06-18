@@ -324,4 +324,48 @@ func TestLogPaginationVerify(t *testing.T) {
 		}}})
 		assert.Empty(t, raw["commits"].(bson.A))
 	})
+
+	// Scenario B6: $match resolved once at HEAD. Fresh database.
+	mfdb := fmt.Sprintf("logfiltmatch%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(mfdb).Drop(ctx))
+	mf := env.client.Database(mfdb)
+	_, err = mf.Collection("orders").InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, mfdb, "m1 add 1,2", "a <a@x.io>")
+	_, err = mf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "status", Value: "pending"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, mfdb, "m2 add 3", "a <a@x.io>")
+	_, err = mf.Collection("orders").UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, mfdb, "m3 ship 1", "a <a@x.io>")
+
+	mmsgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("B6_MatchResolvedAtHead", func(t *testing.T) {
+		// At HEAD only order 3 is pending; its history is m2.
+		raw := runLog(t, env, mfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}}}}},
+		}}})
+		assert.Equal(t, []string{"m2 add 3"}, mmsgs(raw))
+	})
+
+	t.Run("B6_MultipleMatchOR", func(t *testing.T) {
+		raw := runLog(t, env, mfdb, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}},
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "shipped"}}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"m3 ship 1", "m2 add 3", "m1 add 1,2"}, mmsgs(raw))
+	})
 }

@@ -2249,12 +2249,12 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 	}
 	examined := make(map[string]bool)
 
-	// Build per-collection {_id: {$in: [...]}} filter docs once. When set, the
-	// walk includes only commits that touched one of the requested documents,
-	// and Stat/Patch output is scoped to those documents.
-	idFilters, err := idFilterDocs(params.Filters)
+	// Build per-collection filter docs once ($match queries resolved against the
+	// connection branch HEAD here). When set, the walk includes only commits
+	// that touched a matching document, and Stat/Patch output is scoped to those.
+	idFilters, err := buildLogFilterDocs(ctx, db, params.Branch, params.Filters)
 	if err != nil {
-		return nil, fmt.Errorf("DumboDBLog: building id filters: %w", err)
+		return nil, fmt.Errorf("DumboDBLog: building filters: %w", err)
 	}
 
 	// Build a map from commit hash string -> ref labels by iterating over all

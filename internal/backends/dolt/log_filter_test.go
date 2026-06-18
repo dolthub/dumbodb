@@ -46,10 +46,24 @@ func deleteID(t *testing.T, b *Backend, db, branch, coll string, id any) {
 	}
 }
 
+// idFilters is a test convenience: collection -> _id list, where an empty list
+// means the whole-collection wildcard.
+func idFilters(m map[string][]any) map[string]backends.CommitFilter {
+	out := make(map[string]backends.CommitFilter, len(m))
+	for coll, ids := range m {
+		if len(ids) == 0 {
+			out[coll] = backends.CommitFilter{All: true}
+		} else {
+			out[coll] = backends.CommitFilter{IDs: ids}
+		}
+	}
+	return out
+}
+
 func logFilter(t *testing.T, b *Backend, db string, filters map[string][]any) *backends.LogResult {
 	t.Helper()
 	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{
-		DBName: db, Branch: "main", ConnBranch: "main", Limit: 100, Filters: filters,
+		DBName: db, Branch: "main", ConnBranch: "main", Limit: 100, Filters: idFilters(filters),
 	})
 	if err != nil {
 		t.Fatalf("DumboDBLog(filter): %v", err)
@@ -143,7 +157,7 @@ func TestLogIDFilter_ScopeStatPatch(t *testing.T) {
 	// c4 changed o1 (matched), o2 (not matched), u2 (other collection).
 	res, err := b.DumboDBLog(ctx, &backends.LogParams{
 		DBName: "f4", Branch: "main", ConnBranch: "main", Limit: 1, From: []string{h["c4"]},
-		Filters: map[string][]any{"orders": {int64(1)}}, Stat: true, Patch: true,
+		Filters: idFilters(map[string][]any{"orders": {int64(1)}}), Stat: true, Patch: true,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBLog: %v", err)
@@ -196,7 +210,7 @@ func TestLogIDFilter_LimitCountsMatchesWithNext(t *testing.T) {
 	b := newTestBackend(t)
 	h := buildFilterHistory(t, b, "f6")
 	byHash := nameMap(h)
-	filter := map[string][]any{"orders": {int64(1)}}
+	filter := idFilters(map[string][]any{"orders": {int64(1)}})
 
 	// HEAD is c6 (users only). limit=1 returns c5; walk skips c6; next past it.
 	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{
@@ -281,7 +295,7 @@ func TestLogIDFilter_WholeCollection(t *testing.T) {
 	// both o1 and o2 -> Modified count 2 (vs the _id-scoped case which was 1).
 	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{
 		DBName: "fwc", Branch: "main", ConnBranch: "main", Limit: 1, From: []string{h["c4"]},
-		Filters: map[string][]any{"orders": {}}, Stat: true,
+		Filters: idFilters(map[string][]any{"orders": {}}), Stat: true,
 	})
 	if err != nil {
 		t.Fatalf("DumboDBLog: %v", err)
@@ -289,5 +303,62 @@ func TestLogIDFilter_WholeCollection(t *testing.T) {
 	st := res.Commits[0].Stat
 	if len(st) != 1 || st[0].Name != "orders" || st[0].Modified != 2 {
 		t.Fatalf("whole-collection stat should report orders with 2 modified, got %+v", st)
+	}
+}
+
+// logCF runs DumboDBLog with an explicit CommitFilter map (for $match tests).
+func logCF(t *testing.T, b *Backend, db string, filters map[string]backends.CommitFilter) *backends.LogResult {
+	t.Helper()
+	res, err := b.DumboDBLog(context.Background(), &backends.LogParams{
+		DBName: db, Branch: "main", ConnBranch: "main", Limit: 100, Filters: filters,
+	})
+	if err != nil {
+		t.Fatalf("DumboDBLog($match): %v", err)
+	}
+	return res
+}
+
+// TestLogIDFilter_Match covers $match: a find() predicate resolved once at HEAD
+// to a set of _ids, then matched by identity.
+func TestLogIDFilter_Match(t *testing.T) {
+	b := newTestBackend(t)
+	h := buildFilterHistory(t, b, "fm")
+	byHash := nameMap(h)
+
+	// At HEAD: o2 (shipped) and o3 (pending) exist; o1 was deleted (c5).
+	// $match {status:"pending"} resolves to {o3} -> commits touching o3: c3.
+	got := names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
+		"orders": {Queries: []*types.Document{mustDoc(t, "status", "pending")}},
+	}).Commits))
+	if want := []string{"c3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("$match status=pending: got %v want %v (HEAD-resolved to o3)", got, want)
+	}
+
+	// Multiple $match OR: status=shipped ({o2}) OR status=pending ({o3}) ->
+	// commits touching o2 or o3: c4(o2), c3(o3), c1(o2).
+	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
+		"orders": {Queries: []*types.Document{
+			mustDoc(t, "status", "shipped"),
+			mustDoc(t, "status", "pending"),
+		}},
+	}).Commits))
+	if want := []string{"c4", "c3", "c1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("$match OR: got %v want %v", got, want)
+	}
+
+	// $match unioned with an explicit _id: pending ({o3}) OR _id:1 -> c5,c4,c3,c1.
+	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
+		"orders": {IDs: []any{int64(1)}, Queries: []*types.Document{mustDoc(t, "status", "pending")}},
+	}).Commits))
+	if want := []string{"c5", "c4", "c3", "c1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("$match + _id: got %v want %v", got, want)
+	}
+
+	// A $match that resolves to nothing matches nothing (NOT whole-collection).
+	got = names(byHash, idsOf(logCF(t, b, "fm", map[string]backends.CommitFilter{
+		"orders": {Queries: []*types.Document{mustDoc(t, "status", "cancelled")}},
+	}).Commits))
+	if len(got) != 0 {
+		t.Fatalf("$match resolving to nothing should match nothing, got %v", got)
 	}
 }

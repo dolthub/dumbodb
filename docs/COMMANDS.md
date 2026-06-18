@@ -494,7 +494,7 @@ timestamp first.
 | `limit` | int32 | no | unset (default 20) | Maximum number of commits to return. `0` explicitly requests an empty list. |
 | `from` | string or array of strings | no | HEAD | Seed commit(s) for the traversal frontier. A single hash starts there (and still walks both parents of merges); an array seeds the walk with every listed commit. Pass back a prior response's `next` to page. |
 | `all` | bool | no | `false` | Seed the walk with the HEAD of every branch, so it spans all branches (`git log --all`; tags excluded). Mutually exclusive with `from`. |
-| `filters` | array | no | unset | List of `{collection: _id}` entries; returns only commits that touched one of those documents (see Filtering). The value is a single `_id` or an array of `_id`s. |
+| `filters` | array | no | unset | List of `{collection: _id}` entries; returns only commits that touched matching documents (see Filtering). The value is a single `_id`, an array of `_id`s, an empty array (whole collection), or a `{$match: <query>}` predicate. |
 | `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
 | `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
 
@@ -608,6 +608,27 @@ if it touched any document in that collection. (An empty array is never a valid
 `_id`, so this is unambiguous; a whole-collection entry subsumes any specific
 `_id`s listed for the same collection.)
 
+A list element may also be a **`{$match: <query>}`** predicate. Each `$match`
+is resolved **once** against the collection at the connection branch's HEAD
+into the set of matching `_id`s, which are then filtered by identity (so it
+behaves exactly like passing those `_id`s explicitly). `$match` elements,
+explicit `_id`s, and id-lists in the same entry all OR together:
+
+```js
+// orders pending OR with that customer now, then their full history:
+log.runCommand({ dumboLog: 1, filters: [ { orders: [
+  { $match: { status: "pending" } },
+  { $match: { customer: "4242" } }
+] } ] })
+```
+
+Because `$match` resolves at HEAD, it answers "the history of the documents
+that match this query *now*" -- a document deleted before HEAD is not in the
+resolved set. A `$match` resolving to no documents matches nothing (distinct
+from the empty-array wildcard). Only `$match` is supported; any other
+`$`-operator is rejected. `$`-prefixed field names are never valid in an `_id`,
+which is what lets `{$match: ...}` coexist unambiguously with composite `_id`s.
+
 An `_id` value may be **any valid BSON `_id` type** -- number, string,
 `ObjectId`, date, decimal, or a document/subdocument -- and is matched with the
 same equality `find({_id: ...})` uses: numeric cross-type coercion
@@ -629,8 +650,8 @@ the requested `_id`s that changed (like `git log -p -- path`).
 ### Error cases
 
 - `filters` that is not an array, an entry that is not a single-key document,
-  or an `_id`-list element that is itself an array, returns `TypeMismatch` /
-  `BadValue`.
+  an `_id`-list element that is itself an array, or a `$`-operator other than
+  `$match`, returns `TypeMismatch` / `BadValue`.
 - `all` together with `from` returns `BadValue` (they are mutually exclusive).
 - A `from` array element that is not a string returns `TypeMismatch`; an
   unparseable or unknown commit hash returns `OperationFailed`.

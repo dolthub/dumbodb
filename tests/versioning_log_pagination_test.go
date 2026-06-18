@@ -352,3 +352,74 @@ func TestLogIDFilterHandler_ExoticIDs(t *testing.T) {
 		require.Len(t, arr, 2) // add-int and add-oid
 	})
 }
+
+func TestLogMatchHandler(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("logmatch%d", rand.Int64N(1_000_000))
+	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	orders := env.client.Database(dbName).Collection("orders")
+
+	// c1 add o1(pending),o2(shipped); c2 add o3(pending); c3 ship o1; c4 add user
+	_, err := orders.InsertMany(ctx, []interface{}{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
+	})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c1", "a <a@x.io>")
+	_, err = orders.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "status", Value: "pending"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c2", "a <a@x.io>")
+	_, err = orders.UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c3", "a <a@x.io>")
+	_, err = env.client.Database(dbName).Collection("users").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "c4", "a <a@x.io>")
+
+	msgs := func(raw bson.M) []string {
+		arr := raw["commits"].(bson.A)
+		out := make([]string, len(arr))
+		for i, c := range arr {
+			out[i] = c.(bson.M)["message"].(string)
+		}
+		return out
+	}
+
+	t.Run("MatchResolvesAtHead", func(t *testing.T) {
+		// At HEAD pending = {o3} (o1 is now shipped). History of o3: c2.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}}}}},
+		}}})
+		assert.Equal(t, []string{"c2"}, msgs(raw))
+	})
+
+	t.Run("MultipleMatchOR", func(t *testing.T) {
+		// pending {o3} OR shipped {o1,o2} -> commits touching o1/o2/o3: c3,c2,c1.
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}},
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "shipped"}}}},
+			}}},
+		}}})
+		assert.Equal(t, []string{"c3", "c2", "c1"}, msgs(raw))
+	})
+
+	t.Run("MatchMixedWithID", func(t *testing.T) {
+		// pending {o3} OR _id 1 -> c3(o1), c2(o3), c1(o1).
+		raw := runLog(t, env, dbName, bson.D{{Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.A{
+				bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: "pending"}}}},
+				int32(1),
+			}}},
+		}}})
+		assert.Equal(t, []string{"c3", "c2", "c1"}, msgs(raw))
+	})
+
+	t.Run("UnknownOperator_Errors", func(t *testing.T) {
+		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
+			bson.D{{Key: "orders", Value: bson.D{{Key: "$nope", Value: int32(1)}}}},
+		}}}
+		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+	})
+}

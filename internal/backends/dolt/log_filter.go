@@ -17,6 +17,7 @@ package dolt
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -29,23 +30,59 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 )
 
-// idFilterDocs converts the simple log filter (collection name -> list of _id
-// values) into a per-collection filter document. A non-empty id list becomes
-// `{_id: {$in: [...]}}`; an empty list is the whole-collection wildcard and
-// becomes `{}` (matches every document). Routing through the registered find()
-// matcher gives MongoDB _id equality for free -- numeric cross-type coercion
-// (int32/int64/double), ObjectId, and document _ids.
-func idFilterDocs(filters map[string][]any) (map[string]*types.Document, error) {
+// buildLogFilterDocs turns the per-collection CommitFilter into a per-collection
+// filter document used by the walk. Each collection's $match Queries are first
+// resolved ONCE, against the collection at the connection branch's HEAD, into a
+// set of _ids that are unioned with the explicit IDs. The result per collection:
+//   - All           -> `{}` (matches every document)
+//   - otherwise     -> `{_id: {$in: [ids...]}}` (empty list matches nothing)
+//
+// Routing _id membership through the registered find() matcher gives MongoDB
+// _id equality for free -- numeric cross-type coercion, ObjectId, document _ids.
+func buildLogFilterDocs(ctx context.Context, db *dbState, branch string, filters map[string]backends.CommitFilter) (map[string]*types.Document, error) {
 	if len(filters) == 0 {
 		return nil, nil
 	}
+
+	// Resolve the HEAD address map once; only needed if some collection carries
+	// $match queries.
+	var headAM prolly.AddressMap
+	headLoaded := false
+	loadHead := func() error {
+		if headLoaded {
+			return nil
+		}
+		h, err := resolveRootishToCommitHash(ctx, db, branch)
+		if err != nil {
+			return fmt.Errorf("resolving HEAD for $match: %w", err)
+		}
+		headAM, err = amFromCommitHash(ctx, db, h.String())
+		if err != nil {
+			return fmt.Errorf("loading HEAD address map for $match: %w", err)
+		}
+		headLoaded = true
+		return nil
+	}
+
 	out := make(map[string]*types.Document, len(filters))
-	for coll, ids := range filters {
-		if len(ids) == 0 {
-			// Whole-collection wildcard: match any document in the collection.
+	for coll, cf := range filters {
+		if cf.All {
 			out[coll] = must.NotFail(types.NewDocument())
 			continue
 		}
+
+		ids := append([]any(nil), cf.IDs...)
+		for _, q := range cf.Queries {
+			if err := loadHead(); err != nil {
+				return nil, err
+			}
+			resolved, err := resolveQueryIDs(ctx, db, headAM, coll, q)
+			if err != nil {
+				return nil, fmt.Errorf("resolving $match for %q: %w", coll, err)
+			}
+			ids = append(ids, resolved...)
+		}
+
 		arr, err := types.NewArray(ids...)
 		if err != nil {
 			return nil, err
@@ -61,6 +98,46 @@ func idFilterDocs(filters map[string][]any) (map[string]*types.Document, error) 
 		out[coll] = filterDoc
 	}
 	return out, nil
+}
+
+// resolveQueryIDs scans the collection as it exists at headAM and returns the
+// _ids of all documents matching the find()-style query. This is the one-time
+// resolution of a $match predicate to a set of identities.
+func resolveQueryIDs(ctx context.Context, db *dbState, headAM prolly.AddressMap, coll string, query *types.Document) ([]any, error) {
+	m, err := collectionMapFromAM(ctx, db, headAM, coll)
+	if err != nil {
+		return nil, err
+	}
+	iter, err := m.IterAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []any
+	for {
+		k, v, iErr := iter.Next(ctx)
+		if iErr == io.EOF {
+			break
+		}
+		if iErr != nil {
+			return nil, iErr
+		}
+		doc, rErr := readDocFromEntry(ctx, db.ns, k, v)
+		if rErr != nil {
+			return nil, rErr
+		}
+		ok, mErr := backends.MatchPartialFilter(doc, query)
+		if mErr != nil {
+			return nil, mErr
+		}
+		if ok {
+			id, idErr := doc.Get("_id")
+			if idErr != nil {
+				return nil, idErr
+			}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // commitTouchesFilter reports whether commit ci added, removed, or modified
