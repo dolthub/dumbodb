@@ -578,7 +578,7 @@ To page across **all** branches, start with `all: true` instead of `from`
 and subsequent pages continue from `next` as usual:
 
 ```js
-log.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branches
+db.runCommand({ dumboLog: 1, limit: 50, all: true })  // page 1 spans all branches
 ```
 
 ### Filtering
@@ -601,19 +601,19 @@ answers "show me the commits in this document's history."
 
 ```js
 // history of one document (the common case):
-log.runCommand({ dumboLog: 1, filters: [ { orders: 42 } ] })
+db.runCommand({ dumboLog: 1, filters: [ { orders: 42 } ] })
 
 // several documents, possibly across collections (OR):
-log.runCommand({ dumboLog: 1, filters: [ { orders: [1, 2] }, { users: 7 } ] })
+db.runCommand({ dumboLog: 1, filters: [ { orders: [1, 2] }, { users: 7 } ] })
 
 // _id can be any valid _id type, including a subdocument:
-log.runCommand({ dumboLog: 1, filters: [ { events: { region: "us", seq: 5 } } ] })
+db.runCommand({ dumboLog: 1, filters: [ { events: { region: "us", seq: 5 } } ] })
 
 // whole collection: a bare collection-name string matches any _id:
-log.runCommand({ dumboLog: 1, filters: [ "orders" ] })
+db.runCommand({ dumboLog: 1, filters: [ "orders" ] })
 
 // whole collection OR a specific doc in another collection:
-log.runCommand({ dumboLog: 1, filters: [ "orders", { users: 7 } ] })
+db.runCommand({ dumboLog: 1, filters: [ "orders", { users: 7 } ] })
 ```
 
 A **bare collection-name string** entry is the whole-collection wildcard: the
@@ -629,7 +629,7 @@ satisfying the query.
 
 ```js
 // commits that touched an order while it was pending:
-log.runCommand({ dumboLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
+db.runCommand({ dumboLog: 1, filters: [ { orders: [ { $match: { status: "pending" } } ] } ] })
 ```
 
 `$match` elements, explicit `_id`s, and id-lists in the same entry OR together.
