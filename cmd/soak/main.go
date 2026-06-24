@@ -30,11 +30,31 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/dolthub/dumbodb/internal/version"
 )
+
+// buildVersion returns the version under test, matching the Makefile's
+// GIT_VERSION (git describe --tags --always --dirty). It prefers the value
+// embedded at build time via -ldflags; absent that (e.g. a plain go build), it
+// runs the same git command from the current directory.
+func buildVersion() string {
+	if v := version.GitVersion; v != "" && v != "unknown" {
+		return v
+	}
+
+	out, err := exec.Command("git", "describe", "--tags", "--always", "--dirty").Output()
+	if err != nil {
+		return version.GitVersion
+	}
+
+	return strings.TrimSpace(string(out))
+}
 
 func main() {
 	var (
@@ -146,8 +166,9 @@ func main() {
 	defer wl.stop()
 
 	hostname, _ := os.Hostname()
-	log.Printf("soak started host=%s pid=%d addr=%s sample=%s window=%s threshold=%.2fMB/h cooldown=%s",
-		hostname, pid, addr, *sampleInterval, *slopeWindow, *slopeThresholdMB, *cooldown)
+	buildVer := buildVersion()
+	log.Printf("soak started host=%s build=%s pid=%d addr=%s sample=%s window=%s threshold=%.2fMB/h cooldown=%s",
+		hostname, buildVer, pid, addr, *sampleInterval, *slopeWindow, *slopeThresholdMB, *cooldown)
 
 	ticker := time.NewTicker(*sampleInterval)
 	defer ticker.Stop()
@@ -164,7 +185,7 @@ func main() {
 		// Send a summary at the end of every run, including clean
 		// no-alert runs. A silent cron is indistinguishable from a
 		// broken cron; the summary email is the heartbeat.
-		text, htmlBody := summaryReport(hostname, pid, addr, startedAt, time.Now(),
+		text, htmlBody := summaryReport(hostname, buildVer, pid, addr, startedAt, time.Now(),
 			sampleCount, alertCount, firstSample, lastSample, allSamples,
 			wl.cycleCount(), wl.errCount())
 		subj := fmt.Sprintf("dumbodb soak: %d alert(s)", alertCount)
@@ -209,7 +230,7 @@ func main() {
 			}
 			alertCount++
 			recent := detector.recent()
-			text, htmlBody := alertReport(hostname, pid, addr, alert, recent, wl.cycleCount(), wl.errCount())
+			text, htmlBody := alertReport(hostname, buildVer, pid, addr, alert, recent, wl.cycleCount(), wl.errCount())
 			log.Printf("ALERT: %s", strings.ReplaceAll(strings.TrimSpace(text), "\n", " | "))
 			notify(ctx, alertMessage{
 				Subject:  *emailSubj,
@@ -269,9 +290,10 @@ func resolveServer(ctx context.Context, attachAddr string, attachPid int, binary
 
 // alertReport renders the in-flight alert email as both plain text
 // and HTML, sharing the same stat lines so the two views agree.
-func alertReport(host string, pid int, addr string, a alert, recent []sample, cycles, errs int64) (text, htmlBody string) {
+func alertReport(host, buildVer string, pid int, addr string, a alert, recent []sample, cycles, errs int64) (text, htmlBody string) {
 	title := fmt.Sprintf("dumbodb soak alert on %s", host)
 	stats := []string{
+		fmt.Sprintf("build: %s", buildVer),
 		fmt.Sprintf("pid: %d (%s)", pid, addr),
 		fmt.Sprintf("slope: %+.2f MB/hour over the last %s (threshold %+.2f MB/hour)",
 			a.slopeMBPerHour, roundDuration(a.window), a.thresholdMBPerHour),
@@ -282,9 +304,10 @@ func alertReport(host string, pid int, addr string, a alert, recent []sample, cy
 
 // summaryReport renders the end-of-run summary email as both plain
 // text and HTML.
-func summaryReport(host string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64) (text, htmlBody string) {
+func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64) (text, htmlBody string) {
 	title := fmt.Sprintf("dumbodb soak summary on %s", host)
 	stats := []string{
+		fmt.Sprintf("build: %s", buildVer),
 		fmt.Sprintf("pid: %d (%s)", pid, addr),
 		fmt.Sprintf("runtime: %s (started %s, ended %s)",
 			roundDuration(endedAt.Sub(startedAt)),
