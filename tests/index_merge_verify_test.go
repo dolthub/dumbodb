@@ -243,7 +243,8 @@ func TestIndexMergeVerify(t *testing.T) {
 		reason := entry["reason"].(bson.M)
 		assert.Equal(t, "by_sku", reason["index"], "reason names the offending index")
 		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"], "reason carries the colliding key")
-		assert.Contains(t, reason["message"], "by_sku", "message names the index")
+		assert.Equal(t, `unique index "by_sku": branch 'main' (ours) and branch 'feature' (theirs) both have sku = "S-1"`,
+			reason["message"], "message names the index and both branches")
 
 		// Both contenders are present with their own _ids: ours is the
 		// surviving doc 10 (main), theirs is the evicted doc 20 (feature).

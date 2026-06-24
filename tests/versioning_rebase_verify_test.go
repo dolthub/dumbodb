@@ -427,7 +427,8 @@ func TestRebaseVerify(t *testing.T) {
 		})
 		require.EqualValues(t, 0, raw["ok"], "rebase must conflict on F3")
 
-		// Resolve with theirs (accept feature's v:100)
+		// Resolve with theirs. After the rebase swap, "theirs" is the onto/main
+		// side (v:200); "ours" would be the replayed feature commit (v:100).
 		var conflictsRes bson.M
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -453,10 +454,10 @@ func TestRebaseVerify(t *testing.T) {
 		assert.EqualValues(t, 1, contRaw["ok"], "continue must succeed")
 		assert.EqualValues(t, 3, contRaw["commitsReplayed"], "all 3 commits must be replayed")
 
-		// Verify: _id:1 should have v:100 (theirs/feature's version)
+		// Verify: _id:1 should have v:200 (theirs = onto/main's version)
 		var doc bson.M
 		require.NoError(t, featDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))
-		assert.EqualValues(t, 100, doc["v"], "theirs resolution: v must be 100")
+		assert.EqualValues(t, 200, doc["v"], "theirs resolution keeps onto/main's value")
 
 		// Feature must have exactly 3 docs: _id:1 (resolved) + _id:10 (F1) + _id:11 (F2)
 		n, err := featDB.Collection("items").CountDocuments(ctx, bson.D{})
@@ -588,8 +589,12 @@ func TestRebaseVerify(t *testing.T) {
 		firstConflict := conflictList[0].(bson.M)
 		conflictID, _ := firstConflict["conflictId"].(string)
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
-		assert.Equal(t, "branch 'feature' (ours) and the replayed commit (theirs) both modified document 1",
+		assert.Equal(t, "the replayed commit (ours) and branch 'main' (theirs) both modified document 1",
 			firstConflict["reason"].(bson.M)["message"])
+		// After the rebase swap, "ours" is the replayed feature commit (v:200),
+		// "theirs" is the onto/main value (v:100).
+		assert.EqualValues(t, 200, firstConflict["ours"].(bson.M)["doc"].(bson.M)["v"], "ours = replayed feature commit")
+		assert.EqualValues(t, 100, firstConflict["theirs"].(bson.M)["doc"].(bson.M)["v"], "theirs = onto/main")
 
 		// Resolve using "ours".
 		var resolveResult bson.M
@@ -625,6 +630,12 @@ func TestRebaseVerify(t *testing.T) {
 		assert.Nil(t, cleanStatus["conflicts"], "conflicts must be absent after resolution")
 		assert.Equal(t, false, cleanStatus["dirty"], "workspace must not be dirty after resolution")
 		assert.NotNil(t, cleanStatus["commitId"], "commitId must be present after resolution")
+
+		// Resolving "ours" kept the replayed feature commit (v:200).
+		var doc1 bson.M
+		err = conflictFeatureDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc1)
+		require.NoError(t, err)
+		assert.EqualValues(t, 200, doc1["v"], "resolve-ours keeps the replayed commit's value")
 
 		// No committer param: rebased commits must have committer == author.
 		var logResult bson.M

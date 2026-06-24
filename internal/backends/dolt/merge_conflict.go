@@ -71,6 +71,7 @@ type mergeInProgress struct {
 	// Rebase-specific fields (set when isRebase is true).
 	// intoHash (above) tracks the current rebased tip hash and is updated as commits are replayed.
 	isRebase              bool
+	ontoBranch            string      // the branch being rebased onto (the "theirs" side in conflict messages)
 	rebaseBranchHash      hash.Hash   // branch HEAD before rebase started (used to reset branch on abort)
 	rebaseRemainingHashes []hash.Hash // commits yet to replay (oldest-first), not including the current paused one
 	rebaseCurrentPick     hash.Hash   // commit currently being replayed (paused on conflict)
@@ -199,9 +200,10 @@ func documentEditReasonMessage(code string, id any, oursDesc, theirsDesc string)
 	}
 }
 
-// collisionMessage describes a unique-index collision, naming the index.
-func collisionMessage(index string, key *types.Document) string {
-	return fmt.Sprintf("unique index %q: ours and theirs both have %s", index, renderKey(key))
+// collisionMessage describes a unique-index collision, naming the index and
+// each contending side (e.g. "branch 'main' (ours)").
+func collisionMessage(index string, key *types.Document, oursDesc, theirsDesc string) string {
+	return fmt.Sprintf("unique index %q: %s and %s both have %s", index, oursDesc, theirsDesc, renderKey(key))
 }
 
 func renderKey(key *types.Document) string {
@@ -896,7 +898,7 @@ func captureConflictsForCollection(
 					reasonCode:    "uniqueKeyCollision",
 					reasonIndex:   loser.index,
 					reasonKey:     loser.key,
-					reasonMessage: collisionMessage(loser.index, loser.key),
+					reasonMessage: collisionMessage(loser.index, loser.key, oursDesc, theirsDesc),
 				}
 				e.ourDiffType = "modified"
 				if baseVal == nil {
@@ -966,7 +968,7 @@ func captureConflictsForCollection(
 				reasonCode:    "uniqueKeyCollision",
 				reasonIndex:   loser.index,
 				reasonKey:     loser.key,
-				reasonMessage: collisionMessage(loser.index, loser.key),
+				reasonMessage: collisionMessage(loser.index, loser.key, oursDesc, theirsDesc),
 			})
 		}
 	}

@@ -1116,7 +1116,7 @@ main.runCommand({ dumboConflicts: 1 })
 //   conflictId: "...",
 //   type:   "uniqueKeyCollision",
 //   reason: { code: "uniqueKeyCollision",
-//             message: 'unique index "by_sku": ours and theirs both have sku = "S-1"',
+//             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
 //   base:   null,
 //   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },

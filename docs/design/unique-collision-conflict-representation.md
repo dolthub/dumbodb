@@ -67,7 +67,7 @@ change: **`_id` moves off the top level and into each side.**
   type: "documentEdit" | "uniqueKeyCollision",
   reason: {
     code:    "bothModified" | "modifyDelete" | "uniqueKeyCollision" | ...,
-    message: "unique index \"by_sku\": ours and theirs both have sku = \"S-1\"",
+    message: "unique index \"by_sku\": branch 'main' (ours) and branch 'feature' (theirs) both have sku = \"S-1\"",
     index:   "by_sku",        // present only when an index is implicated;
                               // always named in the message for collisions
     key:     { sku: "S-1" }   // the colliding key value

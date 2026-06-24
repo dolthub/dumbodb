@@ -3215,6 +3215,7 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 	// Initialize rebase state: start with onto as the current tip.
 	ms := &mergeInProgress{
 		intoBranch:            branch,
+		ontoBranch:            params.Onto,
 		premergeAM:            preRebaseAM,
 		intoHash:              ontoHead,
 		isRebase:              true,
@@ -3292,8 +3293,10 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		}
 
 		// 3-way merge: apply pick's diff (base->from) onto the current rebased tip (into).
-		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
-			fmt.Sprintf("branch '%s' (ours)", ms.intoBranch), "the replayed commit (theirs)")
+		// Sides are swapped so the replayed commit presents as "ours" and the
+		// onto/tip as "theirs" (a rebase moves the user's commits onto a base).
+		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
+			"the replayed commit (ours)", fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {
 			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
 		}

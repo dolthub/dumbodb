@@ -432,7 +432,7 @@ printjson(rConflicts)
 //         { conflictId: "<base64-id>",
 //           type: "documentEdit",
 //           reason: { code: "bothModified",
-//                     message: "branch 'feature' (ours) and the replayed commit (theirs) both modified document 1" },
+//                     message: "the replayed commit (ours) and branch 'main' (theirs) both modified document 1" },
 //           base:   { _id: 1, doc: { _id: 1, v: 1 } },
 //           ours:   { _id: 1, doc: { _id: 1, v: 200 }, diffType: "modified" },
 //           theirs: { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" } }
@@ -441,7 +441,8 @@ printjson(rConflicts)
 //   ],
 //   ok: 1
 // }
-// _id lives on each side; ours = feature's version (v:200), theirs = main's version (v:100)
+// For a rebase, "ours" is the replayed feature commit (v:200) and "theirs"
+// is the onto branch (main, v:100).
 const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 print("conflictId =", conflictId)
 
