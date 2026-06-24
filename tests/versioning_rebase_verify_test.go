@@ -220,19 +220,27 @@ func TestRebaseVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 4: Rebase onto same tip replays feature's commit again
+	// Scenario 4: Rebasing when already up-to-date is a no-op
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_AlreadyUpToDate", func(t *testing.T) {
-		// After Scenario 1, feature = C2' (parent = C3, main tip = C3). feature
-		// is still one commit ahead of main, so a second rebase replays that
-		// commit onto main  -- matching git's behavior.
+		// After Scenario 1, feature = C2' sitting on main's tip C3, and main has
+		// not advanced. onto (main) is therefore already an ancestor of feature's
+		// HEAD, so a second rebase replays nothing and leaves the tip unchanged --
+		// matching git's "Current branch is up to date". (Replaying the lone
+		// feature commit again would duplicate it on every rebase.)
+		var before bson.M
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{{Key: "doltStatus", Value: int32(1)}}).Decode(&before))
+		tipBefore := before["commitId"]
+		require.NotNil(t, tipBefore, "feature must have a HEAD before the no-op rebase")
+
 		raw := runCommandRaw(t, featureDB, bson.D{
 			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
 
-		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for clean rebase")
-		assert.EqualValues(t, 1, raw["commitsReplayed"], "feature's lone commit must replay onto main")
+		assert.EqualValues(t, 1, raw["ok"], "ok must be 1 for an up-to-date rebase")
+		assert.EqualValues(t, 0, raw["commitsReplayed"], "nothing to replay when already based on onto")
+		assert.Equal(t, tipBefore, raw["newTip"], "tip must be unchanged -- no commit duplicated")
 	})
 
 	// -------------------------------------------------------------------------

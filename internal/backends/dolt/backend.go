@@ -3182,13 +3182,29 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 		return nil, fmt.Errorf("DumboDBRebase: resolving onto %q: %w", params.Onto, err)
 	}
 
+	// If onto is already an ancestor of the branch HEAD, the branch already
+	// sits on top of onto: there is nothing to replay (matches git, which
+	// reports "Current branch is up to date" and leaves the tip untouched).
+	// Without this the branch's own commits -- which are not reachable from
+	// onto -- would be replayed again, duplicating them on every rebase.
+	branchAncestors, err := inclusiveAncestorSet(ctx, db, branchHead)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBRebase: computing branch ancestors: %w", err)
+	}
+	if branchAncestors.Has(ontoHead) {
+		return &backends.RebaseResult{
+			CommitsReplayed: 0,
+			NewTip:          branchHead.String(),
+		}, nil
+	}
+
 	// Find all commits on branch not reachable from ontoHead (oldest-first).
 	toReplay, err := findCommitsToReplay(ctx, db, branchHead, ontoHead)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRebase: finding commits to replay: %w", err)
 	}
 
-	// If nothing to replay, the branch is already up-to-date.
+	// If nothing to replay, the branch is already up-to-date (e.g. behind onto).
 	if len(toReplay) == 0 {
 		return &backends.RebaseResult{
 			CommitsReplayed: 0,
