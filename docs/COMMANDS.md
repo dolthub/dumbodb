@@ -1100,7 +1100,7 @@ main.runCommand({ dumboConflicts: 1 })
 //           conflictId: "2onhBAqtYZDVqr4WfXh8pA",
 //           type:   "documentEdit",
 //           reason: { code: "bothModified",
-//                     message: "ours and theirs modified the same document" },
+//                     message: "both branches modified document: 1" },
 //           base:   { _id: 1, doc: { _id: 1, amount: 100 } },
 //           ours:   { _id: 1, doc: { _id: 1, amount: 150 }, diffType: "modified" },
 //           theirs: { _id: 1, doc: { _id: 1, amount: 200 }, diffType: "modified" }

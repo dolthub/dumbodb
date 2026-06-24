@@ -184,14 +184,15 @@ func documentEditReasonCode(ourDiff, theirDiff string) string {
 	}
 }
 
-func documentEditReasonMessage(code string) string {
+func documentEditReasonMessage(code string, id any) string {
+	idStr := types.FormatAnyValue(id)
 	switch code {
 	case "deleteModify":
-		return "ours deleted the document; theirs modified it"
+		return fmt.Sprintf("ours deleted document %s; theirs modified it", idStr)
 	case "modifyDelete":
-		return "ours modified the document; theirs deleted it"
+		return fmt.Sprintf("ours modified document %s; theirs deleted it", idStr)
 	default:
-		return "ours and theirs modified the same document"
+		return fmt.Sprintf("both branches modified document: %s", idStr)
 	}
 }
 
@@ -1062,8 +1063,22 @@ func captureConflictsForCollection(
 			} else {
 				entry.theirDiffType = "deleted"
 			}
+			var idVal any = types.Null
+			for _, rv := range []val.Tuple{entry.oursRawVal, entry.theirsRawVal, entry.baseRawVal} {
+				if rv == nil {
+					continue
+				}
+				d, derr := readDocFromValue(ctx, ns, rv)
+				if derr != nil {
+					return prolly.Map{}, nil, fmt.Errorf("decoding conflict document for _id: %w", derr)
+				}
+				if v, gerr := d.Get("_id"); gerr == nil {
+					idVal = v
+					break
+				}
+			}
 			entry.reasonCode = documentEditReasonCode(entry.ourDiffType, entry.theirDiffType)
-			entry.reasonMessage = documentEditReasonMessage(entry.reasonCode)
+			entry.reasonMessage = documentEditReasonMessage(entry.reasonCode, idVal)
 			entries = append(entries, entry)
 			if indexing {
 				leftDoc, derr := docOf(val.Tuple(diff.Left))

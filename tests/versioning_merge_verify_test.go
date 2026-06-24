@@ -499,7 +499,10 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
 		assert.Equal(t, "documentEdit", cf["type"])
-		assert.Equal(t, "bothModified", cf["reason"].(bson.M)["code"])
+		reason := cf["reason"].(bson.M)
+		assert.Equal(t, "bothModified", reason["code"])
+		assert.Equal(t, "both branches modified document: 1", reason["message"],
+			"message names the _id of the document both branches edited")
 
 		// Each non-null side carries its own _id (sibling of doc).
 		ours := cf["ours"].(bson.M)

@@ -205,7 +205,7 @@ printjson(rConflicts)
 //         { conflictId: "<base64-id>",
 //           type: "documentEdit",
 //           reason: { code: "modifyDelete",
-//                     message: "ours modified the document; theirs deleted it" },
+//                     message: "ours modified document 10; theirs deleted it" },
 //           base:   { _id: 10, doc: {...} },
 //           ours:   { _id: 10, doc: { _id: 10, v: 99 }, diffType: "modified" },
 //           theirs: null }
