@@ -432,7 +432,7 @@ printjson(rConflicts)
 //         { conflictId: "<base64-id>",
 //           type: "documentEdit",
 //           reason: { code: "bothModified",
-//                     message: "both branches modified document: 1" },
+//                     message: "branch 'feature' (ours) and the replayed commit (theirs) both modified document 1" },
 //           base:   { _id: 1, doc: { _id: 1, v: 1 } },
 //           ours:   { _id: 1, doc: { _id: 1, v: 200 }, diffType: "modified" },
 //           theirs: { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" } }

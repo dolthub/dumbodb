@@ -184,15 +184,18 @@ func documentEditReasonCode(ourDiff, theirDiff string) string {
 	}
 }
 
-func documentEditReasonMessage(code string, id any) string {
+// documentEditReasonMessage describes a same-identity edit clash, naming the
+// document _id and each side. oursDesc/theirsDesc identify the sides, e.g.
+// "branch 'main' (ours)" and "branch 'feature' (theirs)".
+func documentEditReasonMessage(code string, id any, oursDesc, theirsDesc string) string {
 	idStr := types.FormatAnyValue(id)
 	switch code {
 	case "deleteModify":
-		return fmt.Sprintf("ours deleted document %s; theirs modified it", idStr)
+		return fmt.Sprintf("%s deleted document %s; %s modified it", oursDesc, idStr, theirsDesc)
 	case "modifyDelete":
-		return fmt.Sprintf("ours modified document %s; theirs deleted it", idStr)
+		return fmt.Sprintf("%s modified document %s; %s deleted it", oursDesc, idStr, theirsDesc)
 	default:
-		return fmt.Sprintf("both branches modified document: %s", idStr)
+		return fmt.Sprintf("%s and %s both modified document %s", oursDesc, theirsDesc, idStr)
 	}
 }
 
@@ -768,6 +771,7 @@ func captureConflictsForCollection(
 	intoMap, fromMap, baseMap prolly.Map,
 	theirHash hash.Hash,
 	applier *indexMergeApplier,
+	oursDesc, theirsDesc string,
 ) (mergedMap prolly.Map, entries []*conflictEntry, err error) {
 	ns := baseMap.NodeStore()
 
@@ -1078,7 +1082,7 @@ func captureConflictsForCollection(
 				}
 			}
 			entry.reasonCode = documentEditReasonCode(entry.ourDiffType, entry.theirDiffType)
-			entry.reasonMessage = documentEditReasonMessage(entry.reasonCode, idVal)
+			entry.reasonMessage = documentEditReasonMessage(entry.reasonCode, idVal, oursDesc, theirsDesc)
 			entries = append(entries, entry)
 			if indexing {
 				leftDoc, derr := docOf(val.Tuple(diff.Left))
@@ -1168,7 +1172,7 @@ func captureConflictsForCollection(
 //
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
-func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash) (prolly.AddressMap, map[string][]*conflictEntry, error) {
+func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, error) {
 	allNames := make(map[string]struct{})
 	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
 		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
@@ -1283,7 +1287,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		}
 		applier := &indexMergeApplier{state: state, survivors: survivors}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash, applier)
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc)
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}

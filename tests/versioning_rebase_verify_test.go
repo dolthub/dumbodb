@@ -588,6 +588,8 @@ func TestRebaseVerify(t *testing.T) {
 		firstConflict := conflictList[0].(bson.M)
 		conflictID, _ := firstConflict["conflictId"].(string)
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
+		assert.Equal(t, "branch 'feature' (ours) and the replayed commit (theirs) both modified document 1",
+			firstConflict["reason"].(bson.M)["message"])
 
 		// Resolve using "ours".
 		var resolveResult bson.M

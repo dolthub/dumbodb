@@ -501,8 +501,8 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		assert.Equal(t, "documentEdit", cf["type"])
 		reason := cf["reason"].(bson.M)
 		assert.Equal(t, "bothModified", reason["code"])
-		assert.Equal(t, "both branches modified document: 1", reason["message"],
-			"message names the _id of the document both branches edited")
+		assert.Equal(t, "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1", reason["message"],
+			"message names both branches and the _id of the contended document")
 
 		// Each non-null side carries its own _id (sibling of doc).
 		ours := cf["ours"].(bson.M)

@@ -244,7 +244,7 @@ printjson(rConflicts)
 //         { conflictId: "<base64-id>",
 //           type: "documentEdit",
 //           reason: { code: "bothModified",
-//                     message: "both branches modified document: 1" },
+//                     message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
 //           base:   { _id: 1, doc: { _id: 1, v: 1 } },
 //           ours:   { _id: 1, doc: { _id: 1, v: 10 }, diffType: "modified" },
 //           theirs: { _id: 1, doc: { _id: 1, v: 20 }, diffType: "modified" } }
