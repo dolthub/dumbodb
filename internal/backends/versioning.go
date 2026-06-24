@@ -128,14 +128,27 @@ func (e *DumboDBCherryPickConflictError) Error() string {
 	return fmt.Sprintf("dumboCherryPick: unresolved conflicts in %d collection(s)", len(e.Conflicts))
 }
 
-// ConflictInfo describes a single document-level conflict in an in-progress merge.
+// ConflictInfo describes a single conflict in an in-progress merge. A
+// documentEdit conflict shares one _id across Base/Ours/Theirs; a
+// uniqueKeyCollision conflict has Ours and Theirs as distinct identities
+// (each document carries its own _id) contending for one indexed key.
 type ConflictInfo struct {
 	ConflictID    string
+	Type          string          // "documentEdit" or "uniqueKeyCollision"
 	Base          *types.Document // nil when the document was absent in the common ancestor (added by one or both branches)
 	Ours          *types.Document // nil when our branch deleted the document
 	Theirs        *types.Document // nil when their branch deleted the document
 	OurDiffType   string          // "added", "modified", "deleted"
 	TheirDiffType string          // "added", "modified", "deleted"
+	Reason        ConflictReason
+}
+
+// ConflictReason explains why two states cannot both stand.
+type ConflictReason struct {
+	Code    string          // e.g. "bothModified", "modifyDelete", "deleteModify", "uniqueKeyCollision"
+	Message string          // human-readable explanation
+	Index   string          // unique index name, set only for uniqueKeyCollision
+	Key     *types.Document // colliding key value, set only for uniqueKeyCollision
 }
 
 type ConflictsParams struct {

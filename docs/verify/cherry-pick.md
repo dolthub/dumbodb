@@ -206,15 +206,19 @@ printjson(rConflicts)
 //     {
 //       collection: "items",
 //       conflicts: [
-//         { conflictId: "<base64-id>", _id: 1, base: {...},
-//           ours: { v: 100 }, theirs: { v: 99 },
-//           ourDiffType: "modified", theirDiffType: "modified" }
+//         { conflictId: "<base64-id>",
+//           type: "documentEdit",
+//           reason: { code: "bothModified",
+//                     message: "ours and theirs modified the same document" },
+//           base:   { _id: 1, doc: {...} },
+//           ours:   { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" },
+//           theirs: { _id: 1, doc: { _id: 1, v: 99 },  diffType: "modified" } }
 //       ]
 //     }
 //   ],
 //   ok: 1
 // }
-// _id is promoted to top level; ours = main's version (v:100), theirs = cherry-picked version (v:99)
+// _id lives on each side; ours = main's version (v:100), theirs = cherry-picked version (v:99)
 
 const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
@@ -241,8 +245,8 @@ printjson(rContinue)
 
 Key checks:
 - `doltConflicts` returns `collections` array with per-document `conflicts` grouped by collection
-- Each conflict entry has `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
-- `_id` is promoted to the top level of each conflict entry; `base`/`ours`/`theirs` do not contain `_id`
+- Each conflict entry has `conflictId`, a `type` (`"documentEdit"`), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides
+- Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (no top-level `_id`), `doc` is the full document, and `base` carries no `diffType`
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
 - After `doltCherryPick continue:1`, `ok` equals `1` and `commitId` is present
 - main HEAD reflects the resolved document state

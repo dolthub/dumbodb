@@ -241,8 +241,13 @@ printjson(rConflicts)
 //     {
 //       collection: "inventory",
 //       conflicts: [
-//         { conflictId: "<base64-id>", _id: 1, base: { v: 1 }, ours: { v: 10 },
-//           theirs: { v: 20 }, ourDiffType: "modified", theirDiffType: "modified" }
+//         { conflictId: "<base64-id>",
+//           type: "documentEdit",
+//           reason: { code: "bothModified",
+//                     message: "ours and theirs modified the same document" },
+//           base:   { _id: 1, doc: { _id: 1, v: 1 } },
+//           ours:   { _id: 1, doc: { _id: 1, v: 10 }, diffType: "modified" },
+//           theirs: { _id: 1, doc: { _id: 1, v: 20 }, diffType: "modified" } }
 //       ]
 //     }
 //   ],
@@ -253,10 +258,15 @@ const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
 Key checks:
 - `collections` lists per-collection conflict groups, each with a `collection` name and `conflicts` array.
-- Each conflict entry has `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`.
+- Each conflict entry has `conflictId`, a `type` (`"documentEdit"` here), a `reason`
+  (`code` + human `message`), and `base` / `ours` / `theirs` sides.
+- Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (there is
+  no top-level `_id`), `doc` is the full document, and `base` carries no `diffType`.
 - `base` is the document at the common ancestor (null for new documents).
-- `ours` / `theirs` are the two conflicting versions (null for deletions).
-- `ourDiffType` / `theirDiffType` are one of `"added"`, `"modified"`, `"deleted"`.
+- `ours` / `theirs` are the two conflicting versions (null for deletions; the
+  deleting side is identified by `reason.code`).
+- `diffType` is one of `"added"`, `"modified"`, `"deleted"`; `reason.code` for a
+  document edit is `"bothModified"`, `"modifyDelete"`, or `"deleteModify"`.
 
 ---
 

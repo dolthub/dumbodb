@@ -198,13 +198,18 @@ db.runCommand({ count: "items", query: { sku: "S-1" } })
 db.items.find({ sku: "S-1" })
 // Expected: one document: { _id: 10, sku: "S-1" }
 
-// Inspect: theirs carries the evicted document; ours is null
-// (the document does not exist on the merged branch).
+// Inspect: the conflict is self-describing. It names the index and the
+// colliding key, and carries BOTH contenders with their own _ids.
 const rConflicts = db.getSiblingDB("idxmrg4@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
 // Expected: collections[0].conflicts[0] has
-//   _id: 20, ours: null, theirs: { _id: 20, sku: "S-1" },
-//   ourDiffType: "deleted", theirDiffType: "added"
+//   type: "uniqueKeyCollision",
+//   reason: { code: "uniqueKeyCollision",
+//             message: 'unique index "by_sku": ours and theirs both have sku = "S-1"',
+//             index: "by_sku", key: { sku: "S-1" } },
+//   base:   null,
+//   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },
+//   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
 const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
 // Resolving "theirs" would re-create the collision with doc 10:
@@ -232,9 +237,68 @@ db.runCommand({ count: "items", query: { sku: "S-1" } })
 Key checks:
 - The merge does not explode and does not silently keep both
   documents; it parks the loser as a conflict.
+- The conflict names the offending index and colliding key, and shows
+  both contending documents with their own _ids.
 - The "theirs" resolution is rejected with a duplicate-key error and
   the conflict remains resolvable.
 - After continue, exactly one document carries the key.
+
+---
+
+## Scenario 4b: Two unique indexes produce two independent collisions
+
+Two unique indexes; one pair of documents collides on each. The merge
+surfaces exactly two conflicts, one per index, each naming its own index
+and resolvable independently.
+
+```js
+var db = db.getSiblingDB("idxmrg4b")
+db.dropDatabase()
+
+db.items.insertOne({ _id: 1, sku: "SEED", code: "SEED" })
+db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
+db.items.createIndex({ code: 1 }, { name: "by_code", unique: true })
+db.runCommand({ doltCommit: 1, message: "seed + two unique indexes", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmrg4b@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// One pair will collide on by_sku, a separate pair on by_code.
+db.items.insertOne({ _id: 10, sku: "S-1", code: "K-10" })
+db.items.insertOne({ _id: 11, sku: "S-11", code: "C-1" })
+db.runCommand({ doltCommit: 1, message: "main: docs 10,11", author: "alice <alice@acme.com>" })
+
+var feat = db.getSiblingDB("idxmrg4b@feature")
+feat.items.insertOne({ _id: 20, sku: "S-1", code: "K-20" })
+feat.items.insertOne({ _id: 21, sku: "S-21", code: "C-1" })
+feat.runCommand({ doltCommit: 1, message: "feature: docs 20,21", author: "bob <bob@widgets.io>" })
+
+db.getSiblingDB("idxmrg4b@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+// Expected throw: unresolved conflicts in 1 collection(s)
+
+const r = db.getSiblingDB("idxmrg4b@main").runCommand({ doltConflicts: 1 })
+printjson(r)
+// Expected: collections[0].conflicts has length 2; one entry with
+//   reason.index "by_sku" (ours._id 10, theirs._id 20) and one with
+//   reason.index "by_code" (ours._id 11, theirs._id 21).
+
+// Each collision resolves independently with "ours".
+r.collections[0].conflicts.forEach(function (c) {
+  db.getSiblingDB("idxmrg4b@main").runCommand({
+    doltResolveConflict: 1, collection: "items",
+    conflictId: c.conflictId, resolution: "ours"
+  })
+})
+db.getSiblingDB("idxmrg4b@main").runCommand({ doltMerge: 1, continue: 1 })
+// Expected: { commitId: "...", ok: 1 }
+
+db.items.find({ sku: "S-1" })   // Expected: only { _id: 10, ... }
+db.items.find({ code: "C-1" })  // Expected: only { _id: 11, ... }
+```
+
+Key checks:
+- A document pair colliding on a different index from another pair
+  yields one conflict per index, not one merged conflict.
+- Each conflict carries its own conflictId and reason.index and is
+  resolvable on its own.
 
 ---
 

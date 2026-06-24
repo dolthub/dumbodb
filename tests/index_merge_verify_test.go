@@ -240,10 +240,23 @@ func TestIndexMergeVerify(t *testing.T) {
 		conflicts := colls[0].(bson.M)["conflicts"].(bson.A)
 		require.Len(t, conflicts, 1)
 		entry := conflicts[0].(bson.M)
-		assert.EqualValues(t, 20, entry["_id"])
-		assert.Nil(t, entry["ours"], "evicted doc must not exist on ours")
-		require.NotNil(t, entry["theirs"])
-		assert.Equal(t, "S-1", entry["theirs"].(bson.M)["sku"])
+		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "by_sku", reason["index"], "reason names the offending index")
+		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"], "reason carries the colliding key")
+		assert.Contains(t, reason["message"], "by_sku", "message names the index")
+
+		// Both contenders are present with their own _ids: ours is the
+		// surviving doc 10 (main), theirs is the evicted doc 20 (feature).
+		ours := entry["ours"].(bson.M)
+		assert.EqualValues(t, 10, ours["_id"])
+		assert.Equal(t, "S-1", ours["doc"].(bson.M)["sku"])
+		assert.Equal(t, "added", ours["diffType"])
+		theirs := entry["theirs"].(bson.M)
+		assert.EqualValues(t, 20, theirs["_id"])
+		assert.Equal(t, "S-1", theirs["doc"].(bson.M)["sku"])
+		assert.Equal(t, "added", theirs["diffType"])
+		assert.Nil(t, entry["base"], "no document held the key in the ancestor")
 		conflictID := entry["conflictId"].(string)
 
 		// "theirs" would re-create the collision: rejected.
@@ -321,7 +334,14 @@ func TestIndexMergeVerify(t *testing.T) {
 		byDocID := map[int32]string{}
 		for _, c := range conflicts {
 			e := c.(bson.M)
-			byDocID[e["_id"].(int32)] = e["conflictId"].(string)
+			assert.Equal(t, "documentEdit", e["type"])
+			assert.Equal(t, "bothModified", e["reason"].(bson.M)["code"])
+			// A documentEdit shares one _id across base/ours/theirs.
+			side := e["ours"]
+			if side == nil {
+				side = e["theirs"]
+			}
+			byDocID[side.(bson.M)["_id"].(int32)] = e["conflictId"].(string)
 		}
 
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
@@ -351,5 +371,83 @@ func TestIndexMergeVerify(t *testing.T) {
 			assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "name", Value: stale}}),
 				"stale value %q must not be findable", stale)
 		}
+	})
+
+	t.Run("Scenario6_TwoIndexesTwoCollisions", func(t *testing.T) {
+		dbName := fmt.Sprintf("idxmrg6v%d", suffix)
+		db := env.client.Database(dbName)
+		mainDB := env.client.Database(dbName + "@main")
+		require.NoError(t, db.Drop(ctx))
+		items := db.Collection("items")
+
+		_, err := items.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(1)}, {Key: "sku", Value: "SEED"}, {Key: "code", Value: "SEED"}})
+		require.NoError(t, err)
+		for _, m := range []mongo.IndexModel{
+			{Keys: bson.D{{Key: "sku", Value: int32(1)}}, Options: options.Index().SetName("by_sku").SetUnique(true)},
+			{Keys: bson.D{{Key: "code", Value: int32(1)}}, Options: options.Index().SetName("by_code").SetUnique(true)},
+		} {
+			_, err = items.Indexes().CreateOne(ctx, m)
+			require.NoError(t, err)
+		}
+		dumboDBCommit(t, env, dbName, "seed + two unique indexes", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		// One pair collides on by_sku, a separate pair on by_code.
+		_, err = items.InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(10)}, {Key: "sku", Value: "S-1"}, {Key: "code", Value: "K-10"}},
+			bson.D{{Key: "_id", Value: int32(11)}, {Key: "sku", Value: "S-11"}, {Key: "code", Value: "C-1"}},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: docs 10,11", "alice <alice@acme.com>")
+
+		feat := env.client.Database(dbName + "@feature")
+		_, err = feat.Collection("items").InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(20)}, {Key: "sku", Value: "S-1"}, {Key: "code", Value: "K-20"}},
+			bson.D{{Key: "_id", Value: int32(21)}, {Key: "sku", Value: "S-21"}, {Key: "code", Value: "C-1"}},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature: docs 20,21", "bob <bob@widgets.io>")
+
+		raw := idxvMerge(t, env, dbName, "feature")
+		assert.EqualValues(t, 0, raw["ok"], "two collisions must surface conflicts: %v", raw)
+
+		var rc bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
+		conflicts := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)
+		require.Len(t, conflicts, 2, "one conflict per colliding index")
+
+		byIndex := map[string]bson.M{}
+		for _, c := range conflicts {
+			e := c.(bson.M)
+			assert.Equal(t, "uniqueKeyCollision", e["type"])
+			byIndex[e["reason"].(bson.M)["index"].(string)] = e
+		}
+		require.Contains(t, byIndex, "by_sku")
+		require.Contains(t, byIndex, "by_code")
+		assert.EqualValues(t, 10, byIndex["by_sku"]["ours"].(bson.M)["_id"])
+		assert.EqualValues(t, 20, byIndex["by_sku"]["theirs"].(bson.M)["_id"])
+		assert.EqualValues(t, 11, byIndex["by_code"]["ours"].(bson.M)["_id"])
+		assert.EqualValues(t, 21, byIndex["by_code"]["theirs"].(bson.M)["_id"])
+
+		// Each collision resolves independently.
+		for _, e := range byIndex {
+			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+				{Key: "doltResolveConflict", Value: int32(1)},
+				{Key: "collection", Value: "items"},
+				{Key: "conflictId", Value: e["conflictId"].(string)},
+				{Key: "resolution", Value: "ours"},
+			}).Err())
+		}
+
+		var contRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltMerge", Value: int32(1)},
+			{Key: "continue", Value: int32(1)},
+		}).Decode(&contRaw))
+		assert.EqualValues(t, 1, contRaw["ok"])
+
+		assert.Equal(t, []int32{10}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
+		assert.Equal(t, []int32{11}, idxvFindIDs(t, db, "items", bson.D{{Key: "code", Value: "C-1"}}))
 	})
 }

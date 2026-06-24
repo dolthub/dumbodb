@@ -31,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 func indexSetFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (map[string]*resolvedIndexEntry, error) {
@@ -352,8 +353,25 @@ func (e mergeDocEdit) incomingOurs() bool {
 // mergeLoser names a document evicted by a unique-key collision; the
 // caller must remove it from the merged primary and record the conflict.
 type mergeLoser struct {
-	id       []byte // primary id of the losing doc
-	incoming bool   // true when the loser is this edit's own new doc
+	id       []byte          // primary id of the losing doc
+	winnerID []byte          // primary id of the doc that keeps the key
+	incoming bool            // true when the loser is this edit's own new doc
+	index    string          // name of the unique index whose key collided
+	key      *types.Document // the colliding key value, e.g. {sku: "S-1"}
+}
+
+// indexKeyDoc renders an index's key for doc as a {field: value} document,
+// used to surface the colliding key in a unique-collision conflict.
+func indexKeyDoc(doc *types.Document, idx backends.IndexInfo) *types.Document {
+	kd := must.NotFail(types.NewDocument())
+	for _, kp := range idx.Key {
+		v, err := doc.Get(kp.Field)
+		if err != nil {
+			v = types.Null
+		}
+		kd.Set(kp.Field, v)
+	}
+	return kd
 }
 
 // apply routes one edit to every survivor. Unique collisions resolve
@@ -372,10 +390,11 @@ func (a *indexMergeApplier) apply(ctx context.Context, edit mergeDocEdit, idByte
 		if !collision {
 			continue
 		}
+		keyDoc := indexKeyDoc(newDoc, s.info)
 		if edit.incomingOurs() && !ownerOurs {
-			return &mergeLoser{id: ownerID, incoming: false}, nil
+			return &mergeLoser{id: ownerID, winnerID: idBytes, incoming: false, index: s.info.Name, key: keyDoc}, nil
 		}
-		return &mergeLoser{id: idBytes, incoming: true}, nil
+		return &mergeLoser{id: idBytes, winnerID: ownerID, incoming: true, index: s.info.Name, key: keyDoc}, nil
 	}
 
 	for _, s := range a.survivors {

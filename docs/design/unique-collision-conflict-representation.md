@@ -67,8 +67,9 @@ change: **`_id` moves off the top level and into each side.**
   type: "documentEdit" | "uniqueKeyCollision",
   reason: {
     code:    "bothModified" | "modifyDelete" | "uniqueKeyCollision" | ...,
-    message: "ours and theirs each added a document with by_sku = \"S-1\"",
-    index:   "by_sku",        // present only when an index is implicated
+    message: "unique index \"by_sku\": ours and theirs both have sku = \"S-1\"",
+    index:   "by_sku",        // present only when an index is implicated;
+                              // always named in the message for collisions
     key:     { sku: "S-1" }   // the colliding key value
   },
   base:   { _id, doc } | null,
@@ -106,9 +107,14 @@ theirs contributes **at most one** contending document. The triple is
 not just adequate for collisions -- it is exactly right, once each slot
 carries its own `_id`.
 
-If a single doc-pair collides on two different unique indexes, that is
-two independent collisions: two conflicts, each with its own
-`conflictId` and its own `reason.index`, resolved individually.
+Two *independent* collisions are two conflicts, each with its own
+`conflictId` and `reason.index`, resolved individually -- for example
+one document pair colliding on `by_sku` and a separate pair colliding on
+`by_code` (Scenario 4b). A *single* document pair that happens to
+collide on two indexes at once is one conflict, not two: the loser is
+evicted as a whole document on the first index that collides, so it can
+no longer collide on the second. The conflict names the index that
+triggered the eviction.
 
 ## 6. Resolution
 
@@ -153,10 +159,10 @@ All DumboDB-only (no MongoDB analogue for merge):
   `type: "uniqueKeyCollision"`, `reason.index: "by_sku"`,
   `reason.key: {sku:"S-1"}`, and both contending docs with their `_id`s
   -- not a null `ours` with `ourDiffType: "deleted"`.
-- **Two indexes, two conflicts.** With two unique indexes, one document
-  added per branch colliding on both: exactly two conflict entries, one
-  per index, each with its own `conflictId` and `reason.index`,
-  resolvable independently.
+- **Two indexes, two conflicts.** With two unique indexes and two
+  independent colliding pairs (one pair on each index): exactly two
+  conflict entries, one per index, each with its own `conflictId` and
+  `reason.index`, resolvable independently (Scenario 4b).
 - **Document edit still fits.** A same-`_id` divergent edit produces
   `type: "documentEdit"` with `base`/`ours`/`theirs` sharing the `_id`
   and a `reason.code` describing the edit clash.

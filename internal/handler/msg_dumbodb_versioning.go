@@ -900,55 +900,43 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 	for _, cc := range res.Collections {
 		conflictsArr := types.MakeArray(len(cc.Conflicts))
 		for _, cf := range cc.Conflicts {
-			pairs := []any{
+			// Each side carries its own _id: a uniqueKeyCollision has
+			// distinct identities for ours and theirs. base carries no
+			// diffType.
+			buildSide := func(doc *types.Document, diffType string) any {
+				if doc == nil {
+					return types.Null
+				}
+				side := must.NotFail(types.NewDocument())
+				if v, getErr := doc.Get("_id"); getErr == nil {
+					side.Set("_id", v)
+				}
+				side.Set("doc", doc)
+				if diffType != "" {
+					side.Set("diffType", diffType)
+				}
+				return side
+			}
+
+			reason := must.NotFail(types.NewDocument(
+				"code", cf.Reason.Code,
+				"message", cf.Reason.Message,
+			))
+			if cf.Reason.Index != "" {
+				reason.Set("index", cf.Reason.Index)
+			}
+			if cf.Reason.Key != nil {
+				reason.Set("key", cf.Reason.Key)
+			}
+
+			conflictsArr.Append(must.NotFail(types.NewDocument(
 				"conflictId", cf.ConflictID,
-			}
-
-			// Extract _id from whichever document is non-nil and promote it
-			// to the top level so it isn't repeated inside base/ours/theirs.
-			var docID any
-			for _, doc := range []*types.Document{cf.Ours, cf.Theirs, cf.Base} {
-				if doc != nil {
-					if v, getErr := doc.Get("_id"); getErr == nil {
-						docID = v
-						break
-					}
-				}
-			}
-			if docID != nil {
-				pairs = append(pairs, "_id", docID)
-			}
-
-			// Build base/ours/theirs without the _id field.
-			for _, kv := range []struct {
-				key string
-				doc *types.Document
-			}{
-				{"base", cf.Base},
-				{"ours", cf.Ours},
-				{"theirs", cf.Theirs},
-			} {
-				if kv.doc == nil {
-					pairs = append(pairs, kv.key, types.Null)
-					continue
-				}
-				stripped := must.NotFail(types.NewDocument())
-				for _, k := range kv.doc.Keys() {
-					if k == "_id" {
-						continue
-					}
-					v, _ := kv.doc.Get(k)
-					stripped.Set(k, v)
-				}
-				pairs = append(pairs, kv.key, stripped)
-			}
-
-			pairs = append(pairs,
-				"ourDiffType", cf.OurDiffType,
-				"theirDiffType", cf.TheirDiffType,
-			)
-
-			conflictsArr.Append(must.NotFail(types.NewDocument(pairs...)))
+				"type", cf.Type,
+				"reason", reason,
+				"base", buildSide(cf.Base, ""),
+				"ours", buildSide(cf.Ours, cf.OurDiffType),
+				"theirs", buildSide(cf.Theirs, cf.TheirDiffType),
+			)))
 		}
 
 		collectionsArr.Append(must.NotFail(types.NewDocument(

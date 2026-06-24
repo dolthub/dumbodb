@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -131,14 +132,29 @@ func (m *mergeInProgress) summaries() []backends.ConflictSummary {
 // conflictEntry represents a single document-level conflict captured during a merge.
 // The raw key and value tuples are stored as byte slices so they can be decoded lazily on demand.
 type conflictEntry struct {
-	id            string
-	rawKey        val.Tuple // encoded _id key bytes
+	id     string
+	typ    string // "documentEdit" (default) or "uniqueKeyCollision"
+	rawKey val.Tuple // encoded _id key bytes (the document identity for a documentEdit)
+
+	// Per-side key overrides. For a documentEdit all three coincide with
+	// rawKey. For a uniqueKeyCollision the contending documents have
+	// different _ids, so ours and theirs carry their own keys.
+	oursKey   val.Tuple // nil -> rawKey
+	theirsKey val.Tuple // nil -> rawKey
+
 	baseRawVal    val.Tuple // base document value tuple (nil if document was absent in ancestor)
 	oursRawVal    val.Tuple // ours document value tuple (nil if our branch deleted the document)
 	theirsRawVal  val.Tuple // theirs document value tuple (nil if their branch deleted the document)
 	ourDiffType   string    // "added", "modified", or "deleted"
 	theirDiffType string    // "added", "modified", or "deleted"
-	resolved      bool
+
+	// reason explains why this is a conflict.
+	reasonCode    string
+	reasonMessage string
+	reasonIndex   string          // unique index name, for uniqueKeyCollision
+	reasonKey     *types.Document // colliding key value, for uniqueKeyCollision
+
+	resolved bool
 }
 
 // diffTypeString converts a tree.DiffType to the canonical string used in the wire protocol.
@@ -153,6 +169,51 @@ func diffTypeString(dt tree.DiffType) string {
 	default:
 		return "none"
 	}
+}
+
+// documentEditReasonCode classifies a same-identity divergent edit from the
+// two sides' diff types.
+func documentEditReasonCode(ourDiff, theirDiff string) string {
+	switch {
+	case ourDiff == "deleted" && theirDiff != "deleted":
+		return "deleteModify"
+	case ourDiff != "deleted" && theirDiff == "deleted":
+		return "modifyDelete"
+	default:
+		return "bothModified"
+	}
+}
+
+func documentEditReasonMessage(code string) string {
+	switch code {
+	case "deleteModify":
+		return "ours deleted the document; theirs modified it"
+	case "modifyDelete":
+		return "ours modified the document; theirs deleted it"
+	default:
+		return "ours and theirs modified the same document"
+	}
+}
+
+// collisionMessage describes a unique-index collision, naming the index.
+func collisionMessage(index string, key *types.Document) string {
+	return fmt.Sprintf("unique index %q: ours and theirs both have %s", index, renderKey(key))
+}
+
+func renderKey(key *types.Document) string {
+	if key == nil {
+		return "the same key"
+	}
+	parts := make([]string, 0, len(key.Keys()))
+	for _, k := range key.Keys() {
+		v, _ := key.Get(k)
+		if s, ok := v.(string); ok {
+			parts = append(parts, fmt.Sprintf("%s = %q", k, s))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s = %v", k, v))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // DumboDBConflicts implements backends.VersioningBackend.
@@ -186,10 +247,30 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 				continue
 			}
 
+			typ := e.typ
+			if typ == "" {
+				typ = "documentEdit"
+			}
 			info := backends.ConflictInfo{
 				ConflictID:    e.id,
+				Type:          typ,
 				OurDiffType:   e.ourDiffType,
 				TheirDiffType: e.theirDiffType,
+				Reason: backends.ConflictReason{
+					Code:    e.reasonCode,
+					Message: e.reasonMessage,
+					Index:   e.reasonIndex,
+					Key:     e.reasonKey,
+				},
+			}
+
+			oursKey := e.oursKey
+			if oursKey == nil {
+				oursKey = e.rawKey
+			}
+			theirsKey := e.theirsKey
+			if theirsKey == nil {
+				theirsKey = e.rawKey
 			}
 
 			if e.baseRawVal != nil {
@@ -201,7 +282,7 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 			}
 
 			if e.oursRawVal != nil {
-				doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.oursRawVal)
+				doc, docErr := readDocFromEntry(ctx, db.ns, oursKey, e.oursRawVal)
 				if docErr != nil {
 					return nil, fmt.Errorf("DumboDBConflicts: reading ours doc for conflict %q: %w", e.id, docErr)
 				}
@@ -209,7 +290,7 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 			}
 
 			if e.theirsRawVal != nil {
-				doc, docErr := readDocFromEntry(ctx, db.ns, e.rawKey, e.theirsRawVal)
+				doc, docErr := readDocFromEntry(ctx, db.ns, theirsKey, e.theirsRawVal)
 				if docErr != nil {
 					return nil, fmt.Errorf("DumboDBConflicts: reading theirs doc for conflict %q: %w", e.id, docErr)
 				}
@@ -775,11 +856,16 @@ func captureConflictsForCollection(
 					return err
 				}
 				e := &conflictEntry{
-					id:           conflictID(rawKey, theirHash),
-					rawKey:       rawKey,
-					baseRawVal:   baseVal,
-					oursRawVal:   baseVal,
-					theirsRawVal: theirsVal,
+					id:            conflictID(rawKey, theirHash),
+					typ:           "uniqueKeyCollision",
+					rawKey:        rawKey,
+					baseRawVal:    baseVal,
+					oursRawVal:    baseVal,
+					theirsRawVal:  theirsVal,
+					reasonCode:    "uniqueKeyCollision",
+					reasonIndex:   loser.index,
+					reasonKey:     loser.key,
+					reasonMessage: collisionMessage(loser.index, loser.key),
 				}
 				e.ourDiffType = "modified"
 				if baseVal == nil {
@@ -820,12 +906,36 @@ func captureConflictsForCollection(
 			if err := mut.Delete(ctx, loserKey); err != nil {
 				return err
 			}
+			// ours = the surviving incoming document (it keeps the key on
+			// retry); theirs = the evicted existing document. They are
+			// distinct identities sharing one indexed key.
+			var oursVal val.Tuple
+			ourDiff := "added"
+			if edit.left != nil {
+				ov, werr := writeDocToValue(ctx, ns, edit.left)
+				if werr != nil {
+					return werr
+				}
+				oursVal = ov
+				if edit.base != nil {
+					ourDiff = "modified"
+				}
+			}
+			// rawKey is the parked (loser) identity that resolution acts
+			// on; oursKey points at the surviving winner for display only.
 			entries = append(entries, &conflictEntry{
 				id:            conflictID(loserKey, theirHash),
+				typ:           "uniqueKeyCollision",
 				rawKey:        loserKey,
+				oursKey:       rawKey,
+				oursRawVal:    oursVal,
 				theirsRawVal:  loserVal,
-				ourDiffType:   "deleted",
+				ourDiffType:   ourDiff,
 				theirDiffType: "added",
+				reasonCode:    "uniqueKeyCollision",
+				reasonIndex:   loser.index,
+				reasonKey:     loser.key,
+				reasonMessage: collisionMessage(loser.index, loser.key),
 			})
 		}
 	}
@@ -900,6 +1010,7 @@ func captureConflictsForCollection(
 			rawKey := append(val.Tuple(nil), diff.Key...)
 			entry := &conflictEntry{
 				id:     conflictID(rawKey, theirHash),
+				typ:    "documentEdit",
 				rawKey: rawKey,
 			}
 			if diff.Base != nil {
@@ -925,6 +1036,8 @@ func captureConflictsForCollection(
 			} else {
 				entry.theirDiffType = "deleted"
 			}
+			entry.reasonCode = documentEditReasonCode(entry.ourDiffType, entry.theirDiffType)
+			entry.reasonMessage = documentEditReasonMessage(entry.reasonCode)
 			entries = append(entries, entry)
 			if indexing {
 				leftDoc, derr := docOf(val.Tuple(diff.Left))

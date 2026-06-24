@@ -202,15 +202,20 @@ printjson(rConflicts)
 //     {
 //       collection: "records",
 //       conflicts: [
-//         { conflictId: "<base64-id>", _id: 10, base: {...},
-//           ours: { v: 99 }, theirs: null,
-//           ourDiffType: "modified", theirDiffType: "deleted" }
+//         { conflictId: "<base64-id>",
+//           type: "documentEdit",
+//           reason: { code: "modifyDelete",
+//                     message: "ours modified the document; theirs deleted it" },
+//           base:   { _id: 10, doc: {...} },
+//           ours:   { _id: 10, doc: { _id: 10, v: 99 }, diffType: "modified" },
+//           theirs: null }
 //       ]
 //     }
 //   ],
 //   ok: 1
 // }
-// _id promoted to top level; ours = main's current version (v:99), theirs = revert target (deleted)
+// ours = main's current version (v:99); theirs is null (revert target deleted it),
+// so reason.code names the modify/delete clash.
 
 const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
@@ -237,7 +242,8 @@ printjson(rContinue)
 
 Key checks:
 - `doltConflicts` returns `collections` array with per-document `conflicts` grouped by collection
-- Each conflict entry has `conflictId`, `_id` (top-level), `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- Each conflict entry has `conflictId`, a `type` (`"documentEdit"`), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides
+- Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (no top-level `_id`), `doc` is the full document, and `base` carries no `diffType`. A deleted side is `null`, and `reason.code` (here `"modifyDelete"`) names the clash
 - After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
 - After `doltRevert continue:1`, `ok` equals `1` and `commitId` is present
 

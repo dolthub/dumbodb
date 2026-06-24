@@ -498,20 +498,23 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
-		// _id is promoted to top level.
-		assert.EqualValues(t, int32(1), cf["_id"], "_id must be a top-level field in the conflict entry")
+		assert.Equal(t, "documentEdit", cf["type"])
+		assert.Equal(t, "bothModified", cf["reason"].(bson.M)["code"])
 
-		assert.Equal(t, "modified", cf["ourDiffType"])
-		assert.Equal(t, "modified", cf["theirDiffType"])
-
-		// base, ours, theirs must be present; _id must not appear inside them.
-		oursDoc := cf["ours"].(bson.M)
+		// Each non-null side carries its own _id (sibling of doc).
+		ours := cf["ours"].(bson.M)
+		assert.EqualValues(t, int32(1), ours["_id"], "ours side must carry _id:1")
+		assert.Equal(t, "modified", ours["diffType"])
+		oursDoc := ours["doc"].(bson.M)
 		assert.EqualValues(t, 10, oursDoc["v"], "ours doc must have v:10 (main's version)")
-		assert.Nil(t, oursDoc["_id"], "ours must not contain _id")
+		assert.EqualValues(t, int32(1), oursDoc["_id"], "doc carries the full document including _id")
 
-		theirsDoc := cf["theirs"].(bson.M)
+		theirs := cf["theirs"].(bson.M)
+		assert.EqualValues(t, int32(1), theirs["_id"], "theirs side must carry _id:1")
+		assert.Equal(t, "modified", theirs["diffType"])
+		theirsDoc := theirs["doc"].(bson.M)
 		assert.EqualValues(t, 20, theirsDoc["v"], "theirs doc must have v:20 (feature's version)")
-		assert.Nil(t, theirsDoc["_id"], "theirs must not contain _id")
+		assert.EqualValues(t, int32(1), theirsDoc["_id"], "doc carries the full document including _id")
 	})
 
 	// Scenario 7: dumboDBCommit blocked while conflicts remain
@@ -904,7 +907,7 @@ func TestMergePartialConflict(t *testing.T) {
 	conflicts := collEntry["conflicts"].(bson.A)
 	require.Len(t, conflicts, 1, "exactly one conflict (_id:1 only)")
 	cf := conflicts[0].(bson.M)
-	assert.EqualValues(t, int32(1), cf["_id"], "conflicting document must be _id:1")
+	assert.EqualValues(t, int32(1), cf["ours"].(bson.M)["_id"], "conflicting document must be _id:1")
 	conflictID := cf["conflictId"].(string)
 
 	// Resolve _id:1 with "theirs" (feature's value).
