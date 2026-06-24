@@ -25,6 +25,7 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 | rootish.md | rootish_test.go | TestRootishVerify |
 | status.md | status_test.go | TestStatusVerify |
 | tag.md | tag_test.go | TestTagVerify |
+| undrop.md | undrop_test.go | TestUndropVerify |
 | index-branch-isolation.md | index_branch_isolation_test.go | TestIndexBranchIsolationVerify |
 | index-maintenance.md | index_maintenance_test.go | TestIndexMaintenanceVerify |
 | index-merge.md | index_merge_test.go | TestIndexMergeVerify |
