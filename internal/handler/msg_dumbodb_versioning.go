@@ -383,6 +383,26 @@ func validateRefName(name, kind string) error {
 	return nil
 }
 
+// enforceRootDatabase returns an OperationFailed error if the encoded database name
+// carries a branch or revision qualifier (anything after the '@' delimiter).
+//
+// Whole-database operations such as dropDatabase act on every branch and the
+// entire commit history, so they are only valid on the unqualified root database
+// name. A name like "mydb@main" or "mydb@<hash>" is rejected.
+func enforceRootDatabase(encodedDB string) error {
+	base, _, _, err := branchFromDBName(encodedDB)
+	if err != nil {
+		return err
+	}
+	if base != encodedDB {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("cannot perform this operation on the revision-qualified name %q; it can only be performed on a root database (e.g. %q)", encodedDB, base),
+		)
+	}
+	return nil
+}
+
 // enforceWritableRootish returns an OperationFailed error if the encoded database name
 // resolves to a read-only rootish (commit hash or ancestor expression).
 //

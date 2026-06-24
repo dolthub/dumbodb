@@ -42,7 +42,7 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	if err = enforceWritableRootish(dbName); err != nil {
+	if err = enforceRootDatabase(dbName); err != nil {
 		return nil, err
 	}
 
