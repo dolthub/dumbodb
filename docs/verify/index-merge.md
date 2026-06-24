@@ -212,26 +212,22 @@ printjson(rConflicts)
 //   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
 const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 
-// Resolving "theirs" would re-create the collision with doc 10:
-// rejected, the conflict stays open.
+// For a collision, "theirs" is a key-ownership swap: evict ours's
+// surviving doc 10 and install theirs's doc 20 under the key. (Resolving
+// with "ours" keeps doc 10 and discards doc 20.)
 db.getSiblingDB("idxmrg4@main").runCommand({
   doltResolveConflict: 1, collection: "items",
   conflictId: conflictId, resolution: "theirs"
 })
-// Expected throw: duplicate key error mentioning by_sku
-
-// Resolving "ours" (keep the eviction) succeeds.
-db.getSiblingDB("idxmrg4@main").runCommand({
-  doltResolveConflict: 1, collection: "items",
-  conflictId: conflictId, resolution: "ours"
-})
-// Expected: { ok: 1 }
+// Expected: { ok: 1 }   (no duplicate-key error: the swap frees the key)
 
 db.getSiblingDB("idxmrg4@main").runCommand({ doltMerge: 1, continue: 1 })
 // Expected: { commitId: "...", ok: 1 }
 
 db.runCommand({ count: "items", query: { sku: "S-1" } })
-// Expected: { n: 1, ok: 1 }   (doc 10 owns the key)
+// Expected: { n: 1, ok: 1 }
+db.items.find({ sku: "S-1" })
+// Expected: one document: { _id: 20, sku: "S-1" }   (theirs took the key)
 ```
 
 Key checks:
@@ -239,8 +235,8 @@ Key checks:
   documents; it parks the loser as a conflict.
 - The conflict names the offending index and colliding key, and shows
   both contending documents with their own _ids.
-- The "theirs" resolution is rejected with a duplicate-key error and
-  the conflict remains resolvable.
+- "theirs" swaps key ownership (evict ours, install theirs) instead of
+  being rejected with a duplicate-key error; "ours" keeps the winner.
 - After continue, exactly one document carries the key.
 
 ---

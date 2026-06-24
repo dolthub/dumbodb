@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -259,23 +258,14 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.Nil(t, entry["base"], "no document held the key in the ancestor")
 		conflictID := entry["conflictId"].(string)
 
-		// "theirs" would re-create the collision: rejected.
-		theirsErr := mainDB.RunCommand(ctx, bson.D{
-			{Key: "doltResolveConflict", Value: int32(1)},
-			{Key: "collection", Value: "items"},
-			{Key: "conflictId", Value: conflictID},
-			{Key: "resolution", Value: "theirs"},
-		}).Err()
-		require.Error(t, theirsErr, "colliding theirs resolution must be rejected")
-		assert.True(t, strings.Contains(strings.ToLower(theirsErr.Error()), "duplicate"),
-			"rejection must be a duplicate-key error: %v", theirsErr)
-
+		// "theirs" is a key-ownership swap: evict ours's doc 10, install
+		// theirs's doc 20 under the key. It succeeds (no duplicate error).
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
 			{Key: "collection", Value: "items"},
 			{Key: "conflictId", Value: conflictID},
-			{Key: "resolution", Value: "ours"},
-		}).Err())
+			{Key: "resolution", Value: "theirs"},
+		}).Err(), "theirs swap must not be rejected")
 
 		var contRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
@@ -284,8 +274,9 @@ func TestIndexMergeVerify(t *testing.T) {
 		}).Decode(&contRaw))
 		assert.EqualValues(t, 1, contRaw["ok"])
 
+		// Theirs now owns the key; ours's doc 10 is gone.
 		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
-		assert.Equal(t, []int32{10}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
+		assert.Equal(t, []int32{20}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
 	})
 
 	t.Run("Scenario5_ResolutionReindexesChosenDoc", func(t *testing.T) {

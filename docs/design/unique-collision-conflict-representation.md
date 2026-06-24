@@ -2,7 +2,7 @@
 
 **Issues:** related: workspace-k34 (build-time unique enforcement, distinct)
 **Date:** 2026-06-23
-**Status:** Draft
+**Status:** Implemented (workspace-pdz)
 
 ## 1. Goal
 
@@ -185,11 +185,14 @@ collision representation; tracked separately.
 
 ## 12. Plan
 
-1. **Representation:** the unified `dumboConflicts` envelope (`type`,
-   `reason`, per-side `_id`/`doc`/`diffType`); capture both collision
-   contenders at merge time; verify tests + `index-merge.md` updates.
-2. **Resolution:** `ours`/`theirs` for `uniqueKeyCollision` (the
-   key-ownership swap), replacing the current dup-key rejection.
+1. **Representation (done):** the unified `dumboConflicts` envelope
+   (`type`, `reason`, per-side `_id`/`doc`/`diffType`); capture both
+   collision contenders at merge time; verify tests + `index-merge.md`
+   updates.
+2. **Resolution (done):** `ours`/`theirs` for `uniqueKeyCollision` (the
+   key-ownership swap), replacing the dup-key rejection. `ours` keeps
+   the surviving winner; `theirs` evicts it and installs the parked
+   contender under the key.
 
-Still to settle while implementing: the exact `reason.code` vocabulary
-for document-edit conflicts (both-modified, modify/delete, delete/modify).
+The document-edit `reason.code` vocabulary settled as `bothModified`,
+`modifyDelete`, and `deleteModify`.

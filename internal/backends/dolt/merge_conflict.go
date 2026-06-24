@@ -415,6 +415,26 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	}
 	sort.Slice(idxInfos, func(i, j int) bool { return idxInfos[i].Name < idxInfos[j].Name })
 
+	// A uniqueKeyCollision resolved with "theirs" is a key-ownership
+	// swap: evict ours's surviving document so theirs's contender can
+	// take the key. Un-index the winner up front so the collision probe
+	// below sees a free key, and remember its key for the collection
+	// delete.
+	collisionSwap := target.typ == "uniqueKeyCollision" && params.Resolution == "theirs" &&
+		target.oursRawVal != nil && target.oursKey != nil
+	var swapWinnerKey val.Tuple
+	if collisionSwap {
+		swapWinnerKey = target.oursKey
+		winnerDoc, derr := readDocFromValue(ctx, db.ns, target.oursRawVal)
+		if derr != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: decoding surviving document: %w", derr)
+		}
+		idxMaps, err = applyDeletesToIndexes(ctx, idxInfos, idxMaps, []*types.Document{winnerDoc})
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: un-indexing evicted winner: %w", err)
+		}
+	}
+
 	rawKeyIDBytes, ok := keyDesc.GetBytes(0, target.rawKey)
 	if !ok {
 		return nil, fmt.Errorf("DumboDBResolveConflict: conflict key missing id bytes")
@@ -465,6 +485,12 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	}
 
 	mut := collMap.Mutate()
+
+	if collisionSwap {
+		if err := mut.Delete(ctx, swapWinnerKey); err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: evicting surviving document from collection %q: %w", params.Collection, err)
+		}
+	}
 
 	if deleteDoc {
 		if err := mut.Delete(ctx, target.rawKey); err != nil {
