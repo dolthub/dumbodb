@@ -231,8 +231,10 @@ Expected: `added` contains exactly `_id:99`; `collections` is non-empty.
 
 ## Scenario 6: Author is echoed and visible in doltLog
 
-The `author` provided to `doltCommit` is echoed in the response and stored in the
-commit  -- it is visible via `doltLog`.
+The `author` you pass is echoed verbatim in the `doltCommit` response and stored
+in the commit. The stored author is normalized to `Name <email>` form: when you
+pass a bare name with no email, the server synthesizes `<name@dumbodb>`, so
+`doltLog` shows the normalized value.
 
 ```js
 db.orders.insertOne({ _id: 60, label: "author", v: 60 })
@@ -240,15 +242,15 @@ const r6 = db.runCommand({ doltCommit: 1, message: "authored commit", author: "b
 printjson(r6)
 // Expected: { hash: "...", branch: "main", message: "authored commit", author: "bob", timestamp: ISODate("..."), ok: 1 }
 
-// Verify author appears in doltLog
+// Verify author appears in doltLog (normalized to Name <email>)
 const log = db.runCommand({ doltLog: 1, limit: 1 })
 print("log author:", log.commits[0].author)
-// Expected: "bob"
+// Expected: "bob <bob@dumbodb>"
 ```
 
 Key checks:
-- `r6.author` equals `"bob"`
-- `log.commits[0].author` equals `"bob"`
+- `r6.author` equals `"bob"` (the response echoes what you passed)
+- `log.commits[0].author` equals `"bob <bob@dumbodb>"` (stored author, email synthesized)
 
 ---
 
@@ -285,13 +287,13 @@ Key checks:
 
 | Scenario | Command | Key outcome |
 |---|---|---|
-| Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@acme.com>" }` | `{ hash, branch:"main", message:"msg", author:"alice", timestamp:ISODate(...), ok:1 }` |
+| Commit on main | `{ doltCommit: 1, message: "msg", author: "alice <alice@acme.com>" }` | `{ hash, branch:"main", message:"msg", author:"alice <alice@acme.com>", timestamp:ISODate(...), ok:1 }` |
 | Commit on branch | `featureDB.runCommand({ doltCommit: 1, ..., author: "bob <bob@widgets.io>" })` | Data committed to branch; isolation verified via count |
 | Two sequential commits | Call twice with same author | Hashes are different |
 | Empty working set, no flag | Commit with no pending changes | Fails with `ok:0` and "nothing to commit" |
 | Empty working set, `allowEmpty:true` | Commit with no pending changes plus the flag | Succeeds with `ok:1` and a new hash |
 | Use hash in diff | `{ doltDiff: 1, from: hash1, to: hash2 }` | Shows changes between commits |
-| Custom author | Pass `author: "bob"` | Response and doltLog echo `"bob"` |
+| Custom author | Pass `author: "bob"` | Response echoes `"bob"`; doltLog shows stored `"bob <bob@dumbodb>"` |
 | Custom timestamp | Pass `timestamp: new Date("2020-06-15")` | Response and doltLog echo fixed time |
 
 - `hash` is a Dolt commit hash (non-empty string).
