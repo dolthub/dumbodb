@@ -575,4 +575,43 @@ type VersioningBackend interface {
 
 	// DumboDBBranchStatus reports how many commits each target refspec is ahead and behind the base refspec.
 	DumboDBBranchStatus(context.Context, *BranchStatusParams) (*BranchStatusResult, error)
+
+	// UndropDatabase restores a soft-deleted database from the dropped-database
+	// quarantine back to a live database. When multiple drops of the same name
+	// exist, DropID selects one; with an empty DropID and a single drop, that
+	// drop is restored, and with multiple drops an error lists the candidates.
+	UndropDatabase(context.Context, *UndropParams) (*UndropResult, error)
+
+	// ListDroppedDatabases returns every soft-deleted database currently held in
+	// the quarantine, most recently dropped first.
+	ListDroppedDatabases(context.Context) (*DroppedDatabasesResult, error)
+}
+
+// UndropParams represents the parameters of VersioningBackend.UndropDatabase.
+// Name is the database to restore. DropID, when set, selects a specific drop
+// (the value of DroppedDatabase.DropID) for names with more than one quarantined drop.
+type UndropParams struct {
+	Name   string
+	DropID string
+}
+
+// UndropResult represents the result of VersioningBackend.UndropDatabase.
+type UndropResult struct {
+	Name   string
+	DropID string
+}
+
+// DroppedDatabase describes a single soft-deleted database in the quarantine.
+// DropID is the unique identifier (UnixNano timestamp of the drop) used to
+// disambiguate multiple drops of the same name. DroppedAtUnixNano is the same
+// instant in nanoseconds since the Unix epoch.
+type DroppedDatabase struct {
+	Name              string
+	DropID            string
+	DroppedAtUnixNano int64
+}
+
+// DroppedDatabasesResult represents the result of VersioningBackend.ListDroppedDatabases.
+type DroppedDatabasesResult struct {
+	Databases []DroppedDatabase
 }

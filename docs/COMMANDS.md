@@ -40,6 +40,7 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboResolveConflict` | `doltResolveConflict` |
 | `dumboTag` | `doltTag` |
 | `dumboGC` | `doltGC` |
+| `dumboUndrop` | `doltUndrop` |
 
 ---
 
@@ -1382,3 +1383,76 @@ Default mode walks new-gen chunks only -- chunks already promoted to oldgen arch
 
 - `dumboGC` is a durable command (routed through the session commit fence), so it is mutually exclusive with other durable commands on the same connection.
 - The calling session is excluded from the GC safepoint's wait set, so the running command does not deadlock on itself. Other connections' in-flight commands are awaited at the pre-finalize safepoint and block briefly until GC completes.
+
+---
+
+## dumboUndrop
+
+Restores a soft-deleted database, or lists the databases available to undrop.
+
+When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into a quarantine and can be restored. `dumboUndrop` reverses that move. Repeat drops of the same name are all retained, distinguished by a `dropId`.
+
+**Alias:** `doltUndrop`
+
+**Admin-only:** must be run against the `admin` database.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | no | `""` | Database to restore. Omit to list databases available to undrop. Must be a root database name (no `@branch`/`@revision`). |
+| `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one quarantined copy. Use the `dropId` from the list response. |
+
+### Response fields (list mode, no `name`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dropped` | array | One entry per quarantined drop, most recently dropped first |
+| `dropped[].name` | string | Database name |
+| `dropped[].dropId` | string | Unique id of this drop |
+| `dropped[].droppedAt` | Date | When the drop happened |
+| `ok` | number | `1` on success |
+
+### Response fields (restore mode, with `name`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `undropped` | string | Restored database name |
+| `dropId` | string | Id of the drop that was restored |
+| `ok` | number | `1` on success |
+
+### Example
+
+```js
+var admin = db.getSiblingDB("admin")
+
+// List what can be undropped
+admin.runCommand({ dumboUndrop: 1 })
+// {
+//   dropped: [
+//     { name: "orders", dropId: "1775505756999075683", droppedAt: ISODate("2026-06-24T21:00:00.000Z") }
+//   ],
+//   ok: 1
+// }
+
+// Restore it
+admin.runCommand({ dumboUndrop: 1, name: "orders" })
+// { undropped: "orders", dropId: "1775505756999075683", ok: 1 }
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| Not run against `admin` | `OperationFailed: dumboUndrop: can only be run against the admin database` |
+| No dropped database with that name | `DatabaseDoesNotExist: undrop: no dropped database named "<name>"; ...` |
+| Multiple drops and no `dropId` | `OperationFailed: undrop: database "<name>" has N dropped copies; specify dropId (...)` |
+| `dropId` does not match any drop | `DatabaseDoesNotExist: undrop: database "<name>" has no dropped copy with dropId "<id>"` |
+| A live database with that name already exists | `OperationFailed: undrop: a live database named "<name>" already exists` |
+| `name` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: name must be a root database, ...` |
+
+### Notes
+
+- The full commit history of the restored database is preserved exactly as it was at drop time.
+- Quarantined databases remain on disk indefinitely; there is currently no command to reclaim that space.
+- System databases (`admin`, `config`, `local`) cannot be dropped, so they never appear in the quarantine.

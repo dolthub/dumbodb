@@ -630,6 +630,12 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			continue
 		}
 
+		// Dot-prefixed directories are internal (e.g. the dropped-database
+		// quarantine) and never valid MongoDB database names.
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
 		dbName := entry.Name()
 
 		// System databases are always included, matching MongoDB's behavior where
@@ -693,7 +699,15 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		delete(b.dbs, params.Name)
 	}
 
-	if err := os.RemoveAll(dbDir); err != nil {
+	// Soft delete: move the database directory into the quarantine instead of
+	// removing it, so it can be restored with UndropDatabase. Repeat drops of
+	// the same name are retained under distinct drop ids.
+	dest, err := b.quarantineDest(params.Name)
+	if err != nil {
+		return fmt.Errorf("dropping database %q: %w", params.Name, err)
+	}
+
+	if err := os.Rename(dbDir, dest); err != nil {
 		return fmt.Errorf("dropping database %q: %w", params.Name, err)
 	}
 
