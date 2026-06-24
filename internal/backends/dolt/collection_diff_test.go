@@ -157,7 +157,7 @@ func TestForEachCollectionChange_MatchesBruteForce(t *testing.T) {
 	hA := commitTS(t, b, db, "main", "A", 10_000)
 
 	// commit B: modify 2, delete 3, add 4.
-	updateDoc(t, b, db, "main", "c", mustDoc(t, "_id", int64(2), "v", int64(2)))
+	updateDocOnBranch(t, b, db, "main", "c", mustDoc(t, "_id", int64(2), "v", int64(2)))
 	deleteID(t, b, db, "main", "c", int64(3))
 	insertOne(t, ctx, collAt(t, b, db, "main", "c"), mustDoc(t, "_id", int64(4), "v", int64(1)))
 	hB := commitTS(t, b, db, "main", "B", 20_000)
@@ -269,7 +269,7 @@ func TestForEachCollectionChange_VisitsOnlyChanges(t *testing.T) {
 	}
 	hBase := commitTS(t, b, db, "main", "base", 10_000)
 
-	updateDoc(t, b, db, "main", "c", mustDoc(t, "_id", int64(N/2), "v", int64(2)))
+	updateDocOnBranch(t, b, db, "main", "c", mustDoc(t, "_id", int64(N/2), "v", int64(2)))
 	hMod := commitTS(t, b, db, "main", "mod", 20_000)
 
 	insertOne(t, ctx, collAt(t, b, db, "main", "c"), mustDoc(t, "_id", int64(N), "v", int64(1)))

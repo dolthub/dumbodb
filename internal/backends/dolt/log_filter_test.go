@@ -30,7 +30,7 @@ func init() {
 	backends.RegisterPartialFilterMatcher(common.FilterDocument)
 }
 
-func updateDoc(t *testing.T, b *Backend, db, branch, coll string, doc *types.Document) {
+func updateDocOnBranch(t *testing.T, b *Backend, db, branch, coll string, doc *types.Document) {
 	t.Helper()
 	if _, err := collAt(t, b, db, branch, coll).UpdateAll(context.Background(),
 		&backends.UpdateAllParams{Docs: []*types.Document{doc}}); err != nil {
@@ -97,15 +97,15 @@ func buildFilterHistory(t *testing.T, b *Backend, db string) map[string]string {
 	insertOne(t, ctx, oc(), mustDoc(t, "_id", int64(3), "status", "pending"))
 	h["c3"] = commitTS(t, b, db, "main", "c3", 30_000)
 
-	updateDoc(t, b, db, "main", "orders", mustDoc(t, "_id", int64(1), "status", "pending", "note", "x"))
-	updateDoc(t, b, db, "main", "orders", mustDoc(t, "_id", int64(2), "status", "shipped", "region", "eu"))
-	updateDoc(t, b, db, "main", "users", mustDoc(t, "_id", int64(2), "name", "bobby"))
+	updateDocOnBranch(t, b, db, "main", "orders", mustDoc(t, "_id", int64(1), "status", "pending", "note", "x"))
+	updateDocOnBranch(t, b, db, "main", "orders", mustDoc(t, "_id", int64(2), "status", "shipped", "region", "eu"))
+	updateDocOnBranch(t, b, db, "main", "users", mustDoc(t, "_id", int64(2), "name", "bobby"))
 	h["c4"] = commitTS(t, b, db, "main", "c4", 40_000)
 
 	deleteID(t, b, db, "main", "orders", int64(1))
 	h["c5"] = commitTS(t, b, db, "main", "c5", 50_000)
 
-	updateDoc(t, b, db, "main", "users", mustDoc(t, "_id", int64(1), "name", "alicia"))
+	updateDocOnBranch(t, b, db, "main", "users", mustDoc(t, "_id", int64(1), "name", "alicia"))
 	h["c6"] = commitTS(t, b, db, "main", "c6", 60_000)
 
 	return h
@@ -249,7 +249,7 @@ func TestLogIDFilter_DocumentID(t *testing.T) {
 	insertOne(t, ctx, collAt(t, b, db, "main", "orders"), mustDoc(t, "_id", idBA, "v", int64(2)))
 	h["cBA"] = commitTS(t, b, db, "main", "cBA", 20_000)
 	// A later modification of the {a:1,b:"x"} doc -- should also be a touch.
-	updateDoc(t, b, db, "main", "orders", mustDoc(t, "_id", idAB, "v", int64(99)))
+	updateDocOnBranch(t, b, db, "main", "orders", mustDoc(t, "_id", idAB, "v", int64(99)))
 	h["cMod"] = commitTS(t, b, db, "main", "cMod", 30_000)
 	byHash := nameMap(h)
 
