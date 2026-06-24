@@ -3312,7 +3312,7 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		// Sides are swapped so the replayed commit presents as "ours" and the
 		// onto/tip as "theirs" (a rebase moves the user's commits onto a base).
 		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
-			"the replayed commit (ours)", fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
+			fmt.Sprintf("commit '%s' (ours)", pickHash.String()), fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {
 			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
 		}

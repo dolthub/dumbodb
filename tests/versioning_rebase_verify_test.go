@@ -556,7 +556,7 @@ func TestRebaseVerify(t *testing.T) {
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
-		dumboDBCommit(t, env, conflictDB+"@feature", "feature-modifies-1", "test <test@example.com>")
+		featModHash := dumboDBCommit(t, env, conflictDB+"@feature", "feature-modifies-1", "test <test@example.com>")
 
 		// Start rebase  -- expect conflict.
 		raw := runCommandRaw(t, conflictFeatureDB, bson.D{
@@ -597,7 +597,7 @@ func TestRebaseVerify(t *testing.T) {
 		firstConflict := conflictList[0].(bson.M)
 		conflictID, _ := firstConflict["conflictId"].(string)
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
-		assert.Equal(t, "the replayed commit (ours) and branch 'main' (theirs) both modified document 1",
+		assert.Equal(t, fmt.Sprintf("commit '%s' (ours) and branch 'main' (theirs) both modified document 1", featModHash),
 			firstConflict["reason"].(bson.M)["message"])
 		// After the rebase swap, "ours" is the replayed feature commit (v:200),
 		// "theirs" is the onto/main value (v:100).
