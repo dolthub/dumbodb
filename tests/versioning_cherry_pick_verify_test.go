@@ -278,7 +278,7 @@ func TestCherryPickVerify(t *testing.T) {
 
 		assert.Equal(t, "documentEdit", cf["type"])
 		assert.Equal(t, "bothModified", cf["reason"].(bson.M)["code"])
-		assert.Equal(t, "branch 'main' (ours) and the cherry-picked commit (theirs) both modified document 1",
+		assert.Equal(t, fmt.Sprintf("branch 'main' (ours) and commit '%s' (theirs) both modified document 1", hashConflictFeat),
 			cf["reason"].(bson.M)["message"])
 
 		// Both branches changed _id:1; each non-null side carries its own _id and diffType.

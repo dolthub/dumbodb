@@ -280,7 +280,7 @@ func TestRevertVerify(t *testing.T) {
 		conflictID, ok := cf["conflictId"].(string)
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
-		assert.Equal(t, "branch 'main' (ours) modified document 10; the reverted change (theirs) deleted it",
+		assert.Equal(t, fmt.Sprintf("branch 'main' (ours) modified document 10; commit '%s' (theirs) deleted it", hashConflictCommit),
 			cf["reason"].(bson.M)["message"])
 
 		// Step 3: Resolve  -- accept "ours" (keep the modified main version).

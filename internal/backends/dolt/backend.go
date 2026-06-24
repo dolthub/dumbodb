@@ -2035,7 +2035,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 
 	// Perform the 3-way merge: apply cherry-pick diff (base->from) onto current HEAD (into).
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
-		fmt.Sprintf("branch '%s' (ours)", branch), "the cherry-picked commit (theirs)")
+		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", pickHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
 	}
@@ -3622,7 +3622,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	// theirHash = parentHash (the "from" side commit hash)
 	// baseHash  = revertHash (the "base" side commit hash)
 	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
-		fmt.Sprintf("branch '%s' (ours)", branch), "the reverted change (theirs)")
+		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", revertHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: %w", err)
 	}
