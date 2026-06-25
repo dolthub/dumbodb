@@ -128,6 +128,81 @@ db.items.find({ city: "november" }).explain().queryPlanner.winningPlan
 
 ---
 
+## Scenario 2b: Deleting a base document drops it from the merged index
+
+A document present in the base (and therefore in the index) is deleted on
+the feature branch. After a clean merge its indexed value is gone, while
+the untouched base document stays indexed.
+
+```js
+var db = db.getSiblingDB("idxmrg2b")
+db.dropDatabase()
+
+db.items.insertOne({ _id: 1, city: "base" })
+db.items.insertOne({ _id: 2, city: "paris" })
+db.items.createIndex({ city: 1 }, { name: "by_city" })
+db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmrg2b@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// Feature deletes the base document carrying "paris".
+var feat = db.getSiblingDB("idxmrg2b@feature")
+feat.items.deleteOne({ _id: 2 })
+feat.runCommand({ doltCommit: 1, message: "feature: delete doc 2", author: "bob <bob@widgets.io>" })
+
+db.getSiblingDB("idxmrg2b@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+
+db.runCommand({ count: "items", query: { city: "paris" } })
+// Expected: { n: 0, ok: 1 }   (paris dropped from the index)
+db.items.find({ city: "base" }).toArray()
+// Expected: [ { _id: 1, city: "base" } ]   (untouched base doc still indexed)
+db.items.find({ city: "paris" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_city" (still index-served, 0 hits)
+```
+
+Key checks:
+- The deleted document's value (`paris`) no longer matches; the merge
+  un-indexed it.
+- The other base document stays indexed and findable.
+
+---
+
+## Scenario 2c: Updating an indexed field updates the merged index
+
+The indexed field of a base document is changed on the feature branch.
+After a clean merge the index reflects the new value, not the old one.
+
+```js
+var db = db.getSiblingDB("idxmrg2c")
+db.dropDatabase()
+
+db.items.insertOne({ _id: 1, city: "base" })
+db.items.insertOne({ _id: 2, city: "paris" })
+db.items.createIndex({ city: 1 }, { name: "by_city" })
+db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmrg2c@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// Feature changes the indexed field: paris -> london.
+var feat = db.getSiblingDB("idxmrg2c@feature")
+feat.items.updateOne({ _id: 2 }, { $set: { city: "london" } })
+feat.runCommand({ doltCommit: 1, message: "feature: doc 2 -> london", author: "bob <bob@widgets.io>" })
+
+db.getSiblingDB("idxmrg2c@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+
+db.items.find({ city: "london" }).toArray()
+// Expected: [ { _id: 2, city: "london" } ]   (new value indexed)
+db.runCommand({ count: "items", query: { city: "paris" } })
+// Expected: { n: 0, ok: 1 }   (old value gone from the index)
+db.items.find({ city: "london" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_city"
+```
+
+Key checks:
+- The new value (`london`) is findable through the index.
+- The old value (`paris`) is gone; a stale-value hit would mean the merge
+  updated the document but not the index.
+
+---
+
 ## Scenario 3: A drop wins over the other branch's writes
 
 Main drops the index; feature keeps writing documents it would have

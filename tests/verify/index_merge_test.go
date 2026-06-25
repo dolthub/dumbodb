@@ -156,6 +156,83 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.Equal(t, "by_city", idxvIxscanName(wp), "lookup must be served by the index: %v", wp)
 	})
 
+	// Scenario 2b: a base document (present in the index) deleted on the feature
+	// branch must drop out of the merged index.
+	t.Run("Scenario2b_DeleteOnBranchDropsFromMergedIndex", func(t *testing.T) {
+		dbName := fmt.Sprintf("idxmrg2bv%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		items := db.Collection("items")
+
+		_, err := items.InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(1)}, {Key: "city", Value: "base"}},
+			bson.D{{Key: "_id", Value: int32(2)}, {Key: "city", Value: "paris"}},
+		})
+		require.NoError(t, err)
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed + index", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		// feature deletes the base doc 2 (the one carrying "paris" in the index).
+		feat := env.Client.Database(dbName + "@feature")
+		_, err = feat.Collection("items").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature: delete doc 2", "bob <bob@widgets.io>")
+
+		raw := idxvMerge(t, env, dbName, "feature")
+		assert.EqualValues(t, 1, raw["ok"], "merge must complete cleanly: %v", raw)
+
+		// The deleted doc's indexed value is gone from the merged index.
+		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "city", Value: "paris"}}), "paris must be gone after merge")
+		assert.Empty(t, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "paris"}}))
+		// The untouched base doc is still indexed.
+		assert.Equal(t, []int32{1}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "base"}}))
+		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "city", Value: "paris"}})
+		assert.Equal(t, "by_city", idxvIxscanName(wp), "lookup still served by the index: %v", wp)
+	})
+
+	// Scenario 2c: changing an indexed field of a base document on the feature
+	// branch must update the merged index (new value in, old value out).
+	t.Run("Scenario2c_UpdateIndexedFieldOnBranchUpdatesMergedIndex", func(t *testing.T) {
+		dbName := fmt.Sprintf("idxmrg2cv%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		items := db.Collection("items")
+
+		_, err := items.InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(1)}, {Key: "city", Value: "base"}},
+			bson.D{{Key: "_id", Value: int32(2)}, {Key: "city", Value: "paris"}},
+		})
+		require.NoError(t, err)
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed + index", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		// feature changes the indexed field of base doc 2: paris -> london.
+		feat := env.Client.Database(dbName + "@feature")
+		_, err = feat.Collection("items").UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: int32(2)}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "london"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature: doc 2 -> london", "bob <bob@widgets.io>")
+
+		raw := idxvMerge(t, env, dbName, "feature")
+		assert.EqualValues(t, 1, raw["ok"], "merge must complete cleanly: %v", raw)
+
+		// New value indexed; old value gone.
+		assert.Equal(t, []int32{2}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "london"}}), "london (new value) must be indexed")
+		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "city", Value: "paris"}}), "paris (old value) must be gone")
+		assert.Equal(t, []int32{1}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "base"}}), "untouched base doc still indexed")
+		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "city", Value: "london"}})
+		assert.Equal(t, "by_city", idxvIxscanName(wp), "lookup served by the index: %v", wp)
+	})
+
 	t.Run("Scenario3_DropWins", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg3v%d", suffix)
 		db := env.Client.Database(dbName)
