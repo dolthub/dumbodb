@@ -3,7 +3,7 @@
 Manual verification guide for `doltLog` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_log_verify_test.go` (`TestLogVerify`)
+> **Automated equivalent:** `tests/verify/log_test.go` (`TestLogVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

@@ -9,7 +9,7 @@ bottom. Each section builds on the previous setup.
 These scenarios verify behaviors W2, W3, W5, M1, and M2 from
 `docs/design/secondary-index-structural-sharing.md`.
 
-> **Automated equivalent:** `tests/index_maintenance_verify_test.go`
+> **Automated equivalent:** `tests/verify/index_maintenance_test.go`
 > (`TestIndexMaintenanceVerify`) covers every scenario in this
 > document as sequential subtests using the same setup. Run it with:
 > ```

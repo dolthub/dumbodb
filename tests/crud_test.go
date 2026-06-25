@@ -30,7 +30,7 @@ import (
 func TestCRUD_FindOneAndUpdate_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "alice"}, {Key: "score", Value: int32(10)}},
@@ -59,7 +59,7 @@ func TestCRUD_FindOneAndUpdate_Basic(t *testing.T) {
 func TestCRUD_FindOneAndUpdate_ReturnAfter(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "bob"}, {Key: "score", Value: int32(5)}},
@@ -82,7 +82,7 @@ func TestCRUD_FindOneAndUpdate_ReturnAfter(t *testing.T) {
 func TestCRUD_FindOneAndUpdate_Upsert(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	opts := options.FindOneAndUpdate().
 		SetUpsert(true).
@@ -111,7 +111,7 @@ func TestCRUD_FindOneAndUpdate_Upsert(t *testing.T) {
 func TestCRUD_FindOneAndUpdate_NoMatch(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	err := coll.FindOneAndUpdate(ctx,
 		bson.D{{Key: "name", Value: "ghost"}},
@@ -125,7 +125,7 @@ func TestCRUD_FindOneAndUpdate_NoMatch(t *testing.T) {
 func TestCRUD_FindOneAndUpdate_Projection(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{
@@ -157,7 +157,7 @@ func TestCRUD_FindOneAndUpdate_Projection(t *testing.T) {
 func TestCRUD_FindOneAndDelete_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "eve"}, {Key: "score", Value: int32(3)}},
@@ -187,7 +187,7 @@ func TestCRUD_FindOneAndDelete_Basic(t *testing.T) {
 func TestCRUD_FindOneAndDelete_NoMatch(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	err := coll.FindOneAndDelete(ctx,
 		bson.D{{Key: "name", Value: "nobody"}},
@@ -200,7 +200,7 @@ func TestCRUD_FindOneAndDelete_NoMatch(t *testing.T) {
 func TestCRUD_FindOneAndDelete_Sort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "score", Value: int32(5)}},
@@ -225,7 +225,7 @@ func TestCRUD_FindOneAndDelete_Sort(t *testing.T) {
 func TestCRUD_UpdateMany_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "status", Value: "active"}, {Key: "v", Value: int32(1)}},
@@ -257,7 +257,7 @@ func TestCRUD_UpdateMany_Basic(t *testing.T) {
 func TestCRUD_UpdateMany_Upsert(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	opts := options.UpdateMany().SetUpsert(true)
 	result, err := coll.UpdateMany(ctx,
@@ -278,7 +278,7 @@ func TestCRUD_UpdateMany_Upsert(t *testing.T) {
 func TestCRUD_DeleteMany_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "tag", Value: "delete-me"}, {Key: "n", Value: int32(1)}},
@@ -301,7 +301,7 @@ func TestCRUD_DeleteMany_Basic(t *testing.T) {
 func TestCRUD_DeleteMany_EmptyFilter(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "x", Value: int32(1)}},
@@ -323,7 +323,7 @@ func TestCRUD_DeleteMany_EmptyFilter(t *testing.T) {
 func TestCRUD_DeleteMany_NoMatch(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
 
@@ -337,7 +337,7 @@ func TestCRUD_DeleteMany_NoMatch(t *testing.T) {
 func TestCRUD_BulkWrite_InsertUpdateDelete(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Seed two existing documents.
 	insertDocs(t, coll,
@@ -376,7 +376,7 @@ func TestCRUD_BulkWrite_InsertUpdateDelete(t *testing.T) {
 func TestCRUD_BulkWrite_Ordered(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Create a unique index on "key".
 	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
@@ -411,7 +411,7 @@ func TestCRUD_BulkWrite_Ordered(t *testing.T) {
 func TestCRUD_BulkWrite_Unordered(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "key", Value: 1}},
@@ -442,7 +442,7 @@ func TestCRUD_BulkWrite_Unordered(t *testing.T) {
 func TestCRUD_BulkWrite_ReplaceOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "original"}, {Key: "extra", Value: "value"}},
@@ -470,7 +470,7 @@ func TestCRUD_BulkWrite_ReplaceOne(t *testing.T) {
 func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	opts := options.UpdateOne().SetUpsert(true)
 
@@ -511,7 +511,7 @@ func TestCRUD_UpdateOne_SetOnInsert(t *testing.T) {
 func TestCRUD_InsertMany_DuplicateKey(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	docs := []interface{}{
 		bson.D{{Key: "_id", Value: "dup"}, {Key: "v", Value: int32(1)}},
@@ -531,7 +531,7 @@ func TestCRUD_InsertMany_DuplicateKey(t *testing.T) {
 func TestCRUD_InsertMany_Unordered(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	docs := []interface{}{
 		bson.D{{Key: "_id", Value: "a"}, {Key: "v", Value: int32(1)}},
@@ -553,7 +553,7 @@ func TestCRUD_InsertMany_Unordered(t *testing.T) {
 func TestCRUD_ReplaceOne_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "old"}, {Key: "extra", Value: "data"}},
@@ -577,7 +577,7 @@ func TestCRUD_ReplaceOne_Basic(t *testing.T) {
 func TestCRUD_CountDocuments_WithFilter(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "color", Value: "red"}},
@@ -598,7 +598,7 @@ func TestCRUD_CountDocuments_WithFilter(t *testing.T) {
 func TestCRUD_Distinct_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "cat", Value: "A"}, {Key: "v", Value: int32(1)}},
@@ -621,7 +621,7 @@ func TestCRUD_Distinct_Basic(t *testing.T) {
 func TestCRUD_Distinct_WithFilter(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "group", Value: "x"}, {Key: "val", Value: int32(1)}},
@@ -641,7 +641,7 @@ func TestCRUD_Distinct_WithFilter(t *testing.T) {
 func TestCRUD_Distinct_Indexed(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "cat", Value: 1}},
@@ -675,7 +675,7 @@ func TestCRUD_Distinct_Indexed(t *testing.T) {
 func TestCRUD_Distinct_NumericTypes(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "n", Value: int32(5)}},
@@ -694,7 +694,7 @@ func TestUpdateMany_upsert(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 
@@ -720,7 +720,7 @@ func TestFindOneAndUpdate_returnAfter(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("x", int32(1))),
@@ -752,7 +752,7 @@ func TestFindOneAndReplace_no_match(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 
@@ -771,7 +771,7 @@ func TestCountDocuments_nested_filter(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("a", d(e("b", int32(5))))),
@@ -792,7 +792,7 @@ func TestEstimatedDocumentCount_empty(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 

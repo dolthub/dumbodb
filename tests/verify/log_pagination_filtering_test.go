@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestLogPaginationVerify is the automated analog of
 // docs/verify/log-pagination-filtering.md. It covers frontier pagination:
@@ -46,11 +46,11 @@ func TestLogPaginationVerify(t *testing.T) {
 	// Confirmed walk order: M m5 m4 f2 m3 f1 m2 m1 init.
 	// -------------------------------------------------------------------------
 	pgdb := fmt.Sprintf("logpage%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(pgdb).Drop(ctx))
+	require.NoError(t, env.Client.Database(pgdb).Drop(ctx))
 
 	label := map[string]string{} // hash -> label
-	main := env.client.Database(pgdb)
-	feat := env.client.Database(pgdb + "@feat")
+	main := env.Client.Database(pgdb)
+	feat := env.Client.Database(pgdb + "@feat")
 
 	insMain := func(id int32) {
 		_, err := main.Collection("coll").InsertOne(ctx, bson.D{{Key: "_id", Value: id}})
@@ -173,9 +173,9 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	t.Run("A6_AllSpansBranches", func(t *testing.T) {
 		// A side branch off main with an un-merged commit.
-		require.NoError(t, env.client.Database(pgdb+"@main").RunCommand(ctx,
+		require.NoError(t, env.Client.Database(pgdb+"@main").RunCommand(ctx,
 			bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "side"}}).Err())
-		_, err := env.client.Database(pgdb+"@side").Collection("coll").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(900)}})
+		_, err := env.Client.Database(pgdb+"@side").Collection("coll").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(900)}})
 		require.NoError(t, err)
 		s1 := dumboDBCommit(t, env, pgdb+"@side", "s1", "a <a@x.io>")
 
@@ -186,15 +186,15 @@ func TestLogPaginationVerify(t *testing.T) {
 		assert.Contains(t, all, s1, "all walk includes the side-branch commit")
 
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "all", Value: true}, {Key: "from", Value: s1}}
-		require.Error(t, env.client.Database(pgdb).RunCommand(ctx, cmd).Err(), "all + from must be rejected")
+		require.Error(t, env.Client.Database(pgdb).RunCommand(ctx, cmd).Err(), "all + from must be rejected")
 	})
 
 	// -------------------------------------------------------------------------
 	// Part B: collection:_id filtering.
 	// -------------------------------------------------------------------------
 	fdb := fmt.Sprintf("logfiltv%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(fdb).Drop(ctx))
-	fb := env.client.Database(fdb)
+	require.NoError(t, env.Client.Database(fdb).Drop(ctx))
+	fb := env.Client.Database(fdb)
 
 	_, err := fb.Collection("orders").InsertMany(ctx, []interface{}{
 		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
@@ -268,11 +268,11 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	t.Run("B4_Errors", func(t *testing.T) {
 		// not an array
-		require.Error(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(fdb).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.D{{Key: "orders", Value: int32(1)}}},
 		}).Err())
 		// id-list element that is itself an array (arrays are never valid _ids)
-		require.Error(t, env.client.Database(fdb).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(fdb).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
 				bson.D{{Key: "orders", Value: bson.A{bson.A{int32(1)}}}},
 			}},
@@ -281,8 +281,8 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	// Scenario B5: non-integer _ids (ObjectId and document). Fresh database.
 	nfdb := fmt.Sprintf("logfiltids%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(nfdb).Drop(ctx))
-	nf := env.client.Database(nfdb)
+	require.NoError(t, env.Client.Database(nfdb).Drop(ctx))
+	nf := env.Client.Database(nfdb)
 	oid := bson.NewObjectID()
 	subID := bson.D{{Key: "region", Value: "us"}, {Key: "seq", Value: int32(5)}}
 
@@ -325,8 +325,8 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	// Scenario B6: $match applied per commit (touched). Fresh database.
 	mfdb := fmt.Sprintf("logfiltmatch%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(mfdb).Drop(ctx))
-	mf := env.client.Database(mfdb)
+	require.NoError(t, env.Client.Database(mfdb).Drop(ctx))
+	mf := env.Client.Database(mfdb)
 	_, err = mf.Collection("orders").InsertMany(ctx, []interface{}{
 		bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "pending"}},
 		bson.D{{Key: "_id", Value: int32(2)}, {Key: "status", Value: "shipped"}},
@@ -370,8 +370,8 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	// Scenario B7: $match with an operator ($gt). Fresh database.
 	gfdb := fmt.Sprintf("logfiltgt%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(gfdb).Drop(ctx))
-	gf := env.client.Database(gfdb)
+	require.NoError(t, env.Client.Database(gfdb).Drop(ctx))
+	gf := env.Client.Database(gfdb)
 	_, err = gf.Collection("orders").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "amount", Value: int32(50)}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, gfdb, "g1 add cheap order", "a <a@x.io>")
@@ -400,8 +400,8 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	// Scenario B8: $changed field qualifier. Fresh database.
 	cfdb := fmt.Sprintf("logfiltchanged%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(cfdb).Drop(ctx))
-	cf := env.client.Database(cfdb)
+	require.NoError(t, env.Client.Database(cfdb).Drop(ctx))
+	cf := env.Client.Database(cfdb)
 	_, err = cf.Collection("orders").InsertMany(ctx, []interface{}{
 		bson.D{{Key: "_id", Value: int32(1)}, {Key: "customer", Value: "4242"}, {Key: "status", Value: "pending"}},
 		bson.D{{Key: "_id", Value: int32(2)}, {Key: "customer", Value: "9999"}, {Key: "status", Value: "pending"}},

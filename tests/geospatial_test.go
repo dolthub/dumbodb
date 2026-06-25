@@ -30,7 +30,7 @@ func TestGeo_near_InvalidPointLongitude(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	_, err := coll.Find(ctx,
@@ -54,7 +54,7 @@ func TestGeo_near_InvalidPointLatitude(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	_, err := coll.Find(ctx,
@@ -78,7 +78,7 @@ func TestGeo_nearSphere_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	_, err := coll.Find(ctx,
@@ -103,7 +103,7 @@ func TestGeo_geoNear_InvalidPoint(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	_, err := coll.Aggregate(ctx, bson.A{
@@ -136,7 +136,7 @@ func TestGeo_Legacy_NearSphere_2d(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Create a legacy 2d index on the location field.
 	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2d"}}}

@@ -3,7 +3,7 @@
 Manual verification guide for `doltRebase` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_rebase_verify_test.go` (`TestRebaseVerify`)
+> **Automated equivalent:** `tests/verify/rebase_test.go` (`TestRebaseVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

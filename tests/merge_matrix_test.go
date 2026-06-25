@@ -40,7 +40,7 @@ func mergeMatrixSetup(
 	t.Helper()
 	ctx := context.Background()
 
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 
 	for coll, docs := range collections {
@@ -51,8 +51,8 @@ func mergeMatrixSetup(
 	}
 	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
 
-	mainDB = env.client.Database(dbName + "@main")
-	featDB = env.client.Database(dbName + "@feature")
+	mainDB = env.Client.Database(dbName + "@main")
+	featDB = env.Client.Database(dbName + "@feature")
 
 	var branchRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{

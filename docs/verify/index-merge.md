@@ -11,7 +11,7 @@ bottom; each scenario uses its own database so they are independent.
 These scenarios verify behaviors B2, B4, B5, B6, and C1-C5 from
 `docs/design/secondary-index-structural-sharing.md`.
 
-> **Automated equivalent:** `tests/index_merge_verify_test.go`
+> **Automated equivalent:** `tests/verify/index_merge_test.go`
 > (`TestIndexMergeVerify`) covers every scenario in this document as
 > subtests using the same setup. Run it with:
 > ```

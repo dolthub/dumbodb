@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestCherryPickVerify is the automated analog of docs/verify/cherry-pick.md.
 //
@@ -44,7 +44,7 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 
 	require.NoError(t, db.Drop(ctx))
 
@@ -58,7 +58,7 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 
 	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
@@ -66,7 +66,7 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 	assert.Equal(t, "feature", branchResult["branch"])
 
 	// Advance feature with a commit that adds _id:2.
-	_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
@@ -87,7 +87,7 @@ func TestCherryPickVerify(t *testing.T) {
 	hashC1, hashC2 := cherryPickVerifySetup(t, env, dbName)
 	_ = hashC1
 
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Clean cherry-pick  -- response shape and commit annotation
@@ -148,7 +148,7 @@ func TestCherryPickVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_CustomMessageAndAuthor", func(t *testing.T) {
 		// Add a new commit on feature to cherry-pick.
-		_, err := env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
@@ -189,7 +189,7 @@ func TestCherryPickVerify(t *testing.T) {
 	var hashConflictFeat string
 	t.Run("Scenario3_ConflictResponse", func(t *testing.T) {
 		// Modify _id:1 on feature (will conflict with main's version).
-		_, err := env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
+		_, err := env.Client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
@@ -357,7 +357,7 @@ func TestCherryPickVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AbortCherryPick", func(t *testing.T) {
 		// Create another conflicting commit on feature.
-		_, err := env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
+		_, err := env.Client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)

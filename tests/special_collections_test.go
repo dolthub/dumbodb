@@ -54,7 +54,7 @@ func TestCappedCreate_Rejected(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	err := coll.Database().RunCommand(ctx, bson.D{
 		{Key: "create", Value: coll.Name()},
@@ -77,7 +77,7 @@ func TestCappedCreate_RejectedBeforeSizeValidation(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	err := coll.Database().RunCommand(ctx, bson.D{
 		{Key: "create", Value: coll.Name()},
@@ -98,7 +98,7 @@ func TestCappedCreate_NoOptionsStillWorks(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_create_nocapped_%d", rand.Int64())
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	t.Cleanup(func() {
 		db.Drop(context.Background()) //nolint:errcheck
 	})
@@ -118,7 +118,7 @@ func TestConvertToCapped_Rejected(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Make sure the collection exists so the rejection cannot be confused with
 	// NamespaceNotFound.
@@ -142,7 +142,7 @@ func TestConvertToCapped_RejectedOnMissingCollection(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Do not create the collection.
 	err := coll.Database().RunCommand(ctx, bson.D{
@@ -171,7 +171,7 @@ func TestView_WithLookupPipeline(t *testing.T) {
 
 	// Use a unique database per test to avoid cross-test collection name collisions.
 	dbName := fmt.Sprintf("testdb_view_lookup_%d", rand.Int64())
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	t.Cleanup(func() {
 		db.Drop(context.Background()) //nolint:errcheck
 	})

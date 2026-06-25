@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestIndexMergeVerify is the automated analog of
 // docs/verify/index-merge.md. Each subtest corresponds to one scenario
@@ -34,7 +34,7 @@ import (
 
 func idxvBranch(t *testing.T, env *dumboDBTestEnv, dbName, branch string) {
 	t.Helper()
-	require.NoError(t, env.client.Database(dbName+"@main").RunCommand(context.Background(), bson.D{
+	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(context.Background(), bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: branch},
 	}).Err())
@@ -42,7 +42,7 @@ func idxvBranch(t *testing.T, env *dumboDBTestEnv, dbName, branch string) {
 
 func idxvMerge(t *testing.T, env *dumboDBTestEnv, dbName, branch string) bson.M {
 	t.Helper()
-	return runCommandRaw(t, env.client.Database(dbName+"@main"), bson.D{
+	return runCommandRaw(t, env.Client.Database(dbName+"@main"), bson.D{
 		{Key: "doltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: branch},
 	})
@@ -86,7 +86,7 @@ func TestIndexMergeVerify(t *testing.T) {
 
 	t.Run("Scenario1_MergedIndexCoversBothBranches", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg1v%d", suffix)
-		db := env.client.Database(dbName)
+		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
@@ -106,7 +106,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: a-side", "alice <alice@acme.com>")
 
-		feat := env.client.Database(dbName + "@feature")
+		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(20)}, {Key: "name", Value: "november"}},
 			bson.D{{Key: "_id", Value: int32(21)}, {Key: "name", Value: "oscar"}},
@@ -127,7 +127,7 @@ func TestIndexMergeVerify(t *testing.T) {
 
 	t.Run("Scenario2_OneSidedIndexCoversMergedDocs", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg2v%d", suffix)
-		db := env.client.Database(dbName)
+		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
@@ -142,7 +142,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: create by_city", "alice <alice@acme.com>")
 
-		feat := env.client.Database(dbName + "@feature")
+		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").InsertOne(ctx,
 			bson.D{{Key: "_id", Value: int32(20)}, {Key: "city", Value: "november"}})
 		require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestIndexMergeVerify(t *testing.T) {
 
 	t.Run("Scenario3_DropWins", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg3v%d", suffix)
-		db := env.client.Database(dbName)
+		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
@@ -174,7 +174,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, items.Indexes().DropOne(ctx, "by_name"))
 		dumboDBCommit(t, env, dbName, "main: drop by_name", "alice <alice@acme.com>")
 
-		feat := env.client.Database(dbName + "@feature")
+		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").InsertOne(ctx,
 			bson.D{{Key: "_id", Value: int32(20)}, {Key: "name", Value: "november"}})
 		require.NoError(t, err)
@@ -200,8 +200,8 @@ func TestIndexMergeVerify(t *testing.T) {
 
 	t.Run("Scenario4_UniqueCollisionIsConflict", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg4v%d", suffix)
-		db := env.client.Database(dbName)
-		mainDB := env.client.Database(dbName + "@main")
+		db := env.Client.Database(dbName)
+		mainDB := env.Client.Database(dbName + "@main")
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
@@ -219,7 +219,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: doc 10 sku S-1", "alice <alice@acme.com>")
 
-		feat := env.client.Database(dbName + "@feature")
+		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").InsertOne(ctx,
 			bson.D{{Key: "_id", Value: int32(20)}, {Key: "sku", Value: "S-1"}})
 		require.NoError(t, err)
@@ -282,8 +282,8 @@ func TestIndexMergeVerify(t *testing.T) {
 
 	t.Run("Scenario5_ResolutionReindexesChosenDoc", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg5v%d", suffix)
-		db := env.client.Database(dbName)
-		mainDB := env.client.Database(dbName + "@main")
+		db := env.Client.Database(dbName)
+		mainDB := env.Client.Database(dbName + "@main")
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
@@ -307,7 +307,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		}
 		dumboDBCommit(t, env, dbName, "main: ours", "alice <alice@acme.com>")
 
-		feat := env.client.Database(dbName + "@feature")
+		feat := env.Client.Database(dbName + "@feature")
 		for i, v := range map[int32]string{1: "theirs-1", 2: "theirs-2"} {
 			_, err = feat.Collection("items").UpdateOne(ctx,
 				bson.D{{Key: "_id", Value: i}},
@@ -367,8 +367,8 @@ func TestIndexMergeVerify(t *testing.T) {
 
 	t.Run("Scenario6_TwoIndexesTwoCollisions", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg6v%d", suffix)
-		db := env.client.Database(dbName)
-		mainDB := env.client.Database(dbName + "@main")
+		db := env.Client.Database(dbName)
+		mainDB := env.Client.Database(dbName + "@main")
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
@@ -393,7 +393,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: docs 10,11", "alice <alice@acme.com>")
 
-		feat := env.client.Database(dbName + "@feature")
+		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(20)}, {Key: "sku", Value: "S-1"}, {Key: "code", Value: "K-20"}},
 			bson.D{{Key: "_id", Value: int32(21)}, {Key: "sku", Value: "S-21"}, {Key: "code", Value: "C-1"}},

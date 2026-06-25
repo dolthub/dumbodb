@@ -124,19 +124,19 @@ func TestAddrFlag(t *testing.T) {
 
 // TestAutoCommitFlag verifies that --auto-commit is accepted and causes
 // writes to auto-commit. This complements TestAutoCommit in
-// versioning_auto_commit_test.go by testing the flag parsing path.
+// auto_commit_test.go by testing the flag parsing path.
 func TestAutoCommitFlag(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
 
-	coll := env.client.Database("flagtest").Collection("items")
+	coll := env.Client.Database("flagtest").Collection("items")
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: 1}})
 	require.NoError(t, err)
 
 	// Without explicit doltCommit, the log should have 2 entries
 	// (Initialize + auto-commit from the insert).
 	var raw bson.M
-	require.NoError(t, env.client.Database("flagtest").RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database("flagtest").RunCommand(ctx, bson.D{
 		{Key: "doltLog", Value: int32(1)},
 	}).Decode(&raw))
 	lr := decodeLogResult(t, raw)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestIndexHintsVerify is the automated analog of
 // docs/verify/index-hints.md. Each subtest corresponds to one scenario
@@ -77,7 +77,7 @@ func TestIndexHintsVerify(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("idxhintvrfy%d", rand.Int64N(1_000_000))
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 
 	items := db.Collection("items")

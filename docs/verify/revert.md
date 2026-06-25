@@ -3,7 +3,7 @@
 Manual verification guide for `doltRevert` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_revert_verify_test.go` (`TestRevertVerify`)
+> **Automated equivalent:** `tests/verify/revert_test.go` (`TestRevertVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

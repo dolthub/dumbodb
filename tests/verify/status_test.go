@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestStatusVerify is the automated analog of docs/verify/status.md.
 //
@@ -35,97 +35,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// statusResult holds the decoded top-level response from a dumboDBStatus command.
-type statusResult struct {
-	Branch   string
-	CommitID string // HEAD commit hash; present only when workspace is clean
-	Tables   []tableStatusEntry
-}
-
-// tableStatusEntry holds one entry from the "collections" array of a dumboDBStatus response.
-type tableStatusEntry struct {
-	Name     string
-	Status   string
-	Added    int
-	Modified int
-	Deleted  int
-}
-
-// decodeStatusResult parses the raw bson.M from a dumboDBStatus RunCommand into the
-// typed helpers above, failing the test if the shape is unexpected.
-func decodeStatusResult(t *testing.T, raw bson.M) statusResult {
-	t.Helper()
-
-	branch, _ := raw["branch"].(string)
-	commitID, _ := raw["commitId"].(string)
-
-	rawTables, ok := raw["collections"]
-	require.True(t, ok, "doltStatus result missing 'collections' field")
-
-	tablesArr, ok := rawTables.(bson.A)
-	require.True(t, ok, "doltStatus 'collections' is not an array, got %T", rawTables)
-
-	var out statusResult
-	out.Branch = branch
-	out.CommitID = commitID
-
-	for _, tbl := range tablesArr {
-		tm, ok := tbl.(bson.M)
-		require.True(t, ok, "collections entry is not a document, got %T", tbl)
-
-		entry := tableStatusEntry{
-			Name:     fmt.Sprintf("%v", tm["name"]),
-			Status:   fmt.Sprintf("%v", tm["status"]),
-			Added:    toInt(tm["added"]),
-			Modified: toInt(tm["modified"]),
-			Deleted:  toInt(tm["deleted"]),
-		}
-		out.Tables = append(out.Tables, entry)
-	}
-
-	return out
-}
-
-// toInt coerces a BSON numeric (int32/int64/float64) into a Go int, returning 0 for
-// any other (including missing) value.
-func toInt(v any) int {
-	switch n := v.(type) {
-	case int32:
-		return int(n)
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	case int:
-		return n
-	default:
-		return 0
-	}
-}
-
-// findTableStatus returns the tableStatusEntry for the named collection, or nil.
-func findTableStatus(sr statusResult, name string) *tableStatusEntry {
-	for i := range sr.Tables {
-		if sr.Tables[i].Name == name {
-			return &sr.Tables[i]
-		}
-	}
-	return nil
-}
-
-// runStatus issues a dumboDBStatus command on the named db and returns the decoded result.
-func runStatus(t *testing.T, env *dumboDBTestEnv, dbName string) statusResult {
-	t.Helper()
-	ctx := context.Background()
-
-	var raw bson.M
-	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
-		{Key: "doltStatus", Value: int32(1)},
-	}).Decode(&raw))
-
-	return decodeStatusResult(t, raw)
-}
-
 func TestStatusVerify(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -134,8 +43,8 @@ func TestStatusVerify(t *testing.T) {
 	dbName := fmt.Sprintf("statusvrfy%d", rand.Int64N(1_000_000))
 
 	// Setup: baseline commit with one document in "items".
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	_, err := env.Client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "label", Value: "alpha"},
 		{Key: "score", Value: int32(10)},
@@ -152,7 +61,7 @@ func TestStatusVerify(t *testing.T) {
 		assert.NotEmpty(t, sr.CommitID, "commitId must be present when workspace is clean")
 
 		var rawStatus bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&rawStatus)
 		require.NoError(t, err)
@@ -166,7 +75,7 @@ func TestStatusVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_AfterInsert", func(t *testing.T) {
 		// First verify that dirty workspace does NOT include commitId.
-		_, err := env.client.Database(dbName).Collection("newcoll").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("newcoll").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
 			{Key: "v", Value: "new"},
 		})
@@ -178,7 +87,7 @@ func TestStatusVerify(t *testing.T) {
 
 		// dirty flag must be true after uncommitted insert.
 		var rawDirty bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&rawDirty))
 		assert.Equal(t, true, rawDirty["dirty"], "workspace with uncommitted changes must be dirty")
@@ -199,7 +108,7 @@ func TestStatusVerify(t *testing.T) {
 	t.Run("Scenario3_AfterUpdate", func(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "add newcoll", "alice <alice@acme.com>")
 
-		_, err := env.client.Database(dbName).Collection("items").UpdateOne(ctx,
+		_, err := env.Client.Database(dbName).Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(99)}}}},
 		)
@@ -223,7 +132,7 @@ func TestStatusVerify(t *testing.T) {
 	t.Run("Scenario4_AfterDelete", func(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "modify items", "alice <alice@acme.com>")
 
-		require.NoError(t, env.client.Database(dbName).Collection("items").Drop(ctx))
+		require.NoError(t, env.Client.Database(dbName).Collection("items").Drop(ctx))
 
 		sr := runStatus(t, env, dbName)
 
@@ -256,13 +165,13 @@ func TestStatusVerify(t *testing.T) {
 		// - "users":    not in HEAD -> will be "added" (5 inserts)
 		// - "archive":  committed baseline -> will be "deleted" (Drop)
 		for i := int32(1); i <= 3; i++ {
-			_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+			_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 				{Key: "_id", Value: i},
 				{Key: "total", Value: i * int32(10)},
 			})
 			require.NoError(t, err)
 		}
-		_, err := env.client.Database(dbName).Collection("archive").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("archive").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
 			{Key: "note", Value: "old"},
 		})
@@ -273,25 +182,25 @@ func TestStatusVerify(t *testing.T) {
 
 		// orders: 3 new docs, 1 modified doc, 2 deleted docs.
 		for i := int32(4); i <= 6; i++ {
-			_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+			_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 				{Key: "_id", Value: i},
 				{Key: "total", Value: i * int32(10)},
 			})
 			require.NoError(t, err)
 		}
-		_, err = env.client.Database(dbName).Collection("orders").UpdateOne(ctx,
+		_, err = env.Client.Database(dbName).Collection("orders").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "total", Value: int32(999)}}}},
 		)
 		require.NoError(t, err)
-		_, err = env.client.Database(dbName).Collection("orders").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+		_, err = env.Client.Database(dbName).Collection("orders").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 		require.NoError(t, err)
-		_, err = env.client.Database(dbName).Collection("orders").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
+		_, err = env.Client.Database(dbName).Collection("orders").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
 		require.NoError(t, err)
 
 		// users: new collection with 5 inserts.
 		for i := int32(1); i <= 5; i++ {
-			_, err := env.client.Database(dbName).Collection("users").InsertOne(ctx, bson.D{
+			_, err := env.Client.Database(dbName).Collection("users").InsertOne(ctx, bson.D{
 				{Key: "_id", Value: i},
 				{Key: "name", Value: fmt.Sprintf("user%d", i)},
 			})
@@ -299,7 +208,7 @@ func TestStatusVerify(t *testing.T) {
 		}
 
 		// archive: drop the whole collection.
-		require.NoError(t, env.client.Database(dbName).Collection("archive").Drop(ctx))
+		require.NoError(t, env.Client.Database(dbName).Collection("archive").Drop(ctx))
 
 		sr := runStatus(t, env, dbName)
 
@@ -336,7 +245,7 @@ func TestStatusVerify(t *testing.T) {
 		// - set a new field   (age)
 		// - modify an existing field (name)
 		// - unset an existing field  (later doltStatus still counts the doc as 1 modified)
-		_, err := env.client.Database(dbName).Collection("users").UpdateOne(ctx,
+		_, err := env.Client.Database(dbName).Collection("users").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{
 				{Key: "$set", Value: bson.D{
@@ -366,7 +275,7 @@ func TestStatusVerify(t *testing.T) {
 
 		// Commit hash rootish.
 		var snapStatus bson.M
-		require.NoError(t, env.client.Database(dbName+"@"+commitHash).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName+"@"+commitHash).RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&snapStatus))
 
@@ -377,7 +286,7 @@ func TestStatusVerify(t *testing.T) {
 
 		// Ancestor expression.
 		var parentStatus bson.M
-		require.NoError(t, env.client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
 		}).Decode(&parentStatus))
 

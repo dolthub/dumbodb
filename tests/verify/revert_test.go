@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestRevertVerify is the automated analog of docs/verify/revert.md.
 //
@@ -42,7 +42,7 @@ func revertVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 
 	require.NoError(t, db.Drop(ctx))
 
@@ -75,7 +75,7 @@ func TestRevertVerify(t *testing.T) {
 	hashC1, hashC2 := revertVerifySetup(t, env, dbName)
 	_ = hashC1
 
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Clean revert  -- response shape and commit annotation
@@ -181,7 +181,7 @@ func TestRevertVerify(t *testing.T) {
 		assert.Equal(t, "conflict-feat", branchResult["branch"])
 
 		// Add a document on feature that will be referenced in the commit to revert.
-		featDB := env.client.Database(dbName + "@conflict-feat")
+		featDB := env.Client.Database(dbName + "@conflict-feat")
 		_, err = featDB.Collection("records").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(10)},
 			{Key: "v", Value: int32(10)},

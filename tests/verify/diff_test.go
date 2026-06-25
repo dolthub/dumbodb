@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestDiffVerify is the automated analog of docs/verify/diff.md.
 //
@@ -164,7 +164,7 @@ func diffVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBase
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	items := db.Collection("items")
 
 	// Start fresh.
@@ -227,7 +227,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_WorkingSetVsHEAD", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -280,7 +280,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NotEmpty(t, hashNew)
 
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBase},
 			{Key: "to", Value: hashNew},
@@ -315,7 +315,7 @@ func TestDiffVerify(t *testing.T) {
 	t.Run("Scenario3_NoChanges", func(t *testing.T) {
 		// After committing in Scenario 2, working set matches HEAD.
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -328,7 +328,7 @@ func TestDiffVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_FromOnly", func(t *testing.T) {
 		// Make one more uncommitted change.
-		_, err := env.client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(4)},
 			{Key: "label", Value: "delta"},
 			{Key: "score", Value: int32(40)},
@@ -336,7 +336,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBase},
 		}).Decode(&raw))
@@ -378,7 +378,7 @@ func TestDiffVerify(t *testing.T) {
 	// Delete one, modify one, leave one unchanged, add one  -- only changed docs appear.
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_MultipleDocsWithMixedChanges", func(t *testing.T) {
-		multi := env.client.Database(dbName).Collection("multi")
+		multi := env.Client.Database(dbName).Collection("multi")
 
 		// Commit 3-doc baseline.
 		_, err := multi.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alpha"}, {Key: "v", Value: int32(1)}})
@@ -401,7 +401,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -436,7 +436,7 @@ func TestDiffVerify(t *testing.T) {
 		// Commit the working set from Scenario 5 first so HEAD is clean.
 		dumboDBCommit(t, env, dbName, "pre-scenario6", "alice <alice@acme.com>")
 
-		mf := env.client.Database(dbName).Collection("mixedfields")
+		mf := env.Client.Database(dbName).Collection("mixedfields")
 
 		// Baseline: doc with x and y.
 		_, err := mf.InsertOne(ctx, bson.D{
@@ -459,7 +459,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -505,7 +505,7 @@ func TestDiffVerify(t *testing.T) {
 		// Commit working set from Scenario 6 for a clean HEAD.
 		dumboDBCommit(t, env, dbName, "pre-scenario7", "alice <alice@acme.com>")
 
-		tc := env.client.Database(dbName).Collection("typechg")
+		tc := env.Client.Database(dbName).Collection("typechg")
 
 		// Baseline: "val" is a number.
 		_, err := tc.InsertOne(ctx, bson.D{
@@ -528,7 +528,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -564,18 +564,18 @@ func TestDiffVerify(t *testing.T) {
 		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario9", "alice <alice@acme.com>")
 
 		// Create a feature branch that starts at current main HEAD.
-		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "rootishtest"},
 		}).Err(), "doltBranch to create 'rootishtest'")
 
-		rootish := env.client.Database(dbName + "@rootishtest")
+		rootish := env.Client.Database(dbName + "@rootishtest")
 
 		// Two commits on main  -- feature branch stays behind. hashC1 is empty
 		// (no working changes), hashC2 adds _id:1.
 		hashC1 := dumboDBCommitAllowEmpty(t, env, dbName, "scenario9-c1", "alice <alice@acme.com>")
 
-		_, err := env.client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("scenario9").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(1)},
 			{Key: "v", Value: int32(1)},
 		})
@@ -586,7 +586,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9a: from=HEAD~1, to=HEAD on main connection  -- HEAD resolves to c2.
 		// Expect _id:1 added (delta between c1 and c2).
 		var raw9a bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "HEAD~1"},
 			{Key: "to", Value: "HEAD"},
@@ -601,7 +601,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9b: from=hashC1, to="HEAD" on main connection  -- HEAD = c2.
 		// Same result as 9a.
 		var raw9b bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC1},
 			{Key: "to", Value: "HEAD"},
@@ -648,7 +648,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9e: from="rootishtest" (bare branch name), to="main"  -- branch name rootish.
 		// rootishtest = c1, main = c2: expect _id:1 added.
 		var raw9e bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "rootishtest"},
 			{Key: "to", Value: "main"},
@@ -663,7 +663,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9f: REVERSE  -- from=HEAD, to=HEAD~1 on main connection.
 		// Inverts 9a: _id:1 was added going forward, so going backward it appears as removed.
 		var raw9f bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "HEAD"},
 			{Key: "to", Value: "HEAD~1"},
@@ -679,7 +679,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9g: REVERSE  -- from="main", to="rootishtest" (bare branch names, reverse of 9e).
 		// 9e showed _id:1 added going rootishtest->main; reversed: _id:1 is removed.
 		var raw9g bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: "main"},
 			{Key: "to", Value: "rootishtest"},
@@ -695,7 +695,7 @@ func TestDiffVerify(t *testing.T) {
 		// 9h: from=hashC2+"~1" (commit hash with tilde), to=hashC2.
 		// hashC2~1 = hashC1. Same result as 9b: _id:1 added.
 		var raw9h bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashC2 + "~1"},
 			{Key: "to", Value: hashC2},
@@ -715,7 +715,7 @@ func TestDiffVerify(t *testing.T) {
 		// this passes even when no prior changes are pending).
 		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario8", "alice <alice@acme.com>")
 
-		nested := env.client.Database(dbName).Collection("nested")
+		nested := env.Client.Database(dbName).Collection("nested")
 
 		// Baseline: doc with a sub-document address and a top-level name.
 		_, err := nested.InsertOne(ctx, bson.D{
@@ -737,7 +737,7 @@ func TestDiffVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -775,7 +775,7 @@ func TestDiffVerify(t *testing.T) {
 		// a fresh baseline commit.
 		dumboDBCommitAllowEmpty(t, env, dbName, "pre-scenario10", "alice <alice@acme.com>")
 
-		db := env.client.Database(dbName)
+		db := env.Client.Database(dbName)
 
 		// Baseline: 'staying' (will persist) and 'going' (will be dropped).
 		stay := db.Collection("scen10_staying")

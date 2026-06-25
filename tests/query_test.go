@@ -29,7 +29,7 @@ func TestQuery_regex_dotall(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("text", "hello\nworld")),

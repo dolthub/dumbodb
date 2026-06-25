@@ -6,7 +6,7 @@ explain path and at runtime, matching MongoDB.
 
 These steps assume a running dumbodb on `mongodb://localhost:27017`. Each
 scenario builds on the setup block below. The automated analog is
-`tests/index_hints_verify_test.go`.
+`tests/verify/index_hints_test.go`.
 
 ## Setup
 

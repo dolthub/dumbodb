@@ -35,9 +35,9 @@ func TestAutoCommit(t *testing.T) {
 	dbName := fmt.Sprintf("autocommit%d", rand.Int64N(1_000_000))
 
 	// Ensure a clean slate.
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
 
-	coll := env.client.Database(dbName).Collection("items")
+	coll := env.Client.Database(dbName).Collection("items")
 
 	// Insert a document  -- should auto-commit.
 	_, err := coll.InsertOne(ctx, bson.D{
@@ -48,7 +48,7 @@ func TestAutoCommit(t *testing.T) {
 
 	t.Run("AfterInsert", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 		lr := decodeLogResult(t, raw)
@@ -66,7 +66,7 @@ func TestAutoCommit(t *testing.T) {
 
 	t.Run("AfterUpdate", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 		lr := decodeLogResult(t, raw)
@@ -82,7 +82,7 @@ func TestAutoCommit(t *testing.T) {
 
 	t.Run("AfterDelete", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 		lr := decodeLogResult(t, raw)

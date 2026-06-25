@@ -35,7 +35,7 @@ type wireConn struct {
 
 func dialWire(t *testing.T, env *dumboDBTestEnv) *wireConn {
 	t.Helper()
-	addr := fmt.Sprintf("127.0.0.1:%d", env.port)
+	addr := fmt.Sprintf("127.0.0.1:%d", env.Port)
 	c, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial %s: %v", addr, err)

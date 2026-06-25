@@ -3,7 +3,7 @@
 Manual verification guide for `doltCommit` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_commit_verify_test.go` (`TestCommitVerify`)
+> **Automated equivalent:** `tests/verify/commit_test.go` (`TestCommitVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

@@ -6,32 +6,33 @@ version-control command. Work through the scenarios top to bottom in
 
 ## Automated Tests
 
-Every verify doc has a matching automated test in `tests/`:
+Every verify doc has a matching automated test in `tests/verify/` (package
+`verify`). The shared harness and response decoders live in `tests/support`.
 
-| Document | Test file | Test function |
-|----------|-----------|---------------|
-| branch.md | versioning_branch_verify_test.go | TestBranchVerify |
-| branch-status.md | versioning_branch_status_verify_test.go | TestBranchStatusVerify |
-| cherry-pick.md | versioning_cherry_pick_verify_test.go | TestCherryPickVerify |
-| commit.md | versioning_commit_verify_test.go | TestCommitVerify |
-| diff.md | versioning_diff_verify_test.go | TestDiffVerify |
-| log.md | versioning_log_verify_test.go | TestLogVerify |
-| log-pagination-filtering.md | versioning_log_pagination_verify_test.go | TestLogPaginationVerify |
-| merge.md | versioning_merge_verify_test.go | TestMergeVerify |
-| rebase.md | versioning_rebase_verify_test.go | TestRebaseVerify |
-| reset.md | versioning_reset_verify_test.go | TestResetVerify |
-| revert.md | versioning_revert_verify_test.go | TestRevertVerify |
-| rootish.md | versioning_rootish_verify_test.go | TestRootishVerify |
-| status.md | versioning_status_verify_test.go | TestStatusVerify |
-| tag.md | versioning_tag_verify_test.go | TestTagVerify |
-| index-branch-isolation.md | index_branch_isolation_verify_test.go | TestIndexBranchIsolationVerify |
-| index-maintenance.md | index_maintenance_verify_test.go | TestIndexMaintenanceVerify |
-| index-merge.md | index_merge_verify_test.go | TestIndexMergeVerify |
+| Document | Test file (in `tests/verify/`) | Test function |
+|----------|--------------------------------|---------------|
+| branch.md | branch_test.go | TestBranchVerify |
+| branch-status.md | branch_status_test.go | TestBranchStatusVerify |
+| cherry-pick.md | cherry_pick_test.go | TestCherryPickVerify |
+| commit.md | commit_test.go | TestCommitVerify |
+| diff.md | diff_test.go | TestDiffVerify |
+| log.md | log_test.go | TestLogVerify |
+| log-pagination-filtering.md | log_pagination_filtering_test.go | TestLogPaginationVerify |
+| merge.md | merge_test.go | TestMergeVerify |
+| rebase.md | rebase_test.go | TestRebaseVerify |
+| reset.md | reset_test.go | TestResetVerify |
+| revert.md | revert_test.go | TestRevertVerify |
+| rootish.md | rootish_test.go | TestRootishVerify |
+| status.md | status_test.go | TestStatusVerify |
+| tag.md | tag_test.go | TestTagVerify |
+| index-branch-isolation.md | index_branch_isolation_test.go | TestIndexBranchIsolationVerify |
+| index-maintenance.md | index_maintenance_test.go | TestIndexMaintenanceVerify |
+| index-merge.md | index_merge_test.go | TestIndexMergeVerify |
 
 Run all verify tests:
 
 ```bash
-go test ./tests/ -run "Verify" -count=1 -timeout=5m -v
+go test ./tests/verify/ -count=1 -timeout=10m -v
 ```
 
 ## Rules

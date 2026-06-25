@@ -42,7 +42,7 @@ func TestWireMoreToCome_UnacknowledgedWriteFollowedByAck(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 
-	addr := fmt.Sprintf("mongodb://127.0.0.1:%d/", env.port)
+	addr := fmt.Sprintf("mongodb://127.0.0.1:%d/", env.Port)
 
 	// Connect with maxPoolSize=1 so the unacknowledged insert and the
 	// acknowledged read MUST share the same wire connection.
@@ -53,7 +53,7 @@ func TestWireMoreToCome_UnacknowledgedWriteFollowedByAck(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w0Client.Disconnect(ctx) })
 
-	coll := w0Client.Database("testdb").Collection(fmt.Sprintf("mtc_%d", env.port))
+	coll := w0Client.Database("testdb").Collection(fmt.Sprintf("mtc_%d", env.Port))
 	t.Cleanup(func() { _ = coll.Drop(ctx) })
 
 	// Fire-and-forget insert (driver sets moreToCome=1, expects no reply).

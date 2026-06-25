@@ -3,7 +3,7 @@
 Manual verification guide for `doltStatus` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_status_verify_test.go` (`TestStatusVerify`)
+> **Automated equivalent:** `tests/verify/status_test.go` (`TestStatusVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

@@ -29,7 +29,7 @@ import (
 
 func siClient(t *testing.T, env *dumboDBTestEnv) *mongo.Client {
 	t.Helper()
-	uri := fmt.Sprintf("mongodb://127.0.0.1:%d", env.port)
+	uri := fmt.Sprintf("mongodb://127.0.0.1:%d", env.Port)
 	c, err := mongo.Connect(options.Client().ApplyURI(uri))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Disconnect(context.Background()) })
@@ -60,9 +60,9 @@ func mongoCommandCode(err error) int32 {
 func TestSessionIsolation_StartTransactionRejected(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	sess, err := env.client.StartSession()
+	sess, err := env.Client.StartSession()
 	require.NoError(t, err)
 	defer sess.EndSession(ctx)
 	require.NoError(t, sess.StartTransaction())
@@ -80,9 +80,9 @@ func TestSessionIsolation_StartTransactionRejected(t *testing.T) {
 func TestSessionIsolation_StartTransactionAllowedInDefaultMode(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	sess, err := env.client.StartSession()
+	sess, err := env.Client.StartSession()
 	require.NoError(t, err)
 	defer sess.EndSession(ctx)
 	require.NoError(t, sess.StartTransaction())
@@ -97,7 +97,7 @@ func TestSessionIsolation_StartTransactionAllowedInDefaultMode(t *testing.T) {
 func TestSessionIsolation_ImplicitForkVisibility(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	cB := siClient(t, env)
 	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
@@ -123,7 +123,7 @@ func TestSessionIsolation_ImplicitForkVisibility(t *testing.T) {
 func TestSessionIsolation_ConflictRejectsSecondCommit(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "p"}, {Key: "x", Value: "seed"}})
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestSessionIsolation_ConflictRejectsSecondCommit(t *testing.T) {
 func TestSessionIsolation_NonConflictingMergesCleanly(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
 	require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestSessionIsolation_NonConflictingMergesCleanly(t *testing.T) {
 func TestSessionIsolation_ReadYourOwnWrites(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: "own"}, {Key: "v", Value: "v1"}})
 	require.NoError(t, err)
@@ -229,7 +229,7 @@ func siCreateBranch(t *testing.T, db *mongo.Database, branch string) {
 func TestSessionIsolation_DirtySessionPinnedToForkPoint(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	cB := siClient(t, env)
 	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
@@ -275,7 +275,7 @@ func TestSessionIsolation_DirtySessionPinnedToForkPoint(t *testing.T) {
 func TestSessionIsolation_SeesNewCommitsAfterOwnCommit(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	cB := siClient(t, env)
 	collB := cB.Database(collA.Database().Name()).Collection(collA.Name())
@@ -309,7 +309,7 @@ func TestSessionIsolation_MultiBranchIsolationOneSession(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
 
-	dbName := fmt.Sprintf("multibranch_%d", env.port)
+	dbName := fmt.Sprintf("multibranch_%d", env.Port)
 	collName := "items"
 
 	cA := siClient(t, env)
@@ -362,7 +362,7 @@ func TestSessionIsolation_MultiBranchIsolationOneSession(t *testing.T) {
 func TestSessionIsolation_ThreeWayConcurrentCommitSerializes(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
 	require.NoError(t, err)
@@ -403,7 +403,7 @@ func TestSessionIsolation_ThreeWayConcurrentCommitSerializes(t *testing.T) {
 func TestSessionIsolation_DeleteVsModifyConflict(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
-	collA := env.collection(t)
+	collA := env.Collection(t)
 
 	_, err := collA.InsertOne(ctx, bson.D{{Key: "_id", Value: "p"}, {Key: "x", Value: "original"}})
 	require.NoError(t, err)
@@ -433,18 +433,18 @@ func TestSessionIsolation_ImplicitForkVisibility_OnFeatureBranch(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
 
-	dbName := fmt.Sprintf("brfork_%d", env.port)
+	dbName := fmt.Sprintf("brfork_%d", env.Port)
 	collName := "items"
 
-	_, err := env.client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	_, err := env.Client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
 	require.NoError(t, err)
-	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
 	}).Err())
 
-	siCreateBranch(t, env.client.Database(dbName+"@main"), "feature")
+	siCreateBranch(t, env.Client.Database(dbName+"@main"), "feature")
 
-	collA := env.client.Database(dbName + "@feature").Collection(collName)
+	collA := env.Client.Database(dbName + "@feature").Collection(collName)
 	cB := siClient(t, env)
 	collB := cB.Database(dbName + "@feature").Collection(collName)
 
@@ -469,17 +469,17 @@ func TestSessionIsolation_NonConflictingMergesCleanly_OnFeatureBranch(t *testing
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
 
-	dbName := fmt.Sprintf("brmerge_%d", env.port)
+	dbName := fmt.Sprintf("brmerge_%d", env.Port)
 	collName := "items"
 
-	_, err := env.client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
+	_, err := env.Client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{{Key: "_id", Value: "seed"}})
 	require.NoError(t, err)
-	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
 	}).Err())
-	siCreateBranch(t, env.client.Database(dbName+"@main"), "feature")
+	siCreateBranch(t, env.Client.Database(dbName+"@main"), "feature")
 
-	collA := env.client.Database(dbName + "@feature").Collection(collName)
+	collA := env.Client.Database(dbName + "@feature").Collection(collName)
 	cB := siClient(t, env)
 	collB := cB.Database(dbName + "@feature").Collection(collName)
 
@@ -514,7 +514,7 @@ func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
 	a := dialWire(t, env)
 	b := dialWire(t, env)
 
-	dbName := fmt.Sprintf("supersede_%d", env.port)
+	dbName := fmt.Sprintf("supersede_%d", env.Port)
 	lsid := freshLsid()
 
 	resA, err := a.run(bson.D{
@@ -557,7 +557,7 @@ func TestSessionIsolation_LsidSupersedeSurfacedAsCode225(t *testing.T) {
 
 func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testing.T) {
 	env := startDumboDB(t)
-	dbName := fmt.Sprintf("commitfence_%d", env.port)
+	dbName := fmt.Sprintf("commitfence_%d", env.Port)
 	lsid := freshLsid()
 
 	a := dialWire(t, env)
@@ -629,7 +629,7 @@ func TestSessionIsolation_DoltCommitDurabilityUnderConcurrentSupersede(t *testin
 // DumboDB CI runs where MONGO_RS_URI may not be set.
 func TestTransaction_WireReconnectResumesTransactionState(t *testing.T) {
 	env := startDumboDB(t)
-	dbName := fmt.Sprintf("txnreconnect_%d", env.port)
+	dbName := fmt.Sprintf("txnreconnect_%d", env.Port)
 	lsid := freshLsid()
 	const txnNum = int64(1)
 
@@ -698,7 +698,7 @@ func TestTransaction_WireReconnectResumesTransactionState(t *testing.T) {
 // previously-uncommitted state to HEAD, where a fresh lsid can read it.
 func TestSessionIsolation_WireReconnectResumesUncommittedState(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
-	dbName := fmt.Sprintf("wirereconnect_%d", env.port)
+	dbName := fmt.Sprintf("wirereconnect_%d", env.Port)
 	lsid := freshLsid()
 
 	conn1 := dialWire(t, env)
@@ -764,7 +764,7 @@ func TestSessionIsolation_ReconnectResumesCommittedState(t *testing.T) {
 	env := startDumboDB(t)
 
 	a := dialWire(t, env)
-	dbName := fmt.Sprintf("reconnect_%d", env.port)
+	dbName := fmt.Sprintf("reconnect_%d", env.Port)
 	lsid := freshLsid()
 
 	resInsert, err := a.run(bson.D{
@@ -827,19 +827,19 @@ func TestSessionIsolation_ConflictRejectsSecondCommit_OnFeatureBranch(t *testing
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
 
-	dbName := fmt.Sprintf("brconf_%d", env.port)
+	dbName := fmt.Sprintf("brconf_%d", env.Port)
 	collName := "items"
 
-	_, err := env.client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{
+	_, err := env.Client.Database(dbName).Collection(collName).InsertOne(ctx, bson.D{
 		{Key: "_id", Value: "p"}, {Key: "x", Value: "seed"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "doltCommit", Value: 1}, {Key: "message", Value: "seed"},
 	}).Err())
-	siCreateBranch(t, env.client.Database(dbName+"@main"), "feature")
+	siCreateBranch(t, env.Client.Database(dbName+"@main"), "feature")
 
-	collA := env.client.Database(dbName + "@feature").Collection(collName)
+	collA := env.Client.Database(dbName + "@feature").Collection(collName)
 	cB := siClient(t, env)
 	collB := cB.Database(dbName + "@feature").Collection(collName)
 

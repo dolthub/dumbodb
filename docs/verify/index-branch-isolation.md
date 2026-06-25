@@ -6,7 +6,7 @@ they cover, depend on the branch the connection is pinned to. Work
 through each scenario top to bottom. Each section builds on the
 previous setup.
 
-> **Automated equivalent:** `tests/index_branch_isolation_verify_test.go`
+> **Automated equivalent:** `tests/verify/index_branch_isolation_test.go`
 > (`TestIndexBranchIsolationVerify`) covers every scenario in this
 > document as sequential subtests using the same setup. Run it with:
 > ```

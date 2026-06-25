@@ -52,7 +52,7 @@ func assertExplainResponse(t *testing.T, res bson.D, verbosity string) {
 func TestExplain_Find_QueryPlanner(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -71,7 +71,7 @@ func TestExplain_Find_QueryPlanner(t *testing.T) {
 func TestExplain_Find_ExecutionStats(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -90,7 +90,7 @@ func TestExplain_Find_ExecutionStats(t *testing.T) {
 func TestExplain_Find_AllPlansExecution(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -109,7 +109,7 @@ func TestExplain_Find_AllPlansExecution(t *testing.T) {
 func TestExplain_Aggregate(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -131,7 +131,7 @@ func TestExplain_Aggregate(t *testing.T) {
 func TestExplain_Count(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -149,7 +149,7 @@ func TestExplain_Count(t *testing.T) {
 func TestExplain_Update(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -175,7 +175,7 @@ func TestExplain_Update(t *testing.T) {
 func TestExplain_Delete(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -201,7 +201,7 @@ func TestExplain_Delete(t *testing.T) {
 func TestExplain_Distinct(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll, bson.D{{Key: "v", Value: int32(1)}})
 
@@ -228,7 +228,7 @@ func TestDB_RunCommand_DbStats(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert documents so counts and sizes are non-zero.
 	insertDocs(t, coll,
@@ -302,7 +302,7 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert documents so count and size fields are non-zero.
 	insertDocs(t, coll,
@@ -395,7 +395,7 @@ func TestDB_RunCommand_CollStats(t *testing.T) {
 func TestDB_RunCommand_ListCollections(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert a document so the collection exists.
 	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
@@ -457,7 +457,7 @@ func TestDB_RunCommand_ListCollections(t *testing.T) {
 func TestDB_RunCommand_BuildInfo(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{
@@ -534,7 +534,7 @@ func TestDB_RunCommand_BuildInfo(t *testing.T) {
 func TestDB_RunCommand_Validate(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert two documents so nrecords is non-zero.
 	insertDocs(t, coll,
@@ -599,7 +599,7 @@ func TestDB_RunCommand_Validate(t *testing.T) {
 func TestDB_ListDatabases(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert a document so the user database (testdb) exists and is non-empty.
 	insertDocs(t, coll, bson.D{{Key: "x", Value: int32(1)}})
@@ -609,7 +609,7 @@ func TestDB_ListDatabases(t *testing.T) {
 	// Issue listDatabases via RunCommand against the admin database (the
 	// canonical target for admin commands in MongoDB).
 	var res bson.D
-	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+	err := env.Client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "listDatabases", Value: int32(1)},
 	}).Decode(&res)
 	require.NoError(t, err, "listDatabases via RunCommand must not error")
@@ -665,7 +665,7 @@ func TestDB_ListDatabases(t *testing.T) {
 	// Before the fix, the handler could crash the TCP connection (EOF) during listDatabases,
 	// leaving the driver unable to issue subsequent commands.
 	var pingRes bson.D
-	err = env.client.Database("admin").RunCommand(ctx, bson.D{
+	err = env.Client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "ping", Value: int32(1)},
 	}).Decode(&pingRes)
 	require.NoError(t, err, "connection must remain alive after listDatabases")
@@ -678,7 +678,7 @@ func TestDB_ListDatabases(t *testing.T) {
 func TestDB_RunCommand_Hello(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{
@@ -740,7 +740,7 @@ func TestDB_RunCommand_Hello(t *testing.T) {
 func TestDB_RunCommand_IsMaster(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{
@@ -793,7 +793,7 @@ func TestDB_RunCommand_IsMaster(t *testing.T) {
 func TestDB_RunCommand_ServerStatus(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{

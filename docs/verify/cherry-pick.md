@@ -3,7 +3,7 @@
 Manual verification guide for `doltCherryPick` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_cherry_pick_verify_test.go` (`TestCherryPickVerify`)
+> **Automated equivalent:** `tests/verify/cherry_pick_test.go` (`TestCherryPickVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

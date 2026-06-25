@@ -3,7 +3,7 @@
 Manual verification guide for `doltMerge` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_merge_verify_test.go` (`TestMergeVerify`)
+> **Automated equivalent:** `tests/verify/merge_test.go` (`TestMergeVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

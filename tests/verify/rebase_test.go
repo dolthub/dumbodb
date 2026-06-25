@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestRebaseVerify is the automated analog of docs/verify/rebase.md.
 //
@@ -46,7 +46,7 @@ func rebaseVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 
 	require.NoError(t, db.Drop(ctx))
 
@@ -60,14 +60,14 @@ func rebaseVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 
 	// Create "feature" branch at C1.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
 	require.NoError(t, err, "doltBranch to create 'feature'")
 
 	// C2: feature adds _id:2.
-	_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
@@ -94,7 +94,7 @@ func TestRebaseVerify(t *testing.T) {
 	hashC1, hashC2, hashC3 := rebaseVerifySetup(t, env, dbName)
 	_, _ = hashC1, hashC2
 
-	featureDB := env.client.Database(dbName + "@feature")
+	featureDB := env.Client.Database(dbName + "@feature")
 
 	// -------------------------------------------------------------------------
 	// Scenario 1: Clean rebase  -- response shape
@@ -153,7 +153,7 @@ func TestRebaseVerify(t *testing.T) {
 		noCommDB := fmt.Sprintf("rebasenocomm%d", rand.Int64N(1_000_000))
 		_, _, _ = rebaseVerifySetup(t, env, noCommDB)
 
-		noCommFeatureDB := env.client.Database(noCommDB + "@feature")
+		noCommFeatureDB := env.Client.Database(noCommDB + "@feature")
 
 		raw := runCommandRaw(t, noCommFeatureDB, bson.D{
 			{Key: "dumboRebase", Value: int32(1)},
@@ -260,7 +260,7 @@ func TestRebaseVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_ThreeCommitRebase", func(t *testing.T) {
 		tdb := fmt.Sprintf("rebase3c%d", rand.Int64N(1_000_000))
-		mainCol := env.client.Database(tdb + "@main").Collection("items")
+		mainCol := env.Client.Database(tdb + "@main").Collection("items")
 
 		// C1: root
 		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
@@ -268,12 +268,12 @@ func TestRebaseVerify(t *testing.T) {
 		dumboDBCommit(t, env, tdb+"@main", "C1", "alice <alice@acme.com>")
 
 		// Create feature branch
-		require.NoError(t, env.client.Database(tdb+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(tdb+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 
-		featCol := env.client.Database(tdb + "@feature").Collection("items")
+		featCol := env.Client.Database(tdb + "@feature").Collection("items")
 
 		// Three commits on feature
 		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: int32(10)}})
@@ -294,7 +294,7 @@ func TestRebaseVerify(t *testing.T) {
 		dumboDBCommit(t, env, tdb+"@main", "C2", "alice <alice@acme.com>")
 
 		// Rebase feature onto main
-		raw := runCommandRaw(t, env.client.Database(tdb+"@feature"), bson.D{
+		raw := runCommandRaw(t, env.Client.Database(tdb+"@feature"), bson.D{
 			{Key: "dumboRebase", Value: int32(1)},
 			{Key: "onto", Value: "main"},
 		})
@@ -302,7 +302,7 @@ func TestRebaseVerify(t *testing.T) {
 		assert.EqualValues(t, 3, raw["commitsReplayed"], "all 3 feature commits must be replayed")
 
 		// Verify all documents are present
-		n, err := env.client.Database(tdb+"@feature").Collection("items").CountDocuments(ctx, bson.D{})
+		n, err := env.Client.Database(tdb+"@feature").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(5), n, "feature must have 5 docs (C1 + C2 + F1 + F2 + F3)")
 	})
@@ -312,19 +312,19 @@ func TestRebaseVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_ThreeCommit_FirstConflicts", func(t *testing.T) {
 		tdb := fmt.Sprintf("rebase3cf%d", rand.Int64N(1_000_000))
-		mainCol := env.client.Database(tdb + "@main").Collection("items")
+		mainCol := env.Client.Database(tdb + "@main").Collection("items")
 
 		// C1: root with _id:1
 		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, tdb+"@main", "C1", "alice <alice@acme.com>")
 
-		require.NoError(t, env.client.Database(tdb+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(tdb+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 
-		featCol := env.client.Database(tdb + "@feature").Collection("items")
+		featCol := env.Client.Database(tdb + "@feature").Collection("items")
 
 		// F1: modify _id:1 (will conflict with main)
 		_, err = featCol.UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}})
@@ -346,7 +346,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, tdb+"@main", "C2-conflict", "alice <alice@acme.com>")
 
-		featDB := env.client.Database(tdb + "@feature")
+		featDB := env.Client.Database(tdb + "@feature")
 
 		// Rebase -- first commit (F1) conflicts
 		raw := runCommandRaw(t, featDB, bson.D{
@@ -392,19 +392,19 @@ func TestRebaseVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_ThreeCommit_ThirdConflicts", func(t *testing.T) {
 		tdb := fmt.Sprintf("rebase3cl%d", rand.Int64N(1_000_000))
-		mainCol := env.client.Database(tdb + "@main").Collection("items")
+		mainCol := env.Client.Database(tdb + "@main").Collection("items")
 
 		// C1: root with _id:1
 		_, err := mainCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, tdb+"@main", "C1", "alice <alice@acme.com>")
 
-		require.NoError(t, env.client.Database(tdb+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(tdb+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 
-		featCol := env.client.Database(tdb + "@feature").Collection("items")
+		featCol := env.Client.Database(tdb + "@feature").Collection("items")
 
 		// F1: add _id:10 (clean)
 		_, err = featCol.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: int32(10)}})
@@ -426,7 +426,7 @@ func TestRebaseVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, tdb+"@main", "C2-conflict", "alice <alice@acme.com>")
 
-		featDB := env.client.Database(tdb + "@feature")
+		featDB := env.Client.Database(tdb + "@feature")
 
 		// Rebase -- F1 and F2 replay clean, F3 conflicts
 		raw := runCommandRaw(t, featDB, bson.D{
@@ -482,10 +482,10 @@ func TestRebaseVerify(t *testing.T) {
 		_, hashC2c, _ := rebaseVerifySetup(t, env, conflictDB)
 		_ = hashC2c
 
-		conflictFeatureDB := env.client.Database(conflictDB + "@feature")
+		conflictFeatureDB := env.Client.Database(conflictDB + "@feature")
 
 		// Modify _id:1 on main (will conflict with a modification on feature).
-		conflictMainDB := env.client.Database(conflictDB + "@main")
+		conflictMainDB := env.Client.Database(conflictDB + "@main")
 		_, err := conflictMainDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
@@ -540,8 +540,8 @@ func TestRebaseVerify(t *testing.T) {
 		conflictDB := fmt.Sprintf("rebaseresol%d", rand.Int64N(1_000_000))
 		_, _, _ = rebaseVerifySetup(t, env, conflictDB)
 
-		conflictFeatureDB := env.client.Database(conflictDB + "@feature")
-		conflictMainDB := env.client.Database(conflictDB + "@main")
+		conflictFeatureDB := env.Client.Database(conflictDB + "@feature")
+		conflictMainDB := env.Client.Database(conflictDB + "@main")
 
 		// Create conflict: both branches modify _id:1.
 		_, err := conflictMainDB.Collection("items").UpdateOne(ctx,

@@ -30,56 +30,17 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// runLog issues a dumboLog command with the given extra fields and returns the
-// decoded raw response.
-func runLog(t *testing.T, env *dumboDBTestEnv, dbName string, extra bson.D) bson.M {
-	t.Helper()
-	cmd := append(bson.D{{Key: "doltLog", Value: int32(1)}}, extra...)
-	var raw bson.M
-	require.NoError(t, env.client.Database(dbName).RunCommand(context.Background(), cmd).Decode(&raw))
-	return raw
-}
-
-// logCommitIDs extracts the ordered commit ids from a dumboLog response.
-func logCommitIDs(t *testing.T, raw bson.M) []string {
-	t.Helper()
-	arr, ok := raw["commits"].(bson.A)
-	require.True(t, ok, "commits should be an array")
-	ids := make([]string, len(arr))
-	for i, c := range arr {
-		ids[i] = c.(bson.M)["commitId"].(string)
-	}
-	return ids
-}
-
-// logNext extracts the "next" frontier as a string slice (nil when absent).
-func logNext(t *testing.T, raw bson.M) []string {
-	t.Helper()
-	v, ok := raw["next"]
-	if !ok {
-		return nil
-	}
-	arr, ok := v.(bson.A)
-	require.True(t, ok, "next should be an array")
-	out := make([]string, len(arr))
-	for i, e := range arr {
-		s, ok := e.(string)
-		require.True(t, ok, "next elements should be strings")
-		out[i] = s
-	}
-	return out
-}
 
 func TestLogPaginationHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logpage%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
 
 	// Linear history: c1..c5 plus the Initialize root => 6 commits total.
 	var hashes []string
 	for i := 1; i <= 5; i++ {
-		_, err := env.client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		_, err := env.Client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
 		require.NoError(t, err)
 		hashes = append(hashes, dumboDBCommit(t, env, dbName, fmt.Sprintf("c%d", i), "a <a@x.io>"))
 	}
@@ -145,13 +106,13 @@ func TestLogPaginationHandler(t *testing.T) {
 
 	t.Run("InvalidHashElement_Errors", func(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "from", Value: bson.A{"notavalidhash"}}}
-		err := env.client.Database(dbName).RunCommand(ctx, cmd).Err()
+		err := env.Client.Database(dbName).RunCommand(ctx, cmd).Err()
 		require.Error(t, err)
 	})
 
 	t.Run("WrongTypeElement_Errors", func(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "from", Value: bson.A{int32(123)}}}
-		err := env.client.Database(dbName).RunCommand(ctx, cmd).Err()
+		err := env.Client.Database(dbName).RunCommand(ctx, cmd).Err()
 		require.Error(t, err)
 	})
 }
@@ -162,30 +123,30 @@ func TestLogNegativeLimitRejected(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logneg%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	_, err := env.client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	_, err := env.Client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "c1", "a <a@x.io>")
 
 	cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(-3)}}
-	require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+	require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 }
 
 func TestLogAllHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logall%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
 
 	// main: one commit.
-	_, err := env.client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	_, err := env.Client.Database(dbName).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "main-1", "a <a@x.io>")
 
 	// side branch with a commit not reachable from main.
-	require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx,
+	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx,
 		bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "side"}}).Err())
-	_, err = env.client.Database(dbName+"@side").Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+	_, err = env.Client.Database(dbName+"@side").Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	sideHash := dumboDBCommit(t, env, dbName+"@side", "side-1", "a <a@x.io>")
 
@@ -199,7 +160,7 @@ func TestLogAllHandler(t *testing.T) {
 
 	t.Run("AllAndFromMutuallyExclusive", func(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "all", Value: true}, {Key: "from", Value: sideHash}}
-		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+		require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 }
 
@@ -207,9 +168,9 @@ func TestLogIDFilterHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logidf%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	orders := env.client.Database(dbName).Collection("orders")
-	users := env.client.Database(dbName).Collection("users")
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	orders := env.Client.Database(dbName).Collection("orders")
+	users := env.Client.Database(dbName).Collection("users")
 
 	// c1: orders 1,2 ; c2: users 1 ; c3: order 3 ; c4: modify order 1 + user 1 ; c5: delete order 1
 	_, err := orders.InsertMany(ctx, []interface{}{
@@ -265,7 +226,7 @@ func TestLogIDFilterHandler(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.A{}}},
 		}}}
-		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+		require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 
 	t.Run("MultiCollectionOR", func(t *testing.T) {
@@ -289,7 +250,7 @@ func TestLogIDFilterHandler(t *testing.T) {
 
 	t.Run("NotAnArray_Errors", func(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.D{{Key: "orders", Value: int32(1)}}}}
-		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+		require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 
 	t.Run("DocumentValueIsAValidID", func(t *testing.T) {
@@ -299,7 +260,7 @@ func TestLogIDFilterHandler(t *testing.T) {
 			bson.D{{Key: "orders", Value: bson.D{{Key: "a", Value: int32(1)}}}},
 		}}}
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, cmd).Decode(&raw))
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Decode(&raw))
 		assert.Empty(t, raw["commits"].(bson.A))
 	})
 
@@ -309,14 +270,14 @@ func TestLogIDFilterHandler(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.A{bson.A{int32(1)}}}},
 		}}}
-		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+		require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 
 	t.Run("MultiKeyEntry_Errors", func(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: int32(1)}, {Key: "users", Value: int32(1)}},
 		}}}
-		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+		require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 }
 
@@ -324,8 +285,8 @@ func TestLogIDFilterHandler_ExoticIDs(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logidx%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	c := env.client.Database(dbName).Collection("items")
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	c := env.Client.Database(dbName).Collection("items")
 
 	oid := bson.NewObjectID()
 	subID := bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: "x"}} // document _id
@@ -378,8 +339,8 @@ func TestLogMatchHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logmatch%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	orders := env.client.Database(dbName).Collection("orders")
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	orders := env.Client.Database(dbName).Collection("orders")
 
 	// c1 add o1(pending),o2(shipped); c2 add o3(pending); c3 ship o1; c4 add user
 	_, err := orders.InsertMany(ctx, []interface{}{
@@ -394,7 +355,7 @@ func TestLogMatchHandler(t *testing.T) {
 	_, err = orders.UpdateByID(ctx, int32(1), bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "shipped"}}}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "c3", "a <a@x.io>")
-	_, err = env.client.Database(dbName).Collection("users").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	_, err = env.Client.Database(dbName).Collection("users").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "c4", "a <a@x.io>")
 
@@ -442,7 +403,7 @@ func TestLogMatchHandler(t *testing.T) {
 		cmd := bson.D{{Key: "doltLog", Value: int32(1)}, {Key: "filters", Value: bson.A{
 			bson.D{{Key: "orders", Value: bson.D{{Key: "$nope", Value: int32(1)}}}},
 		}}}
-		require.Error(t, env.client.Database(dbName).RunCommand(ctx, cmd).Err())
+		require.Error(t, env.Client.Database(dbName).RunCommand(ctx, cmd).Err())
 	})
 }
 
@@ -450,8 +411,8 @@ func TestLogChangedHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("logchg%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	orders := env.client.Database(dbName).Collection("orders")
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	orders := env.Client.Database(dbName).Collection("orders")
 
 	// c1 add o1{cust 4242, pending}, o2{cust 9999, pending}
 	_, err := orders.InsertMany(ctx, []interface{}{

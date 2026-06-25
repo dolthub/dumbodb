@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestLogVerify is the automated analog of docs/verify/log.md.
 //
@@ -41,73 +41,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// logResult holds the decoded top-level response from a dumboDBLog command.
-type logResult struct {
-	Commits []commitEntry
-}
-
-// commitEntry holds one entry from the "commits" array of a dumboDBLog response.
-type commitEntry struct {
-	CommitID           string
-	Parent1            string
-	Parent2            string
-	Message            string
-	Author             string
-	Committer          string
-	CommitterTimestamp interface{}
-	Refs               []string
-}
-
-// decodeLogResult parses the raw bson.M from a dumboDBLog RunCommand into the
-// typed helpers above, failing the test if the shape is unexpected.
-func decodeLogResult(t *testing.T, raw bson.M) logResult {
-	t.Helper()
-
-	_, hasBranch := raw["branch"]
-	require.False(t, hasBranch, "doltLog result must not include 'branch' field")
-
-	rawCommits, ok := raw["commits"]
-	require.True(t, ok, "doltLog result missing 'commits' field")
-
-	commitsArr, ok := rawCommits.(bson.A)
-	require.True(t, ok, "doltLog 'commits' is not an array, got %T", rawCommits)
-
-	var out logResult
-
-	for _, c := range commitsArr {
-		cm, ok := c.(bson.M)
-		require.True(t, ok, "commits entry is not a document, got %T", c)
-
-		entry := commitEntry{
-			CommitID: fmt.Sprintf("%v", cm["commitId"]),
-			Message:  fmt.Sprintf("%v", cm["message"]),
-			Author:   fmt.Sprintf("%v", cm["author"]),
-		}
-		if c, ok := cm["committer"]; ok {
-			entry.Committer = fmt.Sprintf("%v", c)
-		}
-		if ct, ok := cm["committerTimestamp"]; ok {
-			entry.CommitterTimestamp = ct
-		}
-		if p1, ok := cm["parent1"]; ok {
-			entry.Parent1 = fmt.Sprintf("%v", p1)
-		}
-		if p2, ok := cm["parent2"]; ok {
-			entry.Parent2 = fmt.Sprintf("%v", p2)
-		}
-		if rawRefs, ok := cm["refs"]; ok {
-			if refsArr, ok := rawRefs.(bson.A); ok {
-				for _, r := range refsArr {
-					entry.Refs = append(entry.Refs, fmt.Sprintf("%v", r))
-				}
-			}
-		}
-		out.Commits = append(out.Commits, entry)
-	}
-
-	return out
-}
-
 func TestLogVerify(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -115,8 +48,8 @@ func TestLogVerify(t *testing.T) {
 	dbName := fmt.Sprintf("logvrfy%d", rand.Int64N(1_000_000))
 
 	// Start fresh.
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	_, err := env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	_, err := env.Client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(0)},
 	})
 	require.NoError(t, err)
@@ -126,7 +59,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_NoUserCommits", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -137,21 +70,21 @@ func TestLogVerify(t *testing.T) {
 	})
 
 	// Setup: three sequential commits on the same database.
-	_, err = env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "label", Value: "alpha"},
 	})
 	require.NoError(t, err)
 	hash1 := dumboDBCommit(t, env, dbName, "first", "alice <alice@acme.com>")
 
-	_, err = env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "beta"},
 	})
 	require.NoError(t, err)
 	hash2 := dumboDBCommit(t, env, dbName, "second", "alice <alice@acme.com>")
 
-	_, err = env.client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(dbName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "label", Value: "gamma"},
 	})
@@ -163,7 +96,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_MultipleCommits", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -198,7 +131,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_WithLimit", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))
@@ -218,7 +151,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3b_LimitZero", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(0)},
 		}).Decode(&raw))
@@ -232,7 +165,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3c_LimitZeroWithFrom", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "from", Value: hash2},
 			{Key: "limit", Value: int32(0)},
@@ -247,7 +180,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_FromHash", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "from", Value: hash2},
 		}).Decode(&raw))
@@ -272,7 +205,7 @@ func TestLogVerify(t *testing.T) {
 	t.Run("Scenario5_RefsAnnotation", func(t *testing.T) {
 		// Create a second branch "logvrfy-refs" pointing at the current main HEAD
 		// (hash3), so two branches share the same tip commit.
-		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "logvrfy-refs"},
 		}).Err(), "creating logvrfy-refs branch must succeed")
@@ -281,7 +214,7 @@ func TestLogVerify(t *testing.T) {
 		// "logvrfy-refs", so its refs field must contain "HEAD", "main", and
 		// "logvrfy-refs".  Non-head commits must have no refs field.
 		var rawMain bson.M
-		require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&rawMain))
 
@@ -302,7 +235,7 @@ func TestLogVerify(t *testing.T) {
 		// Query dumboDBLog on logvrfy-refs.  hash3 is still the tip but now the
 		// connection branch is "logvrfy-refs", so the decoration is reversed.
 		var rawFeature bson.M
-		require.NoError(t, env.client.Database(dbName+"@logvrfy-refs").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName+"@logvrfy-refs").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&rawFeature))
 
@@ -331,8 +264,8 @@ func TestLogVerify(t *testing.T) {
 	//   hashC -> hashA -> init  (hashB and hashM are unreachable)
 	// -------------------------------------------------------------------------
 	mergeDBName := fmt.Sprintf("logmerge%d", rand.Int64N(1_000_000))
-	require.NoError(t, env.client.Database(mergeDBName).Drop(ctx))
-	_, err = env.client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
+	require.NoError(t, env.Client.Database(mergeDBName).Drop(ctx))
+	_, err = env.Client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "v", Value: int32(1)},
 	})
@@ -340,13 +273,13 @@ func TestLogVerify(t *testing.T) {
 	hashA := dumboDBCommit(t, env, mergeDBName, "add-one", "alice <alice@acme.com>")
 
 	// Create "feat" branch from main HEAD (hashA).
-	require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feat"},
 	}).Err())
 
 	// Advance main: _id:2 -> hashB (diverges from hashA).
-	_, err = env.client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(mergeDBName).Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
@@ -354,7 +287,7 @@ func TestLogVerify(t *testing.T) {
 	hashB := dumboDBCommit(t, env, mergeDBName, "add-two", "alice <alice@acme.com>")
 
 	// Advance feat independently: _id:3 -> hashC (diverges from hashA).
-	_, err = env.client.Database(mergeDBName+"@feat").Collection("events").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(mergeDBName+"@feat").Collection("events").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(3)},
 		{Key: "v", Value: int32(3)},
 	})
@@ -363,7 +296,7 @@ func TestLogVerify(t *testing.T) {
 
 	// Merge feat into main -> three-way merge commit hashM.
 	var mergeRaw bson.M
-	require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "feat"},
 	}).Decode(&mergeRaw))
@@ -376,7 +309,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_MergeCommitParents", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&raw))
@@ -399,7 +332,7 @@ func TestLogVerify(t *testing.T) {
 		// walk are hashC -> hashA -> "Initialize database". hashB (reachable only
 		// via main) and hashM (the merge commit) must not appear.
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "from", Value: hashC},
 		}).Decode(&raw))
@@ -430,7 +363,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7b_FromFeatBranchConnection", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"@feat").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(mergeDBName+"@feat").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -464,7 +397,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_TopologicalMergeWalk", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 		}).Decode(&raw))
 
@@ -487,7 +420,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario9_LimitOnNonLinearHistory", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(2)},
 		}).Decode(&raw))
@@ -512,7 +445,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario10_StatFlag", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 			{Key: "stat", Value: true},
@@ -546,7 +479,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario11_PatchFlag", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 			{Key: "patch", Value: true},
@@ -590,7 +523,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario12_StatMultipleCommits", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(3)},
 			{Key: "stat", Value: true},
@@ -616,7 +549,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario13_NoStatNoPatch", func(t *testing.T) {
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&raw))
@@ -632,7 +565,7 @@ func TestLogVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario14_IndexOnlyCommitInStatAndPatch", func(t *testing.T) {
 		idbName := fmt.Sprintf("logidxvrfy%d", rand.Int64N(1_000_000))
-		idb := env.client.Database(idbName)
+		idb := env.Client.Database(idbName)
 		require.NoError(t, idb.Drop(ctx))
 
 		_, err := idb.Collection("items").InsertOne(ctx, bson.D{

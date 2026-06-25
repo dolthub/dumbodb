@@ -5,7 +5,7 @@ each scenario top to bottom. All scenarios share the single commit graph built i
 setup block; `dumboBranchStatus` is read-only, so the scenarios do not affect one
 another.
 
-> **Automated equivalent:** `tests/versioning_branch_status_verify_test.go`
+> **Automated equivalent:** `tests/verify/branch_status_test.go`
 > (`TestBranchStatusVerify`) covers every scenario in this document as sequential
 > subtests using the same setup. Run it with:
 > ```

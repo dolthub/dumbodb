@@ -37,7 +37,7 @@ import (
 func TestMongoDB_GroupAndTotalTutorial(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 	ctx := context.Background()
 
 	// Dates used in test data.

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestIndexMaintenanceVerify is the automated analog of
 // docs/verify/index-maintenance.md. Each top-level subtest corresponds
@@ -71,7 +71,7 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("idxmntvrfy%d", rand.Int64N(1_000_000))
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 
 	// Setup block from the doc.

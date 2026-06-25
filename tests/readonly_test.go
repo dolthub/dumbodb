@@ -23,72 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
-
-// dumboDBCommit runs dumboDBCommit on the given database and returns the commit hash.
-func dumboDBCommit(tb testing.TB, env *dumboDBTestEnv, dbName, message string, author ...string) string {
-	tb.Helper()
-
-	a := "testuser"
-	if len(author) > 0 {
-		a = author[0]
-	}
-
-	ctx := context.Background()
-	var result bson.M
-	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-		{Key: "doltCommit", Value: int32(1)},
-		{Key: "message", Value: message},
-		{Key: "author", Value: a},
-	}).Decode(&result)
-	require.NoError(tb, err, "doltCommit must succeed")
-
-	hash, ok := result["commitId"].(string)
-	require.True(tb, ok, "doltCommit must return a string hash, got %T", result["commitId"])
-	require.NotEmpty(tb, hash, "commit hash must not be empty")
-	return hash
-}
-
-// dumboDBCommitAllowEmpty runs dumboDBCommit with allowEmpty:true so it succeeds even
-// when the working set has no pending changes versus HEAD.
-func dumboDBCommitAllowEmpty(tb testing.TB, env *dumboDBTestEnv, dbName, message string, author ...string) string {
-	tb.Helper()
-
-	a := "testuser"
-	if len(author) > 0 {
-		a = author[0]
-	}
-
-	ctx := context.Background()
-	var result bson.M
-	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
-		{Key: "doltCommit", Value: int32(1)},
-		{Key: "message", Value: message},
-		{Key: "author", Value: a},
-		{Key: "allowEmpty", Value: true},
-	}).Decode(&result)
-	require.NoError(tb, err, "doltCommit (allowEmpty) must succeed")
-
-	hash, ok := result["commitId"].(string)
-	require.True(tb, ok, "doltCommit must return a string hash, got %T", result["commitId"])
-	require.NotEmpty(tb, hash, "commit hash must not be empty")
-	return hash
-}
-
-// assertWriteBlockedOperationFailed verifies that the error is a MongoDB
-// CommandError with code 96 (OperationFailed), as expected for writes to
-// read-only rootish connections.
-func assertWriteBlockedOperationFailed(tb testing.TB, err error, op string) {
-	tb.Helper()
-
-	require.Error(tb, err, "%s on read-only rootish must return an error", op)
-
-	cmdErr, ok := err.(mongo.CommandError)
-	require.True(tb, ok, "%s: expected mongo.CommandError, got %T: %v", op, err, err)
-	assert.EqualValues(tb, 96, cmdErr.Code,
-		"%s: expected OperationFailed (96), got code %d: %s", op, cmdErr.Code, cmdErr.Message)
-}
 
 // setupVersioningDB creates a database with two commits and returns the first
 // commit hash. After setup:
@@ -98,7 +33,7 @@ func setupVersioningDB(tb testing.TB, env *dumboDBTestEnv, dbName, collName stri
 	tb.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 
 	// First document on main.
 	_, err := db.Collection(collName).InsertOne(ctx, bson.D{
@@ -140,7 +75,7 @@ func TestReadOnlyRootish_CommitHash_WritesBlocked(t *testing.T) {
 
 	// Connect via the commit-hash rootish: "dbname@<hash>".
 	snapshotDBName := dbName + "@" + hash1
-	snapshotDB := env.client.Database(snapshotDBName)
+	snapshotDB := env.Client.Database(snapshotDBName)
 	snapshotColl := snapshotDB.Collection(collName)
 
 	t.Run("insert", func(t *testing.T) {
@@ -199,7 +134,7 @@ func TestReadOnlyRootish_CommitHash_ReadsSucceed(t *testing.T) {
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
 	snapshotDBName := dbName + "@" + hash1
-	snapshotColl := env.client.Database(snapshotDBName).Collection(collName)
+	snapshotColl := env.Client.Database(snapshotDBName).Collection(collName)
 
 	t.Run("find", func(t *testing.T) {
 		t.Parallel()
@@ -253,7 +188,7 @@ func TestReadOnlyRootish_AncestorExpr_WritesBlocked(t *testing.T) {
 
 	// Connect via ancestor expression: "dbname@main~1".
 	ancestorDBName := dbName + "@main~1"
-	ancestorDB := env.client.Database(ancestorDBName)
+	ancestorDB := env.Client.Database(ancestorDBName)
 	ancestorColl := ancestorDB.Collection(collName)
 
 	t.Run("insert", func(t *testing.T) {
@@ -311,7 +246,7 @@ func TestReadOnlyRootish_AncestorExpr_ReadsSucceed(t *testing.T) {
 	setupVersioningDB(t, env, dbName, collName)
 
 	// main~1 = one commit back from HEAD = first commit.
-	ancestorColl := env.client.Database(dbName + "@main~1").Collection(collName)
+	ancestorColl := env.Client.Database(dbName + "@main~1").Collection(collName)
 
 	t.Run("find", func(t *testing.T) {
 		t.Parallel()

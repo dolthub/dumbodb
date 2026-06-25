@@ -32,7 +32,7 @@ func TestAgg_Lookup_Basic(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_lookup_%d", rand.Int64())
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	t.Cleanup(func() { db.Drop(context.Background()) }) //nolint:errcheck
 
 	orders := db.Collection("orders")
@@ -88,7 +88,7 @@ func TestAgg_Lookup_ForeignArray(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_lookup_farr_%d", rand.Int64())
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	t.Cleanup(func() { db.Drop(context.Background()) }) //nolint:errcheck
 
 	students := db.Collection("students")
@@ -144,7 +144,7 @@ func TestAgg_Lookup_Pipeline(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := fmt.Sprintf("testdb_lookup_pipe_%d", rand.Int64())
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	t.Cleanup(func() { db.Drop(context.Background()) }) //nolint:errcheck
 
 	customers := db.Collection("customers")
@@ -196,7 +196,7 @@ func TestAgg_Lookup_Pipeline(t *testing.T) {
 func TestAgg_ReplaceRoot(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{
@@ -229,7 +229,7 @@ func TestAgg_ReplaceRoot(t *testing.T) {
 func TestAgg_ReplaceWith(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{
@@ -255,7 +255,7 @@ func TestAgg_ReplaceWith(t *testing.T) {
 func TestAgg_UnwindBasic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{
@@ -285,7 +285,7 @@ func TestAgg_UnwindBasic(t *testing.T) {
 func TestAgg_UnwindPreserveNullAndEmpty(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "has-tags"}, {Key: "tags", Value: bson.A{"x"}}},
@@ -315,7 +315,7 @@ func TestAgg_UnwindPreserveNullAndEmpty(t *testing.T) {
 func TestAgg_UnwindIncludeArrayIndex(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "tags", Value: bson.A{"first", "second", "third"}}},
@@ -344,7 +344,7 @@ func TestAgg_UnwindIncludeArrayIndex(t *testing.T) {
 func TestAgg_Bucket(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "score", Value: int32(5)}},
@@ -391,7 +391,7 @@ func TestAgg_Bucket(t *testing.T) {
 func TestAgg_BucketAuto(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	for i := 1; i <= 10; i++ {
 		insertDocs(t, coll, bson.D{{Key: "n", Value: int32(i)}})
@@ -426,7 +426,7 @@ func TestAgg_BucketAuto(t *testing.T) {
 func TestAgg_Facet(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "category", Value: "A"}, {Key: "price", Value: int32(10)}},
@@ -478,7 +478,7 @@ func TestAgg_Facet(t *testing.T) {
 func TestAgg_AddFields(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "a", Value: int32(3)}, {Key: "b", Value: int32(4)}},
@@ -508,7 +508,7 @@ func TestAgg_AddFields(t *testing.T) {
 func TestAgg_Count(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "x", Value: int32(1)}},
@@ -534,7 +534,7 @@ func TestAgg_Count(t *testing.T) {
 func TestAgg_SortByCount(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "tag", Value: "go"}},
@@ -569,7 +569,7 @@ func TestAgg_SortByCount(t *testing.T) {
 func TestAgg_Limit_Skip(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	for i := 1; i <= 10; i++ {
 		insertDocs(t, coll, bson.D{{Key: "n", Value: int32(i)}})
@@ -597,7 +597,7 @@ func TestAgg_Limit_Skip(t *testing.T) {
 func TestAgg_Group_MultipleAccumulators(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "cat", Value: "x"}, {Key: "v", Value: int32(10)}},
@@ -635,7 +635,7 @@ func TestAgg_Group_MultipleAccumulators(t *testing.T) {
 func TestAgg_Group_Push(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "dept", Value: "eng"}, {Key: "name", Value: "alice"}},
@@ -665,7 +665,7 @@ func TestAgg_Group_Push(t *testing.T) {
 func TestAgg_Group_AddToSet(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "tag", Value: "go"}},
@@ -698,7 +698,7 @@ func TestAgg_Group_AddToSet(t *testing.T) {
 func TestAgg_SetWindowFields_Sum(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "date", Value: int32(1)}, {Key: "amount", Value: int32(100)}},
@@ -738,7 +738,7 @@ func TestAgg_SetWindowFields_Sum(t *testing.T) {
 func TestAgg_SetWindowFields_Rank(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "alice"}, {Key: "score", Value: int32(90)}},
@@ -782,7 +782,7 @@ func TestAgg_SetWindowFields_Rank(t *testing.T) {
 func TestAgg_SetWindowFields_DenseRank(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "score", Value: int32(90)}},
@@ -818,7 +818,7 @@ func TestAgg_SetWindowFields_DenseRank(t *testing.T) {
 func TestAgg_SetWindowFields_DocumentNumber(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "v", Value: int32(30)}},
@@ -853,7 +853,7 @@ func TestAgg_SetWindowFields_DocumentNumber(t *testing.T) {
 func TestAgg_SetWindowFields_Partition(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "dept", Value: "eng"}, {Key: "v", Value: int32(100)}},
@@ -903,7 +903,7 @@ func TestAgg_SetWindowFields_Partition(t *testing.T) {
 func TestAgg_SetWindowFields_Avg(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "day", Value: int32(1)}, {Key: "sales", Value: int32(10)}},
@@ -950,7 +950,7 @@ func TestAgg_SetWindowFields_Avg(t *testing.T) {
 func TestAgg_SetWindowFields_Min_Max(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "pos", Value: int32(1)}, {Key: "v", Value: int32(50)}},
