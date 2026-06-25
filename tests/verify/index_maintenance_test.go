@@ -305,4 +305,71 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		wpM := idxvWinningPlan(t, mainDB, "items", bson.D{{Key: "name", Value: "oscar"}})
 		assert.Equal(t, "by_name", idxvIxscanName(wpM), "merged lookup served by the index: %v", wpM)
 	})
+
+	// Scenario 8: each branch creates a distinct index over the same documents
+	// (main on the first field, feature on the second). Merging unions both the
+	// documents and the index definitions; afterwards both indexes cover every
+	// document from both branches.
+	t.Run("Scenario8_DistinctIndexesPerBranchMergeUnions", func(t *testing.T) {
+		twoDB := fmt.Sprintf("idxmnt2idx%d", rand.Int64N(1_000_000))
+		mainDB := env.Client.Database(twoDB + "@main")
+		require.NoError(t, env.Client.Database(twoDB).Drop(ctx))
+
+		// Baseline: one document with both fields, the common ancestor.
+		_, err := mainDB.Collection("items").InsertOne(ctx,
+			bson.D{{Key: "_id", Value: int32(0)}, {Key: "name", Value: "seed"}, {Key: "city", Value: "Origin"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, twoDB, "base seed", "alice <alice@acme.com>")
+		idxvBranch(t, env, twoDB, "feature")
+
+		// main: a few docs, then an index over the first field (name).
+		_, err = mainDB.Collection("items").InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alpha"}, {Key: "city", Value: "NYC"}},
+			bson.D{{Key: "_id", Value: int32(2)}, {Key: "name", Value: "bravo"}, {Key: "city", Value: "LA"}},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, twoDB, "main: docs", "alice <alice@acme.com>")
+		_, err = mainDB.Collection("items").Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "name", Value: int32(1)}}, Options: options.Index().SetName("by_name"),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, twoDB, "main: create by_name", "alice <alice@acme.com>")
+
+		// feature: different docs, then an index over the second field (city).
+		featDB := env.Client.Database(twoDB + "@feature")
+		_, err = featDB.Collection("items").InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(10)}, {Key: "name", Value: "november"}, {Key: "city", Value: "Boston"}},
+			bson.D{{Key: "_id", Value: int32(11)}, {Key: "name", Value: "oscar"}, {Key: "city", Value: "Denver"}},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, twoDB+"@feature", "feature: docs", "bob <bob@widgets.io>")
+		_, err = featDB.Collection("items").Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, twoDB+"@feature", "feature: create by_city", "bob <bob@widgets.io>")
+
+		// Merge feature into main: distinct docs and distinct indexes -> clean merge.
+		merged := idxvMerge(t, env, twoDB, "feature")
+		assert.EqualValues(t, 1, merged["ok"], "merge must be clean (no conflicts): %v", merged)
+		assert.NotEqual(t, "fast-forward", merged["message"], "must be a real 3-way merge")
+
+		assert.EqualValues(t, 5, idxvCount(t, mainDB, "items", bson.D{}), "seed + main(2) + feature(2) present after merge")
+
+		// by_name (created on main) now covers every document, including feature's.
+		assert.Equal(t, []int32{0}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "seed"}}))
+		assert.Equal(t, []int32{1}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "alpha"}}))
+		assert.Equal(t, []int32{10}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "november"}}))
+		assert.Equal(t, []int32{11}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "oscar"}}))
+		wpName := idxvWinningPlan(t, mainDB, "items", bson.D{{Key: "name", Value: "november"}})
+		assert.Equal(t, "by_name", idxvIxscanName(wpName), "by_name must serve feature's docs after merge: %v", wpName)
+
+		// by_city (created on feature) now covers every document, including main's.
+		assert.Equal(t, []int32{0}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "city", Value: "Origin"}}))
+		assert.Equal(t, []int32{1}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "city", Value: "NYC"}}))
+		assert.Equal(t, []int32{2}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "city", Value: "LA"}}))
+		assert.Equal(t, []int32{10}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "city", Value: "Boston"}}))
+		wpCity := idxvWinningPlan(t, mainDB, "items", bson.D{{Key: "city", Value: "NYC"}})
+		assert.Equal(t, "by_city", idxvIxscanName(wpCity), "by_city must serve main's docs after merge: %v", wpCity)
+	})
 }

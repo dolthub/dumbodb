@@ -354,6 +354,72 @@ Key checks:
 
 ---
 
+## Scenario 8: Distinct indexes per branch, merge unions both
+
+Two branches over a shared base document. `main` adds documents and an
+index on the first field (`name`); `feature` -- branched before either --
+adds its own documents and an index on the second field (`city`). Merging
+`feature` into `main` unions both the documents and the index definitions:
+afterwards `main` carries both indexes, and each one covers every document
+from both branches.
+
+```js
+var db = db.getSiblingDB("idxmnt2idx")
+db.dropDatabase()
+
+// Baseline: one document with both fields -- the common ancestor.
+db.items.insertOne({ _id: 0, name: "seed", city: "Origin" })
+db.runCommand({ doltCommit: 1, message: "base seed", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmnt2idx@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// main: documents, then an index on the first field (name).
+db.items.insertMany([
+  { _id: 1, name: "alpha", city: "NYC" },
+  { _id: 2, name: "bravo", city: "LA"  }
+])
+db.runCommand({ doltCommit: 1, message: "main: docs", author: "alice <alice@acme.com>" })
+db.items.createIndex({ name: 1 }, { name: "by_name" })
+db.runCommand({ doltCommit: 1, message: "main: create by_name", author: "alice <alice@acme.com>" })
+
+// feature: different documents, then an index on the second field (city).
+var feat = db.getSiblingDB("idxmnt2idx@feature")
+feat.items.insertMany([
+  { _id: 10, name: "november", city: "Boston" },
+  { _id: 11, name: "oscar",    city: "Denver" }
+])
+feat.runCommand({ doltCommit: 1, message: "feature: docs", author: "bob <bob@widgets.io>" })
+feat.items.createIndex({ city: 1 }, { name: "by_city" })
+feat.runCommand({ doltCommit: 1, message: "feature: create by_city", author: "bob <bob@widgets.io>" })
+
+// Merge feature into main: distinct docs and distinct indexes -> clean merge.
+db.getSiblingDB("idxmnt2idx@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+// Expected: a merge commit, ok: 1 (no conflicts)
+
+db.runCommand({ count: "items", query: {} })   // Expected: { n: 5, ok: 1 }
+
+// by_name (created on main) now covers every document, including feature's.
+db.items.find({ name: "november" }).toArray()   // Expected: [ { _id: 10, ... } ]
+db.items.find({ name: "oscar" }).toArray()       // Expected: [ { _id: 11, ... } ]
+db.items.find({ name: "november" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_name"
+
+// by_city (created on feature) now covers every document, including main's.
+db.items.find({ city: "NYC" }).toArray()        // Expected: [ { _id: 1, ... } ]
+db.items.find({ city: "LA" }).toArray()          // Expected: [ { _id: 2, ... } ]
+db.items.find({ city: "NYC" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_city"
+```
+
+Key checks:
+- The merge is conflict-free even though each branch defined its own
+  index; both index definitions survive on `main`.
+- `by_name`, created on `main`, serves `feature`'s documents after the
+  merge; `by_city`, created on `feature`, serves `main`'s documents.
+- Each index covers all five documents (seed + main's two + feature's
+  two), so both old and new entries are present in each index.
+
+---
+
 ## Not verifiable from mongosh
 
 Two contracts from the same design doc are storage-level and have no
