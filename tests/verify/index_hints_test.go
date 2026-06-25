@@ -14,10 +14,6 @@
 
 package verify
 
-// TestIndexHintsVerify is the automated analog of
-// docs/verify/index-hints.md. Each subtest corresponds to one scenario
-// in that document.
-
 import (
 	"context"
 	"errors"
@@ -32,8 +28,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// idxvWinningPlanHinted returns the winningPlan for an explained find with a
-// hint applied.
 func idxvWinningPlanHinted(t *testing.T, db *mongo.Database, coll string, filter bson.D, hint any) bson.M {
 	t.Helper()
 	var res bson.M
@@ -52,8 +46,7 @@ func idxvWinningPlanHinted(t *testing.T, db *mongo.Database, coll string, filter
 	return wp
 }
 
-// idxvHintErrorCode runs find(filter).hint(hint) and returns the resulting
-// command error code, or 0 if the query succeeded.
+// idxvHintErrorCode returns the command error code, or 0 if the query succeeded.
 func idxvHintErrorCode(t *testing.T, db *mongo.Database, coll string, filter bson.D, hint any) int32 {
 	t.Helper()
 	cur, err := db.Collection(coll).Find(context.Background(), filter, options.Find().SetHint(hint))

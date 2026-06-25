@@ -50,8 +50,6 @@ const defaultBranch = "main"
 //	db.runCommand({dumboDBDiff: 1})                          // working set vs HEAD
 //	db.runCommand({dumboDBDiff: 1, from: "<hash>"})          // commit hash to working set
 //	db.runCommand({dumboDBDiff: 1, from: "<hash>", to: "<hash>"}) // between two commits
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -485,8 +483,6 @@ func (h *Handler) versioningBackend() backends.VersioningBackend {
 //
 // It commits the current working set on the branch encoded in $db (format: "dbname@branch").
 // Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBCommit: 1, message: "my commit"})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -570,8 +566,6 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 //
 // It creates a new branch from the current branch encoded in $db (format: "dbname@branch").
 // Usage: db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature"})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -680,8 +674,6 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 // HEAD is unchanged; the staged working set reflects the partial merge with "ours"
 // values for conflicting documents. Use dumboDBResolveConflict to resolve conflicts, then
 // dumboDBMerge continue:true to complete the merge.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -820,7 +812,6 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 	if mergeErr != nil {
 		var conflictErr *backends.MergeConflictError
 		if errors.As(mergeErr, &conflictErr) {
-			// Return a structured ok:0 response with per-collection conflict counts.
 			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
 			for _, c := range conflictErr.Conflicts {
 				entry := must.NotFail(types.NewDocument(
@@ -862,8 +853,6 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 //
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBConflicts: 1})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBConflicts: 1, collection: "items"})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -961,8 +950,6 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1054,8 +1041,6 @@ func docHasOperatorKey(d *types.Document) bool {
 //
 // It returns the commit history for the branch encoded in $db (format: "dbname@branch").
 // Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBLog: 1, limit: 10})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1358,8 +1343,6 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 // response echoes each input refspec verbatim alongside its resolved commit hash:
 //
 //	{ base: {target, hash}, targets: [{target, hash, commitsAhead, commitsBehind}], ok: 1 }
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1496,8 +1479,6 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 //	db.runCommand({dumboDBReset: 1})                       // reset to HEAD (discard uncommitted changes if hard)
 //	db.runCommand({dumboDBReset: 1, to: "<hash>"})
 //	db.runCommand({dumboDBReset: 1, to: "<hash>", hard: true})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1572,8 +1553,6 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 //
 // It returns the uncommitted changes on the branch encoded in $db (format: "dbname@branch").
 // Usage: db.getSiblingDB("mydb@feature").runCommand({dumboDBStatus: 1})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1677,8 +1656,6 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 // Optional parameters for cherry-pick initiation:
 //   - message (string): custom commit message (default: original message + annotation)
 //   - author (string): 'Name <email>' for the commit author
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1811,7 +1788,6 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	if pickErr != nil {
 		var conflictErr *backends.DumboDBCherryPickConflictError
 		if errors.As(pickErr, &conflictErr) {
-			// Return a structured ok:0 response with per-collection conflict counts.
 			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
 			for _, c := range conflictErr.Conflicts {
 				entry := must.NotFail(types.NewDocument(
@@ -1857,8 +1833,6 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 //	db.getSiblingDB("mydb@feature").runCommand({doltRebase: 1, onto: "main"})
 //	db.getSiblingDB("mydb@feature").runCommand({doltRebase: 1, abort: 1})
 //	db.getSiblingDB("mydb@feature").runCommand({doltRebase: 1, continue: 1})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -2027,8 +2001,6 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 //	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, commit: "<hash>"})
 //	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, abort: 1})
 //	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, continue: 1})
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -2146,7 +2118,6 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 	if revertErr != nil {
 		var conflictErr *backends.DumboDBRevertConflictError
 		if errors.As(revertErr, &conflictErr) {
-			// Return a structured ok:0 response with per-collection conflict counts.
 			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
 			for _, c := range conflictErr.Conflicts {
 				entry := must.NotFail(types.NewDocument(
@@ -2196,8 +2167,6 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 //   - message (string): tag description
 //   - author  (string): tagger name
 //   - email   (string): tagger email
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -2305,7 +2274,6 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return documentOpMsg(doc)
 	}
 
-	// List mode: return all tags as an array.
 	tagsArr := types.MakeArray(len(res.Tags))
 	for _, t := range res.Tags {
 		entry := must.NotFail(types.NewDocument(
@@ -2347,8 +2315,6 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 //	 chunksBefore, chunksAfter}
 //
 // On error: {ok: 0, errmsg, code}.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDumboDBGC(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

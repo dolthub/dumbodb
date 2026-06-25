@@ -25,7 +25,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// BsEntry is one decoded target row from a dumboBranchStatus response.
 type BsEntry struct {
 	Hash   string
 	Ahead  int64
@@ -45,7 +44,6 @@ func BsToInt64(v any) int64 {
 	}
 }
 
-// BsBranchCreate creates branch name from source on the given database.
 func BsBranchCreate(t *testing.T, env *Env, dbName, source, name string) {
 	t.Helper()
 	var res bson.M

@@ -27,8 +27,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// DefaultIndexName is a name of the index that is created when a collection is created.
-// This index defines document's primary key.
+// DefaultIndexName names the index created with every collection; it defines
+// the document primary key.
 const DefaultIndexName = "_id_"
 
 // Collection is a generic interface for all backends for accessing collection.
@@ -57,7 +57,6 @@ type Collection interface {
 	DropIndexes(context.Context, *DropIndexesParams) (*DropIndexesResult, error)
 }
 
-// collectionContract implements Collection interface.
 type collectionContract struct {
 	c Collection
 }

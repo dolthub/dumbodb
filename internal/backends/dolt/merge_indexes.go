@@ -159,7 +159,7 @@ func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry
 				continue
 			}
 			if indexSpecEqual(into.info, base.info) {
-				continue // dropped
+				continue
 			}
 			return nil, nil, fmt.Errorf("index %q was dropped on one branch and redefined on the other; resolve the definitions before merging", name)
 
@@ -172,11 +172,11 @@ func reconcileIndexSets(intoSet, fromSet, baseSet map[string]*resolvedIndexEntry
 				continue
 			}
 			if indexSpecEqual(from.info, base.info) {
-				continue // dropped by into
+				continue
 			}
 			return nil, nil, fmt.Errorf("index %q was dropped on one branch and redefined on the other; resolve the definitions before merging", name)
 
-		default: // base only: dropped on both sides
+		default:
 		}
 	}
 	return nil, seeds, nil

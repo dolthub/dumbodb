@@ -42,8 +42,8 @@ func mergeBranches(t *testing.T, b *Backend, dbName, into, from string) {
 	}
 }
 
-// TestMergedIndexReflectsBothBranches: disjoint writes on two branches;
-// post-merge index lookups must find both sides' docs (B2).
+// Disjoint writes on two branches; post-merge index lookups must find both
+// sides' docs (B2).
 func TestMergedIndexReflectsBothBranches(t *testing.T) {
 	t.Parallel()
 
@@ -98,8 +98,8 @@ func TestMergedIndexReflectsBothBranches(t *testing.T) {
 	}
 }
 
-// TestOneSidedIndexCoversMergedDocs: an index created on one branch
-// since base must cover the other branch's docs post-merge (B4).
+// An index created on one branch since base must cover the other branch's
+// docs post-merge (B4).
 func TestOneSidedIndexCoversMergedDocs(t *testing.T) {
 	t.Parallel()
 

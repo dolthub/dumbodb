@@ -84,7 +84,6 @@ type mergeInProgress struct {
 	isRevert bool
 }
 
-// hasUnresolvedConflicts reports whether any conflict entry in the merge state is unresolved.
 func (m *mergeInProgress) hasUnresolvedConflicts() bool {
 	for _, entries := range m.conflicts {
 		for _, e := range entries {
@@ -96,8 +95,6 @@ func (m *mergeInProgress) hasUnresolvedConflicts() bool {
 	return false
 }
 
-// theirHash returns the "their" commit hash for artifact storage, depending on the
-// operation type.
 func (m *mergeInProgress) theirHash() hash.Hash {
 	if m.isRebase {
 		return m.rebaseCurrentPick
@@ -113,7 +110,6 @@ func (m *mergeInProgress) theirHash() hash.Hash {
 	return m.fromHash
 }
 
-// summaries builds a per-collection list of unresolved conflict counts.
 func (m *mergeInProgress) summaries() []backends.ConflictSummary {
 	var out []backends.ConflictSummary
 	for name, entries := range m.conflicts {
@@ -158,7 +154,6 @@ type conflictEntry struct {
 	resolved bool
 }
 
-// diffTypeString converts a tree.DiffType to the canonical string used in the wire protocol.
 func diffTypeString(dt tree.DiffType) string {
 	switch dt {
 	case tree.AddedDiff:
@@ -172,8 +167,6 @@ func diffTypeString(dt tree.DiffType) string {
 	}
 }
 
-// documentEditReasonCode classifies a same-identity divergent edit from the
-// two sides' diff types.
 func documentEditReasonCode(ourDiff, theirDiff string) string {
 	switch {
 	case ourDiff == "deleted" && theirDiff != "deleted":
@@ -370,7 +363,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return &backends.ResolveConflictResult{}, nil
 	}
 
-	// Determine the chosen value for "theirs" or "custom".
 	var chosenVal val.Tuple
 	var deleteDoc bool
 
@@ -393,7 +385,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
 	}
 
-	// Update the collection map in resolvedAM to reflect the chosen resolution.
 	collMap, err := collectionMapFromAM(ctx, db, ms.resolvedAM, params.Collection)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: opening collection %q from resolvedAM: %w", params.Collection, err)
@@ -541,7 +532,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: building index AM: %w", err)
 	}
 
-	// Remove the resolved conflict from the ArtifactMap for this collection.
 	updatedAM, err := removeConflictArtifact(ctx, db, ms.resolvedAM, params.Collection, target.rawKey, ms.theirHash())
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: updating artifact map for %q: %w", params.Collection, err)
@@ -718,7 +708,6 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 		return am, fmt.Errorf("flushing artifact map for %q: %w", collName, err)
 	}
 
-	// Determine the new artifacts hash (zero if empty).
 	newArtHash := hash.Hash{}
 	if cnt, countErr := newArtMap.Count(); countErr == nil && cnt > 0 {
 		ref, writeErr := state.vs.WriteValue(ctx, tree.ValueFromNode(newArtMap.Node()))
@@ -728,7 +717,6 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 		newArtHash = ref.TargetHash()
 	}
 
-	// Get the current collection map and index AM to rebuild the DTBL.
 	collMap, err := collectionMapFromAM(ctx, state, am, collName)
 	if err != nil {
 		return am, fmt.Errorf("opening collection map for %q: %w", collName, err)
@@ -1034,7 +1022,6 @@ func captureConflictsForCollection(
 
 		// Both sides made the same change: present everywhere already.
 		case tree.DiffOpConvergentAdd, tree.DiffOpConvergentModify, tree.DiffOpConvergentDelete:
-			// no-op
 
 		// Divergent edits: real conflicts. Keep "ours" (left) value in the merged map.
 		case tree.DiffOpDivergentModifyConflict, tree.DiffOpDivergentDeleteConflict:
@@ -1229,9 +1216,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			continue
 		}
 
-		// Both sides changed this collection.
 		if fromH.IsEmpty() && intoH.IsEmpty() {
-			// Both independently deleted the collection; result is deletion (already absent).
 			continue
 		}
 		if fromH.IsEmpty() || intoH.IsEmpty() {

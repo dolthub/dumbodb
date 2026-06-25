@@ -41,7 +41,6 @@ import (
 // buildOnce ensures the dumbodb binary is built exactly once per test run.
 var buildOnce sync.Once
 
-// Env holds a running dumbodb process and a connected MongoDB client.
 type Env struct {
 	cmd     *exec.Cmd
 	Client  *mongo.Client
@@ -60,7 +59,6 @@ func RepoRoot() string {
 func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 	tb.Helper()
 
-	// Find a free port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(tb, err)
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -69,7 +67,6 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 	dataDir := tb.TempDir()
 	binary := filepath.Join(RepoRoot(), ".runtime", "bin", "dolt")
 
-	// Build once per test run to ensure the binary is up-to-date with current source.
 	var buildErr error
 	buildOnce.Do(func() {
 		if mkErr := os.MkdirAll(filepath.Dir(binary), 0o755); mkErr != nil {
@@ -107,7 +104,6 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 		cmd.Wait()         //nolint:errcheck
 	})
 
-	// Wait for dumbodb to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -118,9 +114,8 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Connect with the MongoDB driver. DefaultDocumentM decodes sub-documents
-	// into bson.M when the surrounding element type is interface{}, which most
-	// tests type-assert against.
+	// DefaultDocumentM decodes sub-documents into bson.M when the surrounding
+	// element type is interface{}, which most tests type-assert against.
 	client, err := mongo.Connect(options.Client().
 		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
 		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
@@ -130,7 +125,6 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 	return env
 }
 
-// Collection returns a fresh collection for each test.
 func (env *Env) Collection(tb testing.TB) *mongo.Collection {
 	tb.Helper()
 
@@ -143,7 +137,6 @@ func (env *Env) Collection(tb testing.TB) *mongo.Collection {
 	return coll
 }
 
-// Commit runs doltCommit on the given database and returns the commit hash.
 func Commit(tb testing.TB, env *Env, dbName, message string, author ...string) string {
 	tb.Helper()
 
@@ -214,14 +207,12 @@ func RunCommandRaw(t *testing.T, db *mongo.Database, cmd interface{}) bson.M {
 	return m
 }
 
-// StatusResult holds the decoded top-level response from a doltStatus command.
 type StatusResult struct {
 	Branch   string
 	CommitID string // HEAD commit hash; present only when workspace is clean
 	Tables   []TableStatusEntry
 }
 
-// TableStatusEntry holds one entry from the "collections" array of a doltStatus response.
 type TableStatusEntry struct {
 	Name     string
 	Status   string
@@ -230,8 +221,6 @@ type TableStatusEntry struct {
 	Deleted  int
 }
 
-// DecodeStatusResult parses the raw bson.M from a doltStatus RunCommand into the
-// typed helpers above, failing the test if the shape is unexpected.
 func DecodeStatusResult(t *testing.T, raw bson.M) StatusResult {
 	t.Helper()
 
@@ -292,7 +281,6 @@ func FindTableStatus(sr StatusResult, name string) *TableStatusEntry {
 	return nil
 }
 
-// RunStatus issues a doltStatus command on the named db and returns the decoded result.
 func RunStatus(t *testing.T, env *Env, dbName string) StatusResult {
 	t.Helper()
 	ctx := context.Background()
@@ -305,12 +293,10 @@ func RunStatus(t *testing.T, env *Env, dbName string) StatusResult {
 	return DecodeStatusResult(t, raw)
 }
 
-// LogResult holds the decoded top-level response from a doltLog command.
 type LogResult struct {
 	Commits []CommitEntry
 }
 
-// CommitEntry holds one entry from the "commits" array of a doltLog response.
 type CommitEntry struct {
 	CommitID           string
 	Parent1            string
@@ -322,8 +308,6 @@ type CommitEntry struct {
 	Refs               []string
 }
 
-// DecodeLogResult parses the raw bson.M from a doltLog RunCommand into the typed
-// helpers above, failing the test if the shape is unexpected.
 func DecodeLogResult(t *testing.T, raw bson.M) LogResult {
 	t.Helper()
 

@@ -98,8 +98,8 @@ func TestDeleteRemovesIndexEntries(t *testing.T) {
 	}
 }
 
-// W4: an update that does not change any indexed field leaves the
-// index root hash unchanged.
+// An update touching no indexed field must leave the index root hash
+// unchanged (W4).
 func TestNoopUpdateLeavesIndexRootUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -122,8 +122,8 @@ func TestNoopUpdateLeavesIndexRootUnchanged(t *testing.T) {
 	}
 }
 
-// W5: an array update that keeps most elements edits only the changed
-// entries.
+// An array update that keeps most elements edits only the changed entries
+// (W5).
 func TestMultikeyUpdateAdjustsOnlyChangedElements(t *testing.T) {
 	t.Parallel()
 
@@ -161,7 +161,7 @@ func TestMultikeyUpdateAdjustsOnlyChangedElements(t *testing.T) {
 	}
 }
 
-// M1: a sparse index holds entries only for docs that have the field.
+// A sparse index holds entries only for docs that have the field (M1).
 func TestSparseIndexMembershipContent(t *testing.T) {
 	t.Parallel()
 
@@ -197,8 +197,8 @@ func TestSparseIndexMembershipContent(t *testing.T) {
 	}
 }
 
-// M2: a partial index holds entries only while the doc satisfies the
-// filter, across boundary crossings in both directions.
+// A partial index holds entries only while the doc satisfies the filter,
+// across boundary crossings in both directions (M2).
 func TestPartialIndexMembershipContent(t *testing.T) {
 	t.Parallel()
 
@@ -244,8 +244,8 @@ func TestPartialIndexMembershipContent(t *testing.T) {
 	}
 }
 
-// P2: chunks outside the touched key range keep their addresses across
-// update and delete.
+// Chunks outside the touched key range keep their addresses across update and
+// delete (P2).
 func TestIndexChunkReuseAcrossWrites(t *testing.T) {
 	t.Parallel()
 

@@ -33,20 +33,11 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// countExplainExecution runs a counting pass against the collection
-// for executionStats verbosity, returning (nReturned,
-// totalDocsExamined, totalKeysExamined).
-//
-// Counting is best-effort: any backend error returns zeros so the
-// caller still produces a structurally valid executionStats document.
-// For find/aggregate the implementation iterates coll.Query's result
-// (each yielded doc counts as one examined doc) and re-applies the
-// filter at the handler level to compute nReturned. When the winning
-// plan tree contains an IXSCAN node every examined doc was reached
-// via the index, so totalKeysExamined = totalDocsExamined.
-//
-// count and distinct commands return zeros today; their dedicated
-// stat surfaces (COUNT_SCAN, DISTINCT_SCAN counters) are a follow-up.
+// countExplainExecution runs a best-effort counting pass for executionStats
+// verbosity; any backend error returns zeros so the caller still produces a
+// structurally valid executionStats document. When the winning plan contains an
+// IXSCAN node every examined doc was reached via the index, so
+// totalKeysExamined = totalDocsExamined. count and distinct return zeros today.
 func countExplainExecution(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, winningPlan *types.Document) (nReturned, totalDocsExamined, totalKeysExamined int32) {
 	if qp.Command != "find" && qp.Command != "aggregate" {
 		return 0, 0, 0
@@ -82,11 +73,9 @@ func countExplainExecution(ctx context.Context, coll backends.Collection, qp *ba
 }
 
 // buildExecutionStages clones the winningPlan tree shape into the
-// executionStages document expected by the executionStats verbosity.
-// At the root the stage's nReturned reflects the actual result count.
-// Per-stage row flow (nReturned, advanced, ...) at intermediate
-// levels is left at zero -- enough to satisfy stage/indexName parity
-// without implementing full row-counting instrumentation.
+// executionStages document. nReturned is reported at the root only;
+// intermediate per-stage row flow is left at zero, enough for
+// stage/indexName parity without full row-counting instrumentation.
 func buildExecutionStages(plan *types.Document, rootStage string, nReturned int32) *types.Document {
 	if plan == nil {
 		return must.NotFail(types.NewDocument(
@@ -131,10 +120,9 @@ func cloneExecutionStage(node *types.Document, nReturned int32) *types.Document 
 	return d
 }
 
-// planContainsIndexScan walks the winningPlan tree looking for any
-// node whose stage is IXSCAN, COUNT_SCAN, or DISTINCT_SCAN. Returns
-// true for both inputStage (single-child) and inputStages (branching)
-// nodes so OR/AND multi-index plans count correctly.
+// planContainsIndexScan walks the winningPlan tree for any IXSCAN,
+// COUNT_SCAN, or DISTINCT_SCAN node, descending both inputStage and
+// inputStages so OR/AND multi-index plans count correctly.
 func planContainsIndexScan(plan *types.Document) bool {
 	if plan == nil {
 		return false
@@ -165,9 +153,6 @@ func planContainsIndexScan(plan *types.Document) bool {
 	return false
 }
 
-// MsgExplain implements `explain` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -189,8 +174,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		"port", int32(27017),
 		"version", version.Get().MongoDBVersion,
 		"gitVersion", version.Get().Commit,
-
-		// our extensions
 		"dumbodb", version.Get().Version,
 	))
 
@@ -307,7 +290,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		"queryPlanner", res.QueryPlanner,
 	))
 
-	// Add executionStats for "executionStats" and "allPlansExecution" verbosity.
 	if params.Verbosity == "executionStats" || params.Verbosity == "allPlansExecution" {
 		// Reflect the winning plan's stage in executionStages so the two
 		// halves of the explain response agree on whether an index was used.
@@ -326,10 +308,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 		nReturned, totalDocsExamined, totalKeysExamined := countExplainExecution(connCtx, coll, qp, winningPlanDoc)
 
-		// executionStages mirrors the winningPlan tree's shape so
-		// stage / indexName / keyPattern parity holds at every level.
-		// nReturned is reported at the root only -- per-stage row-flow
-		// stats are a follow-up.
 		executionStages := buildExecutionStages(winningPlanDoc, execStage, nReturned)
 		executionStats := must.NotFail(types.NewDocument(
 			"executionSuccess", true,
@@ -342,7 +320,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		response.Set("executionStats", executionStats)
 	}
 
-	// Add allPlansExecution for "allPlansExecution" verbosity.
 	if params.Verbosity == "allPlansExecution" {
 		response.Set("allPlansExecution", types.MakeArray(0))
 	}

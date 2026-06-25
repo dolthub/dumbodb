@@ -42,7 +42,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// collection implements backends.Collection.
 type collection struct {
 	db   *database
 	name string
@@ -50,9 +49,8 @@ type collection struct {
 
 // getMap returns the prolly.Map for this collection.
 //
-// When the database's rootish is "main" (the default), the current working-set
-// AM (state.branchAMs[defaultBranch]) is used. When the rootish is a bare commit hash or a tag name,
-// the AM is loaded from the historical RTVL at that commit.
+// When the rootish is "main" the current working-set AM is used; for a bare
+// commit hash or tag name the AM is loaded from the historical RTVL at that commit.
 //
 // Returns (emptyMap, false, nil, nil) if the database or collection doesn't exist.
 func (c *collection) getMap(ctx context.Context) (prolly.Map, bool, *dbState, error) {
@@ -106,7 +104,6 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	// spike/index-poc: attempt secondary index lookup for simple equality queries.
 	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint); used {
 			if err != nil {
@@ -118,7 +115,6 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 		}
 	}
 
-	// Determine direction based on sort.
 	reverse := false
 	if params != nil && params.Sort != nil && params.Sort.Len() > 0 {
 		sortVal := params.Sort.Map()["$natural"].(int64)
@@ -178,7 +174,6 @@ func buildScanPrefilter(filter *types.Document) func([]byte) bool {
 	}
 
 	keys := filter.Keys()
-	// One predicate per top-level field clause. All AND-combined.
 	preds := make([]func([]byte) bool, 0, len(keys))
 	for _, field := range keys {
 		// $and/$or/$comment/etc.  -- bail out and let the handler filter.
@@ -254,7 +249,6 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 				return nil, false
 			}
 		}
-		// An embedded document with no operator keys is a literal _id value.
 		return v, true
 	case *types.Array, types.NullType:
 		return nil, false
@@ -263,8 +257,6 @@ func simpleIDEquality(filter *types.Document) (any, bool) {
 	}
 }
 
-// pointLookupByID performs a single prolly.Map.Get against the hashed _id and
-// returns an iterator over the at-most-one matching document.
 func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal any, onlyRecordID bool) (types.DocumentsIterator, error) {
 	h, err := hashID(idVal)
 	if err != nil {
@@ -316,7 +308,6 @@ func pointLookupByID(ctx context.Context, ns tree.NodeStore, m prolly.Map, idVal
 	return &singleDocIter{doc: doc}, nil
 }
 
-// singleDocIter yields exactly one document then reports done.
 type singleDocIter struct {
 	doc *types.Document
 }
@@ -363,12 +354,10 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	// through to a collection scan -- results are unaffected either way.
 	hintedName := backends.MatchHintedIndex(hint, idxInfos)
 
-	// Map indexed-leading-field -> (index name, map index, compound).
 	// Single-field indexes are preferred (tighter scan range); compound
-	// indexes are used when no single-field index covers the leading
-	// filter field. The handler re-filters every returned doc against
-	// the full predicate, so suffix-field constraints on a compound
-	// index are correctly applied post-scan.
+	// indexes are used when no single-field index covers the leading filter
+	// field. The handler re-filters every returned doc, so a compound index's
+	// suffix-field constraints are applied post-scan.
 	type indexedFieldEntry struct {
 		idxName  string
 		mapIdx   int
@@ -377,15 +366,13 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 	}
 	indexedField := make(map[string]indexedFieldEntry, len(idxInfos))
 	for i, idx := range idxInfos {
-		// When a hint names an index, it is the only candidate considered.
 		if hintedName != "" && idx.Name != hintedName {
 			continue
 		}
-		// Lossy entries sit at wrong byte positions; never usable.
-		// (Sparse is fine: no admitted operator can match a missing
-		// field.) A partial index is usable only when the filter
-		// implies its partial condition, so every matching document
-		// lies within it; otherwise it would drop non-member matches.
+		// Lossy entries sit at wrong byte positions; never usable. A partial
+		// index is usable only when the filter implies its partial condition,
+		// so every matching doc lies within it; otherwise it drops non-member
+		// matches. (Sparse is fine: no admitted operator matches a missing field.)
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
 			continue
 		}
@@ -396,8 +383,6 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		leading := idx.Key[0].Field
 		isCompound := len(idx.Key) > 1
 		rank := indexRank(isCompound, partial)
-		// Lower rank wins: single-field over compound, non-partial over
-		// partial.
 		if cur, have := indexedField[leading]; !have || rank < cur.rank {
 			indexedField[leading] = indexedFieldEntry{
 				idxName: idx.Name, mapIdx: i, compound: isCompound, rank: rank,
@@ -421,8 +406,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if strings.HasPrefix(k, "$") {
 			return nil, false, nil
 		}
-		// Dotted paths look up into sub-documents; the index is keyed on the
-		// flat field, so it can't be used for those constraints.
+		// Index is keyed on the flat field, so dotted-path constraints can't use it.
 		if strings.ContainsRune(k, '.') {
 			continue
 		}
@@ -589,9 +573,8 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 	}
 
 	if hasEq {
-		// $eq with a range narrows further, but for correctness we just
-		// translate $eq alone to its tight equality range. The handler will
-		// re-check any range constraint that may also be present.
+		// Translate $eq alone to its tight equality range; the handler
+		// re-checks any range constraint that may also be present.
 		return idxpkg.LowerBoundInclusive(eqVal), idxpkg.UpperBoundInclusive(eqVal), true
 	}
 
@@ -702,8 +685,6 @@ type explainStage struct {
 	inputs     []*explainStage
 }
 
-// toDoc renders the stage tree as a winningPlan document with nested
-// inputStage or inputStages array.
 func (s *explainStage) toDoc() *types.Document {
 	d := must.NotFail(types.NewDocument("stage", s.stage))
 	if s.indexName != "" {
@@ -796,17 +777,6 @@ func buildOrUnionPlan(params *backends.ExplainParams, idxInfos []backends.IndexI
 	return &explainStage{stage: "SUBPLAN", input: fetch}, true
 }
 
-// pickIndexForFilter mirrors tryIndexLookup's index-selection rule for
-// the planner side of explain: any index whose LEADING field matches a
-// top-level filter field with usable bounds. Single-field and compound
-// indexes are both candidates -- for compound indexes the leading
-// field's bound drives the IXSCAN and the handler re-filters the
-// suffix-field constraints.
-//
-// Preference order: single-field indexes win over compound ones for
-// the same leading field (a single-field index has tighter scan
-// range), matching MongoDB's behaviour where the more selective plan
-// is preferred all else being equal.
 // partialFilterScalar extracts the scalar a condition pins a field to:
 // a bare scalar v, or {$eq: scalar}. Returns ok=false for any other
 // shape (other operators, arrays, null, regex, documents).
@@ -1035,8 +1005,6 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		}
 	}
 
-	// Covered: requires a chosen index + a projection that names only
-	// indexed fields and explicitly excludes _id.
 	if indexPicked && params != nil {
 		covered = projectionIsCoveredBy(params.Projection, picked)
 	}
@@ -1220,8 +1188,6 @@ func projectionInclusion(v any) (bool, bool) {
 	return false, false
 }
 
-// sortIsSingleField reports whether sort is a single non-$natural key,
-// i.e. a candidate for sort-via-index satisfaction.
 func sortIsSingleField(sort *types.Document) bool {
 	if sort == nil || sort.Len() != 1 {
 		return false
@@ -1230,9 +1196,7 @@ func sortIsSingleField(sort *types.Document) bool {
 	return k != "$natural" && !strings.ContainsRune(k, '.')
 }
 
-// sortDirectionAscending returns true when the single-field sort is
-// ascending (value > 0). Sort is assumed already single-field per
-// sortIsSingleField.
+// sortDirectionAscending assumes sort is already single-field (see sortIsSingleField).
 func sortDirectionAscending(sort *types.Document) bool {
 	v, err := sort.Get(sort.Keys()[0])
 	if err != nil {
@@ -1249,10 +1213,6 @@ func sortDirectionAscending(sort *types.Document) bool {
 	return true
 }
 
-// filterBindsEqualityPrefix reports whether filter has an equality
-// predicate (a bare scalar or {$eq: scalar}) for every field listed
-// in keys, with no other constraint. An empty keys slice trivially
-// satisfies.
 func filterBindsEqualityPrefix(filter *types.Document, keys []backends.IndexKeyPair) bool {
 	if len(keys) == 0 {
 		return true
@@ -1309,19 +1269,15 @@ func sortIsNatural(sort *types.Document) bool {
 	return sort.Keys()[0] == "$natural"
 }
 
-// hintIsNatural reports whether hint is the {"$natural": <int>} pattern.
 func hintIsNatural(hint any) bool {
 	return backends.HintIsNatural(hint)
 }
 
-// pickHintedIndex resolves a hint value (either a name string or a key-pattern
-// document) to a matching index name, or returns "" if no index matches.
 func pickHintedIndex(hint any, idxInfos []backends.IndexInfo) string {
 	return backends.MatchHintedIndex(hint, idxInfos)
 }
 
-// extractIndexKey returns a composite key for the given index extracted from doc.
-// Fields absent in the document are represented as types.Null.
+// extractIndexKey represents fields absent from doc as types.Null.
 func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
 	key := make([]any, len(idx.Key))
 	for i, kp := range idx.Key {
@@ -1334,8 +1290,7 @@ func extractIndexKey(doc *types.Document, idx backends.IndexInfo) []any {
 	return key
 }
 
-// allNull returns true if every element in the key slice is types.Null.
-// Used to detect sparse index documents that should be excluded from unique checks.
+// allNull detects sparse index entries that are excluded from unique checks.
 func allNull(key []any) bool {
 	for _, v := range key {
 		if v != types.Null {
@@ -1345,7 +1300,6 @@ func allNull(key []any) bool {
 	return true
 }
 
-// indexKeysEqual returns true if two composite index keys are element-wise equal.
 func indexKeysEqual(a, b []any) bool {
 	if len(a) != len(b) {
 		return false
@@ -1378,7 +1332,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, backends.NewError(backends.ErrorCodeReadOnlyDatabase, fmt.Errorf("cannot write to a read-only database snapshot"))
 	}
 
-	// Load or create the collection's prolly map.
 	m, err := c.loadOrCreateMap(ctx, state)
 	if err != nil {
 		return nil, err
@@ -1410,19 +1363,16 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	batchLossyKeys := make([][][]any, len(uniqueIndexes))
 
 	for _, doc := range params.Docs {
-		// Extract the _id from this document.
 		docID, err := doc.Get("_id")
 		if err != nil {
 			return nil, fmt.Errorf("document missing _id: %w", err)
 		}
 
-		// Hash _id to get the fixed-size primary key.
 		h, err := hashID(docID)
 		if err != nil {
 			return nil, fmt.Errorf("hashing _id: %w", err)
 		}
 
-		// Check against existing IDs in the collection (point lookup).
 		exists, err := existsID(ctx, m, h)
 		if err != nil {
 			return nil, fmt.Errorf("checking existing _id: %w", err)
@@ -1434,7 +1384,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			)
 		}
 
-		// Check against IDs already inserted in this batch.
 		if _, dup := batchHashSet[h]; dup {
 			return nil, backends.NewError(
 				backends.ErrorCodeInsertDuplicateID,
@@ -1524,32 +1473,26 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		batchIDs = append(batchIDs, docID)
 	}
 
-	// Track insertion order for capped collections.
 	if _, isCapped := state.capped[c.name]; isCapped {
 		state.insertionOrder[c.name] = append(state.insertionOrder[c.name], batchIDs...)
 
-		// Perform FIFO eviction if limits are exceeded.
 		if err := c.evictCappedDocs(ctx, state, mut); err != nil {
 			return nil, err
 		}
 	}
 
-	// Flush the mutable map.
 	newMap, err := mut.Map(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Wrap the updated map in a DTBL chunk and update the address map.
-	// autoCommit=true means "create a dolt commit on every write," which already
+	// autoCommit=true creates a dolt commit on every write, which already
 	// triggers its own NBS journal fsync  -- deferring the working-set update but
-	// still committing synchronously would leave the history and working set
+	// still committing synchronously would leave history and working set
 	// inconsistent, so we only honor SkipDurableSync when autoCommit is off.
 	//
-	// Maintain secondary indexes for any documents we just inserted. The
-	// resolver path reads the per-branch index state from disk, so the
-	// resulting AM reflects only this branch's writes -- no cross-branch
-	// leakage into other branches' DTBLs.
+	// The resolver reads per-branch index state from disk, so the resulting AM
+	// reflects only this branch's writes -- no cross-branch leakage.
 	infos, idxMaps, err := resolveBranchIndexState(ctx, c, state)
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch index state: %w", err)
@@ -1613,15 +1556,12 @@ func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *p
 	insertionOrder := state.insertionOrder[c.name]
 	currentCount := int64(len(insertionOrder))
 
-	// Determine how many documents to evict.
 	var toEvict int64
 
-	// Count-based eviction.
 	if cappedMeta.CappedDocuments > 0 && currentCount > cappedMeta.CappedDocuments {
 		toEvict = currentCount - cappedMeta.CappedDocuments
 	}
 
-	// Size-based eviction (estimated).
 	if cappedMeta.CappedSize > 0 {
 		estimatedSize := currentCount * cappedAvgDocSize
 		if estimatedSize > cappedMeta.CappedSize {
@@ -1636,7 +1576,6 @@ func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *p
 		return nil
 	}
 
-	// Evict the oldest documents (FIFO: remove from the front of insertionOrder).
 	if toEvict > currentCount {
 		toEvict = currentCount
 	}
@@ -1662,7 +1601,6 @@ func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *p
 	return nil
 }
 
-// existsID reports whether a document with the given _id hash is already in the map.
 func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
 	key, err := buildKey(h[:])
 	if err != nil {
@@ -1730,7 +1668,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	var idxOldDocs, idxNewDocs []*types.Document
 
 	for i, doc := range params.Docs {
-		// Build key from the document's _id field.
 		docID, err := doc.Get("_id")
 		if err != nil {
 			return nil, fmt.Errorf("document missing _id: %w", err)
@@ -1914,7 +1851,6 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	var idxOldDocs []*types.Document
 
 	if params.RecordIDs != nil {
-		// Delete by RecordID: scan the map and find entries whose derived RecordID matches.
 		// RecordID is derived from the key bytes (see mapIter.Next).
 		targetSet := make(map[int64]struct{}, len(params.RecordIDs))
 		for _, rid := range params.RecordIDs {
@@ -1967,7 +1903,6 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 			deleted++
 		}
 	} else {
-		// Delete by _id: build key from each _id and do direct lookup.
 		for _, id := range params.IDs {
 			h, err := hashID(id)
 			if err != nil {
@@ -2547,7 +2482,6 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		if _, exists := infoByName[idx.Name]; exists {
 			continue
 		}
-		// Build prolly.Map for the new index by scanning the primary map.
 		idxMap, multikey, lossy, buildErr := c.buildSecondaryIndex(ctx, state, idx)
 		if buildErr != nil {
 			return nil, fmt.Errorf("building secondary index %q on %q: %w", idx.Name, c.name, buildErr)
@@ -2621,11 +2555,9 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 	})
 }
 
-// buildSecondaryIndex scans the primary map and builds a secondary index prolly.Map.
-// Must be called with state.mu held (write lock).
-// buildSecondaryIndex scans the primary map and builds the index's
-// prolly.Map. The returned flags report whether any scanned document
-// made the index multikey or lossy (see backends.IndexInfo).
+// buildSecondaryIndex scans the primary map and builds the index's prolly.Map.
+// The returned flags report whether any scanned document made the index
+// multikey or lossy (see backends.IndexInfo). Caller must hold state.mu (write lock).
 func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, idx backends.IndexInfo) (m prolly.Map, multikey, lossy bool, err error) {
 	idxMap, err := idxpkg.NewEmptyMap(ctx, state.ns)
 	if err != nil {
@@ -2888,7 +2820,6 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return openCollection(ctx, state.cs, state.ns, rootHash)
 	}
 
-	// Collection doesn't exist: create it.
 	emptyMap, err := newEmptyMap(ctx, state.ns)
 	if err != nil {
 		return prolly.Map{}, err
@@ -2908,7 +2839,6 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 		return prolly.Map{}, err
 	}
 
-	// Generate and store a UUID for this implicitly-created collection.
 	if _, exists := state.uuids[c.name]; !exists {
 		state.uuids[c.name] = uuid.New().String()
 	}
@@ -2916,7 +2846,6 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	return emptyMap, nil
 }
 
-// docHasMinMaxKey returns true if the document contains any MinKey or MaxKey values.
 func docHasMinMaxKey(doc *types.Document) bool {
 	for _, key := range doc.Keys() {
 		v := must.NotFail(doc.Get(key))
@@ -3068,7 +2997,6 @@ type mapIter struct {
 	prefilter func([]byte) bool
 }
 
-// newMapIter creates an iterator over the prolly.Map.
 func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bool, limit int64, onlyRecordID bool, prefilter func([]byte) bool) types.DocumentsIterator {
 	var iter prolly.MapIter
 	var err error
@@ -3093,7 +3021,6 @@ func newMapIter(ctx context.Context, ns tree.NodeStore, m prolly.Map, reverse bo
 	}
 }
 
-// Next implements types.DocumentsIterator.
 func (it *mapIter) Next() (struct{}, *types.Document, error) {
 	if it.limit > 0 && it.count >= it.limit {
 		return struct{}{}, nil, iterator.ErrIteratorDone
@@ -3113,17 +3040,14 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 			return struct{}{}, nil, iterator.ErrIteratorDone
 		}
 
-		// Extract _id from key bytes.
 		keyBytes, ok := keyDesc.GetBytes(0, k)
 		if !ok {
 			continue
 		}
 
-		// Derive RecordID from key bytes for cursor positioning.
 		recordID := keyBytesToRecordID(keyBytes)
 
 		if it.onlyRecordID {
-			// Return a minimal document with just the RecordID.
 			doc, err := types.NewDocument()
 			if err != nil {
 				return struct{}{}, nil, err
@@ -3135,7 +3059,6 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 			return struct{}{}, doc, nil
 		}
 
-		// Read JSON bytes from the JsonAdaptiveEnc value tuple.
 		jsonBytes, err := getBSONStoredBytes(it.ctx, it.ns, v)
 		if err != nil {
 			continue
@@ -3159,10 +3082,8 @@ func (it *mapIter) Next() (struct{}, *types.Document, error) {
 	}
 }
 
-// Close implements types.DocumentsIterator.
 func (it *mapIter) Close() {}
 
-// emptyIter is an iterator that immediately returns done.
 type emptyIter struct{}
 
 func newEmptyIter() types.DocumentsIterator {
@@ -3186,8 +3107,8 @@ func (it *errorIter) Next() (struct{}, *types.Document, error) {
 
 func (it *errorIter) Close() {}
 
-// sliceIter iterates over a pre-fetched slice of documents.
-// Used by the secondary index lookup path to return results without a full scan.
+// sliceIter is used by the secondary index lookup path to return pre-fetched
+// results without a full scan.
 type sliceIter struct {
 	docs []*types.Document
 	pos  int

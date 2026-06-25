@@ -23,14 +23,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// TestTryIndexLookup_HonorsHint verifies that the runtime read path honors an
-// index hint, the same selection Explain reports. The runtime index choice is
-// not observable over the wire (results are identical and executionStats is
-// derived from the explain planner, not from execution), so this is a
-// white-box assertion on tryIndexLookup's "used" return: a hint naming the
-// index that covers the filter selects it (used), a hint naming an index that
-// does NOT cover the filter forces a collection scan (not used), and the
-// default selection still uses an index.
+// The runtime index choice is not observable over the wire (results are
+// identical and executionStats derives from the explain planner, not from
+// execution), so this is a white-box assertion on tryIndexLookup's "used"
+// return.
 func TestTryIndexLookup_HonorsHint(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +61,7 @@ func TestTryIndexLookup_HonorsHint(t *testing.T) {
 	}
 
 	// db.Collection wraps the collection in a contract; rebuild the raw
-	// *collection (same db/branch) to reach the unexported tryIndexLookup.
+	// *collection to reach the unexported tryIndexLookup.
 	c := &collection{
 		db:   &database{backend: b, name: "testdb", rootish: defaultBranch},
 		name: "testcoll",
@@ -79,7 +75,7 @@ func TestTryIndexLookup_HonorsHint(t *testing.T) {
 		t.Fatal("collection map does not exist")
 	}
 
-	// Filter constrains field "a", which a_1 covers and b_1 does not.
+	// a_1 covers field "a"; b_1 does not.
 	filter := must.NotFail(types.NewDocument("a", int32(3)))
 	keyPatternB := must.NotFail(types.NewDocument("b", int32(1)))
 
@@ -103,8 +99,6 @@ func TestTryIndexLookup_HonorsHint(t *testing.T) {
 			if used != tc.wantUsed {
 				t.Fatalf("used = %v, want %v", used, tc.wantUsed)
 			}
-			// When the index path is used it must return the one matching doc;
-			// the result is correct regardless of which path runs.
 			if used {
 				if len(gotDocs) != 1 {
 					t.Fatalf("index path returned %d docs, want 1", len(gotDocs))

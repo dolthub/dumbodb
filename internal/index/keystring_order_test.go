@@ -136,10 +136,10 @@ func TestNumericOrderFuzz(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	vals := make([]float64, 0, 4000)
 	for i := 0; i < 1000; i++ {
-		vals = append(vals, (rng.Float64()-0.5)*2000) // small fractional
-		vals = append(vals, float64(rng.Intn(2000)-1000)) // small ints
-		vals = append(vals, (rng.Float64()-0.5)*2e12) // large fractional
-		vals = append(vals, rng.NormFloat64()) // near zero
+		vals = append(vals, (rng.Float64()-0.5)*2000)
+		vals = append(vals, float64(rng.Intn(2000)-1000))
+		vals = append(vals, (rng.Float64()-0.5)*2e12)
+		vals = append(vals, rng.NormFloat64())
 	}
 	sort.Float64s(vals)
 	for i := 0; i < len(vals)-1; i++ {

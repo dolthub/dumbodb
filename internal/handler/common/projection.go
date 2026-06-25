@@ -431,8 +431,7 @@ func ProjectDocument(doc, projection, filter *types.Document, inclusion bool) (*
 	return projected, nil
 }
 
-// projectDocumentWithoutID applies projection to the copy of the document and returns projected document.
-// It ignores _id field in the projection.
+// projectDocumentWithoutID applies projection to a copy of doc, ignoring _id.
 func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Document, inclusion bool) (*types.Document, error) {
 	projectionWithoutID := projection.DeepCopy()
 	projectionWithoutID.Remove("_id")
@@ -464,7 +463,7 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 			return nil, lazyerrors.Error(err)
 		}
 
-		switch value := value.(type) { // found in the projection
+		switch value := value.(type) {
 		case *types.Document: // field: { $elemMatch: {...} } | { $slice: N } | { $meta: "..." }
 			opKey := value.Keys()[0]
 			opVal := must.NotFail(value.Get(opKey))
@@ -641,7 +640,6 @@ func sliceArrayWithSkip(arr *types.Array, skip, limit int) *types.Array {
 	return result
 }
 
-// applySliceArg applies a $slice argument to an array and returns the sliced array.
 func applySliceArg(arr *types.Array, arg any) (*types.Array, error) {
 	switch v := arg.(type) {
 	case int32:
@@ -784,7 +782,6 @@ func findFirstElemMatchElement(arr *types.Array, condition *types.Document) (any
 	iter := arr.Iterator()
 	defer iter.Close()
 
-	// Determine if condition uses operators or field names.
 	isOperatorCondition := true
 
 	for _, k := range condition.Keys() {
@@ -1098,14 +1095,13 @@ func setBySourceOrder(key string, val any, source, projected *types.Document) {
 
 	tmp := projected.DeepCopy()
 
-	// remove fields of projected from newFieldIndex to the end
 	for i := newFieldIndex; i < len(projectedKeys); i++ {
 		projected.Remove(projectedKeys[i])
 	}
 
 	projected.Set(key, val)
 
-	// copy newFieldIndex-th to the end from tmp to projected
+	// Re-append the fields after the insertion point, preserving source order.
 	i := newFieldIndex
 	for _, key := range tmp.Keys()[newFieldIndex:] {
 		projected.Set(key, must.NotFail(tmp.Get(tmp.Keys()[i])))

@@ -22,8 +22,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// RunLog issues a doltLog command with the given extra fields and returns the
-// decoded raw response.
 func RunLog(t *testing.T, env *Env, dbName string, extra bson.D) bson.M {
 	t.Helper()
 	cmd := append(bson.D{{Key: "doltLog", Value: int32(1)}}, extra...)
@@ -32,7 +30,6 @@ func RunLog(t *testing.T, env *Env, dbName string, extra bson.D) bson.M {
 	return raw
 }
 
-// LogCommitIDs extracts the ordered commit ids from a doltLog response.
 func LogCommitIDs(t *testing.T, raw bson.M) []string {
 	t.Helper()
 	arr, ok := raw["commits"].(bson.A)

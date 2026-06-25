@@ -30,8 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// chunkAddresses returns the root address plus every address referenced
-// beneath it.
+// Returns the root address plus every address referenced beneath it.
 func chunkAddresses(t *testing.T, ctx context.Context, m prolly.Map) map[hash.Hash]struct{} {
 	t.Helper()
 	out := map[hash.Hash]struct{}{m.HashOf(): {}}
@@ -54,8 +53,8 @@ func countSharedChunks(a, b map[hash.Hash]struct{}) int {
 	return n
 }
 
-// indexMapOnBranch opens the index map persisted in the branch's DTBL,
-// bypassing in-memory state.
+// Opens the index map persisted in the branch's DTBL, bypassing in-memory
+// state.
 func indexMapOnBranch(t *testing.T, ctx context.Context, b *Backend, dbName, branch, collName, idxName string) prolly.Map {
 	t.Helper()
 
@@ -97,8 +96,8 @@ func bulkInsert(t *testing.T, ctx context.Context, coll backends.Collection, idB
 	}
 }
 
-// TestMergedIndexChunkReuseFromBothParents: the merged index tree must
-// physically reuse leaf chunks from BOTH parents (B3).
+// The merged index tree must physically reuse leaf chunks from BOTH parents
+// (B3).
 func TestMergedIndexChunkReuseFromBothParents(t *testing.T) {
 	t.Parallel()
 

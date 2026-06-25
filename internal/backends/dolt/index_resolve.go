@@ -44,8 +44,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// resolvedIndexEntry is the decoded form of an IndexEntry chunk: the
-// metadata plus the hash of the index's prolly.Map root.
 type resolvedIndexEntry struct {
 	info    backends.IndexInfo
 	mapRoot hash.Hash
@@ -61,8 +59,6 @@ var indexEntryMemo sync.Map // hash.Hash -> *resolvedIndexEntry
 // Replaces the per-dbState state.emptyIndexAM field; see design 6.4.
 var emptyIndexAMCache sync.Map // tree.NodeStore -> prolly.AddressMap
 
-// emptyIndexAM returns the cached empty AddressMap for ns, building it on
-// first call.
 func emptyIndexAM(ns tree.NodeStore) (prolly.AddressMap, error) {
 	if v, ok := emptyIndexAMCache.Load(ns); ok {
 		return v.(prolly.AddressMap), nil
@@ -154,9 +150,6 @@ func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Ha
 	return actual.(*resolvedIndexEntry), nil
 }
 
-// indexAMFromAM returns the per-collection secondary_indexes AddressMap
-// stored under collName in collAM. Convenience for callers that already
-// hold an ADRM (e.g. a merge driver iterating two branches' ADRMs).
 func indexAMFromAM(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collAM prolly.AddressMap, collName string) (prolly.AddressMap, error) {
 	dtblHash, err := collAM.Get(ctx, collName)
 	if err != nil {
@@ -277,9 +270,8 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 	return rows, multikey, lossy
 }
 
-// applyInsertsToIndexes adds each inserted document's entries to a
-// fresh copy of the input maps. Pure: inputs are not mutated; the
-// returned infos carry updated Lossy/Multikey flags.
+// applyInsertsToIndexes is pure: inputs are not mutated; the returned infos
+// carry updated Lossy/Multikey flags.
 func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
 	if len(infos) == 0 {
 		return infos, maps, nil
@@ -407,8 +399,7 @@ func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 	return outInfos, out, nil
 }
 
-// applyDeletesToIndexes removes every entry the deleted documents
-// contributed. Pure.
+// applyDeletesToIndexes is pure.
 func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs []*types.Document) (map[string]prolly.Map, error) {
 	if len(infos) == 0 || len(oldDocs) == 0 {
 		return maps, nil
@@ -616,8 +607,6 @@ func indexChangeNamesOf(changes []backends.IndexChange) []string {
 	return out
 }
 
-// openIndexMap returns a prolly.Map handle for the secondary-index data
-// stored at mapRoot.
 func openIndexMap(ctx context.Context, vs *dolttypes.ValueStore, ns tree.NodeStore, mapRoot hash.Hash) (prolly.Map, error) {
 	v, err := vs.ReadValue(ctx, mapRoot)
 	if err != nil {

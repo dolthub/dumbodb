@@ -32,7 +32,6 @@ import (
 
 // TestPortFlag verifies that --port overrides the port in --addr.
 func TestPortFlag(t *testing.T) {
-	// Find a free port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -41,7 +40,7 @@ func TestPortFlag(t *testing.T) {
 	dataDir := t.TempDir()
 	binary := filepath.Join(repoRoot(), ".runtime", "bin", "dolt")
 
-	// Start dumbodb with --port (no --addr, so default addr is used with port override).
+	// --port with no --addr exercises the port override on the default addr.
 	cmd := exec.Command(binary, "--port", fmt.Sprintf("%d", port), "--data-dir", dataDir)
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
@@ -51,7 +50,6 @@ func TestPortFlag(t *testing.T) {
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
-	// Wait for server to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -62,7 +60,6 @@ func TestPortFlag(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Connect and verify basic operation.
 	client, err := mongo.Connect(options.Client().
 		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
 		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
@@ -79,7 +76,6 @@ func TestPortFlag(t *testing.T) {
 
 // TestAddrFlag verifies that --addr sets the listen address.
 func TestAddrFlag(t *testing.T) {
-	// Find a free port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -96,7 +92,6 @@ func TestAddrFlag(t *testing.T) {
 		cmd.Wait()
 	})
 
-	// Wait for server to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -107,7 +102,6 @@ func TestAddrFlag(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Connect and verify basic operation.
 	client, err := mongo.Connect(options.Client().
 		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
 		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))

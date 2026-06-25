@@ -61,27 +61,26 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// CType constants for the first byte of a KeyString-encoded value.
 const (
-	ctypeMinKey    = byte(0x10) // MinKey
-	ctypeNull      = byte(0x14) // Null / missing field
-	ctypeNaN       = byte(0x19) // NaN: sorts below every other number
-	ctypeNegInf    = byte(0x1A) // -Infinity
-	ctypeNegMedium = byte(0x22) // Negative integer-part buckets: 0x22 down to 0x1B
-	ctypeZero      = byte(0x29) // Numeric zero
-	ctypePosMedium = byte(0x2B) // Positive integer-part buckets: 0x2B up to 0x32
-	ctypePosInf    = byte(0x33) // +Infinity: sorts above every other number
-	ctypeString    = byte(0x3C) // UTF-8 string
-	ctypeObject    = byte(0x46) // Embedded document
-	ctypeArray     = byte(0x50) // Array
-	ctypeBinData   = byte(0x5A) // Binary data
-	ctypeOID       = byte(0x64) // ObjectID
-	ctypeBoolFalse = byte(0x6E) // Boolean false
-	ctypeBoolTrue  = byte(0x6F) // Boolean true
-	ctypeDate      = byte(0x78) // UTC datetime
-	ctypeTimestamp = byte(0x82) // BSON Timestamp (internal replication type)
-	ctypeRegex     = byte(0x8C) // Regular expression (pattern + options)
-	ctypeMaxKey    = byte(0xF0) // MaxKey
+	ctypeMinKey    = byte(0x10)
+	ctypeNull      = byte(0x14)
+	ctypeNaN       = byte(0x19) // sorts below every other number
+	ctypeNegInf    = byte(0x1A)
+	ctypeNegMedium = byte(0x22) // negative integer-part buckets: 0x22 down to 0x1B
+	ctypeZero      = byte(0x29)
+	ctypePosMedium = byte(0x2B) // positive integer-part buckets: 0x2B up to 0x32
+	ctypePosInf    = byte(0x33) // sorts above every other number
+	ctypeString    = byte(0x3C)
+	ctypeObject    = byte(0x46)
+	ctypeArray     = byte(0x50)
+	ctypeBinData   = byte(0x5A)
+	ctypeOID       = byte(0x64)
+	ctypeBoolFalse = byte(0x6E)
+	ctypeBoolTrue  = byte(0x6F)
+	ctypeDate      = byte(0x78)
+	ctypeTimestamp = byte(0x82)
+	ctypeRegex     = byte(0x8C)
+	ctypeMaxKey    = byte(0xF0)
 )
 
 // EncodeValue encodes a single BSON value to its KeyString bytes.
@@ -123,7 +122,6 @@ func EncodeValue(v any) []byte {
 		return b
 
 	case types.Binary:
-		// [ctype][subtype][data]
 		b := make([]byte, 2+len(val.B))
 		b[0] = ctypeBinData
 		b[1] = byte(val.Subtype)
@@ -223,11 +221,9 @@ func appendEscaped(out []byte, s string) []byte {
 	return append(out, 0x00)
 }
 
-// encodeString encodes a UTF-8 string with 0x00 bytes escaped as 0x00 0xFF.
-// Format: [0x3C][bytes, 0x00->0x00 0xFF][0x00 terminator]
+// encodeString format: [0x3C][bytes, 0x00->0x00 0xFF][0x00 terminator]
 func encodeString(s string) []byte {
 	raw := []byte(s)
-	// Pre-calculate output size (each 0x00 becomes 2 bytes).
 	size := 2 // ctype + terminator
 	for _, b := range raw {
 		if b == 0x00 {
@@ -241,10 +237,10 @@ func encodeString(s string) []byte {
 	for _, b := range raw {
 		out = append(out, b)
 		if b == 0x00 {
-			out = append(out, 0xFF) // escape
+			out = append(out, 0xFF)
 		}
 	}
-	out = append(out, 0x00) // terminator
+	out = append(out, 0x00)
 	return out
 }
 
@@ -277,7 +273,6 @@ func encodePosInt(n uint64) []byte {
 	byteCount := minBytesForUint(n)
 	out := make([]byte, 1+byteCount)
 	out[0] = ctypePosMedium + byte(byteCount-1)
-	// Write big-endian, right-aligned.
 	for i := byteCount - 1; i >= 0; i-- {
 		out[1+i] = byte(n)
 		n >>= 8
@@ -285,18 +280,12 @@ func encodePosInt(n uint64) []byte {
 	return out
 }
 
-// encodeNegInt encodes a negative integer.
-// We encode abs(n)-1 (so -1 -> 0, -256 -> 255, etc.), then bit-flip all value bytes.
-// The CType encodes magnitude so larger magnitudes sort first (more negative = smaller).
-// CType = ctypeNegMedium - (byteCount-1) ensures descending ctype order.
-// Actually: for negative numbers, ctype = ctypeNegMedium + (8 - byteCount) and
-// we want more-negative (larger magnitude) to sort first.
-//
-// Simpler approach: negate to positive, encode as positive with ctypeNeg range,
-// and invert the value bytes so that larger negatives have lower byte values.
+// encodeNegInt encodes a negative integer by bit-flipping its big-endian
+// magnitude bytes, so larger magnitudes (more negative) sort before smaller
+// ones within a ctype bucket. ctype decreases as byteCount grows so that
+// cross-magnitude order is also descending.
 func encodeNegInt(n int64) []byte {
-	// Convert to positive magnitude for encoding.
-	// n is negative, so abs = -n. But -math.MinInt64 overflows, handle that edge case.
+	// -math.MinInt64 overflows int64, so compute its magnitude directly.
 	var mag uint64
 	if n == math.MinInt64 {
 		mag = uint64(math.MaxInt64) + 1
@@ -305,20 +294,10 @@ func encodeNegInt(n int64) []byte {
 	}
 
 	byteCount := minBytesForUint(mag)
-	// Negate ctype: neg numbers use ctypeNegMedium down to ctypeNegMedium-7.
-	// We want the ctype to decrease as magnitude increases, so larger-magnitude
-	// negatives sort before smaller-magnitude ones.
-	// ctypeNegMedium = 0x22; we subtract (byteCount - 1) from it.
 	ctype := ctypeNegMedium - byte(byteCount-1)
 
 	out := make([]byte, 1+byteCount)
 	out[0] = ctype
-	// Write big-endian magnitude, then bit-flip the value bytes so that
-	// more-negative values (larger mag) sort before less-negative (smaller mag)
-	// within the same ctype bucket.
-	// Since ctype already handles cross-magnitude ordering, within same ctype
-	// we need the bytes to sort in value order (more negative = smaller).
-	// Bit-flipping achieves this: larger mag -> larger bytes before flip -> smaller after flip.
 	for i := byteCount - 1; i >= 0; i-- {
 		out[1+i] = ^byte(mag)
 		mag >>= 8
@@ -397,7 +376,6 @@ func BracketRange(v any) (start, stop []byte, ok bool) {
 	return nil, nil, false
 }
 
-// minBytesForUint returns the minimum number of bytes needed to represent n.
 func minBytesForUint(n uint64) int {
 	switch {
 	case n <= 0xFF:

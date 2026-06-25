@@ -68,8 +68,8 @@ func continueMerge(t *testing.T, b *Backend, dbName, into string) {
 	}
 }
 
-// indexConsistentWithScan: index-driven lookups must equal full-scan
-// results (the design doc's section 2.6 self-consistency invariant).
+// Index-driven lookups must equal full-scan results (design doc 2.6
+// self-consistency invariant).
 func indexConsistentWithScan(t *testing.T, ctx context.Context, coll backends.Collection, field string, values []string) {
 	t.Helper()
 	for _, v := range values {
@@ -90,8 +90,8 @@ func indexConsistentWithScan(t *testing.T, ctx context.Context, coll backends.Co
 	}
 }
 
-// B2's neither-parent case: a field-merged document exists on neither
-// branch, so a 3-way merge of the index maps could never index it.
+// A field-merged document exists on neither branch, so a 3-way merge of the
+// index maps could never index it (B2).
 func TestMergedIndexReflectsFieldMergedDocs(t *testing.T) {
 	t.Parallel()
 
@@ -132,13 +132,11 @@ func TestMergedIndexReflectsFieldMergedDocs(t *testing.T) {
 	}
 }
 
-// The B5 definition-reconciliation case table.
 func TestDroppedIndexStaysDroppedAfterMerge(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
-	// Case 1: into drops, from keeps and writes docs; drop wins.
 	b := newTestBackend(t)
 	insertDoc(t, b, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "base"))
 	createIndex(t, ctx, collAt(t, b, "testdb", "main", "items"), "by_field", "field")
@@ -162,7 +160,6 @@ func TestDroppedIndexStaysDroppedAfterMerge(t *testing.T) {
 		t.Errorf("case drop-vs-write: indexes after merge = %v, want %v", gotNames, wantNames)
 	}
 
-	// Case 2: drop on both sides.
 	b2 := newTestBackend(t)
 	insertDoc(t, b2, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "base"))
 	createIndex(t, ctx, collAt(t, b2, "testdb", "main", "items"), "by_field", "field")
@@ -184,8 +181,6 @@ func TestDroppedIndexStaysDroppedAfterMerge(t *testing.T) {
 		t.Errorf("case drop-vs-drop: indexes after merge = %v, want %v", gotNames, wantNames)
 	}
 
-	// Case 3: into drops and recreates with a different spec; the
-	// redefinition wins and covers from's docs.
 	b3 := newTestBackend(t)
 	insertDoc(t, b3, "testdb", "items", mustDoc(t, "_id", int32(1), "field", "base"))
 	createIndex(t, ctx, collAt(t, b3, "testdb", "main", "items"), "by_field", "field")
@@ -231,8 +226,8 @@ func TestDroppedIndexStaysDroppedAfterMerge(t *testing.T) {
 	}
 }
 
-// B6: same unique key inserted on both branches becomes a conflict
-// requiring manual resolution; the merged state keeps ours.
+// Same unique key inserted on both branches becomes a conflict; the merged
+// state keeps ours (B6).
 func TestMergeUniqueViolationIsConflict(t *testing.T) {
 	t.Parallel()
 
@@ -279,8 +274,6 @@ func TestMergeUniqueViolationIsConflict(t *testing.T) {
 	indexConsistentWithScan(t, ctx, merged, "field", []string{"dup", "seed"})
 }
 
-// mergeWithDocConflict sets up a divergent-modify conflict on doc 1
-// with an index on "field".
 func mergeWithDocConflict(t *testing.T) (*Backend, []backends.ConflictInfo) {
 	t.Helper()
 	ctx := context.Background()
@@ -306,7 +299,6 @@ func mergeWithDocConflict(t *testing.T) (*Backend, []backends.ConflictInfo) {
 	return b, conflicts
 }
 
-// C1.
 func TestResolveTheirsReindexes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -326,7 +318,6 @@ func TestResolveTheirsReindexes(t *testing.T) {
 	}
 }
 
-// C2.
 func TestResolveCustomReindexes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -349,7 +340,6 @@ func TestResolveCustomReindexes(t *testing.T) {
 	}
 }
 
-// C1, deletion half.
 func TestResolveTheirsDeleteUnindexes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -382,8 +372,7 @@ func TestResolveTheirsDeleteUnindexes(t *testing.T) {
 	}
 }
 
-// C4: a colliding resolution is rejected; the conflict stays
-// unresolved.
+// A colliding custom resolution is rejected; the conflict stays unresolved.
 func TestResolveUniqueCollisionRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -430,8 +419,8 @@ func TestResolveUniqueCollisionRejected(t *testing.T) {
 	}
 }
 
-// C5: after a mixed resolution sequence and the concluding commit,
-// every index describes exactly the committed documents.
+// After a mixed resolution sequence and the concluding commit, every index
+// describes exactly the committed documents.
 func TestResolvedMergeCommitIndexConsistency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -466,7 +455,7 @@ func TestResolvedMergeCommitIndexConsistency(t *testing.T) {
 	}{
 		{"ours", nil},
 		{"theirs", nil},
-		{"custom", nil}, // value filled below per conflict
+		{"custom", nil},
 		{"theirs", nil},
 	}
 	for i, c := range conflicts {

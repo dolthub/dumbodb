@@ -51,8 +51,6 @@ type indexKeyJSON struct {
 	Hashed      bool   `json:"hashed,omitempty"`
 }
 
-// indexInfoToEntry converts a backends.IndexInfo plus the index's map
-// root hash into the stored entry shape.
 func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc, error) {
 	keys := make([]indexKeyJSON, len(idx.Key))
 	for i, k := range idx.Key {
@@ -89,13 +87,10 @@ func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc,
 	}, nil
 }
 
-// entryToIndexInfo decodes a stored entry back into an IndexInfo and the
-// 20-byte hash of the secondary-index prolly.Map root.
-//
-// When the entry has a persisted partial filter expression, MatchesPartialFilter
-// is rebuilt to call backends.MatchPartialFilter against the decoded BSON. The
-// handler layer registers the underlying predicate (FilterDocument) at init time,
-// which keeps the backend free of a circular dependency on handler/common.
+// entryToIndexInfo rebuilds MatchesPartialFilter to call
+// backends.MatchPartialFilter against the decoded BSON. The handler layer
+// registers the underlying predicate (FilterDocument) at init time, which keeps
+// the backend free of a circular dependency on handler/common.
 func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 	keys := make([]backends.IndexKeyPair, len(d.Keys))
 	for i, k := range d.Keys {
@@ -146,8 +141,6 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 	return info, root, nil
 }
 
-// writeIndexEntryChunk stores the entry as a single BSON chunk and
-// returns its content address.
 func writeIndexEntryChunk(ctx context.Context, ns tree.NodeStore, entry indexEntryDoc) (hash.Hash, error) {
 	doc, err := indexEntryToDocument(entry)
 	if err != nil {

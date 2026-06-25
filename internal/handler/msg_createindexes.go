@@ -33,9 +33,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgCreateIndexes implements `createIndexes` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -177,7 +174,6 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	)
 }
 
-// processIndexesArray processes the given array of indexes and returns a slice of backends.IndexInfo elements.
 func processIndexesArray(command string, indexesArray *types.Array) ([]backends.IndexInfo, error) {
 	iter := indexesArray.Iterator()
 	defer iter.Close()
@@ -190,7 +186,6 @@ func processIndexesArray(command string, indexesArray *types.Array) ([]backends.
 
 		switch {
 		case err == nil:
-			// do nothing
 		case errors.Is(err, iterator.ErrIteratorDone):
 			return res, nil
 		default:
@@ -219,7 +214,6 @@ func processIndexesArray(command string, indexesArray *types.Array) ([]backends.
 	}
 }
 
-// processIndex processes the given index document and returns backends.IndexInfo.
 func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo, error) {
 	var index backends.IndexInfo
 
@@ -233,7 +227,6 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 
 		switch {
 		case err == nil:
-			// do nothing
 		case errors.Is(err, iterator.ErrIteratorDone):
 			if !hasValue {
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -332,7 +325,6 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 
 		switch opt {
 		case "key", "name":
-			// already processed, do nothing
 
 		case "unique":
 			v := must.NotFail(indexDoc.Get("unique"))
@@ -417,7 +409,6 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 	}
 }
 
-// processIndexKey processes the document containing the index key (set of "field-order" pairs).
 func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKeyPair, error) {
 	res := make([]backends.IndexKeyPair, 0, keyDoc.Len())
 
@@ -431,7 +422,6 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 
 		switch {
 		case err == nil:
-			// do nothing
 		case errors.Is(err, iterator.ErrIteratorDone):
 			return res, nil
 		default:
@@ -451,7 +441,6 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 
 		duplicateChecker[field] = struct{}{}
 
-		// Check for string-valued index key types: "text", "2dsphere", "2d", "hashed".
 		if orderStr, ok := order.(string); ok {
 			switch orderStr {
 			case "text":
@@ -516,7 +505,6 @@ func processIndexKey(command string, keyDoc *types.Document) ([]backends.IndexKe
 	}
 }
 
-// formatIndexKey formats the given index key to a string.
 func formatIndexKey(key []backends.IndexKeyPair) string {
 	res := make([]string, len(key))
 
@@ -543,9 +531,8 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 	return strings.Join(res, ", ")
 }
 
-// validateIndexesForCreation validates the given list of indexes to create against the existing ones.
-// It filters out duplicate indexes and returns a slice of indexes to create.
-// It returns an error if at least one provided index has an invalid specification.
+// validateIndexesForCreation filters duplicates out of toCreate and returns an
+// error if any index conflicts with an existing one or has an invalid spec.
 func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo) ([]backends.IndexInfo, error) {
 	filteredToCreate := make([]backends.IndexInfo, len(toCreate))
 	copy(filteredToCreate, toCreate)
@@ -572,7 +559,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
 		}
 
-		// Iterate backwards to check if the current index is a duplicate of any other index provided in the list earlier.
+		// Compare against earlier entries in the same request.
 		for j := i - 1; j >= 0; j-- {
 			otherKey := formatIndexKey(toCreate[j].Key)
 			otherName := toCreate[j].Name
@@ -604,7 +591,6 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			}
 		}
 
-		// Check for conflicts with existing indexes.
 		for _, existingIdx := range existing {
 			existingKey := formatIndexKey(existingIdx.Key)
 
@@ -668,7 +654,6 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 	return filteredToCreate, nil
 }
 
-// isTextIndex returns true if the given index has at least one text key field.
 func isTextIndex(idx backends.IndexInfo) bool {
 	for _, kp := range idx.Key {
 		if kp.Text {

@@ -17,8 +17,7 @@ package backends
 import "github.com/dolthub/dumbodb/internal/types"
 
 // HintIsNatural reports whether hint is the {"$natural": <int>} pattern.
-// MongoDB treats this as "scan storage in natural order; do not pick an index
-// regardless of what filter/sort suggests."
+// MongoDB treats this as "scan storage in natural order; do not pick an index."
 func HintIsNatural(hint any) bool {
 	doc, ok := hint.(*types.Document)
 	if !ok || doc == nil || doc.Len() != 1 {
@@ -28,8 +27,6 @@ func HintIsNatural(hint any) bool {
 	return doc.Keys()[0] == "$natural"
 }
 
-// HintRequiresExistingIndex reports whether hint names a specific index that
-// must exist. A nil, empty, or $natural hint imposes no such requirement.
 func HintRequiresExistingIndex(hint any) bool {
 	switch h := hint.(type) {
 	case nil:
@@ -43,8 +40,6 @@ func HintRequiresExistingIndex(hint any) bool {
 	}
 }
 
-// MatchHintedIndex resolves a hint value (either a name string or a key-pattern
-// document) to a matching index name, or returns "" if no index matches.
 func MatchHintedIndex(hint any, idxInfos []IndexInfo) string {
 	if hint == nil {
 		return ""
@@ -74,11 +69,10 @@ func MatchHintedIndex(hint any, idxInfos []IndexInfo) string {
 					match = false
 					break
 				}
-				// A numeric hint direction (1 / -1) must match the index key's
-				// direction, matching MongoDB's exact key-pattern requirement.
-				// Non-numeric values (e.g. "2dsphere", "text", "hashed") are
-				// matched on field name only -- the key model does not record
-				// the special index type.
+				// MongoDB requires the numeric direction (1 / -1) to match the
+				// index key exactly. Non-numeric values ("2dsphere", "text",
+				// "hashed") match on field name only -- the key model does not
+				// record the special index type.
 				if hv, err := h.Get(k); err == nil {
 					if desc, ok := hintDirectionDescending(hv); ok && desc != idx.Key[i].Descending {
 						match = false
@@ -96,9 +90,7 @@ func MatchHintedIndex(hint any, idxInfos []IndexInfo) string {
 	return ""
 }
 
-// hintDirectionDescending interprets a key-pattern hint value as a sort
-// direction. ok is true only for the numeric forms 1 (ascending) and -1
-// (descending).
+// ok is true only for the numeric forms 1 (ascending) and -1 (descending).
 func hintDirectionDescending(v any) (descending, ok bool) {
 	switch n := v.(type) {
 	case int32:

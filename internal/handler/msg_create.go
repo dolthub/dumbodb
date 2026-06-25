@@ -31,9 +31,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgCreate implements `create` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -249,7 +246,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 	}
 
-	// Validate collection name with MongoDB-compatible error messages before calling backend.
 	if collectionName == "" {
 		msg := fmt.Sprintf("Invalid namespace specified '%s.'", dbName)
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
@@ -265,7 +261,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 	}
 
-	// Check fully qualified namespace length (db.collection must be <= 255 bytes).
 	const maxNamespaceLen = 255
 	ns := dbName + "." + collectionName
 	if len(ns) > maxNamespaceLen {
@@ -322,22 +317,18 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 // invalidDatabaseNameMsg returns the MongoDB-compatible error message for an invalid database name.
 func invalidDatabaseNameMsg(dbName, collectionName string) string {
-	// Too long.
 	if len(dbName) > 63 {
 		return fmt.Sprintf("db name must be at most 63 characters, found: %d", len(dbName))
 	}
 
-	// Contains a dot.
 	if strings.ContainsRune(dbName, '.') {
 		return fmt.Sprintf("'.' is an invalid character in a db name: %s", dbName)
 	}
 
-	// Contains a dollar sign.
 	if strings.ContainsRune(dbName, '$') {
 		return fmt.Sprintf("Invalid namespace: %s.%s", dbName, collectionName)
 	}
 
-	// Other invalid characters (slash, backslash, space, null, etc.).
 	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
 }
 

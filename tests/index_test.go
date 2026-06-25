@@ -825,15 +825,8 @@ func TestIndex_IndexStats_AfterInsert(t *testing.T) {
 	}
 }
 
-// TestSecondaryIndex_EmailEqualityQuery is the end-to-end secondary index test
-// that drives the dolt backend directly (no mongo driver).
-//
-// Scenario:
-//   - Insert 100 documents, each with an "email" field. Some share the same email.
-//   - Call createIndex on {email: 1}.
-//   - Call find({email: "alice@example.com"}).
-//   - Verify that only the correct documents are returned.
-//   - Verify that the secondary index map is populated (index was built, not a full scan).
+// TestSecondaryIndex_EmailEqualityQuery drives the dolt backend directly (no
+// mongo driver) to exercise secondary index build and lookup end to end.
 func TestSecondaryIndex_EmailEqualityQuery(t *testing.T) {
 	ctx := context.Background()
 

@@ -14,11 +14,6 @@
 
 package verify
 
-// TestIndexMergeVerify is the automated analog of
-// docs/verify/index-merge.md. Each subtest corresponds to one scenario
-// in that document and uses its own database, exactly as the manual
-// steps do.
-
 import (
 	"context"
 	"fmt"
@@ -48,7 +43,6 @@ func idxvMerge(t *testing.T, env *dumboDBTestEnv, dbName, branch string) bson.M 
 	})
 }
 
-// idxvWinningPlan returns the winningPlan document for a find filter.
 func idxvWinningPlan(t *testing.T, db *mongo.Database, coll string, filter bson.D) bson.M {
 	t.Helper()
 	var res bson.M
@@ -156,15 +150,12 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.Equal(t, "by_city", idxvIxscanName(wp), "lookup must be served by the index: %v", wp)
 	})
 
-	// Scenario 2b: a base document (present in the index) deleted on the feature
-	// branch must drop out of the merged index.
 	t.Run("Scenario2b_DeleteOnBranchDropsFromMergedIndex", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg2bv%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
-		// Base: two docs, NO index yet.
 		_, err := items.InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(1)}, {Key: "city", Value: "base"}},
 			bson.D{{Key: "_id", Value: int32(2)}, {Key: "city", Value: "paris"}},
@@ -173,15 +164,14 @@ func TestIndexMergeVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "seed (no index)", "alice <alice@acme.com>")
 		idxvBranch(t, env, dbName, "feature")
 
-		// The index is created only on main; feature never sees it. This makes
-		// the branches diverge so the merge below is a real 3-way merge.
+		// Index created only on main; feature never sees it, so the merge below
+		// is a real 3-way merge rather than a fast-forward.
 		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
 		})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: create by_city", "alice <alice@acme.com>")
 
-		// Feature (without the index) deletes the base doc carrying "paris".
 		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 		require.NoError(t, err)
@@ -192,24 +182,19 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.NotEqual(t, "fast-forward", raw["message"], "must be a real 3-way merge, not a fast-forward")
 		assert.NotEqual(t, "already up-to-date", raw["message"])
 
-		// The deleted doc's indexed value is gone from the merged index.
 		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "city", Value: "paris"}}), "paris must be gone after merge")
 		assert.Empty(t, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "paris"}}))
-		// The untouched base doc is still indexed.
 		assert.Equal(t, []int32{1}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "base"}}))
 		wp := idxvWinningPlan(t, db, "items", bson.D{{Key: "city", Value: "paris"}})
 		assert.Equal(t, "by_city", idxvIxscanName(wp), "lookup still served by the index: %v", wp)
 	})
 
-	// Scenario 2c: changing an indexed field of a base document on the feature
-	// branch must update the merged index (new value in, old value out).
 	t.Run("Scenario2c_UpdateIndexedFieldOnBranchUpdatesMergedIndex", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg2cv%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
-		// Base: two docs, NO index yet.
 		_, err := items.InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(1)}, {Key: "city", Value: "base"}},
 			bson.D{{Key: "_id", Value: int32(2)}, {Key: "city", Value: "paris"}},
@@ -218,15 +203,14 @@ func TestIndexMergeVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "seed (no index)", "alice <alice@acme.com>")
 		idxvBranch(t, env, dbName, "feature")
 
-		// The index is created only on main; feature never sees it, so the
-		// merge below is a real 3-way merge.
+		// Index created only on main; feature never sees it, so the merge below
+		// is a real 3-way merge.
 		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
 		})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: create by_city", "alice <alice@acme.com>")
 
-		// Feature (without the index) changes the indexed field: paris -> london.
 		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(2)}},
@@ -239,7 +223,6 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.NotEqual(t, "fast-forward", raw["message"], "must be a real 3-way merge, not a fast-forward")
 		assert.NotEqual(t, "already up-to-date", raw["message"])
 
-		// New value indexed; old value gone.
 		assert.Equal(t, []int32{2}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "london"}}), "london (new value) must be indexed")
 		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "city", Value: "paris"}}), "paris (old value) must be gone")
 		assert.Equal(t, []int32{1}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "base"}}), "untouched base doc still indexed")
@@ -366,7 +349,6 @@ func TestIndexMergeVerify(t *testing.T) {
 		}).Decode(&contRaw))
 		assert.EqualValues(t, 1, contRaw["ok"])
 
-		// Theirs now owns the key; ours's doc 10 is gone.
 		assert.EqualValues(t, 1, idxvCount(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
 		assert.Equal(t, []int32{20}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
 	})
@@ -476,7 +458,6 @@ func TestIndexMergeVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "seed + two unique indexes", "alice <alice@acme.com>")
 		idxvBranch(t, env, dbName, "feature")
 
-		// One pair collides on by_sku, a separate pair on by_code.
 		_, err = items.InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(10)}, {Key: "sku", Value: "S-1"}, {Key: "code", Value: "K-10"}},
 			bson.D{{Key: "_id", Value: int32(11)}, {Key: "sku", Value: "S-11"}, {Key: "code", Value: "C-1"}},
@@ -513,7 +494,6 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.EqualValues(t, 11, byIndex["by_code"]["ours"].(bson.M)["_id"])
 		assert.EqualValues(t, 21, byIndex["by_code"]["theirs"].(bson.M)["_id"])
 
-		// Each collision resolves independently.
 		for _, e := range byIndex {
 			require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 				{Key: "doltResolveConflict", Value: int32(1)},
@@ -534,9 +514,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.Equal(t, []int32{11}, idxvFindIDs(t, db, "items", bson.D{{Key: "code", Value: "C-1"}}))
 	})
 
-	// Scenario 7: a cherry-pick that applies a doc colliding on a unique key is
-	// a uniqueKeyCollision conflict, just like a merge. ours = the branch, theirs
-	// = the cherry-picked commit.
+	// In a cherry-pick collision, ours = the branch, theirs = the cherry-picked commit.
 	t.Run("Scenario7_CherryPickCollisionIsConflict", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg7v%d", suffix)
 		db := env.Client.Database(dbName)
@@ -587,8 +565,7 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.Equal(t, []int32{10}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}), "ours (doc 10) keeps the key")
 	})
 
-	// Scenario 8: a rebase that replays a commit colliding on a unique key is a
-	// uniqueKeyCollision. ours = the replayed commit, theirs = the onto branch.
+	// In a rebase collision, ours = the replayed commit, theirs = the onto branch.
 	t.Run("Scenario8_RebaseCollisionIsConflict", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg8v%d", suffix)
 		db := env.Client.Database(dbName)
@@ -637,17 +614,13 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "continue", Value: int32(1)}}).Decode(&contRaw))
 		assert.EqualValues(t, 1, contRaw["ok"])
 
-		// On the rebased feature branch the index reflects the resolution: ours
-		// (the replayed doc 20) owns the key; onto/main's doc 10 was evicted.
 		assert.Equal(t, []int32{20}, idxvFindIDs(t, featureDB, "items", bson.D{{Key: "sku", Value: "S-1"}}), "replayed doc 20 keeps the key")
 		assert.EqualValues(t, 1, idxvCount(t, featureDB, "items", bson.D{{Key: "sku", Value: "S-1"}}))
 		wp := idxvWinningPlan(t, featureDB, "items", bson.D{{Key: "sku", Value: "S-1"}})
 		assert.Equal(t, "by_sku", idxvIxscanName(wp), "lookup still served by the index: %v", wp)
 	})
 
-	// Scenario 9: reverting a delete re-adds a document whose unique key is now
-	// held by a different one: a uniqueKeyCollision. ours = the branch, theirs =
-	// the reverted commit.
+	// In a revert collision, ours = the branch, theirs = the reverted commit.
 	t.Run("Scenario9_RevertCollisionIsConflict", func(t *testing.T) {
 		dbName := fmt.Sprintf("idxmrg9v%d", suffix)
 		db := env.Client.Database(dbName)

@@ -14,14 +14,6 @@
 
 package verify
 
-// TestRootishVerify is the automated analog of docs/verify/rootish.md.
-//
-// Setup:
-//   - Commit 1 (hash1): items = [ { _id:1, label:"first", version:1 } ]
-//   - Commit 2 (hash2): items = [ { _id:1, ... }, { _id:2, label:"second", version:2 } ]
-//   - Branch "feature" at commit 2
-//   - Tag "release-1" at commit 1
-//
 // Subtests run sequentially (no t.Parallel) so side effects carry forward.
 
 import (
@@ -35,7 +27,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// rootishVerifySetup mirrors the Setup section of docs/verify/rootish.md.
 func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1, hash2 string) {
 	t.Helper()
 
@@ -45,7 +36,6 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 
 	require.NoError(t, db.Drop(ctx))
 
-	// Commit 1: one document.
 	_, err := items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "label", Value: "first"},
@@ -54,7 +44,6 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 	require.NoError(t, err)
 	hash1 = dumboDBCommit(t, env, dbName, "first commit", "alice <alice@acme.com>")
 
-	// Commit 2: two documents.
 	_, err = items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "label", Value: "second"},
@@ -63,7 +52,6 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 	require.NoError(t, err)
 	hash2 = dumboDBCommit(t, env, dbName, "second commit", "bob <bob@widgets.io>")
 
-	// Create branch "feature" from main HEAD.
 	var branchResult bson.M
 	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
@@ -72,7 +60,7 @@ func rootishVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1
 	require.NoError(t, err, "doltBranch to create feature")
 	assert.Equal(t, "feature", branchResult["branch"])
 
-	// Create tag "release-1" at commit 1.
+	// Tag release-1 points at commit 1, not HEAD.
 	var tagResult bson.M
 	err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboTag", Value: int32(1)},
@@ -93,9 +81,6 @@ func TestRootishVerify(t *testing.T) {
 
 	hash1, hash2 := rootishVerifySetup(t, env, dbName)
 
-	// -------------------------------------------------------------------------
-	// Scenario 1: @main -- reads and writes work
-	// -------------------------------------------------------------------------
 	t.Run("Scenario1_MainBranch", func(t *testing.T) {
 		items := env.Client.Database(dbName + "@main").Collection("items")
 
@@ -117,9 +102,6 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 2: @feature -- branch isolation
-	// -------------------------------------------------------------------------
 	t.Run("Scenario2_BranchIsolation", func(t *testing.T) {
 		featItems := env.Client.Database(dbName + "@feature").Collection("items")
 		mainItems := env.Client.Database(dbName + "@main").Collection("items")
@@ -146,9 +128,6 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 3: @release-1 -- tag is read-only
-	// -------------------------------------------------------------------------
 	t.Run("Scenario3_TagReadOnly", func(t *testing.T) {
 		tagItems := env.Client.Database(dbName + "@release-1").Collection("items")
 
@@ -156,11 +135,9 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), n, "release-1 tag: expected 1 doc (commit 1)")
 
-		// Write must fail -- tags are read-only.
 		_, err = tagItems.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on tag")
 
-		// Branch creation from tag works.
 		tagDB := env.Client.Database(dbName + "@release-1")
 		var branchResult bson.M
 		require.NoError(t, tagDB.RunCommand(ctx, bson.D{
@@ -174,9 +151,6 @@ func TestRootishVerify(t *testing.T) {
 		assert.Equal(t, int64(1), nFromTag, "from-tag: expected 1 doc")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 4: @<hash> -- commit hash is read-only
-	// -------------------------------------------------------------------------
 	t.Run("Scenario4_CommitHash", func(t *testing.T) {
 		snap1 := env.Client.Database(dbName + "@" + hash1).Collection("items")
 		snap2 := env.Client.Database(dbName + "@" + hash2).Collection("items")
@@ -204,37 +178,24 @@ func TestRootishVerify(t *testing.T) {
 		assert.Equal(t, int64(1), nNew, "from-hash1: expected 1 doc")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 5: @main~1 -- ancestor expression is read-only
-	// -------------------------------------------------------------------------
-	// -------------------------------------------------------------------------
-	// Scenario 5: HEAD is rejected
-	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HEAD_Rejected", func(t *testing.T) {
 		assertRootishRejected(t, env.Client.Database(dbName+"@HEAD"), "HEAD")
 		assertRootishRejected(t, env.Client.Database(dbName+"@HEAD~1"), "HEAD~1")
 		assertRootishRejected(t, env.Client.Database(dbName+"@HEAD^"), "HEAD^")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 6: Tilde, caret, and chained traversal
-	// -------------------------------------------------------------------------
 	t.Run("Scenario6_Tilde_Caret_Chained", func(t *testing.T) {
-		// Tilde: main~1 = first parent (read-only).
 		n, err := env.Client.Database(dbName+"@main~1").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), n, "main~1: expected 1 doc")
 
-		// main~0 = main itself.
 		nSame, err := env.Client.Database(dbName+"@main~0").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), nSame, "main~0: expected 2 docs")
 
-		// Write blocked on ancestor expression.
 		_, err = env.Client.Database(dbName+"@main~1").Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 		assertWriteBlockedOperationFailed(t, err, "insert on main~1")
 
-		// Caret: main^ = first parent (same as main~1 for non-merge).
 		nCaret, err := env.Client.Database(dbName+"@main^").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), nCaret, "main^: expected 1 doc")
@@ -296,32 +257,25 @@ func TestRootishVerify(t *testing.T) {
 		// ^^ = first parent of first parent = C1
 		assert.Equal(t, hashC1, getCommitID("main^^"), "main^^ must be C1")
 
-		_ = hashC1 // used above
+		_ = hashC1
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 7: Percent-encoding for special characters
-	// -------------------------------------------------------------------------
 	t.Run("Scenario7_PercentEncoding", func(t *testing.T) {
-		// Create branch "v1.0" (dot in name).
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "v1.0"},
 		}).Err())
 
-		// Unencoded dot fails -- the Go driver sends it but the server
-		// parses the name incorrectly (dot is a namespace separator).
+		// Unencoded dot fails: the server parses it as a namespace separator.
 		_, unencodedErr := env.Client.Database(dbName + "@v1.0").Collection("items").CountDocuments(ctx, bson.D{})
 		require.Error(t, unencodedErr, "unencoded dot in rootish must fail")
 
-		// Percent-encoded dot works.
 		v1Items := env.Client.Database(dbName + "@v1%2E0").Collection("items")
 
 		n, err := v1Items.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), n, "v1.0 via percent-encoding: expected 2 docs")
 
-		// Write works -- it is a branch.
 		_, err = v1Items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(20)}, {Key: "label", Value: "encoded"}})
 		require.NoError(t, err)
 
@@ -329,7 +283,6 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), nV1)
 
-		// main unchanged.
 		nMain, err := env.Client.Database(dbName+"@main").Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), nMain)
@@ -338,24 +291,18 @@ func TestRootishVerify(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 8: reflog -- rejected (code 96)
-	// -------------------------------------------------------------------------
 	t.Run("Scenario8_Reflog_Rejected", func(t *testing.T) {
 		assertRootishRejected(t, env.Client.Database(dbName+"@main%40%7Byesterday%7D"), "reflog_yesterday")
 		assertRootishRejected(t, env.Client.Database(dbName+"@main%40%7B5%20minutes%20ago%7D"), "reflog_minutes_ago")
 		assertRootishRejected(t, env.Client.Database(dbName+"@%40%7B1%7D"), "reflog_bare")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 9: range -- rejected (code 96)
-	// -------------------------------------------------------------------------
 	t.Run("Scenario9_Range_Rejected", func(t *testing.T) {
 		assertRootishRejected(t, env.Client.Database(dbName+"@main%2E%2Efeature"), "range_two_dot")
 		assertRootishRejected(t, env.Client.Database(dbName+"@main%2E%2E%2Efeature"), "range_three_dot")
 	})
 
-	_ = hash2 // used in Scenario4
+	_ = hash2
 }
 
 // assertRootishRejected and assertWriteBlockedOperationFailed come from package

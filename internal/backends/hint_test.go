@@ -21,9 +21,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// TestMatchHintedIndex_KeyPatternDirection pins that a key-pattern hint must
-// match the index key's direction (1 vs -1), matching MongoDB's exact
-// key-pattern requirement -- a {a:-1} hint must not resolve to an {a:1} index.
+// A key-pattern hint must match the index key direction: a {a:-1} hint must
+// not resolve to an {a:1} index (MongoDB exact key-pattern requirement).
 func TestMatchHintedIndex_KeyPatternDirection(t *testing.T) {
 	asc := []IndexInfo{{Name: "a_1", Key: []IndexKeyPair{{Field: "a", Descending: false}}}}
 	desc := []IndexInfo{{Name: "a_-1", Key: []IndexKeyPair{{Field: "a", Descending: true}}}}
