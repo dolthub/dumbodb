@@ -292,6 +292,68 @@ Key checks:
 
 ---
 
+## Scenario 7: Cherry-pick an index build, then merge, covers all documents
+
+Two branches. `main` creates documents and then an index over them (a
+separate commit). `feature` -- branched before either -- creates its own
+unrelated documents, then cherry-picks `main`'s index-creation commit. The
+cherry-pick succeeds and builds the index over `feature`'s documents (not
+`main`'s). A later merge of the branches is conflict-free and the index
+covers every document from both sides.
+
+```js
+var db = db.getSiblingDB("idxmntcp")
+db.dropDatabase()
+
+// Baseline: a seed doc with no "name" field -- the common ancestor.
+db.items.insertOne({ _id: 0, tag: "seed" })
+db.runCommand({ doltCommit: 1, message: "base seed", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmntcp@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// main: documents, then an index over them in a separate commit.
+db.items.insertMany([{ _id: 1, name: "alpha" }, { _id: 2, name: "bravo" }])
+db.runCommand({ doltCommit: 1, message: "main: docs", author: "alice <alice@acme.com>" })
+db.items.createIndex({ name: 1 }, { name: "by_name" })
+const idxCommit = db.runCommand({ doltCommit: 1, message: "main: create by_name", author: "alice <alice@acme.com>" }).commitId
+
+// feature: different documents (no index yet).
+var feat = db.getSiblingDB("idxmntcp@feature")
+feat.items.insertMany([{ _id: 10, name: "november" }, { _id: 11, name: "oscar" }])
+feat.runCommand({ doltCommit: 1, message: "feature: docs", author: "bob <bob@widgets.io>" })
+
+// Cherry-pick main's index-creation commit onto feature -- it must succeed
+// and build the index over feature's documents.
+feat.runCommand({ doltCherryPick: 1, commit: idxCommit })
+// Expected: { commitId: "...", ok: 1 }
+
+// feature's index holds feature's documents only; main's are not on feature.
+feat.items.find({ name: "november" }).toArray()   // Expected: [ { _id: 10, name: "november" } ]
+feat.items.find({ name: "alpha" }).toArray()       // Expected: [] (main's docs are not on feature)
+feat.items.find({ name: "november" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_name"
+
+// Merge feature into main: distinct docs, same index -> a clean 3-way merge.
+db.getSiblingDB("idxmntcp@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+// Expected: a merge commit, ok: 1 (no conflicts)
+
+// Every document (seed + main + feature) is now in the index.
+db.items.find({ name: "alpha" }).toArray()        // Expected: [ { _id: 1, name: "alpha" } ]
+db.items.find({ name: "oscar" }).toArray()         // Expected: [ { _id: 11, name: "oscar" } ]
+db.runCommand({ count: "items", query: {} })        // Expected: { n: 5, ok: 1 }
+db.items.find({ name: "oscar" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_name"
+```
+
+Key checks:
+- Cherry-picking an index-creation commit succeeds and builds the index
+  over the target branch's documents, not the source branch's.
+- `feature`'s index serves `feature`'s documents; `main`'s documents
+  (added after the branch) are absent on `feature`.
+- Merging the branches is conflict-free; the merged index covers every
+  document from both branches.
+
+---
+
 ## Not verifiable from mongosh
 
 Two contracts from the same design doc are storage-level and have no

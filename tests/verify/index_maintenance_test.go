@@ -239,4 +239,70 @@ func TestIndexMaintenanceVerify(t *testing.T) {
 		// The document is not gone -- a sku-only scan still finds A-1.
 		assert.Equal(t, []int32{30}, idxvFindIDs(t, db, "items", skuOnlyA1))
 	})
+
+	// Scenario 7: cherry-picking an index-creation commit builds the index over
+	// the TARGET branch's own documents (not the source branch's); a later merge
+	// of the two branches is conflict-free and the index covers every document.
+	t.Run("Scenario7_CherryPickIndexBuildThenMergeUnions", func(t *testing.T) {
+		cpDB := fmt.Sprintf("idxmntcp%d", rand.Int64N(1_000_000))
+		mainDB := env.Client.Database(cpDB + "@main")
+		require.NoError(t, env.Client.Database(cpDB).Drop(ctx))
+
+		// Baseline: a seed doc with no "name" field (so it never matches the
+		// by_name value queries below). It is the common ancestor of both
+		// branches; main's and feature's real documents are added after branching.
+		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(0)}, {Key: "tag", Value: "seed"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, cpDB, "base seed", "alice <alice@acme.com>")
+		idxvBranch(t, env, cpDB, "feature")
+
+		// main: a few documents, then an index over them in a separate commit.
+		_, err = mainDB.Collection("items").InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(1)}, {Key: "name", Value: "alpha"}},
+			bson.D{{Key: "_id", Value: int32(2)}, {Key: "name", Value: "bravo"}},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, cpDB, "main: docs", "alice <alice@acme.com>")
+		_, err = mainDB.Collection("items").Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "name", Value: int32(1)}}, Options: options.Index().SetName("by_name"),
+		})
+		require.NoError(t, err)
+		idxCommit := dumboDBCommit(t, env, cpDB, "main: create by_name", "alice <alice@acme.com>")
+
+		// feature: different documents (no index yet).
+		featDB := env.Client.Database(cpDB + "@feature")
+		_, err = featDB.Collection("items").InsertMany(ctx, []interface{}{
+			bson.D{{Key: "_id", Value: int32(10)}, {Key: "name", Value: "november"}},
+			bson.D{{Key: "_id", Value: int32(11)}, {Key: "name", Value: "oscar"}},
+		})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, cpDB+"@feature", "feature: docs", "bob <bob@widgets.io>")
+
+		// Cherry-pick main's index-creation commit onto feature: must succeed and
+		// build the index over feature's documents.
+		cp := runCommandRaw(t, featDB, bson.D{{Key: "dumboCherryPick", Value: int32(1)}, {Key: "commit", Value: idxCommit}})
+		assert.EqualValues(t, 1, cp["ok"], "cherry-pick of index creation must succeed: %v", cp)
+
+		// feature's index holds feature's docs only; main's docs are not here.
+		assert.Equal(t, []int32{10}, idxvFindIDs(t, featDB, "items", bson.D{{Key: "name", Value: "november"}}))
+		assert.Equal(t, []int32{11}, idxvFindIDs(t, featDB, "items", bson.D{{Key: "name", Value: "oscar"}}))
+		assert.Empty(t, idxvFindIDs(t, featDB, "items", bson.D{{Key: "name", Value: "alpha"}}), "main's docs are not on feature")
+		assert.EqualValues(t, 3, idxvCount(t, featDB, "items", bson.D{}), "feature has the seed + its own two docs")
+		wp := idxvWinningPlan(t, featDB, "items", bson.D{{Key: "name", Value: "november"}})
+		assert.Equal(t, "by_name", idxvIxscanName(wp), "feature lookup served by the cherry-picked index: %v", wp)
+
+		// Merge feature into main: distinct docs, same index -> a clean 3-way merge.
+		merged := idxvMerge(t, env, cpDB, "feature")
+		assert.EqualValues(t, 1, merged["ok"], "merge must be clean (no conflicts): %v", merged)
+		assert.NotEqual(t, "fast-forward", merged["message"], "must be a real 3-way merge")
+
+		// Every document (main + feature) is now in the index.
+		assert.Equal(t, []int32{1}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "alpha"}}))
+		assert.Equal(t, []int32{2}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "bravo"}}))
+		assert.Equal(t, []int32{10}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "november"}}))
+		assert.Equal(t, []int32{11}, idxvFindIDs(t, mainDB, "items", bson.D{{Key: "name", Value: "oscar"}}))
+		assert.EqualValues(t, 5, idxvCount(t, mainDB, "items", bson.D{}), "seed + main(2) + feature(2) present after merge")
+		wpM := idxvWinningPlan(t, mainDB, "items", bson.D{{Key: "name", Value: "oscar"}})
+		assert.Equal(t, "by_name", idxvIxscanName(wpM), "merged lookup served by the index: %v", wpM)
+	})
 }
