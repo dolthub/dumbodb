@@ -422,8 +422,10 @@ db.getSiblingDB("idxmrg5@main").runCommand({ doltMerge: 1, merge_in: "feature" }
 // Expected throw: unresolved conflicts in 1 collection(s)
 
 const rc = db.getSiblingDB("idxmrg5@main").runCommand({ doltConflicts: 1 })
+// _id now lives on each side ({ _id, doc, diffType }), not at the top level.
+// For a documentEdit all sides share it; a deleted side is null.
 const byDocID = {}
-rc.collections[0].conflicts.forEach(c => { byDocID[c._id] = c.conflictId })
+rc.collections[0].conflicts.forEach(c => { byDocID[(c.ours || c.theirs)._id] = c.conflictId })
 
 // Doc 1: take theirs. Doc 2: take a custom value.
 db.getSiblingDB("idxmrg5@main").runCommand({
