@@ -40,7 +40,7 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 	for _, v := range stageDocs {
 		vd, ok := v.(*types.Document)
 		if !ok {
-			continue
+			return nil, lazyerrors.Errorf("view pipeline stage is not a document: %T", v)
 		}
 
 		var vs aggregations.Stage

@@ -95,16 +95,17 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		iter = common.CountIterator(iter, closer, "count")
 
 		_, res, cerr := iter.Next()
-		if errors.Is(cerr, iterator.ErrIteratorDone) {
-			cerr = nil
-		}
-
-		if cerr != nil {
+		if cerr != nil && !errors.Is(cerr, iterator.ErrIteratorDone) {
 			return nil, lazyerrors.Error(cerr)
 		}
 
-		count, _ := res.Get("count")
-		n, _ := count.(int32)
+		// CountIterator yields ErrIteratorDone with a nil document when nothing
+		// matched (count 0); a match yields a {count: n} document.
+		var n int32
+		if res != nil {
+			count, _ := res.Get("count")
+			n, _ = count.(int32)
+		}
 
 		return documentOpMsg(
 			must.NotFail(types.NewDocument(
