@@ -164,19 +164,24 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
+		// Base: two docs, NO index yet.
 		_, err := items.InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(1)}, {Key: "city", Value: "base"}},
 			bson.D{{Key: "_id", Value: int32(2)}, {Key: "city", Value: "paris"}},
 		})
 		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed (no index)", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		// The index is created only on main; feature never sees it. This makes
+		// the branches diverge so the merge below is a real 3-way merge.
 		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "seed + index", "alice <alice@acme.com>")
-		idxvBranch(t, env, dbName, "feature")
+		dumboDBCommit(t, env, dbName, "main: create by_city", "alice <alice@acme.com>")
 
-		// feature deletes the base doc 2 (the one carrying "paris" in the index).
+		// Feature (without the index) deletes the base doc carrying "paris".
 		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 		require.NoError(t, err)
@@ -184,6 +189,8 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		raw := idxvMerge(t, env, dbName, "feature")
 		assert.EqualValues(t, 1, raw["ok"], "merge must complete cleanly: %v", raw)
+		assert.NotEqual(t, "fast-forward", raw["message"], "must be a real 3-way merge, not a fast-forward")
+		assert.NotEqual(t, "already up-to-date", raw["message"])
 
 		// The deleted doc's indexed value is gone from the merged index.
 		assert.EqualValues(t, 0, idxvCount(t, db, "items", bson.D{{Key: "city", Value: "paris"}}), "paris must be gone after merge")
@@ -202,19 +209,24 @@ func TestIndexMergeVerify(t *testing.T) {
 		require.NoError(t, db.Drop(ctx))
 		items := db.Collection("items")
 
+		// Base: two docs, NO index yet.
 		_, err := items.InsertMany(ctx, []interface{}{
 			bson.D{{Key: "_id", Value: int32(1)}, {Key: "city", Value: "base"}},
 			bson.D{{Key: "_id", Value: int32(2)}, {Key: "city", Value: "paris"}},
 		})
 		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed (no index)", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		// The index is created only on main; feature never sees it, so the
+		// merge below is a real 3-way merge.
 		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys: bson.D{{Key: "city", Value: int32(1)}}, Options: options.Index().SetName("by_city"),
 		})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "seed + index", "alice <alice@acme.com>")
-		idxvBranch(t, env, dbName, "feature")
+		dumboDBCommit(t, env, dbName, "main: create by_city", "alice <alice@acme.com>")
 
-		// feature changes the indexed field of base doc 2: paris -> london.
+		// Feature (without the index) changes the indexed field: paris -> london.
 		feat := env.Client.Database(dbName + "@feature")
 		_, err = feat.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(2)}},
@@ -224,6 +236,8 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		raw := idxvMerge(t, env, dbName, "feature")
 		assert.EqualValues(t, 1, raw["ok"], "merge must complete cleanly: %v", raw)
+		assert.NotEqual(t, "fast-forward", raw["message"], "must be a real 3-way merge, not a fast-forward")
+		assert.NotEqual(t, "already up-to-date", raw["message"])
 
 		// New value indexed; old value gone.
 		assert.Equal(t, []int32{2}, idxvFindIDs(t, db, "items", bson.D{{Key: "city", Value: "london"}}), "london (new value) must be indexed")

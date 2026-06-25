@@ -130,25 +130,33 @@ db.items.find({ city: "november" }).explain().queryPlanner.winningPlan
 
 ## Scenario 2b: Deleting a base document drops it from the merged index
 
-A document present in the base (and therefore in the index) is deleted on
-the feature branch. After a clean merge its indexed value is gone, while
-the untouched base document stays indexed.
+A document exists in the base; main then adds an index covering it, while
+feature -- which never has the index -- deletes the document. The branches
+diverge, so this is a real 3-way merge (not a fast-forward): it must apply
+feature's delete to main's indexed state and drop the value from the index.
 
 ```js
 var db = db.getSiblingDB("idxmrg2b")
 db.dropDatabase()
 
+// Seed data, no index yet.
 db.items.insertOne({ _id: 1, city: "base" })
 db.items.insertOne({ _id: 2, city: "paris" })
-db.items.createIndex({ city: 1 }, { name: "by_city" })
-db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
+db.runCommand({ doltCommit: 1, message: "seed (no index)", author: "alice <alice@acme.com>" })
+
+// Branch before the index exists, so feature never has it.
 db.getSiblingDB("idxmrg2b@main").runCommand({ doltBranch: 1, branch: "feature" })
 
-// Feature deletes the base document carrying "paris".
+// Create the index only on main; the branches now diverge.
+db.items.createIndex({ city: 1 }, { name: "by_city" })
+db.runCommand({ doltCommit: 1, message: "main: create by_city", author: "alice <alice@acme.com>" })
+
+// Feature (without the index) deletes the base document carrying "paris".
 var feat = db.getSiblingDB("idxmrg2b@feature")
 feat.items.deleteOne({ _id: 2 })
 feat.runCommand({ doltCommit: 1, message: "feature: delete doc 2", author: "bob <bob@widgets.io>" })
 
+// Real 3-way merge: applies feature's delete onto main's indexed state.
 db.getSiblingDB("idxmrg2b@main").runCommand({ doltMerge: 1, merge_in: "feature" })
 
 db.runCommand({ count: "items", query: { city: "paris" } })
@@ -168,24 +176,33 @@ Key checks:
 
 ## Scenario 2c: Updating an indexed field updates the merged index
 
-The indexed field of a base document is changed on the feature branch.
-After a clean merge the index reflects the new value, not the old one.
+A document exists in the base; main adds an index covering it, while
+feature -- without the index -- changes its indexed field. The branches
+diverge, so this is a real 3-way merge: it must apply feature's change to
+main's indexed state (new value in, old value out).
 
 ```js
 var db = db.getSiblingDB("idxmrg2c")
 db.dropDatabase()
 
+// Seed data, no index yet.
 db.items.insertOne({ _id: 1, city: "base" })
 db.items.insertOne({ _id: 2, city: "paris" })
-db.items.createIndex({ city: 1 }, { name: "by_city" })
-db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
+db.runCommand({ doltCommit: 1, message: "seed (no index)", author: "alice <alice@acme.com>" })
+
+// Branch before the index exists, so feature never has it.
 db.getSiblingDB("idxmrg2c@main").runCommand({ doltBranch: 1, branch: "feature" })
 
-// Feature changes the indexed field: paris -> london.
+// Create the index only on main; the branches now diverge.
+db.items.createIndex({ city: 1 }, { name: "by_city" })
+db.runCommand({ doltCommit: 1, message: "main: create by_city", author: "alice <alice@acme.com>" })
+
+// Feature (without the index) changes the indexed field: paris -> london.
 var feat = db.getSiblingDB("idxmrg2c@feature")
 feat.items.updateOne({ _id: 2 }, { $set: { city: "london" } })
 feat.runCommand({ doltCommit: 1, message: "feature: doc 2 -> london", author: "bob <bob@widgets.io>" })
 
+// Real 3-way merge: applies feature's update onto main's indexed state.
 db.getSiblingDB("idxmrg2c@main").runCommand({ doltMerge: 1, merge_in: "feature" })
 
 db.items.find({ city: "london" }).toArray()
