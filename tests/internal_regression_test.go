@@ -27,15 +27,8 @@ package tests
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
-	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -43,8 +36,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// buildOnce ensures the dumbodb binary is built exactly once per test run.
-var buildOnce sync.Once
 
 // dmap converts a bson.D (or already-bson.M) to a bson.M for ergonomic
 // key-based access in tests. Replaces v1's bson.D.Map() method, which was
@@ -63,109 +54,6 @@ func dmap(v any) bson.M {
 	default:
 		panic(fmt.Sprintf("dmap: unsupported type %T", v))
 	}
-}
-
-// dumboDBTestEnv holds a running dumbodb process and a connected MongoDB client.
-type dumboDBTestEnv struct {
-	cmd     *exec.Cmd
-	client  *mongo.Client
-	dataDir string
-	port    int
-}
-
-// repoRoot returns the repository root directory (two levels above this file).
-func repoRoot() string {
-	_, filename, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(filename), "..")
-}
-
-// startDumboDB launches a fresh dumbodb instance on a random free port.
-// Optional extraArgs are appended to the dumbodb command line (e.g. "--auto-commit").
-func startDumboDB(tb testing.TB, extraArgs ...string) *dumboDBTestEnv {
-	tb.Helper()
-
-	// Find a free port.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(tb, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	dataDir := tb.TempDir()
-	binary := filepath.Join(repoRoot(), ".runtime", "bin", "dolt")
-
-	// Build once per test run to ensure the binary is up-to-date with current source.
-	var buildErr error
-	buildOnce.Do(func() {
-		if mkErr := os.MkdirAll(filepath.Dir(binary), 0o755); mkErr != nil {
-			buildErr = mkErr
-			return
-		}
-		build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
-		build.Dir = repoRoot()
-		if out, err := build.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("failed to build dumbodb: %w\n%s", err, out)
-		}
-	})
-	if buildErr != nil {
-		tb.Fatalf("failed to build dumbodb: %v", buildErr)
-	}
-
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	args := append([]string{"--addr", addr, "--data-dir", dataDir}, extraArgs...)
-	cmd := exec.Command(binary, args...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	require.NoError(tb, cmd.Start())
-
-	env := &dumboDBTestEnv{
-		cmd:     cmd,
-		dataDir: dataDir,
-		port:    port,
-	}
-
-	tb.Cleanup(func() {
-		if env.client != nil {
-			env.client.Disconnect(context.Background()) //nolint:errcheck
-		}
-		cmd.Process.Kill() //nolint:errcheck
-		cmd.Wait()         //nolint:errcheck
-	})
-
-	// Wait for dumbodb to be ready.
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Connect with the MongoDB driver.
-	// DefaultDocumentM matches v1's behavior of decoding sub-documents into bson.M
-	// when the surrounding container's element type is interface{}. Most tests
-	// type-assert to bson.M, so this keeps them working unchanged.
-	client, err := mongo.Connect(options.Client().
-		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
-		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
-	require.NoError(tb, err)
-	env.client = client
-
-	return env
-}
-
-// collection returns a fresh collection for each test.
-func (env *dumboDBTestEnv) collection(tb testing.TB) *mongo.Collection {
-	tb.Helper()
-
-	name := fmt.Sprintf("col_%d", rand.Int64())
-	coll := env.client.Database("testdb").Collection(name)
-	tb.Cleanup(func() {
-		coll.Drop(context.Background()) //nolint:errcheck
-	})
-
-	return coll
 }
 
 // insertDocs inserts multiple documents and fails the test on error.
@@ -197,7 +85,7 @@ func d(elems ...bson.E) bson.D {
 // without error.
 func TestBSON_array_nested(t *testing.T) {
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 
@@ -234,7 +122,7 @@ func TestBSON_array_nested(t *testing.T) {
 // with other goroutines' resource tracking.
 func TestFind_CursorCleanupOnFilterError(t *testing.T) {
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("name", "alice")),
@@ -263,7 +151,7 @@ func TestQuery_bitsAllClear_bitmask(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// flags: 0b0100 (4)  -- bits 0 and 1 are clear, bit 2 is set.
 	// flags: 0b0001 (1)  -- bit 0 is set.
@@ -299,7 +187,7 @@ func TestQuery_bitsAnySet_positions(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// flags: 0b0001 (1)  -- bit 0 set.
 	// flags: 0b1000 (8)  -- bit 3 set.
@@ -342,7 +230,7 @@ func TestQuery_geo_within_box(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Store coordinates as legacy [lon, lat] arrays.
 	insertDocs(t, coll,
@@ -382,7 +270,7 @@ func TestQuery_proj_slice_first_n(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40)})),
@@ -415,7 +303,7 @@ func TestQuery_jsonSchema_required_invalid(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("x", int32(1))),
@@ -437,7 +325,7 @@ func TestQuery_type_decimal(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	decVal, decErr := bson.ParseDecimal128("3.14")
 	require.NoError(t, decErr)
@@ -474,7 +362,7 @@ func TestQuery_geo_within_polygon(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", bson.A{float64(2), float64(2)})),   // inside triangle
@@ -511,7 +399,7 @@ func TestQuery_geo_within_centerSphere(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// New York (approx): lon=-74, lat=40.7
 	// London (approx):   lon=0,   lat=51.5
@@ -550,7 +438,7 @@ func TestQuery_geo_near(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Place two points: one near [0,0], one far away.
 	insertDocs(t, coll,
@@ -586,7 +474,7 @@ func TestQuery_geo_nearSphere(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", d(e("type", "Point"), e("coordinates", bson.A{float64(0), float64(0)})))),
@@ -623,7 +511,7 @@ func TestQuery_geo_nearSphere_legacy2d(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Two points near the origin.  In radians the great-circle radius of ~111 km is ~0.0175.
 	// doc1 is at (0,0)  -- ~111 km from query point (1,0).
@@ -657,7 +545,7 @@ func TestQuery_geo_intersects_point(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", d(e("type", "Point"), e("coordinates", bson.A{float64(1), float64(1)})))),
@@ -693,7 +581,7 @@ func TestQuery_geo_intersects_polygon(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("loc", d(e("type", "Point"), e("coordinates", bson.A{float64(5), float64(5)})))),
@@ -736,7 +624,7 @@ func TestQuery_elemMatch_embedded_docs(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("items", bson.A{
@@ -774,7 +662,7 @@ func TestQuery_elemMatch_embedded_multi_cond(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("items", bson.A{
@@ -816,7 +704,7 @@ func TestQuery_proj_slice_last_n(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40)})),
@@ -848,7 +736,7 @@ func TestQuery_proj_slice_skip_limit(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40), int32(50)})),
@@ -881,7 +769,7 @@ func TestQuery_type_number_alias_decimal(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	decVal, decErr := bson.ParseDecimal128("9.99")
 	require.NoError(t, decErr)
@@ -923,7 +811,7 @@ func TestQuery_type_objectid(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("ref", bson.NewObjectID())),

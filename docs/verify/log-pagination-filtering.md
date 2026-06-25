@@ -5,7 +5,7 @@ seed array, `next` in the response, `all` to span every branch) and
 **`collection:_id` filtering** (Part B). Work through each scenario top to
 bottom in `mongosh`.
 
-> **Automated equivalent:** `tests/versioning_log_pagination_verify_test.go`
+> **Automated equivalent:** `tests/verify/log_pagination_filtering_test.go`
 > (`TestLogPaginationVerify`). The manual run below relies on wall-clock
 > commit order (later commits get later timestamps), which produces the same
 > height-primary ordering the automated test asserts.

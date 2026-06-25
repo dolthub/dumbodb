@@ -28,9 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgListIndexes implements `listIndexes` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -112,6 +109,11 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		// only non-default unique indexes should have unique field in the response
 		if index.Unique && index.Name != backends.DefaultIndexName {
 			indexDoc.Set("unique", index.Unique)
+		}
+
+		// sparse is reported only when set, matching MongoDB
+		if index.Sparse && index.Name != backends.DefaultIndexName {
+			indexDoc.Set("sparse", index.Sparse)
 		}
 
 		firstBatch.Append(indexDoc)

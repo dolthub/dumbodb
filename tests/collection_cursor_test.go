@@ -31,7 +31,7 @@ import (
 func TestCollection_CreateCollation(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	db := env.client.Database("testdb")
+	db := env.Client.Database("testdb")
 
 	collName := fmt.Sprintf("col_collation_%d", rand.Int64())
 	t.Cleanup(func() {
@@ -51,13 +51,13 @@ func TestCollection_CreateCollation(t *testing.T) {
 func TestCollection_ListCollectionsIdIndex(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert a document so the collection is guaranteed to exist.
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "x", Value: 1}})
 	require.NoError(t, err)
 
-	cursor, err := env.client.Database("testdb").ListCollections(ctx, bson.D{})
+	cursor, err := env.Client.Database("testdb").ListCollections(ctx, bson.D{})
 	require.NoError(t, err)
 	defer cursor.Close(ctx)
 
@@ -99,7 +99,7 @@ func TestCollection_ListCollectionsIdIndex(t *testing.T) {
 func TestCursor_CollationCaseInsensitive(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "Alice"}},
@@ -128,7 +128,7 @@ func TestCursor_CollationCaseInsensitive(t *testing.T) {
 func TestCursor_CollationSort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "name", Value: "Charlie"}},
@@ -155,7 +155,7 @@ func TestCursor_CollationSort(t *testing.T) {
 func TestCursor_NoCursorTimeout(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "x", Value: 1}},

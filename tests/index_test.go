@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -33,68 +32,63 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// TestIndex_TTL_CreateOne verifies that a TTL index (expireAfterSeconds) can be created (do-81xd).
+// requireTTLRejected asserts err is MongoDB's InvalidOptions (72) error that
+// dumbodb returns for an unsupported TTL (expireAfterSeconds) request.
+func requireTTLRejected(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	var cmdErr mongo.CommandError
+	require.ErrorAs(t, err, &cmdErr)
+	require.Equalf(t, int32(72), cmdErr.Code, "want InvalidOptions (72): %v", err)
+}
+
+// TestIndex_TTL_CreateOne verifies that creating a TTL index (expireAfterSeconds)
+// is rejected. TTL is unsupported by design: a wall-clock sweeper that deletes
+// data conflicts with version control.
 func TestIndex_TTL_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	expireAfter := int32(3600)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	name, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-	require.Equal(t, "createdAt_1", name)
+		Options: options.Index().SetExpireAfterSeconds(int32(3600)),
+	})
+	requireTTLRejected(t, err)
 }
 
-// TestIndex_TTL_ZeroSeconds verifies TTL index with expireAfterSeconds=0 (do-81xd).
+// TestIndex_TTL_ZeroSeconds verifies a TTL index with expireAfterSeconds=0 is rejected.
 func TestIndex_TTL_ZeroSeconds(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	expireAfter := int32(0)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "expireAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	name, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-	require.Equal(t, "expireAt_1", name)
+		Options: options.Index().SetExpireAfterSeconds(int32(0)),
+	})
+	requireTTLRejected(t, err)
 }
 
-// TestIndex_TTL_InsertDocs verifies that inserts work on a TTL-indexed collection (do-81xd).
+// TestIndex_TTL_InsertDocs verifies a TTL index request is rejected, so no
+// TTL-indexed collection is ever created.
 func TestIndex_TTL_InsertDocs(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	expireAfter := int32(3600)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "ts", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	_, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-
-	_, err = coll.InsertOne(ctx, bson.D{
-		{Key: "ts", Value: time.Now()},
-		{Key: "data", Value: "fresh"},
+		Options: options.Index().SetExpireAfterSeconds(int32(3600)),
 	})
-	require.NoError(t, err)
-
-	count, err := coll.CountDocuments(ctx, bson.D{})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	requireTTLRejected(t, err)
 }
 
 // TestIndex_Partial_CreateOne verifies that a partial index can be created (do-81xd).
 func TestIndex_Partial_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	filter := bson.D{{Key: "score", Value: bson.D{{Key: "$gt", Value: int32(10)}}}}
 	model := mongo.IndexModel{
@@ -110,7 +104,7 @@ func TestIndex_Partial_CreateOne(t *testing.T) {
 func TestIndex_Partial_WithExistsFilter(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	filter := bson.D{{Key: "email", Value: bson.D{{Key: "$exists", Value: true}}}}
 	model := mongo.IndexModel{
@@ -126,7 +120,7 @@ func TestIndex_Partial_WithExistsFilter(t *testing.T) {
 func TestIndex_Collation_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	collation := options.Collation{Locale: "en", Strength: 2}
 	model := mongo.IndexModel{
@@ -142,7 +136,7 @@ func TestIndex_Collation_CreateOne(t *testing.T) {
 func TestIndex_WildcardProjection_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{
 		Keys: bson.D{{Key: "$**", Value: 1}},
@@ -160,7 +154,7 @@ func TestIndex_WildcardProjection_CreateOne(t *testing.T) {
 func TestIndex_Hashed_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "user_id", Value: "hashed"}}}
 	name, err := coll.Indexes().CreateOne(ctx, model)
@@ -172,7 +166,7 @@ func TestIndex_Hashed_CreateOne(t *testing.T) {
 func TestIndex_Hashed_EqualityQuery(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "uid", Value: "hashed"}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -192,7 +186,7 @@ func TestIndex_Hashed_EqualityQuery(t *testing.T) {
 func TestIndex_Hashed_CannotBeUnique(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	unique := true
 	model := mongo.IndexModel{
@@ -208,7 +202,7 @@ func TestIndex_Hashed_CannotBeUnique(t *testing.T) {
 func TestIndex_Sparse_UniqueWithMissingField(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	sparse := true
 	unique := true
@@ -235,7 +229,7 @@ func TestIndex_Sparse_UniqueWithMissingField(t *testing.T) {
 func TestIndex_ListIndexes_AfterDrop(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "x", Value: 1}}}
 	name, err := coll.Indexes().CreateOne(ctx, model)
@@ -255,7 +249,7 @@ func TestIndex_ListIndexes_AfterDrop(t *testing.T) {
 func TestIndex_ListIndexes_AfterDropAll(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	models := []mongo.IndexModel{
 		{Keys: bson.D{{Key: "x", Value: 1}}},
@@ -278,7 +272,7 @@ func TestIndex_ListIndexes_AfterDropAll(t *testing.T) {
 func TestIndex_IndexStats_Basic(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "score", Value: 1}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -306,7 +300,7 @@ func TestIndex_IndexStats_Basic(t *testing.T) {
 func TestIndex_IndexStats_NoIndexes(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert a doc to ensure the collection exists.
 	insertDocs(t, coll, bson.D{{Key: "x", Value: 1}})
@@ -323,58 +317,32 @@ func TestIndex_IndexStats_NoIndexes(t *testing.T) {
 	require.Equal(t, 1, len(stats))
 }
 
-// TestIndex_TTL_InsertAndVerifyNotExpiredYet verifies that a document inserted into a
-// TTL-indexed collection is still present immediately after insertion (do-x0vc).
+// TestIndex_TTL_InsertAndVerifyNotExpiredYet verifies a TTL index request is
+// rejected rather than silently accepted.
 func TestIndex_TTL_InsertAndVerifyNotExpiredYet(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	expireAfter := int32(3600)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	_, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-
-	_, err = coll.InsertOne(ctx, bson.D{
-		{Key: "createdAt", Value: time.Now()},
-		{Key: "payload", Value: "not-yet-expired"},
+		Options: options.Index().SetExpireAfterSeconds(int32(3600)),
 	})
-	require.NoError(t, err)
-
-	// Document should still be visible immediately (TTL expiry runs on a background task).
-	count, err := coll.CountDocuments(ctx, bson.D{{Key: "payload", Value: "not-yet-expired"}})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	requireTTLRejected(t, err)
 }
 
-// TestIndex_TTL_OnNestedDateField verifies that a TTL index can be created on a nested
-// date field (do-x0vc).
+// TestIndex_TTL_OnNestedDateField verifies a TTL index on a nested date field
+// is also rejected.
 func TestIndex_TTL_OnNestedDateField(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	expireAfter := int32(86400)
-	model := mongo.IndexModel{
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "meta.expiresAt", Value: 1}},
-		Options: options.Index().SetExpireAfterSeconds(expireAfter),
-	}
-	name, err := coll.Indexes().CreateOne(ctx, model)
-	require.NoError(t, err)
-	require.Equal(t, "meta.expiresAt_1", name)
-
-	_, err = coll.InsertOne(ctx, bson.D{
-		{Key: "meta", Value: bson.D{{Key: "expiresAt", Value: time.Now().Add(24 * time.Hour)}}},
-		{Key: "data", Value: "alive"},
+		Options: options.Index().SetExpireAfterSeconds(int32(86400)),
 	})
-	require.NoError(t, err)
-
-	count, err := coll.CountDocuments(ctx, bson.D{{Key: "data", Value: "alive"}})
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	requireTTLRejected(t, err)
 }
 
 // TestIndex_Partial_OnlyIndexesMatchingDocs verifies that a partial index can be created
@@ -382,7 +350,7 @@ func TestIndex_TTL_OnNestedDateField(t *testing.T) {
 func TestIndex_Partial_OnlyIndexesMatchingDocs(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	filter := bson.D{{Key: "active", Value: true}}
 	model := mongo.IndexModel{
@@ -414,7 +382,7 @@ func TestIndex_Partial_OnlyIndexesMatchingDocs(t *testing.T) {
 func TestIndex_Partial_UniquePartial(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	unique := true
 	filter := bson.D{{Key: "status", Value: "active"}}
@@ -443,7 +411,7 @@ func TestIndex_Partial_UniquePartial(t *testing.T) {
 func TestIndex_Partial_CompoundKeys(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	filter := bson.D{{Key: "published", Value: true}}
 	model := mongo.IndexModel{
@@ -460,7 +428,7 @@ func TestIndex_Partial_CompoundKeys(t *testing.T) {
 func TestIndex_Wildcard_WithWildcardProjection(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{
 		Keys: bson.D{{Key: "$**", Value: 1}},
@@ -487,7 +455,7 @@ func TestIndex_Wildcard_WithWildcardProjection(t *testing.T) {
 func TestIndex_Collation_CaseInsensitive(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	collation := options.Collation{Locale: "en", Strength: 2}
 	model := mongo.IndexModel{
@@ -513,7 +481,7 @@ func TestIndex_Collation_CaseInsensitive(t *testing.T) {
 func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	collation := options.Collation{Locale: "en", Strength: 2}
 	model := mongo.IndexModel{
@@ -535,7 +503,7 @@ func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
 func TestIndex_2dsphere_CreateOne(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "location", Value: "2dsphere"}}}
 	name, err := coll.Indexes().CreateOne(ctx, model)
@@ -548,7 +516,7 @@ func TestIndex_2dsphere_CreateOne(t *testing.T) {
 func TestIndex_2dsphere_NearQuery(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -588,7 +556,7 @@ func TestIndex_2dsphere_NearQuery(t *testing.T) {
 func TestIndex_2dsphere_GeoWithinQuery(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -633,7 +601,7 @@ func TestIndex_2dsphere_GeoWithinQuery(t *testing.T) {
 func TestIndex_2dsphere_Compound(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{
 		Keys: bson.D{
@@ -651,7 +619,7 @@ func TestIndex_2dsphere_Compound(t *testing.T) {
 func TestIndex_2dsphere_GeoIntersects(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -692,7 +660,7 @@ func TestIndex_2dsphere_GeoIntersects(t *testing.T) {
 func TestGeo_GeoIntersects_LineString(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "loc", Value: "2dsphere"}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -763,7 +731,7 @@ func TestGeo_GeoIntersects_LineString(t *testing.T) {
 func TestGeo_DocType_GeometryCollection(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "geo", Value: "2dsphere"}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -820,7 +788,7 @@ func TestGeo_DocType_GeometryCollection(t *testing.T) {
 func TestIndex_IndexStats_AfterInsert(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	model := mongo.IndexModel{Keys: bson.D{{Key: "val", Value: 1}}}
 	_, err := coll.Indexes().CreateOne(ctx, model)
@@ -857,15 +825,8 @@ func TestIndex_IndexStats_AfterInsert(t *testing.T) {
 	}
 }
 
-// TestSecondaryIndex_EmailEqualityQuery is the end-to-end secondary index test
-// that drives the dolt backend directly (no mongo driver).
-//
-// Scenario:
-//   - Insert 100 documents, each with an "email" field. Some share the same email.
-//   - Call createIndex on {email: 1}.
-//   - Call find({email: "alice@example.com"}).
-//   - Verify that only the correct documents are returned.
-//   - Verify that the secondary index map is populated (index was built, not a full scan).
+// TestSecondaryIndex_EmailEqualityQuery drives the dolt backend directly (no
+// mongo driver) to exercise secondary index build and lookup end to end.
 func TestSecondaryIndex_EmailEqualityQuery(t *testing.T) {
 	ctx := context.Background()
 

@@ -39,6 +39,7 @@ type mergeStateDisk struct {
 	Operation   string `json:"op"`             // "merge", "cherry-pick", "rebase"
 	IntoBranch  string `json:"into"`
 	FromBranch  string `json:"from,omitempty"` // merge only
+	OntoBranch  string `json:"onto,omitempty"` // rebase only
 	FromHash    string `json:"fromHash,omitempty"`
 	IntoHash    string `json:"intoHash"`
 	PremergeAM  string `json:"premergeAM"`     // hash of the premerge AddressMap RTVL
@@ -94,6 +95,7 @@ func saveMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) er
 		Operation:           op,
 		IntoBranch:          ms.intoBranch,
 		FromBranch:          ms.fromBranch,
+		OntoBranch:          ms.ontoBranch,
 		FromHash:            ms.fromHash.String(),
 		IntoHash:            ms.intoHash.String(),
 		PremergeAM:          preMergeRef.TargetHash().String(),
@@ -166,6 +168,7 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 	ms := &mergeInProgress{
 		intoBranch:   disk.IntoBranch,
 		fromBranch:   disk.FromBranch,
+		ontoBranch:   disk.OntoBranch,
 		premergeAM:   preMergeAM,
 		resolvedAM:   resolvedAM,
 		isCherryPick: disk.Operation == "cherry-pick",

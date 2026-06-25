@@ -3,7 +3,7 @@
 Manual verification guide for `doltReset` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_reset_verify_test.go` (`TestResetVerify`)
+> **Automated equivalent:** `tests/verify/reset_test.go` (`TestResetVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

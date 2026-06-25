@@ -16,6 +16,7 @@ package dolt
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -26,9 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// newBenchBackend mirrors newTestBackend (which takes *testing.T) for use
-// inside benchmarks. Kept private to this file so it doesn't pollute the
-// shared dolt-backend test surface.
+// Mirrors newTestBackend for benchmarks, which take *testing.B not *testing.T.
 func newBenchBackend(b *testing.B) *Backend {
 	b.Helper()
 	dir, err := os.MkdirTemp("", "dolt-bench-*")
@@ -46,12 +45,9 @@ func newBenchBackend(b *testing.B) *Backend {
 	return bk
 }
 
-// seedBenchCollection creates a 10K-document collection with the same shape
-// the parity harness uses (small docs with i, grp, tag, payload). It returns
-// the collection plus a function that creates the secondary index on demand.
-//
-// The seed is shared between indexed and unindexed variants so the docs paid
-// for once during benchmark setup aren't counted in the per-iteration timer.
+// Seeds a collection with the parity harness shape (docs with i, grp, tag).
+// The seed runs in benchmark setup so it is not counted in the per-iteration
+// timer.
 func seedBenchCollection(b *testing.B, n int) (backends.Collection, context.Context) {
 	b.Helper()
 	ctx := context.Background()
@@ -67,8 +63,7 @@ func seedBenchCollection(b *testing.B, n int) (backends.Collection, context.Cont
 		b.Fatalf("Collection: %v", err)
 	}
 
-	// Insert in batches of 1000 to avoid one giant InsertAll call dominating
-	// the seed phase.
+	// Batched to avoid one giant InsertAll dominating the seed phase.
 	const batch = 1000
 	for off := 0; off < n; off += batch {
 		size := batch
@@ -92,9 +87,8 @@ func seedBenchCollection(b *testing.B, n int) (backends.Collection, context.Cont
 	return coll, ctx
 }
 
-// drainIter consumes the backend iterator and returns the count of documents
-// produced. Mirrors what the handler does after Query  -- its cost dominates
-// the indexed path, so the benchmark must include it.
+// Mirrors what the handler does after Query; its cost dominates the indexed
+// path, so the benchmark must include it.
 func drainIter(b *testing.B, it types.DocumentsIterator) int {
 	count := 0
 	for {
@@ -111,10 +105,8 @@ func drainIter(b *testing.B, it types.DocumentsIterator) int {
 	return count
 }
 
-// BenchmarkIndexLookup_Equality_10K matches the shape of
-// parity's BenchmarkFind_FilterEq_10K_Indexed: filter is a single equality
-// constraint on a 10-way bucketed field, so each query returns ~1K of 10K.
-// Compares the un-indexed scan path against the secondary-index path.
+// Mirrors parity's BenchmarkFind_FilterEq_10K_Indexed: equality on a 10-way
+// bucketed field returns ~1K of 10K.
 func BenchmarkIndexLookup_Equality_10K(b *testing.B) {
 	const n = 10_000
 
@@ -154,12 +146,10 @@ func BenchmarkIndexLookup_Equality_10K(b *testing.B) {
 	})
 }
 
-// BenchmarkIndexLookup_FullRange_10K mirrors the parity Agg_MatchGroup_Indexed
-// shape where the $match filter ($gte:0) is satisfied by every document. The
-// raw index path here materialises every primary id and then point-fetches
-// each document  -- strictly worse than the sequential scan path. The intent of
-// the benchmark is to expose that gap so the planner gate that abandons the
-// index when the range covers ~all of the collection can be tuned.
+// Mirrors parity's Agg_MatchGroup_Indexed: a $gte:0 filter matches every doc.
+// The index path materialises every primary id and point-fetches each doc --
+// strictly worse than a scan. The benchmark exposes that gap so the planner
+// gate that abandons the index over near-full ranges can be tuned.
 func BenchmarkIndexLookup_FullRange_10K(b *testing.B) {
 	const n = 10_000
 
@@ -203,9 +193,8 @@ func BenchmarkIndexLookup_FullRange_10K(b *testing.B) {
 	})
 }
 
-// BenchmarkIndexLookup_Range_10K mirrors the parity FilterRange_10K_Indexed
-// benchmark: a 1%-selectivity numeric range. The selectivity is what makes
-// the index path interesting  -- the un-indexed scan still touches every doc.
+// Mirrors parity's FilterRange_10K_Indexed: a 1%-selectivity numeric range.
+// The selectivity is what makes the index path beat the full scan.
 func BenchmarkIndexLookup_Range_10K(b *testing.B) {
 	const n = 10_000
 	lo, hi := int32(n/10), int32(n/10+n/100) // [1000, 1100)
@@ -250,14 +239,10 @@ func BenchmarkIndexLookup_Range_10K(b *testing.B) {
 	})
 }
 
-// BenchmarkCount_Equality_10K mirrors the parity CountDocuments_10K_Indexed
-// benchmark: a single-equality filter on an indexed field, returning ~1K of
-// 10K rows.
-//
-// The old path (query_and_drain) is what the handler did before the indexed
-// count fast path: index lookup fetches every primary value tuple and
-// decodes the JSON, then the iterator-driven CountIterator counts them. The
-// new path (count_fastpath) walks just the secondary-index range.
+// Mirrors parity's CountDocuments_10K_Indexed. query_and_drain is the old
+// handler path (index lookup fetches and decodes every primary value tuple,
+// then CountIterator counts); count_fastpath walks just the secondary-index
+// range.
 func BenchmarkCount_Equality_10K(b *testing.B) {
 	const n = 10_000
 
@@ -306,10 +291,9 @@ func BenchmarkCount_Equality_10K(b *testing.B) {
 	})
 }
 
-// TestCount_FilteredFastPath verifies the indexed count short-circuit:
-// equality and range filters return correct counts when the field has a
-// covering single-field index, and the backend declines (Filtered=false)
-// otherwise so the handler falls back to the scan path.
+// The indexed count short-circuit must return correct counts only when a
+// covering single-field index exists, and otherwise decline (Filtered=false)
+// so the handler falls back to a scan.
 func TestCount_FilteredFastPath(t *testing.T) {
 	t.Parallel()
 
@@ -338,7 +322,6 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Fatalf("InsertAll: %v", err)
 	}
 
-	// No index yet: filtered count must decline.
 	res, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("grp", int32(3))),
 	})
@@ -358,7 +341,6 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Fatalf("CreateIndexes: %v", err)
 	}
 
-	// Equality on indexed field -> Filtered=true, count = 100.
 	eqRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("grp", int32(3))),
 	})
@@ -372,7 +354,6 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("equality count: want 100, got %d", eqRes.Count)
 	}
 
-	// Range on indexed field -> Filtered=true, count = 100 ([100, 200)).
 	rangeRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("i",
 			must.NotFail(types.NewDocument("$gte", int32(100), "$lt", int32(200))))),
@@ -387,7 +368,7 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("range count: want 100, got %d", rangeRes.Count)
 	}
 
-	// Compound filter (only one field indexed) -> decline.
+	// Compound filter: only one field indexed, so the fast path must decline.
 	compoundRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("grp", int32(3), "tag", "row")),
 	})
@@ -398,7 +379,6 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("expected Filtered=false for compound filter, got true")
 	}
 
-	// Empty filter -> unfiltered count, Filtered=true (and Count=n).
 	emptyRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument()),
 	})
@@ -409,7 +389,6 @@ func TestCount_FilteredFastPath(t *testing.T) {
 		t.Errorf("empty filter: Filtered=%v Count=%d, want true/%d", emptyRes.Filtered, emptyRes.Count, n)
 	}
 
-	// Filter on non-indexed field -> decline.
 	tagRes, err := coll.Count(ctx, &backends.CountParams{
 		Filter: must.NotFail(types.NewDocument("tag", "row")),
 	})
@@ -421,8 +400,8 @@ func TestCount_FilteredFastPath(t *testing.T) {
 	}
 }
 
-// Sanity-check that the benchmarks see the docs they expect. Goes through
-// the same code paths as the benchmark loop body but inspects the count.
+// Runs the benchmark loop's code paths but inspects the count, confirming the
+// benchmarks see the docs they expect.
 func TestIndexLookup_Bench_Sanity(t *testing.T) {
 	t.Parallel()
 	const n = 1000
@@ -474,12 +453,10 @@ func TestIndexLookup_Bench_Sanity(t *testing.T) {
 		got++
 	}
 	res.Iter.Close()
-	// Expected: ~100 (1000/10), exact since seed is deterministic.
 	if got != 100 {
 		t.Errorf("equality candidate count: want 100, got %d", got)
 	}
 
-	// Range: 100..200 -> 100 matches.
 	rangeRes, err := coll.Query(ctx, &backends.QueryParams{
 		Filter: must.NotFail(types.NewDocument("i",
 			must.NotFail(types.NewDocument("$gte", int32(100), "$lt", int32(200))))),
@@ -498,5 +475,37 @@ func TestIndexLookup_Bench_Sanity(t *testing.T) {
 	rangeRes.Iter.Close()
 	if got != 100 {
 		t.Errorf("range candidate count: want 100, got %d", got)
+	}
+}
+
+// Per-insert cost under a unique index must not scale with collection size
+// (P1): the historical implementation scanned and decoded the whole primary
+// per insert batch; the probe implementation does one bounded index read per
+// row. Pre-seeds collections of different sizes to expose any scaling.
+func BenchmarkInsertWithUniqueIndex(b *testing.B) {
+	for _, n := range []int{1000, 8000} {
+		b.Run(fmt.Sprintf("seed_%d", n), func(b *testing.B) {
+			coll, ctx := seedBenchCollection(b, n)
+			if _, err := coll.CreateIndexes(ctx, &backends.CreateIndexesParams{
+				Indexes: []backends.IndexInfo{{
+					Name:   "by_i_unique",
+					Key:    []backends.IndexKeyPair{{Field: "i"}},
+					Unique: true,
+				}},
+			}); err != nil {
+				b.Fatalf("CreateIndexes: %v", err)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				id := int32(1_000_000 + i)
+				doc := must.NotFail(types.NewDocument("_id", id, "i", id))
+				if _, err := coll.InsertAll(ctx, &backends.InsertAllParams{
+					Docs:            []*types.Document{doc},
+					SkipDurableSync: true,
+				}); err != nil {
+					b.Fatalf("InsertAll: %v", err)
+				}
+			}
+		})
 	}
 }

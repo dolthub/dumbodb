@@ -30,7 +30,7 @@ func TestBSON_minkey_maxkey_insert(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 
@@ -82,7 +82,7 @@ func TestBSON_minkey_sort_order(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("v", int32(42))),
@@ -140,7 +140,7 @@ func TestBSON_minkey_type_filter(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("val", int32(42))),

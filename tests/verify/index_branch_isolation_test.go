@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestIndexBranchIsolationVerify is the automated analog of
 // docs/verify/index-branch-isolation.md. Each top-level subtest
@@ -43,9 +43,9 @@ func indexBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) {
 	t.Helper()
 	ctx := context.Background()
 
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
 
-	items := env.client.Database(dbName).Collection("items")
+	items := env.Client.Database(dbName).Collection("items")
 	_, err := items.InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "name", Value: "alpha"},
@@ -53,11 +53,11 @@ func indexBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "seed alpha", "alice <alice@acme.com>")
 
-	require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "am"},
 	}).Err(), "doltBranch to create 'am'")
-	require.NoError(t, env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "nz"},
 	}).Err(), "doltBranch to create 'nz'")
@@ -68,7 +68,7 @@ func indexBranchVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) {
 func indexNamesOf(t *testing.T, env *dumboDBTestEnv, dbName string) []string {
 	t.Helper()
 	ctx := context.Background()
-	cursor, err := env.client.Database(dbName).Collection("items").Indexes().List(ctx)
+	cursor, err := env.Client.Database(dbName).Collection("items").Indexes().List(ctx)
 	require.NoError(t, err)
 	var rows []bson.M
 	require.NoError(t, cursor.All(ctx, &rows))
@@ -84,7 +84,7 @@ func indexNamesOf(t *testing.T, env *dumboDBTestEnv, dbName string) []string {
 func idsForName(t *testing.T, env *dumboDBTestEnv, dbName, value string) []int32 {
 	t.Helper()
 	ctx := context.Background()
-	cursor, err := env.client.Database(dbName).Collection("items").Find(ctx, bson.D{
+	cursor, err := env.Client.Database(dbName).Collection("items").Find(ctx, bson.D{
 		{Key: "name", Value: value},
 	})
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 	// Scenario 1: Create index on one branch, not visible on another
 	// ----------------------------------------------------------------------
 	t.Run("Scenario1_IndexOnAm_NotVisibleOnMainOrNz", func(t *testing.T) {
-		amDB := env.client.Database(dbName + "@am")
+		amDB := env.Client.Database(dbName + "@am")
 		amIdx := amDB.Collection("items").Indexes()
 		_, err := amIdx.CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: "name", Value: int32(1)}},
@@ -171,7 +171,7 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 	// Scenario 2: Different index names on different branches
 	// ----------------------------------------------------------------------
 	t.Run("Scenario2_DifferentIndexesPerBranch", func(t *testing.T) {
-		nzDB := env.client.Database(dbName + "@nz")
+		nzDB := env.Client.Database(dbName + "@nz")
 		_, err := nzDB.Collection("items").Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: "name", Value: int32(1)}, {Key: "_id", Value: int32(1)}},
 			Options: options.Index().SetName("by_id_name"),
@@ -189,7 +189,7 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 	t.Run("Scenario3_InterleavedInsertsDiverge", func(t *testing.T) {
 		amWords := []string{"bravo", "charlie", "delta", "echo", "foxtrot", "golf",
 			"hotel", "india", "juliet", "kilo", "lima", "mike"}
-		amItems := env.client.Database(dbName + "@am").Collection("items")
+		amItems := env.Client.Database(dbName + "@am").Collection("items")
 		for i, w := range amWords {
 			_, err := amItems.InsertOne(ctx, bson.D{
 				{Key: "_id", Value: int32(100 + i)},
@@ -201,7 +201,7 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 
 		nzWords := []string{"november", "oscar", "papa", "quebec", "romeo", "sierra",
 			"tango", "uniform", "victor", "whiskey", "xray", "yankee", "zulu"}
-		nzItems := env.client.Database(dbName + "@nz").Collection("items")
+		nzItems := env.Client.Database(dbName + "@nz").Collection("items")
 		for i, w := range nzWords {
 			_, err := nzItems.InsertOne(ctx, bson.D{
 				{Key: "_id", Value: int32(200 + i)},
@@ -252,7 +252,7 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 	// the other.
 	// ----------------------------------------------------------------------
 	t.Run("Scenario6_DropIndexPerBranch", func(t *testing.T) {
-		amDB := env.client.Database(dbName + "@am")
+		amDB := env.Client.Database(dbName + "@am")
 		err := amDB.Collection("items").Indexes().DropOne(ctx, "by_name")
 		require.NoError(t, err, "dropIndex on am must succeed")
 		dumboDBCommit(t, env, dbName+"@am", "am: drop by_name", "alice <alice@acme.com>")
@@ -287,7 +287,7 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 	// ----------------------------------------------------------------------
 	t.Run("Scenario8_IndexModifiedShowsBothDefinitions", func(t *testing.T) {
 		modDbName := fmt.Sprintf("idxmodvrfy%d", rand.Int64N(1_000_000))
-		mdb := env.client.Database(modDbName)
+		mdb := env.Client.Database(modDbName)
 		require.NoError(t, mdb.Drop(ctx))
 
 		items := mdb.Collection("items")

@@ -30,9 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgCount implements `count` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -69,6 +66,53 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		}
 
 		return nil, lazyerrors.Error(err)
+	}
+
+	// A view has no backing store of its own: count runs as an aggregation over
+	// the view's source with the view's defining pipeline applied, then the
+	// filter/skip/limit. This bypasses the backend fast paths below, which would
+	// count the (empty) view collection and return 0.
+	collParam := backends.ListCollectionsParams{Name: params.Collection}
+	cList, err := db.ListCollections(connCtx, &collParam)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if len(cList.Collections) > 0 && cList.Collections[0].IsView {
+		view := cList.Collections[0]
+
+		closer := iterator.NewMultiCloser()
+		defer closer.Close()
+
+		iter, verr := viewSourceIterator(connCtx, db, view.ViewOn, view.ViewPipeline, closer)
+		if verr != nil {
+			return nil, verr
+		}
+
+		iter = common.FilterIterator(iter, closer, params.Filter)
+		iter = common.SkipIterator(iter, closer, params.Skip)
+		iter = common.LimitIterator(iter, closer, params.Limit)
+		iter = common.CountIterator(iter, closer, "count")
+
+		_, res, cerr := iter.Next()
+		if cerr != nil && !errors.Is(cerr, iterator.ErrIteratorDone) {
+			return nil, lazyerrors.Error(cerr)
+		}
+
+		// CountIterator yields ErrIteratorDone with a nil document when nothing
+		// matched (count 0); a match yields a {count: n} document.
+		var n int32
+		if res != nil {
+			count, _ := res.Get("count")
+			n, _ = count.(int32)
+		}
+
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"n", n,
+				"ok", float64(1),
+			)),
+		)
 	}
 
 	// Fast path: unfiltered count. The backend can return the entry count from

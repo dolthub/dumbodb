@@ -30,7 +30,7 @@ func TestProjection_Slice_AllElements(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30)})),
@@ -57,7 +57,7 @@ func TestProjection_Slice_FirstN(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40), int32(50)})),
@@ -83,7 +83,7 @@ func TestProjection_Slice_LastN(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40), int32(50)})),
@@ -110,7 +110,7 @@ func TestProjection_Slice_NegativeSkip(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40), int32(50)})),
@@ -138,7 +138,7 @@ func TestProjection_Slice_SkipLimit(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(10), int32(20), int32(30), int32(40), int32(50)})),
@@ -166,7 +166,7 @@ func TestProjection_ElemMatch_NoMatchInDoc(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("nums", bson.A{int32(1), int32(2), int32(3)})),
@@ -198,7 +198,7 @@ func TestSort_FourFields(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("a", int32(1)), e("b", int32(2)), e("c", int32(1)), e("x", int32(10))),
@@ -244,7 +244,7 @@ func TestSort_Natural_Descending(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("seq", int32(1))),
@@ -282,7 +282,7 @@ func TestSort_MetaTextScore(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("content", "apple banana")),

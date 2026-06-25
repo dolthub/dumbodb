@@ -37,7 +37,7 @@ func TestBranchStatus_DirtyAfterUpdate(t *testing.T) {
 	dbName := fmt.Sprintf("brstatus%d", rand.Int64N(1_000_000))
 
 	// Baseline: one doc committed on main.
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 	_, err := db.Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)}, {Key: "v", Value: "orig"},
@@ -46,7 +46,7 @@ func TestBranchStatus_DirtyAfterUpdate(t *testing.T) {
 	dumboDBCommit(t, env, dbName, "baseline", "alice")
 
 	// Create feature branch.
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
@@ -59,7 +59,7 @@ func TestBranchStatus_DirtyAfterUpdate(t *testing.T) {
 	assert.NotEmpty(t, srClean.CommitID, "commitId must be present on clean branch")
 
 	// Update a doc on the feature branch.
-	featDB := env.client.Database(dbName + "@feature")
+	featDB := env.Client.Database(dbName + "@feature")
 	_, err = featDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "updated"}}}})
@@ -88,7 +88,7 @@ func TestBranchStatus_CleanAfterCommit(t *testing.T) {
 	ctx := context.Background()
 	dbName := fmt.Sprintf("brcommit%d", rand.Int64N(1_000_000))
 
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 	_, err := db.Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)}, {Key: "v", Value: "orig"},
@@ -96,7 +96,7 @@ func TestBranchStatus_CleanAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "baseline", "alice")
 
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
@@ -104,7 +104,7 @@ func TestBranchStatus_CleanAfterCommit(t *testing.T) {
 	}).Decode(&brRaw))
 
 	// Update on dev branch.
-	devDB := env.client.Database(dbName + "@dev")
+	devDB := env.Client.Database(dbName + "@dev")
 	_, err = devDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "devval"}}}})
@@ -130,7 +130,7 @@ func TestBranchDiff_ShowsChanges(t *testing.T) {
 	ctx := context.Background()
 	dbName := fmt.Sprintf("brdiff%d", rand.Int64N(1_000_000))
 
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 	_, err := db.Collection("items").InsertMany(ctx, []interface{}{
 		bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "a"}},
@@ -139,7 +139,7 @@ func TestBranchDiff_ShowsChanges(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "baseline", "alice")
 
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
@@ -147,7 +147,7 @@ func TestBranchDiff_ShowsChanges(t *testing.T) {
 	}).Decode(&brRaw))
 
 	// Modify _id:1 and delete _id:2 on work branch.
-	workDB := env.client.Database(dbName + "@work")
+	workDB := env.Client.Database(dbName + "@work")
 	_, err = workDB.Collection("items").UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "changed"}}}})
@@ -188,7 +188,7 @@ func TestBranchDiff_EmptyAfterCommit(t *testing.T) {
 	ctx := context.Background()
 	dbName := fmt.Sprintf("brdiffcmt%d", rand.Int64N(1_000_000))
 
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 	_, err := db.Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)}, {Key: "v", Value: "orig"},
@@ -196,7 +196,7 @@ func TestBranchDiff_EmptyAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "baseline", "alice")
 
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
@@ -204,7 +204,7 @@ func TestBranchDiff_EmptyAfterCommit(t *testing.T) {
 	}).Decode(&brRaw))
 
 	// Insert on br.
-	brDB := env.client.Database(dbName + "@br")
+	brDB := env.Client.Database(dbName + "@br")
 	_, err = brDB.Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)}, {Key: "v", Value: "new"},
 	})

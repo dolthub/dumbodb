@@ -40,7 +40,6 @@ var idxBufPool = pool.NewBuffPool()
 // primary key bytes in a secondary index entry key.
 const discriminator = byte(0x04)
 
-// NewEmptyMap creates an empty secondary index prolly.Map.
 func NewEmptyMap(ctx context.Context, ns tree.NodeStore) (prolly.Map, error) {
 	return prolly.NewMapFromTuples(ctx, ns, idxKeyDesc, idxValDesc)
 }
@@ -48,9 +47,6 @@ func NewEmptyMap(ctx context.Context, ns tree.NodeStore) (prolly.Map, error) {
 // BuildSecondaryKey encodes an index entry key:
 //
 //	[KeyString(fieldValues...)][0x04][primaryIDBytes]
-//
-// fieldValues is the slice of field values extracted from the indexed document.
-// primaryIDBytes is the encoded primary key (_id) of the document.
 func BuildSecondaryKey(fieldValues []any, primaryIDBytes []byte) []byte {
 	var buf bytes.Buffer
 	for _, v := range fieldValues {
@@ -61,7 +57,6 @@ func BuildSecondaryKey(fieldValues []any, primaryIDBytes []byte) []byte {
 	return buf.Bytes()
 }
 
-// BuildIndexEntry creates the key and (empty) value tuples for a secondary index entry.
 func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.Tuple, error) {
 	compositeKey := BuildSecondaryKey(fieldValues, primaryIDBytes)
 
@@ -82,7 +77,6 @@ func BuildIndexEntry(fieldValues []any, primaryIDBytes []byte) (val.Tuple, val.T
 	return keyTuple, valTuple, nil
 }
 
-// InsertEntry inserts a single entry into a mutable secondary index map.
 func InsertEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any, primaryIDBytes []byte) error {
 	keyTuple, valTuple, err := BuildIndexEntry(fieldValues, primaryIDBytes)
 	if err != nil {
@@ -91,7 +85,6 @@ func InsertEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any,
 	return mut.Put(ctx, keyTuple, valTuple)
 }
 
-// DeleteEntry removes a single entry from a mutable secondary index map.
 func DeleteEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any, primaryIDBytes []byte) error {
 	keyTuple, _, err := BuildIndexEntry(fieldValues, primaryIDBytes)
 	if err != nil {
@@ -101,13 +94,38 @@ func DeleteEntry(ctx context.Context, mut *prolly.MutableMap, fieldValues []any,
 }
 
 // EqualityLookup returns the primary key bytes for each index entry where the
-// indexed field equals fieldValue. Implemented as a bounded range scan over
-// the contiguous block of entries [KeyString(v)+0x04, KeyString(v)+0x05).
+// indexed field equals fieldValue, via a bounded range scan over the contiguous
+// block of entries [KeyString(v)+0x04, KeyString(v)+0x05).
 func EqualityLookup(ctx context.Context, m prolly.Map, fieldValue any) ([][]byte, error) {
 	encoded := EncodeValue(fieldValue)
 	startKey := append(append([]byte(nil), encoded...), discriminator)
 	stopKey := append(append([]byte(nil), encoded...), discriminator+1)
 	return RangeLookup(ctx, m, startKey, stopKey)
+}
+
+// EqualityProbeBounds returns the [start, stop) range of entries whose
+// value tuple equals fieldValues, regardless of primary ID.
+func EqualityProbeBounds(fieldValues []any) (startKey, stopKey []byte) {
+	prefix := BuildSecondaryKey(fieldValues, nil) // KS(values) || 0x04
+	stop := append([]byte(nil), prefix...)
+	stop[len(stop)-1] = discriminator + 1
+	return prefix, stop
+}
+
+// UniqueConflict reports whether the index holds an entry with this
+// value tuple under a primary ID other than selfID.
+func UniqueConflict(ctx context.Context, m prolly.Map, fieldValues []any, selfID []byte) (bool, error) {
+	start, stop := EqualityProbeBounds(fieldValues)
+	ids, _, err := RangeLookupCapped(ctx, m, start, stop, 2)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if !bytes.Equal(id, selfID) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // LowerBoundInclusive returns the smallest composite-index key that has

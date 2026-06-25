@@ -3,7 +3,7 @@
 Manual verification guide for DumboDB rootish connection string behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup, so run them in order.
 
-> **Automated equivalent:** `tests/versioning_rootish_verify_test.go` (`TestRootishVerify`)
+> **Automated equivalent:** `tests/verify/rootish_test.go` (`TestRootishVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

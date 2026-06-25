@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestTagVerify is the automated analog of docs/verify/tag.md.
 //
@@ -42,7 +42,7 @@ func tagVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hash1, ha
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	items := db.Collection("items")
 
 	require.NoError(t, db.Drop(ctx))
@@ -93,7 +93,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CreateTagAtHead", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v-head"},
 			{Key: "message", Value: "tag at current head"},
@@ -114,7 +114,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2_CreateTagAtSpecificHash", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v1.0"},
 			{Key: "hash", Value: hash1},
@@ -134,7 +134,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_ListAllTags", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 		}).Decode(&result)
 		require.NoError(t, err, "dumboTag list must succeed")
@@ -162,7 +162,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario4_DeleteTag", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v-head"},
 			{Key: "delete", Value: true},
@@ -176,7 +176,7 @@ func TestTagVerify(t *testing.T) {
 
 		// Verify it's gone from the list.
 		var listResult bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 		}).Decode(&listResult))
 
@@ -190,7 +190,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_DuplicateTagRejected", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v1.0"},
 			{Key: "hash", Value: hash2},
@@ -199,7 +199,7 @@ func TestTagVerify(t *testing.T) {
 
 		// Verify original tag is unchanged.
 		var listResult bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 		}).Decode(&listResult))
 
@@ -212,7 +212,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario7_DeleteNonexistentTagRejected", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "does-not-exist"},
 			{Key: "delete", Value: true},
@@ -226,14 +226,14 @@ func TestTagVerify(t *testing.T) {
 	t.Run("Scenario8_InvalidTagNames", func(t *testing.T) {
 		// @ is rejected
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "bad@name"},
 		}).Decode(&result)
 		assert.Error(t, err, "tag name with @ must be rejected")
 
 		// Whitespace is rejected
-		err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "bad name"},
 		}).Decode(&result)
@@ -241,14 +241,14 @@ func TestTagVerify(t *testing.T) {
 
 		// 32 lowercase base32 chars -- looks like a commit hash
 		hashName := "na7kfra98h45fr2u5qtr30o2ggm7vh61"
-		err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: hashName},
 		}).Decode(&result)
 		assert.Error(t, err, "tag name that looks like a commit hash must be rejected")
 
 		// Path ending with a hash-like segment is rejected
-		err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "releases/" + hashName},
 		}).Decode(&result)
@@ -260,7 +260,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2b_TagWithAncestorExpression", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v-ancestor"},
 			{Key: "hash", Value: "main~1"},
@@ -279,7 +279,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2c_TagWithBranchName", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v-branch"},
 			{Key: "hash", Value: "main"},
@@ -297,7 +297,7 @@ func TestTagVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario2d_TagFromTag", func(t *testing.T) {
 		var result bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "dumboTag", Value: int32(1)},
 			{Key: "name", Value: "v-from-tag"},
 			{Key: "hash", Value: "v1.0"},

@@ -29,9 +29,9 @@ import (
 func TestTransactionSmoke(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	sess, err := env.client.StartSession()
+	sess, err := env.Client.StartSession()
 	require.NoError(t, err, "StartSession must succeed")
 	defer sess.EndSession(ctx)
 
@@ -52,9 +52,9 @@ func TestTransactionSmoke(t *testing.T) {
 func TestTransactionSmoke_Abort(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
-	sess, err := env.client.StartSession()
+	sess, err := env.Client.StartSession()
 	require.NoError(t, err, "StartSession must succeed")
 	defer sess.EndSession(ctx)
 

@@ -4,6 +4,22 @@
 DUMBODB_BINARY="${DUMBODB_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/dumbodb}"
 DUMBODB_PID=""
 
+# port_open <host> <port>
+# True when a TCP connection to host:port succeeds. Uses nc when
+# available, falling back to bash's built-in /dev/tcp so the suite
+# also runs on machines without netcat. The fallback runs in a child
+# bash so it cannot disturb bats's internal file descriptors (bats
+# reserves FD 3 for its test protocol).
+port_open() {
+    local host="$1"
+    local port="$2"
+    if command -v nc >/dev/null 2>&1; then
+        nc -z "$host" "$port" 2>/dev/null
+    else
+        bash -c "exec 9<>'/dev/tcp/${host}/${port}'" 2>/dev/null
+    fi
+}
+
 # start_dumbodb <data-dir> <port>
 # Build and start the dumbodb server, wait until it accepts connections.
 start_dumbodb() {
@@ -20,7 +36,7 @@ start_dumbodb() {
     # Wait up to 30 seconds for dumbodb to accept connections.
     local ready=0
     for i in $(seq 1 30); do
-        if nc -z 127.0.0.1 "$port" 2>/dev/null; then
+        if port_open 127.0.0.1 "$port"; then
             ready=1
             break
         fi

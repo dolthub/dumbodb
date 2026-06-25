@@ -12,19 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
-// TestCherryPickVerify is the automated analog of docs/verify/cherry-pick.md.
-//
-// Each top-level subtest corresponds to one scenario in that document.
-// The setup reproduces the manual setup block exactly:
-//
-//   - Commit C1 on main: items = [ {_id:1, v:1} ]
-//   - Branch "feature" pointing at C1
-//   - Commit C2 on feature: items = [ {_id:1, v:1}, {_id:2, v:2} ]
-//
-// Subtests run sequentially (no t.Parallel inside) so they share a single
-// database and the side effects of one scenario carry into the next.
+// Subtests run sequentially so they share a single database and side effects of
+// one scenario carry into the next.
 
 import (
 	"context"
@@ -38,17 +29,16 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// cherryPickVerifySetup mirrors the Setup section of docs/verify/cherry-pick.md.
-// Returns hashC1 (main HEAD, initial commit) and hashC2 (feature HEAD, adds _id:2).
+// cherryPickVerifySetup returns hashC1 (main HEAD, initial commit) and hashC2
+// (feature HEAD, adds _id:2).
 func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1, hashC2 string) {
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 
 	require.NoError(t, db.Drop(ctx))
 
-	// Baseline: one document on main.
 	_, err := db.Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)},
 		{Key: "v", Value: int32(1)},
@@ -56,17 +46,15 @@ func cherryPickVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (ha
 	require.NoError(t, err)
 	hashC1 = dumboDBCommit(t, env, dbName, "initial", "alice <alice@acme.com>")
 
-	// Create "feature" branch from main HEAD.
 	var branchResult bson.M
-	err = env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
 	require.NoError(t, err, "doltBranch to create 'feature'")
 	assert.Equal(t, "feature", branchResult["branch"])
 
-	// Advance feature with a commit that adds _id:2.
-	_, err = env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
+	_, err = env.Client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(2)},
 		{Key: "v", Value: int32(2)},
 	})
@@ -87,11 +75,8 @@ func TestCherryPickVerify(t *testing.T) {
 	hashC1, hashC2 := cherryPickVerifySetup(t, env, dbName)
 	_ = hashC1
 
-	mainDB := env.client.Database(dbName + "@main")
+	mainDB := env.Client.Database(dbName + "@main")
 
-	// -------------------------------------------------------------------------
-	// Scenario 1: Clean cherry-pick  -- response shape and commit annotation
-	// -------------------------------------------------------------------------
 	t.Run("Scenario1_CleanCherryPick_ResponseShape", func(t *testing.T) {
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
@@ -118,14 +103,12 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 
-	// Verify main now has both documents after the cherry-pick.
 	t.Run("Scenario1_CleanCherryPick_DataVisible", func(t *testing.T) {
 		count, err := mainDB.Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, count, "main must have 2 documents after cherry-pick")
 	})
 
-	// Verify the cherry-pick commit is a single-parent commit (not a merge commit).
 	t.Run("Scenario1_CleanCherryPick_SingleParent", func(t *testing.T) {
 		var logResult bson.M
 		err := mainDB.RunCommand(ctx, bson.D{
@@ -143,12 +126,8 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.False(t, hasParent2, "cherry-pick commit must have no parent2 (single-parent)")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 2: Custom message and author override
-	// -------------------------------------------------------------------------
 	t.Run("Scenario2_CustomMessageAndAuthor", func(t *testing.T) {
-		// Add a new commit on feature to cherry-pick.
-		_, err := env.client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName+"@feature").Collection("items").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "v", Value: int32(3)},
 		})
@@ -156,7 +135,6 @@ func TestCherryPickVerify(t *testing.T) {
 
 		hashC3feat := dumboDBCommit(t, env, dbName+"@feature", "add-three", "carol <carol@startup.dev>")
 
-		// Cherry-pick with custom message and explicit committer.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashC3feat},
@@ -183,20 +161,15 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 3: Conflict during cherry-pick  -- structured error response
-	// -------------------------------------------------------------------------
 	var hashConflictFeat string
 	t.Run("Scenario3_ConflictResponse", func(t *testing.T) {
-		// Modify _id:1 on feature (will conflict with main's version).
-		_, err := env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
+		_, err := env.Client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(99)}}}},
 		)
 		require.NoError(t, err)
 		hashConflictFeat = dumboDBCommit(t, env, dbName+"@feature", "conflict-source", "alice <alice@acme.com>")
 
-		// Modify _id:1 on main too (independent change to create conflict).
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(100)}}}},
@@ -204,11 +177,9 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName+"@main", "conflict-target", "alice <alice@acme.com>")
 
-		// Cherry-pick  -- expect conflict.
-		// The server returns {ok: 0, code: 96, errmsg: "..."} on conflict.
-		// The Go mongo-driver surfaces this as a mongo.CommandError (code 96,
-		// OperationFailed). runCommandRaw captures the ok:0 response document
-		// directly so we can assert the structured error fields.
+		// On conflict the server returns ok:0 with code 96; runCommandRaw captures
+		// that response document directly so the structured error fields are
+		// assertable (the driver would otherwise raise a bare CommandError).
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashConflictFeat},
@@ -228,7 +199,6 @@ func TestCherryPickVerify(t *testing.T) {
 		errmsg, _ := raw["errmsg"].(string)
 		assert.Contains(t, errmsg, "dumboCherryPick", "errmsg must mention the command")
 
-		// doltStatus must reflect the cherry-pick-in-progress state.
 		var statusRaw bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
@@ -245,15 +215,9 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.EqualValues(t, 1, sc["count"])
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 4: Inspect conflicts, resolve, and continue
-	// -------------------------------------------------------------------------
 	t.Run("Scenario4_ResolveAndContinue", func(t *testing.T) {
-		// doltConflicts and doltResolveConflict are the same interface used for merge
-		// conflicts. The cherry-pick state is stored in the same mergeState struct
-		// (with isCherryPick=true), so both commands work identically for cherry-picks.
-
-		// Step 1: List all conflicts grouped by collection.
+		// Cherry-pick state is stored in the same mergeState struct (isCherryPick=true),
+		// so doltConflicts and doltResolveConflict work identically to merge conflicts.
 		var conflictsRes bson.M
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -276,26 +240,28 @@ func TestCherryPickVerify(t *testing.T) {
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
-		// _id is promoted to top level, not repeated inside base/ours/theirs.
-		assert.EqualValues(t, int32(1), cf["_id"], "_id must be a top-level field in the conflict entry")
+		assert.Equal(t, "documentEdit", cf["type"])
+		assert.Equal(t, "bothModified", cf["reason"].(bson.M)["code"])
+		assert.Equal(t, fmt.Sprintf("branch 'main' (ours) and commit '%s' (theirs) both modified document 1", hashConflictFeat),
+			cf["reason"].(bson.M)["message"])
 
-		// ourDiffType / theirDiffType must both be "modified" (both branches changed _id:1).
-		assert.Equal(t, "modified", cf["ourDiffType"])
-		assert.Equal(t, "modified", cf["theirDiffType"])
-
-		// ours = main's version (v:100), theirs = cherry-picked version (v:99).
-		// _id must NOT appear inside these sub-documents.
-		oursDoc, ok := cf["ours"].(bson.M)
+		// Each non-null side carries its own _id and diffType.
+		ours, ok := cf["ours"].(bson.M)
 		require.True(t, ok, "ours must be a document")
+		assert.EqualValues(t, int32(1), ours["_id"], "ours side must carry _id:1")
+		assert.Equal(t, "modified", ours["diffType"])
+		oursDoc := ours["doc"].(bson.M)
 		assert.EqualValues(t, 100, oursDoc["v"], "ours doc must have v:100 (main's version)")
-		assert.Nil(t, oursDoc["_id"], "ours must not contain _id (promoted to top level)")
+		assert.EqualValues(t, int32(1), oursDoc["_id"], "doc carries the full document including _id")
 
-		theirsDoc, ok := cf["theirs"].(bson.M)
+		theirs, ok := cf["theirs"].(bson.M)
 		require.True(t, ok, "theirs must be a document")
+		assert.EqualValues(t, int32(1), theirs["_id"], "theirs side must carry _id:1")
+		assert.Equal(t, "modified", theirs["diffType"])
+		theirsDoc := theirs["doc"].(bson.M)
 		assert.EqualValues(t, 99, theirsDoc["v"], "theirs doc must have v:99 (cherry-picked version)")
-		assert.Nil(t, theirsDoc["_id"], "theirs must not contain _id (promoted to top level)")
+		assert.EqualValues(t, int32(1), theirsDoc["_id"], "doc carries the full document including _id")
 
-		// Step 3: Resolve  -- accept "theirs" (the cherry-picked value v:99).
 		var resolveRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: int32(1)},
@@ -306,7 +272,6 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, resolveRes["ok"])
 
-		// Step 4: After resolution, doltConflicts summary must return an empty collections array.
 		var postResolveRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
@@ -316,7 +281,7 @@ func TestCherryPickVerify(t *testing.T) {
 		require.True(t, ok, "collections must be an array after resolution")
 		assert.Len(t, postColls, 0, "no more conflicts after resolution")
 
-		// Step 5: Continue the cherry-pick  -- same as doltMerge continue:1 for merge.
+		// Continue mirrors doltMerge continue:1.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},
@@ -331,13 +296,11 @@ func TestCherryPickVerify(t *testing.T) {
 			"without committer param, committer must equal original author")
 		assert.NotNil(t, raw["committerTimestamp"], "committerTimestamp must be present")
 
-		// Verify the resolved value is visible on main.
 		var doc bson.M
 		err = mainDB.Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc)
 		require.NoError(t, err)
 		assert.EqualValues(t, 99, doc["v"], "resolved value should be 99 (theirs)")
 
-		// doltStatus must no longer show cherry-pick state after continue.
 		var cleanStatus bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltStatus", Value: int32(1)},
@@ -349,19 +312,14 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.NotNil(t, cleanStatus["commitId"], "commitId must be present after resolution")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 5: Abort cherry-pick in progress
-	// -------------------------------------------------------------------------
 	t.Run("Scenario5_AbortCherryPick", func(t *testing.T) {
-		// Create another conflicting commit on feature.
-		_, err := env.client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
+		_, err := env.Client.Database(dbName+"@feature").Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(200)}}}},
 		)
 		require.NoError(t, err)
 		hashConflict2 := dumboDBCommit(t, env, dbName+"@feature", "another-conflict", "alice <alice@acme.com>")
 
-		// Create conflicting change on main.
 		_, err = mainDB.Collection("items").UpdateOne(ctx,
 			bson.D{{Key: "_id", Value: int32(1)}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(201)}}}},
@@ -369,14 +327,12 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err)
 		mainHeadBeforeAbort := dumboDBCommit(t, env, dbName+"@main", "another-conflict-target", "alice <alice@acme.com>")
 
-		// Start cherry-pick  -- expect conflict.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "commit", Value: hashConflict2},
 		})
 		require.EqualValues(t, 0, raw["ok"], "cherry-pick must produce conflict")
 
-		// Abort.
 		var abortRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
@@ -386,7 +342,6 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.EqualValues(t, 1, abortRes["ok"], "abort must succeed")
 		assert.Equal(t, "cherry-pick aborted", abortRes["message"])
 
-		// After abort, main HEAD must be unchanged.
 		var logRes bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
@@ -399,17 +354,12 @@ func TestCherryPickVerify(t *testing.T) {
 		assert.Equal(t, mainHeadBeforeAbort, headAfterAbort, "main HEAD must be unchanged after abort")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 6: Error cases
-	// -------------------------------------------------------------------------
 	t.Run("Scenario6_ErrorCases", func(t *testing.T) {
-		// Missing commit parameter.
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 		})
 		assert.EqualValues(t, 0, raw["ok"], "missing commit must return ok:0")
 
-		// Abort when no cherry-pick in progress.
 		rawAbort := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "abort", Value: int32(1)},
@@ -418,7 +368,6 @@ func TestCherryPickVerify(t *testing.T) {
 		errmsg, _ := rawAbort["errmsg"].(string)
 		assert.Contains(t, errmsg, "no cherry-pick in progress", "abort error must mention no cherry-pick in progress")
 
-		// Continue when no cherry-pick in progress.
 		rawContinue := runCommandRaw(t, mainDB, bson.D{
 			{Key: "dumboCherryPick", Value: int32(1)},
 			{Key: "continue", Value: int32(1)},

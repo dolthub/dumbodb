@@ -16,8 +16,6 @@ package tests
 
 import (
 	"context"
-	"fmt"
-	"math/rand/v2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,111 +27,6 @@ import (
 // End-to-end tests for the dumboBranchStatus command. The commit graphs port
 // dolt's BranchStatusTableFunctionScriptTests scenarios over the wire protocol.
 
-type bsEntry struct {
-	hash   string
-	ahead  int64
-	behind int64
-}
-
-func bsToInt64(v any) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int32:
-		return int64(n)
-	case float64:
-		return int64(n)
-	default:
-		return -1
-	}
-}
-
-// bsBranchCreate creates branch name from source on the given database.
-func bsBranchCreate(t *testing.T, env *dumboDBTestEnv, dbName, source, name string) {
-	t.Helper()
-	var res bson.M
-	require.NoError(t, env.client.Database(dbName+"@"+source).RunCommand(context.Background(), bson.D{
-		{Key: "doltBranch", Value: int32(1)},
-		{Key: "branch", Value: name},
-	}).Decode(&res), "doltBranch %q from %q", name, source)
-}
-
-// bsMerge merges source into target (target is the current branch).
-func bsMerge(t *testing.T, env *dumboDBTestEnv, dbName, target, source string) {
-	t.Helper()
-	var res bson.M
-	require.NoError(t, env.client.Database(dbName+"@"+target).RunCommand(context.Background(), bson.D{
-		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: source},
-	}).Decode(&res), "doltMerge %q into %q", source, target)
-}
-
-// bsTag creates a tag pointing at the commit that hashish resolves to.
-func bsTag(t *testing.T, env *dumboDBTestEnv, dbName, name, hashish string) {
-	t.Helper()
-	var res bson.M
-	require.NoError(t, env.client.Database(dbName).RunCommand(context.Background(), bson.D{
-		{Key: "dumboTag", Value: int32(1)},
-		{Key: "name", Value: name},
-		{Key: "hash", Value: hashish},
-	}).Decode(&res), "dumboTag %q -> %q", name, hashish)
-}
-
-// bsStatus runs dumboBranchStatus against connDB and returns the decoded base
-// sub-document plus a target -> entry map. targets may be a single string or a
-// slice of strings.
-func bsStatus(t *testing.T, env *dumboDBTestEnv, connDB, base string, targets any) (bson.M, map[string]bsEntry) {
-	t.Helper()
-	cmd := bson.D{
-		{Key: "dumboBranchStatus", Value: int32(1)},
-		{Key: "base", Value: base},
-	}
-	if targets != nil {
-		cmd = append(cmd, bson.E{Key: "targets", Value: targets})
-	}
-	var res bson.M
-	require.NoError(t, env.client.Database(connDB).RunCommand(context.Background(), cmd).Decode(&res),
-		"dumboBranchStatus(base=%q, targets=%v)", base, targets)
-
-	require.EqualValues(t, 1, bsToInt64(res["ok"]), "ok must be 1")
-	baseDoc, _ := res["base"].(bson.M)
-	require.NotNil(t, baseDoc, "base sub-document must be present")
-
-	out := map[string]bsEntry{}
-	arr, _ := res["targets"].(bson.A)
-	for _, raw := range arr {
-		e, ok := raw.(bson.M)
-		require.True(t, ok, "each target entry must be a document, got %T", raw)
-		target, _ := e["target"].(string)
-		hash, _ := e["hash"].(string)
-		out[target] = bsEntry{hash: hash, ahead: bsToInt64(e["commitsAhead"]), behind: bsToInt64(e["commitsBehind"])}
-	}
-	return baseDoc, out
-}
-
-func bsAssert(t *testing.T, m map[string]bsEntry, target string, ahead, behind int64) {
-	t.Helper()
-	e, ok := m[target]
-	if !ok {
-		t.Fatalf("no entry for target %q (got %v)", target, m)
-	}
-	assert.Equal(t, ahead, e.ahead, "target %q ahead", target)
-	assert.Equal(t, behind, e.behind, "target %q behind", target)
-	assert.Len(t, e.hash, 32, "target %q resolved hash must be 32 chars", target)
-}
-
-// bsNewDB returns a fresh database name and seeds an initial baseline commit on
-// main so the database exists.
-func bsNewDB(t *testing.T, env *dumboDBTestEnv) string {
-	t.Helper()
-	dbName := fmt.Sprintf("bstatus%d", rand.Int64N(1_000_000))
-	ctx := context.Background()
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	_, err := env.client.Database(dbName).Collection("seed").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
-	require.NoError(t, err)
-	dumboDBCommit(t, env, dbName, "anc", "alice")
-	return dbName
-}
 
 // TestBranchStatus_DivergentGraph ports dolt's first scenario over the wire.
 func TestBranchStatus_DivergentGraph(t *testing.T) {
@@ -175,7 +68,7 @@ func TestBranchStatus_DivergentGraph(t *testing.T) {
 
 	_, mh := bsStatus(t, env, connDB, "main", bson.A{b5Hash})
 	bsAssert(t, mh, b5Hash, 3, 0)
-	assert.Equal(t, b5Hash, mh[b5Hash].hash)
+	assert.Equal(t, b5Hash, mh[b5Hash].Hash)
 
 	_, ms := bsStatus(t, env, connDB, "main", "b5")
 	bsAssert(t, ms, "b5", 3, 0)
@@ -241,13 +134,13 @@ func TestBranchStatus_Errors(t *testing.T) {
 	dbName := bsNewDB(t, env)
 	ctx := context.Background()
 
-	err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+	err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "targets", Value: bson.A{"main"}},
 	}).Err()
 	require.Error(t, err, "missing base must error")
 
-	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
 		{Key: "targets", Value: bson.A{""}},
@@ -257,20 +150,20 @@ func TestBranchStatus_Errors(t *testing.T) {
 	require.True(t, ok, "expected mongo.CommandError, got %T", err)
 	assert.EqualValues(t, 2, cmdErr.Code, "empty target -> BadValue (rejected by parseRootish)")
 
-	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
 		{Key: "targets", Value: bson.A{"no-such-branch"}},
 	}).Err()
 	require.Error(t, err, "unknown target must error")
 
-	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
 	}).Err()
 	require.Error(t, err, "missing targets must error")
 
-	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "dumboBranchStatus", Value: int32(1)},
 		{Key: "base", Value: "main"},
 		{Key: "targets", Value: bson.A{}},

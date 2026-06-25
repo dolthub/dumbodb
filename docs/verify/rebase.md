@@ -3,7 +3,7 @@
 Manual verification guide for `doltRebase` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_rebase_verify_test.go` (`TestRebaseVerify`)
+> **Automated equivalent:** `tests/verify/rebase_test.go` (`TestRebaseVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```
@@ -429,15 +429,20 @@ printjson(rConflicts)
 //     {
 //       collection: "items",
 //       conflicts: [
-//         { conflictId: "<base64-id>", _id: 1, base: { v: 1 },
-//           ours: { v: 200 }, theirs: { v: 100 },
-//           ourDiffType: "modified", theirDiffType: "modified" }
+//         { conflictId: "<base64-id>",
+//           type: "documentEdit",
+//           reason: { code: "bothModified",
+//                     message: "commit '<hash>' (ours) and branch 'main' (theirs) both modified document 1" },
+//           base:   { _id: 1, doc: { _id: 1, v: 1 } },
+//           ours:   { _id: 1, doc: { _id: 1, v: 200 }, diffType: "modified" },
+//           theirs: { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" } }
 //       ]
 //     }
 //   ],
 //   ok: 1
 // }
-// _id promoted to top level; ours = feature's version (v:200), theirs = main's version (v:100)
+// For a rebase, "ours" is the replayed feature commit (v:200) and "theirs"
+// is the onto branch (main, v:100).
 const conflictId = rConflicts.collections[0].conflicts[0].conflictId
 print("conflictId =", conflictId)
 
@@ -457,6 +462,6 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` returns `collections` array with per-document conflicts grouped by collection, each with `conflictId`, `base`, `ours`, `theirs`, `ourDiffType`, `theirDiffType`
+- `doltConflicts` returns `collections` array with per-document conflicts grouped by collection, each with `conflictId`, a `type`, a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides of `{ _id, doc, diffType }` (`base` has no `diffType`; a deleted side is `null`)
 - After `doltResolveConflict`, `ok` equals `1`
 - After `doltRebase continue:1`, `ok` equals `1`, `commitsReplayed` equals `1`, `newTip` is present

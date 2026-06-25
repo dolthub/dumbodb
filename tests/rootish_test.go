@@ -23,23 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
-// assertRootishRejected verifies that any operation on an invalid rootish
-// returns OperationFailed (code 96) at parse time.
-func assertRootishRejected(tb testing.TB, db *mongo.Database, op string) {
-	tb.Helper()
-
-	ctx := context.Background()
-	_, err := db.Collection("col").Find(ctx, bson.D{})
-	require.Error(tb, err, "%s: expected parse-time rejection", op)
-
-	cmdErr, ok := err.(mongo.CommandError)
-	require.True(tb, ok, "%s: expected CommandError, got %T: %v", op, err, err)
-	assert.EqualValues(tb, 96, cmdErr.Code,
-		"%s: expected OperationFailed (96), got %d: %s", op, cmdErr.Code, cmdErr.Message)
-}
 
 // TestRootish_ParseRejection verifies that reflog and range rootish
 // forms are rejected at parse time with code 96. HEAD, HEAD~N, and HEAD^N
@@ -67,7 +52,7 @@ func TestRootish_ParseRejection(t *testing.T) {
 			t.Parallel()
 
 			encoded := dbName + "@" + tc.rootish
-			assertRootishRejected(t, env.client.Database(encoded), tc.rootish)
+			assertRootishRejected(t, env.Client.Database(encoded), tc.rootish)
 		})
 	}
 }
@@ -85,7 +70,7 @@ func TestRootish_AllDigitSuffix_TreatedAsPlainDB(t *testing.T) {
 
 	// Simulate a database name containing @ followed by an all-digit timestamp.
 	dbName := "parityreg_sometest@1775505756999075683"
-	coll := env.client.Database(dbName).Collection("col")
+	coll := env.Client.Database(dbName).Collection("col")
 
 	// Insert must succeed  -- the numeric suffix must NOT be misinterpreted as a branch.
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "hello"}})
@@ -114,8 +99,8 @@ func TestRootish_CommitHash_DataIsolation(t *testing.T) {
 	// hash1 has 1 doc; HEAD (after setup) has 2 docs.
 	hash1 := setupVersioningDB(t, env, dbName, collName)
 
-	snapColl := env.client.Database(dbName + "@" + hash1).Collection(collName)
-	mainColl := env.client.Database(dbName).Collection(collName)
+	snapColl := env.Client.Database(dbName + "@" + hash1).Collection(collName)
+	mainColl := env.Client.Database(dbName).Collection(collName)
 
 	// Main has 2 docs.
 	n, err := mainColl.CountDocuments(ctx, bson.D{})

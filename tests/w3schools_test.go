@@ -32,7 +32,7 @@ import (
 func TestW3S_AggAddFields_ComputedAvg(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 	ctx := context.Background()
 
 	// Insert student documents with exam score arrays.
@@ -79,7 +79,7 @@ func TestW3S_AggAddFields_ComputedAvg(t *testing.T) {
 func TestW3S_Indexing_AtlasSearch(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 	ctx := context.Background()
 
 	// Attempt to create an Atlas Search index; expect a proper server error.

@@ -31,7 +31,7 @@ func TestAdvancedQuery_JsonSchema_ExclusiveMinimum_Maximum(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("score", float64(5))),
@@ -68,7 +68,7 @@ func TestAdvancedQuery_JsonSchema_MultipleOf(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("n", int32(3))),
@@ -103,7 +103,7 @@ func TestAdvancedQuery_JsonSchema_NoMatch(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("x", int32(1))),
@@ -131,7 +131,7 @@ func TestAdvancedQuery_JsonSchema_DuplicateRequired(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("x", int32(1))),
@@ -159,7 +159,7 @@ func TestAdvancedQuery_JsonSchema_OneOf(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		// Matches only the int schema (bsonType int only) -> oneOf passes (exactly 1 match).
@@ -200,7 +200,7 @@ func TestAdvancedQuery_Regex_ExtendedWhitespace_x_Flag(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("name", "foobar")),
@@ -234,7 +234,7 @@ func TestAdvancedQuery_Regex_LookaheadSupported(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("name", "foobar")),
@@ -261,7 +261,7 @@ func TestAdvancedQuery_TextSearch_MetaTextScore_Projection(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("body", "the quick brown fox")),
@@ -301,7 +301,7 @@ func TestAdvancedQuery_TextSearch_MetaTextScore_Sort(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("body", "quick fox")),
@@ -330,7 +330,7 @@ func TestAdvancedQuery_TextSearch_MultipleTerms(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("body", "the quick brown fox")),
@@ -361,7 +361,7 @@ func TestAdvancedQuery_TextSearch_WithAdditionalFilter(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		d(e("_id", int32(1)), e("body", "apple pie"), e("category", "food")),

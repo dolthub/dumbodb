@@ -44,8 +44,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// resolvedIndexEntry is the decoded form of an IndexEntry chunk: the
-// metadata plus the hash of the index's prolly.Map root.
 type resolvedIndexEntry struct {
 	info    backends.IndexInfo
 	mapRoot hash.Hash
@@ -61,8 +59,6 @@ var indexEntryMemo sync.Map // hash.Hash -> *resolvedIndexEntry
 // Replaces the per-dbState state.emptyIndexAM field; see design 6.4.
 var emptyIndexAMCache sync.Map // tree.NodeStore -> prolly.AddressMap
 
-// emptyIndexAM returns the cached empty AddressMap for ns, building it on
-// first call.
 func emptyIndexAM(ns tree.NodeStore) (prolly.AddressMap, error) {
 	if v, ok := emptyIndexAMCache.Load(ns); ok {
 		return v.(prolly.AddressMap), nil
@@ -131,10 +127,9 @@ func indexAMForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	return am, nil
 }
 
-// resolveIndexEntry decodes the IndexEntry JSON chunk at entryHash via
-// the process-wide memo. The returned pointer must not be mutated by the
-// caller. See design 6.5 for why memoizing is safe (chunk bytes are
-// immutable; the captured MatchesPartialFilter closure is pure).
+// resolveIndexEntry decodes the IndexEntry chunk at entryHash via the
+// process-wide memo. The returned pointer must not be mutated. See
+// design 6.5 for why memoizing is safe.
 func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Hash) (*resolvedIndexEntry, error) {
 	if entryHash.IsEmpty() {
 		return nil, fmt.Errorf("resolveIndexEntry: empty hash")
@@ -155,9 +150,6 @@ func resolveIndexEntry(ctx context.Context, ns tree.NodeStore, entryHash hash.Ha
 	return actual.(*resolvedIndexEntry), nil
 }
 
-// indexAMFromAM returns the per-collection secondary_indexes AddressMap
-// stored under collName in collAM. Convenience for callers that already
-// hold an ADRM (e.g. a merge driver iterating two branches' ADRMs).
 func indexAMFromAM(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collAM prolly.AddressMap, collName string) (prolly.AddressMap, error) {
 	dtblHash, err := collAM.Get(ctx, collName)
 	if err != nil {
@@ -190,7 +182,7 @@ func resolveCollIndexAM(ctx context.Context, c *collection, state *dbState) (pro
 }
 
 // resolveIndexes walks the index AM and resolves every entry through
-// the memoized JSON-decode path. Returns parallel slices: the IndexInfo
+// the memoized decode path. Returns parallel slices: the IndexInfo
 // for each index, and the prolly.Map handle. Both slices are in AM-walk
 // order (sorted by index name).
 func resolveIndexes(ctx context.Context, c *collection, state *dbState) ([]backends.IndexInfo, []prolly.Map, error) {
@@ -246,16 +238,170 @@ func resolveBranchIndexState(ctx context.Context, c *collection, state *dbState)
 	return infos, byName, nil
 }
 
-// applyInsertsToIndexes runs each inserted document through every
-// indexed field and adds the corresponding entries to a fresh copy of
-// the input maps. Pure: maps is not mutated; the returned map contains
-// new prolly.Map values for indexes that had any new entries.
-//
-// Used by write paths that previously called updateSecondaryIndexesOnInsert
-// against state.secIndexMaps. The new shape decouples the in-memory
-// mutation from any dbState field so per-branch writes do not collide.
-func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) (map[string]prolly.Map, error) {
+// indexEntriesForDoc is the single source of truth for which entries a
+// document contributes: partial/sparse membership (a filter-evaluation
+// error counts as non-membership), multikey expansion, and the
+// Lossy/Multikey flag detection. Every build, insert, update, delete,
+// and merge path routes through it.
+func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]any, multikey, lossy bool) {
+	if idx.MatchesPartialFilter != nil {
+		match, err := idx.MatchesPartialFilter(doc)
+		if err != nil || !match {
+			return nil, false, false
+		}
+	}
+	fieldVals := extractIndexFieldValues(doc, idx)
+	if idx.Sparse && allNull(fieldVals) {
+		return nil, false, false
+	}
+	for _, v := range fieldVals {
+		if _, isArr := v.(*types.Array); isArr {
+			multikey = true
+		}
+	}
+	rows = expandMultiKeyValues(fieldVals)
+	for _, row := range rows {
+		for _, v := range row {
+			if idxpkg.ValueLossy(v) {
+				lossy = true
+			}
+		}
+	}
+	return rows, multikey, lossy
+}
+
+// applyInsertsToIndexes is pure: inputs are not mutated; the returned infos
+// carry updated Lossy/Multikey flags.
+func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, docs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
 	if len(infos) == 0 {
+		return infos, maps, nil
+	}
+	out := make(map[string]prolly.Map, len(maps))
+	for k, v := range maps {
+		out[k] = v
+	}
+	outInfos := append([]backends.IndexInfo(nil), infos...)
+	for i, info := range outInfos {
+		idxMap, ok := out[info.Name]
+		if !ok {
+			return nil, nil, fmt.Errorf("applyInsertsToIndexes: missing map for %q", info.Name)
+		}
+		mut := idxMap.Mutate()
+		for _, doc := range docs {
+			docID, err := doc.Get("_id")
+			if err != nil {
+				return nil, nil, fmt.Errorf("applyInsertsToIndexes: doc missing _id for index %q: %w", info.Name, err)
+			}
+			h, err := hashID(docID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
+			}
+			idBytes := h[:]
+			rows, multikey, lossy := indexEntriesForDoc(doc, info)
+			outInfos[i].Multikey = outInfos[i].Multikey || multikey
+			outInfos[i].Lossy = outInfos[i].Lossy || lossy
+			for _, fv := range rows {
+				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
+					return nil, nil, fmt.Errorf("applyInsertsToIndexes: inserting entry into %q: %w", info.Name, err)
+				}
+			}
+		}
+		updated, err := mut.Map(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w", info.Name, err)
+		}
+		out[info.Name] = updated
+	}
+	return outInfos, out, nil
+}
+
+func entryKeysForRows(rows [][]any, idBytes []byte) map[string][]any {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string][]any, len(rows))
+	for _, row := range rows {
+		out[string(idxpkg.BuildSecondaryKey(row, idBytes))] = row
+	}
+	return out
+}
+
+// applyUpdatesToIndexes deletes/inserts only the entry-set difference
+// per (oldDoc, newDoc) pair, so an update that does not change an
+// indexed entry leaves that index's root hash untouched. Pure;
+// oldDocs and newDocs are parallel slices.
+func applyUpdatesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs, newDocs []*types.Document) ([]backends.IndexInfo, map[string]prolly.Map, error) {
+	if len(infos) == 0 || len(oldDocs) == 0 {
+		return infos, maps, nil
+	}
+	if len(oldDocs) != len(newDocs) {
+		return nil, nil, fmt.Errorf("applyUpdatesToIndexes: %d old docs vs %d new docs", len(oldDocs), len(newDocs))
+	}
+	out := make(map[string]prolly.Map, len(maps))
+	for k, v := range maps {
+		out[k] = v
+	}
+	outInfos := append([]backends.IndexInfo(nil), infos...)
+	for i, info := range outInfos {
+		idxMap, ok := out[info.Name]
+		if !ok {
+			return nil, nil, fmt.Errorf("applyUpdatesToIndexes: missing map for %q", info.Name)
+		}
+		mut := idxMap.Mutate()
+		edited := false
+		for d := range oldDocs {
+			docID, err := newDocs[d].Get("_id")
+			if err != nil {
+				return nil, nil, fmt.Errorf("applyUpdatesToIndexes: doc missing _id for index %q: %w", info.Name, err)
+			}
+			h, err := hashID(docID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("applyUpdatesToIndexes: hashing _id for index %q: %w", info.Name, err)
+			}
+			idBytes := h[:]
+
+			oldRows, _, _ := indexEntriesForDoc(oldDocs[d], info)
+			newRows, multikey, lossy := indexEntriesForDoc(newDocs[d], info)
+			outInfos[i].Multikey = outInfos[i].Multikey || multikey
+			outInfos[i].Lossy = outInfos[i].Lossy || lossy
+
+			oldKeys := entryKeysForRows(oldRows, idBytes)
+			newKeys := entryKeysForRows(newRows, idBytes)
+
+			for k, row := range oldKeys {
+				if _, keep := newKeys[k]; keep {
+					continue
+				}
+				if err := idxpkg.DeleteEntry(ctx, mut, row, idBytes); err != nil {
+					return nil, nil, fmt.Errorf("applyUpdatesToIndexes: deleting entry from %q: %w", info.Name, err)
+				}
+				edited = true
+			}
+			for k, row := range newKeys {
+				if _, had := oldKeys[k]; had {
+					continue
+				}
+				if err := idxpkg.InsertEntry(ctx, mut, row, idBytes); err != nil {
+					return nil, nil, fmt.Errorf("applyUpdatesToIndexes: inserting entry into %q: %w", info.Name, err)
+				}
+				edited = true
+			}
+		}
+		if !edited {
+			continue
+		}
+		updated, err := mut.Map(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("applyUpdatesToIndexes: flushing map for %q: %w", info.Name, err)
+		}
+		out[info.Name] = updated
+	}
+	return outInfos, out, nil
+}
+
+// applyDeletesToIndexes is pure.
+func applyDeletesToIndexes(ctx context.Context, infos []backends.IndexInfo, maps map[string]prolly.Map, oldDocs []*types.Document) (map[string]prolly.Map, error) {
+	if len(infos) == 0 || len(oldDocs) == 0 {
 		return maps, nil
 	}
 	out := make(map[string]prolly.Map, len(maps))
@@ -265,29 +411,34 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 	for _, info := range infos {
 		idxMap, ok := out[info.Name]
 		if !ok {
-			return nil, fmt.Errorf("applyInsertsToIndexes: missing map for %q", info.Name)
+			return nil, fmt.Errorf("applyDeletesToIndexes: missing map for %q", info.Name)
 		}
 		mut := idxMap.Mutate()
-		for _, doc := range docs {
+		edited := false
+		for _, doc := range oldDocs {
 			docID, err := doc.Get("_id")
 			if err != nil {
-				return nil, fmt.Errorf("applyInsertsToIndexes: doc missing _id for index %q: %w", info.Name, err)
+				return nil, fmt.Errorf("applyDeletesToIndexes: doc missing _id for index %q: %w", info.Name, err)
 			}
 			h, err := hashID(docID)
 			if err != nil {
-				return nil, fmt.Errorf("applyInsertsToIndexes: hashing _id for index %q: %w", info.Name, err)
+				return nil, fmt.Errorf("applyDeletesToIndexes: hashing _id for index %q: %w", info.Name, err)
 			}
 			idBytes := h[:]
-			fieldVals := extractIndexFieldValues(doc, info)
-			for _, fv := range expandMultiKeyValues(fieldVals) {
-				if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
-					return nil, fmt.Errorf("applyInsertsToIndexes: inserting entry into %q: %w", info.Name, err)
+			rows, _, _ := indexEntriesForDoc(doc, info)
+			for _, row := range rows {
+				if err := idxpkg.DeleteEntry(ctx, mut, row, idBytes); err != nil {
+					return nil, fmt.Errorf("applyDeletesToIndexes: deleting entry from %q: %w", info.Name, err)
 				}
+				edited = true
 			}
+		}
+		if !edited {
+			continue
 		}
 		updated, err := mut.Map(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("applyInsertsToIndexes: flushing map for %q: %w", info.Name, err)
+			return nil, fmt.Errorf("applyDeletesToIndexes: flushing map for %q: %w", info.Name, err)
 		}
 		out[info.Name] = updated
 	}
@@ -296,7 +447,7 @@ func applyInsertsToIndexes(ctx context.Context, infos []backends.IndexInfo, maps
 
 // buildIndexAM is the pure replacement for persistIndexes: given a set of
 // (IndexInfo, prolly.Map) pairs it writes each map's root to the value
-// store and a per-index JSON IndexEntry chunk, then returns a new
+// store and a per-index IndexEntry chunk, then returns a new
 // AddressMap from index name to IndexEntry hash. No dbState fields are
 // touched. Callers pass the result to dtblHashForCollection.
 func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInfo, maps map[string]prolly.Map) (prolly.AddressMap, error) {
@@ -456,8 +607,6 @@ func indexChangeNamesOf(changes []backends.IndexChange) []string {
 	return out
 }
 
-// openIndexMap returns a prolly.Map handle for the secondary-index data
-// stored at mapRoot.
 func openIndexMap(ctx context.Context, vs *dolttypes.ValueStore, ns tree.NodeStore, mapRoot hash.Hash) (prolly.Map, error) {
 	v, err := vs.ReadValue(ctx, mapRoot)
 	if err != nil {

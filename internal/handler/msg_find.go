@@ -35,9 +35,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgFind implements `find` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -91,8 +88,20 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		cInfo = cList.Collections[0]
 	}
 
-	// If the target is a view, redirect to the source collection for reading.
+	// If the target is a view, the read runs as an aggregation over the view's
+	// source collection with the view's defining pipeline applied; the find's
+	// own filter/sort/skip/limit/projection are layered on top below.
+	var (
+		isView       bool
+		viewOn       string
+		viewPipeline *types.Array
+	)
+
 	if cInfo.IsView {
+		isView = true
+		viewOn = cInfo.ViewOn
+		viewPipeline = cInfo.ViewPipeline
+
 		params.Collection = cInfo.ViewOn
 		viewSourceParam := backends.ListCollectionsParams{Name: cInfo.ViewOn}
 		var srcList *backends.ListCollectionsResult
@@ -120,9 +129,15 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
-	// Validate geospatial operators in the filter before executing (query-time validation).
 	if err = common.ValidateGeoFilter(params.Filter); err != nil {
 		return nil, err
+	}
+
+	// A hint naming an index that does not exist is an error, matching MongoDB.
+	if !isView {
+		if err = validateHintExists(connCtx, coll, params.Hint, "find"); err != nil {
+			return nil, err
+		}
 	}
 
 	qp, err := h.makeFindQueryParams(connCtx, params, &cInfo)
@@ -151,15 +166,24 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}()
 	}
 
-	queryRes, err := coll.Query(ctx, qp)
+	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
+
+	var srcIter types.DocumentsIterator
+	if isView {
+		srcIter, err = viewSourceIterator(ctx, db, viewOn, viewPipeline, closer)
+	} else {
+		var queryRes *backends.QueryResult
+		if queryRes, err = coll.Query(ctx, qp); err != nil {
+			return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
+		}
+		srcIter = queryRes.Iter
+	}
+
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
 
-	// closer accumulates all things that should be closed / canceled.
-	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
-
-	iter, err := h.makeFindIter(queryRes.Iter, closer, params)
+	iter, err := h.makeFindIter(srcIter, closer, params)
 	if err != nil {
 		return nil, handleMaxTimeMSError(err, params.MaxTimeMS, "find")
 	}
@@ -213,7 +237,6 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 			h.cursors.CloseAndRemove(c)
 		}
 
-		// let the client know that there are no more results
 		cursorID = 0
 	}
 
@@ -240,11 +263,11 @@ type findCursorData struct {
 	findParams *common.FindParams
 }
 
-// makeFindQueryParams creates the backend's query parameters for the find command.
 func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindParams, cInfo *backends.CollectionInfo) (*backends.QueryParams, error) { //nolint:lll // for readability
 	qp := &backends.QueryParams{
 		Comment:         params.Comment,
 		CaseInsensitive: params.ParsedCollation.CaseInsensitive(),
+		Hint:            params.Hint,
 	}
 
 	var err error
@@ -285,9 +308,8 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 
 	switch {
 	case h.DisablePushdown:
-		// Pushdown disabled
 	case params.Sort.Len() == 0 && cInfo.Capped():
-		// Pushdown default recordID sorting for capped collections
+		// Capped collections default to $natural (recordID) order.
 		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
 	case params.Sort.Len() == 1:
 		if params.Sort.Keys()[0] != "$natural" {
@@ -311,11 +333,9 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 	return qp, nil
 }
 
-// makeFindIter creates an iterator chain for the find command.
-//
-// Iter is passed from the backend's query.
-// All iterators, including the initial one, are added to the passed closer,
-// and the returned iterator is wrapped with it.
+// makeFindIter builds the find iterator chain. All iterators, including the
+// initial one, are added to the passed closer, and the returned iterator is
+// wrapped with it.
 //
 //nolint:lll // for readability
 func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams) (types.DocumentsIterator, error) {
@@ -332,7 +352,6 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 
 	iter = common.FilterIterator(iter, closer, filterDoc)
 
-	// Apply min/max index bounds filter if specified (used with hint to constrain index scan range).
 	if params.Min != nil || params.Max != nil {
 		hintDoc, _ := params.Hint.(*types.Document)
 		iter = minMaxBoundsIterator(iter, closer, hintDoc, params.Min, params.Max)
@@ -366,7 +385,6 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 
 	iter = common.LimitIterator(iter, closer, params.Limit)
 
-	// If returnKey is true, project only the index key fields (from hint) instead of regular projection.
 	if params.ReturnKey {
 		keyProj := buildReturnKeyProjection(params.Hint)
 		var err error
@@ -386,9 +404,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	return iterator.WithClose(iter, closer.Close), nil
 }
 
-// buildReturnKeyProjection creates a projection document that includes only the
-// fields specified in the hint (index key fields), with _id excluded.
-// This is used when returnKey=true is set in a find command.
+// buildReturnKeyProjection projects only the hint's index key fields, _id excluded.
 func buildReturnKeyProjection(hint any) *types.Document {
 	hintDoc, ok := hint.(*types.Document)
 	if !ok || hintDoc == nil {
@@ -399,22 +415,19 @@ func buildReturnKeyProjection(hint any) *types.Document {
 	for _, field := range hintDoc.Keys() {
 		pairs = append(pairs, field, int32(1))
 	}
-	// Exclude _id by default for returnKey projections.
 	pairs = append(pairs, "_id", int32(0))
 	return must.NotFail(types.NewDocument(pairs...))
 }
 
-// minMaxBoundsIterator wraps an iterator and filters out documents that fall
-// outside the min/max index bounds. min is inclusive, max is exclusive.
-// If hintDoc is provided, only its fields are checked; otherwise all fields
-// in min/max documents are checked.
+// minMaxBoundsIterator filters out documents outside the min/max index bounds
+// (min inclusive, max exclusive). If hintDoc is non-empty only its fields are
+// checked; otherwise all fields in the min/max documents are.
 func minMaxBoundsIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, hintDoc, minDoc, maxDoc *types.Document) types.DocumentsIterator {
 	res := &minMaxIter{iter: iter, hintDoc: hintDoc, minDoc: minDoc, maxDoc: maxDoc}
 	closer.Add(res)
 	return res
 }
 
-// minMaxIter filters documents based on min/max index bounds.
 type minMaxIter struct {
 	iter    types.DocumentsIterator
 	hintDoc *types.Document
@@ -441,11 +454,7 @@ func (it *minMaxIter) Close() {
 	it.iter.Close()
 }
 
-// matchesBounds returns true if the document satisfies the min/max bounds.
-// min is inclusive, max is exclusive.
 func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
-	// Determine which fields to check: use hint fields if available,
-	// otherwise use all fields from min/max documents.
 	var fields []string
 	if it.hintDoc != nil && it.hintDoc.Len() > 0 {
 		fields = it.hintDoc.Keys()
@@ -472,14 +481,13 @@ func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
 	for _, field := range fields {
 		docVal, err := doc.Get(field)
 		if err != nil {
-			// Field missing from document  -- doesn't satisfy bounds.
+			// A field missing from the document does not satisfy the bounds.
 			return false
 		}
 
 		if it.minDoc != nil {
 			minVal, err := it.minDoc.Get(field)
 			if err == nil {
-				// min is inclusive: docVal >= minVal
 				if cmp := types.Compare(docVal, minVal); cmp == types.Less {
 					return false
 				}
@@ -489,7 +497,6 @@ func (it *minMaxIter) matchesBounds(doc *types.Document) bool {
 		if it.maxDoc != nil {
 			maxVal, err := it.maxDoc.Get(field)
 			if err == nil {
-				// max is exclusive: docVal < maxVal
 				if cmp := types.Compare(docVal, maxVal); cmp != types.Less {
 					return false
 				}

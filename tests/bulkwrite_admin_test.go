@@ -33,7 +33,7 @@ func TestAdminBulkWrite_InsertUpdateDelete(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := "bulkwrite_admin_test"
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 	defer db.Drop(ctx) //nolint:errcheck // best-effort cleanup
 
@@ -45,7 +45,7 @@ func TestAdminBulkWrite_InsertUpdateDelete(t *testing.T) {
 	_, err = collB.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "z", Value: int32(1)}})
 	require.NoError(t, err)
 
-	admin := env.client.Database("admin")
+	admin := env.Client.Database("admin")
 	cmd := bson.D{
 		{Key: "bulkWrite", Value: int32(1)},
 		{Key: "ops", Value: bson.A{
@@ -88,7 +88,7 @@ func TestAdminBulkWrite_OrderedStopsOnError(t *testing.T) {
 	ctx := context.Background()
 
 	dbName := "bulkwrite_admin_ordered_test"
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 	defer db.Drop(ctx) //nolint:errcheck // best-effort cleanup
 
@@ -96,7 +96,7 @@ func TestAdminBulkWrite_OrderedStopsOnError(t *testing.T) {
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(42)}})
 	require.NoError(t, err)
 
-	admin := env.client.Database("admin")
+	admin := env.Client.Database("admin")
 	cmd := bson.D{
 		{Key: "bulkWrite", Value: int32(1)},
 		{Key: "ordered", Value: true},

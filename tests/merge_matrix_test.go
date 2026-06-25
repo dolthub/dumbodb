@@ -40,7 +40,7 @@ func mergeMatrixSetup(
 	t.Helper()
 	ctx := context.Background()
 
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	require.NoError(t, db.Drop(ctx))
 
 	for coll, docs := range collections {
@@ -51,8 +51,8 @@ func mergeMatrixSetup(
 	}
 	dumboDBCommit(t, env, dbName, "baseline", "alice <alice@acme.com>")
 
-	mainDB = env.client.Database(dbName + "@main")
-	featDB = env.client.Database(dbName + "@feature")
+	mainDB = env.Client.Database(dbName + "@main")
+	featDB = env.Client.Database(dbName + "@feature")
 
 	var branchRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
@@ -203,7 +203,7 @@ func TestMergeMatrix_MixedChanges_SingleCollection(t *testing.T) {
 
 	conflicts := getConflictsByCollection(t, mainDB)
 	require.Len(t, conflicts["items"], 1, "exactly one conflict")
-	assert.EqualValues(t, int32(1), conflicts["items"][0]["_id"])
+	assert.EqualValues(t, int32(1), conflicts["items"][0]["ours"].(bson.M)["_id"])
 
 	// During merge: verify auto-merged state.
 	col := mainDB.Collection("items")
@@ -256,8 +256,10 @@ func TestMergeMatrix_DeleteModifyConflict(t *testing.T) {
 	conflicts := getConflictsByCollection(t, mainDB)
 	require.Len(t, conflicts["items"], 1)
 	cf := conflicts["items"][0]
-	assert.Equal(t, "deleted", cf["ourDiffType"])
-	assert.Equal(t, "modified", cf["theirDiffType"])
+	assert.Equal(t, "documentEdit", cf["type"])
+	assert.Equal(t, "deleteModify", cf["reason"].(bson.M)["code"])
+	assert.Nil(t, cf["ours"], "ours deleted the doc")
+	assert.Equal(t, "modified", cf["theirs"].(bson.M)["diffType"])
 
 	// Resolve with "theirs" -- doc reappears.
 	resolveAllConflicts(t, mainDB, "theirs")
@@ -301,8 +303,10 @@ func TestMergeMatrix_ModifyDeleteConflict(t *testing.T) {
 	conflicts := getConflictsByCollection(t, mainDB)
 	require.Len(t, conflicts["items"], 1)
 	cf := conflicts["items"][0]
-	assert.Equal(t, "modified", cf["ourDiffType"])
-	assert.Equal(t, "deleted", cf["theirDiffType"])
+	assert.Equal(t, "documentEdit", cf["type"])
+	assert.Equal(t, "modifyDelete", cf["reason"].(bson.M)["code"])
+	assert.Equal(t, "modified", cf["ours"].(bson.M)["diffType"])
+	assert.Nil(t, cf["theirs"], "theirs deleted the doc")
 
 	// Resolve with "theirs" -- doc is deleted.
 	resolveAllConflicts(t, mainDB, "theirs")

@@ -485,47 +485,12 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 			// Prepend view pipeline stages (if any) ahead of the user stages.
 			if viewPipeline := cList.Collections[0].ViewPipeline; viewPipeline != nil && viewPipeline.Len() > 0 {
-				viewStages := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
-				prepended := make([]aggregations.Stage, 0, len(viewStages)+len(stagesDocuments))
-				for _, v := range viewStages {
-					vd, vok := v.(*types.Document)
-					if !vok {
-						continue
-					}
-					var vs aggregations.Stage
-					switch vd.Command() {
-					case "$lookup", "$graphLookup":
-						fetcher := func(ctx context.Context, collName string) ([]*types.Document, error) {
-							fromColl, collErr := db.Collection(collName)
-							if collErr != nil {
-								return nil, collErr
-							}
-
-							qRes, qErr := fromColl.Query(ctx, new(backends.QueryParams))
-							if qErr != nil {
-								return nil, qErr
-							}
-
-							defer qRes.Iter.Close()
-
-							return iterator.ConsumeValues(qRes.Iter)
-						}
-
-						if vd.Command() == "$graphLookup" {
-							vs, err = stages.NewGraphLookupStage(vd, fetcher)
-						} else {
-							vs, err = stages.NewLookupStage(vd, fetcher)
-						}
-					default:
-						vs, err = stages.NewStage(vd)
-					}
-					if err != nil {
-						closer.Close()
-						return nil, err
-					}
-					prepended = append(prepended, vs)
+				viewStages, vErr := buildViewPipelineStages(db, viewPipeline)
+				if vErr != nil {
+					closer.Close()
+					return nil, vErr
 				}
-				stagesDocuments = append(prepended, stagesDocuments...)
+				stagesDocuments = append(viewStages, stagesDocuments...)
 			}
 		}
 

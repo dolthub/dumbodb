@@ -33,9 +33,126 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgExplain implements `explain` command.
-//
-// The passed context is canceled when the client connection is closed.
+// countExplainExecution runs a best-effort counting pass for executionStats
+// verbosity; any backend error returns zeros so the caller still produces a
+// structurally valid executionStats document. When the winning plan contains an
+// IXSCAN node every examined doc was reached via the index, so
+// totalKeysExamined = totalDocsExamined. count and distinct return zeros today.
+func countExplainExecution(ctx context.Context, coll backends.Collection, qp *backends.ExplainParams, winningPlan *types.Document) (nReturned, totalDocsExamined, totalKeysExamined int32) {
+	if qp.Command != "find" && qp.Command != "aggregate" {
+		return 0, 0, 0
+	}
+	usesIndex := planContainsIndexScan(winningPlan)
+
+	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter})
+	if err != nil || qres == nil || qres.Iter == nil {
+		return 0, 0, 0
+	}
+	defer qres.Iter.Close()
+
+	for {
+		_, doc, err := qres.Iter.Next()
+		if err != nil {
+			break
+		}
+		totalDocsExamined++
+		if qp.Filter == nil || qp.Filter.Len() == 0 {
+			nReturned++
+			continue
+		}
+		match, ferr := common.FilterDocument(doc, qp.Filter)
+		if ferr == nil && match {
+			nReturned++
+		}
+	}
+
+	if usesIndex {
+		totalKeysExamined = totalDocsExamined
+	}
+	return
+}
+
+// buildExecutionStages clones the winningPlan tree shape into the
+// executionStages document. nReturned is reported at the root only;
+// intermediate per-stage row flow is left at zero, enough for
+// stage/indexName parity without full row-counting instrumentation.
+func buildExecutionStages(plan *types.Document, rootStage string, nReturned int32) *types.Document {
+	if plan == nil {
+		return must.NotFail(types.NewDocument(
+			"stage", rootStage,
+			"nReturned", nReturned,
+			"executionTimeMillisEstimate", int64(0),
+		))
+	}
+	return cloneExecutionStage(plan, nReturned)
+}
+
+func cloneExecutionStage(node *types.Document, nReturned int32) *types.Document {
+	d := must.NotFail(types.NewDocument())
+	if s, _ := node.Get("stage"); s != nil {
+		d.Set("stage", s)
+	}
+	d.Set("nReturned", nReturned)
+	d.Set("executionTimeMillisEstimate", int64(0))
+	if v, _ := node.Get("indexName"); v != nil {
+		d.Set("indexName", v)
+	}
+	if v, _ := node.Get("keyPattern"); v != nil {
+		d.Set("keyPattern", v)
+	}
+	if v, _ := node.Get("inputStage"); v != nil {
+		if child, ok := v.(*types.Document); ok {
+			d.Set("inputStage", cloneExecutionStage(child, 0))
+		}
+	}
+	if v, _ := node.Get("inputStages"); v != nil {
+		if arr, ok := v.(*types.Array); ok {
+			out := types.MakeArray(arr.Len())
+			for i := 0; i < arr.Len(); i++ {
+				c, _ := arr.Get(i)
+				if child, ok := c.(*types.Document); ok {
+					out.Append(cloneExecutionStage(child, 0))
+				}
+			}
+			d.Set("inputStages", out)
+		}
+	}
+	return d
+}
+
+// planContainsIndexScan walks the winningPlan tree for any IXSCAN,
+// COUNT_SCAN, or DISTINCT_SCAN node, descending both inputStage and
+// inputStages so OR/AND multi-index plans count correctly.
+func planContainsIndexScan(plan *types.Document) bool {
+	if plan == nil {
+		return false
+	}
+	if s, _ := plan.Get("stage"); s != nil {
+		if str, ok := s.(string); ok {
+			switch str {
+			case "IXSCAN", "COUNT_SCAN", "DISTINCT_SCAN":
+				return true
+			}
+		}
+	}
+	if v, _ := plan.Get("inputStage"); v != nil {
+		if child, ok := v.(*types.Document); ok && planContainsIndexScan(child) {
+			return true
+		}
+	}
+	if v, _ := plan.Get("inputStages"); v != nil {
+		if arr, ok := v.(*types.Array); ok {
+			for i := 0; i < arr.Len(); i++ {
+				c, _ := arr.Get(i)
+				if child, ok := c.(*types.Document); ok && planContainsIndexScan(child) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -57,8 +174,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		"port", int32(27017),
 		"version", version.Get().MongoDBVersion,
 		"gitVersion", version.Get().Commit,
-
-		// our extensions
 		"dumbodb", version.Get().Version,
 	))
 
@@ -85,6 +200,11 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	// A hint naming an index that does not exist is an error, matching MongoDB.
+	if err = validateHintExists(connCtx, coll, params.Hint, document.Command()); err != nil {
+		return nil, err
+	}
+
 	qp := new(backends.ExplainParams)
 
 	if params.Aggregate {
@@ -96,6 +216,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	qp.Hint = params.Hint
+	qp.Skip = params.Skip
+	qp.Projection = params.Projection
+	qp.Command = params.CommandName
+	qp.DistinctKey = params.DistinctKey
 
 	if !h.EnableNestedPushdown && params.Filter != nil {
 		qp.Filter = params.Filter.DeepCopy()
@@ -135,26 +259,24 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		cInfo = cList.Collections[0]
 	}
 
-	switch {
-	case h.DisablePushdown:
-		// Pushdown disabled
-	case params.Sort.Len() == 0 && cInfo.Capped():
-		// Pushdown default recordID sorting for capped collections
-		qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
-	case params.Sort.Len() == 1:
-		if params.Sort.Keys()[0] != "$natural" {
-			break
+	// For Explain we always surface the requested sort to the backend so
+	// the rendered plan tree can include a SORT stage. The historical
+	// $natural-only gate was about pushdown to the Query path; pushdown
+	// is not relevant for explain output.
+	if !h.DisablePushdown {
+		switch {
+		case params.Sort.Len() == 0 && cInfo.Capped():
+			qp.Sort = must.NotFail(types.NewDocument("$natural", int64(1)))
+		case params.Sort.Len() > 0:
+			qp.Sort = params.Sort
 		}
-
-		qp.Sort = params.Sort
 	}
 
-	// Limit pushdown is not applied if:
-	//  - pushdown is disabled;
-	//  - `filter` is set, it must fetch all documents to filter them in memory;
-	//  - `sort` is set, it must fetch all documents and sort them in memory;
-	//  - `skip` is non-zero value, skip pushdown is not supported yet.
-	if !h.DisablePushdown && params.Filter.Len() == 0 && params.Sort.Len() == 0 && params.Skip == 0 {
+	// For Explain we always surface the requested limit to the backend
+	// so the plan tree can include a LIMIT stage. The pushdown gate that
+	// applied at the Query path (no filter / no sort / no skip) is
+	// irrelevant to explain output.
+	if !h.DisablePushdown {
 		qp.Limit = params.Limit
 	}
 
@@ -168,37 +290,36 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		"queryPlanner", res.QueryPlanner,
 	))
 
-	// Add executionStats for "executionStats" and "allPlansExecution" verbosity.
 	if params.Verbosity == "executionStats" || params.Verbosity == "allPlansExecution" {
 		// Reflect the winning plan's stage in executionStages so the two
 		// halves of the explain response agree on whether an index was used.
 		execStage := "COLLSCAN"
+		var winningPlanDoc *types.Document
 		if wp, _ := res.QueryPlanner.Get("winningPlan"); wp != nil {
-			if winningPlan, ok := wp.(*types.Document); ok {
-				if s, _ := winningPlan.Get("stage"); s != nil {
+			if d, ok := wp.(*types.Document); ok {
+				winningPlanDoc = d
+				if s, _ := d.Get("stage"); s != nil {
 					if str, ok := s.(string); ok && str != "" {
 						execStage = str
 					}
 				}
 			}
 		}
-		executionStages := must.NotFail(types.NewDocument(
-			"stage", execStage,
-			"nReturned", int32(0),
-			"executionTimeMillisEstimate", int64(0),
-		))
+
+		nReturned, totalDocsExamined, totalKeysExamined := countExplainExecution(connCtx, coll, qp, winningPlanDoc)
+
+		executionStages := buildExecutionStages(winningPlanDoc, execStage, nReturned)
 		executionStats := must.NotFail(types.NewDocument(
 			"executionSuccess", true,
-			"nReturned", int32(0),
+			"nReturned", nReturned,
 			"executionTimeMillis", int64(0),
-			"totalKeysExamined", int32(0),
-			"totalDocsExamined", int32(0),
+			"totalKeysExamined", totalKeysExamined,
+			"totalDocsExamined", totalDocsExamined,
 			"executionStages", executionStages,
 		))
 		response.Set("executionStats", executionStats)
 	}
 
-	// Add allPlansExecution for "allPlansExecution" verbosity.
 	if params.Verbosity == "allPlansExecution" {
 		response.Set("allPlansExecution", types.MakeArray(0))
 	}

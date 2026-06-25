@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestCommitVerify is the automated analog of docs/verify/commit.md.
 //
@@ -44,7 +44,7 @@ func commitVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashBa
 	t.Helper()
 
 	ctx := context.Background()
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	items := db.Collection("orders")
 
 	require.NoError(t, db.Drop(ctx))
@@ -82,7 +82,7 @@ func TestCommitVerify(t *testing.T) {
 	t.Run("Scenario1_ResponseShape", func(t *testing.T) {
 		// Insert a doc so the commit has a pending change (the new doltCommit
 		// gate rejects empty working sets unless allowEmpty:true).
-		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(100)},
 			{Key: "label", Value: "shape"},
 			{Key: "v", Value: int32(100)},
@@ -90,7 +90,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var result bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "shape check"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -115,7 +115,7 @@ func TestCommitVerify(t *testing.T) {
 	t.Run("Scenario2_NamedBranch_CommitGoesToBranch", func(t *testing.T) {
 		// Create a "feature" branch from main HEAD.
 		var branchResult bson.M
-		err := env.client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
 			{Key: "branch", Value: "feature"},
 		}).Decode(&branchResult)
@@ -123,7 +123,7 @@ func TestCommitVerify(t *testing.T) {
 		assert.Equal(t, "feature", branchResult["branch"])
 
 		// Insert a document on the feature branch.
-		featureDB := env.client.Database(dbName + "@feature")
+		featureDB := env.Client.Database(dbName + "@feature")
 		_, err = featureDB.Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(3)},
 			{Key: "label", Value: "gamma"},
@@ -152,7 +152,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(4), featureCount, "feature branch must have 4 documents after commit")
 
-		mainCount, err := env.client.Database(dbName+"@main").Collection("orders").CountDocuments(ctx, bson.D{})
+		mainCount, err := env.Client.Database(dbName+"@main").Collection("orders").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), mainCount, "main must still have 3 documents (feature commit must not affect main)")
 	})
@@ -162,7 +162,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario3_SuccessiveCommitsHaveDistinctHashes", func(t *testing.T) {
 		// Commit A: insert _id:10
-		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(10)},
 			{Key: "label", Value: "ten"},
 			{Key: "v", Value: int32(10)},
@@ -170,7 +170,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var resultA bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit A"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -179,7 +179,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NotEmpty(t, hashA)
 
 		// Commit B: insert _id:11
-		_, err = env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err = env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(11)},
 			{Key: "label", Value: "eleven"},
 			{Key: "v", Value: int32(11)},
@@ -187,7 +187,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var resultB bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "commit B"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -212,7 +212,7 @@ func TestCommitVerify(t *testing.T) {
 		// Capture HEAD before any of the 4* attempts so we can assert that
 		// the rejected attempts did not advance it.
 		var beforeLog bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&beforeLog))
@@ -224,7 +224,7 @@ func TestCommitVerify(t *testing.T) {
 		// 4a: bare empty commit must fail with OperationFailed (96) and a
 		// "nothing to commit" message.
 		var rejected bson.M
-		err := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -238,7 +238,7 @@ func TestCommitVerify(t *testing.T) {
 
 		// HEAD must be unchanged after the rejected attempt.
 		var afterRejectLog bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&afterRejectLog))
@@ -251,7 +251,7 @@ func TestCommitVerify(t *testing.T) {
 		// 4b: allowEmpty:true on the same empty state must succeed and produce
 		// a new commit hash.
 		var allowed bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "empty allowed"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -267,7 +267,7 @@ func TestCommitVerify(t *testing.T) {
 		// 4c: another bare empty commit after 4b still fails  -- the empty commit
 		// did not introduce a "pending change" gate that would now be satisfied.
 		var rejected2 bson.M
-		err2 := env.client.Database(dbName).RunCommand(ctx, bson.D{
+		err2 := env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "still empty"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
@@ -284,7 +284,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario5_HashIsValidDiffReference", func(t *testing.T) {
 		// Insert a doc so the pre-change commit has a pending change.
-		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(50)},
 			{Key: "label", Value: "pre"},
 			{Key: "v", Value: int32(50)},
@@ -295,7 +295,7 @@ func TestCommitVerify(t *testing.T) {
 		hashBefore := dumboDBCommit(t, env, dbName, "pre-change", "alice <alice@acme.com>")
 
 		// Insert _id:99 and commit  -- save hashAfter.
-		_, err = env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err = env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(99)},
 			{Key: "label", Value: "new"},
 			{Key: "v", Value: int32(99)},
@@ -306,7 +306,7 @@ func TestCommitVerify(t *testing.T) {
 
 		// Diff from hashBefore to hashAfter must show _id:99 as added.
 		var raw bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 			{Key: "from", Value: hashBefore},
 			{Key: "to", Value: hashAfter},
@@ -326,7 +326,7 @@ func TestCommitVerify(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("Scenario6_AuthorEchoedAndVisibleInLog", func(t *testing.T) {
 		// Insert a doc so the commit has a pending change.
-		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(60)},
 			{Key: "label", Value: "author"},
 			{Key: "v", Value: int32(60)},
@@ -334,7 +334,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var result bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "authored commit"},
 			{Key: "author", Value: "bob"},
@@ -348,7 +348,7 @@ func TestCommitVerify(t *testing.T) {
 
 		// Verify the author is stored and visible via dumboDBLog.
 		var logResult bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logResult))
@@ -369,7 +369,7 @@ func TestCommitVerify(t *testing.T) {
 		fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
 
 		// Insert a doc so the commit has a pending change.
-		_, err := env.client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
+		_, err := env.Client.Database(dbName).Collection("orders").InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(70)},
 			{Key: "label", Value: "timestamp"},
 			{Key: "v", Value: int32(70)},
@@ -377,7 +377,7 @@ func TestCommitVerify(t *testing.T) {
 		require.NoError(t, err)
 
 		var result bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltCommit", Value: int32(1)},
 			{Key: "message", Value: "fixed-time commit"},
 			{Key: "author", Value: "carol"},
@@ -397,7 +397,7 @@ func TestCommitVerify(t *testing.T) {
 
 		// Verify via dumboDBLog that the stored timestamp matches.
 		var logResult bson.M
-		require.NoError(t, env.client.Database(dbName).RunCommand(ctx, bson.D{
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)},
 			{Key: "limit", Value: int32(1)},
 		}).Decode(&logResult))

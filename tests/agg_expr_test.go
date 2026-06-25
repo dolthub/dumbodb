@@ -30,7 +30,7 @@ func aggregate(tb testing.TB, env *dumboDBTestEnv, coll string, pipeline bson.A)
 	tb.Helper()
 
 	ctx := context.Background()
-	c := env.client.Database("testdb").Collection(coll)
+	c := env.Client.Database("testdb").Collection(coll)
 	cursor, err := c.Aggregate(ctx, pipeline)
 	require.NoError(tb, err)
 
@@ -45,7 +45,7 @@ func aggregate(tb testing.TB, env *dumboDBTestEnv, coll string, pipeline bson.A)
 func TestExpr_abs(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -74,7 +74,7 @@ func TestExpr_abs(t *testing.T) {
 func TestExpr_exp_ln(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -107,7 +107,7 @@ func TestExpr_exp_ln(t *testing.T) {
 func TestExpr_zip(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -139,7 +139,7 @@ func TestExpr_zip(t *testing.T) {
 func TestExpr_dateAdd(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -187,7 +187,7 @@ func TestExpr_dateAdd(t *testing.T) {
 func TestExpr_dateDiff(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -221,7 +221,7 @@ func TestExpr_dateDiff(t *testing.T) {
 func TestExpr_cond_true(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -254,7 +254,7 @@ func TestExpr_cond_true(t *testing.T) {
 func TestExpr_convert_int_to_string(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -284,7 +284,7 @@ func TestExpr_convert_int_to_string(t *testing.T) {
 func TestExpr_convert_with_onError(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -315,7 +315,7 @@ func TestExpr_convert_with_onError(t *testing.T) {
 func TestExpr_cmp_operators(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -346,7 +346,7 @@ func TestExpr_cmp_operators(t *testing.T) {
 func TestAccum_mergeObjects(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	// Each document has a "props" sub-document; $mergeObjects accumulates them.
@@ -378,7 +378,7 @@ func TestAccum_mergeObjects(t *testing.T) {
 func TestExpr_trunc(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -407,7 +407,7 @@ func TestExpr_trunc(t *testing.T) {
 func TestExpr_objectToArray(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -441,7 +441,7 @@ func TestExpr_objectToArray(t *testing.T) {
 func TestExpr_literal(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -470,7 +470,7 @@ func TestExpr_literal(t *testing.T) {
 func TestExpr_let(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -503,7 +503,7 @@ func TestExpr_let(t *testing.T) {
 func TestExpr_expr_in_match(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -533,7 +533,7 @@ func TestExpr_expr_in_match(t *testing.T) {
 func TestExpr_project_type_check(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -573,7 +573,7 @@ func TestExpr_project_type_check(t *testing.T) {
 func TestExpr_project_objectToArray_back(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -609,7 +609,7 @@ func TestExpr_project_objectToArray_back(t *testing.T) {
 func TestExpr_project_reduce_sum(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -639,7 +639,7 @@ func TestExpr_project_reduce_sum(t *testing.T) {
 func TestExpr_project_in_operator(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,
@@ -671,7 +671,7 @@ func TestExpr_project_in_operator(t *testing.T) {
 func TestExpr_toDate_objectid(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	// Use a fixed time truncated to second precision (ObjectID only stores seconds).
@@ -700,7 +700,7 @@ func TestExpr_toDate_objectid(t *testing.T) {
 func TestExpr_dateTrunc(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	// 2024-03-15 14:32:45 UTC
@@ -740,7 +740,7 @@ func TestExpr_dateTrunc(t *testing.T) {
 func TestExpr_mod_nan_divisor(t *testing.T) {
 	t.Parallel()
 	env := startDumboDB(t)
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	ctx := context.Background()
 	insertDocs(t, coll,

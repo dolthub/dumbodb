@@ -9,7 +9,7 @@ DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) stora
 ## What's in Version 0.1?
 Dumbo v0.1 is Alpha quality software. We don't recommend it for production use, but it's great for testing your existing applications and seeing what they are changing over time. In a test environment, you can use DumboDB just like you would use MongoDB, but with the added ability to reset to specific snapshots in time and see the changes made by your application code.
 
-We are actively developing new features, so please [join our discord server](https://discord.gg/gqr7K4VNKe) and give us feedback. See the [roadmap below](#roadmap)!
+We are actively developing new features, so please [join our Discord server](https://discord.gg/gqr7K4VNKe) and give us feedback. See the [roadmap below](#roadmap)!
 
 ### MongoDB Compatibility
 DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity with core MongoDB operations. It functions as a drop-in replacement for [standard drivers](https://www.mongodb.com/docs/drivers/) and [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) in single-node environments.
@@ -24,6 +24,10 @@ DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity
 - No Authentication. DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. Do not expose DumboDB instances to untrusted networks. Planned for v0.6.
 - Single Node: Replication (Replica Sets) and Sharding are out of scope. Support not planned.
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
+- Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
+- Expiration (TTL): `expireAfterSeconds` is not supported; specifying it on a collection or index is rejected with an error rather than silently accepted. Support not planned.
+
+If you are needing missing features, please file an [issue](https://github.com/dolthub/dumbodb/issues), or join our [Discord server](https://discord.gg/gqr7K4VNKe) to start a conversation with us. We'd love your feedback!
 
 ### Version Control Features
 DumboDB's version control features are exposed via a set of custom commands (e.g. `dumboCommit`, `dumboMerge`, etc.) that you can run from any MongoDB client. These commands allow you to commit changes, create branches, merge branches, view commit history, and more.
@@ -81,7 +85,7 @@ mongosh mongodb://localhost:27017
 This will connect you to the `test` database by default. You can specify a different database in the connection string if you like (e.g. `mongodb://localhost:27017/mydb`)
 
 ## Example Usage
-All examples below are using the `mongosh` shell, which is effectively javascript. There are equivalent operations for any MongoDB driver in your favorite language.
+All examples below are using the `mongosh` shell, which is effectively JavaScript. There are equivalent operations for any MongoDB driver in your favorite language.
 
 ### Specifying a Branch
 By default, all connections target the `main` branch. This is currently hard coded. Using the `getSiblingDB()` method, you can connect to a different branch by encoding the branch name in the database name. `@` is the delimiter between the database name and the branch name. For example, to connect to a branch named `mybranch`, you would connect to the database `mydb@mybranch`:

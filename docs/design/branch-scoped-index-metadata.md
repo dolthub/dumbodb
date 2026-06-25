@@ -649,12 +649,12 @@ human-runnable verify doc plus its automated equivalent:
   full lifecycle: create index per branch, interleaved insert /
   update / delete on different branches, drop index per branch,
   server restart preserving per-branch state.
-- **Test:** `tests/index_branch_isolation_verify_test.go`
+- **Test:** `tests/verify/index_branch_isolation_test.go`
   (`TestIndexBranchIsolationVerify`). One sequential subtest per
   scenario, sharing one database the way the doc walks one database
   top-to-bottom. Uses the existing `startDumboDB` / `dumboDBCommit`
   test helpers in `tests/` and the `mongo-driver/v2` Go client, the
-  same pattern as `versioning_branch_verify_test.go`.
+  same pattern as `verify/branch_test.go`.
 
 This pair sits alongside the Go backend tests (5.2 through 5.7) rather
 than replacing them: the backend tests cover internal invariants (memo
@@ -810,7 +810,7 @@ separate bd issue with the prior as a dependency.
 
 8. **Land the verify doc and its matching test** (5.8).
    `docs/verify/index-branch-isolation.md` and
-   `tests/index_branch_isolation_verify_test.go` go in together. The
+   `tests/verify/index_branch_isolation_test.go` go in together. The
    doc walks `mongosh` scenarios end-to-end; the test exercises the
    same scenarios via `mongo-driver/v2` as sequential subtests. Both
    should be in the same PR so they cannot drift.

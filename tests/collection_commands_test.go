@@ -37,7 +37,7 @@ func TestCollMod_NonExistentCollection(t *testing.T) {
 
 	// Use a collection handle that was never inserted into  -- neither the database
 	// nor the collection have been created in the storage engine.
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{
@@ -59,7 +59,7 @@ func TestCollMod_InvalidOption(t *testing.T) {
 	ctx := context.Background()
 
 	// First create the collection so the command reaches field-validation logic.
-	coll := env.collection(t)
+	coll := env.Collection(t)
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "x", Value: 1}})
 	require.NoError(t, err)
 
@@ -86,14 +86,14 @@ func TestCompact_EmptyCollection(t *testing.T) {
 	// Explicitly create the collection so it exists but has no documents.
 	dbName := "testdb_compact_empty"
 	collName := "compact_empty_col"
-	err := env.client.Database(dbName).CreateCollection(ctx, collName)
+	err := env.Client.Database(dbName).CreateCollection(ctx, collName)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		env.client.Database(dbName).Drop(context.Background()) //nolint:errcheck
+		env.Client.Database(dbName).Drop(context.Background()) //nolint:errcheck
 	})
 
 	var res bson.D
-	err = env.client.Database(dbName).RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName).RunCommand(ctx, bson.D{
 		{Key: "compact", Value: collName},
 	}).Decode(&res)
 	require.NoError(t, err, "compact on empty collection must succeed")
@@ -121,7 +121,7 @@ func TestCompact_NonExistentCollection(t *testing.T) {
 	ctx := context.Background()
 
 	// Use a collection handle that was never inserted into.
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	var res bson.D
 	err := coll.Database().RunCommand(ctx, bson.D{
@@ -142,7 +142,7 @@ func TestAutoCompact_Enable_Disable_FreeSpaceTargetMB(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	admin := env.client.Database("admin")
+	admin := env.Client.Database("admin")
 
 	subtests := []struct {
 		name    string
@@ -227,7 +227,7 @@ func TestValidate_Full(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "a", Value: int32(1)}},
@@ -257,7 +257,7 @@ func TestValidate_Repair(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "b", Value: int32(1)}},
@@ -287,7 +287,7 @@ func TestDataSize_BasicCollection(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	insertDocs(t, coll,
 		bson.D{{Key: "a", Value: int32(1)}},
@@ -326,7 +326,7 @@ func TestDataSize_WithKeyRange(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert 5 documents with values 1-5 on field "v".
 	for i := int32(1); i <= 5; i++ {
@@ -374,7 +374,7 @@ func TestRenameCollection_NonExistentSource(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// coll was never inserted into  -- it does not exist.
 	dbName := coll.Database().Name()
@@ -382,7 +382,7 @@ func TestRenameCollection_NonExistentSource(t *testing.T) {
 	to := dbName + "." + coll.Name() + "_renamed"
 
 	var res bson.D
-	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+	err := env.Client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "renameCollection", Value: from},
 		{Key: "to", Value: to},
 	}).Decode(&res)
@@ -407,7 +407,7 @@ func TestRenameCollection_DropTarget(t *testing.T) {
 	srcName := "src_col"
 	dstName := "dst_col"
 
-	db := env.client.Database(dbName)
+	db := env.Client.Database(dbName)
 	t.Cleanup(func() { db.Drop(context.Background()) }) //nolint:errcheck
 
 	// Create source collection.
@@ -422,7 +422,7 @@ func TestRenameCollection_DropTarget(t *testing.T) {
 	to := dbName + "." + dstName
 
 	var res bson.D
-	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+	err := env.Client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "renameCollection", Value: from},
 		{Key: "to", Value: to},
 		{Key: "dropTarget", Value: true},
@@ -449,7 +449,7 @@ func TestServerStatus_ReplicationField(t *testing.T) {
 	ctx := context.Background()
 
 	var res bson.D
-	err := env.client.Database("admin").RunCommand(ctx, bson.D{
+	err := env.Client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "serverStatus", Value: int32(1)},
 	}).Decode(&res)
 	require.NoError(t, err, "serverStatus must not error")
@@ -471,7 +471,7 @@ func TestDbStats_ScaleOption(t *testing.T) {
 
 	env := startDumboDB(t)
 	ctx := context.Background()
-	coll := env.collection(t)
+	coll := env.Collection(t)
 
 	// Insert documents so that size fields are non-zero.
 	for i := 0; i < 10; i++ {

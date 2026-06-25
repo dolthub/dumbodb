@@ -27,8 +27,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// DefaultIndexName is a name of the index that is created when a collection is created.
-// This index defines document's primary key.
+// DefaultIndexName names the index created with every collection; it defines
+// the document primary key.
 const DefaultIndexName = "_id_"
 
 // Collection is a generic interface for all backends for accessing collection.
@@ -57,7 +57,6 @@ type Collection interface {
 	DropIndexes(context.Context, *DropIndexesParams) (*DropIndexesResult, error)
 }
 
-// collectionContract implements Collection interface.
 type collectionContract struct {
 	c Collection
 }
@@ -78,6 +77,10 @@ type QueryParams struct {
 	Filter *types.Document
 	Sort   *types.Document
 	Limit  int64
+
+	// Hint forces index selection: a name string or key-pattern document
+	// selects that index; {$natural: <int>} forces a collection scan.
+	Hint any
 
 	OnlyRecordIDs bool
 	Comment       string
@@ -187,9 +190,21 @@ func (cc *collectionContract) Count(ctx context.Context, params *CountParams) (*
 }
 
 type ExplainParams struct {
-	Filter *types.Document
-	Sort   *types.Document
-	Limit  int64
+	Filter     *types.Document
+	Sort       *types.Document
+	Projection *types.Document
+	Limit      int64
+	Skip       int64
+
+	// Command is the original wire command being explained ("find", "count",
+	// "distinct", "aggregate"). The backend picks a top-level explain shape
+	// based on this (e.g. count emits a COUNT stage, distinct emits a
+	// DISTINCT_SCAN under PROJECTION_COVERED). Defaults to "find".
+	Command string
+
+	// DistinctKey is the field name passed to the distinct command. Ignored
+	// for other commands.
+	DistinctKey string
 
 	// Hint, when non-nil, requests that the backend plan the query using the
 	// specified index. It may be a document like {field: 1} naming a key
@@ -224,14 +239,10 @@ func (cc *collectionContract) Explain(ctx context.Context, params *ExplainParams
 		params = new(ExplainParams)
 	}
 
-	if params.Sort.Len() != 0 {
-		must.BeTrue(params.Sort.Len() == 1)
-		sortValue := params.Sort.Map()["$natural"].(int64)
-
-		if sortValue != -1 && sortValue != 1 {
-			panic("sort value must be 1 (for ascending) or -1 (for descending)")
-		}
-	}
+	// Explain receives arbitrary sort docs so the backend can render a
+	// SORT stage in the plan tree. The historical "$natural-only"
+	// precondition was tied to the Query path's pushdown gate; it does
+	// not apply to explain.
 
 	res, err := cc.c.Explain(ctx, params)
 	if err != nil {
@@ -466,6 +477,17 @@ type IndexInfo struct {
 	Unique                bool
 	Sparse                bool // true if the index only covers documents with the indexed field(s)
 	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
+
+	// Lossy: the index stored a value the KeyString encoding cannot
+	// represent faithfully (Decimal128); the planner never consults a
+	// lossy index. Sticky until rebuild.
+	Lossy bool
+
+	// Multikey: the index expanded an array value into per-element
+	// entries; range-entry counts would be per element, not per doc,
+	// so count fast paths skip range filters on it. Sticky until
+	// rebuild.
+	Multikey bool
 
 	// MatchesPartialFilter, when non-nil, reports whether doc satisfies the partial
 	// filter expression. If nil, all documents are considered as matching (no partial

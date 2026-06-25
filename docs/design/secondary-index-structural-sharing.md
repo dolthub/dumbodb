@@ -1,620 +1,602 @@
 # Secondary Indexes with Structural Sharing
 
-**Issue:** workspace-6r7
-**Date:** 2026-05-20
+**Issues:** workspace-4ee (update/delete gap), workspace-ife (merge gap)
+**Date:** 2026-06-09
 **Status:** Draft
 
----
-
-## 1. Problem
-
-DumboDB persists secondary indexes as dolt `prolly.Map`s and routes new-index
-builds and `InsertAll` through `prolly.MutableMap`, so single-document inserts
-already touch O(log N) chunks per index. Three gaps stop the indexes from
-behaving like dolt's:
-
-1. **`UpdateAll` does not touch secondary indexes.** `collection.go:1754-1762`
-   re-persists whatever in-memory index AMs it finds; it never deletes the old
-   secondary entry or inserts the new one. After an update that changes an
-   indexed field, the index is stale and equality lookups return wrong results.
-2. **`DeleteAll` does not touch secondary indexes.** `collection.go:1905-1910`
-   has the same shape: documents are removed from the primary map, but
-   secondary entries keying those `_id`s are left behind.
-3. **3-way merge ignores secondary indexes.** `mergeAddressMapsWithConflicts`
-   in `merge_conflict.go:740-849` merges only the primary `prolly.Map` per
-   collection. `dtblHashForCollection` then inlines `state.collIndexAMs[name]`,
-   which is the *into-branch's* in-memory index AM. Documents added by the
-   "from" branch never appear in the merged-branch indexes, and chunk reuse
-   across the merge is whatever `state.collIndexAMs` happened to contain,
-   which by construction did not see "from"'s edits.
-
-Even where the path is correct (`InsertAll`), there is no test that asserts
-chunk-level structural sharing across branches. The user's two-branch
-"a..m / n..z" scenario is not exercised anywhere in
-`/workspace/dumbodb/internal/backends/dolt/*_test.go`.
-
-## 2. Requirements
-
-Cost (steady-state, per write):
-
-- R1. A write that touches `k` documents must cost `O(k * log N)` chunk writes
-  per affected secondary index, where `N` is the index size. Equivalently,
-  no write path may iterate the index or rebuild it. A bulk write of `k`
-  documents may amortize through dolt's `MutableMap` pending-edits buffer
-  (`tuples.Edits`, flushed at 64 KB) but must not require a full scan.
-- R2. A write that does not change any indexed field must produce zero edits
-  on that index (the dolt equivalent: `isNoopUpdate`,
-  `prolly_index_writer.go:419-434`).
-- R3. Persisting after a write batch must produce a new index root whose
-  chunks below the mutation frontier are identical (by hash) to the pre-write
-  root. Verified by counting distinct chunks before and after.
-
-Structural sharing (cross-branch):
-
-- R4. Disjoint-range writes on two branches must merge into a single index
-  whose leaf chunks are reused by content hash from both sides. Concretely,
-  for the "a..m on branch X, n..z on branch Y" scenario, leaf chunks above
-  some splitter on each side appear unchanged in the merged tree.
-- R5. A document that exists on both branches with the same indexed-field
-  value contributes the same index leaf to both branches' index roots.
-- R6. The DTBL written after a merge inlines an index `AddressMap` whose
-  index roots reflect the merged primary, not the into-branch's stale view.
-
-Read performance (must not regress):
-
-- R7. Equality and range lookups continue to use `prolly.Map.IterKeyRange`
-  (`index.go:191`), touching only chunks along the bound paths.
-- R8. `tryIndexedCount` and `DistinctScan` continue to skip per-document
-  fetches when the filter shape allows.
-
-Conflict semantics:
-
-- R9. Unique-index violations exposed by a merge surface through the existing
-  artifact path (`merge_conflict.go:828-832`), modeled on dolt's
-  `replaceUniqueKeyViolation` (`violations_unique_prolly.go:83-109`).
-- R10. Partial-filter and sparse indexes correctly add/remove entries on
-  membership transitions (a document that newly satisfies / stops satisfying
-  the partial filter after an update).
-
-## 3. Dolt-Grounded Findings (Appendix A)
-
-These are the dolt code paths that the implementation should mirror or reuse.
-
-### 3.1 Per-row write propagation
-
-- `prollyTableWriter.Insert / Update / Delete`
-  (`/workspace/dolt/go/libraries/doltcore/sqle/writer/prolly_table_writer.go:158-213`)
-  iterates the slice of secondary index writers **before** writing the primary
-  index, so unique-constraint failures abort the write before primary state
-  changes.
-- Each secondary writer is a `prollySecondaryIndexWriter`
-  (`/workspace/dolt/go/libraries/doltcore/sqle/writer/prolly_index_writer.go:284-305`)
-  holding a `prolly.MutableMapInterface` (a per-index mutable map) plus the
-  key/val tuple builders.
-- `Update` (`prolly_index_writer.go:436-462`) does the canonical pair:
-  - `isNoopUpdate` (lines 419-434) short-circuits when the indexed columns
-    are unchanged.
-  - Otherwise: `Delete(oldKey)` then `Put(newKey, empty)`.
-- DumboDB's analogue lives in `idxpkg.InsertEntry / DeleteEntry`
-  (`internal/index/index.go:86-101`), which already exist; today only
-  `InsertEntry` is called, and only on `InsertAll`.
-
-### 3.2 Per-index mutability and flush
-
-- `MutableMap` accumulates edits in a skip list (`tuples.Edits`,
-  `/workspace/dolt/go/store/prolly/tuple_mutable_map.go:40`) and flushes via
-  `flushPending` at `defaultMaxPending = 64 KB` (line 30). Flush calls
-  `ApplyMutationsWithSerializer` (line 217), which in turn runs the
-  tree-level `ApplyMutations` (`/workspace/dolt/go/store/prolly/tree/mutator.go:63-69`).
-  `ApplyMutations` walks the old tree once, in key order, and the chunker
-  emits only chunks that lie on the path of an edit. Unedited subtrees keep
-  their existing addresses.
-- This satisfies R1 and R3 for any write path that routes through
-  `MutableMap`.
-
-### 3.3 Persistence layout (`serial.Table`)
-
-- The `serial.Table` flatbuffer (`/workspace/dolt/go/gen/fb/serial/table.fbs:19-42`)
-  has a `secondary_indexes: [ubyte]` field that inlines an `AddressMap` keyed
-  by index name (`/workspace/dolt/go/store/prolly/address_map.go:28-30`).
-- DumboDB already inlines an `AddressMap` here (`helpers.go:184-223`,
-  `buildDoltTableFlatbuffer`). The difference is the *value*: dumbodb stores
-  `name -> JSON-IndexEntry-chunk-hash`, where the JSON entry carries metadata
-  plus the prolly.Map root. Dolt stores `name -> per-index-root-hash`
-  directly, with index metadata coming from the schema. The dumbodb wrapping
-  is fine for structural sharing as long as the wrapper is content-addressed
-  (it is: `writeIndexEntryChunk` -> `tree.SerializeJsonToAddr`,
-  `index_persist.go:154-165`), but it is one extra chunk per index per
-  metadata-change. We can keep it.
-
-### 3.4 3-way merge of secondary indexes
-
-- Entry point: `RootMerger.MergeTable`
-  (`/workspace/dolt/go/libraries/doltcore/merge/merge_rows.go:204`) ->
-  `mergeProllyTable` -> `mergeProllyTableData`
-  (`merge_prolly_rows.go:56,92`).
-- For each secondary index, dolt:
-  - Constructs a `MutableSecondaryIdx` per index
-    (`merge_prolly_rows.go:1483-1509`), pre-loaded with the left side's
-    index root.
-  - Streams the **primary-row diffs** (the output of `ThreeWayDiff` over the
-    primary maps) and calls `applyEdit(idx, key, leftValue, mergedValue)`
-    per row (`merge_prolly_rows.go:1511-1606`, `merge_prolly_indexes.go:172-190`).
-    Each `applyEdit` resolves to a `Delete(oldIndexKey)` + `Put(newIndexKey)`
-    on that index's mutable map.
-  - When an index is missing, or its definition changed across the merge,
-    falls back to `buildIndex`
-    (`merge_prolly_indexes.go:75-96`, `:111-167`), which is a full scan of
-    the merged primary.
-- The diff that drives the per-index updates is a true 3-way prolly diff:
-  `ThreeWayMerge` (`/workspace/dolt/go/store/prolly/tree/merge.go:56-104`)
-  uses `PatchGeneratorFromRoots` and `SendPatches` to compare the two
-  sides against the base in a structural walk. When both sides reach an
-  identical chunk address, `SendPatches` (`merge.go:200-223`) accepts that
-  subtree as-is. This is what gives R4: subtrees outside the edit window on
-  each branch are physically reused in the merged root.
-- Unique-constraint validation runs through `uniqValidator.validateDiff`
-  (`merge_prolly_rows.go:709-837`) and emits artifacts via
-  `replaceUniqueKeyViolation` (`violations_unique_prolly.go:83-109`).
-
-### 3.5 Index schema reconciliation (does not apply to dumbodb)
-
-Dolt has mutable column schemas, so it has to reconcile same-name-different-
-definition indexes on merge (`mergeIndexes`,
-`/workspace/dolt/go/libraries/doltcore/merge/merge_schema.go:762-786`).
-DumboDB indexes are immutable by name: an index is created with a fixed
-spec (keys, unique, sparse, partial filter) and editing it means dropping
-and recreating under a different name. So:
-
-- Two branches can never present the same index name with different specs.
-  If they do, the names differ -- they are independent indexes and merge as
-  separate AM entries.
-- The dolt "rebuild on definition change" fallback
-  (`merge_prolly_indexes.go:75-96` -> `buildIndex` at `:111`) is unreachable
-  in dumbodb; we should not port it.
-- The remaining cases are name-level only: index present on both sides
-  (merge the maps), present on one side and absent from base (carry through),
-  dropped on one side and modified on the other (conflict, mirroring the
-  collection-level deleted-vs-modified handling in
-  `merge_conflict.go:800-803`).
-
-## 4. Dolt Code Reuse Strategy
-
-The design's premise is that dolt has already solved this and dumbodb should
-**use its types and call its functions directly** rather than re-implementing.
-Dolt is a sibling repo we control, so when an API is internal or SQL-bound,
-the answer is to lift / generalise it in dolt and depend on the lifted form
-from both sides.
-
-This section catalogues exactly what we use as-is, what we lift, and what
-stays dumbodb-side.
-
-### 4.1 Used as-is (no dolt change required)
-
-The dumbodb backend already imports `github.com/dolthub/dolt/go/store/...`
-freely, so these are pure go-import dependencies:
-
-- **`prolly.MutableMap`** (`/workspace/dolt/go/store/prolly/tuple_mutable_map.go`)
-  -- the per-index write buffer. Already used on `InsertAll`
-  (`collection.go:1532`). Extend usage to update / delete paths and to merge.
-- **`prolly.MergeMaps(left, right, base, cb)`**
-  (`/workspace/dolt/go/store/prolly/tuple_map.go:171`) -- the public 3-way
-  merge of two `prolly.Map`s with a `tree.CollisionFn`. This is exactly the
-  primitive Phase 3 needs for the "present on both sides" branch.
-  Caveat: the function carries a TODO ("MergeMaps does not properly detect
-  merge conflicts when one side adds a NULL to the end of its tuple ...
-  since MergeMaps is not currently called, fixing this is not a priority,"
-  `tuple_map.go:173`). The index value tuple in dumbodb is a fixed single
-  dummy byte (`idxValDesc` at `index/index.go:35`), so the NULL-suffix case
-  cannot arise for us, but we should add a unit test covering it and, if
-  the TODO is still live, fix it upstream as a paired PR -- it's a six-line
-  comparator change at most.
-- **`tree.ThreeWayDiffer[K, O]`**
-  (`/workspace/dolt/go/store/prolly/tree/three_way_differ.go:61`) -- iterates
-  divergent / convergent / clash diffs over three primary maps. This is what
-  drives per-index `applyEdit` calls when one branch has an index the other
-  side touched documents in (Phase 3b, "present on one side, absent on base").
-- **`prolly.ArtifactsEditor`** + **`replaceUniqueKeyViolation`**
-  (`/workspace/dolt/go/libraries/doltcore/merge/violations_unique_prolly.go:83`)
-  -- the path that turns a unique-index conflict into a row in
-  `dolt_conflicts`. Dumbodb already writes primary-conflict artifacts via
-  `buildConflictArtifactHash` (`merge_conflict.go:828`); we extend that to
-  emit `ArtifactTypeUniqueKeyViol` entries.
-- **`tree.ApplyMutations`** (`/workspace/dolt/go/store/prolly/tree/mutator.go:63`)
-  -- the underlying flush primitive; not called directly, used via
-  `MutableMap.Map(ctx)`. This is what gives R1 / R3.
-- **`prolly.AddressMap` + editor** (`/workspace/dolt/go/store/prolly/address_map.go`)
-  -- the `name -> hash` map already used for the per-collection index AM
-  (`index_persist.go:207`, `:234-243`). No change needed.
-
-### 4.2 Lifted from dolt (small upstream PRs)
-
-These are dolt types we want to call from dumbodb but which currently bind
-to `schema.Schema` / `sql.Row`. The fix is to introduce a key-builder
-interface in dolt, have dolt's existing SQL implementations satisfy it, and
-have dumbodb supply a BSON implementation. Both sides then call the same
-machinery.
-
-- **`merge.MutableSecondaryIdx`**
-  (`/workspace/dolt/go/libraries/doltcore/merge/mutable_secondary_index.go:116`)
-  -- today its fields are `mut *prolly.MutableMap` plus two
-  `index.SecondaryKeyBuilder` instances (left and merged). Proposed change
-  (PR-1):
-
-  ```go
-  // in package merge (or hoisted to package prolly):
-  type SecondaryKeyBuilder interface {
-      SecondaryKeyFromRow(ctx context.Context, primKey, primVal val.Tuple) (val.Tuple, error)
-  }
-  ```
-
-  `index.SecondaryKeyBuilder` (`/workspace/dolt/go/libraries/doltcore/sqle/index/key_builder.go`)
-  already has this exact method shape; the change is to declare the
-  interface and have `MutableSecondaryIdx`'s fields hold it. No call-site
-  change in dolt; dumbodb supplies a `bsonSecondaryKeyBuilder` whose
-  `SecondaryKeyFromRow` calls `idxpkg.BuildSecondaryKey`
-  (`internal/index/index.go:54`) with the doc reconstructed from the
-  `(primKey, primVal=JSONAddr)` pair via `readDocFromEntry`
-  (`collection.go:diff.go:352`).
-
-- **`merge.NewMutableSecondaryIdx`** signature (PR-1, same change) becomes:
-
-  ```go
-  func NewMutableSecondaryIdx(idx prolly.Map, left, merged SecondaryKeyBuilder) MutableSecondaryIdx
-  ```
-
-  shedding the `sql.Context`, `tableName`, and `schema.Schema` parameters
-  that were only needed to *build* the dolt-side key builders. Dolt's
-  existing call sites (`merge_prolly_rows.go:1490`) move the
-  `index.NewSecondaryKeyBuilder` calls out into the caller, where the SQL
-  context is already in scope.
-
-- **`merge.applyEdit`** (`/workspace/dolt/go/libraries/doltcore/merge/merge_prolly_indexes.go:172`)
-  -- 18 lines, depends only on the lifted `MutableSecondaryIdx`. No change
-  needed beyond PR-1.
-
-- **`merge.secondaryMerger`** (`/workspace/dolt/go/libraries/doltcore/merge/merge_prolly_rows.go:1471-1606`)
-  -- coordinates one `MutableSecondaryIdx` per index against the
-  `tree.ThreeWayDiff` stream. Today it also reads `tm.leftTbl.GetIndexSet`
-  and `schema.Schema` to build the per-index writers. Proposed change
-  (PR-2): split into
-
-  - `MergeSecondaryIndexes(ctx, idxs []MutableSecondaryIdx, diffs *tree.ThreeWayDiffer[...]) ([]prolly.Map, error)`
-    -- the pure inner loop, callable from dumbodb,
-  - a thin SQL-side wrapper that builds the `MutableSecondaryIdx` slice
-    from the dolt `IndexSet` and then calls the pure inner loop.
-
-  Dolt's existing behaviour is preserved; dumbodb supplies the slice
-  directly from its own `state.secIndexMaps[c.name]`.
-
-- **`creation.BuildSecondaryProllyIndex`** /
-  **`BuildUniqueProllyIndex`** (`/workspace/dolt/go/libraries/doltcore/table/editor/creation/index.go:154,198`)
-  -- the bulk index-from-primary builder. Today it takes `schema.Schema`
-  and `schema.Index` purely to construct a `SecondaryKeyBuilder` internally.
-  Proposed change (PR-3): add overloads `BuildSecondaryProllyIndexFromBuilder`
-  and `BuildUniqueProllyIndexFromBuilder` that accept the
-  `SecondaryKeyBuilder` interface directly, and have the existing functions
-  call those. Dumbodb's `buildSecondaryIndex` (`collection.go:2497`) is
-  replaced by a call to the builder-from-builder variant; the dumbodb side
-  no longer needs to handcraft the primary-scan loop.
-
-### 4.3 Stays dumbodb-side
-
-Even with maximal dolt reuse, three pieces remain on the dumbodb side
-because they encode dumbodb's specific document model.
-
-- **`internal/index/index.go`** -- the BSON-to-`KeyString` encoding
-  (`BuildSecondaryKey` at `:54`, `EncodeValue` in `keystring.go`). This is
-  the dumbodb analogue of dolt's column-projection key builder; both feed
-  the same `prolly.Map`.
-- **The doc-resolution step** -- given a primary `(key, value=JSONAddr)`
-  pair, fetch the BSON document to extract indexed fields. Already lives
-  in `diff.go:readDocFromEntry`. The `SecondaryKeyBuilder`
-  implementation for dumbodb wraps this.
-- **Multi-key expansion** -- dolt's secondary indexes are scalar per column;
-  dumbodb expands array-valued indexed fields via `expandMultiKeyValues`
-  (called at `collection.go:1544`). The dumbodb `SecondaryKeyBuilder`
-  returns multiple tuples per primary row when the indexed field is an
-  array, which means the interface above must be plural:
-
-  ```go
-  type SecondaryKeyBuilder interface {
-      SecondaryKeysFromRow(ctx context.Context, primKey, primVal val.Tuple, out []val.Tuple) ([]val.Tuple, error)
-  }
-  ```
-
-  -- it appends keys to `out` and returns it. Dolt's existing single-key
-  builders append exactly one. This shape stays correct for both backends
-  and folds multi-key naturally into PR-1.
-
-### 4.4 What we change in dolt vs. what we work around
-
-The principle is **change dolt, do not fork or shadow**. We do not want
-two copies of `applyEdit` or two `MutableSecondaryIdx` types drifting. The
-upstream PRs above (PR-1 through PR-3) are small, mechanical, and
-zero-behaviour-change for dolt's existing SQL surface. Each is a candidate
-for landing on dolt's `main` before the dumbodb code change that depends on
-it.
-
-If, for scheduling reasons, we need to land the dumbodb change before the
-dolt PR ships, the fallback is to type-assert against a build-tagged shim
-inside `internal/backends/dolt/` that wraps the not-yet-public dolt
-function. We accept that as a temporary measure, never as an architecture.
-
-## 5. Implementation Plan
-
-### Phase 0. Tests that fail today (red bar)
-
-Before any code changes, land the failing tests so the gap is captured:
-
-- `index_update_test.go`: insert a doc, update an indexed field, equality
-  lookup on the new value (must return the doc) and on the old value (must
-  return nothing). Today the new-value lookup misses and the old-value
-  lookup hits. (Closes part of `workspace-4ee`.)
-- `index_delete_test.go`: insert, delete by `_id`, equality lookup on the
-  indexed value must return nothing. (Closes part of `workspace-4ee`.)
-- `index_merge_test.go`: branch X writes `{field: "alpha"}` through
-  `{field: "mike"}`, branch Y writes `{field: "november"}` through
-  `{field: "zulu"}`, both branches share an index on `field`. Merge Y into
-  X; equality lookups on both halves must succeed on the merged branch.
-  (Closes part of `workspace-ife`.)
-- `index_chunk_reuse_test.go`: same scenario, but instead of assertions on
-  lookups, walk the index prolly tree pre- and post-merge and count chunks
-  that share addresses with each parent. At least one non-root chunk from
-  each parent index must appear in the merged index. This is the structural
-  bar from R4. Use `tree.Node.Address()` and `prolly.Map.WalkAddresses` from
-  dolt.
-
-### Phase 1. Wire `UpdateAll` / `DeleteAll` through `MutableSecondaryIdx`
-
-Land dolt PR-1 (Section 4.2) first, then on the dumbodb side:
-
-- Add `internal/index/builder.go` containing
-  `type DocSecondaryKeyBuilder struct { idx backends.IndexInfo; ns tree.NodeStore }`
-  with method
-  `SecondaryKeysFromRow(ctx, primKey, primVal val.Tuple, out []val.Tuple) ([]val.Tuple, error)`.
-  Implementation: reconstruct the BSON doc via `readDocFromEntry`
-  (`diff.go:352`), run `extractIndexFieldValues` (`collection.go:2570`),
-  optionally short-circuit on `MatchesPartialFilter`, and for each value in
-  `expandMultiKeyValues` build a tuple via `idxpkg.BuildIndexEntry`
-  (`index.go:65`).
-- In `collection.go`, replace the bespoke
-  `updateSecondaryIndexesOnInsert` (`:1510`) with a call into dolt's
-  `merge.MutableSecondaryIdx.InsertEntry` per index, instantiated once per
-  write batch from the dumbodb key builder. Multi-key arrays come out of
-  the builder's appended-slice return value (Section 4.3).
-- In `UpdateAll` (`:1639`), for each updated doc:
-  - Run the dolt `isNoopUpdate` analogue: build old and new keys, sort,
-    compare. If equal, skip (R2).
-  - Otherwise call `MutableSecondaryIdx.UpdateEntry(ctx, primKey,
-    oldPrimVal, newPrimVal)` per index. The dolt method already does
-    `Delete(old) + Put(new)`
-    (`mutable_secondary_index.go:156-172`). The old doc is already on
-    hand at `:1700` via `existingHash`; thread it as a val.Tuple.
-- In `DeleteAll` (`:1790`), call `MutableSecondaryIdx.DeleteEntry(ctx,
-  primKey, oldPrimVal)` per index per doc.
-- After the per-doc loop, finalise each index with
-  `MutableSecondaryIdx.Map(ctx)` and write through `persistIndexes`.
-
-Cost: one prolly.Map.Get per *unique* index per write (the unique-validation
-probe; non-unique indexes are pure mutate path). No scan. Satisfies R1.
-
-### Phase 2. Unique-index enforcement on write
-
-Reuse the same machinery dolt uses on write, not just on merge. Dolt's
-`prollySecondaryIndexWriter.Insert` / `Update`
-(`/workspace/dolt/go/libraries/doltcore/sqle/writer/prolly_index_writer.go`)
-returns `sql.UniqueKeyError` on duplicate; the merge path emits an artifact
-via `replaceUniqueKeyViolation`. We mirror the same split:
-
-- **Write-path enforcement.** Before `MutableSecondaryIdx.InsertEntry` or
-  the new-key half of `UpdateEntry`, probe the index range
-  `[LowerBoundInclusive(v), UpperBoundExclusive(v))` (helpers already at
-  `internal/index/index.go:116-134`). Any entry with a different primary
-  ID rejects the write with a `WriteException` carrying MongoDB error
-  code 11000 (DuplicateKey). This is a single range probe per unique
-  index per row -- the same shape dolt uses.
-- **Merge-path artifact.** Reuse
-  `merge.replaceUniqueKeyViolation`
-  (`/workspace/dolt/go/libraries/doltcore/merge/violations_unique_prolly.go:83`)
-  from inside the `merge.MutableSecondaryIdx`-driven loop. The
-  `ArtifactsEditor` already plumbed through `buildConflictArtifactHash`
-  (`merge_conflict.go:828`) accepts the same artifact type.
-
-Together this closes the gap that today's `backends.IndexInfo.Unique` is
-metadata-only.
-
-### Phase 3. Merge secondary indexes
-
-Two sub-tasks. Both call dolt directly.
-
-**3a. Expose the primary-row diff.** `captureConflictsForCollection`
-(invoked at `merge_conflict.go:819`) already constructs a
-`tree.ThreeWayDiffer` over the primary maps internally to detect document
-conflicts. Refactor it to *return* the diff stream alongside the merged
-map -- pure code motion, no semantic change -- so the per-index loop can
-consume the same stream. This avoids walking the primary twice and uses
-dolt's diff machinery without copying it.
-
-**3b. Per-index merge.** Walk the index AMs from into / from / base
-(`loadIndexesFromDTBL` already gives us the per-branch sets). Per index
-name, four cases. Index *definitions* never differ when names match
-(Section 3.5), so this is a name-level union:
-
-- **Present on into, from, and base, all roots distinct:**
-  Call `prolly.MergeMaps(intoMap, fromMap, baseMap, collisionCb)`
-  (`/workspace/dolt/go/store/prolly/tuple_map.go:171`). The collision
-  callback is `nil` for non-unique indexes (no collisions possible -- the
-  key embeds the unique primary ID) and `replaceUniqueKeyViolation`
-  (`violations_unique_prolly.go:83`) for unique indexes. This single call
-  gives us R4 / R5 directly: the underlying `tree.MergeOrderedTrees` /
-  `tree.ThreeWayMerge` (`store/prolly/tree/merge.go:62`) reuses identical
-  chunks from both sides by hash.
-
-- **Present on both into and from but base lacks the index:** treat the
-  base as `prolly.NewEmptyMap(...)` and call `MergeMaps` the same way.
-  Edge case validated by a unit test (Section 6.2).
-
-- **Present on one side only (absent in base):** the existing side's
-  index covers only that side's docs. Drive the dolt
-  `MergeSecondaryIndexes` loop (Section 4.2, PR-2) over the primary
-  diff stream with a `MutableSecondaryIdx` seeded from the existing side.
-  Inserts and updates from the *other* side land via `applyEdit`. No
-  other code is needed.
-
-- **Present on base, dropped on one side, kept on the other:** Treat as
-  the collection-level delete-vs-modify policy at
-  `merge_conflict.go:800-803`. A drop on one side combined with primary-
-  row edits on the other is a name-level AM conflict. Drop-on-both is a
-  clean drop.
-
-- **Absent on both sides:** nothing to do.
-
-After the per-index loop, finalise each `MutableSecondaryIdx` via
-`Map(ctx)`, update the per-collection index AM via its editor (existing
-`persistIndexes` code), and write the merged DTBL via
-`dtblHashForCollection`. The change is that the AM holds merged roots,
-not the into-branch's stale roots.
-
-**Why not use dolt's whole-table merge entry point?**
-`merge.RootMerger.MergeTable` (`merge_rows.go:204`) is tempting because it
-already does everything, but it is `sql.Context`-bound and assumes a
-`durable.IndexSet` keyed by SQL schema. The cost of pulling that in would
-be the same as the PRs above plus a synthetic SQL-schema shim for every
-dumbodb collection. PR-1 / PR-2 are the cleaner cut: take the inner
-primitives, leave the outer table-merge driver in dolt.
-
-**Note on dolt code reuse.** `tree.ThreeWayMerge` is parameterised on
-`Ordering[K]` (`merge.go:56-64`) and the val.Tuple ordering already used by
-`prolly.Map` is compatible. We should be able to call it directly with the
-existing tuple descriptors, without copying the algorithm. Open question
-(see Section 6): does dolt expose a public wrapper at the `prolly.Map`
-layer that we can use without dropping into `tree`?
-
-### Phase 4. Cherry-pick / rebase / revert
-
-`backend.go:1832`, `:2812`, `:3121` all call `mergeAddressMapsWithConflicts`.
-Once Phase 3 lands they inherit index merging for free.
-
-### Phase 5. Replace the JSON IndexEntry wrapper
-
-Today dumbodb's per-collection index AM stores
-`name -> JSON-IndexEntry-chunk-hash`, where the JSON entry carries metadata
-plus the prolly.Map root (`index_persist.go:42-49`). Dolt's `serial.Table`
-stores `name -> per-index-root-hash` directly and parks index metadata in
-the table schema (`/workspace/dolt/go/gen/fb/serial/table.fbs`,
-`schema.Index`).
-
-Plan: introduce a per-collection metadata chunk (a small flatbuffer mirroring
-the relevant fields of `schema.Index`: name, keys, unique, sparse, partial
-filter) referenced from the DTBL, and change the AM to `name -> root-hash`.
-Two benefits:
-
-- The AM lookup becomes one chunk read, matching dolt.
-- `persistIndexes` no longer writes a JSON chunk per persist call (small
-  but real savings on write-heavy workloads).
-
-This is independent of correctness and can ship after Phases 1-3. We can
-defer if upstream PR-1/PR-2/PR-3 reveal a better metadata-sharing scheme.
-
-## 6. Testing Plan
-
-### 6.1 Unit-level correctness (Phase 1, 2)
-
-- `TestUpdateAllUpdatesSingleFieldIndex` -- index on `field`, update
-  changes `field`, both lookups behave.
-- `TestUpdateAllNoChangeNoIndexEdit` -- update touches an unindexed field;
-  walk the index root before and after, assert the hash is identical (R2).
-- `TestUpdateAllMultikeyIndex` -- update changes one element of an array
-  field; old keys for unchanged elements must remain.
-- `TestDeleteAllRemovesIndexEntries` -- delete one of N documents sharing an
-  indexed value; lookup returns N-1 docs.
-- `TestUniqueIndexBlocksDuplicateInsert` and
-  `TestUniqueIndexBlocksDuplicateUpdate`.
-- `TestPartialIndexMembershipTransition` -- update that changes the partial
-  filter result both ways.
-
-### 6.2 Structural sharing (R3, R4, R5)
-
-A new helper `countSharedChunks(rootA, rootB hash.Hash, ns tree.NodeStore)`
-that walks both trees and returns the set of addresses present in both.
-Reuse dolt's tree walk; do not reimplement.
-
-- `TestIndexChunkReuseOnNoopUpdate` -- assert pre/post root hashes equal.
-- `TestIndexChunkReuseOnBranchedInserts` -- the user's scenario. Branch X
-  writes keys "alpha".."mike", branch Y writes "november".."zulu". Assert:
-  - X's index root and Y's index root share the empty-tree chunk at most,
-    and more interestingly,
-  - the merged index root, after Phase 3, contains at least the leaf chunks
-    that lie strictly below "m" from X and strictly above "n" from Y.
-- `TestIndexChunkReuseOnOverlap` -- both branches insert the *same* doc
-  (same `_id`, same indexed value). The leaf chunk holding that entry must
-  be byte-identical on both branches and in the merged root.
-
-### 6.3 Read-path regression (R7, R8)
-
-Existing tests in `index_test.go`, `index_partial_test.go`,
-`prefilter_range_test.go`, `index_bench_test.go` must continue to pass.
-The benchmarks in `index_bench_test.go` should not regress more than 5% on
-single-doc inserts after Phase 1 (the only new cost is one prolly.Map.Get
-per unique index, which we will run only when `idxInfo.Unique`).
-
-### 6.4 Cross-DB sanity (against dolt)
-
-Build a small Go test binary that, given an in-memory `tree.NodeStore`,
-runs the same insert sequence through a hand-built dolt SQL table and a
-dumbodb index. Both go through the same lifted `MutableSecondaryIdx`
-machinery (Section 4.2) but with different `SecondaryKeyBuilder`s. After
-each batch:
-
-- The number of chunks rewritten per insert should be identical between
-  the two paths -- they share the flush code in `tree.ApplyMutations`.
-- The merged-index leaf-chunk reuse percentage on the branched-write
-  scenario (R4) should be within 1% between the two paths.
-
-This is the empirical check that dumbodb genuinely shares dolt's
-behaviour rather than approximating it.
-
-## 7. Open Questions
-
-- Q1. **`MergeMaps` TODO.** `tuple_map.go:173` notes that `MergeMaps`
-  "does not properly detect merge conflicts when one side adds a NULL to
-  the end of its tuple." Dumbodb's `idxValDesc` is a fixed single byte
-  (`index/index.go:35`) so the case can't fire for us, but the comment
-  also says "since `MergeMaps` is not currently called, fixing this is
-  not a priority." Once dumbodb starts calling it, we own that priority.
-  Decide whether to fix upstream as part of Phase 3 or to keep dumbodb-
-  side regression coverage as a tripwire.
-
-- Q2. **PR-1 / PR-2 / PR-3 ordering.** Dolt's release cadence is
-  independent from dumbodb's. Confirm the policy for landing dependent
-  PRs across the two repos and whether a single batched upstream PR
-  (one PR adding the interface plus all three call-site touches) is
-  preferred over three independent ones.
-
-- Q3. **Primary-ID stability.** The dumbodb index key includes a 20-byte
-  SHA-512-derived primary ID (`helpers.go:225-279`). Across branches, the
-  same MongoDB `_id` must always produce the same 20 bytes for R5 to
-  hold. Confirm no per-database salt anywhere on the hash path; add a
-  regression test.
-
-- Q4. **Artifact surfacing.** The artifact map writer
-  (`buildConflictArtifactHash`) currently only emits primary-row
-  conflicts. Confirm `ArtifactTypeUniqueKeyViol` round-trips through
-  dumbodb's read side of `dolt_conflicts`-equivalent.
-
-- Q5. **Capped collections.** `evictCappedDocs` (`collection.go:1566`)
-  deletes from the primary map directly. It must also drive
-  `MutableSecondaryIdx.DeleteEntry` per eviction; verify before Phase 1
-  ships.
-
-## 8. Out of Scope
-
-- Compound indexes beyond what `extractIndexFieldValues` /
-  `expandMultiKeyValues` already support.
-- Text / geospatial / hashed index merging. These have their own encoding
-  paths and the same plan applies, but each needs its own ordering for
-  `ThreeWayMerge` correctness.
-- Online index build under concurrent writes. Today dumbodb takes
-  `state.mu` for all writes; the design assumes that lock continues to
-  serialise.
+## 1. Goal
+
+Secondary indexes should behave like the primary document store already
+does: every write keeps them correct, write cost scales with the size of
+the write (not the size of the collection), and branches share unchanged
+index storage with each other and with their merge results.
+
+Today only the insert path maintains indexes. Updates, deletes, and
+merges silently leave indexes stale, and unique-index validation on
+insert scans the whole collection. This doc defines the expected
+behaviors, the tests that pin them, and the plan to get there.
+
+## 2. Expected Behaviors
+
+Each behavior states what a user or test should observe. Status is one
+of: WORKS (passes today), BROKEN (wrong result today), MISSING (feature
+absent today).
+
+Every behavior is pinned by tests in one of two categories:
+
+- **Parity** -- the behavior is observable through the wire protocol
+  and MongoDB defines the correct answer. These live in
+  `dumbodb-parity-testing/tests/` and run the identical operations
+  against MongoDB and DumboDB side by side. Red-bar means landing
+  them as `DumboDBXFail` (divergence expected and recorded); the fix
+  flips them to `DumboDBFull`. One behavior usually needs a family
+  of parity cases, not a single test.
+- **DumboDB-only** -- the behavior has no MongoDB equivalent: version
+  control (branches, merges, history ops) and storage internals
+  (chunk addresses, root hashes, encodings, benchmarks). These live
+  in `internal/backends/dolt/` and `internal/index/`.
+
+### 2.1 Writes keep indexes correct (single branch)
+
+- **W1. Insert is indexed.** After inserting a doc, an equality or
+  range lookup on its indexed field finds it.
+  Status: WORKS.
+  Tests: parity (existing index suites) and dumbodb-only
+  (`index_test.go`).
+
+- **W2. Update re-indexes.** After updating a doc's indexed field from
+  A to B, queries behave exactly as MongoDB's: lookup by B finds the
+  doc, lookup by A does not.
+  Status: BROKEN -- both halves diverge from MongoDB; the index still
+  says A.
+  Tests: parity family `Index_UpdateReindex_*` covering each update
+  shape -- `$set` to a new value, `$unset`, `$inc`, whole-document
+  replace, multi-document update, and upsert-as-update -- each
+  asserting find-by-old and find-by-new against MongoDB side by side.
+
+- **W3. Delete un-indexes.** After deleting a doc, lookups on its
+  indexed values return nothing.
+  Status: BROKEN -- stale entries remain and lookups return the
+  deleted doc.
+  Tests: parity family `Index_DeleteUnindex_*` -- deleteOne by _id,
+  deleteOne by indexed-field filter, deleteMany, findAndModify
+  remove.
+
+- **W4. Untouched indexes are untouched.** An update that does not
+  change any indexed field leaves the index storage bit-for-bit
+  identical (same root hash).
+  Status: MISSING (vacuously "true" today only because updates never
+  touch indexes at all).
+  Test: dumbodb-only `TestNoopUpdateLeavesIndexRootUnchanged` (root
+  hashes are not observable over the wire).
+
+- **W5. Array (multikey) updates are incremental.** Updating one
+  element of an indexed array field fixes entries for the changed
+  element only; lookups on unchanged elements still hit, the removed
+  element misses, the added element hits.
+  Status: BROKEN (no update maintenance at all).
+  Tests: parity family `Index_MultikeyUpdate_*` ($push, $pull,
+  $set of one element, full array replace) for the query-visible
+  half; dumbodb-only test asserting only changed entries were
+  edited (storage-level, see P2).
+
+### 2.2 Index membership rules (sparse / partial)
+
+Index *content* should be the single source of truth for which docs an
+index covers. Today membership rules are scattered through validation
+and read paths while the stored index covers everything.
+
+- **M1. Sparse indexes skip absent fields.** A doc missing the indexed
+  field has no entry in a sparse index; if an update adds the field the
+  entry appears, and if an update unsets it the entry disappears.
+  Status: BROKEN -- sparse indexes store Null entries for missing
+  fields; reads compensate case-by-case.
+  Tests: parity family `Index_Sparse_*` (query results, sparse-unique
+  coexistence -- MongoDB defines all of it); dumbodb-only assertion
+  that the stored index omits non-member docs (entry-count or
+  root-hash level).
+
+- **M2. Partial indexes track their filter.** A doc only has entries
+  in a partial index while it satisfies the filter expression; updates
+  that cross the boundary (either direction) add or remove entries.
+  Status: BROKEN -- same everything-indexed issue as M1.
+  Tests: parity family `Index_Partial_*` (membership transitions in
+  both directions, queried side by side); dumbodb-only stored-content
+  assertion as in M1.
+
+### 2.3 Unique indexes
+
+- **U1. Duplicate insert is rejected.** Inserting a doc whose unique
+  key collides with an existing doc fails with duplicate-key error
+  11000; the collection is unchanged.
+  Status: WORKS, but by scanning the entire primary per insert batch
+  -- correct result, disqualifying cost (see P1).
+  Tests: parity coverage exists; keep green through the rework.
+
+- **U2. Colliding update is rejected.** An update that would change a
+  doc's unique key to collide with another doc fails the same way and
+  leaves both docs unchanged.
+  Status: MISSING -- updates perform no unique validation.
+  Tests: parity family `Index_UniqueUpdate_*` ($set collision,
+  replace collision, error code and message shape, doc unchanged
+  after failure).
+
+- **U3. Unique respects sparse/partial membership.** Two docs both
+  missing a sparse-unique field coexist; two docs both outside a
+  partial-unique filter coexist.
+  Status: WORKS in validation logic; must stay true when validation
+  moves to index probes (depends on M1/M2).
+  Tests: parity (folded into the `Index_Sparse_*` / `Index_Partial_*`
+  families).
+
+### 2.4 Write cost and storage sharing (single branch)
+
+- **P1. Write cost scales with the write.** A write touching k docs
+  performs O(k log N) index work. No write path may scan or rebuild an
+  index or the primary. Concretely: doubling collection size must not
+  measurably change per-doc insert/update/delete latency.
+  Status: BROKEN for unique inserts (full primary scan per batch,
+  U1); WORKS for non-unique inserts; not yet applicable for
+  update/delete (no maintenance exists).
+  Tests: dumbodb-only -- `BenchmarkInsertWithUniqueIndexScalesFlat`
+  plus benchmark guards on update/delete (cost is not wire-visible).
+
+- **P2. Small writes share storage with the previous version.** After
+  a write batch, index tree chunks outside the touched key range have
+  identical addresses to the pre-write tree (structural sharing across
+  time).
+  Status: WORKS for insert; MISSING for update/delete.
+  Test: dumbodb-only `TestIndexChunkReuseAcrossWrites` (walks pre/post
+  trees, asserts shared chunk addresses).
+
+- **P3. Reads stay bounded.** Equality/range lookups, indexed count,
+  and distinct-scan touch only chunks on the lookup path. No
+  regression permitted by any phase.
+  Status: WORKS.
+  Tests: dumbodb-only (existing index read tests and benchmarks).
+
+### 2.5 Branches and merges
+
+All behaviors in this section are version-control or storage concerns
+with no MongoDB equivalent; every test here is dumbodb-only. The one
+exception: post-merge *query* results are still wire-observable, so B2
+and B4 each get a follow-on parity sweep (run the standard index query
+families against the merged branch via the `dbname@branch` extension)
+in addition to their dumbodb-only scenario tests.
+
+- **B1. Same doc, same bytes.** A doc inserted with the same _id and
+  indexed value on two branches produces byte-identical index leaf
+  chunks on both (the chunk store deduplicates them).
+  Status: expected-WORKS (key encoding is branch-independent), never
+  asserted.
+  Test: dumbodb-only `TestSameDocSameIndexLeafAcrossBranches`.
+
+- **B2. Merged indexes are correct.** After merging branch Y into
+  branch X, index lookups on the merge result find exactly the docs in
+  the merged collection: docs added on either side hit; docs deleted
+  on either side miss; docs whose updates merged field-wise are
+  findable by their *merged* values (even when the merged doc existed
+  on neither parent).
+  Status: BROKEN -- merge keeps X's index untouched; Y's writes are
+  invisible to index lookups.
+  Tests: dumbodb-only `TestMergedIndexReflectsBothBranches`,
+  `TestMergedIndexReflectsFieldMergedDocs` (the neither-parent case),
+  `TestMergedIndexConflictKeepsOurs`; plus the post-merge parity
+  sweep noted above.
+
+- **B3. Merged indexes share storage with both parents.** For
+  disjoint-range writes (X writes "a".."m", Y writes "n".."z"), the
+  merged index reuses leaf chunks from both parents rather than
+  rewriting the tree.
+  Status: MISSING.
+  Test: dumbodb-only `TestMergedIndexChunkReuseFromBothParents`.
+
+- **B4. One-sided indexes survive a merge and cover both sides.** An
+  index created on only one branch since the base exists after the
+  merge and covers documents written on the *other* branch.
+  Status: BROKEN (it survives but does not cover the other side's
+  docs).
+  Tests: dumbodb-only `TestOneSidedIndexCoversMergedDocs`; plus the
+  post-merge parity sweep noted above.
+
+- **B5. A drop wins.** The index-level three-way cases when the two
+  sides disagree about an index's existence. Merging Left (ours) and
+  Right (theirs) against Base:
+
+  - Base: has Index-A. Left: dropped Index-A. Right: still has
+    Index-A, its content advanced by Right's document writes.
+    Result: Index-A is absent from the merge. Right's documents
+    still merge into the collection; only the index is gone. The
+    drop wins over the content change because indexes are derived
+    data -- recreating is cheap and explicit, and nothing is lost.
+    No warning artifact; the drop is silent and final (decided).
+  - The mirror image (Right dropped, Left kept and wrote): same
+    result, Index-A absent.
+  - Base: has Index-A; both sides dropped it: absent, trivially.
+  - Base: has Index-A; Left dropped it and re-created the same name
+    with the same spec: the name exists on both sides with matching
+    specs, so this is the ordinary present-on-both content merge
+    (B2/B3) -- the drop+recreate is invisible at the name level.
+  - Base: has Index-A; Left dropped it and re-created the same name
+    with a DIFFERENT spec; Right did not alter the definition
+    (Right's spec still equals Base's, regardless of Right's
+    document writes). Result: Left's re-created index wins -- the
+    definition change is an intentional edit and the unaltered side
+    has no competing claim. The winning index must still cover
+    Right's documents (same obligation as B4: seed from Left's
+    index, apply Right's document diffs).
+  - Base: has Index-A; BOTH sides altered the definition (each
+    dropped and re-created with specs that differ from Base's and
+    from each other): conflict -- there is no unaltered side to
+    defer to. Surfaced as a merge error naming the index.
+  - Base: lacks Index-A; one side created it: not a drop at all --
+    that is B4 (carry it and cover both sides' docs).
+
+  The general rule: an index definition change (drop, or
+  drop+recreate with a new spec) wins over a side that left the
+  definition untouched; two competing definition changes conflict.
+  "Altered" is judged by comparing each side's spec fields (keys,
+  unique, sparse, partial filter) to Base's -- index content (the
+  map root) does not count as alteration.
+
+  Status: MISSING (never exercised).
+  Tests: dumbodb-only `TestDroppedIndexStaysDroppedAfterMerge` (one
+  case per bullet, both directions).
+
+- **B6. Merge-created unique violations are conflicts.** When each
+  branch inserts a different doc with the same unique key, the merge
+  records a conflict requiring manual resolution -- the standard
+  conflict resolution workflow (Section 2.6).
+  Status: MISSING.
+  Test: dumbodb-only `TestMergeUniqueViolationIsConflict`.
+
+- **B7. Cherry-pick, rebase, and revert behave like merge.** All of
+  B2-B6 hold for these operations (they share the merge machinery).
+  Reverting a commit that created an index drops it.
+  Status: BROKEN/MISSING in line with B2-B6.
+  Tests: dumbodb-only, one scenario per operation in
+  `index_history_ops_test.go`.
+
+- **B8. Branch isolation (already shipped).** Creating or dropping an
+  index on one branch never changes another branch's behavior.
+  Status: WORKS (branch-scoped metadata refactor).
+  Tests: dumbodb-only `index_branch_isolation_test.go`. Must stay
+  green.
+
+### 2.6 Conflict resolution
+
+Resolving a merge conflict is a write: it replaces (or deletes) a
+document in the in-progress merge state, and whatever document state
+ends up in the resulting dumboCommit must be reflected in the indexes
+of that commit. This is where membership rules bite hardest: with a
+partial index on `{status: "active"}`, resolving a conflict by
+changing `status` to `"inactive"` must remove the doc's index entry,
+even though no ordinary update ever ran.
+
+Today `DumboDBResolveConflict` writes the chosen value directly into
+the merged primary map and re-attaches the existing index AM
+untouched -- a third index-bypassing write path alongside UpdateAll
+and DeleteAll. All behaviors below are dumbodb-only (MongoDB has no
+merge conflicts), but each test should include the self-consistency
+check that index-driven query results equal full-scan results on the
+same branch -- that equivalence is what parity tests give us
+elsewhere and it needs no MongoDB to assert.
+
+- **C1. Resolving "theirs" re-indexes.** After resolving a conflict
+  with theirs, lookups find the doc by theirs' field values and no
+  longer find it by ours' values. Resolving with theirs-deleted
+  removes all the doc's index entries.
+  Status: BROKEN -- the index keeps ours' entries regardless.
+  Tests: dumbodb-only `TestResolveTheirsReindexes`,
+  `TestResolveTheirsDeleteUnindexes`.
+
+- **C2. Resolving "custom" re-indexes.** After resolving with a
+  custom document, lookups find the doc by the custom values; both
+  parents' old values miss.
+  Status: BROKEN -- same bypass.
+  Test: dumbodb-only `TestResolveCustomReindexes`.
+
+- **C3. Resolution can flip membership.** The motivating example: a
+  resolution that moves a doc across a partial-filter boundary (or
+  sets/unsets a sparse field) adds or removes its entries
+  accordingly, in both directions.
+  Status: BROKEN (compounds the M1/M2 gap with the resolve bypass).
+  Tests: dumbodb-only `TestResolveCrossesPartialFilterBoundary`,
+  `TestResolveSetsUnsetsSparseField`.
+
+- **C4. Resolution respects unique constraints.** A "custom"
+  resolution whose unique key collides with a different doc is
+  rejected like any other write (duplicate-key, the conflict stays
+  unresolved). A "theirs" resolution that collides surfaces the same
+  way the merge itself would (B6 artifact path).
+  Status: MISSING -- no validation on the resolve path.
+  Test: dumbodb-only `TestResolveUniqueCollisionRejected`.
+
+- **C5. The committed root is index-correct.** Catch-all: after any
+  sequence of resolutions ("ours", "theirs", "custom", deletions, in
+  any order) followed by the commit that concludes the merge, the
+  committed indexes describe exactly the committed documents.
+  Status: BROKEN.
+  Test: dumbodb-only `TestResolvedMergeCommitIndexConsistency`
+  (randomized resolution sequence; assert index-scan == collscan for
+  every index).
+
+### 2.7 Mixed-type values in index keys
+
+MongoDB allows a single indexed field to hold different BSON types
+across documents and defines a total order over them (the type bracket
+order: MinKey < Null < Numbers < String < Object < Array < BinData <
+ObjectId < Boolean < Date < Timestamp < Regex < MaxKey, with all
+numeric types compared by value inside one bracket). DumboDB's
+KeyString encoding (`internal/index/keystring.go`) copies MongoDB's
+ctype byte layout, so the *bracket* order is already right; the
+problems are inside and outside the brackets. Verified by direct
+byte-comparison probes on 2026-06-09:
+
+- **T1. Type brackets sort in Mongo order.** Sorting or
+  range-querying a field whose values span types returns documents in
+  MongoDB's bracket order (null < numbers < string < bool < date
+  etc.), and equality lookups never return documents from another
+  bracket.
+  Status: WORKS for the encoded types (verified at the byte level:
+  null/int/string/bool/date brackets compare correctly), but never
+  asserted against MongoDB.
+  Tests: parity family `Index_MixedTypeBrackets_*` (sort over a
+  mixed-type indexed field, equality and range queries that must not
+  leak across brackets -- this is the essential coverage); supported
+  by a dumbodb-only `TestKeyStringTypeBracketOrder` byte-comparison
+  unit test pinning the encoding itself.
+
+- **T2. Numeric types compare by value, not representation.** int32,
+  int64, and float64 holding the same number produce the same index
+  key (2 == 2.0), and mixed int/float ranges sort numerically.
+  Status: BROKEN for non-integer floats. Whole-value floats unify
+  correctly (verified: KS(int64(2)) == KS(float64(2.0))), but every
+  non-integer float is bucketed above all integers: KS(2.5) sorts
+  after KS(3), KS(0.5) sorts after KS(1) (verified by byte compare).
+  Consequence: an indexed range scan for `{n: {$gt: 2.5}}` starts
+  past the integer bucket and silently misses n=3 -- wrong query
+  results on the find path today, not just a perf issue. This breaks
+  the soundness contract `indexBoundsForFilterValue` claims.
+  Tests: parity family `Index_MixedNumeric_*` (find and count with
+  $gt/$gte/$lt/$lte bounds crossing the int/float boundary, sort over
+  mixed numerics -- MongoDB defines every answer); dumbodb-only
+  encoding-order test pinning the byte-level fix.
+
+- **T3. Types the encoder cannot represent must not produce index
+  plans.** Decimal128, Timestamp, and Regex values fall through
+  `EncodeValue`'s default case and encode as Null; NaN and +/-Inf
+  also encode as Null; all embedded documents encode as one
+  marker byte (no content), as do nested arrays. Any of these in
+  index *content* is tolerable for find (the handler re-filters
+  false positives) but must never feed a *plan that skips
+  re-validation*: today `tryIndexedCount` counts raw index entries
+  in the computed range and its bounds builder accepts these values,
+  so `count({field: null})` includes Decimal128/Timestamp docs and
+  `count({field: <some object>})` counts every object-valued doc.
+  The Phase 2 unique probe would inherit the same falseness (two
+  different Decimal128 values would look like duplicates).
+  Status: BROKEN for counts today; blocks Phase 2.
+  Tests: parity family `Index_LossyTypes_*` (find and count with
+  Decimal128 / Timestamp / NaN / object / nested-array values, each
+  compared against MongoDB -- correct whether dumbodb answers by
+  guard-and-scan or by faithful encoding); dumbodb-only test pinning
+  that the planner rejects lossy values (no index plan chosen).
+
+- **T4. Multikey arrays may mix element types.** An indexed array
+  field whose elements span types indexes each element under its own
+  bracket; lookups on each element value hit.
+  Status: expected-WORKS (multikey expansion encodes each element
+  independently); never asserted with mixed-type elements.
+  Tests: parity family `Index_MultikeyMixedTypes_*`.
+
+The fix has two tiers. Tier 1 (guards, small): make
+`indexBoundsForFilterValue` and the entry-generation path reject
+values whose encoding is lossy (Decimal128, Timestamp, Regex, NaN,
+Inf, Document, Array-as-element) so plans fall back to scans, and fix
+the float bucketing so T2 holds. Tier 2 (fidelity, larger, optional
+per type): add
+faithful encodings (Mongo solves Decimal128/double unification with
+continuation bytes; objects/arrays encode recursively) so the guard
+list shrinks and counts/probes accelerate for those types. Tier 1 is
+required before Phase 2; Tier 2 items are independent follow-ups.
+
+### 2.8 Explicitly out of behavior scope
+
+- Text / geo / hashed index merging, KeyString decoding (covered
+  queries), online index builds, runtime $or execution.
+- Tier 2 encoding fidelity for Decimal128 / Timestamp / Regex /
+  nested documents (Section 2.7) beyond the soundness guards --
+  each is its own follow-up.
+
+## 3. How (mechanism, briefly)
+
+The implementation approach in one paragraph per area. Code-level
+grounding lives in the appendix.
+
+**Writes.** Indexes are prolly maps; entry keys are
+`KeyString(values) || 0x04 || primaryID`, so every maintenance action
+is a Put/Delete on a `prolly.MutableMap` -- O(log N) and
+automatically chunk-sharing (P2). One new function,
+`indexEntriesForDoc`, becomes the single place that turns (doc, index
+spec) into entry keys, applying sparse/partial membership (M1/M2).
+Update maintenance is "diff the old and new entry sets, delete/insert
+the difference, skip if equal" (W2-W5); delete maintenance is the
+delete half (W3). These extend the same pure
+resolve-apply-rebuild-AM pattern the insert path already uses.
+
+**Unique checks.** Replace the whole-collection scan with one bounded
+range probe per unique index per written row -- the index itself
+answers "does this key exist for a different _id" in O(log N) (P1,
+U1-U3). Probes are only sound once index content respects membership
+(M1/M2 first).
+
+**Merges.** The primary-map merge already walks a three-way diff of
+the documents and resolves them (including field-level merging). Index
+maintenance rides that same diff stream: seed each surviving index
+from one parent's index map (wholesale chunk reuse, B3), then apply
+per-document entry edits for the other side's changes and for resolved
+docs (B2, B4). Name-level reconciliation (which index definitions
+survive) compares each side's spec fields to Base's: a definition
+change (drop, or drop+recreate with a new spec) wins over an
+untouched side, and two competing definition changes are a merge
+error -- the full case table is in B5. A surviving index whose
+definition only one side carries (B4, or the recreated-spec winner
+in B5) seeds from that side's map and applies the other side's
+document diffs. Unique collisions detected while applying edits
+become conflict artifacts (B6). Cherry-pick/rebase/revert call the
+same function (B7).
+
+**Conflict resolution.** Resolving a conflict is an update (or delete)
+against the in-progress merge state, so it routes through the same
+entry-set diff used by ordinary updates: old entries from the document
+currently in the merged map, new entries from the chosen value via
+`indexEntriesForDoc` -- which is exactly what makes membership flips
+(C3) fall out for free. "Ours" resolutions change nothing (the merged
+map already holds ours). The resolve path then rebuilds the index AM
+into the DTBL it already writes, instead of re-attaching the stale
+one. Unique probes run against the merged index state (C4).
+
+A note on the road not taken: 3-way-merging the index *maps* directly
+(`prolly.MergeMaps`) looks attractive but is wrong -- field-level
+document merging produces docs that exist on neither parent, whose
+index entries exist in neither parent's index. Only the
+diff-stream-driven approach indexes those (B2's neither-parent test
+exists to catch exactly this).
+
+## 4. Plan
+
+Phases ship independently; each lists the behaviors it turns green.
+
+- **Phase 0 -- red bar.** Land the W2, W3, T2, and T3 parity families
+  as `DumboDBXFail` (divergence recorded side by side), and the B2 and
+  B3 dumbodb-only scenarios as failing tests (chunk-reuse walker
+  helper included). Nothing turns green; the gaps become visible in
+  CI and in the parity report.
+- **Phase E -- encoding soundness (Tier 1 of Section 2.7).** Fix
+  non-integer float bucketing; reject lossy value types in the bounds
+  builder and entry generation so plans fall back to scans.
+  Standalone bugfix; can ship before or alongside Phase 1.
+  Turns green: T1 (pinned), T2, T3, T4.
+- **Phase 1 -- write correctness.** `indexEntriesForDoc` +
+  update/delete maintenance, wired into UpdateAll and DeleteAll.
+  Turns green: W2, W3, W4, W5, M1, M2, P2 (update/delete cases).
+- **Phase 2 -- unique via probes.** Replace the insert scan; add
+  update-path checks.
+  Turns green: U2, U3, P1. Keeps green: U1.
+- **Phase 3 -- merge and resolution.** Diff-driven index maintenance
+  inside the collection merge, name-level reconciliation, unique
+  artifacts, and the same maintenance wired into the conflict-resolve
+  path.
+  Turns green: B1-B6, C1-C5.
+- **Phase 4 -- history ops.** Test-only phase confirming cherry-pick /
+  rebase / revert inherit Phase 3.
+  Turns green: B7.
+- **Phase 5 -- metadata format cleanup (deferred).** Replace the JSON
+  per-index metadata chunk with BSON (or fold into the collection
+  metadata) and point the index address map at raw roots. No behavior
+  changes; pure storage hygiene. Lowest priority.
+
+Dependencies: Phase 2 needs Phase 1 (membership correctness before
+probes) and Phase E (probe equality is only sound over faithful or
+guarded encodings). Phase 3 needs Phase 1 (shared entry generation).
+Phase 4 needs Phase 3. Phases 0, E, and 5 are independent of the
+rest.
+
+No dolt changes in any phase: everything builds on public dolt APIs
+(`prolly.MutableMap`, `tree.ThreeWayDiffer`, `prolly.AddressMap`).
+DumboDB stays on its current dolt branch untouched.
+
+## 5. Decided Policies
+
+No open questions remain. Decisions recorded so they are not
+re-litigated:
+
+- **Unique-violation conflicts reuse the document-conflict shape
+  (B6).** The conflict entry carries the left and right document
+  values of the three-way merge, which is sufficient to show the
+  user what collided; there is no richer vocabulary available today.
+  No distinct artifact type. Revisit only if user feedback on the
+  existing data-conflict workflow demands it.
+- **Drop wins (B5).** An index definition change beats an untouched
+  side, silently; two competing definition changes are a merge
+  error. Full case table in B5.
+- **No backward compatibility.** Index data persisted before these
+  changes is not detected or migrated. The membership fixes (M1/M2)
+  and the float-bucketing fix (T2) change persisted index bytes;
+  pre-existing indexes are simply invalid under the new code.
+
+## 6. Appendix: Code Ground Truth (verified 2026-06-09)
+
+Where each behavior's current status was established. Line refs are to
+the rebased `dumbo-indexes` tree.
+
+- Storage is BSON-at-rest: value tuple is `[0x01][raw BSON]` in a
+  `BytesAdaptiveEnc` field (`helpers.go:55`, `bson_codec.go:30-36`);
+  docs decode straight from the tuple via `readDocFromValue`
+  (`collection.go:2688`). Primary key is salt-free
+  `SHA512(canonical-BSON(_id))[:20]` (`hashID`, `helpers.go:227`) --
+  this is why B1 holds without new work.
+- Index entry layout: `index/index.go:29-101` (descriptors, key
+  builder, InsertEntry/DeleteEntry); KeyString encoding in
+  `index/keystring.go`. Lookups via `IterKeyRange`
+  (`index/index.go:106-260`).
+- Branch-scoped resolution (B8) landed as `index_resolve.go`: pure
+  read resolvers (`resolveBranchIndexState` `:237`,
+  `resolveCollIndexAM` `:180`) and pure write helpers
+  (`applyInsertsToIndexes` `:257`, `buildIndexAM` `:302`). InsertAll
+  composes them (`collection.go:1297`, `:1468-1475`).
+- W2/W3 gaps: TODO comments at `collection.go:1717` (UpdateAll) and
+  `:1880` (DeleteAll); both preserve the existing index AM untouched.
+  UpdateAll already holds the old doc bytes (`existingTup`,
+  `:1656-1666`) needed for entry-set diffing.
+- M1/M2 gap: `buildSecondaryIndex` (`collection.go:2468`) and
+  `applyInsertsToIndexes` index every doc; missing fields become Null
+  entries (`extractIndexFieldValues`, `collection.go:2539`).
+  Membership checks exist only in unique validation
+  (`collection.go:1386-1422`) and some reads (`:2162`).
+- U1 scan: `collection.go:1311-1342` iterates and decodes the whole
+  primary per insert batch when any unique index exists.
+- T2/T3 gaps: `EncodeValue` (`index/keystring.go:74-136`) routes all
+  non-integer floats to the largest-magnitude buckets
+  (`encodeFloat64`, `:241-272` -- ctypePosLarge/ctypeNegLarge
+  regardless of value) and its default case encodes Decimal128 /
+  Timestamp / Regex as Null; documents and nested arrays are
+  marker-byte-only (`:118-123`). NaN and +/-Inf also map to Null
+  (`:243`). `indexBoundsForFilterValue` (`collection.go`) rejects
+  only nil/Null/Array scalars and Document/Array/Null/Regex operator
+  operands -- the lossy types above pass through.
+  `tryIndexedCount` (`collection.go:1979`) counts raw entries in the
+  computed range with no re-validation.
+- B2-B6 gap: `mergeAddressMapsWithConflicts` (`merge_conflict.go:716`)
+  merges primaries via a `tree.ThreeWayDiffer` walk in
+  `captureConflictsForCollection` (`:559`) -- seeded from the FROM
+  side, into-side edits applied on top, field-level resolution via
+  `mergeBSONDoc` (`:563-594`) -- then explicitly re-attaches the
+  into-branch's index AM (`:811-818`). The differ loop is the natural
+  driver for per-index edits (Section 3).
+- B7 callers: merge `backend.go:1758`, cherry-pick `:2035` and
+  `:3065`, revert `:3374`.
+- C1-C5 gap: `DumboDBResolveConflict` (`merge_conflict.go:240`) puts
+  the chosen value (or deletes) directly on the merged collection map
+  and re-attaches the existing index AM via `indexAMFromAM` before
+  `dtblHashForCollection` -- no index maintenance, no unique
+  validation, on the resolve path.
+- Phase 5 target: JSON metadata chunk written by
+  `writeIndexEntryChunk` (`index_persist.go:148-159`); also the
+  `docToExtJSON` -> `docToBSON` rename (`collection.go:2692`).
+
+### Decisions revisited from the 2026-05-20 draft
+
+1. Upstream dolt changes (a `SecondaryKeyBuilder` interface, lifting
+   `MutableSecondaryIdx`) -- dropped; dumbodb stays on its pinned dolt
+   branch and the glue is small enough to own.
+2. `prolly.MergeMaps` for index merge -- dropped for correctness (see
+   Section 3); diff-driven instead, which is also what dolt itself
+   does for secondary indexes.
+3. Stateful per-index writer objects -- replaced by the pure
+   resolve/apply/build pattern the codebase adopted in the
+   branch-scoped metadata refactor.
+4. The old JSONAddr document-chunk assumptions -- superseded by
+   BSON-at-rest; doc decoding for index maintenance is cheaper than
+   the v1 design assumed.

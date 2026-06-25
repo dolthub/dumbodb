@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tests
+package verify
 
 // TestBranchStatusVerify is the automated analog of docs/verify/branch-status.md.
 //
@@ -38,8 +38,8 @@ func TestBranchStatusVerify(t *testing.T) {
 
 	dbName := fmt.Sprintf("bsvrfy%d", rand.Int64N(1_000_000))
 
-	require.NoError(t, env.client.Database(dbName).Drop(ctx))
-	_, err := env.client.Database(dbName).Collection("seed").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, env.Client.Database(dbName).Drop(ctx))
+	_, err := env.Client.Database(dbName).Collection("seed").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName, "anc", "alice <alice@acme.com>")
 
@@ -91,7 +91,7 @@ func TestBranchStatusVerify(t *testing.T) {
 
 		_, mh := bsStatus(t, env, connMain, "main", bson.A{b5Head})
 		bsAssert(t, mh, b5Head, 3, 0)
-		assert.Equal(t, b5Head, mh[b5Head].hash, "bare hash echoes and resolves to itself")
+		assert.Equal(t, b5Head, mh[b5Head].Hash, "bare hash echoes and resolves to itself")
 	})
 
 	// rel = merge of b2 (anc->b1->b2) into main (anc->main): 3 ahead (b1, b2, merge).
@@ -105,34 +105,34 @@ func TestBranchStatusVerify(t *testing.T) {
 
 	t.Run("Scenario6_Errors", func(t *testing.T) {
 		// missing targets
-		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 		}).Err())
 
 		// empty targets array
-		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 			{Key: "targets", Value: bson.A{}},
 		}).Err())
 
 		// empty-string target
-		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 			{Key: "targets", Value: bson.A{""}},
 		}).Err())
 
 		// unknown target
-		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "base", Value: "main"},
 			{Key: "targets", Value: bson.A{"no-such-branch"}},
 		}).Err())
 
 		// missing base
-		require.Error(t, env.client.Database(connMain).RunCommand(ctx, bson.D{
+		require.Error(t, env.Client.Database(connMain).RunCommand(ctx, bson.D{
 			{Key: "dumboBranchStatus", Value: int32(1)},
 			{Key: "targets", Value: bson.A{"b1"}},
 		}).Err())

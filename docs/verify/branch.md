@@ -3,7 +3,7 @@
 Manual verification guide for `doltBranch` end-to-end behavior. Work through each
 scenario top to bottom. Each section builds on the previous setup.
 
-> **Automated equivalent:** `tests/versioning_branch_verify_test.go` (`TestBranchVerify`)
+> **Automated equivalent:** `tests/verify/branch_test.go` (`TestBranchVerify`)
 > covers every scenario in this document as sequential subtests using the same setup.
 > Run it with:
 > ```

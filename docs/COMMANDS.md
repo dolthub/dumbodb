@@ -1065,19 +1065,31 @@ None (beyond the implicit `$db` connection).
 | Field | Type | Description |
 |-------|------|-------------|
 | `conflictId` | string | Unique identifier for this conflict (used with `dumboResolveConflict`) |
-| `_id` | any | The document's `_id` value (promoted to top level) |
-| `base` | document or null | The common ancestor document (without `_id`) |
-| `ours` | document or null | Our version of the document (without `_id`) |
-| `theirs` | document or null | Their version of the document (without `_id`) |
-| `ourDiffType` | string | How we changed it: `"added"`, `"modified"`, `"deleted"` |
-| `theirDiffType` | string | How they changed it |
+| `type` | string | `"documentEdit"` (one identity edited on both sides) or `"uniqueKeyCollision"` (two identities contending for one unique-index key) |
+| `reason` | document | Why the two states cannot both stand (see below) |
+| `base` | document or null | The common-ancestor side as `{ _id, doc }`; null if absent in the ancestor. No `diffType`. |
+| `ours` | document or null | Our side as `{ _id, doc, diffType }`; null if our branch deleted the document |
+| `theirs` | document or null | Their side as `{ _id, doc, diffType }`; null if their branch deleted the document |
+
+Each non-null side carries its own `_id` (a `uniqueKeyCollision` has different
+`_id`s for `ours` and `theirs`), the full `doc`, and -- for `ours`/`theirs` -- a
+`diffType` of `"added"`, `"modified"`, or `"deleted"`.
+
+#### `reason` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `code` | string | `"bothModified"`, `"modifyDelete"`, `"deleteModify"` (document edits), or `"uniqueKeyCollision"` |
+| `message` | string | Human-readable explanation |
+| `index` | string | Unique index name; present only for `uniqueKeyCollision` |
+| `key` | document | The colliding key value; present only for `uniqueKeyCollision` |
 
 ### Example
 
 ```js
 var main = db.getSiblingDB("orders@main")
 
-// After a merge conflict:
+// After a merge conflict (both branches modified _id:1):
 main.runCommand({ dumboConflicts: 1 })
 // {
 //   collections: [
@@ -1085,18 +1097,30 @@ main.runCommand({ dumboConflicts: 1 })
 //       collection: "orders",
 //       conflicts: [
 //         {
-//           conflictId:    "2onhBAqtYZDVqr4WfXh8pA",
-//           _id:           1,
-//           base:          { amount: 100 },
-//           ours:          { amount: 150 },
-//           theirs:        { amount: 200 },
-//           ourDiffType:   "modified",
-//           theirDiffType: "modified"
+//           conflictId: "2onhBAqtYZDVqr4WfXh8pA",
+//           type:   "documentEdit",
+//           reason: { code: "bothModified",
+//                     message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
+//           base:   { _id: 1, doc: { _id: 1, amount: 100 } },
+//           ours:   { _id: 1, doc: { _id: 1, amount: 150 }, diffType: "modified" },
+//           theirs: { _id: 1, doc: { _id: 1, amount: 200 }, diffType: "modified" }
 //         }
 //       ]
 //     }
 //   ],
 //   ok: 1
+// }
+
+// A uniqueKeyCollision (each branch added a different doc on the same unique key):
+// {
+//   conflictId: "...",
+//   type:   "uniqueKeyCollision",
+//   reason: { code: "uniqueKeyCollision",
+//             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
+//             index: "by_sku", key: { sku: "S-1" } },
+//   base:   null,
+//   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },
+//   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
 // }
 ```
 
@@ -1119,11 +1143,11 @@ Resolves a single document conflict in the current in-progress merge, cherry-pic
 
 ### Resolution options
 
-| Value | Behavior |
-|-------|----------|
-| `"ours"` | Keep the local (into-branch) version |
-| `"theirs"` | Use the incoming (from-branch) version |
-| `"custom"` | Use the document provided in `value` |
+| Value | `documentEdit` | `uniqueKeyCollision` |
+|-------|----------------|----------------------|
+| `"ours"` | Keep the local (into-branch) version | Keep ours's document on the key; discard theirs's contender |
+| `"theirs"` | Use the incoming (from-branch) version | Key-ownership swap: evict ours's document and install theirs's contender under the key |
+| `"custom"` | Use the document provided in `value` | Use the document provided in `value` (rejected if it collides with a different document on a unique index) |
 
 ### Response fields
 

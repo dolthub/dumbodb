@@ -32,7 +32,6 @@ import (
 
 // TestPortFlag verifies that --port overrides the port in --addr.
 func TestPortFlag(t *testing.T) {
-	// Find a free port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -41,7 +40,7 @@ func TestPortFlag(t *testing.T) {
 	dataDir := t.TempDir()
 	binary := filepath.Join(repoRoot(), ".runtime", "bin", "dolt")
 
-	// Start dumbodb with --port (no --addr, so default addr is used with port override).
+	// --port with no --addr exercises the port override on the default addr.
 	cmd := exec.Command(binary, "--port", fmt.Sprintf("%d", port), "--data-dir", dataDir)
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
@@ -51,7 +50,6 @@ func TestPortFlag(t *testing.T) {
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
-	// Wait for server to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -62,7 +60,6 @@ func TestPortFlag(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Connect and verify basic operation.
 	client, err := mongo.Connect(options.Client().
 		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
 		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
@@ -79,7 +76,6 @@ func TestPortFlag(t *testing.T) {
 
 // TestAddrFlag verifies that --addr sets the listen address.
 func TestAddrFlag(t *testing.T) {
-	// Find a free port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -96,7 +92,6 @@ func TestAddrFlag(t *testing.T) {
 		cmd.Wait()
 	})
 
-	// Wait for server to be ready.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
@@ -107,7 +102,6 @@ func TestAddrFlag(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Connect and verify basic operation.
 	client, err := mongo.Connect(options.Client().
 		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
 		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
@@ -124,19 +118,19 @@ func TestAddrFlag(t *testing.T) {
 
 // TestAutoCommitFlag verifies that --auto-commit is accepted and causes
 // writes to auto-commit. This complements TestAutoCommit in
-// versioning_auto_commit_test.go by testing the flag parsing path.
+// auto_commit_test.go by testing the flag parsing path.
 func TestAutoCommitFlag(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
 
-	coll := env.client.Database("flagtest").Collection("items")
+	coll := env.Client.Database("flagtest").Collection("items")
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: 1}})
 	require.NoError(t, err)
 
 	// Without explicit doltCommit, the log should have 2 entries
 	// (Initialize + auto-commit from the insert).
 	var raw bson.M
-	require.NoError(t, env.client.Database("flagtest").RunCommand(ctx, bson.D{
+	require.NoError(t, env.Client.Database("flagtest").RunCommand(ctx, bson.D{
 		{Key: "doltLog", Value: int32(1)},
 	}).Decode(&raw))
 	lr := decodeLogResult(t, raw)
