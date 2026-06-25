@@ -636,6 +636,13 @@ func TestIndexMergeVerify(t *testing.T) {
 		var contRaw bson.M
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "continue", Value: int32(1)}}).Decode(&contRaw))
 		assert.EqualValues(t, 1, contRaw["ok"])
+
+		// On the rebased feature branch the index reflects the resolution: ours
+		// (the replayed doc 20) owns the key; onto/main's doc 10 was evicted.
+		assert.Equal(t, []int32{20}, idxvFindIDs(t, featureDB, "items", bson.D{{Key: "sku", Value: "S-1"}}), "replayed doc 20 keeps the key")
+		assert.EqualValues(t, 1, idxvCount(t, featureDB, "items", bson.D{{Key: "sku", Value: "S-1"}}))
+		wp := idxvWinningPlan(t, featureDB, "items", bson.D{{Key: "sku", Value: "S-1"}})
+		assert.Equal(t, "by_sku", idxvIxscanName(wp), "lookup still served by the index: %v", wp)
 	})
 
 	// Scenario 9: reverting a delete re-adds a document whose unique key is now

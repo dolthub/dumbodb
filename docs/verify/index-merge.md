@@ -554,6 +554,12 @@ const cid = r.collections[0].conflicts[0].conflictId
 db.getSiblingDB("idxmrg7@feature").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
 db.getSiblingDB("idxmrg7@feature").runCommand({ doltRebase: 1, continue: 1 })
 // Expected: { ok: 1, ... }
+
+// The rebased feature branch's index reflects the resolution.
+db.getSiblingDB("idxmrg7@feature").items.find({ sku: "S-1" }).toArray()
+// Expected: [ { _id: 20, sku: "S-1" } ]   (the replayed doc kept the key; doc 10 evicted)
+db.getSiblingDB("idxmrg7@feature").items.find({ sku: "S-1" }).explain().queryPlanner.winningPlan
+// Expected: IXSCAN with indexName "by_sku"
 ```
 
 Key checks:
@@ -561,6 +567,8 @@ Key checks:
   commit and the onto branch.
 - `ours` = the replayed commit; `theirs` = the onto branch (the rebase
   side-swap, consistent with rebase.md).
+- After resolving "ours" and continuing, the rebased branch's index serves
+  only the replayed document (doc 20); onto/main's doc 10 was evicted.
 
 ---
 
