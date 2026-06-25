@@ -442,4 +442,164 @@ func TestIndexMergeVerify(t *testing.T) {
 		assert.Equal(t, []int32{10}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}))
 		assert.Equal(t, []int32{11}, idxvFindIDs(t, db, "items", bson.D{{Key: "code", Value: "C-1"}}))
 	})
+
+	// Scenario 7: a cherry-pick that applies a doc colliding on a unique key is
+	// a uniqueKeyCollision conflict, just like a merge. ours = the branch, theirs
+	// = the cherry-picked commit.
+	t.Run("Scenario7_CherryPickCollisionIsConflict", func(t *testing.T) {
+		dbName := fmt.Sprintf("idxmrg7v%d", suffix)
+		db := env.Client.Database(dbName)
+		mainDB := env.Client.Database(dbName + "@main")
+		require.NoError(t, db.Drop(ctx))
+		items := db.Collection("items")
+
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "sku", Value: "SEED"}})
+		require.NoError(t, err)
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "sku", Value: int32(1)}}, Options: options.Index().SetName("by_sku").SetUnique(true)})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed + unique index", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: doc 10 sku S-1", "alice <alice@acme.com>")
+
+		feat := env.Client.Database(dbName + "@feature")
+		_, err = feat.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(20)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		pickHash := dumboDBCommit(t, env, dbName+"@feature", "feature: doc 20 sku S-1", "bob <bob@widgets.io>")
+
+		raw := runCommandRaw(t, mainDB, bson.D{{Key: "dumboCherryPick", Value: int32(1)}, {Key: "commit", Value: pickHash}})
+		assert.EqualValues(t, 0, raw["ok"], "colliding cherry-pick must surface conflicts: %v", raw)
+
+		var rc bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
+		entry := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)[0].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "by_sku", reason["index"])
+		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"])
+		assert.Equal(t, fmt.Sprintf(`unique index "by_sku": branch 'main' (ours) and commit '%s' (theirs) both have sku = "S-1"`, pickHash),
+			reason["message"], "names the branch and the cherry-picked commit")
+		assert.EqualValues(t, 10, entry["ours"].(bson.M)["_id"], "ours = main's surviving doc 10")
+		assert.EqualValues(t, 20, entry["theirs"].(bson.M)["_id"], "theirs = the cherry-picked commit's doc 20")
+		assert.Equal(t, "added", entry["ours"].(bson.M)["diffType"])
+		assert.Equal(t, "added", entry["theirs"].(bson.M)["diffType"])
+
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)}, {Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: entry["conflictId"].(string)}, {Key: "resolution", Value: "ours"}}).Err())
+		var contRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltCherryPick", Value: int32(1)}, {Key: "continue", Value: int32(1)}}).Decode(&contRaw))
+		assert.EqualValues(t, 1, contRaw["ok"])
+		assert.Equal(t, []int32{10}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}), "ours (doc 10) keeps the key")
+	})
+
+	// Scenario 8: a rebase that replays a commit colliding on a unique key is a
+	// uniqueKeyCollision. ours = the replayed commit, theirs = the onto branch.
+	t.Run("Scenario8_RebaseCollisionIsConflict", func(t *testing.T) {
+		dbName := fmt.Sprintf("idxmrg8v%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		items := db.Collection("items")
+
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "sku", Value: "SEED"}})
+		require.NoError(t, err)
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "sku", Value: int32(1)}}, Options: options.Index().SetName("by_sku").SetUnique(true)})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed + unique index", "alice <alice@acme.com>")
+		idxvBranch(t, env, dbName, "feature")
+
+		feat := env.Client.Database(dbName + "@feature")
+		_, err = feat.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(20)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		pickHash := dumboDBCommit(t, env, dbName+"@feature", "feature: doc 20 sku S-1", "bob <bob@widgets.io>")
+
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: doc 10 sku S-1", "alice <alice@acme.com>")
+
+		featureDB := env.Client.Database(dbName + "@feature")
+		raw := runCommandRaw(t, featureDB, bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "onto", Value: "main"}})
+		assert.EqualValues(t, 0, raw["ok"], "colliding rebase must surface conflicts: %v", raw)
+
+		var rc bson.M
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
+		entry := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)[0].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "by_sku", reason["index"])
+		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"])
+		assert.Equal(t, fmt.Sprintf(`unique index "by_sku": commit '%s' (ours) and branch 'main' (theirs) both have sku = "S-1"`, pickHash),
+			reason["message"], "names the replayed commit and the onto branch")
+		assert.EqualValues(t, 20, entry["ours"].(bson.M)["_id"], "ours = the replayed commit's doc 20")
+		assert.EqualValues(t, 10, entry["theirs"].(bson.M)["_id"], "theirs = onto/main's doc 10")
+		assert.Equal(t, "added", entry["ours"].(bson.M)["diffType"])
+		assert.Equal(t, "added", entry["theirs"].(bson.M)["diffType"])
+
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)}, {Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: entry["conflictId"].(string)}, {Key: "resolution", Value: "ours"}}).Err())
+		var contRaw bson.M
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{{Key: "dumboRebase", Value: int32(1)}, {Key: "continue", Value: int32(1)}}).Decode(&contRaw))
+		assert.EqualValues(t, 1, contRaw["ok"])
+	})
+
+	// Scenario 9: reverting a delete re-adds a document whose unique key is now
+	// held by a different one: a uniqueKeyCollision. ours = the branch, theirs =
+	// the reverted commit.
+	t.Run("Scenario9_RevertCollisionIsConflict", func(t *testing.T) {
+		dbName := fmt.Sprintf("idxmrg9v%d", suffix)
+		db := env.Client.Database(dbName)
+		mainDB := env.Client.Database(dbName + "@main")
+		require.NoError(t, db.Drop(ctx))
+		items := db.Collection("items")
+
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "sku", Value: "SEED"}})
+		require.NoError(t, err)
+		_, err = items.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "sku", Value: int32(1)}}, Options: options.Index().SetName("by_sku").SetUnique(true)})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "seed + unique index", "alice <alice@acme.com>")
+
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "add doc 10 sku S-1", "alice <alice@acme.com>")
+
+		_, err = items.DeleteOne(ctx, bson.D{{Key: "_id", Value: int32(10)}})
+		require.NoError(t, err)
+		delHash := dumboDBCommit(t, env, dbName, "delete doc 10", "alice <alice@acme.com>")
+
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(20)}, {Key: "sku", Value: "S-1"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "add doc 20 sku S-1", "alice <alice@acme.com>")
+
+		// Reverting the delete re-adds doc 10 (sku S-1), colliding with doc 20.
+		raw := runCommandRaw(t, mainDB, bson.D{{Key: "dumboRevert", Value: int32(1)}, {Key: "commit", Value: delHash}})
+		assert.EqualValues(t, 0, raw["ok"], "colliding revert must surface conflicts: %v", raw)
+
+		var rc bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
+		entry := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)[0].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "by_sku", reason["index"])
+		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"])
+		assert.Equal(t, fmt.Sprintf(`unique index "by_sku": branch 'main' (ours) and commit '%s' (theirs) both have sku = "S-1"`, delHash),
+			reason["message"], "names the branch and the reverted commit")
+		assert.EqualValues(t, 20, entry["ours"].(bson.M)["_id"], "ours = main's doc 20")
+		assert.EqualValues(t, 10, entry["theirs"].(bson.M)["_id"], "theirs = the reverted commit re-adding doc 10")
+		assert.Equal(t, "added", entry["ours"].(bson.M)["diffType"])
+		assert.Equal(t, "added", entry["theirs"].(bson.M)["diffType"])
+
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)}, {Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: entry["conflictId"].(string)}, {Key: "resolution", Value: "ours"}}).Err())
+		var contRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "dumboRevert", Value: int32(1)}, {Key: "continue", Value: int32(1)}}).Decode(&contRaw))
+		assert.EqualValues(t, 1, contRaw["ok"])
+		assert.Equal(t, []int32{20}, idxvFindIDs(t, db, "items", bson.D{{Key: "sku", Value: "S-1"}}), "ours (doc 20) keeps the key")
+	})
 }

@@ -361,3 +361,162 @@ Key checks:
   superseded value (base, ours, and the not-chosen theirs) counts 0.
 - A non-zero count for a stale value means resolution updated the
   primary document but not the index.
+
+---
+
+## Scenario 6: A cherry-pick that collides on a unique key is a conflict
+
+Cherry-pick behaves like merge: applying a commit whose document lands on
+an occupied unique key parks it as a `uniqueKeyCollision`. `ours` is the
+branch; `theirs` is the cherry-picked commit.
+
+```js
+var db = db.getSiblingDB("idxmrg6")
+db.dropDatabase()
+
+db.items.insertOne({ _id: 1, sku: "SEED" })
+db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
+db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmrg6@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// main takes the key.
+db.items.insertOne({ _id: 10, sku: "S-1" })
+db.runCommand({ doltCommit: 1, message: "main: doc 10 sku S-1", author: "alice <alice@acme.com>" })
+
+// feature adds a different doc on the same key (the commit we cherry-pick).
+var feat = db.getSiblingDB("idxmrg6@feature")
+feat.items.insertOne({ _id: 20, sku: "S-1" })
+const pick = feat.runCommand({ doltCommit: 1, message: "feature: doc 20 sku S-1", author: "bob <bob@widgets.io>" }).commitId
+
+// Cherry-pick feature's commit onto main -> collides on by_sku.
+db.getSiblingDB("idxmrg6@main").runCommand({ doltCherryPick: 1, commit: pick })
+// Expected throw: unresolved conflicts in 1 collection(s)
+
+const r = db.getSiblingDB("idxmrg6@main").runCommand({ doltConflicts: 1 })
+printjson(r)
+// Expected: collections[0].conflicts[0] has
+//   type: "uniqueKeyCollision",
+//   reason: { code: "uniqueKeyCollision",
+//             message: 'unique index "by_sku": branch \'main\' (ours) and commit \'<pick>\' (theirs) both have sku = "S-1"',
+//             index: "by_sku", key: { sku: "S-1" } },
+//   base:   null,
+//   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },
+//   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
+const cid = r.collections[0].conflicts[0].conflictId
+
+// Resolve "ours" (keep main's doc 10) and continue.
+db.getSiblingDB("idxmrg6@main").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
+db.getSiblingDB("idxmrg6@main").runCommand({ doltCherryPick: 1, continue: 1 })
+// Expected: { commitId: "...", ok: 1 }
+
+db.items.find({ sku: "S-1" })   // Expected: only { _id: 10, sku: "S-1" }
+```
+
+Key checks:
+- The colliding cherry-pick parks a `uniqueKeyCollision` naming the index
+  and the cherry-picked commit (by full hash).
+- `ours` = the current branch's doc; `theirs` = the cherry-picked commit's doc.
+- After resolving "ours" and continuing, ours's doc owns the key.
+
+---
+
+## Scenario 7: A rebase that replays a colliding commit is a conflict
+
+When a replayed commit lands on a key already held on the onto branch, the
+rebase parks a `uniqueKeyCollision`. Per rebase semantics the sides are the
+other way round: `ours` is the replayed commit, `theirs` is the onto branch.
+
+```js
+var db = db.getSiblingDB("idxmrg7")
+db.dropDatabase()
+
+db.items.insertOne({ _id: 1, sku: "SEED" })
+db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
+db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
+db.getSiblingDB("idxmrg7@main").runCommand({ doltBranch: 1, branch: "feature" })
+
+// feature takes the key first (diverging from main).
+var feat = db.getSiblingDB("idxmrg7@feature")
+feat.items.insertOne({ _id: 20, sku: "S-1" })
+const pick = feat.runCommand({ doltCommit: 1, message: "feature: doc 20 sku S-1", author: "bob <bob@widgets.io>" }).commitId
+
+// main independently takes the same key.
+db.items.insertOne({ _id: 10, sku: "S-1" })
+db.runCommand({ doltCommit: 1, message: "main: doc 10 sku S-1", author: "alice <alice@acme.com>" })
+
+// Rebase feature onto main -> replaying feature's commit collides.
+db.getSiblingDB("idxmrg7@feature").runCommand({ doltRebase: 1, onto: "main" })
+// Expected throw: unresolved conflicts in 1 collection(s)
+
+const r = db.getSiblingDB("idxmrg7@feature").runCommand({ doltConflicts: 1 })
+printjson(r)
+// Expected: collections[0].conflicts[0] has
+//   type: "uniqueKeyCollision",
+//   reason.message: 'unique index "by_sku": commit \'<pick>\' (ours) and branch \'main\' (theirs) both have sku = "S-1"',
+//   ours:   { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" },   // the replayed commit
+//   theirs: { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" }    // onto/main
+const cid = r.collections[0].conflicts[0].conflictId
+
+db.getSiblingDB("idxmrg7@feature").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
+db.getSiblingDB("idxmrg7@feature").runCommand({ doltRebase: 1, continue: 1 })
+// Expected: { ok: 1, ... }
+```
+
+Key checks:
+- A colliding replay parks a `uniqueKeyCollision` naming the replayed
+  commit and the onto branch.
+- `ours` = the replayed commit; `theirs` = the onto branch (the rebase
+  side-swap, consistent with rebase.md).
+
+---
+
+## Scenario 8: Reverting a delete onto an occupied key is a conflict
+
+Reverting a commit that deleted a document re-adds it; if a different
+document now holds its unique key, the revert parks a `uniqueKeyCollision`.
+`ours` is the branch; `theirs` is the reverted commit.
+
+```js
+var db = db.getSiblingDB("idxmrg8")
+db.dropDatabase()
+
+db.items.insertOne({ _id: 1, sku: "SEED" })
+db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
+db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
+
+db.items.insertOne({ _id: 10, sku: "S-1" })
+db.runCommand({ doltCommit: 1, message: "add doc 10 sku S-1", author: "alice <alice@acme.com>" })
+
+db.items.deleteOne({ _id: 10 })
+const del = db.runCommand({ doltCommit: 1, message: "delete doc 10", author: "alice <alice@acme.com>" }).commitId
+
+// A different doc takes the freed key.
+db.items.insertOne({ _id: 20, sku: "S-1" })
+db.runCommand({ doltCommit: 1, message: "add doc 20 sku S-1", author: "alice <alice@acme.com>" })
+
+// Revert the delete -> re-adds doc 10 (sku S-1), colliding with doc 20.
+db.getSiblingDB("idxmrg8@main").runCommand({ doltRevert: 1, commit: del })
+// Expected throw: unresolved conflicts in 1 collection(s)
+
+const r = db.getSiblingDB("idxmrg8@main").runCommand({ doltConflicts: 1 })
+printjson(r)
+// Expected: collections[0].conflicts[0] has
+//   type: "uniqueKeyCollision",
+//   reason.message: 'unique index "by_sku": branch \'main\' (ours) and commit \'<del>\' (theirs) both have sku = "S-1"',
+//   ours:   { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" },
+//   theirs: { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" }    // re-added by the revert
+const cid = r.collections[0].conflicts[0].conflictId
+
+db.getSiblingDB("idxmrg8@main").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
+db.getSiblingDB("idxmrg8@main").runCommand({ doltRevert: 1, continue: 1 })
+// Expected: { commitId: "...", ok: 1 }
+
+db.items.find({ sku: "S-1" })   // Expected: only { _id: 20, sku: "S-1" }
+```
+
+Key checks:
+- Reverting a delete onto an occupied unique key parks a
+  `uniqueKeyCollision` naming the index and the reverted commit.
+- `ours` = the branch's current doc; `theirs` = the reverted commit's
+  re-added doc.
+- After resolving "ours" and continuing, ours's doc keeps the key.
