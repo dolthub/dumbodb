@@ -40,39 +40,30 @@ func TestMerge_CollectionAddedOnBothBranches(t *testing.T) {
 	ctx := context.Background()
 	dbName := fmt.Sprintf("mergeadd_%d", rand.Int64N(1_000_000))
 
-	// Base commit A: only "item" exists here. This is the merge base.
-	base := env.Client.Database(dbName)
-	require.NoError(t, base.Drop(ctx))
-	_, err := base.Collection("item").InsertOne(ctx,
-		bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "base"}})
-	require.NoError(t, err)
-	dumboDBCommit(t, env, dbName, "A: base with item", "alice <a@x.io>")
-
-	// Branch featureA from main at A.
-	mainDB := env.Client.Database(dbName + "@main")
-	featDB := env.Client.Database(dbName + "@featureA")
-	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "featureA"},
-	}).Err())
-
-	// main independently creates a NEW collection "items" (absent in base A).
-	_, err = mainDB.Collection("items").InsertOne(ctx,
+	// main creates a new collection "items".
+	mainDB := env.Client.Database(dbName)
+	require.NoError(t, mainDB.Drop(ctx))
+	_, err := mainDB.Collection("items").InsertOne(ctx,
 		bson.D{{Key: "_id", Value: int32(10)}, {Key: "side", Value: "main"}})
 	require.NoError(t, err)
-	dumboDBCommit(t, env, dbName+"@main", "main: add items/10", "alice <a@x.io>")
+	dumboDBCommit(t, env, dbName, "main: add items/10", "alice <a@x.io>")
 
-	// featureA independently creates the SAME new collection "items" with a
-	// different _id, so the merge itself is conflict-free once the empty base is
-	// handled.
+	// featureA branches from before "items" existed (main~1, the root), then adds
+	// the SAME collection independently. "items" is therefore absent from the
+	// merge base.
+	require.NoError(t, env.Client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
+		{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "featureA"},
+	}).Err())
+	featDB := env.Client.Database(dbName + "@featureA")
 	_, err = featDB.Collection("items").InsertOne(ctx,
 		bson.D{{Key: "_id", Value: int32(20)}, {Key: "side", Value: "featureA"}})
 	require.NoError(t, err)
 	dumboDBCommit(t, env, dbName+"@featureA", "featureA: add items/20", "bob <b@x.io>")
 
 	// Merge featureA into main. "items" was added on both sides and is absent
-	// from base A, so its base collection hash is empty.
+	// from the merge base, so its base collection hash is empty.
 	var res bson.M
-	err = mainDB.RunCommand(ctx, bson.D{
+	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
 		{Key: "merge_in", Value: "featureA"},
 		{Key: "message", Value: "merge featureA into main"},
@@ -82,8 +73,9 @@ func TestMerge_CollectionAddedOnBothBranches(t *testing.T) {
 	assert.EqualValues(t, 1, res["ok"])
 
 	// Both independently-added documents survive the merge.
-	require.NoError(t, mainDB.Collection("items").FindOne(ctx,
-		bson.D{{Key: "_id", Value: int32(10)}}).Err(), "main's items/10 must survive")
-	require.NoError(t, mainDB.Collection("items").FindOne(ctx,
-		bson.D{{Key: "_id", Value: int32(20)}}).Err(), "featureA's items/20 must survive")
+	merged := env.Client.Database(dbName + "@main").Collection("items")
+	require.NoError(t, merged.FindOne(ctx, bson.D{{Key: "_id", Value: int32(10)}}).Err(),
+		"main's items/10 must survive")
+	require.NoError(t, merged.FindOne(ctx, bson.D{{Key: "_id", Value: int32(20)}}).Err(),
+		"featureA's items/20 must survive")
 }
