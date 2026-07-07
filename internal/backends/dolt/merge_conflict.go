@@ -1233,9 +1233,6 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening from collection %q: %w", name, err)
 		}
-		// When the collection was added independently on both branches it is
-		// absent from the merge base (baseH is the zero hash); the 3-way merge
-		// treats the missing base as an empty collection map.
 		var baseMap prolly.Map
 		if baseH.IsEmpty() {
 			baseMap, err = newEmptyMap(ctx, state.ns)
