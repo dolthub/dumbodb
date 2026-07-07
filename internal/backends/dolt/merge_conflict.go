@@ -1233,7 +1233,12 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening from collection %q: %w", name, err)
 		}
-		baseMap, err := openCollection(ctx, state.cs, state.ns, baseH)
+		var baseMap prolly.Map
+		if baseH.IsEmpty() {
+			baseMap, err = newEmptyMap(ctx, state.ns)
+		} else {
+			baseMap, err = openCollection(ctx, state.cs, state.ns, baseH)
+		}
 		if err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("opening base collection %q: %w", name, err)
 		}
@@ -1248,7 +1253,12 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		if idxErr != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("reading from index AM for %q: %w", name, idxErr)
 		}
-		baseIdxAM, idxErr := indexAMForDTBL(ctx, state.cs, state.ns, baseH)
+		var baseIdxAM prolly.AddressMap
+		if baseH.IsEmpty() {
+			baseIdxAM, idxErr = prolly.NewEmptyAddressMap(state.ns)
+		} else {
+			baseIdxAM, idxErr = indexAMForDTBL(ctx, state.cs, state.ns, baseH)
+		}
 		if idxErr != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("reading base index AM for %q: %w", name, idxErr)
 		}
