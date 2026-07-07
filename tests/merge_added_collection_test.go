@@ -62,3 +62,43 @@ func TestMerge_CollectionAddedOnBothBranches(t *testing.T) {
 	require.NoError(t, merged.FindOne(ctx, bson.D{{Key: "_id", Value: int32(20)}}).Err(),
 		"featureA's items/20 must survive")
 }
+
+func TestMerge_CollectionAddedOnBothBranches_Conflict(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("mergeaddc_%d", rand.Int64N(1_000_000))
+
+	mainDB := env.Client.Database(dbName)
+	require.NoError(t, mainDB.Drop(ctx))
+	_, err := mainDB.Collection("items").InsertOne(ctx,
+		bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: "main"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName, "main: add items/10", "alice <a@x.io>")
+
+	require.NoError(t, env.Client.Database(dbName+"@main~1").RunCommand(ctx, bson.D{
+		{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "featureA"},
+	}).Err())
+	featDB := env.Client.Database(dbName + "@featureA")
+	_, err = featDB.Collection("items").InsertOne(ctx,
+		bson.D{{Key: "_id", Value: int32(10)}, {Key: "v", Value: "featureA"}})
+	require.NoError(t, err)
+	dumboDBCommit(t, env, dbName+"@featureA", "featureA: add items/10", "bob <b@x.io>")
+
+	branch := env.Client.Database(dbName + "@main")
+	raw := runCommandRaw(t, branch, bson.D{
+		{Key: "doltMerge", Value: int32(1)},
+		{Key: "merge_in", Value: "featureA"},
+		{Key: "message", Value: "merge featureA into main"},
+		{Key: "author", Value: "alice <a@x.io>"},
+	})
+	require.EqualValues(t, 0, raw["ok"], "same _id added on both branches must conflict")
+
+	conflicts := getConflictsByCollection(t, branch)
+	require.Len(t, conflicts["items"], 1, "one conflict on items/10")
+
+	resolveAllConflicts(t, branch, "ours")
+	mergeContinue(t, branch)
+
+	col := branch.Collection("items")
+	assert.Equal(t, "main", getDocField(t, col, 10, "v"), "ours resolution keeps main's value")
+}
