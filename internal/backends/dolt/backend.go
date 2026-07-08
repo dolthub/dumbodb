@@ -2724,16 +2724,21 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Resolve empty CommitID to the current HEAD.
+	branch := params.Branch
+	if branch == "" {
+		branch = defaultBranch
+	}
+	branchDataset := "refs/heads/" + branch
+
 	commitID := params.CommitID
 	if commitID == "" {
-		mainDS, dsErr := db.datasDB.GetDataset(ctx, mainDataset)
+		branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
 		if dsErr != nil {
-			return nil, fmt.Errorf("DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
+			return nil, fmt.Errorf("DumboDBReset: resolving branch %q for db %q: %w", branch, params.DBName, dsErr)
 		}
-		headHash, ok := mainDS.MaybeHeadAddr()
+		headHash, ok := branchDS.MaybeHeadAddr()
 		if !ok {
-			return nil, fmt.Errorf("DumboDBReset: no HEAD commit for db %q", params.DBName)
+			return nil, fmt.Errorf("DumboDBReset: no HEAD commit for branch %q in db %q", branch, params.DBName)
 		}
 		commitID = headHash.String()
 	}
@@ -2749,39 +2754,38 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		return nil, fmt.Errorf("DumboDBReset: resolving target commit %q: %w", commitID, err)
 	}
 
-	// Move HEAD to the target commit without touching the working set.
-	mainDS, dsErr := db.datasDB.GetDataset(ctx, mainDataset)
+	branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
 	if dsErr != nil {
-		return nil, fmt.Errorf("DumboDBReset: resolving main dataset for db %q: %w", params.DBName, dsErr)
+		return nil, fmt.Errorf("DumboDBReset: resolving branch %q for db %q: %w", branch, params.DBName, dsErr)
 	}
-	if _, err := db.datasDB.SetHead(ctx, mainDS, targetHash, ""); err != nil {
-		return nil, fmt.Errorf("DumboDBReset: setting HEAD to %q: %w", commitID, err)
+	if _, err := db.datasDB.SetHead(ctx, branchDS, targetHash, ""); err != nil {
+		return nil, fmt.Errorf("DumboDBReset: setting HEAD for branch %q to %q: %w", branch, commitID, err)
 	}
 
 	if params.Hard {
 		// Hard reset: working tree and staged root both point to the target commit.
-		if err := db.persistAM(ctx, defaultBranch, targetAM); err != nil {
-			return nil, fmt.Errorf("DumboDBReset: updating working set (hard): %w", err)
+		if err := db.persistAM(ctx, branch, targetAM); err != nil {
+			return nil, fmt.Errorf("DumboDBReset: updating working set (hard) for branch %q: %w", branch, err)
 		}
-		db.setAM(ctx, defaultBranch, targetAM)
+		db.setAM(ctx, branch, targetAM)
 	} else {
 		// Soft reset: keep working tree, change staged to target commit.
 		stagedRV, stagedErr := amToRootValue(ctx, db, targetAM)
 		if stagedErr != nil {
 			return nil, fmt.Errorf("DumboDBReset (soft): building staged root: %w", stagedErr)
 		}
-		fallbackWS, fbErr := db.loadBranchWS(ctx, defaultBranch)
+		fallbackWS, fbErr := db.loadBranchWS(ctx, branch)
 		if fbErr != nil {
-			return nil, fmt.Errorf("DumboDBReset (soft): loading working set: %w", fbErr)
+			return nil, fmt.Errorf("DumboDBReset (soft): loading working set for branch %q: %w", branch, fbErr)
 		}
-		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), fallbackWS, params.DBName, defaultBranch)
+		ws, wsErr := workingSetViaSession(ctx, sessionFromContext(ctx), fallbackWS, params.DBName, branch)
 		if wsErr != nil {
-			return nil, fmt.Errorf("DumboDBReset (soft): reading working set: %w", wsErr)
+			return nil, fmt.Errorf("DumboDBReset (soft): reading working set for branch %q: %w", branch, wsErr)
 		}
-		if err := db.updateBranchWS(ctx, defaultBranch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
+		if err := db.updateBranchWS(ctx, branch, func(_ *doltdb.WorkingSet) (*doltdb.WorkingSet, error) {
 			return ws.WithStagedRoot(stagedRV), nil
 		}); err != nil {
-			return nil, fmt.Errorf("DumboDBReset: updating working set (soft): %w", err)
+			return nil, fmt.Errorf("DumboDBReset: updating working set (soft) for branch %q: %w", branch, err)
 		}
 	}
 

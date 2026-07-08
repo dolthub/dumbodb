@@ -1490,6 +1490,10 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
+	if err := enforceWritableRootish(encodedDB); err != nil {
+		return nil, err
+	}
+
 	dbName, branch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err

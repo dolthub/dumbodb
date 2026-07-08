@@ -33,13 +33,13 @@ db.dropDatabase()
 db.tasks.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
 printjson(r1)
-// Expected: { hash: "<hashC1>", branch: "main", message: "initial", ok: 1 }
+// Expected: { commitId: "<hashC1>", branch: "main", message: "initial", ok: 1, ... }
 const hashC1 = r1.commitId
 
 db.tasks.insertOne({ _id: 2, v: 2 })
 const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@widgets.io>" })
 printjson(r2)
-// Expected: { hash: "<hashC2>", branch: "main", message: "add-two", ok: 1 }
+// Expected: { commitId: "<hashC2>", branch: "main", message: "add-two", ok: 1, ... }
 const hashC2 = r2.commitId
 
 print("hashC1 =", hashC1)
@@ -65,11 +65,11 @@ db.tasks.insertOne({ _id: 3, v: 3 })
 // Soft reset to hashC1 (no `hard` parameter  -- defaults to false).
 const rReset = db.runCommand({ doltReset: 1, to: hashC1 })
 printjson(rReset)
-// Expected: { hash: "<hashC1>", ok: 1 }
+// Expected: { commitId: "<hashC1>", ok: 1 }
 ```
 
 Key checks:
-- `hash` in the response equals `hashC1`
+- `commitId` in the response equals `hashC1`
 
 After the reset, HEAD is at C1 (which contains only `_id:1`). The working set is
 unchanged and still contains `_id:1`, `_id:2`, and `_id:3`. Diffing HEAD vs the
@@ -100,11 +100,11 @@ db.tasks.insertOne({ _id: 4, v: 4 })
 // Hard reset to hashC1.
 const rHard = db.runCommand({ doltReset: 1, to: hashC1, hard: true })
 printjson(rHard)
-// Expected: { hash: "<hashC1>", ok: 1 }
+// Expected: { commitId: "<hashC1>", ok: 1 }
 ```
 
 Key checks:
-- `hash` in the response equals `hashC1`
+- `commitId` in the response equals `hashC1`
 
 After the hard reset, both HEAD and the working set reflect the C1 state:
 
@@ -137,7 +137,7 @@ const hashC4 = r4.commitId
 
 // Soft reset to C1  -- this "undoes" the C4 commit.
 db.runCommand({ doltReset: 1, to: hashC1 })
-// Expected: { hash: "<hashC1>", ok: 1 }
+// Expected: { commitId: "<hashC1>", ok: 1 }
 ```
 
 After this soft reset:
@@ -186,8 +186,37 @@ db.tasks.find()
 // Expected: only the documents present in the HEAD commit
 ```
 
-A soft reset to HEAD is a no-op in effect (HEAD stays the same, working tree
-stays the same), but is valid and returns the HEAD hash.
+Finally, a soft reset to HEAD  -- `{ doltReset: 1 }` with neither `to` nor `hard`  --
+must have no effect on uncommitted edits: HEAD stays the same and the working tree is
+preserved. Introduce an uncommitted insert, then soft-reset to HEAD:
+
+```js
+db.tasks.insertOne({ _id: 6, v: 6 })   // uncommitted edit
+
+const rSoft = db.runCommand({ doltReset: 1 })
+printjson(rSoft)
+// Expected: { commitId: "<current HEAD hash>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals the current HEAD hash (unchanged)
+- The uncommitted edit survives  -- the working tree is untouched:
+
+```js
+db.runCommand({ doltDiff: 1 })
+// Expected: tasks.added still contains _id:6
+
+db.tasks.find()
+// Expected: the HEAD documents plus the uncommitted _id:6
+```
+
+A hard reset to HEAD then discards that same edit, restoring the clean HEAD state:
+
+```js
+db.runCommand({ doltReset: 1, hard: true })
+db.tasks.find()
+// Expected: only the documents present in the HEAD commit (the _id:6 edit is gone)
+```
 
 ---
 
@@ -216,6 +245,191 @@ Accepted forms for `to`:
 - Relative ancestor expression (`<branch>~N`)
 - `HEAD` (alias for the connection's branch HEAD)
 - `HEAD~N` (Nth first-parent ancestor of the connection's branch HEAD)
+
+---
+
+## Branch setup (Scenarios 6 and 7)
+
+`doltReset` acts on the branch encoded in the connection (`db@branch`), not on
+`main`. Resetting a feature branch must move that branch's HEAD (and, when hard,
+its working set); `main` must be left completely untouched.
+
+Both branch scenarios use a fresh database so the two histories are unambiguous.
+Run this setup once before each scenario (drop and rebuild for a clean state).
+
+```js
+var mdb = db.getSiblingDB("resetbranchdb")
+mdb.dropDatabase()
+
+// main: one committed document (M1).
+mdb.tasks.insertOne({ _id: 1, v: 1 })
+const hashM1 = mdb.runCommand({ doltCommit: 1, message: "main-base", author: "alice <alice@acme.com>" }).commitId
+
+// Create a feature branch from main.
+mdb.runCommand({ doltBranch: 1, branch: "feature" })
+
+// Switch to the feature branch and add two commits (F1, F2).
+var fdb = db.getSiblingDB("resetbranchdb@feature")
+fdb.tasks.insertOne({ _id: 2, v: 2 })
+const hashF1 = fdb.runCommand({ doltCommit: 1, message: "feature-one", author: "carol <carol@acme.com>" }).commitId
+
+fdb.tasks.insertOne({ _id: 3, v: 3 })
+const hashF2 = fdb.runCommand({ doltCommit: 1, message: "feature-two", author: "carol <carol@acme.com>" }).commitId
+```
+
+After setup:
+- **main** (`hashM1`): `tasks` = `[ { _id: 1 } ]`
+- **feature** (`hashF2`, HEAD): `tasks` = `[ { _id: 1 }, { _id: 2 }, { _id: 3 } ]`
+
+---
+
+## Scenario 6: Soft reset on a non-main branch  -- only the target branch moves
+
+Rebuild the branch setup, then soft-reset the feature branch back to F1. HEAD moves
+but the working tree is preserved, so `_id:3` becomes an uncommitted addition. `main`
+must be untouched.
+
+```js
+const rSoft = fdb.runCommand({ doltReset: 1, to: hashF1 })
+printjson(rSoft)
+// Expected: { commitId: "<hashF1>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals `hashF1`
+- The **feature** branch moved to F1 but its working tree is preserved:
+
+```js
+fdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF1
+fdb.tasks.find()                                      // Expected: _id:1, _id:2, _id:3 (3 docs)
+fdb.runCommand({ doltDiff: 1 })                       // Expected: tasks.added contains exactly _id:3
+```
+
+- **main** is untouched: its HEAD is still M1 and only `_id:1` is visible.
+
+```js
+mdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashM1 (unchanged)
+mdb.tasks.find()                                      // Expected: _id:1 only (1 doc)
+```
+
+---
+
+## Scenario 7: Hard reset on a non-main branch  -- only the target branch moves
+
+Rebuild the branch setup, then hard-reset the feature branch back to F1. Both HEAD
+and the working set return to the F1 state. `main` must be untouched.
+
+```js
+const rHard = fdb.runCommand({ doltReset: 1, to: hashF1, hard: true })
+printjson(rHard)
+// Expected: { commitId: "<hashF1>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals `hashF1`
+- The **feature** branch moved: its HEAD is F1 and only `_id:1`, `_id:2` are visible.
+
+```js
+fdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF1
+fdb.tasks.find()                                      // Expected: _id:1 and _id:2 only (2 docs)
+```
+
+- **main** is untouched: its HEAD is still M1 and only `_id:1` is visible.
+
+```js
+mdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashM1 (unchanged)
+mdb.tasks.find()                                      // Expected: _id:1 only (1 doc)
+```
+
+---
+
+## Scenario 8: Hard reset to a commit on another branch  -- content follows the target
+
+`to` may name any commit in the repo, including one that lives on a different branch.
+Resetting `main` to a feature-branch commit moves `main` to that commit; a hard reset
+also makes `main`'s content follow the target. The feature branch is untouched.
+
+Rebuild the branch setup, then, on the `main` connection, hard-reset to F1:
+
+```js
+const rHard = mdb.runCommand({ doltReset: 1, to: hashF1, hard: true })
+printjson(rHard)
+// Expected: { commitId: "<hashF1>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals `hashF1`
+- **main** now follows F1's content, including `_id:2` which was only ever committed
+  on the feature branch; `_id:3` (only on F2) is absent, and the working set is clean:
+
+```js
+mdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF1
+mdb.tasks.find()                                      // Expected: _id:1 and _id:2 (2 docs)
+mdb.runCommand({ doltDiff: 1 })                       // Expected: { collections: [], ok: 1 }
+```
+
+- **feature** is untouched: its HEAD is still F2 and all three docs are present.
+
+```js
+fdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF2 (unchanged)
+fdb.tasks.find()                                      // Expected: _id:1, _id:2, _id:3 (3 docs)
+```
+
+---
+
+## Scenario 9: Soft reset to a commit on another branch  -- diff reflects the gap
+
+A soft reset to a cross-branch commit moves HEAD but preserves `main`'s working tree.
+The resulting diff therefore compares the new HEAD against the unchanged working tree.
+
+Rebuild the branch setup, then, on the `main` connection, soft-reset to F1:
+
+```js
+const rSoft = mdb.runCommand({ doltReset: 1, to: hashF1 })
+printjson(rSoft)
+// Expected: { commitId: "<hashF1>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals `hashF1`; `main` HEAD is now F1
+- `main`'s working tree is preserved at M1 (only `_id:1`), so relative to the new HEAD
+  (F1 = `{_id:1, _id:2}`) the working tree is missing `_id:2`  -- it shows as removed:
+
+```js
+mdb.tasks.find()               // Expected: _id:1 only (working tree unchanged)
+mdb.runCommand({ doltDiff: 1 })
+// Expected: tasks.removed contains exactly _id:2; added and modified are empty
+```
+
+- **feature** is untouched: its HEAD is still F2 and all three docs are present.
+
+```js
+fdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF2 (unchanged)
+fdb.tasks.find()                                      // Expected: _id:1, _id:2, _id:3 (3 docs)
+```
+
+---
+
+## Scenario 10: Reset is rejected on a read-only connection
+
+A connection whose rootish is a commit hash or an ancestor/caret expression
+(`db@<hash>`, `db@main~1`) is a read-only snapshot with no branch to move. `doltReset`
+must be refused rather than treating the rootish as a branch name.
+
+```js
+var sdb = db.getSiblingDB("resetbranchdb@" + hashF1)   // commit-hash snapshot
+sdb.runCommand({ doltReset: 1, to: hashF1 })
+// Expected: command error, code 96 (OperationFailed): cannot write to a read-only database snapshot
+
+sdb.runCommand({ doltReset: 1, to: hashF1, hard: true })
+// Expected: same OperationFailed error
+
+var adb = db.getSiblingDB("resetbranchdb@feature~1")   // ancestor-expression snapshot
+adb.runCommand({ doltReset: 1, to: hashF1 })
+// Expected: same OperationFailed error
+```
+
+Neither `main` nor `feature` moves, and no stray branch is created.
 
 ---
 
