@@ -123,9 +123,6 @@ func TestResetVerify(t *testing.T) {
 
 	hashC1, _ := resetVerifySetup(t, env, dbName)
 
-	// -------------------------------------------------------------------------
-	// Scenario 1: Soft reset (default)  -- HEAD moves back, working set preserved
-	// -------------------------------------------------------------------------
 	t.Run("Scenario1_SoftReset_WorkingSetPreserved", func(t *testing.T) {
 		items := env.Client.Database(dbName).Collection("tasks")
 
@@ -170,9 +167,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Empty(t, cd.Modified, "no documents should be modified")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 2: Hard reset  -- HEAD and working set both reset to target
-	// -------------------------------------------------------------------------
 	t.Run("Scenario2_HardReset_WorkingSetDiscarded", func(t *testing.T) {
 		items := env.Client.Database(dbName).Collection("tasks")
 
@@ -215,9 +209,6 @@ func TestResetVerify(t *testing.T) {
 			"after hard reset to C1: exactly 1 document must be visible")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 3: Soft reset undoes a committed change  -- it becomes uncommitted
-	// -------------------------------------------------------------------------
 	t.Run("Scenario3_SoftReset_UndoCommit", func(t *testing.T) {
 		items := env.Client.Database(dbName).Collection("tasks")
 
@@ -255,9 +246,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Empty(t, cd.Modified, "no modified documents")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 4: Hard reset to HEAD (no `to`)  -- discards uncommitted changes
-	// -------------------------------------------------------------------------
 	t.Run("Scenario4_HardResetToHEAD_DiscardsUncommitted", func(t *testing.T) {
 		items := env.Client.Database(dbName).Collection("tasks")
 
@@ -353,9 +341,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(1), n, "hard reset to HEAD must discard the uncommitted _id:6")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 5: Reset accepts relative rootish (HEAD~N, branch~N)
-	// -------------------------------------------------------------------------
 	t.Run("Scenario5_RelativeRootish", func(t *testing.T) {
 		items := env.Client.Database(dbName).Collection("tasks")
 
