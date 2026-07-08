@@ -56,6 +56,18 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
+	toDatabase, err := common.GetOptionalParam[string](document, "to_database", "")
+	if err != nil {
+		return nil, err
+	}
+
+	if toDatabase != "" && name == "" {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboUndrop: to_database requires name",
+		)
+	}
+
 	if name == "" {
 		res, err := vb.ListDroppedDatabases(connCtx)
 		if err != nil {
@@ -84,12 +96,19 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	if strings.Contains(toDatabase, dbBranchSep) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboUndrop: to_database must be a root database, not a revision-qualified name",
+		)
+	}
+
 	dropID, err := common.GetOptionalParam[string](document, "dropId", "")
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := vb.UndropDatabase(connCtx, &backends.UndropParams{Name: name, DropID: dropID})
+	res, err := vb.UndropDatabase(connCtx, &backends.UndropParams{Name: name, DropID: dropID, ToDatabase: toDatabase})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}

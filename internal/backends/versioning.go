@@ -578,7 +578,8 @@ type VersioningBackend interface {
 
 	// UndropDatabase restores a soft-deleted database from the preserved drops
 	// back to a live database. DropID selects a specific drop; with an empty
-	// DropID the most recent drop of that name is restored.
+	// DropID the most recent drop of that name is restored. ToDatabase, when set,
+	// restores the drop under that name instead of its original one.
 	UndropDatabase(context.Context, *UndropParams) (*UndropResult, error)
 
 	// ListDroppedDatabases returns every soft-deleted database currently held in
@@ -587,11 +588,14 @@ type VersioningBackend interface {
 }
 
 // UndropParams represents the parameters of VersioningBackend.UndropDatabase.
-// Name is the database to restore. DropID, when set, selects a specific drop
-// (the value of DroppedDatabase.DropID) for names with more than one preserved drop.
+// Name is the dropped database to restore. DropID, when set, selects a specific
+// drop (the value of DroppedDatabase.DropID) for names with more than one
+// preserved drop. ToDatabase, when set, is the name to restore the drop under
+// (defaults to Name).
 type UndropParams struct {
-	Name   string
-	DropID string
+	Name       string
+	DropID     string
+	ToDatabase string
 }
 
 // UndropResult represents the result of VersioningBackend.UndropDatabase.

@@ -167,17 +167,22 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		chosen = candidates[0]
 	}
 
-	liveDir := filepath.Join(b.dataDir, params.Name)
-	if _, ok := b.dbs[params.Name]; ok {
-		return nil, fmt.Errorf("undrop: a live database named %q already exists", params.Name)
+	target := params.Name
+	if params.ToDatabase != "" {
+		target = params.ToDatabase
+	}
+
+	liveDir := filepath.Join(b.dataDir, target)
+	if _, ok := b.dbs[target]; ok {
+		return nil, fmt.Errorf("undrop: a live database named %q already exists", target)
 	}
 	if _, statErr := os.Stat(liveDir); statErr == nil {
-		return nil, fmt.Errorf("undrop: a live database named %q already exists", params.Name)
+		return nil, fmt.Errorf("undrop: a live database named %q already exists", target)
 	}
 
 	src := filepath.Join(b.preservedRoot(), chosen.Name, chosen.DropID)
 	if err := os.Rename(src, liveDir); err != nil {
-		return nil, fmt.Errorf("undrop: restoring %q: %w", params.Name, err)
+		return nil, fmt.Errorf("undrop: restoring %q: %w", target, err)
 	}
 
 	// Remove the now-empty per-name preserved-drops directory if this was the last drop.
@@ -186,7 +191,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		_ = os.Remove(parent)
 	}
 
-	return &backends.UndropResult{Name: chosen.Name, DropID: chosen.DropID}, nil
+	return &backends.UndropResult{Name: target, DropID: chosen.DropID}, nil
 }
 
 func availableHint(all []backends.DroppedDatabase) string {

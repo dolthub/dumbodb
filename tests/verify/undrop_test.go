@@ -205,6 +205,32 @@ func TestUndropVerify(t *testing.T) {
 		assert.Len(t, remaining, 2, "v1 and v3 remain preserved")
 	})
 
+	// Scenario 4c: Restore under a different name with to_database.
+	t.Run("Scenario4c_ToDatabase", func(t *testing.T) {
+		undropCommit(t, env, "srcdb", bson.D{{Key: "_id", Value: 1}, {Key: "tag", Value: "orig"}}, "s1")
+		undropDropDB(t, env, "srcdb")
+
+		res, err := undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "to_database", Value: "destdb"},
+		})
+		require.NoError(t, err)
+		assert.EqualValues(t, "destdb", res["undropped"], "restored under the alternate name")
+
+		// destdb is live with srcdb's data.
+		var got bson.M
+		require.NoError(t, env.Client.Database("destdb").Collection("items").
+			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
+		assert.EqualValues(t, "orig", got["tag"])
+
+		// srcdb is neither live nor preserved anymore.
+		names, err := env.Client.ListDatabaseNames(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.NotContains(t, names, "srcdb")
+		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
+		require.NoError(t, err)
+		assert.NotContains(t, droppedNames(list), "srcdb")
+	})
+
 	// Scenario 5: Error cases.
 	t.Run("Scenario5_Errors", func(t *testing.T) {
 		_, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ghost"}})
@@ -218,6 +244,18 @@ func TestUndropVerify(t *testing.T) {
 
 		_, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger@main"}})
 		require.Error(t, err)
+
+		// to_database without name is an error.
+		_, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "to_database", Value: "somewhere"}})
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "to_database requires name")
+
+		// to_database must be a root name.
+		_, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "to_database", Value: "dest@main"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "to_database must be a root database")
 	})
 
 	// Scenario 6: undrop is admin-only.

@@ -1390,7 +1390,7 @@ Default mode walks new-gen chunks only -- chunks already promoted to oldgen arch
 
 Restores a soft-deleted database, or lists the databases available to undrop.
 
-When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into the preserved-drops directory and can be restored. `dumboUndrop` reverses that move. Repeat drops of the same name are all retained, distinguished by a `dropId`.
+When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into the preserved-drops directory and can be restored. `dumboUndrop` reverses that move. Repeat drops of the same name are all retained, distinguished by a `dropId`. Pass `to_database` to restore under a different name.
 
 **Alias:** `doltUndrop`
 
@@ -1402,6 +1402,7 @@ When a database is dropped with `dropDatabase`, it is not deleted: its directory
 |-----------|------|----------|---------|-------------|
 | `name` | string | no | `""` | Database to restore. Omit to list databases available to undrop. Must be a root database name (no `@branch`/`@revision`). |
 | `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one preserved copy. Omit to restore the most recent drop. Use the `dropId` from the list response. |
+| `to_database` | string | no | `""` | Restore the drop under this name instead of its original. Requires `name`; must be a root database name (no `@branch`/`@revision`). |
 
 ### Response fields (list mode, no `name`)
 
@@ -1417,7 +1418,7 @@ When a database is dropped with `dropDatabase`, it is not deleted: its directory
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `undropped` | string | Restored database name |
+| `undropped` | string | Restored database name (the `to_database` name when one is given) |
 | `dropId` | string | Id of the drop that was restored |
 | `ok` | number | `1` on success |
 
@@ -1438,6 +1439,10 @@ admin.runCommand({ dumboUndrop: 1 })
 // Restore it
 admin.runCommand({ dumboUndrop: 1, name: "orders" })
 // { undropped: "orders", dropId: "1775505756999075683", ok: 1 }
+
+// Restore it under a different name
+admin.runCommand({ dumboUndrop: 1, name: "orders", to_database: "orders_recovered" })
+// { undropped: "orders_recovered", dropId: "1775505756999075683", ok: 1 }
 ```
 
 ### Error cases
@@ -1447,8 +1452,10 @@ admin.runCommand({ dumboUndrop: 1, name: "orders" })
 | Not run against `admin` | `OperationFailed: dumboUndrop: can only be run against the admin database` |
 | No dropped database with that name | `DatabaseDoesNotExist: undrop: no dropped database named "<name>"; ...` |
 | `dropId` does not match any drop | `DatabaseDoesNotExist: undrop: database "<name>" has no dropped copy with dropId "<id>"` |
-| A live database with that name already exists | `OperationFailed: undrop: a live database named "<name>" already exists` |
+| A live database with the target name already exists | `OperationFailed: undrop: a live database named "<name>" already exists` |
 | `name` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: name must be a root database, ...` |
+| `to_database` given without `name` | `OperationFailed: dumboUndrop: to_database requires name` |
+| `to_database` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: to_database must be a root database, ...` |
 
 ### Notes
 

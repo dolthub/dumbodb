@@ -25,6 +25,7 @@ because it operates across the whole instance rather than on a single database.
 |-----------|--------|----------|---------|----------------------------------------------------------------------------------------------|
 | `name`    | string | no       |  --      | Database to restore. Omit to list databases available to undrop. Must be a root name (no `@`). |
 | `dropId`  | string | no       |  --      | Selects one drop when `name` has more than one preserved copy. Use the `dropId` from the list. |
+| `to_database` | string | no   |  --      | Restore the drop under this name instead of its original. Requires `name`; must be a root name (no `@`). |
 
 ## Prerequisites
 
@@ -253,6 +254,33 @@ Key checks:
 
 ---
 
+## Scenario 4c: Restore under a different name (to_database)
+
+Pass `to_database` to restore a drop under a new name -- drop `srcdb`, undrop it
+as `destdb`.
+
+```js
+var s = db.getSiblingDB("srcdb")
+s.items.insertOne({ _id: 1, tag: "orig" })
+s.runCommand({ doltCommit: 1, message: "s1", author: "a <a@a>" })
+s.dropDatabase()
+
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", to_database: "destdb" })
+// Expected: { undropped: "destdb", dropId: <id>, ok: 1 }
+
+db.getSiblingDB("destdb").items.findOne({ _id: 1 }).tag
+// Expected: "orig" -- srcdb's data now lives under destdb
+
+db.adminCommand({ listDatabases: 1 }).databases.map(d => d.name).includes("srcdb")
+// Expected: false -- srcdb was consumed by the restore
+```
+
+Key checks:
+- `undropped` reports the new name `destdb`.
+- `destdb` is live with `srcdb`'s data; `srcdb` is neither live nor still listed as dropped.
+
+---
+
 ## Scenario 5: Error cases
 
 ```js
@@ -268,6 +296,14 @@ db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger" })
 // Revision-qualified names are not allowed
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger@main" })
 // Expected: ok: 0; errmsg says name must be a root database
+
+// to_database without name is an error
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, to_database: "somewhere" })
+// Expected: ok: 0; errmsg contains "to_database requires name"
+
+// to_database must be a root name
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", to_database: "dest@main" })
+// Expected: ok: 0; errmsg says to_database must be a root database
 ```
 
 Key check: each call returns an error; no database state changes.
@@ -343,11 +379,13 @@ restore succeeds.
 |---------------------------------------------------------------------|---------------------------------------------------|
 | `db.getSiblingDB("x").dropDatabase()`                               | Soft-delete `x` (preserves it for undrop)         |
 | `db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })`           | List databases available to undrop                |
-| `... runCommand({ dumboUndrop: 1, name: "x" })`                     | Restore `x` (errors if `x` has multiple drops)    |
+| `... runCommand({ dumboUndrop: 1, name: "x" })`                     | Restore `x` (the most recent drop)                |
 | `... runCommand({ dumboUndrop: 1, name: "x", dropId: "<id>" })`     | Restore a specific drop of `x`                     |
+| `... runCommand({ dumboUndrop: 1, name: "x", to_database: "y" })`   | Restore `x`'s drop under the name `y`             |
 
 - `dropDatabase` only works on a root database name; system databases (`admin`, `config`, `local`) cannot be dropped.
 - `dumboUndrop` must be run against `admin`.
 - Repeat drops of one name are all retained; `dropId` selects among them.
+- `to_database` restores under a new name; it requires `name`.
 - Undrop restores the complete commit history, not just the latest data.
 - Preserved databases are permanently deleted by a background job once they are more than 30 days old (checked hourly).
