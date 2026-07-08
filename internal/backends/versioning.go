@@ -577,9 +577,8 @@ type VersioningBackend interface {
 	DumboDBBranchStatus(context.Context, *BranchStatusParams) (*BranchStatusResult, error)
 
 	// UndropDatabase restores a soft-deleted database from the preserved drops
-	// back to a live database. When multiple drops of the same name
-	// exist, DropID selects one; with an empty DropID and a single drop, that
-	// drop is restored, and with multiple drops an error lists the candidates.
+	// back to a live database. DropID selects a specific drop; with an empty
+	// DropID the most recent drop of that name is restored.
 	UndropDatabase(context.Context, *UndropParams) (*UndropResult, error)
 
 	// ListDroppedDatabases returns every soft-deleted database currently held in
