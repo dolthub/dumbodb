@@ -16,15 +16,23 @@ package handler
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+// isSystemDatabase reports whether name is a MongoDB system database that must
+// not be dropped.
+func isSystemDatabase(name string) bool {
+	return name == "admin" || name == "config" || name == "local"
+}
 
 // MsgDropDatabase implements `dropDatabase` command.
 //
@@ -42,8 +50,15 @@ func (h *Handler) MsgDropDatabase(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	if err = enforceWritableRootish(dbName); err != nil {
+	if err = enforceRootDatabase(dbName); err != nil {
 		return nil, err
+	}
+
+	if isSystemDatabase(dbName) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrIllegalOperation,
+			fmt.Sprintf("cannot drop the %q database: system databases cannot be dropped", dbName),
+		)
 	}
 
 	// Most backends would block on `DropDatabase` below otherwise.

@@ -40,6 +40,7 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboResolveConflict` | `doltResolveConflict` |
 | `dumboTag` | `doltTag` |
 | `dumboGC` | `doltGC` |
+| `dumboUndrop` | `doltUndrop` |
 
 ---
 
@@ -1382,3 +1383,104 @@ Default mode walks new-gen chunks only -- chunks already promoted to oldgen arch
 
 - `dumboGC` is a durable command (routed through the session commit fence), so it is mutually exclusive with other durable commands on the same connection.
 - The calling session is excluded from the GC safepoint's wait set, so the running command does not deadlock on itself. Other connections' in-flight commands are awaited at the pre-finalize safepoint and block briefly until GC completes.
+
+---
+
+## dumboUndrop
+
+Restores a soft-deleted database, or lists the databases available to undrop.
+
+When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into the preserved-drops directory and can be restored. `dumboUndrop` restores a **copy** of a drop -- the drop itself stays preserved and listed until the 30-day GC purges it, so one drop can be restored repeatedly (e.g. under several names via `to_database`). Repeat drops of the same name are all retained, distinguished by a `dropId`. Pass `to_database` to restore under a different name.
+
+**Alias:** `doltUndrop`
+
+**Admin-only:** must be run against the `admin` database.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | no | `""` | Database to restore. Omit to list databases available to undrop. Must be a root database name (no `@branch`/`@revision`). |
+| `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one preserved copy. Omit to restore the most recent drop. Use the `dropId` from the list response. |
+| `to_database` | string | no | `""` | Restore the drop under this name instead of its original. Requires `name`; must be a root database name (no `@branch`/`@revision`) and not a system database (`admin`, `config`, `local`). |
+| `purgeMatching` | object | no |  -- | Purge mode: permanently delete preserved drops matching the filter (see below). Mutually exclusive with `name`/`dropId`/`to_database`. |
+
+### Purge mode (`purgeMatching`)
+
+`purgeMatching` switches `dumboUndrop` from restore to purge: it permanently deletes preserved drops that match the filter, before the automatic 30-day GC would. The filter is a purpose-built object (not a general `$match`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **yes** | Exact database name. Every purge is scoped to one name. |
+| `dropId` | string | no | Exact drop id (from the list response). |
+| `droppedBefore` | Date | no | Only drops whose `droppedAt` is strictly before this time. |
+
+A drop is purged only if it satisfies **every** field that is set (AND). `name` is required, so a purge is always scoped to a single database; `dropId` and `droppedBefore` further narrow it. Unknown fields are rejected (guards against typos such as `droppedAt`). Response: `{ purged: [ { name, dropId, droppedAt }, ... ], ok: 1 }`.
+
+### Response fields (list mode, no `name`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dropped` | array | One entry per preserved drop, most recently dropped first |
+| `dropped[].name` | string | Database name |
+| `dropped[].dropId` | string | Unique id of this drop |
+| `dropped[].droppedAt` | Date | When the drop happened |
+| `ok` | number | `1` on success |
+
+### Response fields (restore mode, with `name`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `undropped` | string | Restored database name (the `to_database` name when one is given) |
+| `dropId` | string | Id of the drop that was restored |
+| `ok` | number | `1` on success |
+
+### Example
+
+```js
+var admin = db.getSiblingDB("admin")
+
+// List what can be undropped
+admin.runCommand({ dumboUndrop: 1 })
+// {
+//   dropped: [
+//     { name: "orders", dropId: "1775505756999075683", droppedAt: ISODate("2026-06-24T21:00:00.000Z") }
+//   ],
+//   ok: 1
+// }
+
+// Restore it
+admin.runCommand({ dumboUndrop: 1, name: "orders" })
+// { undropped: "orders", dropId: "1775505756999075683", ok: 1 }
+
+// Restore it under a different name
+admin.runCommand({ dumboUndrop: 1, name: "orders", to_database: "orders_recovered" })
+// { undropped: "orders_recovered", dropId: "1775505756999075683", ok: 1 }
+
+// Purge every drop of "orders" older than a cutoff, before the 30-day GC
+admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefore: ISODate("2026-06-01") } })
+// { purged: [ { name: "orders", dropId: "...", droppedAt: ISODate("...") } ], ok: 1 }
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| Not run against `admin` | `OperationFailed: dumboUndrop: can only be run against the admin database` |
+| No dropped database with that name | `OperationFailed: undrop: no dropped database named "<name>"; ...` |
+| `dropId` does not match any drop | `OperationFailed: undrop: database "<name>" has no dropped copy with dropId "<id>"` |
+| A live database with the target name already exists | `OperationFailed: undrop: a live database named "<name>" already exists` |
+| `name` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: name must be a root database, ...` |
+| `to_database` given without `name` | `OperationFailed: dumboUndrop: to_database requires name` |
+| `to_database` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: to_database must be a root database, ...` |
+| Target is a system database (`admin`, `config`, `local`) | `OperationFailed: dumboUndrop: cannot restore to system database <name>` |
+| `purgeMatching` without `name` | `OperationFailed: dumboUndrop: purgeMatching requires name` |
+| `purgeMatching` has an unknown field | `OperationFailed: dumboUndrop: purgeMatching has unknown field <field> (allowed: name, dropId, droppedBefore)` |
+| `purgeMatching` combined with `name`/`dropId`/`to_database` | `OperationFailed: dumboUndrop: purgeMatching cannot be combined with <field>` |
+
+### Notes
+
+- The full commit history of the restored database is preserved exactly as it was at drop time.
+- Restore is a copy: the drop is not consumed. It stays listed and can be restored again (each restore produces an independent database). Restoring into a name that is already live is rejected.
+- Preserved databases are permanently deleted automatically once they are more than 30 days old. A background job checks hourly and logs an INFO line for each deletion. Undrop a database before then to recover it.
+- System databases (`admin`, `config`, `local`) cannot be dropped, so they are never preserved.

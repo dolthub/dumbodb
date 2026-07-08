@@ -346,6 +346,30 @@ func (bc *backendContract) DumboDBTag(ctx context.Context, params *TagParams) (*
 	return nil, newVersioningUnsupportedError("DumboDBTag")
 }
 
+func (bc *backendContract) UndropDatabase(ctx context.Context, params *UndropParams) (*UndropResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.UndropDatabase(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("UndropDatabase")
+}
+
+func (bc *backendContract) ListDroppedDatabases(ctx context.Context) (*DroppedDatabasesResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.ListDroppedDatabases(ctx)
+	}
+
+	return nil, newVersioningUnsupportedError("ListDroppedDatabases")
+}
+
+func (bc *backendContract) PurgeDroppedDatabases(ctx context.Context, params *PurgeDroppedParams) (*PurgeDroppedResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.PurgeDroppedDatabases(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("PurgeDroppedDatabases")
+}
+
 func newVersioningUnsupportedError(op string) error {
 	return fmt.Errorf("dolt versioning not supported by this backend: %s", op)
 }

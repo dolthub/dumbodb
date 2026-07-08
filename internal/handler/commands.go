@@ -140,6 +140,7 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgDumboDBRevert, Help: "Reverts the changes introduced by the named commit, creating a new inverse commit."}, "doltRevert", "dumboRevert")
 	h.register(&Command{Handler: h.MsgDumboDBStatus, Help: "Returns uncommitted changes on the branch encoded in the database name."}, "doltStatus", "dumboStatus")
 	h.register(&Command{Handler: h.MsgDumboDBTag, Help: "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>)."}, "doltTag", "dumboTag")
+	h.register(&Command{Handler: h.MsgDumboDBUndrop, Help: "Restores a soft-deleted database, or with no name lists databases available to undrop. Admin-only."}, "doltUndrop", "dumboUndrop")
 
 	// Durable boundaries: routed through Shadow.Commit (writeMu fence).
 	h.register(&Command{Handler: h.MsgDumboDBCommit, Durable: true, Help: "Commits the current working set on the branch encoded in the database name."}, "doltCommit", "dumboCommit")

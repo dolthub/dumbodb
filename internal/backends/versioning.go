@@ -182,7 +182,7 @@ type ResolveConflictResult struct{}
 type LogParams struct {
 	DBName     string
 	Branch     string
-	ConnBranch string   // branch name from the connection's encoded db name (used for HEAD -> decoration)
+	ConnBranch string // branch name from the connection's encoded db name (used for HEAD -> decoration)
 	Limit      int32
 	From       []string // optional: seed commit hashes for the traversal frontier; empty means start at HEAD
 	Stat       bool     // when true, include per-collection change counts for each commit
@@ -213,15 +213,15 @@ type CommitFilter struct {
 // CommitInfo represents a single commit entry returned by DumboDBLog.
 type CommitInfo struct {
 	CommitID           string
-	Parent1            string   // empty for root commit (no parent)
-	Parent2            string   // non-empty only for merge commits
+	Parent1            string // empty for root commit (no parent)
+	Parent2            string // non-empty only for merge commits
 	Author             string
 	Email              string
 	Message            string
-	Timestamp          int64    // Unix milliseconds (author date)
-	Committer          string   // "Name <email>" of the committer; equals Author when not explicitly set
-	CommitterTimestamp int64    // Unix milliseconds (committer date)
-	Refs               []string // branch/tag decorations; empty when commit is not a branch head
+	Timestamp          int64            // Unix milliseconds (author date)
+	Committer          string           // "Name <email>" of the committer; equals Author when not explicitly set
+	CommitterTimestamp int64            // Unix milliseconds (committer date)
+	Refs               []string         // branch/tag decorations; empty when commit is not a branch head
 	Stat               []TableStatus    // per-collection change summary (only when LogParams.Stat is true)
 	Diff               []CollectionDiff // full document diffs (only when LogParams.Patch is true)
 }
@@ -575,4 +575,48 @@ type VersioningBackend interface {
 
 	// DumboDBBranchStatus reports how many commits each target refspec is ahead and behind the base refspec.
 	DumboDBBranchStatus(context.Context, *BranchStatusParams) (*BranchStatusResult, error)
+
+	// UndropDatabase restores a copy of a soft-deleted database: the drop stays
+	// preserved and listed so it can be restored again. Empty DropID restores the
+	// most recent drop; ToDatabase restores under a different name (default Name).
+	UndropDatabase(context.Context, *UndropParams) (*UndropResult, error)
+
+	// ListDroppedDatabases returns every preserved drop, most recently dropped first.
+	ListDroppedDatabases(context.Context) (*DroppedDatabasesResult, error)
+
+	// PurgeDroppedDatabases permanently removes preserved drops matching the filter
+	// (Name required), returning the removed drops.
+	PurgeDroppedDatabases(context.Context, *PurgeDroppedParams) (*PurgeDroppedResult, error)
+}
+
+// PurgeDroppedParams filters PurgeDroppedDatabases; a drop must satisfy every set field.
+type PurgeDroppedParams struct {
+	Name          string    // required: exact database name
+	DropID        string    // optional: exact drop id
+	DroppedBefore time.Time // optional: only drops dropped strictly before this
+}
+
+type PurgeDroppedResult struct {
+	Purged []DroppedDatabase
+}
+
+type UndropParams struct {
+	Name       string
+	DropID     string // optional: selects one drop when Name has several
+	ToDatabase string // optional: restore under this name instead of Name
+}
+
+type UndropResult struct {
+	Name   string
+	DropID string
+}
+
+type DroppedDatabase struct {
+	Name              string
+	DropID            string // UnixNano of the drop; disambiguates repeat drops of one name
+	DroppedAtUnixNano int64
+}
+
+type DroppedDatabasesResult struct {
+	Databases []DroppedDatabase
 }

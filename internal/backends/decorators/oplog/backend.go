@@ -216,6 +216,30 @@ func (b *backend) DumboDBBranchStatus(ctx context.Context, params *backends.Bran
 	return nil, fmt.Errorf("oplog: DumboDBBranchStatus: versioning not supported by wrapped backend")
 }
 
+func (b *backend) UndropDatabase(ctx context.Context, params *backends.UndropParams) (*backends.UndropResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.UndropDatabase(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: UndropDatabase: versioning not supported by wrapped backend")
+}
+
+func (b *backend) ListDroppedDatabases(ctx context.Context) (*backends.DroppedDatabasesResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.ListDroppedDatabases(ctx)
+	}
+
+	return nil, fmt.Errorf("oplog: ListDroppedDatabases: versioning not supported by wrapped backend")
+}
+
+func (b *backend) PurgeDroppedDatabases(ctx context.Context, params *backends.PurgeDroppedParams) (*backends.PurgeDroppedResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.PurgeDroppedDatabases(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: PurgeDroppedDatabases: versioning not supported by wrapped backend")
+}
+
 var (
 	_ backends.Backend           = (*backend)(nil)
 	_ backends.VersioningBackend = (*backend)(nil)

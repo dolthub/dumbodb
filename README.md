@@ -26,6 +26,7 @@ DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 - Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
 - Expiration (TTL): `expireAfterSeconds` is not supported; specifying it on a collection or index is rejected with an error rather than silently accepted. Support not planned.
+- Reserved System Databases: the `config` and `local` databases carry special MongoDB semantics that DumboDB does not implement, so creating them is rejected with an error. `admin` is supported.
 
 If you are needing missing features, please file an [issue](https://github.com/dolthub/dumbodb/issues), or join our [Discord server](https://discord.gg/gqr7K4VNKe) to start a conversation with us. We'd love your feedback!
 
@@ -49,6 +50,7 @@ DumboDB's version control features are exposed via a set of custom commands (e.g
 | [`dumboResolveConflict`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboresolveconflict) | Resolve a single document conflict (ours / theirs / custom) |
 | [`dumboTag`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbotag) | Create, list, or delete tags at specific commits |
 | [`dumboGC`](https://github.com/dolthub/dumbodb/wiki/Commands#dumbogc) | Run garbage collection on the database's chunk store |
+| [`dumboUndrop`](https://github.com/dolthub/dumbodb/wiki/Commands#dumboundrop) | Restore a soft-deleted database, or list databases available to undrop |
 
 All commands have a `dolt*` alias (e.g. `doltCommit`, `doltMerge`). Use whichever prefix you prefer!
 

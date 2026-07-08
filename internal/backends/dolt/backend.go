@@ -56,8 +56,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -75,6 +75,10 @@ const (
 	// defaultSessionTimeout matches MongoDB's logicalSessionTimeoutMinutes default.
 	defaultSessionTimeout     = 30 * time.Minute
 	defaultSessionSweepPeriod = time.Minute
+
+	// defaultDroppedDatabaseTTL is how long a preserved drop is kept before the GC removes it.
+	defaultDroppedDatabaseTTL = 30 * 24 * time.Hour
+	defaultDroppedGCPeriod    = time.Hour
 
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
@@ -133,9 +137,9 @@ type dbState struct {
 	mu    sync.RWMutex
 	dbDir string
 
-	cs     *nbs.GenerationalNBS
-	ns     tree.NodeStore
-	vs     *dolttypes.ValueStore
+	cs *nbs.GenerationalNBS
+	ns tree.NodeStore
+	vs *dolttypes.ValueStore
 
 	// doltDB is the primary handle for working-set and commit operations.
 	// datasDB is the lower-level dataset interface required for operations not yet
@@ -247,7 +251,6 @@ func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *dol
 	_ = sess.SetWorkingSet(sqlCtx, qualified, newWS)
 }
 
-
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
 	dataDir          string
@@ -274,6 +277,11 @@ type Backend struct {
 	sweeperStop   chan struct{}
 	sweeperDone   chan struct{}
 	sweeperPeriod time.Duration
+
+	droppedGCStop   chan struct{}
+	droppedGCDone   chan struct{}
+	droppedGCPeriod time.Duration
+	droppedGCTTL    time.Duration
 }
 
 func docLocksKey(db, branch string) string {
@@ -436,6 +444,10 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		docLocks:         make(map[string]*DocLockManager),
 		sweeperStop:      make(chan struct{}),
 		sweeperDone:      make(chan struct{}),
+		droppedGCStop:    make(chan struct{}),
+		droppedGCDone:    make(chan struct{}),
+		droppedGCPeriod:  defaultDroppedGCPeriod,
+		droppedGCTTL:     defaultDroppedDatabaseTTL,
 	}
 	if sessionSweepPeriod > 0 {
 		b.sweeperPeriod = sessionSweepPeriod
@@ -467,6 +479,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 	}
 
 	go b.sessionSweepLoop()
+	go b.droppedDatabaseGCLoop()
 
 	return b, nil
 }
@@ -498,6 +511,17 @@ func (b *Backend) Close() {
 		}
 		if b.sweeperDone != nil {
 			<-b.sweeperDone
+		}
+	}
+
+	if b.droppedGCStop != nil {
+		select {
+		case <-b.droppedGCStop:
+		default:
+			close(b.droppedGCStop)
+		}
+		if b.droppedGCDone != nil {
+			<-b.droppedGCDone
 		}
 	}
 
@@ -630,6 +654,11 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			continue
 		}
 
+		// Skip internal dot-prefixed dirs (e.g. preserved drops); not valid db names.
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
 		dbName := entry.Name()
 
 		// System databases are always included, matching MongoDB's behavior where
@@ -693,7 +722,13 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		delete(b.dbs, params.Name)
 	}
 
-	if err := os.RemoveAll(dbDir); err != nil {
+	// Soft delete: move (not remove) into the preserved-drops store so UndropDatabase can restore it.
+	dest, err := b.preservedDest(params.Name)
+	if err != nil {
+		return fmt.Errorf("dropping database %q: %w", params.Name, err)
+	}
+
+	if err := os.Rename(dbDir, dest); err != nil {
 		return fmt.Errorf("dropping database %q: %w", params.Name, err)
 	}
 
@@ -703,6 +738,12 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 // getOrOpenDB returns the dbState for the given database name,
 // opening/creating the NBS store if needed.
 // If create is false and the directory doesn't exist, returns nil, nil.
+// isReservedDatabase reports whether name is a system database DumboDB does not
+// implement and must not let users create. admin is excluded (DumboDB uses it).
+func isReservedDatabase(name string) bool {
+	return name == "config" || name == "local"
+}
+
 func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (*dbState, error) {
 	db, opened, err := b.getOrOpenDBLocked(ctx, dbName, create)
 	if err != nil || db == nil {
@@ -749,6 +790,11 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		if _, err := os.Stat(dbDir); os.IsNotExist(err) {
 			return nil, false, nil
 		}
+	}
+
+	if create && isReservedDatabase(dbName) {
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid,
+			fmt.Errorf("database %q is a reserved system database and cannot be created", dbName))
 	}
 
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
@@ -3589,8 +3635,8 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			conflicts:   conflicts,
 			resolvedAM:  mergedAM,
 			isRevert:    true,
-			pickHash:    revertHash,   // the commit being reverted
-			fromHash:    parentHash,   // parent hash  -- used as "their" hash in artifacts
+			pickHash:    revertHash, // the commit being reverted
+			fromHash:    parentHash, // parent hash  -- used as "their" hash in artifacts
 			originalMsg: originalMsg,
 		}
 

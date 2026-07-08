@@ -48,6 +48,11 @@ type Env struct {
 	Port    int
 }
 
+// DataDir returns the server's --data-dir, for tests that inspect on-disk state.
+func (env *Env) DataDir() string {
+	return env.dataDir
+}
+
 // RepoRoot returns the repository root directory (two levels above this file).
 func RepoRoot() string {
 	_, filename, _, _ := runtime.Caller(0)
