@@ -1390,7 +1390,7 @@ Default mode walks new-gen chunks only -- chunks already promoted to oldgen arch
 
 Restores a soft-deleted database, or lists the databases available to undrop.
 
-When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into a quarantine and can be restored. `dumboUndrop` reverses that move. Repeat drops of the same name are all retained, distinguished by a `dropId`.
+When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into the preserved-drops directory and can be restored. `dumboUndrop` reverses that move. Repeat drops of the same name are all retained, distinguished by a `dropId`.
 
 **Alias:** `doltUndrop`
 
@@ -1401,13 +1401,13 @@ When a database is dropped with `dropDatabase`, it is not deleted: its directory
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `name` | string | no | `""` | Database to restore. Omit to list databases available to undrop. Must be a root database name (no `@branch`/`@revision`). |
-| `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one quarantined copy. Omit to restore the most recent drop. Use the `dropId` from the list response. |
+| `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one preserved copy. Omit to restore the most recent drop. Use the `dropId` from the list response. |
 
 ### Response fields (list mode, no `name`)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dropped` | array | One entry per quarantined drop, most recently dropped first |
+| `dropped` | array | One entry per preserved drop, most recently dropped first |
 | `dropped[].name` | string | Database name |
 | `dropped[].dropId` | string | Unique id of this drop |
 | `dropped[].droppedAt` | Date | When the drop happened |
@@ -1453,5 +1453,5 @@ admin.runCommand({ dumboUndrop: 1, name: "orders" })
 ### Notes
 
 - The full commit history of the restored database is preserved exactly as it was at drop time.
-- Quarantined databases are permanently deleted automatically once they are more than 30 days old. A background job checks hourly and logs an INFO line for each deletion. Undrop a database before then to recover it.
-- System databases (`admin`, `config`, `local`) cannot be dropped, so they never appear in the quarantine.
+- Preserved databases are permanently deleted automatically once they are more than 30 days old. A background job checks hourly and logs an INFO line for each deletion. Undrop a database before then to recover it.
+- System databases (`admin`, `config`, `local`) cannot be dropped, so they are never preserved.

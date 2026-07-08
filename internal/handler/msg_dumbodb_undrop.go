@@ -32,7 +32,7 @@ import (
 //
 // With no "name", it lists the databases available to undrop. With "name", it
 // restores that soft-deleted database; "dropId" disambiguates when the name has
-// more than one quarantined drop. Admin-only.
+// more than one preserved drop. Admin-only.
 func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

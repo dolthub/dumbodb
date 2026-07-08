@@ -26,7 +26,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-const undropQuarantineDir = ".dumbodb_dropped_databases"
+const undropPreservedDir = ".dumbodb_dropped_databases"
 
 func undropCommit(t *testing.T, env *dumboDBTestEnv, dbName string, doc bson.D, msg string) {
 	t.Helper()
@@ -92,9 +92,9 @@ func TestUndropVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, names, "undropvdb")
 
-		entries, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "undropvdb"))
+		entries, err := os.ReadDir(filepath.Join(env.DataDir(), undropPreservedDir, "undropvdb"))
 		require.NoError(t, err)
-		assert.Len(t, entries, 1, "exactly one quarantined copy")
+		assert.Len(t, entries, 1, "exactly one preserved copy")
 	})
 
 	// Scenario 2: List databases available to undrop.
@@ -134,7 +134,7 @@ func TestUndropVerify(t *testing.T) {
 		undropCommit(t, env, "ledger", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "second"}}, "g2")
 		undropDropDB(t, env, "ledger")
 
-		entries, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "ledger"))
+		entries, err := os.ReadDir(filepath.Join(env.DataDir(), undropPreservedDir, "ledger"))
 		require.NoError(t, err)
 		require.Len(t, entries, 2, "both drops retained")
 
@@ -159,9 +159,9 @@ func TestUndropVerify(t *testing.T) {
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
 		assert.EqualValues(t, "second", got["gen"], "most recent copy restored")
 
-		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "ledger"))
+		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropPreservedDir, "ledger"))
 		require.NoError(t, err)
-		assert.Len(t, remaining, 1, "the older copy is still quarantined")
+		assert.Len(t, remaining, 1, "the older copy is still preserved")
 	})
 
 	// Scenario 4b: A specific, non-latest drop can be restored by dropId.
@@ -199,10 +199,10 @@ func TestUndropVerify(t *testing.T) {
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
 		assert.EqualValues(t, "v2", got["gen"], "the specific non-latest copy (v2) was restored")
 
-		// The other two copies (v1, v3) remain quarantined.
-		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "journal"))
+		// The other two copies (v1, v3) remain preserved.
+		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropPreservedDir, "journal"))
 		require.NoError(t, err)
-		assert.Len(t, remaining, 2, "v1 and v3 remain quarantined")
+		assert.Len(t, remaining, 2, "v1 and v3 remain preserved")
 	})
 
 	// Scenario 5: Error cases.

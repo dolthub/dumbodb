@@ -44,10 +44,10 @@ func (b *Backend) droppedDatabaseGCLoop() {
 	}
 }
 
-// purgeExpiredDroppedDatabases removes every quarantined drop whose drop time is
+// purgeExpiredDroppedDatabases removes every preserved drop whose drop time is
 // more than maxAge before now, returning the drops that were purged. A drop's
 // time is its dropId (the UnixNano recorded when it was dropped), so age is
-// derived from the quarantine directory name -- no filesystem mtime needed.
+// derived from the preserved-drops directory name -- no filesystem mtime needed.
 //
 // This is the testable core of the background GC: callers pass now and maxAge
 // explicitly. The hourly loop passes time.Now() and the retention TTL.
@@ -55,7 +55,7 @@ func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Durati
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	all, err := b.scanQuarantine()
+	all, err := b.scanPreserved()
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Durati
 			continue
 		}
 
-		dir := filepath.Join(b.quarantineRoot(), d.Name, d.DropID)
+		dir := filepath.Join(b.preservedRoot(), d.Name, d.DropID)
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
 			b.l.Warn("dropped-database GC: could not remove expired drop",
 				"db", d.Name, "dropId", d.DropID, "err", rmErr)
@@ -81,8 +81,8 @@ func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Durati
 			"droppedAt", droppedAt.UTC(), "ageDays", int(now.Sub(droppedAt).Hours()/24))
 		purged = append(purged, d)
 
-		// Remove the now-empty per-name quarantine directory if this was its last drop.
-		parent := filepath.Join(b.quarantineRoot(), d.Name)
+		// Remove the now-empty per-name preserved-drops directory if this was its last drop.
+		parent := filepath.Join(b.preservedRoot(), d.Name)
 		if remaining, rerr := os.ReadDir(parent); rerr == nil && len(remaining) == 0 {
 			_ = os.Remove(parent)
 		}

@@ -27,7 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// quarantineDirName is the data-dir subdirectory holding soft-deleted databases.
+// preservedDirName is the data-dir subdirectory holding soft-deleted databases.
 // The leading dot keeps it out of the database namespace: MongoDB database names
 // cannot contain '.', so no live database can ever collide with it, and
 // ListDatabases skips dot-prefixed entries.
@@ -35,19 +35,19 @@ import (
 // Layout: <dataDir>/.dumbodb_dropped_databases/<dbName>/<dropId>/
 // where dropId is the UnixNano instant of the drop. The two-level layout lets a
 // single database be dropped repeatedly without losing earlier drops.
-const quarantineDirName = ".dumbodb_dropped_databases"
+const preservedDirName = ".dumbodb_dropped_databases"
 
-func (b *Backend) quarantineRoot() string {
-	return filepath.Join(b.dataDir, quarantineDirName)
+func (b *Backend) preservedRoot() string {
+	return filepath.Join(b.dataDir, preservedDirName)
 }
 
-// quarantineDest reserves and returns a fresh quarantine directory for a drop of
-// name. The parent (<quarantineRoot>/<name>) is created; the returned leaf does
+// preservedDest reserves and returns a fresh preserved-drops directory for a drop of
+// name. The parent (<preservedRoot>/<name>) is created; the returned leaf does
 // not yet exist and is the rename target for the live database directory.
 //
 // Caller must hold b.mu.
-func (b *Backend) quarantineDest(name string) (string, error) {
-	parent := filepath.Join(b.quarantineRoot(), name)
+func (b *Backend) preservedDest(name string) (string, error) {
+	parent := filepath.Join(b.preservedRoot(), name)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return "", err
 	}
@@ -64,22 +64,22 @@ func (b *Backend) quarantineDest(name string) (string, error) {
 	}
 }
 
-// ListDroppedDatabases returns every quarantined drop, most recent first.
+// ListDroppedDatabases returns every preserved drop, most recent first.
 func (b *Backend) ListDroppedDatabases(_ context.Context) (*backends.DroppedDatabasesResult, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	dropped, err := b.scanQuarantine()
+	dropped, err := b.scanPreserved()
 	if err != nil {
 		return nil, err
 	}
 	return &backends.DroppedDatabasesResult{Databases: dropped}, nil
 }
 
-// scanQuarantine walks the quarantine directory and returns its drops sorted by
+// scanPreserved walks the preserved-drops directory and returns its drops sorted by
 // drop id descending (most recently dropped first). Caller must hold b.mu.
-func (b *Backend) scanQuarantine() ([]backends.DroppedDatabase, error) {
-	root := b.quarantineRoot()
+func (b *Backend) scanPreserved() ([]backends.DroppedDatabase, error) {
+	root := b.preservedRoot()
 	nameEntries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -131,7 +131,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		return nil, fmt.Errorf("undrop: database name is required")
 	}
 
-	all, err := b.scanQuarantine()
+	all, err := b.scanPreserved()
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		}
 	} else {
 		// No dropId: restore the most recent drop. candidates preserve
-		// scanQuarantine's most-recently-dropped-first ordering.
+		// scanPreserved's most-recently-dropped-first ordering.
 		chosen = candidates[0]
 	}
 
@@ -175,13 +175,13 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		return nil, fmt.Errorf("undrop: a live database named %q already exists", params.Name)
 	}
 
-	src := filepath.Join(b.quarantineRoot(), chosen.Name, chosen.DropID)
+	src := filepath.Join(b.preservedRoot(), chosen.Name, chosen.DropID)
 	if err := os.Rename(src, liveDir); err != nil {
 		return nil, fmt.Errorf("undrop: restoring %q: %w", params.Name, err)
 	}
 
-	// Remove the now-empty per-name quarantine directory if this was the last drop.
-	parent := filepath.Join(b.quarantineRoot(), chosen.Name)
+	// Remove the now-empty per-name preserved-drops directory if this was the last drop.
+	parent := filepath.Join(b.preservedRoot(), chosen.Name)
 	if remaining, rerr := os.ReadDir(parent); rerr == nil && len(remaining) == 0 {
 		_ = os.Remove(parent)
 	}

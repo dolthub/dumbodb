@@ -76,10 +76,10 @@ const (
 	defaultSessionTimeout     = 30 * time.Minute
 	defaultSessionSweepPeriod = time.Minute
 
-	// defaultDroppedDatabaseTTL is how long a soft-deleted (quarantined) database
+	// defaultDroppedDatabaseTTL is how long a soft-deleted (preserved) database
 	// is retained before the background GC permanently removes it.
 	defaultDroppedDatabaseTTL = 30 * 24 * time.Hour
-	// defaultDroppedGCPeriod is how often the dropped-database GC scans the quarantine.
+	// defaultDroppedGCPeriod is how often the dropped-database GC scans the preserved-drops directory.
 	defaultDroppedGCPeriod = time.Hour
 
 	// defaultMemTableSize is the in-memory table size for NBS.
@@ -657,8 +657,8 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			continue
 		}
 
-		// Dot-prefixed directories are internal (e.g. the dropped-database
-		// quarantine) and never valid MongoDB database names.
+		// Dot-prefixed directories are internal (e.g. the preserved-drops
+		// directory) and never valid MongoDB database names.
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
@@ -726,10 +726,10 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		delete(b.dbs, params.Name)
 	}
 
-	// Soft delete: move the database directory into the quarantine instead of
+	// Soft delete: move the database directory into the preserved-drops directory instead of
 	// removing it, so it can be restored with UndropDatabase. Repeat drops of
 	// the same name are retained under distinct drop ids.
-	dest, err := b.quarantineDest(params.Name)
+	dest, err := b.preservedDest(params.Name)
 	if err != nil {
 		return fmt.Errorf("dropping database %q: %w", params.Name, err)
 	}

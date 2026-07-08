@@ -29,14 +29,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedQuarantineEntry writes a fake quarantined drop for name whose dropId
+// seedPreservedEntry writes a fake preserved drop for name whose dropId
 // encodes droppedAt (mirroring how DropDatabase names the directory). Returns
 // the dropId. This is the test seam: age is derived from the dropId, so an old
 // drop is simply one with an old timestamp in its directory name.
-func seedQuarantineEntry(t *testing.T, b *Backend, name string, droppedAt time.Time) string {
+func seedPreservedEntry(t *testing.T, b *Backend, name string, droppedAt time.Time) string {
 	t.Helper()
 	dropID := strconv.FormatInt(droppedAt.UnixNano(), 10)
-	dir := filepath.Join(b.quarantineRoot(), name, dropID)
+	dir := filepath.Join(b.preservedRoot(), name, dropID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644))
 	return dropID
@@ -59,9 +59,9 @@ func TestPurgeExpiredDroppedDatabases(t *testing.T) {
 	now := time.Now()
 	ttl := defaultDroppedDatabaseTTL
 
-	oldID := seedQuarantineEntry(t, be, "olddb", now.Add(-40*24*time.Hour))    // expired
-	freshID := seedQuarantineEntry(t, be, "freshdb", now.Add(-5*24*time.Hour)) // kept
-	boundaryID := seedQuarantineEntry(t, be, "boundarydb", now.Add(-ttl))      // exactly TTL: kept
+	oldID := seedPreservedEntry(t, be, "olddb", now.Add(-40*24*time.Hour))    // expired
+	freshID := seedPreservedEntry(t, be, "freshdb", now.Add(-5*24*time.Hour)) // kept
+	boundaryID := seedPreservedEntry(t, be, "boundarydb", now.Add(-ttl))      // exactly TTL: kept
 
 	purged, err := be.purgeExpiredDroppedDatabases(now, ttl)
 	require.NoError(t, err)
@@ -72,13 +72,13 @@ func TestPurgeExpiredDroppedDatabases(t *testing.T) {
 	assert.Equal(t, oldID, purged[0].DropID)
 
 	// Expired drop is gone on disk, and its now-empty parent dir is removed.
-	_, statErr := os.Stat(filepath.Join(be.quarantineRoot(), "olddb"))
+	_, statErr := os.Stat(filepath.Join(be.preservedRoot(), "olddb"))
 	assert.True(t, os.IsNotExist(statErr), "expired drop's parent dir should be removed")
 
 	// Fresh and exactly-TTL drops survive.
-	_, statErr = os.Stat(filepath.Join(be.quarantineRoot(), "freshdb", freshID))
+	_, statErr = os.Stat(filepath.Join(be.preservedRoot(), "freshdb", freshID))
 	assert.NoError(t, statErr, "fresh drop must survive")
-	_, statErr = os.Stat(filepath.Join(be.quarantineRoot(), "boundarydb", boundaryID))
+	_, statErr = os.Stat(filepath.Join(be.preservedRoot(), "boundarydb", boundaryID))
 	assert.NoError(t, statErr, "drop aged exactly TTL must survive (not strictly older)")
 
 	// An INFO line is logged for the purge.
@@ -103,8 +103,8 @@ func TestPurgeExpiredDroppedDatabases_KeepsFresherDropOfSameName(t *testing.T) {
 	be, _ := newTestBackendWithLog(t)
 
 	now := time.Now()
-	oldID := seedQuarantineEntry(t, be, "ledger", now.Add(-40*24*time.Hour))
-	newID := seedQuarantineEntry(t, be, "ledger", now.Add(-1*24*time.Hour))
+	oldID := seedPreservedEntry(t, be, "ledger", now.Add(-40*24*time.Hour))
+	newID := seedPreservedEntry(t, be, "ledger", now.Add(-1*24*time.Hour))
 
 	purged, err := be.purgeExpiredDroppedDatabases(now, defaultDroppedDatabaseTTL)
 	require.NoError(t, err)
@@ -112,11 +112,11 @@ func TestPurgeExpiredDroppedDatabases_KeepsFresherDropOfSameName(t *testing.T) {
 	require.Len(t, purged, 1)
 	assert.Equal(t, oldID, purged[0].DropID, "only the old drop of the name is purged")
 
-	_, statErr := os.Stat(filepath.Join(be.quarantineRoot(), "ledger", oldID))
+	_, statErr := os.Stat(filepath.Join(be.preservedRoot(), "ledger", oldID))
 	assert.True(t, os.IsNotExist(statErr), "old drop removed")
-	_, statErr = os.Stat(filepath.Join(be.quarantineRoot(), "ledger", newID))
+	_, statErr = os.Stat(filepath.Join(be.preservedRoot(), "ledger", newID))
 	assert.NoError(t, statErr, "fresh drop of same name kept")
-	_, statErr = os.Stat(filepath.Join(be.quarantineRoot(), "ledger"))
+	_, statErr = os.Stat(filepath.Join(be.preservedRoot(), "ledger"))
 	assert.NoError(t, statErr, "parent dir kept because a fresh drop remains")
 }
 
@@ -124,8 +124,8 @@ func TestPurgeExpiredDroppedDatabases_NothingExpired(t *testing.T) {
 	be, logBuf := newTestBackendWithLog(t)
 
 	now := time.Now()
-	seedQuarantineEntry(t, be, "a", now.Add(-1*time.Hour))
-	seedQuarantineEntry(t, be, "b", now.Add(-10*24*time.Hour))
+	seedPreservedEntry(t, be, "a", now.Add(-1*time.Hour))
+	seedPreservedEntry(t, be, "b", now.Add(-10*24*time.Hour))
 
 	purged, err := be.purgeExpiredDroppedDatabases(now, defaultDroppedDatabaseTTL)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestPurgeExpiredDroppedDatabases_NothingExpired(t *testing.T) {
 	assert.NotContains(t, logBuf.String(), "purged expired dropped database")
 }
 
-func TestPurgeExpiredDroppedDatabases_EmptyQuarantine(t *testing.T) {
+func TestPurgeExpiredDroppedDatabases_EmptyPreservedDir(t *testing.T) {
 	be, _ := newTestBackendWithLog(t)
 	purged, err := be.purgeExpiredDroppedDatabases(time.Now(), defaultDroppedDatabaseTTL)
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestDroppedDatabaseGCLoop_RunsPeriodically(t *testing.T) {
 		droppedGCPeriod: 10 * time.Millisecond,
 		droppedGCTTL:    defaultDroppedDatabaseTTL,
 	}
-	seedQuarantineEntry(t, be, "olddb", time.Now().Add(-40*24*time.Hour))
+	seedPreservedEntry(t, be, "olddb", time.Now().Add(-40*24*time.Hour))
 
 	go be.droppedDatabaseGCLoop()
 	t.Cleanup(func() {
@@ -162,7 +162,7 @@ func TestDroppedDatabaseGCLoop_RunsPeriodically(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(filepath.Join(be.quarantineRoot(), "olddb"))
+		_, err := os.Stat(filepath.Join(be.preservedRoot(), "olddb"))
 		return os.IsNotExist(err)
 	}, 2*time.Second, 10*time.Millisecond, "the GC loop should purge the expired drop on a tick")
 }

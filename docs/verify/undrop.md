@@ -7,11 +7,11 @@ Manual verification guide for the soft-delete / undrop feature end-to-end.
 Work through each scenario top to bottom. Each section builds on the previous
 setup.
 
-`dropDatabase` does not delete data. It moves the database directory into a
-quarantine at `<dataDir>/.dumbodb_dropped_databases/<name>/<dropId>/`, where
+`dropDatabase` does not delete data. It moves the database directory into the
+preserved-drops directory at `<dataDir>/.dumbodb_dropped_databases/<name>/<dropId>/`, where
 `dropId` is the nanosecond timestamp of the drop. `dumboUndrop` moves it back.
 Repeat drops of the same name are all retained, distinguished by `dropId`.
-A background job runs hourly and permanently deletes any quarantined drop more
+A background job runs hourly and permanently deletes any preserved drop more
 than 30 days old, logging an INFO line per deletion.
 
 `dumboUndrop` is **admin-only**: it must be run against the `admin` database,
@@ -24,7 +24,7 @@ because it operates across the whole instance rather than on a single database.
 | Parameter | Type   | Required | Default | Description                                                                                  |
 |-----------|--------|----------|---------|----------------------------------------------------------------------------------------------|
 | `name`    | string | no       |  --      | Database to restore. Omit to list databases available to undrop. Must be a root name (no `@`). |
-| `dropId`  | string | no       |  --      | Selects one drop when `name` has more than one quarantined copy. Use the `dropId` from the list. |
+| `dropId`  | string | no       |  --      | Selects one drop when `name` has more than one preserved copy. Use the `dropId` from the list. |
 
 ## Prerequisites
 
@@ -45,8 +45,8 @@ Some scenarios inspect the data directory on disk; have a shell open at the
 
 Run this once before the scenarios below.
 
-Use a fresh DumboDB instance (empty `--data-dir`) so the quarantine starts
-empty.
+Use a fresh DumboDB instance (empty `--data-dir`) so the preserved-drops
+directory starts empty.
 
 ```js
 var shop = db.getSiblingDB("undropvdb")
@@ -99,13 +99,13 @@ ls <data-dir>/.dumbodb_dropped_databases/undropvdb/
 Key checks:
 - `dropDatabase` returns `dropped: "undropvdb"`, `ok: 1`.
 - `undropvdb` no longer appears in `listDatabases`.
-- A single quarantined copy exists under `.dumbodb_dropped_databases/undropvdb/`.
+- A single preserved copy exists under `.dumbodb_dropped_databases/undropvdb/`.
 
 ---
 
 ## Scenario 2: List databases available to undrop
 
-`dumboUndrop` with no `name` lists every quarantined drop, most recently
+`dumboUndrop` with no `name` lists every preserved drop, most recently
 dropped first. Admin-only.
 
 ```js
@@ -155,7 +155,7 @@ db.getSiblingDB("undropvdb").runCommand({ doltLog: 1 }).commits.length
 // Expected: equals N -- every commit is restored, not just the latest data
 ```
 
-The quarantine is now empty for this name:
+The preserved-drops list is now empty for this name:
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })
@@ -186,7 +186,7 @@ g.items.insertOne({ _id: 1, gen: "second" })
 g.runCommand({ doltCommit: 1, message: "g2", author: "a <a@a>" })
 g.dropDatabase()
 
-// Two quarantined copies now exist
+// Two preserved copies now exist
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "ledger")
 // Expected: two entries, each with a distinct dropId (most recent first)
 ```
@@ -201,7 +201,7 @@ db.getSiblingDB("ledger").items.findOne({ _id: 1 }).gen
 // Expected: "second" -- the most recent copy was restored
 ```
 
-The older copy is still quarantined:
+The older copy is still preserved:
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "ledger").length
@@ -240,7 +240,7 @@ db.getSiblingDB("journal").items.findOne({ _id: 1 }).gen
 // Expected: "v2" -- the specific, non-latest copy was restored
 ```
 
-The other two copies remain quarantined:
+The other two copies remain preserved:
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "journal").length
@@ -290,7 +290,7 @@ Key check: undrop fails when not run against `admin`.
 
 ## Scenario 7: System databases cannot be dropped
 
-`admin`, `config`, and `local` are protected and never enter the quarantine.
+`admin`, `config`, and `local` are protected and are never preserved.
 
 ```js
 db.getSiblingDB("admin").dropDatabase()
@@ -307,13 +307,13 @@ Key check: all three error; the `admin` database remains fully usable.
 
 ---
 
-## Scenario 8 (manual): Quarantine survives a server restart
+## Scenario 8 (manual): Preserved drops survive a server restart
 
 Soft-deleted databases live on disk, so they remain undroppable after a
 restart.
 
 ```js
-// Drop and confirm it is quarantined
+// Drop and confirm it is preserved
 db.getSiblingDB("survivor").items.insertOne({ _id: 1 })
 db.getSiblingDB("survivor").runCommand({ doltCommit: 1, message: "c1", author: "a <a@a>" })
 db.getSiblingDB("survivor").dropDatabase()
@@ -341,7 +341,7 @@ restore succeeds.
 
 | Command                                                              | Effect                                            |
 |---------------------------------------------------------------------|---------------------------------------------------|
-| `db.getSiblingDB("x").dropDatabase()`                               | Soft-delete `x` (moves it to the quarantine)      |
+| `db.getSiblingDB("x").dropDatabase()`                               | Soft-delete `x` (preserves it for undrop)         |
 | `db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })`           | List databases available to undrop                |
 | `... runCommand({ dumboUndrop: 1, name: "x" })`                     | Restore `x` (errors if `x` has multiple drops)    |
 | `... runCommand({ dumboUndrop: 1, name: "x", dropId: "<id>" })`     | Restore a specific drop of `x`                     |
@@ -350,4 +350,4 @@ restore succeeds.
 - `dumboUndrop` must be run against `admin`.
 - Repeat drops of one name are all retained; `dropId` selects among them.
 - Undrop restores the complete commit history, not just the latest data.
-- Quarantined databases are permanently deleted by a background job once they are more than 30 days old (checked hourly).
+- Preserved databases are permanently deleted by a background job once they are more than 30 days old (checked hourly).
