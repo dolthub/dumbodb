@@ -76,6 +76,12 @@ const (
 	defaultSessionTimeout     = 30 * time.Minute
 	defaultSessionSweepPeriod = time.Minute
 
+	// defaultDroppedDatabaseTTL is how long a soft-deleted (quarantined) database
+	// is retained before the background GC permanently removes it.
+	defaultDroppedDatabaseTTL = 30 * 24 * time.Hour
+	// defaultDroppedGCPeriod is how often the dropped-database GC scans the quarantine.
+	defaultDroppedGCPeriod = time.Hour
+
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
 
@@ -274,6 +280,11 @@ type Backend struct {
 	sweeperStop   chan struct{}
 	sweeperDone   chan struct{}
 	sweeperPeriod time.Duration
+
+	droppedGCStop   chan struct{}
+	droppedGCDone   chan struct{}
+	droppedGCPeriod time.Duration
+	droppedGCTTL    time.Duration
 }
 
 func docLocksKey(db, branch string) string {
@@ -436,6 +447,10 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 		docLocks:         make(map[string]*DocLockManager),
 		sweeperStop:      make(chan struct{}),
 		sweeperDone:      make(chan struct{}),
+		droppedGCStop:    make(chan struct{}),
+		droppedGCDone:    make(chan struct{}),
+		droppedGCPeriod:  defaultDroppedGCPeriod,
+		droppedGCTTL:     defaultDroppedDatabaseTTL,
 	}
 	if sessionSweepPeriod > 0 {
 		b.sweeperPeriod = sessionSweepPeriod
@@ -467,6 +482,7 @@ func newBackend(dataDir string, l *slog.Logger, autoCommit, sessionIsolation boo
 	}
 
 	go b.sessionSweepLoop()
+	go b.droppedDatabaseGCLoop()
 
 	return b, nil
 }
@@ -498,6 +514,17 @@ func (b *Backend) Close() {
 		}
 		if b.sweeperDone != nil {
 			<-b.sweeperDone
+		}
+	}
+
+	if b.droppedGCStop != nil {
+		select {
+		case <-b.droppedGCStop:
+		default:
+			close(b.droppedGCStop)
+		}
+		if b.droppedGCDone != nil {
+			<-b.droppedGCDone
 		}
 	}
 

@@ -1453,5 +1453,5 @@ admin.runCommand({ dumboUndrop: 1, name: "orders" })
 ### Notes
 
 - The full commit history of the restored database is preserved exactly as it was at drop time.
-- Quarantined databases remain on disk indefinitely; there is currently no command to reclaim that space.
+- Quarantined databases are permanently deleted automatically once they are more than 30 days old. A background job checks hourly and logs an INFO line for each deletion. Undrop a database before then to recover it.
 - System databases (`admin`, `config`, `local`) cannot be dropped, so they never appear in the quarantine.

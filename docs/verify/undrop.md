@@ -11,8 +11,8 @@ setup.
 quarantine at `<dataDir>/.dumbodb_dropped_databases/<name>/<dropId>/`, where
 `dropId` is the nanosecond timestamp of the drop. `dumboUndrop` moves it back.
 Repeat drops of the same name are all retained, distinguished by `dropId`.
-Quarantined databases remain on disk indefinitely; there is currently no
-command to reclaim that space.
+A background job runs hourly and permanently deletes any quarantined drop more
+than 30 days old, logging an INFO line per deletion.
 
 `dumboUndrop` is **admin-only**: it must be run against the `admin` database,
 because it operates across the whole instance rather than on a single database.
@@ -350,4 +350,4 @@ restore succeeds.
 - `dumboUndrop` must be run against `admin`.
 - Repeat drops of one name are all retained; `dropId` selects among them.
 - Undrop restores the complete commit history, not just the latest data.
-- Quarantined databases remain on disk indefinitely; there is currently no command to reclaim that space.
+- Quarantined databases are permanently deleted by a background job once they are more than 30 days old (checked hourly).
