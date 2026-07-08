@@ -16,7 +16,6 @@ package handler
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -27,6 +26,25 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+// rejectRevisionQualifiedName returns an error if s carries a real branch or
+// revision qualifier after '@'. It mirrors dropDatabase's acceptance rule
+// (branchFromDBName): an all-digit '@' suffix is part of the database name (e.g.
+// "parity_test@1775505756999075683") and is allowed, so a database that can be
+// dropped can also be undropped. An empty s is allowed (no rename).
+func rejectRevisionQualifiedName(s, label string) error {
+	base, _, _, err := branchFromDBName(s)
+	if err != nil {
+		return err
+	}
+	if base != s {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboUndrop: "+label+" must be a root database, not a revision-qualified name",
+		)
+	}
+	return nil
+}
 
 // MsgDumboDBUndrop implements the `dumboUndrop` command.
 //
@@ -97,18 +115,12 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		)))
 	}
 
-	if strings.Contains(name, dbBranchSep) {
-		return nil, handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrOperationFailed,
-			"dumboUndrop: name must be a root database, not a revision-qualified name",
-		)
+	if err = rejectRevisionQualifiedName(name, "name"); err != nil {
+		return nil, err
 	}
 
-	if strings.Contains(toDatabase, dbBranchSep) {
-		return nil, handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrOperationFailed,
-			"dumboUndrop: to_database must be a root database, not a revision-qualified name",
-		)
+	if err = rejectRevisionQualifiedName(toDatabase, "to_database"); err != nil {
+		return nil, err
 	}
 
 	target := name

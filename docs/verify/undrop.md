@@ -297,6 +297,32 @@ Key checks:
 
 ---
 
+## Scenario 4d: Undrop a name with an all-digit `@` suffix
+
+An `@` followed by all digits (e.g. `parity_test@1783469187442119000`) is part of
+the database name, not a revision qualifier. Such a name can be dropped, so it
+must also be undroppable.
+
+```js
+var name = "parity_test@1783469187442119000"
+var d = db.getSiblingDB(name)
+d.items.insertOne({ _id: 1, tag: "x" }); d.runCommand({ doltCommit: 1, message: "c1", author: "a <a@a>" }); d.dropDatabase()
+
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.map(d => d.name).includes(name)
+// Expected: true -- the name is listed as a drop
+
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: name })
+// Expected: { undropped: "parity_test@1783469187442119000", dropId: <id>, ok: 1 }
+
+db.getSiblingDB(name).items.findOne({ _id: 1 }).tag
+// Expected: "x" -- restored
+```
+
+Key checks:
+- A name whose `@` suffix is all digits is accepted by both `dropDatabase` and `dumboUndrop` (only real revisions like `db@main` are rejected).
+
+---
+
 ## Scenario 5: Error cases
 
 ```js

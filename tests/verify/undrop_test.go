@@ -254,6 +254,27 @@ func TestUndropVerify(t *testing.T) {
 		assert.Contains(t, droppedNames(list), "srcdb")
 	})
 
+	// Scenario 4d: a name with an all-digit "@" suffix is a valid plain database
+	// name (the digits are not a revision), so it can be dropped AND undropped.
+	t.Run("Scenario4d_AllDigitAtSuffixName", func(t *testing.T) {
+		const name = "parity_test@1783469187442119000"
+		undropCommit(t, env, name, bson.D{{Key: "_id", Value: 1}, {Key: "tag", Value: "x"}}, "c1")
+		undropDropDB(t, env, name)
+
+		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
+		require.NoError(t, err)
+		require.Contains(t, droppedNames(list), name, "the @-digit name is listed as a drop")
+
+		res, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: name}})
+		require.NoError(t, err, "an @-digit name must be undroppable, not just droppable")
+		assert.EqualValues(t, name, res["undropped"])
+
+		var got bson.M
+		require.NoError(t, env.Client.Database(name).Collection("items").
+			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
+		assert.EqualValues(t, "x", got["tag"])
+	})
+
 	// Scenario 5: Error cases.
 	t.Run("Scenario5_Errors", func(t *testing.T) {
 		_, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ghost"}})

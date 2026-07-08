@@ -179,6 +179,8 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 	}
 	if _, statErr := os.Stat(liveDir); statErr == nil {
 		return nil, fmt.Errorf("undrop: a live database named %q already exists", target)
+	} else if !os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("undrop: checking target %q: %w", target, statErr)
 	}
 
 	// Restore is a copy, not a move: the preserved drop stays available so it can
