@@ -744,6 +744,13 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 // getOrOpenDB returns the dbState for the given database name,
 // opening/creating the NBS store if needed.
 // If create is false and the directory doesn't exist, returns nil, nil.
+// isReservedDatabase reports whether name is a MongoDB system database that
+// DumboDB does not implement and therefore must not let users create (config,
+// local). admin is excluded: DumboDB uses it as a real system database.
+func isReservedDatabase(name string) bool {
+	return name == "config" || name == "local"
+}
+
 func (b *Backend) getOrOpenDB(ctx context.Context, dbName string, create bool) (*dbState, error) {
 	db, opened, err := b.getOrOpenDBLocked(ctx, dbName, create)
 	if err != nil || db == nil {
@@ -790,6 +797,15 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		if _, err := os.Stat(dbDir); os.IsNotExist(err) {
 			return nil, false, nil
 		}
+	}
+
+	// config and local are MongoDB system database names. DumboDB does not
+	// implement their special semantics, so a user database created under those
+	// names would behave differently than clients expect. Refuse to materialize
+	// them. (admin is a genuine system database DumboDB does use.)
+	if create && isReservedDatabase(dbName) {
+		return nil, false, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid,
+			fmt.Errorf("database %q is a reserved system database and cannot be created", dbName))
 	}
 
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {

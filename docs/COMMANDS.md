@@ -1402,7 +1402,7 @@ When a database is dropped with `dropDatabase`, it is not deleted: its directory
 |-----------|------|----------|---------|-------------|
 | `name` | string | no | `""` | Database to restore. Omit to list databases available to undrop. Must be a root database name (no `@branch`/`@revision`). |
 | `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one preserved copy. Omit to restore the most recent drop. Use the `dropId` from the list response. |
-| `to_database` | string | no | `""` | Restore the drop under this name instead of its original. Requires `name`; must be a root database name (no `@branch`/`@revision`). |
+| `to_database` | string | no | `""` | Restore the drop under this name instead of its original. Requires `name`; must be a root database name (no `@branch`/`@revision`) and not a system database (`admin`, `config`, `local`). |
 
 ### Response fields (list mode, no `name`)
 
@@ -1456,6 +1456,7 @@ admin.runCommand({ dumboUndrop: 1, name: "orders", to_database: "orders_recovere
 | `name` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: name must be a root database, ...` |
 | `to_database` given without `name` | `OperationFailed: dumboUndrop: to_database requires name` |
 | `to_database` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: to_database must be a root database, ...` |
+| Target is a system database (`admin`, `config`, `local`) | `OperationFailed: dumboUndrop: cannot restore to system database <name>` |
 
 ### Notes
 

@@ -256,6 +256,15 @@ func TestUndropVerify(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.Contains(t, strings.ToLower(err.Error()), "to_database must be a root database")
+
+		// Cannot restore onto reserved system databases config/local.
+		for _, sys := range []string{"config", "local"} {
+			_, err = undropAdmin(t, env, bson.D{
+				{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "to_database", Value: sys},
+			})
+			require.Error(t, err, "undrop to %q must be rejected", sys)
+			assert.Contains(t, strings.ToLower(err.Error()), "system database")
+		}
 	})
 
 	// Scenario 6: undrop is admin-only.
@@ -275,5 +284,24 @@ func TestUndropVerify(t *testing.T) {
 		}
 		_, statErr := os.Stat(filepath.Join(env.DataDir(), "admin"))
 		assert.NoError(t, statErr, "admin dir survives")
+	})
+
+	// Scenario 7b: config and local cannot be created by users. DumboDB does not
+	// implement their MongoDB semantics, so materializing them is refused.
+	t.Run("Scenario7b_ReservedDbsCannotBeCreated", func(t *testing.T) {
+		for _, sys := range []string{"config", "local"} {
+			_, err := env.Client.Database(sys).Collection("c").
+				InsertOne(ctx, bson.D{{Key: "_id", Value: 1}})
+			require.Error(t, err, "creating %q must be rejected", sys)
+			assert.Contains(t, strings.ToLower(err.Error()), "namespace")
+
+			_, statErr := os.Stat(filepath.Join(env.DataDir(), sys))
+			assert.True(t, os.IsNotExist(statErr), "%q dir must not be created", sys)
+		}
+
+		// admin remains usable (positive control): a write to admin succeeds.
+		_, err := env.Client.Database("admin").Collection("probe").
+			InsertOne(ctx, bson.D{{Key: "_id", Value: 1}})
+		require.NoError(t, err, "admin must remain writable")
 	})
 }

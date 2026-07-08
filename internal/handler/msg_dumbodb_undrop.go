@@ -103,6 +103,17 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	target := name
+	if toDatabase != "" {
+		target = toDatabase
+	}
+	if isSystemDatabase(target) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboUndrop: cannot restore to system database "+target,
+		)
+	}
+
 	dropID, err := common.GetOptionalParam[string](document, "dropId", "")
 	if err != nil {
 		return nil, err

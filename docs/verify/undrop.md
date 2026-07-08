@@ -25,7 +25,7 @@ because it operates across the whole instance rather than on a single database.
 |-----------|--------|----------|---------|----------------------------------------------------------------------------------------------|
 | `name`    | string | no       |  --      | Database to restore. Omit to list databases available to undrop. Must be a root name (no `@`). |
 | `dropId`  | string | no       |  --      | Selects one drop when `name` has more than one preserved copy. Use the `dropId` from the list. |
-| `to_database` | string | no   |  --      | Restore the drop under this name instead of its original. Requires `name`; must be a root name (no `@`). |
+| `to_database` | string | no   |  --      | Restore the drop under this name instead of its original. Requires `name`; must be a root name (no `@`) and not a system database (`admin`, `config`, `local`). |
 
 ## Prerequisites
 
@@ -304,6 +304,10 @@ db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, to_database: "somewhere" }
 // to_database must be a root name
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", to_database: "dest@main" })
 // Expected: ok: 0; errmsg says to_database must be a root database
+
+// cannot restore onto a reserved system database
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", to_database: "config" })
+// Expected: ok: 0; errmsg says cannot restore to system database
 ```
 
 Key check: each call returns an error; no database state changes.
