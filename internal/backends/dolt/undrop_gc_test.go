@@ -27,6 +27,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dolthub/dumbodb/internal/backends"
 )
 
 // seedPreservedEntry writes a fake preserved drop for name whose dropId
@@ -165,4 +167,86 @@ func TestDroppedDatabaseGCLoop_RunsPeriodically(t *testing.T) {
 		_, err := os.Stat(filepath.Join(be.preservedRoot(), "olddb"))
 		return os.IsNotExist(err)
 	}, 2*time.Second, 10*time.Millisecond, "the GC loop should purge the expired drop on a tick")
+}
+
+func TestPurgeDroppedDatabases_Filters(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty filter is rejected", func(t *testing.T) {
+		be, _ := newTestBackendWithLog(t)
+		_, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least one")
+	})
+
+	t.Run("dropId matches exactly one", func(t *testing.T) {
+		be, _ := newTestBackendWithLog(t)
+		id1 := seedPreservedEntry(t, be, "svc", time.Now().Add(-2*time.Hour))
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-1*time.Hour))
+
+		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DropID: id1})
+		require.NoError(t, err)
+		require.Len(t, res.Purged, 1)
+		assert.Equal(t, id1, res.Purged[0].DropID)
+	})
+
+	t.Run("name purges all drops of that name only", func(t *testing.T) {
+		be, _ := newTestBackendWithLog(t)
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-2*time.Hour))
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-1*time.Hour))
+		seedPreservedEntry(t, be, "other", time.Now().Add(-1*time.Hour))
+
+		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{Name: "svc"})
+		require.NoError(t, err)
+		assert.Len(t, res.Purged, 2)
+		_, statErr := os.Stat(filepath.Join(be.preservedRoot(), "other"))
+		assert.NoError(t, statErr, "other name untouched")
+	})
+
+	t.Run("droppedBefore is strict (boundary kept)", func(t *testing.T) {
+		be, _ := newTestBackendWithLog(t)
+		at := time.Now().Add(-time.Hour)
+		seedPreservedEntry(t, be, "svc", at)
+
+		// droppedBefore == droppedAt: strictly-before, so not purged.
+		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DroppedBefore: at})
+		require.NoError(t, err)
+		assert.Empty(t, res.Purged, "a drop exactly at the boundary is kept")
+
+		// one nanosecond later: purged.
+		res, err = be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DroppedBefore: at.Add(1)})
+		require.NoError(t, err)
+		assert.Len(t, res.Purged, 1)
+	})
+
+	t.Run("name AND droppedBefore", func(t *testing.T) {
+		be, _ := newTestBackendWithLog(t)
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-48*time.Hour)) // old svc
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-1*time.Minute)) // new svc
+		seedPreservedEntry(t, be, "other", time.Now().Add(-48*time.Hour)) // old other
+
+		// only svc drops older than 24h.
+		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{
+			Name:          "svc",
+			DroppedBefore: time.Now().Add(-24 * time.Hour),
+		})
+		require.NoError(t, err)
+		require.Len(t, res.Purged, 1)
+		assert.Equal(t, "svc", res.Purged[0].Name)
+		assert.Len(t, preservedNames(t, be, "svc"), 1, "the newer svc drop remains")
+		assert.Len(t, preservedNames(t, be, "other"), 1, "other remains")
+	})
+}
+
+func preservedNames(t *testing.T, be *Backend, name string) []backends.DroppedDatabase {
+	t.Helper()
+	all, err := be.ListDroppedDatabases(context.Background())
+	require.NoError(t, err)
+	var out []backends.DroppedDatabase
+	for _, d := range all.Databases {
+		if d.Name == name {
+			out = append(out, d)
+		}
+	}
+	return out
 }

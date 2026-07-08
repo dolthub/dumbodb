@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -326,4 +327,114 @@ func TestUndropVerify(t *testing.T) {
 			InsertOne(ctx, bson.D{{Key: "_id", Value: 1}})
 		require.NoError(t, err, "admin must remain writable")
 	})
+
+	// Scenario 8: purgeMatching removes selected preserved drops before the GC.
+	t.Run("Scenario8_PurgeMatching", func(t *testing.T) {
+		// Seed: pa dropped twice, pb and pc once each.
+		for _, n := range []string{"pa", "pb", "pc"} {
+			undropCommit(t, env, n, bson.D{{Key: "_id", Value: 1}}, "c1")
+			undropDropDB(t, env, n)
+		}
+		undropCommit(t, env, "pa", bson.D{{Key: "_id", Value: 2}}, "c2")
+		undropDropDB(t, env, "pa")
+
+		paDrops := preservedDropsFor(t, env, "pa")
+		require.Len(t, paDrops, 2)
+
+		// Purge one exact drop by dropId.
+		oneID := paDrops[0]["dropId"].(string)
+		res, err := undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{{Key: "dropId", Value: oneID}}},
+		})
+		require.NoError(t, err)
+		purged := res["purged"].(bson.A)
+		require.Len(t, purged, 1)
+		assert.EqualValues(t, oneID, purged[0].(bson.M)["dropId"])
+		require.Len(t, preservedDropsFor(t, env, "pa"), 1, "one pa drop remains")
+
+		// Purge all remaining drops of a name.
+		res, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{{Key: "name", Value: "pa"}}},
+		})
+		require.NoError(t, err)
+		assert.Len(t, res["purged"].(bson.A), 1)
+		assert.Empty(t, preservedDropsFor(t, env, "pa"), "pa fully purged")
+
+		// droppedBefore a past time matches nothing.
+		res, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{{Key: "droppedBefore", Value: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}}},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, res["purged"].(bson.A), "nothing older than year 2000")
+
+		// droppedBefore a future time purges the rest (pb, pc).
+		res, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{{Key: "droppedBefore", Value: time.Now().Add(time.Hour)}}},
+		})
+		require.NoError(t, err)
+		names := map[string]bool{}
+		for _, d := range res["purged"].(bson.A) {
+			names[d.(bson.M)["name"].(string)] = true
+		}
+		assert.True(t, names["pb"] && names["pc"], "pb and pc purged by droppedBefore")
+
+		// name + droppedBefore together (AND): only old drops of that name.
+		undropCommit(t, env, "svc", bson.D{{Key: "_id", Value: 1}}, "c1")
+		undropDropDB(t, env, "svc")
+		res, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{
+				{Key: "name", Value: "svc"},
+				{Key: "droppedBefore", Value: time.Now().Add(time.Hour)},
+			}},
+		})
+		require.NoError(t, err)
+		assert.Len(t, res["purged"].(bson.A), 1)
+		assert.Empty(t, preservedDropsFor(t, env, "svc"))
+	})
+
+	// Scenario 8b: purgeMatching validation.
+	t.Run("Scenario8b_PurgeMatchingErrors", func(t *testing.T) {
+		// empty filter is rejected (never purge everything by accident).
+		_, err := undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1}, {Key: "purgeMatching", Value: bson.D{}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "at least one")
+
+		// unknown field is rejected (guards against typos like droppedAt).
+		_, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{{Key: "droppedAt", Value: time.Now()}}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "unknown field")
+
+		// cannot combine purge with restore params.
+		_, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "name", Value: "whatever"},
+			{Key: "purgeMatching", Value: bson.D{{Key: "name", Value: "whatever"}}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "cannot be combined")
+	})
+}
+
+// preservedDropsFor returns the dumboUndrop list entries for a given db name.
+func preservedDropsFor(t *testing.T, env *dumboDBTestEnv, name string) []bson.M {
+	t.Helper()
+	list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
+	require.NoError(t, err)
+	var out []bson.M
+	for _, d := range list["dropped"].(bson.A) {
+		if dm := d.(bson.M); dm["name"] == name {
+			out = append(out, dm)
+		}
+	}
+	return out
 }

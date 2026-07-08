@@ -232,6 +232,14 @@ func (b *backend) ListDroppedDatabases(ctx context.Context) (*backends.DroppedDa
 	return nil, fmt.Errorf("oplog: ListDroppedDatabases: versioning not supported by wrapped backend")
 }
 
+func (b *backend) PurgeDroppedDatabases(ctx context.Context, params *backends.PurgeDroppedParams) (*backends.PurgeDroppedResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.PurgeDroppedDatabases(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: PurgeDroppedDatabases: versioning not supported by wrapped backend")
+}
+
 var (
 	_ backends.Backend           = (*backend)(nil)
 	_ backends.VersioningBackend = (*backend)(nil)

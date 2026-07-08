@@ -15,6 +15,8 @@
 package dolt
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -69,8 +71,7 @@ func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Durati
 			continue
 		}
 
-		dir := filepath.Join(b.preservedRoot(), d.Name, d.DropID)
-		if rmErr := os.RemoveAll(dir); rmErr != nil {
+		if rmErr := b.removePreservedDrop(d); rmErr != nil {
 			b.l.Warn("dropped-database GC: could not remove expired drop",
 				"db", d.Name, "dropId", d.DropID, "err", rmErr)
 			continue
@@ -80,13 +81,64 @@ func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Durati
 			"db", d.Name, "dropId", d.DropID,
 			"droppedAt", droppedAt.UTC(), "ageDays", int(now.Sub(droppedAt).Hours()/24))
 		purged = append(purged, d)
-
-		// Remove the now-empty per-name preserved-drops directory if this was its last drop.
-		parent := filepath.Join(b.preservedRoot(), d.Name)
-		if remaining, rerr := os.ReadDir(parent); rerr == nil && len(remaining) == 0 {
-			_ = os.Remove(parent)
-		}
 	}
 
 	return purged, nil
+}
+
+// removePreservedDrop deletes a single preserved drop's directory and removes the
+// now-empty per-name parent directory if that was its last drop. Caller must hold b.mu.
+func (b *Backend) removePreservedDrop(d backends.DroppedDatabase) error {
+	dir := filepath.Join(b.preservedRoot(), d.Name, d.DropID)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+
+	parent := filepath.Join(b.preservedRoot(), d.Name)
+	if remaining, rerr := os.ReadDir(parent); rerr == nil && len(remaining) == 0 {
+		_ = os.Remove(parent)
+	}
+	return nil
+}
+
+// PurgeDroppedDatabases permanently removes preserved drops matching the filter.
+// It is the manual analog of the automatic GC; the filter is required (an empty
+// filter is rejected so it cannot remove every drop).
+func (b *Backend) PurgeDroppedDatabases(_ context.Context, params *backends.PurgeDroppedParams) (*backends.PurgeDroppedResult, error) {
+	if params == nil || params.IsEmpty() {
+		return nil, fmt.Errorf("purge: at least one filter criterion is required")
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	all, err := b.scanPreserved()
+	if err != nil {
+		return nil, err
+	}
+
+	var purged []backends.DroppedDatabase
+	for _, d := range all {
+		if params.Name != "" && d.Name != params.Name {
+			continue
+		}
+		if params.DropID != "" && d.DropID != params.DropID {
+			continue
+		}
+		if !params.DroppedBefore.IsZero() && !time.Unix(0, d.DroppedAtUnixNano).Before(params.DroppedBefore) {
+			continue
+		}
+
+		if rmErr := b.removePreservedDrop(d); rmErr != nil {
+			b.l.Warn("purge: could not remove dropped database",
+				"db", d.Name, "dropId", d.DropID, "err", rmErr)
+			continue
+		}
+
+		b.l.Info("purged dropped database",
+			"db", d.Name, "dropId", d.DropID, "droppedAt", time.Unix(0, d.DroppedAtUnixNano).UTC())
+		purged = append(purged, d)
+	}
+
+	return &backends.PurgeDroppedResult{Purged: purged}, nil
 }

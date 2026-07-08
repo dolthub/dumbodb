@@ -589,6 +589,32 @@ type VersioningBackend interface {
 	// ListDroppedDatabases returns every soft-deleted database currently held in
 	// the preserved-drops directory, most recently dropped first.
 	ListDroppedDatabases(context.Context) (*DroppedDatabasesResult, error)
+
+	// PurgeDroppedDatabases permanently removes preserved drops matching the
+	// filter, returning the drops that were removed. This is the manual analog of
+	// the automatic 30-day GC. The filter must select a subset (see
+	// PurgeDroppedParams); an empty filter is rejected so a purge cannot remove
+	// every drop by accident.
+	PurgeDroppedDatabases(context.Context, *PurgeDroppedParams) (*PurgeDroppedResult, error)
+}
+
+// PurgeDroppedParams filters which preserved drops PurgeDroppedDatabases removes.
+// A drop is purged only if it satisfies every criterion that is set. At least
+// one criterion must be set.
+type PurgeDroppedParams struct {
+	Name          string    // exact database name; "" matches any name
+	DropID        string    // exact drop id; "" matches any drop
+	DroppedBefore time.Time // only drops dropped strictly before this; zero means no time bound
+}
+
+// IsEmpty reports whether no criterion is set.
+func (p *PurgeDroppedParams) IsEmpty() bool {
+	return p.Name == "" && p.DropID == "" && p.DroppedBefore.IsZero()
+}
+
+// PurgeDroppedResult represents the result of VersioningBackend.PurgeDroppedDatabases.
+type PurgeDroppedResult struct {
+	Purged []DroppedDatabase
 }
 
 // UndropParams represents the parameters of VersioningBackend.UndropDatabase.

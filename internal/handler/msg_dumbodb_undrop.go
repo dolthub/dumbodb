@@ -51,6 +51,14 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	purgeMatching, err := common.GetOptionalParam[*types.Document](document, "purgeMatching", nil)
+	if err != nil {
+		return nil, err
+	}
+	if purgeMatching != nil {
+		return h.purgeMatchingDroppedDatabases(connCtx, vb, document, purgeMatching)
+	}
+
 	name, err := common.GetOptionalParam[string](document, "name", "")
 	if err != nil {
 		return nil, err
@@ -127,6 +135,78 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 	return documentOpMsg(must.NotFail(types.NewDocument(
 		"undropped", res.Name,
 		"dropId", res.DropID,
+		"ok", float64(1),
+	)))
+}
+
+// purgeMatchingDroppedDatabaseFields is the set of keys allowed inside a
+// purgeMatching filter. Anything else is rejected so a typo (e.g. droppedAt
+// instead of droppedBefore) cannot silently widen the purge.
+var purgeMatchingDroppedDatabaseFields = map[string]struct{}{
+	"name":          {},
+	"dropId":        {},
+	"droppedBefore": {},
+}
+
+// purgeMatchingDroppedDatabases handles `dumboUndrop` with a purgeMatching filter:
+// it permanently removes preserved drops matching {name, dropId, droppedBefore}.
+func (h *Handler) purgeMatchingDroppedDatabases(connCtx context.Context, vb backends.VersioningBackend, document, pm *types.Document) (*wire.OpMsg, error) {
+	// purge mode is exclusive with the restore parameters.
+	for _, k := range []string{"name", "dropId", "to_database"} {
+		if document.Has(k) {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrOperationFailed,
+				"dumboUndrop: purgeMatching cannot be combined with "+k,
+			)
+		}
+	}
+
+	for _, k := range pm.Keys() {
+		if _, ok := purgeMatchingDroppedDatabaseFields[k]; !ok {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrOperationFailed,
+				"dumboUndrop: purgeMatching has unknown field "+k+" (allowed: name, dropId, droppedBefore)",
+			)
+		}
+	}
+
+	name, err := common.GetOptionalParam[string](pm, "name", "")
+	if err != nil {
+		return nil, err
+	}
+	dropID, err := common.GetOptionalParam[string](pm, "dropId", "")
+	if err != nil {
+		return nil, err
+	}
+	droppedBefore, err := common.GetOptionalParam[time.Time](pm, "droppedBefore", time.Time{})
+	if err != nil {
+		return nil, err
+	}
+
+	params := &backends.PurgeDroppedParams{Name: name, DropID: dropID, DroppedBefore: droppedBefore}
+	if params.IsEmpty() {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboUndrop: purgeMatching requires at least one of name, dropId, droppedBefore",
+		)
+	}
+
+	res, err := vb.PurgeDroppedDatabases(connCtx, params)
+	if err != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	arr := types.MakeArray(len(res.Purged))
+	for _, d := range res.Purged {
+		arr.Append(must.NotFail(types.NewDocument(
+			"name", d.Name,
+			"dropId", d.DropID,
+			"droppedAt", time.Unix(0, d.DroppedAtUnixNano),
+		)))
+	}
+
+	return documentOpMsg(must.NotFail(types.NewDocument(
+		"purged", arr,
 		"ok", float64(1),
 	)))
 }
