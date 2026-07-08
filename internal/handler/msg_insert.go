@@ -258,8 +258,8 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			}
 
 			if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
-				msg := fmt.Sprintf("Invalid namespace specified '%s.%s'", params.DB, params.Collection)
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
+				errMsg := fmt.Sprintf("Invalid namespace specified '%s.%s'", params.DB, params.Collection)
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, errMsg, "insert")
 			}
 
 			if !backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {

@@ -58,7 +58,7 @@ func (b *Backend) preservedDest(name string) (string, error) {
 		dest := filepath.Join(parent, strconv.FormatInt(id, 10))
 		if _, err := os.Stat(dest); os.IsNotExist(err) {
 			return dest, nil
-		} else if err != nil && !os.IsExist(err) {
+		} else if err != nil {
 			return "", err
 		}
 		id++
@@ -145,8 +145,10 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 	}
 
 	if len(candidates) == 0 {
-		return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-			fmt.Errorf("undrop: no dropped database named %q; %s", params.Name, availableHint(all)))
+		// Plain error: the undrop handler flattens all backend errors to
+		// OperationFailed, so a typed code here would only leak its name into
+		// the client-facing message.
+		return nil, fmt.Errorf("undrop: no dropped database named %q; %s", params.Name, availableHint(all))
 	}
 
 	var chosen backends.DroppedDatabase
@@ -159,8 +161,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 			}
 		}
 		if !found {
-			return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
-				fmt.Errorf("undrop: database %q has no dropped copy with dropId %q", params.Name, params.DropID))
+			return nil, fmt.Errorf("undrop: database %q has no dropped copy with dropId %q", params.Name, params.DropID)
 		}
 	} else {
 		// No dropId: restore the most recent drop. candidates preserve

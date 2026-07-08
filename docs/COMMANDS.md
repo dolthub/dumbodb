@@ -1467,8 +1467,8 @@ admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefor
 | Condition | Error |
 |-----------|-------|
 | Not run against `admin` | `OperationFailed: dumboUndrop: can only be run against the admin database` |
-| No dropped database with that name | `DatabaseDoesNotExist: undrop: no dropped database named "<name>"; ...` |
-| `dropId` does not match any drop | `DatabaseDoesNotExist: undrop: database "<name>" has no dropped copy with dropId "<id>"` |
+| No dropped database with that name | `OperationFailed: undrop: no dropped database named "<name>"; ...` |
+| `dropId` does not match any drop | `OperationFailed: undrop: database "<name>" has no dropped copy with dropId "<id>"` |
 | A live database with the target name already exists | `OperationFailed: undrop: a live database named "<name>" already exists` |
 | `name` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: name must be a root database, ...` |
 | `to_database` given without `name` | `OperationFailed: dumboUndrop: to_database requires name` |
