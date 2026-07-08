@@ -329,9 +329,10 @@ func TestUndropVerify(t *testing.T) {
 	})
 
 	// Scenario 8: purgeMatching removes selected preserved drops before the GC.
+	// name is required; dropId and droppedBefore further narrow the match.
 	t.Run("Scenario8_PurgeMatching", func(t *testing.T) {
-		// Seed: pa dropped twice, pb and pc once each.
-		for _, n := range []string{"pa", "pb", "pc"} {
+		// Seed: pa dropped twice, pb once.
+		for _, n := range []string{"pa", "pb"} {
 			undropCommit(t, env, n, bson.D{{Key: "_id", Value: 1}}, "c1")
 			undropDropDB(t, env, n)
 		}
@@ -341,11 +342,11 @@ func TestUndropVerify(t *testing.T) {
 		paDrops := preservedDropsFor(t, env, "pa")
 		require.Len(t, paDrops, 2)
 
-		// Purge one exact drop by dropId.
+		// Purge one exact drop by name + dropId.
 		oneID := paDrops[0]["dropId"].(string)
 		res, err := undropAdmin(t, env, bson.D{
 			{Key: "dumboUndrop", Value: 1},
-			{Key: "purgeMatching", Value: bson.D{{Key: "dropId", Value: oneID}}},
+			{Key: "purgeMatching", Value: bson.D{{Key: "name", Value: "pa"}, {Key: "dropId", Value: oneID}}},
 		})
 		require.NoError(t, err)
 		purged := res["purged"].(bson.A)
@@ -361,50 +362,49 @@ func TestUndropVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, res["purged"].(bson.A), 1)
 		assert.Empty(t, preservedDropsFor(t, env, "pa"), "pa fully purged")
+		assert.Len(t, preservedDropsFor(t, env, "pb"), 1, "pb untouched (purge is name-scoped)")
 
-		// droppedBefore a past time matches nothing.
-		res, err = undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1},
-			{Key: "purgeMatching", Value: bson.D{{Key: "droppedBefore", Value: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)}}},
-		})
-		require.NoError(t, err)
-		assert.Empty(t, res["purged"].(bson.A), "nothing older than year 2000")
-
-		// droppedBefore a future time purges the rest (pb, pc).
-		res, err = undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1},
-			{Key: "purgeMatching", Value: bson.D{{Key: "droppedBefore", Value: time.Now().Add(time.Hour)}}},
-		})
-		require.NoError(t, err)
-		names := map[string]bool{}
-		for _, d := range res["purged"].(bson.A) {
-			names[d.(bson.M)["name"].(string)] = true
-		}
-		assert.True(t, names["pb"] && names["pc"], "pb and pc purged by droppedBefore")
-
-		// name + droppedBefore together (AND): only old drops of that name.
-		undropCommit(t, env, "svc", bson.D{{Key: "_id", Value: 1}}, "c1")
-		undropDropDB(t, env, "svc")
+		// name + droppedBefore, cutoff in the past: matches nothing.
 		res, err = undropAdmin(t, env, bson.D{
 			{Key: "dumboUndrop", Value: 1},
 			{Key: "purgeMatching", Value: bson.D{
-				{Key: "name", Value: "svc"},
+				{Key: "name", Value: "pb"},
+				{Key: "droppedBefore", Value: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)},
+			}},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, res["purged"].(bson.A), "pb is not older than year 2000")
+		assert.Len(t, preservedDropsFor(t, env, "pb"), 1, "pb still preserved")
+
+		// name + droppedBefore, cutoff in the future: purges the matching drop.
+		res, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{
+				{Key: "name", Value: "pb"},
 				{Key: "droppedBefore", Value: time.Now().Add(time.Hour)},
 			}},
 		})
 		require.NoError(t, err)
 		assert.Len(t, res["purged"].(bson.A), 1)
-		assert.Empty(t, preservedDropsFor(t, env, "svc"))
+		assert.Empty(t, preservedDropsFor(t, env, "pb"))
 	})
 
 	// Scenario 8b: purgeMatching validation.
 	t.Run("Scenario8b_PurgeMatchingErrors", func(t *testing.T) {
-		// empty filter is rejected (never purge everything by accident).
+		// name is required.
 		_, err := undropAdmin(t, env, bson.D{
 			{Key: "dumboUndrop", Value: 1}, {Key: "purgeMatching", Value: bson.D{}},
 		})
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "at least one")
+		assert.Contains(t, strings.ToLower(err.Error()), "requires name")
+
+		// droppedBefore alone (no name) is rejected.
+		_, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{{Key: "droppedBefore", Value: time.Now()}}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, strings.ToLower(err.Error()), "requires name")
 
 		// unknown field is rejected (guards against typos like droppedAt).
 		_, err = undropAdmin(t, env, bson.D{

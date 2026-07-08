@@ -592,24 +592,18 @@ type VersioningBackend interface {
 
 	// PurgeDroppedDatabases permanently removes preserved drops matching the
 	// filter, returning the drops that were removed. This is the manual analog of
-	// the automatic 30-day GC. The filter must select a subset (see
-	// PurgeDroppedParams); an empty filter is rejected so a purge cannot remove
-	// every drop by accident.
+	// the automatic 30-day GC. Name is required (a purge is always scoped to one
+	// database name); DropID and DroppedBefore further narrow the match.
 	PurgeDroppedDatabases(context.Context, *PurgeDroppedParams) (*PurgeDroppedResult, error)
 }
 
 // PurgeDroppedParams filters which preserved drops PurgeDroppedDatabases removes.
-// A drop is purged only if it satisfies every criterion that is set. At least
-// one criterion must be set.
+// A drop is purged only if it satisfies every criterion that is set. Name is
+// required; DropID and DroppedBefore are optional refinements.
 type PurgeDroppedParams struct {
-	Name          string    // exact database name; "" matches any name
-	DropID        string    // exact drop id; "" matches any drop
-	DroppedBefore time.Time // only drops dropped strictly before this; zero means no time bound
-}
-
-// IsEmpty reports whether no criterion is set.
-func (p *PurgeDroppedParams) IsEmpty() bool {
-	return p.Name == "" && p.DropID == "" && p.DroppedBefore.IsZero()
+	Name          string    // required: exact database name
+	DropID        string    // optional: exact drop id; "" matches any drop of Name
+	DroppedBefore time.Time // optional: only drops dropped strictly before this; zero means no time bound
 }
 
 // PurgeDroppedResult represents the result of VersioningBackend.PurgeDroppedDatabases.

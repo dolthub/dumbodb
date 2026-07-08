@@ -172,19 +172,22 @@ func TestDroppedDatabaseGCLoop_RunsPeriodically(t *testing.T) {
 func TestPurgeDroppedDatabases_Filters(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("empty filter is rejected", func(t *testing.T) {
+	t.Run("name is required", func(t *testing.T) {
 		be, _ := newTestBackendWithLog(t)
 		_, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "at least one")
+		assert.Contains(t, err.Error(), "name is required")
+
+		_, err = be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DroppedBefore: time.Now()})
+		require.Error(t, err, "droppedBefore without name is rejected")
 	})
 
-	t.Run("dropId matches exactly one", func(t *testing.T) {
+	t.Run("name + dropId matches exactly one", func(t *testing.T) {
 		be, _ := newTestBackendWithLog(t)
 		id1 := seedPreservedEntry(t, be, "svc", time.Now().Add(-2*time.Hour))
 		seedPreservedEntry(t, be, "svc", time.Now().Add(-1*time.Hour))
 
-		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DropID: id1})
+		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{Name: "svc", DropID: id1})
 		require.NoError(t, err)
 		require.Len(t, res.Purged, 1)
 		assert.Equal(t, id1, res.Purged[0].DropID)
@@ -209,12 +212,12 @@ func TestPurgeDroppedDatabases_Filters(t *testing.T) {
 		seedPreservedEntry(t, be, "svc", at)
 
 		// droppedBefore == droppedAt: strictly-before, so not purged.
-		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DroppedBefore: at})
+		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{Name: "svc", DroppedBefore: at})
 		require.NoError(t, err)
 		assert.Empty(t, res.Purged, "a drop exactly at the boundary is kept")
 
 		// one nanosecond later: purged.
-		res, err = be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{DroppedBefore: at.Add(1)})
+		res, err = be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{Name: "svc", DroppedBefore: at.Add(1)})
 		require.NoError(t, err)
 		assert.Len(t, res.Purged, 1)
 	})

@@ -174,6 +174,12 @@ func (h *Handler) purgeMatchingDroppedDatabases(connCtx context.Context, vb back
 	if err != nil {
 		return nil, err
 	}
+	if name == "" {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"dumboUndrop: purgeMatching requires name",
+		)
+	}
 	dropID, err := common.GetOptionalParam[string](pm, "dropId", "")
 	if err != nil {
 		return nil, err
@@ -184,12 +190,6 @@ func (h *Handler) purgeMatchingDroppedDatabases(connCtx context.Context, vb back
 	}
 
 	params := &backends.PurgeDroppedParams{Name: name, DropID: dropID, DroppedBefore: droppedBefore}
-	if params.IsEmpty() {
-		return nil, handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrOperationFailed,
-			"dumboUndrop: purgeMatching requires at least one of name, dropId, droppedBefore",
-		)
-	}
 
 	res, err := vb.PurgeDroppedDatabases(connCtx, params)
 	if err != nil {

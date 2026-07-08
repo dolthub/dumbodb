@@ -1409,13 +1409,13 @@ When a database is dropped with `dropDatabase`, it is not deleted: its directory
 
 `purgeMatching` switches `dumboUndrop` from restore to purge: it permanently deletes preserved drops that match the filter, before the automatic 30-day GC would. The filter is a purpose-built object (not a general `$match`):
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Exact database name. |
-| `dropId` | string | Exact drop id (from the list response). |
-| `droppedBefore` | Date | Only drops whose `droppedAt` is strictly before this time. |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **yes** | Exact database name. Every purge is scoped to one name. |
+| `dropId` | string | no | Exact drop id (from the list response). |
+| `droppedBefore` | Date | no | Only drops whose `droppedAt` is strictly before this time. |
 
-A drop is purged only if it satisfies **every** field that is set (AND). At least one field is required -- an empty `purgeMatching` is rejected so a purge can never remove everything by accident. Unknown fields are rejected (guards against typos such as `droppedAt`). Response: `{ purged: [ { name, dropId, droppedAt }, ... ], ok: 1 }`.
+A drop is purged only if it satisfies **every** field that is set (AND). `name` is required, so a purge is always scoped to a single database; `dropId` and `droppedBefore` further narrow it. Unknown fields are rejected (guards against typos such as `droppedAt`). Response: `{ purged: [ { name, dropId, droppedAt }, ... ], ok: 1 }`.
 
 ### Response fields (list mode, no `name`)
 
@@ -1474,7 +1474,7 @@ admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefor
 | `to_database` given without `name` | `OperationFailed: dumboUndrop: to_database requires name` |
 | `to_database` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: to_database must be a root database, ...` |
 | Target is a system database (`admin`, `config`, `local`) | `OperationFailed: dumboUndrop: cannot restore to system database <name>` |
-| `purgeMatching` is empty | `OperationFailed: dumboUndrop: purgeMatching requires at least one of name, dropId, droppedBefore` |
+| `purgeMatching` without `name` | `OperationFailed: dumboUndrop: purgeMatching requires name` |
 | `purgeMatching` has an unknown field | `OperationFailed: dumboUndrop: purgeMatching has unknown field <field> (allowed: name, dropId, droppedBefore)` |
 | `purgeMatching` combined with `name`/`dropId`/`to_database` | `OperationFailed: dumboUndrop: purgeMatching cannot be combined with <field>` |
 

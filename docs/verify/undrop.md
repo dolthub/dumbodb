@@ -28,7 +28,7 @@ because it operates across the whole instance rather than on a single database.
 | `name`    | string | no       |  --      | Database to restore. Omit to list databases available to undrop. Must be a root name (no `@`). |
 | `dropId`  | string | no       |  --      | Selects one drop when `name` has more than one preserved copy. Use the `dropId` from the list. |
 | `to_database` | string | no   |  --      | Restore the drop under this name instead of its original. Requires `name`; must be a root name (no `@`) and not a system database (`admin`, `config`, `local`). |
-| `purgeMatching` | object | no |  --      | Purge mode: permanently delete drops matching `{name, dropId, droppedBefore}` (AND; at least one required). Mutually exclusive with the restore parameters. |
+| `purgeMatching` | object | no |  --      | Purge mode: permanently delete drops matching `{name (required), dropId, droppedBefore}` (AND). Mutually exclusive with the restore parameters. |
 
 ## Prerequisites
 
@@ -365,8 +365,9 @@ Key check: all three error; the `admin` database remains fully usable.
 
 ## Scenario 8: Purge drops early with purgeMatching
 
-`purgeMatching` permanently removes drops before the 30-day GC. The filter fields
-(`name`, `dropId`, `droppedBefore`) combine with AND; at least one is required.
+`purgeMatching` permanently removes drops before the 30-day GC. `name` is
+required (a purge is always scoped to one database); `dropId` and `droppedBefore`
+further narrow the match, combining with AND.
 
 ```js
 var admin = db.getSiblingDB("admin")
@@ -375,16 +376,16 @@ var admin = db.getSiblingDB("admin")
 var s = db.getSiblingDB("svc"); s.items.insertOne({ _id: 1 }); s.runCommand({ doltCommit: 1, message: "c", author: "a <a@a>" }); s.dropDatabase()
 s = db.getSiblingDB("svc"); s.items.insertOne({ _id: 2 }); s.runCommand({ doltCommit: 1, message: "c", author: "a <a@a>" }); s.dropDatabase()
 
-// Purge one specific drop by dropId
+// Purge one specific drop by name + dropId
 var id = admin.runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "svc")[0].dropId
-admin.runCommand({ dumboUndrop: 1, purgeMatching: { dropId: id } })
+admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "svc", dropId: id } })
 // { purged: [ { name: "svc", dropId: <id>, droppedAt: ISODate("...") } ], ok: 1 }
 
 // Purge all remaining drops of a name
 admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "svc" } })
 // purges the rest of svc's drops
 
-// Purge everything dropped before a cutoff (name + droppedBefore = AND)
+// Purge a name's drops older than a cutoff (name + droppedBefore = AND)
 admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefore: ISODate("2026-06-01") } })
 ```
 
@@ -392,9 +393,12 @@ Validation:
 
 ```js
 admin.runCommand({ dumboUndrop: 1, purgeMatching: {} })
-// Expected: ok: 0; errmsg "requires at least one of name, dropId, droppedBefore"
+// Expected: ok: 0; errmsg "purgeMatching requires name"
 
-admin.runCommand({ dumboUndrop: 1, purgeMatching: { droppedAt: ISODate("2026-06-01") } })
+admin.runCommand({ dumboUndrop: 1, purgeMatching: { droppedBefore: ISODate("2026-06-01") } })
+// Expected: ok: 0; errmsg "purgeMatching requires name" (name is mandatory)
+
+admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "svc", droppedAt: ISODate("2026-06-01") } })
 // Expected: ok: 0; errmsg "unknown field droppedAt" (typo guard; the field is droppedBefore)
 
 admin.runCommand({ dumboUndrop: 1, name: "svc", purgeMatching: { name: "svc" } })
@@ -454,5 +458,5 @@ restore succeeds.
 - `to_database` restores under a new name; it requires `name`.
 - Undrop restores the complete commit history, not just the latest data.
 - Undrop copies the drop; it stays listed and can be restored again until purged. Restoring onto a live database name is rejected.
-- `purgeMatching` deletes drops early: filter by `name`, `dropId`, and/or `droppedBefore` (AND); at least one is required.
+- `purgeMatching` deletes drops early: `name` is required, optionally narrowed by `dropId` and/or `droppedBefore` (AND).
 - Preserved databases are permanently deleted by a background job once they are more than 30 days old (checked hourly).

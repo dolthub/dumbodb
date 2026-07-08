@@ -105,8 +105,8 @@ func (b *Backend) removePreservedDrop(d backends.DroppedDatabase) error {
 // It is the manual analog of the automatic GC; the filter is required (an empty
 // filter is rejected so it cannot remove every drop).
 func (b *Backend) PurgeDroppedDatabases(_ context.Context, params *backends.PurgeDroppedParams) (*backends.PurgeDroppedResult, error) {
-	if params == nil || params.IsEmpty() {
-		return nil, fmt.Errorf("purge: at least one filter criterion is required")
+	if params == nil || params.Name == "" {
+		return nil, fmt.Errorf("purge: name is required")
 	}
 
 	b.mu.Lock()
