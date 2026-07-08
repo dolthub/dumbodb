@@ -343,6 +343,73 @@ mdb.tasks.find()                                      // Expected: _id:1 only (1
 
 ---
 
+## Scenario 8: Hard reset to a commit on another branch  -- content follows the target
+
+`to` may name any commit in the repo, including one that lives on a different branch.
+Resetting `main` to a feature-branch commit moves `main` to that commit; a hard reset
+also makes `main`'s content follow the target. The feature branch is untouched.
+
+Rebuild the branch setup, then, on the `main` connection, hard-reset to F1:
+
+```js
+const rHard = mdb.runCommand({ doltReset: 1, to: hashF1, hard: true })
+printjson(rHard)
+// Expected: { commitId: "<hashF1>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals `hashF1`
+- **main** now follows F1's content, including `_id:2` which was only ever committed
+  on the feature branch; `_id:3` (only on F2) is absent, and the working set is clean:
+
+```js
+mdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF1
+mdb.tasks.find()                                      // Expected: _id:1 and _id:2 (2 docs)
+mdb.runCommand({ doltDiff: 1 })                       // Expected: { collections: [], ok: 1 }
+```
+
+- **feature** is untouched: its HEAD is still F2 and all three docs are present.
+
+```js
+fdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF2 (unchanged)
+fdb.tasks.find()                                      // Expected: _id:1, _id:2, _id:3 (3 docs)
+```
+
+---
+
+## Scenario 9: Soft reset to a commit on another branch  -- diff reflects the gap
+
+A soft reset to a cross-branch commit moves HEAD but preserves `main`'s working tree.
+The resulting diff therefore compares the new HEAD against the unchanged working tree.
+
+Rebuild the branch setup, then, on the `main` connection, soft-reset to F1:
+
+```js
+const rSoft = mdb.runCommand({ doltReset: 1, to: hashF1 })
+printjson(rSoft)
+// Expected: { commitId: "<hashF1>", ok: 1 }
+```
+
+Key checks:
+- `commitId` equals `hashF1`; `main` HEAD is now F1
+- `main`'s working tree is preserved at M1 (only `_id:1`), so relative to the new HEAD
+  (F1 = `{_id:1, _id:2}`) the working tree is missing `_id:2`  -- it shows as removed:
+
+```js
+mdb.tasks.find()               // Expected: _id:1 only (working tree unchanged)
+mdb.runCommand({ doltDiff: 1 })
+// Expected: tasks.removed contains exactly _id:2; added and modified are empty
+```
+
+- **feature** is untouched: its HEAD is still F2 and all three docs are present.
+
+```js
+fdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF2 (unchanged)
+fdb.tasks.find()                                      // Expected: _id:1, _id:2, _id:3 (3 docs)
+```
+
+---
+
 ## Quick Reference
 
 | Command | HEAD after | Working set after |

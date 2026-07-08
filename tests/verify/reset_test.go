@@ -508,4 +508,92 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(1), mn,
 			"main working set must be untouched (only _id:1) by a hard reset on feature")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: Hard reset to a commit on another branch  -- content follows target
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_HardResetToCommitOnOtherBranch", func(t *testing.T) {
+		brDB, _, hashF1, hashF2 := resetBranchVerifySetup(t, env)
+		mainDB := env.Client.Database(brDB)
+		tasks := mainDB.Collection("tasks")
+
+		// On main, hard-reset to F1  -- a commit that lives on the feature branch.
+		var raw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "to", Value: hashF1},
+			{Key: "hard", Value: true},
+		}).Decode(&raw))
+		assert.Equal(t, hashF1, raw["commitId"], "reset must resolve to the feature commit F1")
+		assert.EqualValues(t, 1, raw["ok"])
+
+		// main HEAD moved to F1 and its content now follows the target: {_id:1,_id:2},
+		// including _id:2 which was only ever committed on the feature branch.
+		assert.Equal(t, hashF1, branchHead(t, env, brDB), "main HEAD must be F1 after hard reset")
+		mn, err := tasks.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), mn, "main content must follow F1 (2 docs: _id:1,2)")
+		got2, err := tasks.CountDocuments(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), got2, "_id:2 (feature content) must now be present on main")
+		got3, err := tasks.CountDocuments(ctx, bson.D{{Key: "_id", Value: int32(3)}})
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), got3, "_id:3 (only on F2) must not be present after reset to F1")
+
+		// Working set matches the new HEAD  -- diff is empty.
+		var diffRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltDiff", Value: int32(1)}}).Decode(&diffRaw))
+		assert.Empty(t, decodeDiffResult(t, diffRaw).Collections,
+			"after hard reset the working set must match HEAD (empty diff)")
+
+		// The feature branch is untouched: HEAD still F2, still 3 docs.
+		assert.Equal(t, hashF2, branchHead(t, env, brDB+"@feature"),
+			"feature HEAD must be unchanged by a reset on main")
+		fn, err := env.Client.Database(brDB+"@feature").Collection("tasks").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), fn, "feature content must be unchanged (3 docs)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: Soft reset to a commit on another branch  -- diff reflects the gap
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_SoftResetToCommitOnOtherBranch", func(t *testing.T) {
+		brDB, _, hashF1, hashF2 := resetBranchVerifySetup(t, env)
+		mainDB := env.Client.Database(brDB)
+		tasks := mainDB.Collection("tasks")
+
+		// On main, soft-reset to F1 (a feature-branch commit). HEAD moves to F1 but
+		// main's working tree (still M1 = {_id:1}) is preserved.
+		var raw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "to", Value: hashF1},
+		}).Decode(&raw))
+		assert.Equal(t, hashF1, raw["commitId"], "soft reset must resolve to the feature commit F1")
+		assert.EqualValues(t, 1, raw["ok"])
+		assert.Equal(t, hashF1, branchHead(t, env, brDB), "main HEAD must be F1 after soft reset")
+
+		// Working tree preserved at M1: only _id:1 is visible.
+		mn, err := tasks.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), mn, "soft reset preserves main's working tree (_id:1 only)")
+
+		// The diff makes sense: the new HEAD F1 has {_id:1,_id:2} but the working
+		// tree has only {_id:1}, so _id:2 shows as removed relative to the new HEAD.
+		var diffRaw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltDiff", Value: int32(1)}}).Decode(&diffRaw))
+		cd := findCollDiff(decodeDiffResult(t, diffRaw), "tasks")
+		require.NotNil(t, cd, "expected a 'tasks' diff after soft reset across branches")
+		require.Len(t, cd.Removed, 1, "exactly _id:2 must be missing from the working tree vs the new HEAD")
+		assert.Equal(t, int32(2), cd.Removed[0]["_id"], "the removed doc must be _id:2")
+		assert.Empty(t, cd.Added, "no docs should be added")
+		assert.Empty(t, cd.Modified, "no docs should be modified")
+
+		// The feature branch is untouched: HEAD still F2, still 3 docs.
+		assert.Equal(t, hashF2, branchHead(t, env, brDB+"@feature"),
+			"feature HEAD must be unchanged by a reset on main")
+		fn, err := env.Client.Database(brDB+"@feature").Collection("tasks").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), fn, "feature content must be unchanged (3 docs)")
+	})
 }
