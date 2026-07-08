@@ -389,6 +389,46 @@ func TestUndropVerify(t *testing.T) {
 		assert.Empty(t, preservedDropsFor(t, env, "pb"))
 	})
 
+	// Scenario 8c: droppedBefore is the discriminator -- of two drops of one name,
+	// only the one dropped before the cutoff is purged; the newer one is kept.
+	t.Run("Scenario8c_PurgeByDroppedBefore", func(t *testing.T) {
+		// Drop "cutoffdb", capture a cutoff, then drop it again. The sleeps give
+		// the two drops (and the cutoff) millisecond separation so the cutoff
+		// falls strictly between them.
+		undropCommit(t, env, "cutoffdb", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "old"}}, "c1")
+		undropDropDB(t, env, "cutoffdb")
+		time.Sleep(10 * time.Millisecond)
+		cutoff := time.Now()
+		time.Sleep(10 * time.Millisecond)
+		undropCommit(t, env, "cutoffdb", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "new"}}, "c2")
+		undropDropDB(t, env, "cutoffdb")
+
+		// Two drops now exist: [newer, older] (most-recent first).
+		drops := preservedDropsFor(t, env, "cutoffdb")
+		require.Len(t, drops, 2)
+		newerID := drops[0]["dropId"].(string)
+		olderID := drops[1]["dropId"].(string)
+
+		res, err := undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1},
+			{Key: "purgeMatching", Value: bson.D{
+				{Key: "name", Value: "cutoffdb"},
+				{Key: "droppedBefore", Value: cutoff},
+			}},
+		})
+		require.NoError(t, err)
+
+		// Only the older drop (dropped before the cutoff) is purged.
+		purged := res["purged"].(bson.A)
+		require.Len(t, purged, 1, "only the pre-cutoff drop is purged")
+		assert.EqualValues(t, olderID, purged[0].(bson.M)["dropId"])
+
+		// The newer drop (dropped after the cutoff) survives.
+		remaining := preservedDropsFor(t, env, "cutoffdb")
+		require.Len(t, remaining, 1)
+		assert.Equal(t, newerID, remaining[0]["dropId"].(string), "the post-cutoff drop is kept")
+	})
+
 	// Scenario 8b: purgeMatching validation.
 	t.Run("Scenario8b_PurgeMatchingErrors", func(t *testing.T) {
 		// name is required.

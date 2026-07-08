@@ -408,6 +408,38 @@ Key checks:
 
 ---
 
+## Scenario 8c: droppedBefore purges only drops older than the cutoff
+
+When a name has several drops, `droppedBefore` removes just the ones dropped
+before the cutoff and keeps the rest. Drop `cutoffdb`, note the time, then drop
+it again; purging with `droppedBefore` set to the noted time removes only the
+first drop.
+
+```js
+var admin = db.getSiblingDB("admin")
+
+var c = db.getSiblingDB("cutoffdb")
+c.items.insertOne({ _id: 1, gen: "old" }); c.runCommand({ doltCommit: 1, message: "c1", author: "a <a@a>" }); c.dropDatabase()
+
+var cutoff = new Date()   // a moment between the two drops
+
+// (pause briefly so the second drop is clearly after the cutoff)
+c = db.getSiblingDB("cutoffdb")
+c.items.insertOne({ _id: 1, gen: "new" }); c.runCommand({ doltCommit: 1, message: "c2", author: "a <a@a>" }); c.dropDatabase()
+
+admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "cutoffdb", droppedBefore: cutoff } })
+// Expected: purged contains exactly one entry -- the first ("old") drop
+
+admin.runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "cutoffdb").length
+// Expected: 1 -- the drop made after the cutoff is kept
+```
+
+Key checks:
+- Only the drop made before `cutoff` is purged.
+- The drop made after `cutoff` survives, proving `droppedBefore` is the discriminator (not `name` alone).
+
+---
+
 ## Scenario 9 (manual): Preserved drops survive a server restart
 
 Soft-deleted databases live on disk, so they remain undroppable after a
