@@ -186,11 +186,13 @@ db.tasks.find()
 // Expected: only the documents present in the HEAD commit
 ```
 
-Finally, a bare soft reset  -- `{ doltReset: 1 }` with neither `to` nor `hard`  --
-defaults to HEAD and is a no-op in effect: HEAD stays the same and the working tree
-stays the same. It is still valid and returns the current HEAD hash.
+Finally, a soft reset to HEAD  -- `{ doltReset: 1 }` with neither `to` nor `hard`  --
+must have no effect on uncommitted edits: HEAD stays the same and the working tree is
+preserved. Introduce an uncommitted insert, then soft-reset to HEAD:
 
 ```js
+db.tasks.insertOne({ _id: 6, v: 6 })   // uncommitted edit
+
 const rSoft = db.runCommand({ doltReset: 1 })
 printjson(rSoft)
 // Expected: { commitId: "<current HEAD hash>", ok: 1 }
@@ -198,14 +200,22 @@ printjson(rSoft)
 
 Key checks:
 - `commitId` equals the current HEAD hash (unchanged)
-- The working set is unperturbed:
+- The uncommitted edit survives  -- the working tree is untouched:
 
 ```js
 db.runCommand({ doltDiff: 1 })
-// Expected: { "collections": [], "ok": 1 }
+// Expected: tasks.added still contains _id:6
 
 db.tasks.find()
-// Expected: still only the documents present in the HEAD commit
+// Expected: the HEAD documents plus the uncommitted _id:6
+```
+
+A hard reset to HEAD then discards that same edit, restoring the clean HEAD state:
+
+```js
+db.runCommand({ doltReset: 1, hard: true })
+db.tasks.find()
+// Expected: only the documents present in the HEAD commit (the _id:6 edit is gone)
 ```
 
 ---

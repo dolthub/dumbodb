@@ -327,9 +327,15 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(1), n,
 			"after hard reset to HEAD: exactly 1 document must be visible")
 
-		// Bare soft reset {doltReset:1} (no `to`, no `hard`) defaults to HEAD and is
-		// a no-op in effect: HEAD unchanged, working tree unchanged. It must still
-		// succeed and return the current HEAD hash (doc Scenario 4 note + Quick Ref).
+		// Soft reset to HEAD must have NO effect on uncommitted edits. Introduce an
+		// uncommitted insert (_id:6), then bare soft reset {doltReset:1} (no `to`, no
+		// `hard`, defaults to HEAD), and confirm the edit survives.
+		_, err = items.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(6)},
+			{Key: "v", Value: int32(6)},
+		})
+		require.NoError(t, err)
+
 		var softRaw bson.M
 		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -337,18 +343,28 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, headHash, softRaw["commitId"], "bare soft reset must return current HEAD hash")
 		assert.EqualValues(t, 1, softRaw["ok"], "bare soft reset must report ok:1")
 
-		// The no-op soft reset must not perturb the working set: diff still empty,
-		// still only _id:1 visible.
+		// Working tree is untouched: _id:6 is still an uncommitted addition.
 		var softDiffRaw bson.M
 		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
 		}).Decode(&softDiffRaw))
-		assert.Empty(t, decodeDiffResult(t, softDiffRaw).Collections,
-			"after bare soft reset to HEAD: diff must remain empty")
+		softCD := findCollDiff(decodeDiffResult(t, softDiffRaw), "tasks")
+		require.NotNil(t, softCD, "soft reset to HEAD must preserve the uncommitted _id:6 diff")
+		require.Len(t, softCD.Added, 1, "soft reset to HEAD must leave _id:6 as the only addition")
+		assert.Equal(t, int32(6), softCD.Added[0]["_id"], "the preserved addition must be _id:6")
 		n, err = items.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
-		assert.Equal(t, int64(1), n,
-			"after bare soft reset to HEAD: exactly 1 document must be visible")
+		assert.Equal(t, int64(2), n, "soft reset to HEAD must not remove the uncommitted _id:6")
+
+		// A hard reset to HEAD then discards that same edit, restoring the clean
+		// HEAD=C1 state (also the precondition Scenario 5 relies on).
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "doltReset", Value: int32(1)},
+			{Key: "hard", Value: true},
+		}).Decode(&softRaw))
+		n, err = items.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), n, "hard reset to HEAD must discard the uncommitted _id:6")
 	})
 
 	// -------------------------------------------------------------------------
