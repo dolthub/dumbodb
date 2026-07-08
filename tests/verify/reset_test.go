@@ -287,8 +287,9 @@ func TestResetVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Pre-check (mirrors the doc): the uncommitted _id:5 must show as a staged
-		// change before we discard it, so an empty diff after reset is meaningful.
+		// Pre-check (mirrors the doc): the uncommitted _id:5 must show as a working-set
+		// change (doltDiff = HEAD vs working set) before we discard it, so an empty
+		// diff after reset is meaningful.
 		var preDiffRaw bson.M
 		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -595,5 +596,38 @@ func TestResetVerify(t *testing.T) {
 		fn, err := env.Client.Database(brDB+"@feature").Collection("tasks").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), fn, "feature content must be unchanged (3 docs)")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: Reset is rejected on a read-only connection (no branch to move)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_ResetRejectedOnReadOnlyConnection", func(t *testing.T) {
+		brDB, hashM1, hashF1, hashF2 := resetBranchVerifySetup(t, env)
+
+		// A commit-hash connection and an ancestor-expression connection are both
+		// read-only snapshots with no branch to move; reset must be refused rather
+		// than treating the rootish as a branch name (which would create a stray
+		// refs/heads/<rootish>).
+		readOnlyConns := []string{brDB + "@" + hashF1, brDB + "@feature~1"}
+		for _, conn := range readOnlyConns {
+			db := env.Client.Database(conn)
+
+			softErr := db.RunCommand(ctx, bson.D{
+				{Key: "doltReset", Value: int32(1)},
+				{Key: "to", Value: hashF1},
+			}).Err()
+			assertWriteBlockedOperationFailed(t, softErr, "soft doltReset on "+conn)
+
+			hardErr := db.RunCommand(ctx, bson.D{
+				{Key: "doltReset", Value: int32(1)},
+				{Key: "to", Value: hashF1},
+				{Key: "hard", Value: true},
+			}).Err()
+			assertWriteBlockedOperationFailed(t, hardErr, "hard doltReset on "+conn)
+		}
+
+		// Nothing moved: main and feature HEADs are exactly as the setup left them.
+		assert.Equal(t, hashM1, branchHead(t, env, brDB), "main HEAD must be unchanged")
+		assert.Equal(t, hashF2, branchHead(t, env, brDB+"@feature"), "feature HEAD must be unchanged")
 	})
 }

@@ -410,6 +410,29 @@ fdb.tasks.find()                                      // Expected: _id:1, _id:2,
 
 ---
 
+## Scenario 10: Reset is rejected on a read-only connection
+
+A connection whose rootish is a commit hash or an ancestor/caret expression
+(`db@<hash>`, `db@main~1`) is a read-only snapshot with no branch to move. `doltReset`
+must be refused rather than treating the rootish as a branch name.
+
+```js
+var sdb = db.getSiblingDB("resetbranchdb@" + hashF1)   // commit-hash snapshot
+sdb.runCommand({ doltReset: 1, to: hashF1 })
+// Expected: command error, code 96 (OperationFailed): cannot write to a read-only database snapshot
+
+sdb.runCommand({ doltReset: 1, to: hashF1, hard: true })
+// Expected: same OperationFailed error
+
+var adb = db.getSiblingDB("resetbranchdb@feature~1")   // ancestor-expression snapshot
+adb.runCommand({ doltReset: 1, to: hashF1 })
+// Expected: same OperationFailed error
+```
+
+Neither `main` nor `feature` moves, and no stray branch is created.
+
+---
+
 ## Quick Reference
 
 | Command | HEAD after | Working set after |
