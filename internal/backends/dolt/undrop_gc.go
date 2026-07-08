@@ -24,10 +24,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// droppedDatabaseGCLoop periodically removes soft-deleted databases whose age
-// exceeds the retention TTL. It mirrors sessionSweepLoop: a ticker plus a stop
-// channel, with all real work delegated to purgeExpiredDroppedDatabases (which
-// takes now/maxAge explicitly so it is testable without the timer).
+// droppedDatabaseGCLoop mirrors sessionSweepLoop (ticker + stop channel),
+// delegating the work to purgeExpiredDroppedDatabases.
 func (b *Backend) droppedDatabaseGCLoop() {
 	defer close(b.droppedGCDone)
 
@@ -46,13 +44,8 @@ func (b *Backend) droppedDatabaseGCLoop() {
 	}
 }
 
-// purgeExpiredDroppedDatabases removes every preserved drop whose drop time is
-// more than maxAge before now, returning the drops that were purged. A drop's
-// time is its dropId (the UnixNano recorded when it was dropped), so age is
-// derived from the preserved-drops directory name -- no filesystem mtime needed.
-//
-// This is the testable core of the background GC: callers pass now and maxAge
-// explicitly. The hourly loop passes time.Now() and the retention TTL.
+// purgeExpiredDroppedDatabases removes preserved drops older than maxAge (a drop's
+// age comes from its dropId). now/maxAge are explicit so it is testable without the timer.
 func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Duration) ([]backends.DroppedDatabase, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -86,8 +79,7 @@ func (b *Backend) purgeExpiredDroppedDatabases(now time.Time, maxAge time.Durati
 	return purged, nil
 }
 
-// removePreservedDrop deletes a single preserved drop's directory and removes the
-// now-empty per-name parent directory if that was its last drop. Caller must hold b.mu.
+// removePreservedDrop deletes one drop's directory (and its parent if now empty). Caller must hold b.mu.
 func (b *Backend) removePreservedDrop(d backends.DroppedDatabase) error {
 	dir := filepath.Join(b.preservedRoot(), d.Name, d.DropID)
 	if err := os.RemoveAll(dir); err != nil {
@@ -101,9 +93,8 @@ func (b *Backend) removePreservedDrop(d backends.DroppedDatabase) error {
 	return nil
 }
 
-// PurgeDroppedDatabases permanently removes preserved drops matching the filter.
-// It is the manual analog of the automatic GC; the filter is required (an empty
-// filter is rejected so it cannot remove every drop).
+// PurgeDroppedDatabases permanently removes preserved drops matching the filter
+// (the manual analog of the automatic GC).
 func (b *Backend) PurgeDroppedDatabases(_ context.Context, params *backends.PurgeDroppedParams) (*backends.PurgeDroppedResult, error) {
 	if params == nil || params.Name == "" {
 		return nil, fmt.Errorf("purge: name is required")

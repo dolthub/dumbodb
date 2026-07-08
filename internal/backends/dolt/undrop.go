@@ -28,25 +28,18 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// preservedDirName is the data-dir subdirectory holding soft-deleted databases.
-// The leading dot keeps it out of the database namespace: MongoDB database names
-// cannot contain '.', so no live database can ever collide with it, and
-// ListDatabases skips dot-prefixed entries.
-//
-// Layout: <dataDir>/.dumbodb_dropped_databases/<dbName>/<dropId>/
-// where dropId is the UnixNano instant of the drop. The two-level layout lets a
-// single database be dropped repeatedly without losing earlier drops.
+// preservedDirName holds soft-deleted databases as <dataDir>/<preservedDirName>/<dbName>/<dropId>/,
+// dropId being the UnixNano of the drop (repeat drops of one name are kept). The
+// leading dot keeps it out of the db namespace (MongoDB names cannot contain '.',
+// and ListDatabases skips dot-prefixed entries).
 const preservedDirName = ".dumbodb_dropped_databases"
 
 func (b *Backend) preservedRoot() string {
 	return filepath.Join(b.dataDir, preservedDirName)
 }
 
-// preservedDest reserves and returns a fresh preserved-drops directory for a drop of
-// name. The parent (<preservedRoot>/<name>) is created; the returned leaf does
-// not yet exist and is the rename target for the live database directory.
-//
-// Caller must hold b.mu.
+// preservedDest returns a fresh (not-yet-existing) preserved-drops directory to
+// rename a dropped database into. Caller must hold b.mu.
 func (b *Backend) preservedDest(name string) (string, error) {
 	parent := filepath.Join(b.preservedRoot(), name)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -77,8 +70,7 @@ func (b *Backend) ListDroppedDatabases(_ context.Context) (*backends.DroppedData
 	return &backends.DroppedDatabasesResult{Databases: dropped}, nil
 }
 
-// scanPreserved walks the preserved-drops directory and returns its drops sorted by
-// drop id descending (most recently dropped first). Caller must hold b.mu.
+// scanPreserved returns all preserved drops, most recently dropped first. Caller must hold b.mu.
 func (b *Backend) scanPreserved() ([]backends.DroppedDatabase, error) {
 	root := b.preservedRoot()
 	nameEntries, err := os.ReadDir(root)
@@ -106,8 +98,7 @@ func (b *Backend) scanPreserved() ([]backends.DroppedDatabase, error) {
 			dropID := dropEntry.Name()
 			nanos, perr := strconv.ParseInt(dropID, 10, 64)
 			if perr != nil {
-				// Not a drop id we produced; skip rather than fail the listing.
-				continue
+				continue // foreign dir, not one of our drop ids
 			}
 			dropped = append(dropped, backends.DroppedDatabase{
 				Name:              name,
@@ -145,9 +136,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 	}
 
 	if len(candidates) == 0 {
-		// Plain error: the undrop handler flattens all backend errors to
-		// OperationFailed, so a typed code here would only leak its name into
-		// the client-facing message.
+		// Plain error: the undrop handler flattens backend errors to OperationFailed.
 		return nil, fmt.Errorf("undrop: no dropped database named %q; %s", params.Name, availableHint(all))
 	}
 
@@ -164,9 +153,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 			return nil, fmt.Errorf("undrop: database %q has no dropped copy with dropId %q", params.Name, params.DropID)
 		}
 	} else {
-		// No dropId: restore the most recent drop. candidates preserve
-		// scanPreserved's most-recently-dropped-first ordering.
-		chosen = candidates[0]
+		chosen = candidates[0] // most recent (scanPreserved orders newest-first)
 	}
 
 	target := params.Name
@@ -184,11 +171,8 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		return nil, fmt.Errorf("undrop: checking target %q: %w", target, statErr)
 	}
 
-	// Restore is a copy, not a move: the preserved drop stays available so it can
-	// be restored again (e.g. repeatedly with a different ToDatabase to make
-	// several copies) and remains listed until the 30-day GC purges it. Copy into
-	// a dot-prefixed temp dir first (excluded from ListDatabases), then rename it
-	// into place so a partially-copied database is never visible as live.
+	// Copy (not move) so the drop survives for future restores. Stage in a
+	// dot-prefixed temp dir, then rename in, so a partial copy is never live.
 	src := filepath.Join(b.preservedRoot(), chosen.Name, chosen.DropID)
 	tmp, err := os.MkdirTemp(b.dataDir, ".restore-*")
 	if err != nil {

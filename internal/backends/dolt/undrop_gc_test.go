@@ -31,10 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// seedPreservedEntry writes a fake preserved drop for name whose dropId
-// encodes droppedAt (mirroring how DropDatabase names the directory). Returns
-// the dropId. This is the test seam: age is derived from the dropId, so an old
-// drop is simply one with an old timestamp in its directory name.
+// seedPreservedEntry writes a fake preserved drop at droppedAt (dropId = its UnixNano) and returns the dropId.
 func seedPreservedEntry(t *testing.T, b *Backend, name string, droppedAt time.Time) string {
 	t.Helper()
 	dropID := strconv.FormatInt(droppedAt.UnixNano(), 10)
@@ -61,35 +58,30 @@ func TestPurgeExpiredDroppedDatabases(t *testing.T) {
 	now := time.Now()
 	ttl := defaultDroppedDatabaseTTL
 
-	oldID := seedPreservedEntry(t, be, "olddb", now.Add(-40*24*time.Hour))    // expired
-	freshID := seedPreservedEntry(t, be, "freshdb", now.Add(-5*24*time.Hour)) // kept
-	boundaryID := seedPreservedEntry(t, be, "boundarydb", now.Add(-ttl))      // exactly TTL: kept
+	oldID := seedPreservedEntry(t, be, "olddb", now.Add(-40*24*time.Hour))
+	freshID := seedPreservedEntry(t, be, "freshdb", now.Add(-5*24*time.Hour))
+	boundaryID := seedPreservedEntry(t, be, "boundarydb", now.Add(-ttl))
 
 	purged, err := be.purgeExpiredDroppedDatabases(now, ttl)
 	require.NoError(t, err)
 
-	// Only the expired drop is purged.
 	require.Len(t, purged, 1)
 	assert.Equal(t, "olddb", purged[0].Name)
 	assert.Equal(t, oldID, purged[0].DropID)
 
-	// Expired drop is gone on disk, and its now-empty parent dir is removed.
 	_, statErr := os.Stat(filepath.Join(be.preservedRoot(), "olddb"))
 	assert.True(t, os.IsNotExist(statErr), "expired drop's parent dir should be removed")
 
-	// Fresh and exactly-TTL drops survive.
 	_, statErr = os.Stat(filepath.Join(be.preservedRoot(), "freshdb", freshID))
 	assert.NoError(t, statErr, "fresh drop must survive")
 	_, statErr = os.Stat(filepath.Join(be.preservedRoot(), "boundarydb", boundaryID))
 	assert.NoError(t, statErr, "drop aged exactly TTL must survive (not strictly older)")
 
-	// An INFO line is logged for the purge.
 	logs := logBuf.String()
 	assert.Contains(t, logs, "level=INFO")
 	assert.Contains(t, logs, "purged expired dropped database")
 	assert.Contains(t, logs, "olddb")
 
-	// The listing reflects the removal.
 	res, err := be.ListDroppedDatabases(context.Background())
 	require.NoError(t, err)
 	names := map[string]bool{}
@@ -142,9 +134,6 @@ func TestPurgeExpiredDroppedDatabases_EmptyPreservedDir(t *testing.T) {
 	assert.Empty(t, purged)
 }
 
-// TestDroppedDatabaseGCLoop_RunsPeriodically exercises the ticker loop itself
-// (the part not covered by calling purgeExpiredDroppedDatabases directly) using
-// a fast tick, so the timer wiring is not dark code in CI.
 func TestDroppedDatabaseGCLoop_RunsPeriodically(t *testing.T) {
 	be := &Backend{
 		dataDir:         t.TempDir(),
@@ -211,12 +200,10 @@ func TestPurgeDroppedDatabases_Filters(t *testing.T) {
 		at := time.Now().Add(-time.Hour)
 		seedPreservedEntry(t, be, "svc", at)
 
-		// droppedBefore == droppedAt: strictly-before, so not purged.
 		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{Name: "svc", DroppedBefore: at})
 		require.NoError(t, err)
 		assert.Empty(t, res.Purged, "a drop exactly at the boundary is kept")
 
-		// one nanosecond later: purged.
 		res, err = be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{Name: "svc", DroppedBefore: at.Add(1)})
 		require.NoError(t, err)
 		assert.Len(t, res.Purged, 1)
@@ -224,11 +211,10 @@ func TestPurgeDroppedDatabases_Filters(t *testing.T) {
 
 	t.Run("name AND droppedBefore", func(t *testing.T) {
 		be, _ := newTestBackendWithLog(t)
-		seedPreservedEntry(t, be, "svc", time.Now().Add(-48*time.Hour)) // old svc
-		seedPreservedEntry(t, be, "svc", time.Now().Add(-1*time.Minute)) // new svc
-		seedPreservedEntry(t, be, "other", time.Now().Add(-48*time.Hour)) // old other
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-48*time.Hour))
+		seedPreservedEntry(t, be, "svc", time.Now().Add(-1*time.Minute))
+		seedPreservedEntry(t, be, "other", time.Now().Add(-48*time.Hour))
 
-		// only svc drops older than 24h.
 		res, err := be.PurgeDroppedDatabases(ctx, &backends.PurgeDroppedParams{
 			Name:          "svc",
 			DroppedBefore: time.Now().Add(-24 * time.Hour),

@@ -56,8 +56,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/commitgraph"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -76,11 +76,9 @@ const (
 	defaultSessionTimeout     = 30 * time.Minute
 	defaultSessionSweepPeriod = time.Minute
 
-	// defaultDroppedDatabaseTTL is how long a soft-deleted (preserved) database
-	// is retained before the background GC permanently removes it.
+	// defaultDroppedDatabaseTTL is how long a preserved drop is kept before the GC removes it.
 	defaultDroppedDatabaseTTL = 30 * 24 * time.Hour
-	// defaultDroppedGCPeriod is how often the dropped-database GC scans the preserved-drops directory.
-	defaultDroppedGCPeriod = time.Hour
+	defaultDroppedGCPeriod    = time.Hour
 
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
@@ -139,9 +137,9 @@ type dbState struct {
 	mu    sync.RWMutex
 	dbDir string
 
-	cs     *nbs.GenerationalNBS
-	ns     tree.NodeStore
-	vs     *dolttypes.ValueStore
+	cs *nbs.GenerationalNBS
+	ns tree.NodeStore
+	vs *dolttypes.ValueStore
 
 	// doltDB is the primary handle for working-set and commit operations.
 	// datasDB is the lower-level dataset interface required for operations not yet
@@ -252,7 +250,6 @@ func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *dol
 	qualified := qualifiedDbName(s.name, branch)
 	_ = sess.SetWorkingSet(sqlCtx, qualified, newWS)
 }
-
 
 // Backend implements backends.Backend using Dolt storage.
 type Backend struct {
@@ -657,8 +654,7 @@ func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDataba
 			continue
 		}
 
-		// Dot-prefixed directories are internal (e.g. the preserved-drops
-		// directory) and never valid MongoDB database names.
+		// Skip internal dot-prefixed dirs (e.g. preserved drops); not valid db names.
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
@@ -726,9 +722,7 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 		delete(b.dbs, params.Name)
 	}
 
-	// Soft delete: move the database directory into the preserved-drops directory instead of
-	// removing it, so it can be restored with UndropDatabase. Repeat drops of
-	// the same name are retained under distinct drop ids.
+	// Soft delete: move (not remove) into the preserved-drops store so UndropDatabase can restore it.
 	dest, err := b.preservedDest(params.Name)
 	if err != nil {
 		return fmt.Errorf("dropping database %q: %w", params.Name, err)
@@ -744,9 +738,8 @@ func (b *Backend) DropDatabase(ctx context.Context, params *backends.DropDatabas
 // getOrOpenDB returns the dbState for the given database name,
 // opening/creating the NBS store if needed.
 // If create is false and the directory doesn't exist, returns nil, nil.
-// isReservedDatabase reports whether name is a MongoDB system database that
-// DumboDB does not implement and therefore must not let users create (config,
-// local). admin is excluded: DumboDB uses it as a real system database.
+// isReservedDatabase reports whether name is a system database DumboDB does not
+// implement and must not let users create. admin is excluded (DumboDB uses it).
 func isReservedDatabase(name string) bool {
 	return name == "config" || name == "local"
 }
@@ -799,10 +792,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		}
 	}
 
-	// config and local are MongoDB system database names. DumboDB does not
-	// implement their special semantics, so a user database created under those
-	// names would behave differently than clients expect. Refuse to materialize
-	// them. (admin is a genuine system database DumboDB does use.)
 	if create && isReservedDatabase(dbName) {
 		return nil, false, backends.NewError(backends.ErrorCodeDatabaseNameIsInvalid,
 			fmt.Errorf("database %q is a reserved system database and cannot be created", dbName))
@@ -3646,8 +3635,8 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			conflicts:   conflicts,
 			resolvedAM:  mergedAM,
 			isRevert:    true,
-			pickHash:    revertHash,   // the commit being reverted
-			fromHash:    parentHash,   // parent hash  -- used as "their" hash in artifacts
+			pickHash:    revertHash, // the commit being reverted
+			fromHash:    parentHash, // parent hash  -- used as "their" hash in artifacts
 			originalMsg: originalMsg,
 		}
 

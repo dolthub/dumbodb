@@ -27,11 +27,8 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// rejectRevisionQualifiedName returns an error if s carries a real branch or
-// revision qualifier after '@'. It mirrors dropDatabase's acceptance rule
-// (branchFromDBName): an all-digit '@' suffix is part of the database name (e.g.
-// "parity_test@1775505756999075683") and is allowed, so a database that can be
-// dropped can also be undropped. An empty s is allowed (no rename).
+// rejectRevisionQualifiedName rejects a real branch/revision after '@', matching
+// dropDatabase (branchFromDBName): an all-digit '@' suffix stays a plain name.
 func rejectRevisionQualifiedName(s, label string) error {
 	base, _, _, err := branchFromDBName(s)
 	if err != nil {
@@ -151,9 +148,8 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 	)))
 }
 
-// purgeMatchingDroppedDatabaseFields is the set of keys allowed inside a
-// purgeMatching filter. Anything else is rejected so a typo (e.g. droppedAt
-// instead of droppedBefore) cannot silently widen the purge.
+// purgeMatchingDroppedDatabaseFields are the only keys allowed in a purgeMatching
+// filter; others are rejected so a typo cannot silently widen the purge.
 var purgeMatchingDroppedDatabaseFields = map[string]struct{}{
 	"name":          {},
 	"dropId":        {},
@@ -163,7 +159,6 @@ var purgeMatchingDroppedDatabaseFields = map[string]struct{}{
 // purgeMatchingDroppedDatabases handles `dumboUndrop` with a purgeMatching filter:
 // it permanently removes preserved drops matching {name, dropId, droppedBefore}.
 func (h *Handler) purgeMatchingDroppedDatabases(connCtx context.Context, vb backends.VersioningBackend, document, pm *types.Document) (*wire.OpMsg, error) {
-	// purge mode is exclusive with the restore parameters.
 	for _, k := range []string{"name", "dropId", "to_database"} {
 		if document.Has(k) {
 			return nil, handlererrors.NewCommandErrorMsg(
@@ -224,8 +219,6 @@ func (h *Handler) purgeMatchingDroppedDatabases(connCtx context.Context, vb back
 }
 
 // requireAdminDB returns an error unless the command targets the admin database.
-// Instance-level operations (undrop) are not scoped to a single database and are
-// only accepted against admin to avoid ambiguity and limit blast radius.
 func requireAdminDB(document *types.Document, command string) error {
 	dbName, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {

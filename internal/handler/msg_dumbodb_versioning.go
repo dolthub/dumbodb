@@ -383,12 +383,9 @@ func validateRefName(name, kind string) error {
 	return nil
 }
 
-// enforceRootDatabase returns an OperationFailed error if the encoded database name
-// carries a branch or revision qualifier (anything after the '@' delimiter).
-//
-// Whole-database operations such as dropDatabase act on every branch and the
-// entire commit history, so they are only valid on the unqualified root database
-// name. A name like "mydb@main" or "mydb@<hash>" is rejected.
+// enforceRootDatabase rejects a branch/revision-qualified name (anything after
+// '@'). Whole-database ops like dropDatabase act on all branches and history, so
+// they require the unqualified root name.
 func enforceRootDatabase(encodedDB string) error {
 	base, _, _, err := branchFromDBName(encodedDB)
 	if err != nil {
@@ -2174,6 +2171,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		)),
 	)
 }
+
 // MsgDumboDBTag implements the `dumboTag` command.
 //
 // Tags share Dolt's tag refspec (refs/tags/<name>) and use the Dolt tag
