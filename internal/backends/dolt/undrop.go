@@ -149,8 +149,7 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 	}
 
 	var chosen backends.DroppedDatabase
-	switch {
-	case params.DropID != "":
+	if params.DropID != "" {
 		found := false
 		for _, c := range candidates {
 			if c.DropID == params.DropID {
@@ -162,15 +161,10 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 			return nil, backends.NewError(backends.ErrorCodeDatabaseDoesNotExist,
 				fmt.Errorf("undrop: database %q has no dropped copy with dropId %q", params.Name, params.DropID))
 		}
-	case len(candidates) == 1:
+	} else {
+		// No dropId: restore the most recent drop. candidates preserve
+		// scanQuarantine's most-recently-dropped-first ordering.
 		chosen = candidates[0]
-	default:
-		ids := make([]string, len(candidates))
-		for i, c := range candidates {
-			ids[i] = c.DropID
-		}
-		return nil, fmt.Errorf("undrop: database %q has %d dropped copies; specify dropId (one of: %s)",
-			params.Name, len(candidates), strings.Join(ids, ", "))
 	}
 
 	liveDir := filepath.Join(b.dataDir, params.Name)

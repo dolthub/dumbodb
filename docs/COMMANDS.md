@@ -1401,7 +1401,7 @@ When a database is dropped with `dropDatabase`, it is not deleted: its directory
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `name` | string | no | `""` | Database to restore. Omit to list databases available to undrop. Must be a root database name (no `@branch`/`@revision`). |
-| `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one quarantined copy. Use the `dropId` from the list response. |
+| `dropId` | string | no | `""` | Selects a specific drop when `name` has more than one quarantined copy. Omit to restore the most recent drop. Use the `dropId` from the list response. |
 
 ### Response fields (list mode, no `name`)
 
@@ -1446,7 +1446,6 @@ admin.runCommand({ dumboUndrop: 1, name: "orders" })
 |-----------|-------|
 | Not run against `admin` | `OperationFailed: dumboUndrop: can only be run against the admin database` |
 | No dropped database with that name | `DatabaseDoesNotExist: undrop: no dropped database named "<name>"; ...` |
-| Multiple drops and no `dropId` | `OperationFailed: undrop: database "<name>" has N dropped copies; specify dropId (...)` |
 | `dropId` does not match any drop | `DatabaseDoesNotExist: undrop: database "<name>" has no dropped copy with dropId "<id>"` |
 | A live database with that name already exists | `OperationFailed: undrop: a live database named "<name>" already exists` |
 | `name` is revision-qualified (`db@rev`) | `OperationFailed: dumboUndrop: name must be a root database, ...` |

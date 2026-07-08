@@ -126,8 +126,9 @@ func TestUndropVerify(t *testing.T) {
 		assert.NotContains(t, droppedNames(list), "undropvdb")
 	})
 
-	// Scenario 4: Repeat drops are all kept; disambiguate with dropId.
-	t.Run("Scenario4_KeepAllDisambiguate", func(t *testing.T) {
+	// Scenario 4: Repeat drops are all kept; no dropId restores the most recent,
+	// and an explicit dropId restores a specific older copy.
+	t.Run("Scenario4_KeepAllMostRecentDefault", func(t *testing.T) {
 		undropCommit(t, env, "ledger", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "first"}}, "g1")
 		undropDropDB(t, env, "ledger")
 		undropCommit(t, env, "ledger", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "second"}}, "g2")
@@ -137,12 +138,8 @@ func TestUndropVerify(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, entries, 2, "both drops retained")
 
-		// Ambiguous undrop is rejected.
-		_, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}})
-		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "dropid")
-
-		// Restore the oldest copy (last in the most-recent-first list).
+		// Capture the older ("first") dropId before restoring anything.
+		// The list is most-recently-dropped first, so [0]=second, [1]=first.
 		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
 		require.NoError(t, err)
 		var ledgerDrops []bson.M
@@ -152,21 +149,33 @@ func TestUndropVerify(t *testing.T) {
 			}
 		}
 		require.Len(t, ledgerDrops, 2)
-		oldest := ledgerDrops[len(ledgerDrops)-1]["dropId"].(string)
+		olderDropID := ledgerDrops[len(ledgerDrops)-1]["dropId"].(string)
 
-		_, err = undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "dropId", Value: oldest},
-		})
+		// No dropId: restores the MOST RECENT drop ("second").
+		res, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}})
 		require.NoError(t, err)
+		assert.EqualValues(t, ledgerDrops[0]["dropId"], res["dropId"], "no dropId restores the most recent drop")
 
 		var got bson.M
 		require.NoError(t, env.Client.Database("ledger").Collection("items").
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
-		assert.EqualValues(t, "first", got["gen"], "the chosen older copy was restored")
+		assert.EqualValues(t, "second", got["gen"], "most recent copy restored")
 
 		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "ledger"))
 		require.NoError(t, err)
-		assert.Len(t, remaining, 1, "one copy still quarantined")
+		assert.Len(t, remaining, 1, "the older copy is still quarantined")
+
+		// Explicit dropId restores that specific older copy. The live "ledger"
+		// is in the way, so drop it first.
+		undropDropDB(t, env, "ledger")
+		_, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "dropId", Value: olderDropID},
+		})
+		require.NoError(t, err)
+
+		require.NoError(t, env.Client.Database("ledger").Collection("items").
+			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
+		assert.EqualValues(t, "first", got["gen"], "explicit dropId restores the chosen older copy")
 	})
 
 	// Scenario 5: Error cases.

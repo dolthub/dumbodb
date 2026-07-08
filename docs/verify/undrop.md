@@ -169,7 +169,7 @@ Key checks:
 
 ---
 
-## Scenario 4: Repeat drops are all kept; disambiguate with dropId
+## Scenario 4: Repeat drops are all kept; no dropId restores the most recent
 
 Drops are never overwritten. Dropping the same name twice keeps both copies.
 
@@ -191,37 +191,35 @@ db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.na
 // Expected: two entries, each with a distinct dropId (most recent first)
 ```
 
-Undrop by name alone is ambiguous and is rejected:
+With no `dropId`, undrop restores the **most recent** drop:
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger" })
-// Expected: ok: 0; errmsg contains "dropId" and reports 2 dropped copies
+// Expected: { undropped: "ledger", dropId: <most recent>, ok: 1 }
+
+db.getSiblingDB("ledger").items.findOne({ _id: 1 }).gen
+// Expected: "second" -- the most recent copy was restored
 ```
 
-Restore a specific copy by passing its `dropId` (the older one here, the last
-entry in the most-recent-first list):
+The older copy is still quarantined. To restore it specifically, pass its
+`dropId` (the last entry in the most-recent-first list). The live `ledger` is
+in the way, so drop it first:
 
 ```js
-var copies = db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "ledger")
-var oldest = copies[copies.length - 1].dropId
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", dropId: oldest })
-// Expected: { undropped: "ledger", dropId: <oldest>, ok: 1 }
+var older = db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })
+             .dropped.filter(d => d.name === "ledger").pop().dropId
+db.getSiblingDB("ledger").dropDatabase()
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", dropId: older })
+// Expected: { undropped: "ledger", dropId: <older>, ok: 1 }
 
 db.getSiblingDB("ledger").items.findOne({ _id: 1 }).gen
 // Expected: "first" -- the specifically chosen older copy was restored
 ```
 
-One copy still remains quarantined:
-
-```js
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "ledger").length
-// Expected: 1
-```
-
 Key checks:
 - Two drops of `ledger` coexist with distinct `dropId`s.
-- Undrop with no `dropId` errors when the name is ambiguous.
-- Undrop with a `dropId` restores exactly that copy; the other remains.
+- Undrop with no `dropId` restores the most recently dropped copy.
+- Undrop with a `dropId` restores exactly that copy.
 
 ---
 
