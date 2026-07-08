@@ -580,6 +580,10 @@ type VersioningBackend interface {
 	// back to a live database. DropID selects a specific drop; with an empty
 	// DropID the most recent drop of that name is restored. ToDatabase, when set,
 	// restores the drop under that name instead of its original one.
+	//
+	// The restore is a copy: the preserved drop stays available (so it can be
+	// restored again, e.g. under several names) and remains listed until the GC
+	// purges it.
 	UndropDatabase(context.Context, *UndropParams) (*UndropResult, error)
 
 	// ListDroppedDatabases returns every soft-deleted database currently held in

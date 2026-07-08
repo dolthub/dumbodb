@@ -9,10 +9,12 @@ setup.
 
 `dropDatabase` does not delete data. It moves the database directory into the
 preserved-drops directory at `<dataDir>/.dumbodb_dropped_databases/<name>/<dropId>/`, where
-`dropId` is the nanosecond timestamp of the drop. `dumboUndrop` moves it back.
-Repeat drops of the same name are all retained, distinguished by `dropId`.
-A background job runs hourly and permanently deletes any preserved drop more
-than 30 days old, logging an INFO line per deletion.
+`dropId` is the nanosecond timestamp of the drop. `dumboUndrop` restores a
+**copy**: the drop stays preserved and listed, so it can be restored again (for
+example under several names via `to_database`). Repeat drops of the same name are
+all retained, distinguished by `dropId`. A background job runs hourly and
+permanently deletes any preserved drop more than 30 days old, logging an INFO
+line per deletion.
 
 `dumboUndrop` is **admin-only**: it must be run against the `admin` database,
 because it operates across the whole instance rather than on a single database.
@@ -156,17 +158,17 @@ db.getSiblingDB("undropvdb").runCommand({ doltLog: 1 }).commits.length
 // Expected: equals N -- every commit is restored, not just the latest data
 ```
 
-The preserved-drops list is now empty for this name:
+The drop is a copy, so it stays in the list after restore:
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })
-// Expected: dropped no longer contains undropvdb
+// Expected: dropped still contains undropvdb
 ```
 
 Key checks:
 - Both documents are present after undrop.
 - `doltLog` returns the same number of commits as before the drop.
-- `undropvdb` is no longer listed as dropped.
+- `undropvdb` is still listed as dropped (the drop was copied, not consumed).
 
 ---
 
@@ -202,16 +204,17 @@ db.getSiblingDB("ledger").items.findOne({ _id: 1 }).gen
 // Expected: "second" -- the most recent copy was restored
 ```
 
-The older copy is still preserved:
+Both drops are still preserved (restore copies, it does not consume):
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "ledger").length
-// Expected: 1
+// Expected: 2
 ```
 
 Key checks:
 - Two drops of `ledger` coexist with distinct `dropId`s.
 - Undrop with no `dropId` restores the most recently dropped copy.
+- Both drops remain listed after the restore.
 
 ---
 
@@ -241,23 +244,23 @@ db.getSiblingDB("journal").items.findOne({ _id: 1 }).gen
 // Expected: "v2" -- the specific, non-latest copy was restored
 ```
 
-The other two copies remain preserved:
+All three drops remain preserved (restore copies, it does not consume):
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "journal").length
-// Expected: 2  (v1 and v3)
+// Expected: 3  (v1, v2, v3)
 ```
 
 Key checks:
 - The restored data is `v2`, proving selection is by `dropId`, not "most recent" or "oldest".
-- The other two drops (v1, v3) are untouched and still listed.
+- All three drops (v1, v2, v3) are untouched and still listed.
 
 ---
 
-## Scenario 4c: Restore under a different name (to_database)
+## Scenario 4c: Restore under different names (to_database), repeatedly
 
-Pass `to_database` to restore a drop under a new name -- drop `srcdb`, undrop it
-as `destdb`.
+Pass `to_database` to restore a drop under a new name. Because restore copies,
+one drop can seed several independent live databases.
 
 ```js
 var s = db.getSiblingDB("srcdb")
@@ -265,19 +268,31 @@ s.items.insertOne({ _id: 1, tag: "orig" })
 s.runCommand({ doltCommit: 1, message: "s1", author: "a <a@a>" })
 s.dropDatabase()
 
+// First copy
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", to_database: "destdb" })
 // Expected: { undropped: "destdb", dropId: <id>, ok: 1 }
-
 db.getSiblingDB("destdb").items.findOne({ _id: 1 }).tag
-// Expected: "orig" -- srcdb's data now lives under destdb
+// Expected: "orig"
 
-db.adminCommand({ listDatabases: 1 }).databases.map(d => d.name).includes("srcdb")
-// Expected: false -- srcdb was consumed by the restore
+// srcdb was NOT consumed -- it is still listed as a drop
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.map(d => d.name).includes("srcdb")
+// Expected: true
+
+// Second copy from the same drop, under another name
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", to_database: "destdb2" })
+db.getSiblingDB("destdb2").items.findOne({ _id: 1 }).tag
+// Expected: "orig" -- an independent copy
+
+// The copies are independent
+db.getSiblingDB("destdb").items.updateOne({ _id: 1 }, { $set: { tag: "changed" } })
+db.getSiblingDB("destdb2").items.findOne({ _id: 1 }).tag
+// Expected: "orig" -- destdb2 is unaffected by writes to destdb
 ```
 
 Key checks:
-- `undropped` reports the new name `destdb`.
-- `destdb` is live with `srcdb`'s data; `srcdb` is neither live nor still listed as dropped.
+- `undropped` reports the new name.
+- Each restore produces an independent live database with `srcdb`'s data.
+- `srcdb` stays listed as a drop after each restore.
 
 ---
 
@@ -392,4 +407,5 @@ restore succeeds.
 - Repeat drops of one name are all retained; `dropId` selects among them.
 - `to_database` restores under a new name; it requires `name`.
 - Undrop restores the complete commit history, not just the latest data.
+- Undrop copies the drop; it stays listed and can be restored again until purged. Restoring onto a live database name is rejected.
 - Preserved databases are permanently deleted by a background job once they are more than 30 days old (checked hourly).

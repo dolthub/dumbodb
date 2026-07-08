@@ -17,6 +17,7 @@ package dolt
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -180,18 +181,78 @@ func (b *Backend) UndropDatabase(_ context.Context, params *backends.UndropParam
 		return nil, fmt.Errorf("undrop: a live database named %q already exists", target)
 	}
 
+	// Restore is a copy, not a move: the preserved drop stays available so it can
+	// be restored again (e.g. repeatedly with a different ToDatabase to make
+	// several copies) and remains listed until the 30-day GC purges it. Copy into
+	// a dot-prefixed temp dir first (excluded from ListDatabases), then rename it
+	// into place so a partially-copied database is never visible as live.
 	src := filepath.Join(b.preservedRoot(), chosen.Name, chosen.DropID)
-	if err := os.Rename(src, liveDir); err != nil {
+	tmp, err := os.MkdirTemp(b.dataDir, ".restore-*")
+	if err != nil {
+		return nil, fmt.Errorf("undrop: restoring %q: %w", target, err)
+	}
+	if err := copyTree(src, tmp); err != nil {
+		_ = os.RemoveAll(tmp)
+		return nil, fmt.Errorf("undrop: restoring %q: %w", target, err)
+	}
+	if err := os.Rename(tmp, liveDir); err != nil {
+		_ = os.RemoveAll(tmp)
 		return nil, fmt.Errorf("undrop: restoring %q: %w", target, err)
 	}
 
-	// Remove the now-empty per-name preserved-drops directory if this was the last drop.
-	parent := filepath.Join(b.preservedRoot(), chosen.Name)
-	if remaining, rerr := os.ReadDir(parent); rerr == nil && len(remaining) == 0 {
-		_ = os.Remove(parent)
-	}
-
 	return &backends.UndropResult{Name: target, DropID: chosen.DropID}, nil
+}
+
+// copyTree recursively copies the directory tree rooted at src into dst,
+// creating dst if needed. Only directories and regular files are supported
+// (Dolt NBS stores contain nothing else).
+func copyTree(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		s := filepath.Join(src, e.Name())
+		d := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := copyTree(s, d); err != nil {
+				return err
+			}
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("cannot copy non-regular file %q", s)
+		}
+		if err := copyFile(s, d, info.Mode()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func availableHint(all []backends.DroppedDatabase) string {

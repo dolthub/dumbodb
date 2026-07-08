@@ -1390,7 +1390,7 @@ Default mode walks new-gen chunks only -- chunks already promoted to oldgen arch
 
 Restores a soft-deleted database, or lists the databases available to undrop.
 
-When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into the preserved-drops directory and can be restored. `dumboUndrop` reverses that move. Repeat drops of the same name are all retained, distinguished by a `dropId`. Pass `to_database` to restore under a different name.
+When a database is dropped with `dropDatabase`, it is not deleted: its directory is moved into the preserved-drops directory and can be restored. `dumboUndrop` restores a **copy** of a drop -- the drop itself stays preserved and listed until the 30-day GC purges it, so one drop can be restored repeatedly (e.g. under several names via `to_database`). Repeat drops of the same name are all retained, distinguished by a `dropId`. Pass `to_database` to restore under a different name.
 
 **Alias:** `doltUndrop`
 
@@ -1461,5 +1461,6 @@ admin.runCommand({ dumboUndrop: 1, name: "orders", to_database: "orders_recovere
 ### Notes
 
 - The full commit history of the restored database is preserved exactly as it was at drop time.
+- Restore is a copy: the drop is not consumed. It stays listed and can be restored again (each restore produces an independent database). Restoring into a name that is already live is rejected.
 - Preserved databases are permanently deleted automatically once they are more than 30 days old. A background job checks hourly and logs an INFO line for each deletion. Undrop a database before then to recover it.
 - System databases (`admin`, `config`, `local`) cannot be dropped, so they are never preserved.

@@ -121,9 +121,10 @@ func TestUndropVerify(t *testing.T) {
 
 		assert.Equal(t, commitCountN, undropCommitCount(t, env, "undropvdb"), "full history restored")
 
+		// Restore is a copy: the drop stays in the list after undrop.
 		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
 		require.NoError(t, err)
-		assert.NotContains(t, droppedNames(list), "undropvdb")
+		assert.Contains(t, droppedNames(list), "undropvdb", "drop remains listed after undrop")
 	})
 
 	// Scenario 4: Repeat drops are all kept; with no dropId, undrop restores the
@@ -159,9 +160,10 @@ func TestUndropVerify(t *testing.T) {
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
 		assert.EqualValues(t, "second", got["gen"], "most recent copy restored")
 
+		// Restore is a copy: both drops remain preserved (nothing is consumed).
 		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropPreservedDir, "ledger"))
 		require.NoError(t, err)
-		assert.Len(t, remaining, 1, "the older copy is still preserved")
+		assert.Len(t, remaining, 2, "both drops remain preserved after a copy-restore")
 	})
 
 	// Scenario 4b: A specific, non-latest drop can be restored by dropId.
@@ -199,36 +201,56 @@ func TestUndropVerify(t *testing.T) {
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
 		assert.EqualValues(t, "v2", got["gen"], "the specific non-latest copy (v2) was restored")
 
-		// The other two copies (v1, v3) remain preserved.
+		// Restore is a copy: all three drops (v1, v2, v3) remain preserved.
 		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropPreservedDir, "journal"))
 		require.NoError(t, err)
-		assert.Len(t, remaining, 2, "v1 and v3 remain preserved")
+		assert.Len(t, remaining, 3, "all drops remain preserved after a copy-restore")
 	})
 
-	// Scenario 4c: Restore under a different name with to_database.
-	t.Run("Scenario4c_ToDatabase", func(t *testing.T) {
+	// Scenario 4c: Restore under a different name with to_database, repeatedly.
+	// Because restore is a copy, one drop can seed several live copies.
+	t.Run("Scenario4c_ToDatabaseMultipleCopies", func(t *testing.T) {
 		undropCommit(t, env, "srcdb", bson.D{{Key: "_id", Value: 1}, {Key: "tag", Value: "orig"}}, "s1")
 		undropDropDB(t, env, "srcdb")
 
+		// First copy.
 		res, err := undropAdmin(t, env, bson.D{
 			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "to_database", Value: "destdb"},
 		})
 		require.NoError(t, err)
 		assert.EqualValues(t, "destdb", res["undropped"], "restored under the alternate name")
 
-		// destdb is live with srcdb's data.
 		var got bson.M
 		require.NoError(t, env.Client.Database("destdb").Collection("items").
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
 		assert.EqualValues(t, "orig", got["tag"])
 
-		// srcdb is neither live nor preserved anymore.
-		names, err := env.Client.ListDatabaseNames(ctx, bson.D{})
-		require.NoError(t, err)
-		assert.NotContains(t, names, "srcdb")
+		// srcdb was NOT consumed: it is still listed as a drop.
 		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
 		require.NoError(t, err)
-		assert.NotContains(t, droppedNames(list), "srcdb")
+		assert.Contains(t, droppedNames(list), "srcdb", "drop remains after a to_database restore")
+
+		// Second copy from the same drop, under another name.
+		_, err = undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "to_database", Value: "destdb2"},
+		})
+		require.NoError(t, err)
+		require.NoError(t, env.Client.Database("destdb2").Collection("items").
+			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
+		assert.EqualValues(t, "orig", got["tag"], "second independent copy has the data too")
+
+		// The two copies are independent: mutating one does not affect the other.
+		_, err = env.Client.Database("destdb").Collection("items").
+			UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}}, bson.D{{Key: "$set", Value: bson.D{{Key: "tag", Value: "changed"}}}})
+		require.NoError(t, err)
+		require.NoError(t, env.Client.Database("destdb2").Collection("items").
+			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
+		assert.EqualValues(t, "orig", got["tag"], "destdb2 is unaffected by writes to destdb")
+
+		// srcdb still listed after the second copy.
+		list, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
+		require.NoError(t, err)
+		assert.Contains(t, droppedNames(list), "srcdb")
 	})
 
 	// Scenario 5: Error cases.
