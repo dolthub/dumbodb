@@ -2724,14 +2724,12 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Reset operates on the branch encoded in the connection, not necessarily main.
 	branch := params.Branch
 	if branch == "" {
 		branch = defaultBranch
 	}
 	branchDataset := "refs/heads/" + branch
 
-	// Resolve empty CommitID to the current HEAD of the target branch.
 	commitID := params.CommitID
 	if commitID == "" {
 		branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
@@ -2756,7 +2754,6 @@ func (b *Backend) DumboDBReset(ctx context.Context, params *backends.ResetParams
 		return nil, fmt.Errorf("DumboDBReset: resolving target commit %q: %w", commitID, err)
 	}
 
-	// Move the branch HEAD to the target commit without touching the working set.
 	branchDS, dsErr := db.datasDB.GetDataset(ctx, branchDataset)
 	if dsErr != nil {
 		return nil, fmt.Errorf("DumboDBReset: resolving branch %q for db %q: %w", branch, params.DBName, dsErr)

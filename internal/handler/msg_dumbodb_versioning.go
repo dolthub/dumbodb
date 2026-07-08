@@ -1490,9 +1490,6 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	// Reset moves a branch HEAD and working set; it requires a writable branch.
-	// Reject read-only connections (commit hash, ancestor/caret rootish) before
-	// deriving the branch, so we never treat a rootish as a branch name.
 	if err := enforceWritableRootish(encodedDB); err != nil {
 		return nil, err
 	}

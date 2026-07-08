@@ -64,8 +64,6 @@ func resetVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1,
 	return hashC1, hashC2
 }
 
-// branchHead returns the HEAD commit hash for a connection db, which may encode a
-// branch as "db@branch".
 func branchHead(t *testing.T, env *dumboDBTestEnv, connDB string) string {
 	t.Helper()
 
@@ -83,8 +81,6 @@ func branchHead(t *testing.T, env *dumboDBTestEnv, connDB string) string {
 	return h
 }
 
-// resetBranchVerifySetup creates a fresh database with main at M1 and a feature
-// branch carrying two extra commits F1 and F2. Returns the db name and hashes.
 func resetBranchVerifySetup(t *testing.T, env *dumboDBTestEnv) (brDB, hashM1, hashF1, hashF2 string) {
 	t.Helper()
 	ctx := context.Background()
@@ -93,14 +89,12 @@ func resetBranchVerifySetup(t *testing.T, env *dumboDBTestEnv) (brDB, hashM1, ha
 	mainDB := env.Client.Database(brDB)
 	require.NoError(t, mainDB.Drop(ctx))
 
-	// main: one committed document (M1).
 	_, err := mainDB.Collection("tasks").InsertOne(ctx, bson.D{
 		{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)},
 	})
 	require.NoError(t, err)
 	hashM1 = dumboDBCommit(t, env, brDB, "main-base", "alice <alice@acme.com>")
 
-	// Create a feature branch from main, then add two commits on it (F1, F2).
 	bsBranchCreate(t, env, brDB, "main", "feature")
 	featDB := env.Client.Database(brDB + "@feature")
 
@@ -287,9 +281,6 @@ func TestResetVerify(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Pre-check (mirrors the doc): the uncommitted _id:5 must show as a working-set
-		// change (doltDiff = HEAD vs working set) before we discard it, so an empty
-		// diff after reset is meaningful.
 		var preDiffRaw bson.M
 		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -328,9 +319,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(1), n,
 			"after hard reset to HEAD: exactly 1 document must be visible")
 
-		// Soft reset to HEAD must have NO effect on uncommitted edits. Introduce an
-		// uncommitted insert (_id:6), then bare soft reset {doltReset:1} (no `to`, no
-		// `hard`, defaults to HEAD), and confirm the edit survives.
 		_, err = items.InsertOne(ctx, bson.D{
 			{Key: "_id", Value: int32(6)},
 			{Key: "v", Value: int32(6)},
@@ -344,7 +332,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, headHash, softRaw["commitId"], "bare soft reset must return current HEAD hash")
 		assert.EqualValues(t, 1, softRaw["ok"], "bare soft reset must report ok:1")
 
-		// Working tree is untouched: _id:6 is still an uncommitted addition.
 		var softDiffRaw bson.M
 		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -357,8 +344,6 @@ func TestResetVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), n, "soft reset to HEAD must not remove the uncommitted _id:6")
 
-		// A hard reset to HEAD then discards that same edit, restoring the clean
-		// HEAD=C1 state (also the precondition Scenario 5 relies on).
 		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
 			{Key: "hard", Value: true},
@@ -432,15 +417,10 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashC5, raw["commitId"], "to:'main' must return main's HEAD")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 6: Soft reset on a non-main branch  -- only the target branch moves
-	// -------------------------------------------------------------------------
 	t.Run("Scenario6_SoftResetOnNonMainBranch", func(t *testing.T) {
 		brDB, hashM1, hashF1, _ := resetBranchVerifySetup(t, env)
 		featDB := env.Client.Database(brDB + "@feature")
 
-		// Soft-reset feature back to F1 (no `hard`): feature HEAD moves to F1 but
-		// the working tree is preserved, so _id:3 becomes an uncommitted addition.
 		var raw bson.M
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -449,7 +429,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashF1, raw["commitId"], "soft reset on feature must resolve to F1")
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// feature: HEAD moved to F1, working tree preserved (still _id:1,2,3).
 		assert.Equal(t, hashF1, branchHead(t, env, brDB+"@feature"),
 			"feature HEAD must be F1 after soft reset on feature")
 		fn, err := featDB.Collection("tasks").CountDocuments(ctx, bson.D{})
@@ -457,7 +436,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(3), fn,
 			"soft reset preserves the feature working tree (_id:1,2,3)")
 
-		// feature diff: HEAD=F1 vs working set shows _id:3 as the only addition.
 		var diffRaw bson.M
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
 			{Key: "doltDiff", Value: int32(1)},
@@ -467,7 +445,6 @@ func TestResetVerify(t *testing.T) {
 		require.Len(t, cd.Added, 1, "exactly _id:3 should be uncommitted after soft reset to F1")
 		assert.Equal(t, int32(3), cd.Added[0]["_id"], "the uncommitted addition must be _id:3")
 
-		// main must be completely untouched: HEAD=M1, working set = {_id:1}.
 		assert.Equal(t, hashM1, branchHead(t, env, brDB),
 			"main HEAD must be unchanged by a soft reset on feature")
 		mn, err := env.Client.Database(brDB).Collection("tasks").CountDocuments(ctx, bson.D{})
@@ -476,14 +453,10 @@ func TestResetVerify(t *testing.T) {
 			"main working set must be untouched by a soft reset on feature")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 7: Hard reset on a non-main branch  -- only the target branch moves
-	// -------------------------------------------------------------------------
 	t.Run("Scenario7_HardResetOnNonMainBranch", func(t *testing.T) {
 		brDB, hashM1, hashF1, _ := resetBranchVerifySetup(t, env)
 		featDB := env.Client.Database(brDB + "@feature")
 
-		// Hard-reset the feature branch back to F1.
 		var raw bson.M
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -493,7 +466,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashF1, raw["commitId"], "hard reset on feature must resolve to F1")
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// feature: HEAD=F1 and working set reset to {_id:1,_id:2}.
 		assert.Equal(t, hashF1, branchHead(t, env, brDB+"@feature"),
 			"feature HEAD must be F1 after hard reset on feature")
 		fn, err := featDB.Collection("tasks").CountDocuments(ctx, bson.D{})
@@ -501,7 +473,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(2), fn,
 			"feature working set must show 2 docs (_id:1,2) after hard reset to F1")
 
-		// main must be completely untouched: HEAD=M1, working set = {_id:1}.
 		assert.Equal(t, hashM1, branchHead(t, env, brDB),
 			"main HEAD must be unchanged by a hard reset on feature")
 		mn, err := env.Client.Database(brDB).Collection("tasks").CountDocuments(ctx, bson.D{})
@@ -510,15 +481,11 @@ func TestResetVerify(t *testing.T) {
 			"main working set must be untouched (only _id:1) by a hard reset on feature")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 8: Hard reset to a commit on another branch  -- content follows target
-	// -------------------------------------------------------------------------
 	t.Run("Scenario8_HardResetToCommitOnOtherBranch", func(t *testing.T) {
 		brDB, _, hashF1, hashF2 := resetBranchVerifySetup(t, env)
 		mainDB := env.Client.Database(brDB)
 		tasks := mainDB.Collection("tasks")
 
-		// On main, hard-reset to F1  -- a commit that lives on the feature branch.
 		var raw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -528,8 +495,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, hashF1, raw["commitId"], "reset must resolve to the feature commit F1")
 		assert.EqualValues(t, 1, raw["ok"])
 
-		// main HEAD moved to F1 and its content now follows the target: {_id:1,_id:2},
-		// including _id:2 which was only ever committed on the feature branch.
 		assert.Equal(t, hashF1, branchHead(t, env, brDB), "main HEAD must be F1 after hard reset")
 		mn, err := tasks.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
@@ -541,13 +506,11 @@ func TestResetVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), got3, "_id:3 (only on F2) must not be present after reset to F1")
 
-		// Working set matches the new HEAD  -- diff is empty.
 		var diffRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltDiff", Value: int32(1)}}).Decode(&diffRaw))
 		assert.Empty(t, decodeDiffResult(t, diffRaw).Collections,
 			"after hard reset the working set must match HEAD (empty diff)")
 
-		// The feature branch is untouched: HEAD still F2, still 3 docs.
 		assert.Equal(t, hashF2, branchHead(t, env, brDB+"@feature"),
 			"feature HEAD must be unchanged by a reset on main")
 		fn, err := env.Client.Database(brDB+"@feature").Collection("tasks").CountDocuments(ctx, bson.D{})
@@ -555,16 +518,11 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(3), fn, "feature content must be unchanged (3 docs)")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 9: Soft reset to a commit on another branch  -- diff reflects the gap
-	// -------------------------------------------------------------------------
 	t.Run("Scenario9_SoftResetToCommitOnOtherBranch", func(t *testing.T) {
 		brDB, _, hashF1, hashF2 := resetBranchVerifySetup(t, env)
 		mainDB := env.Client.Database(brDB)
 		tasks := mainDB.Collection("tasks")
 
-		// On main, soft-reset to F1 (a feature-branch commit). HEAD moves to F1 but
-		// main's working tree (still M1 = {_id:1}) is preserved.
 		var raw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltReset", Value: int32(1)},
@@ -574,13 +532,10 @@ func TestResetVerify(t *testing.T) {
 		assert.EqualValues(t, 1, raw["ok"])
 		assert.Equal(t, hashF1, branchHead(t, env, brDB), "main HEAD must be F1 after soft reset")
 
-		// Working tree preserved at M1: only _id:1 is visible.
 		mn, err := tasks.CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), mn, "soft reset preserves main's working tree (_id:1 only)")
 
-		// The diff makes sense: the new HEAD F1 has {_id:1,_id:2} but the working
-		// tree has only {_id:1}, so _id:2 shows as removed relative to the new HEAD.
 		var diffRaw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltDiff", Value: int32(1)}}).Decode(&diffRaw))
 		cd := findCollDiff(decodeDiffResult(t, diffRaw), "tasks")
@@ -590,7 +545,6 @@ func TestResetVerify(t *testing.T) {
 		assert.Empty(t, cd.Added, "no docs should be added")
 		assert.Empty(t, cd.Modified, "no docs should be modified")
 
-		// The feature branch is untouched: HEAD still F2, still 3 docs.
 		assert.Equal(t, hashF2, branchHead(t, env, brDB+"@feature"),
 			"feature HEAD must be unchanged by a reset on main")
 		fn, err := env.Client.Database(brDB+"@feature").Collection("tasks").CountDocuments(ctx, bson.D{})
@@ -598,16 +552,9 @@ func TestResetVerify(t *testing.T) {
 		assert.Equal(t, int64(3), fn, "feature content must be unchanged (3 docs)")
 	})
 
-	// -------------------------------------------------------------------------
-	// Scenario 10: Reset is rejected on a read-only connection (no branch to move)
-	// -------------------------------------------------------------------------
 	t.Run("Scenario10_ResetRejectedOnReadOnlyConnection", func(t *testing.T) {
 		brDB, hashM1, hashF1, hashF2 := resetBranchVerifySetup(t, env)
 
-		// A commit-hash connection and an ancestor-expression connection are both
-		// read-only snapshots with no branch to move; reset must be refused rather
-		// than treating the rootish as a branch name (which would create a stray
-		// refs/heads/<rootish>).
 		readOnlyConns := []string{brDB + "@" + hashF1, brDB + "@feature~1"}
 		for _, conn := range readOnlyConns {
 			db := env.Client.Database(conn)
@@ -626,7 +573,6 @@ func TestResetVerify(t *testing.T) {
 			assertWriteBlockedOperationFailed(t, hardErr, "hard doltReset on "+conn)
 		}
 
-		// Nothing moved: main and feature HEADs are exactly as the setup left them.
 		assert.Equal(t, hashM1, branchHead(t, env, brDB), "main HEAD must be unchanged")
 		assert.Equal(t, hashF2, branchHead(t, env, brDB+"@feature"), "feature HEAD must be unchanged")
 	})
