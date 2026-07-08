@@ -384,9 +384,6 @@ admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "svc", dropId: id } })
 // Purge all remaining drops of a name
 admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "svc" } })
 // purges the rest of svc's drops
-
-// Purge a name's drops older than a cutoff (name + droppedBefore = AND)
-admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefore: ISODate("2026-06-01") } })
 ```
 
 Validation:
