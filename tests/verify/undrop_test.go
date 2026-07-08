@@ -126,8 +126,8 @@ func TestUndropVerify(t *testing.T) {
 		assert.NotContains(t, droppedNames(list), "undropvdb")
 	})
 
-	// Scenario 4: Repeat drops are all kept; no dropId restores the most recent,
-	// and an explicit dropId restores a specific older copy.
+	// Scenario 4: Repeat drops are all kept; with no dropId, undrop restores the
+	// most recent drop.
 	t.Run("Scenario4_KeepAllMostRecentDefault", func(t *testing.T) {
 		undropCommit(t, env, "ledger", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "first"}}, "g1")
 		undropDropDB(t, env, "ledger")
@@ -138,8 +138,7 @@ func TestUndropVerify(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, entries, 2, "both drops retained")
 
-		// Capture the older ("first") dropId before restoring anything.
-		// The list is most-recently-dropped first, so [0]=second, [1]=first.
+		// The list is most-recently-dropped first, so [0] is the "second" drop.
 		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
 		require.NoError(t, err)
 		var ledgerDrops []bson.M
@@ -149,7 +148,6 @@ func TestUndropVerify(t *testing.T) {
 			}
 		}
 		require.Len(t, ledgerDrops, 2)
-		olderDropID := ledgerDrops[len(ledgerDrops)-1]["dropId"].(string)
 
 		// No dropId: restores the MOST RECENT drop ("second").
 		res, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}})
@@ -164,18 +162,47 @@ func TestUndropVerify(t *testing.T) {
 		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "ledger"))
 		require.NoError(t, err)
 		assert.Len(t, remaining, 1, "the older copy is still quarantined")
+	})
 
-		// Explicit dropId restores that specific older copy. The live "ledger"
-		// is in the way, so drop it first.
-		undropDropDB(t, env, "ledger")
-		_, err = undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "dropId", Value: olderDropID},
+	// Scenario 4b: A specific, non-latest drop can be restored by dropId.
+	// Three drops of "journal" exist simultaneously; restoring the MIDDLE one
+	// by dropId proves selection is by id, not "most recent" or "oldest".
+	t.Run("Scenario4b_RestoreSpecificNonLatest", func(t *testing.T) {
+		undropCommit(t, env, "journal", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "v1"}}, "j1")
+		undropDropDB(t, env, "journal")
+		undropCommit(t, env, "journal", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "v2"}}, "j2")
+		undropDropDB(t, env, "journal")
+		undropCommit(t, env, "journal", bson.D{{Key: "_id", Value: 1}, {Key: "gen", Value: "v3"}}, "j3")
+		undropDropDB(t, env, "journal")
+
+		// Most-recently-dropped first: [v3, v2, v1]. The middle entry is v2.
+		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
+		require.NoError(t, err)
+		var journalDrops []bson.M
+		for _, d := range list["dropped"].(bson.A) {
+			if dm := d.(bson.M); dm["name"] == "journal" {
+				journalDrops = append(journalDrops, dm)
+			}
+		}
+		require.Len(t, journalDrops, 3)
+		middleDropID := journalDrops[1]["dropId"].(string)
+
+		// Restore the middle drop by its dropId (neither newest nor oldest).
+		res, err := undropAdmin(t, env, bson.D{
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "journal"}, {Key: "dropId", Value: middleDropID},
 		})
 		require.NoError(t, err)
+		assert.EqualValues(t, middleDropID, res["dropId"], "the requested dropId was restored")
 
-		require.NoError(t, env.Client.Database("ledger").Collection("items").
+		var got bson.M
+		require.NoError(t, env.Client.Database("journal").Collection("items").
 			FindOne(ctx, bson.D{{Key: "_id", Value: 1}}).Decode(&got))
-		assert.EqualValues(t, "first", got["gen"], "explicit dropId restores the chosen older copy")
+		assert.EqualValues(t, "v2", got["gen"], "the specific non-latest copy (v2) was restored")
+
+		// The other two copies (v1, v3) remain quarantined.
+		remaining, err := os.ReadDir(filepath.Join(env.DataDir(), undropQuarantineDir, "journal"))
+		require.NoError(t, err)
+		assert.Len(t, remaining, 2, "v1 and v3 remain quarantined")
 	})
 
 	// Scenario 5: Error cases.

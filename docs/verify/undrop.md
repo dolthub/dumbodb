@@ -201,25 +201,55 @@ db.getSiblingDB("ledger").items.findOne({ _id: 1 }).gen
 // Expected: "second" -- the most recent copy was restored
 ```
 
-The older copy is still quarantined. To restore it specifically, pass its
-`dropId` (the last entry in the most-recent-first list). The live `ledger` is
-in the way, so drop it first:
+The older copy is still quarantined:
 
 ```js
-var older = db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })
-             .dropped.filter(d => d.name === "ledger").pop().dropId
-db.getSiblingDB("ledger").dropDatabase()
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", dropId: older })
-// Expected: { undropped: "ledger", dropId: <older>, ok: 1 }
-
-db.getSiblingDB("ledger").items.findOne({ _id: 1 }).gen
-// Expected: "first" -- the specifically chosen older copy was restored
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "ledger").length
+// Expected: 1
 ```
 
 Key checks:
 - Two drops of `ledger` coexist with distinct `dropId`s.
 - Undrop with no `dropId` restores the most recently dropped copy.
-- Undrop with a `dropId` restores exactly that copy.
+
+---
+
+## Scenario 4b: Restore a specific (non-latest) drop by dropId
+
+Passing an explicit `dropId` restores exactly that copy, regardless of how
+recent it is. Here three drops of `journal` exist at once, and we restore the
+**middle** one -- neither the newest nor the oldest.
+
+```js
+// Three generations, all dropped
+var j = db.getSiblingDB("journal")
+j.items.insertOne({ _id: 1, gen: "v1" }); j.runCommand({ doltCommit: 1, message: "j1", author: "a <a@a>" }); j.dropDatabase()
+j = db.getSiblingDB("journal")
+j.items.insertOne({ _id: 1, gen: "v2" }); j.runCommand({ doltCommit: 1, message: "j2", author: "a <a@a>" }); j.dropDatabase()
+j = db.getSiblingDB("journal")
+j.items.insertOne({ _id: 1, gen: "v3" }); j.runCommand({ doltCommit: 1, message: "j3", author: "a <a@a>" }); j.dropDatabase()
+
+// List is most-recent-first: [v3, v2, v1]. The middle entry is v2.
+var drops = db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "journal")
+var middle = drops[1].dropId
+
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "journal", dropId: middle })
+// Expected: { undropped: "journal", dropId: <middle>, ok: 1 }
+
+db.getSiblingDB("journal").items.findOne({ _id: 1 }).gen
+// Expected: "v2" -- the specific, non-latest copy was restored
+```
+
+The other two copies remain quarantined:
+
+```js
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.filter(d => d.name === "journal").length
+// Expected: 2  (v1 and v3)
+```
+
+Key checks:
+- The restored data is `v2`, proving selection is by `dropId`, not "most recent" or "oldest".
+- The other two drops (v1, v3) are untouched and still listed.
 
 ---
 
