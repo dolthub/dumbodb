@@ -17,6 +17,7 @@ package dolt
 import (
 	"context"
 	"crypto/sha512"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -41,7 +42,6 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
-	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -227,22 +227,32 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 }
 
 // hashID returns a stable 20-byte primary key for a MongoDB _id value. Numeric
-// values MongoDB treats as equal must produce the same key. Integer-valued
-// numbers fold to int64 and are hashed from the original BSON encoding, so 42,
-// NumberLong(42) and 42.0 collide while every non-numeric _id keeps its
-// original hash (and thus its doc-id order). Non-integer or non-finite numbers
-// (0.5, NumberDecimal("0.10"), Infinity, NaN) are keyed by their exact
-// mathematical value, so equal values collide across subtype and decimal scale.
+// values MongoDB treats as equal must produce the same key. A scalar integer
+// (any of int32/int64, integer float64/Decimal128) folds to int64 and is
+// hashed from the original BSON encoding, so 42, NumberLong(42) and 42.0
+// collide while every non-numeric scalar _id keeps its original hash (and thus
+// its doc-id order). A scalar non-integer or non-finite number (0.5, Infinity,
+// NaN) is keyed by its exact value. A document/array _id is keyed by a
+// canonical encoding in which every numeric leaf, at any depth, is reduced to
+// its exact value, so {a: NumberLong(42)} == {a: 42.0} and {a: 0.10} ==
+// {a: 0.1} while field order stays significant.
 func hashID(id any) ([20]byte, error) {
+	switch id.(type) {
+	case *types.Document, *types.Array:
+		buf, err := appendCanonicalValue(nil, id)
+		if err != nil {
+			return [20]byte{}, err
+		}
+		return sha512Key(buf), nil
+	}
+
 	if key, ok := exactNumericKey(id); ok {
 		return sha512Key(key), nil
 	}
-
-	folded, err := foldIntegerNumerics(id)
-	if err != nil {
-		return [20]byte{}, err
+	if i, ok := numericToInt64(id); ok {
+		return wirebsonIDHash(i)
 	}
-	return wirebsonIDHash(folded)
+	return wirebsonIDHash(id)
 }
 
 func sha512Key(b []byte) [20]byte {
@@ -275,18 +285,6 @@ func wirebsonIDHash(id any) ([20]byte, error) {
 		wval = v
 	case types.Decimal128:
 		wval = wirebson.Decimal128{L: v.L, H: v.H}
-	case *types.Document:
-		wdoc, err := bson.FromDocument(v)
-		if err != nil {
-			return [20]byte{}, fmt.Errorf("encoding _id document for hash: %w", err)
-		}
-		wval = wdoc
-	case *types.Array:
-		warr, err := bson.FromArray(v)
-		if err != nil {
-			return [20]byte{}, fmt.Errorf("encoding _id array for hash: %w", err)
-		}
-		wval = warr
 	default:
 		return [20]byte{}, fmt.Errorf("unsupported _id type %T", id)
 	}
@@ -303,37 +301,118 @@ func wirebsonIDHash(id any) ([20]byte, error) {
 
 // exactNumericKey keys a scalar numeric _id whose value cannot be folded to
 // int64 (non-integer or non-finite float64 / Decimal128) by its exact value,
-// so 0.5, NumberDecimal("0.5"), NumberDecimal("0.50") share one key. Reports
-// ok=false for integers, non-numerics and composites, which keep their
-// BSON-bytes hash.
+// so 0.5, NumberDecimal("0.5") and NumberDecimal("0.50") share one key. Reports
+// ok=false for integers and non-numerics, which keep their BSON-bytes hash.
 func exactNumericKey(id any) ([]byte, bool) {
 	if _, ok := numericToInt64(id); ok {
 		return nil, false
 	}
-	switch v := id.(type) {
+	if tok, ok := numericValueToken(id); ok {
+		return []byte("num:" + tok), true
+	}
+	return nil, false
+}
+
+// appendCanonicalValue encodes a document/array _id (recursively) so that every
+// numeric leaf is reduced to its exact value while non-numeric leaves keep a
+// type-tagged encoding. Values MongoDB treats as equal encode identically;
+// distinct field order encodes differently.
+func appendCanonicalValue(dst []byte, v any) ([]byte, error) {
+	if tok, ok := numericValueToken(v); ok {
+		return appendLenBytes(append(dst, 'N'), []byte(tok)), nil
+	}
+	switch v := v.(type) {
+	case string:
+		return appendLenBytes(append(dst, 'S'), []byte(v)), nil
+	case types.ObjectID:
+		return append(append(dst, 'O'), v[:]...), nil
+	case types.Binary:
+		return appendLenBytes(append(dst, 'B', byte(v.Subtype)), v.B), nil
+	case bool:
+		if v {
+			return append(dst, 'L', 1), nil
+		}
+		return append(dst, 'L', 0), nil
+	case time.Time:
+		return binary.BigEndian.AppendUint64(append(dst, 'T'), uint64(v.UnixMilli())), nil
+	case types.NullType:
+		return append(dst, 'Z'), nil
+	case types.Regex:
+		dst = appendLenBytes(append(dst, 'R'), []byte(v.Pattern))
+		return appendLenBytes(dst, []byte(v.Options)), nil
+	case types.Timestamp:
+		return binary.BigEndian.AppendUint64(append(dst, 'P'), uint64(v)), nil
+	case types.MinKeyType:
+		return append(dst, '<'), nil
+	case types.MaxKeyType:
+		return append(dst, '>'), nil
+	case *types.Document:
+		keys := v.Keys()
+		dst = binary.AppendUvarint(append(dst, 'D'), uint64(len(keys)))
+		for _, k := range keys {
+			val, err := v.Get(k)
+			if err != nil {
+				return nil, err
+			}
+			dst = appendLenBytes(dst, []byte(k))
+			if dst, err = appendCanonicalValue(dst, val); err != nil {
+				return nil, err
+			}
+		}
+		return dst, nil
+	case *types.Array:
+		dst = binary.AppendUvarint(append(dst, 'A'), uint64(v.Len()))
+		for i := 0; i < v.Len(); i++ {
+			elem, err := v.Get(i)
+			if err != nil {
+				return nil, err
+			}
+			if dst, err = appendCanonicalValue(dst, elem); err != nil {
+				return nil, err
+			}
+		}
+		return dst, nil
+	default:
+		return nil, fmt.Errorf("unsupported _id type %T", v)
+	}
+}
+
+func appendLenBytes(dst, b []byte) []byte {
+	return append(binary.AppendUvarint(dst, uint64(len(b))), b...)
+}
+
+// numericValueToken returns a canonical string for a numeric value's exact
+// mathematical value -- an integer, a reduced fraction, or a nan/inf sentinel.
+// Equal values share one token regardless of subtype or decimal scale.
+func numericValueToken(v any) (string, bool) {
+	switch v := v.(type) {
+	case int32:
+		return new(big.Rat).SetInt64(int64(v)).RatString(), true
+	case int64:
+		return new(big.Rat).SetInt64(v).RatString(), true
 	case float64:
 		switch {
 		case math.IsNaN(v):
-			return []byte("num:nan"), true
+			return "nan", true
 		case math.IsInf(v, 1):
-			return []byte("num:+inf"), true
+			return "+inf", true
 		case math.IsInf(v, -1):
-			return []byte("num:-inf"), true
+			return "-inf", true
 		default:
-			return []byte("num:" + new(big.Rat).SetFloat64(v).RatString()), true
+			return new(big.Rat).SetFloat64(v).RatString(), true
 		}
 	case types.Decimal128:
 		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
 		if err != nil {
 			switch {
 			case errors.Is(err, primitive.ErrParseNaN):
-				return []byte("num:nan"), true
+				return "nan", true
 			case errors.Is(err, primitive.ErrParseInf):
-				return []byte("num:+inf"), true
+				return "+inf", true
 			case errors.Is(err, primitive.ErrParseNegInf):
-				return []byte("num:-inf"), true
+				return "-inf", true
 			default:
-				return nil, false
+				return "", false
 			}
 		}
 		r := new(big.Rat)
@@ -342,52 +421,9 @@ func exactNumericKey(id any) ([]byte, bool) {
 		} else {
 			r.SetFrac(coeff, pow10(-exp))
 		}
-		return []byte("num:" + r.RatString()), true
+		return r.RatString(), true
 	default:
-		return nil, false
-	}
-}
-
-// foldIntegerNumerics rewrites integer-valued numbers (including those nested
-// in a document or array _id) to int64, leaving all other values untouched, so
-// integer _ids collide across numeric subtypes without changing any other hash.
-func foldIntegerNumerics(id any) (any, error) {
-	switch v := id.(type) {
-	case int32, int64, float64, types.Decimal128:
-		if i, ok := numericToInt64(v); ok {
-			return i, nil
-		}
-		return v, nil
-	case *types.Document:
-		pairs := make([]any, 0, v.Len()*2)
-		for _, k := range v.Keys() {
-			val, err := v.Get(k)
-			if err != nil {
-				return nil, err
-			}
-			fv, err := foldIntegerNumerics(val)
-			if err != nil {
-				return nil, err
-			}
-			pairs = append(pairs, k, fv)
-		}
-		return types.NewDocument(pairs...)
-	case *types.Array:
-		vals := make([]any, 0, v.Len())
-		for i := 0; i < v.Len(); i++ {
-			e, err := v.Get(i)
-			if err != nil {
-				return nil, err
-			}
-			fe, err := foldIntegerNumerics(e)
-			if err != nil {
-				return nil, err
-			}
-			vals = append(vals, fe)
-		}
-		return types.NewArray(vals...)
-	default:
-		return id, nil
+		return "", false
 	}
 }
 
