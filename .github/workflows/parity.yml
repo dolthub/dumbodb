@@ -61,10 +61,32 @@ jobs:
           cat /tmp/dumbodb.log >&2
           exit 1
 
+      # Prefer a parity-testing branch whose name matches this PR/push branch
+      # (parallel PRs are usually developed on the same-named branch); fall
+      # back to main when no such branch exists.
+      - name: Resolve parity-testing branch
+        id: parity_ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "main" ] && \
+             git ls-remote --exit-code --heads \
+               "https://x-access-token:${GH_TOKEN}@github.com/dolthub/dumbodb-parity-testing.git" \
+               "refs/heads/${CANDIDATE}" >/dev/null 2>&1; then
+            ref="$CANDIDATE"
+            echo "Matching parity-testing branch found: ${CANDIDATE}"
+          else
+            echo "No matching parity-testing branch; using main"
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
       - name: Check out parity tests
         uses: actions/checkout@v6
         with:
           repository: dolthub/dumbodb-parity-testing
+          ref: ${{ steps.parity_ref.outputs.ref }}
           path: parity-testing
 
       - name: Run parity suite
