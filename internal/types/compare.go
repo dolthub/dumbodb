@@ -355,6 +355,13 @@ func pow10big(n int) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }
 
+// decimalIsNaN reports whether d is a Decimal128 NaN, which sorts with double
+// NaN as the lowest number rather than among finite numbers.
+func decimalIsNaN(d Decimal128) bool {
+	_, _, err := primitive.NewDecimal128(d.H, d.L).BigInt()
+	return errors.Is(err, primitive.ErrParseNaN)
+}
+
 // compareArrays compares indices of a filter array according to indices of a document array;
 // returns Equal when an array equals to filter array;
 // returns Less when an index of the document array is less than the index of the filter array;
