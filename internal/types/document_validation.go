@@ -151,6 +151,8 @@ func validateNoDollarInID(doc *Document) error {
 
 	for i, key := range keys {
 		if !dbRef && strings.HasPrefix(key, "$") {
+			// %s (not %q) reproduces MongoDB's message verbatim; parity tests
+			// compare on the error code.
 			return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
 				"_id fields may not contain '$'-prefixed fields: %s is not valid for storage.", key))
 		}

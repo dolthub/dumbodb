@@ -238,7 +238,7 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 // {a: 0.1} while field order stays significant.
 func hashID(id any) ([20]byte, error) {
 	switch id.(type) {
-	case *types.Document, *types.Array, types.Timestamp, types.MinKeyType, types.MaxKeyType:
+	case *types.Document, *types.Array, types.NullType, types.Timestamp, types.MinKeyType, types.MaxKeyType:
 		buf, err := appendCanonicalValue(nil, id)
 		if err != nil {
 			return [20]byte{}, err
