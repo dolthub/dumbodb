@@ -20,6 +20,7 @@ package dolt
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -84,6 +85,10 @@ func indexConsistentWithScan(t *testing.T, ctx context.Context, coll backends.Co
 				}
 			}
 		}
+		// idxIDs is sorted by equalityLookupIDs; a full scan returns docs in
+		// doc-id (hash) order, which is unrelated to _id value, so compare as
+		// sets by sorting both.
+		sort.Slice(scanIDs, func(i, j int) bool { return scanIDs[i] < scanIDs[j] })
 		if !reflect.DeepEqual(idxIDs, scanIDs) && !(len(idxIDs) == 0 && len(scanIDs) == 0) {
 			t.Errorf("index/scan divergence for %q: index=%v scan=%v", v, idxIDs, scanIDs)
 		}

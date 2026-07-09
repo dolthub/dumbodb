@@ -17,6 +17,7 @@ package dolt
 import (
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -225,9 +226,33 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 	return serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
 }
 
-// hashID returns a stable 20-byte primary key for a MongoDB _id value.
-// It serialises id to canonical BSON bytes using wirebson, then returns SHA-512(bytes)[:20].
+// hashID returns a stable 20-byte primary key for a MongoDB _id value. Numeric
+// values MongoDB treats as equal must produce the same key. Integer-valued
+// numbers fold to int64 and are hashed from the original BSON encoding, so 42,
+// NumberLong(42) and 42.0 collide while every non-numeric _id keeps its
+// original hash (and thus its doc-id order). Non-integer or non-finite numbers
+// (0.5, NumberDecimal("0.10"), Infinity, NaN) are keyed by their exact
+// mathematical value, so equal values collide across subtype and decimal scale.
 func hashID(id any) ([20]byte, error) {
+	if key, ok := exactNumericKey(id); ok {
+		return sha512Key(key), nil
+	}
+
+	folded, err := foldIntegerNumerics(id)
+	if err != nil {
+		return [20]byte{}, err
+	}
+	return wirebsonIDHash(folded)
+}
+
+func sha512Key(b []byte) [20]byte {
+	sum := sha512.Sum512(b)
+	var h [20]byte
+	copy(h[:], sum[:20])
+	return h
+}
+
+func wirebsonIDHash(id any) ([20]byte, error) {
 	doc := wirebson.MakeDocument(1)
 
 	var wval any
@@ -237,7 +262,7 @@ func hashID(id any) ([20]byte, error) {
 	case int64:
 		wval = v
 	case float64:
-		wval = canonicalDoubleID(v)
+		wval = v
 	case types.ObjectID:
 		wval = wirebson.ObjectID(v)
 	case string:
@@ -249,11 +274,7 @@ func hashID(id any) ([20]byte, error) {
 	case time.Time:
 		wval = v
 	case types.Decimal128:
-		if i, ok := decimalIDAsInt64(v); ok {
-			wval = i
-		} else {
-			wval = wirebson.Decimal128{L: v.L, H: v.H}
-		}
+		wval = wirebson.Decimal128{L: v.L, H: v.H}
 	case *types.Document:
 		wdoc, err := bson.FromDocument(v)
 		if err != nil {
@@ -273,45 +294,139 @@ func hashID(id any) ([20]byte, error) {
 	if err := doc.Add("_id", wval); err != nil {
 		return [20]byte{}, fmt.Errorf("building _id doc for hash: %w", err)
 	}
-
 	raw, err := doc.Encode()
 	if err != nil {
 		return [20]byte{}, fmt.Errorf("encoding _id for hash: %w", err)
 	}
-
-	sum := sha512.Sum512(raw)
-	var h [20]byte
-	copy(h[:], sum[:20])
-	return h, nil
+	return sha512Key(raw), nil
 }
 
-func canonicalDoubleID(f float64) any {
-	const twoTo63 = 9223372036854775808.0
-	if f == math.Trunc(f) && f >= -twoTo63 && f < twoTo63 {
-		return int64(f)
+// exactNumericKey keys a scalar numeric _id whose value cannot be folded to
+// int64 (non-integer or non-finite float64 / Decimal128) by its exact value,
+// so 0.5, NumberDecimal("0.5"), NumberDecimal("0.50") share one key. Reports
+// ok=false for integers, non-numerics and composites, which keep their
+// BSON-bytes hash.
+func exactNumericKey(id any) ([]byte, bool) {
+	if _, ok := numericToInt64(id); ok {
+		return nil, false
 	}
-	return f
+	switch v := id.(type) {
+	case float64:
+		switch {
+		case math.IsNaN(v):
+			return []byte("num:nan"), true
+		case math.IsInf(v, 1):
+			return []byte("num:+inf"), true
+		case math.IsInf(v, -1):
+			return []byte("num:-inf"), true
+		default:
+			return []byte("num:" + new(big.Rat).SetFloat64(v).RatString()), true
+		}
+	case types.Decimal128:
+		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
+		if err != nil {
+			switch {
+			case errors.Is(err, primitive.ErrParseNaN):
+				return []byte("num:nan"), true
+			case errors.Is(err, primitive.ErrParseInf):
+				return []byte("num:+inf"), true
+			case errors.Is(err, primitive.ErrParseNegInf):
+				return []byte("num:-inf"), true
+			default:
+				return nil, false
+			}
+		}
+		r := new(big.Rat)
+		if exp >= 0 {
+			r.SetInt(new(big.Int).Mul(coeff, pow10(exp)))
+		} else {
+			r.SetFrac(coeff, pow10(-exp))
+		}
+		return []byte("num:" + r.RatString()), true
+	default:
+		return nil, false
+	}
 }
 
-func decimalIDAsInt64(d types.Decimal128) (int64, bool) {
-	coeff, exp, err := primitive.NewDecimal128(d.H, d.L).BigInt()
-	if err != nil {
+// foldIntegerNumerics rewrites integer-valued numbers (including those nested
+// in a document or array _id) to int64, leaving all other values untouched, so
+// integer _ids collide across numeric subtypes without changing any other hash.
+func foldIntegerNumerics(id any) (any, error) {
+	switch v := id.(type) {
+	case int32, int64, float64, types.Decimal128:
+		if i, ok := numericToInt64(v); ok {
+			return i, nil
+		}
+		return v, nil
+	case *types.Document:
+		pairs := make([]any, 0, v.Len()*2)
+		for _, k := range v.Keys() {
+			val, err := v.Get(k)
+			if err != nil {
+				return nil, err
+			}
+			fv, err := foldIntegerNumerics(val)
+			if err != nil {
+				return nil, err
+			}
+			pairs = append(pairs, k, fv)
+		}
+		return types.NewDocument(pairs...)
+	case *types.Array:
+		vals := make([]any, 0, v.Len())
+		for i := 0; i < v.Len(); i++ {
+			e, err := v.Get(i)
+			if err != nil {
+				return nil, err
+			}
+			fe, err := foldIntegerNumerics(e)
+			if err != nil {
+				return nil, err
+			}
+			vals = append(vals, fe)
+		}
+		return types.NewArray(vals...)
+	default:
+		return id, nil
+	}
+}
+
+// numericToInt64 reports whether v is an integer-valued number within int64
+// range and returns that int64.
+func numericToInt64(v any) (int64, bool) {
+	switch v := v.(type) {
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		const twoTo63 = 9223372036854775808.0
+		if v == math.Trunc(v) && v >= -twoTo63 && v < twoTo63 {
+			return int64(v), true
+		}
 		return 0, false
-	}
-	switch {
-	case exp > 0:
-		coeff = new(big.Int).Mul(coeff, pow10(exp))
-	case exp < 0:
-		q, r := new(big.Int).QuoRem(coeff, pow10(-exp), new(big.Int))
-		if r.Sign() != 0 {
+	case types.Decimal128:
+		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
+		if err != nil {
 			return 0, false
 		}
-		coeff = q
-	}
-	if !coeff.IsInt64() {
+		switch {
+		case exp > 0:
+			coeff = new(big.Int).Mul(coeff, pow10(exp))
+		case exp < 0:
+			q, r := new(big.Int).QuoRem(coeff, pow10(-exp), new(big.Int))
+			if r.Sign() != 0 {
+				return 0, false
+			}
+			coeff = q
+		}
+		if !coeff.IsInt64() {
+			return 0, false
+		}
+		return coeff.Int64(), true
+	default:
 		return 0, false
 	}
-	return coeff.Int64(), true
 }
 
 func pow10(n int) *big.Int {

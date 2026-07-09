@@ -77,7 +77,24 @@ func TestHashIDNumericCanonicalization(t *testing.T) {
 	assert.Equal(t, int42, hashFor(t, decimal(t, "42.0")), "Decimal128(42.0) must hash as int32(42)")
 	assert.Equal(t, int42, hashFor(t, decimal(t, "4.2E1")), "Decimal128(4.2E1) must hash as int32(42)")
 	assert.NotEqual(t, int42, hashFor(t, decimal(t, "42.5")), "Decimal128(42.5) must not hash as 42")
-	assert.NotEqual(t, int42, hashFor(t, decimal(t, "1E30")), "out-of-int64-range decimal keeps decimal identity")
+	assert.NotEqual(t, int42, hashFor(t, decimal(t, "1E30")), "large decimal stays distinct from small ints")
+
+	half := hashFor(t, float64(0.5))
+	assert.Equal(t, half, hashFor(t, decimal(t, "0.5")), "double 0.5 must hash as decimal 0.5")
+	assert.Equal(t, half, hashFor(t, decimal(t, "0.50")), "decimal 0.50 must hash as 0.5")
+	assert.Equal(t, hashFor(t, decimal(t, "0.10")), hashFor(t, decimal(t, "0.1")), "decimal 0.10 must hash as 0.1")
+	assert.NotEqual(t, hashFor(t, decimal(t, "0.1")), hashFor(t, float64(0.1)), "decimal 0.1 is not the inexact binary 0.1")
+
+	assert.Equal(t, hashFor(t, math.Inf(1)), hashFor(t, decimal(t, "Infinity")), "double +Inf must hash as decimal Infinity")
+	assert.Equal(t, hashFor(t, math.Inf(-1)), hashFor(t, decimal(t, "-Infinity")), "double -Inf must hash as decimal -Infinity")
+	assert.Equal(t, hashFor(t, math.NaN()), hashFor(t, decimal(t, "NaN")), "double NaN must hash as decimal NaN")
+	assert.NotEqual(t, hashFor(t, math.Inf(1)), hashFor(t, math.Inf(-1)), "+Inf must not hash as -Inf")
+
+	docLong := must.NotFail(types.NewDocument("x", int64(42)))
+	docDouble := must.NotFail(types.NewDocument("x", float64(42)))
+	docOther := must.NotFail(types.NewDocument("x", int64(43)))
+	assert.Equal(t, hashFor(t, docLong), hashFor(t, docDouble), "nested {x:long 42} must hash as {x:double 42}")
+	assert.NotEqual(t, hashFor(t, docLong), hashFor(t, docOther), "nested {x:42} must not hash as {x:43}")
 }
 
 func decimal(t *testing.T, s string) types.Decimal128 {
