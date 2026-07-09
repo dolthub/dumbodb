@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha512"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -230,11 +231,11 @@ func hashID(id any) ([20]byte, error) {
 	var wval any
 	switch v := id.(type) {
 	case int32:
-		wval = v
+		wval = int64(v)
 	case int64:
 		wval = v
 	case float64:
-		wval = v
+		wval = canonicalDoubleID(v)
 	case types.ObjectID:
 		wval = wirebson.ObjectID(v)
 	case string:
@@ -276,6 +277,14 @@ func hashID(id any) ([20]byte, error) {
 	var h [20]byte
 	copy(h[:], sum[:20])
 	return h, nil
+}
+
+func canonicalDoubleID(f float64) any {
+	const twoTo63 = 9223372036854775808.0
+	if f == math.Trunc(f) && f >= -twoTo63 && f < twoTo63 {
+		return int64(f)
+	}
+	return f
 }
 
 // buildKey creates a key tuple for the encoded MongoDB _id bytes.

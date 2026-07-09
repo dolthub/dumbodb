@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,6 +53,24 @@ func TestResolvePreciseScalarID(t *testing.T) {
 			assert.Equal(t, hashFor(t, c.id), ids[0].String())
 		})
 	}
+}
+
+func TestHashIDNumericCanonicalization(t *testing.T) {
+	int42 := hashFor(t, int32(42))
+	assert.Equal(t, int42, hashFor(t, int64(42)), "int64(42) must hash as int32(42)")
+	assert.Equal(t, int42, hashFor(t, float64(42)), "double(42.0) must hash as int32(42)")
+
+	zero := hashFor(t, int64(0))
+	assert.Equal(t, zero, hashFor(t, float64(0)), "double(0.0) must hash as int64(0)")
+	assert.Equal(t, zero, hashFor(t, math.Copysign(0, -1)), "double(-0.0) must hash as int64(0)")
+
+	assert.NotEqual(t, int42, hashFor(t, float64(42.5)), "42.5 must not hash as 42")
+	assert.NotEqual(t, int42, hashFor(t, "42"), "string \"42\" must not hash as numeric 42")
+
+	big := 1e300
+	assert.Equal(t, hashFor(t, big), hashFor(t, big), "large double hashes stably")
+	assert.NotEqual(t, hashFor(t, big), hashFor(t, int64(0)))
+	assert.NotEqual(t, hashFor(t, math.Inf(1)), int42)
 }
 
 func TestResolveInArrayOfIDs(t *testing.T) {
