@@ -11,11 +11,12 @@ func _() {
 	_ = x[ErrValidation-1]
 	_ = x[ErrWrongIDType-2]
 	_ = x[ErrIDNotFound-3]
+	_ = x[ErrDollarPrefixedID-4]
 }
 
-const _ValidationErrorCode_name = "ErrValidationErrWrongIDTypeErrIDNotFound"
+const _ValidationErrorCode_name = "ErrValidationErrWrongIDTypeErrIDNotFoundErrDollarPrefixedID"
 
-var _ValidationErrorCode_index = [...]uint8{0, 13, 27, 40}
+var _ValidationErrorCode_index = [...]uint8{0, 13, 27, 40, 59}
 
 func (i ValidationErrorCode) String() string {
 	i -= 1

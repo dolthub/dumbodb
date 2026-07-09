@@ -262,6 +262,8 @@ func validationErrToUpdateErr(command string, ve *types.ValidationError) error {
 		code = handlererrors.ErrBadValue
 	case types.ErrWrongIDType:
 		code = handlererrors.ErrInvalidID
+	case types.ErrDollarPrefixedID:
+		code = handlererrors.ErrDollarPrefixedFieldName
 	default:
 		panic(fmt.Sprintf("unknown error code: %v", ve.Code()))
 	}

@@ -148,6 +148,8 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 					code = handlererrors.ErrBadValue
 				case types.ErrWrongIDType:
 					code = handlererrors.ErrInvalidID
+				case types.ErrDollarPrefixedID:
+					code = handlererrors.ErrDollarPrefixedFieldName
 				default:
 					panic(fmt.Sprintf("Unknown error code: %v", ve.Code()))
 				}
