@@ -238,8 +238,10 @@ func TestSort_FourFields(t *testing.T) {
 	}
 }
 
-// TestSort_Natural_Descending verifies that {$natural: -1} returns documents in
-// reverse insertion order. (DumboDBFull)
+// TestSort_Natural_Descending verifies that {$natural: -1} returns the exact
+// reverse of {$natural: 1}. DumboDB has no global insertion order (see capped
+// collections), so $natural is storage (doc-id) order, not insertion order;
+// the guarantee it provides is that -1 reverses +1 over the same documents.
 func TestSort_Natural_Descending(t *testing.T) {
 	t.Parallel()
 
@@ -253,27 +255,38 @@ func TestSort_Natural_Descending(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	cursor, err := coll.Find(ctx, bson.D{},
-		options.Find().SetSort(bson.D{{Key: "$natural", Value: -1}}),
-	)
-	require.NoError(t, err)
-	defer cursor.Close(ctx)
 
-	var results []bson.D
-	require.NoError(t, cursor.All(ctx, &results))
-	require.Len(t, results, 3)
+	readIDs := func(direction int32) []int32 {
+		cursor, err := coll.Find(ctx, bson.D{},
+			options.Find().SetSort(bson.D{{Key: "$natural", Value: direction}}),
+		)
+		require.NoError(t, err)
+		defer cursor.Close(ctx)
 
-	// Reverse insertion order: 3, 2, 1.
-	expectedIDs := []int32{3, 2, 1}
-	for i, doc := range results {
-		var id int32
-		for _, el := range doc {
-			if el.Key == "_id" {
-				id = el.Value.(int32)
+		var results []bson.D
+		require.NoError(t, cursor.All(ctx, &results))
+
+		ids := make([]int32, 0, len(results))
+		for _, doc := range results {
+			for _, el := range doc {
+				if el.Key == "_id" {
+					ids = append(ids, el.Value.(int32))
+				}
 			}
 		}
-		assert.Equal(t, expectedIDs[i], id, "$natural:-1 order: position %d", i)
+		return ids
 	}
+
+	asc := readIDs(1)
+	desc := readIDs(-1)
+
+	require.ElementsMatch(t, []int32{1, 2, 3}, asc, "$natural:1 must return all documents")
+
+	reversed := make([]int32, len(asc))
+	for i, id := range asc {
+		reversed[len(asc)-1-i] = id
+	}
+	assert.Equal(t, reversed, desc, "$natural:-1 must return the reverse of $natural:1")
 }
 
 // TestSort_MetaTextScore verifies that sorting by {$meta: "textScore"} in a $text query
