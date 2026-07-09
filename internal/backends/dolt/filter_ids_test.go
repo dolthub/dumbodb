@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -71,6 +72,20 @@ func TestHashIDNumericCanonicalization(t *testing.T) {
 	assert.Equal(t, hashFor(t, big), hashFor(t, big), "large double hashes stably")
 	assert.NotEqual(t, hashFor(t, big), hashFor(t, int64(0)))
 	assert.NotEqual(t, hashFor(t, math.Inf(1)), int42)
+
+	assert.Equal(t, int42, hashFor(t, decimal(t, "42")), "Decimal128(42) must hash as int32(42)")
+	assert.Equal(t, int42, hashFor(t, decimal(t, "42.0")), "Decimal128(42.0) must hash as int32(42)")
+	assert.Equal(t, int42, hashFor(t, decimal(t, "4.2E1")), "Decimal128(4.2E1) must hash as int32(42)")
+	assert.NotEqual(t, int42, hashFor(t, decimal(t, "42.5")), "Decimal128(42.5) must not hash as 42")
+	assert.NotEqual(t, int42, hashFor(t, decimal(t, "1E30")), "out-of-int64-range decimal keeps decimal identity")
+}
+
+func decimal(t *testing.T, s string) types.Decimal128 {
+	t.Helper()
+	d, err := primitive.ParseDecimal128(s)
+	require.NoError(t, err)
+	h, l := d.GetBytes()
+	return types.Decimal128{H: h, L: l}
 }
 
 func TestResolveInArrayOfIDs(t *testing.T) {

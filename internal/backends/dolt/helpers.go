@@ -19,12 +19,14 @@ import (
 	"crypto/sha512"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
 	"github.com/dolthub/go-mysql-server/sql"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -247,7 +249,11 @@ func hashID(id any) ([20]byte, error) {
 	case time.Time:
 		wval = v
 	case types.Decimal128:
-		wval = wirebson.Decimal128{L: v.L, H: v.H}
+		if i, ok := decimalIDAsInt64(v); ok {
+			wval = i
+		} else {
+			wval = wirebson.Decimal128{L: v.L, H: v.H}
+		}
 	case *types.Document:
 		wdoc, err := bson.FromDocument(v)
 		if err != nil {
@@ -285,6 +291,31 @@ func canonicalDoubleID(f float64) any {
 		return int64(f)
 	}
 	return f
+}
+
+func decimalIDAsInt64(d types.Decimal128) (int64, bool) {
+	coeff, exp, err := primitive.NewDecimal128(d.H, d.L).BigInt()
+	if err != nil {
+		return 0, false
+	}
+	switch {
+	case exp > 0:
+		coeff = new(big.Int).Mul(coeff, pow10(exp))
+	case exp < 0:
+		q, r := new(big.Int).QuoRem(coeff, pow10(-exp), new(big.Int))
+		if r.Sign() != 0 {
+			return 0, false
+		}
+		coeff = q
+	}
+	if !coeff.IsInt64() {
+		return 0, false
+	}
+	return coeff.Int64(), true
+}
+
+func pow10(n int) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }
 
 // buildKey creates a key tuple for the encoded MongoDB _id bytes.
