@@ -17,6 +17,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -31,6 +32,7 @@ const (
 	ErrValidation
 	ErrWrongIDType
 	ErrIDNotFound
+	ErrDollarPrefixedID
 )
 
 // ValidationError describes an error that could occur when validating a document.
@@ -90,6 +92,12 @@ func (d *Document) validateData(isTopLevel bool) error {
 
 		switch value := value.(type) {
 		case *Document:
+			if isTopLevel && key == "_id" {
+				if err := validateNoDollarInID(value); err != nil {
+					return err
+				}
+			}
+
 			err := value.validateData(false)
 			if err != nil {
 				var vErr *ValidationError
@@ -131,4 +139,62 @@ func (d *Document) validateData(isTopLevel bool) error {
 	}
 
 	return nil
+}
+
+func validateNoDollarInID(doc *Document) error {
+	dbRef := isDBRef(doc)
+	keys := doc.Keys()
+	values := doc.Values()
+
+	for i, key := range keys {
+		if !dbRef && strings.HasPrefix(key, "$") {
+			return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
+				"_id fields may not contain '$'-prefixed fields: %s is not valid for storage.", key))
+		}
+
+		switch value := values[i].(type) {
+		case *Document:
+			if err := validateNoDollarInID(value); err != nil {
+				return err
+			}
+		case *Array:
+			for j := 0; j < value.Len(); j++ {
+				if nested, ok := must.NotFail(value.Get(j)).(*Document); ok {
+					if err := validateNoDollarInID(nested); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func isDBRef(doc *Document) bool {
+	keys := doc.Keys()
+	values := doc.Values()
+
+	if len(keys) < 2 || keys[0] != "$ref" || keys[1] != "$id" {
+		return false
+	}
+
+	if _, ok := values[0].(string); !ok {
+		return false
+	}
+
+	for i := 2; i < len(keys); i++ {
+		if keys[i] == "$db" {
+			if _, ok := values[i].(string); !ok {
+				return false
+			}
+			continue
+		}
+
+		if strings.HasPrefix(keys[i], "$") {
+			return false
+		}
+	}
+
+	return true
 }

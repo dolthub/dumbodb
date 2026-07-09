@@ -15,10 +15,12 @@
 package dolt
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -52,6 +54,55 @@ func TestResolvePreciseScalarID(t *testing.T) {
 			assert.Equal(t, hashFor(t, c.id), ids[0].String())
 		})
 	}
+}
+
+func TestHashIDNumericCanonicalization(t *testing.T) {
+	int42 := hashFor(t, int32(42))
+	assert.Equal(t, int42, hashFor(t, int64(42)), "int64(42) must hash as int32(42)")
+	assert.Equal(t, int42, hashFor(t, float64(42)), "double(42.0) must hash as int32(42)")
+
+	zero := hashFor(t, int64(0))
+	assert.Equal(t, zero, hashFor(t, float64(0)), "double(0.0) must hash as int64(0)")
+	assert.Equal(t, zero, hashFor(t, math.Copysign(0, -1)), "double(-0.0) must hash as int64(0)")
+
+	assert.NotEqual(t, int42, hashFor(t, float64(42.5)), "42.5 must not hash as 42")
+	assert.NotEqual(t, int42, hashFor(t, "42"), "string \"42\" must not hash as numeric 42")
+
+	big := 1e300
+	assert.Equal(t, hashFor(t, big), hashFor(t, big), "large double hashes stably")
+	assert.NotEqual(t, hashFor(t, big), hashFor(t, int64(0)))
+	assert.NotEqual(t, hashFor(t, math.Inf(1)), int42)
+
+	assert.Equal(t, int42, hashFor(t, decimal(t, "42")), "Decimal128(42) must hash as int32(42)")
+	assert.Equal(t, int42, hashFor(t, decimal(t, "42.0")), "Decimal128(42.0) must hash as int32(42)")
+	assert.Equal(t, int42, hashFor(t, decimal(t, "4.2E1")), "Decimal128(4.2E1) must hash as int32(42)")
+	assert.NotEqual(t, int42, hashFor(t, decimal(t, "42.5")), "Decimal128(42.5) must not hash as 42")
+	assert.NotEqual(t, int42, hashFor(t, decimal(t, "1E30")), "large decimal stays distinct from small ints")
+
+	half := hashFor(t, float64(0.5))
+	assert.Equal(t, half, hashFor(t, decimal(t, "0.5")), "double 0.5 must hash as decimal 0.5")
+	assert.Equal(t, half, hashFor(t, decimal(t, "0.50")), "decimal 0.50 must hash as 0.5")
+	assert.Equal(t, hashFor(t, decimal(t, "0.10")), hashFor(t, decimal(t, "0.1")), "decimal 0.10 must hash as 0.1")
+	assert.NotEqual(t, hashFor(t, decimal(t, "0.1")), hashFor(t, float64(0.1)), "decimal 0.1 is not the inexact binary 0.1")
+
+	assert.Equal(t, hashFor(t, math.Inf(1)), hashFor(t, decimal(t, "Infinity")), "double +Inf must hash as decimal Infinity")
+	assert.Equal(t, hashFor(t, math.Inf(-1)), hashFor(t, decimal(t, "-Infinity")), "double -Inf must hash as decimal -Infinity")
+	assert.Equal(t, hashFor(t, math.NaN()), hashFor(t, decimal(t, "NaN")), "double NaN must hash as decimal NaN")
+	assert.NotEqual(t, hashFor(t, math.Inf(1)), hashFor(t, math.Inf(-1)), "+Inf must not hash as -Inf")
+
+	docLong := must.NotFail(types.NewDocument("x", int64(42)))
+	docDouble := must.NotFail(types.NewDocument("x", float64(42)))
+	docOther := must.NotFail(types.NewDocument("x", int64(43)))
+	assert.Equal(t, hashFor(t, docLong), hashFor(t, docDouble), "nested {x:long 42} must hash as {x:double 42}")
+	assert.NotEqual(t, hashFor(t, docLong), hashFor(t, docOther), "nested {x:42} must not hash as {x:43}")
+}
+
+func decimal(t *testing.T, s string) types.Decimal128 {
+	t.Helper()
+	d, err := primitive.ParseDecimal128(s)
+	require.NoError(t, err)
+	h, l := d.GetBytes()
+	return types.Decimal128{H: h, L: l}
 }
 
 func TestResolveInArrayOfIDs(t *testing.T) {

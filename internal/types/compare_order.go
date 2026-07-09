@@ -81,6 +81,9 @@ func detectDataType(value any) compareTypeOrderResult {
 	case int64:
 		return numbersDataType
 	case Decimal128:
+		if decimalIsNaN(value) {
+			return nanDataType
+		}
 		return numbersDataType
 	case MinKeyType:
 		return minKeyDataType

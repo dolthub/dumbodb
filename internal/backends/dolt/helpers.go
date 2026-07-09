@@ -17,13 +17,18 @@ package dolt
 import (
 	"context"
 	"crypto/sha512"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	fb "github.com/dolthub/flatbuffers/v23/go"
 	"github.com/dolthub/go-mysql-server/sql"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -37,7 +42,6 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
-	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -222,15 +226,39 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 	return serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
 }
 
-// hashID returns a stable 20-byte primary key for a MongoDB _id value.
-// It serialises id to canonical BSON bytes using wirebson, then returns SHA-512(bytes)[:20].
 func hashID(id any) ([20]byte, error) {
+	switch id.(type) {
+	case *types.Document, *types.Array, types.NullType, types.Timestamp, types.MinKeyType, types.MaxKeyType:
+		buf, err := appendCanonicalValue(nil, id)
+		if err != nil {
+			return [20]byte{}, err
+		}
+		return sha512Key(buf), nil
+	}
+
+	if key, ok := exactNumericKey(id); ok {
+		return sha512Key(key), nil
+	}
+	if i, ok := numericToInt64(id); ok {
+		return wirebsonIDHash(i)
+	}
+	return wirebsonIDHash(id)
+}
+
+func sha512Key(b []byte) [20]byte {
+	sum := sha512.Sum512(b)
+	var h [20]byte
+	copy(h[:], sum[:20])
+	return h
+}
+
+func wirebsonIDHash(id any) ([20]byte, error) {
 	doc := wirebson.MakeDocument(1)
 
 	var wval any
 	switch v := id.(type) {
 	case int32:
-		wval = v
+		wval = int64(v)
 	case int64:
 		wval = v
 	case float64:
@@ -247,18 +275,6 @@ func hashID(id any) ([20]byte, error) {
 		wval = v
 	case types.Decimal128:
 		wval = wirebson.Decimal128{L: v.L, H: v.H}
-	case *types.Document:
-		wdoc, err := bson.FromDocument(v)
-		if err != nil {
-			return [20]byte{}, fmt.Errorf("encoding _id document for hash: %w", err)
-		}
-		wval = wdoc
-	case *types.Array:
-		warr, err := bson.FromArray(v)
-		if err != nil {
-			return [20]byte{}, fmt.Errorf("encoding _id array for hash: %w", err)
-		}
-		wval = warr
 	default:
 		return [20]byte{}, fmt.Errorf("unsupported _id type %T", id)
 	}
@@ -266,16 +282,168 @@ func hashID(id any) ([20]byte, error) {
 	if err := doc.Add("_id", wval); err != nil {
 		return [20]byte{}, fmt.Errorf("building _id doc for hash: %w", err)
 	}
-
 	raw, err := doc.Encode()
 	if err != nil {
 		return [20]byte{}, fmt.Errorf("encoding _id for hash: %w", err)
 	}
+	return sha512Key(raw), nil
+}
 
-	sum := sha512.Sum512(raw)
-	var h [20]byte
-	copy(h[:], sum[:20])
-	return h, nil
+func exactNumericKey(id any) ([]byte, bool) {
+	if _, ok := numericToInt64(id); ok {
+		return nil, false
+	}
+	if tok, ok := numericValueToken(id); ok {
+		return []byte("num:" + tok), true
+	}
+	return nil, false
+}
+
+func appendCanonicalValue(dst []byte, v any) ([]byte, error) {
+	if tok, ok := numericValueToken(v); ok {
+		return appendLenBytes(append(dst, 'N'), []byte(tok)), nil
+	}
+	switch v := v.(type) {
+	case string:
+		return appendLenBytes(append(dst, 'S'), []byte(v)), nil
+	case types.ObjectID:
+		return append(append(dst, 'O'), v[:]...), nil
+	case types.Binary:
+		return appendLenBytes(append(dst, 'B', byte(v.Subtype)), v.B), nil
+	case bool:
+		if v {
+			return append(dst, 'L', 1), nil
+		}
+		return append(dst, 'L', 0), nil
+	case time.Time:
+		return binary.BigEndian.AppendUint64(append(dst, 'T'), uint64(v.UnixMilli())), nil
+	case types.NullType:
+		return append(dst, 'Z'), nil
+	case types.Regex:
+		dst = appendLenBytes(append(dst, 'R'), []byte(v.Pattern))
+		return appendLenBytes(dst, []byte(v.Options)), nil
+	case types.Timestamp:
+		return binary.BigEndian.AppendUint64(append(dst, 'P'), uint64(v)), nil
+	case types.MinKeyType:
+		return append(dst, '<'), nil
+	case types.MaxKeyType:
+		return append(dst, '>'), nil
+	case *types.Document:
+		keys := v.Keys()
+		dst = binary.AppendUvarint(append(dst, 'D'), uint64(len(keys)))
+		for _, k := range keys {
+			val, err := v.Get(k)
+			if err != nil {
+				return nil, err
+			}
+			dst = appendLenBytes(dst, []byte(k))
+			if dst, err = appendCanonicalValue(dst, val); err != nil {
+				return nil, err
+			}
+		}
+		return dst, nil
+	case *types.Array:
+		dst = binary.AppendUvarint(append(dst, 'A'), uint64(v.Len()))
+		for i := 0; i < v.Len(); i++ {
+			elem, err := v.Get(i)
+			if err != nil {
+				return nil, err
+			}
+			if dst, err = appendCanonicalValue(dst, elem); err != nil {
+				return nil, err
+			}
+		}
+		return dst, nil
+	default:
+		return nil, fmt.Errorf("unsupported _id type %T", v)
+	}
+}
+
+func appendLenBytes(dst, b []byte) []byte {
+	return append(binary.AppendUvarint(dst, uint64(len(b))), b...)
+}
+
+func numericValueToken(v any) (string, bool) {
+	switch v := v.(type) {
+	case int32:
+		return new(big.Rat).SetInt64(int64(v)).RatString(), true
+	case int64:
+		return new(big.Rat).SetInt64(v).RatString(), true
+	case float64:
+		switch {
+		case math.IsNaN(v):
+			return "nan", true
+		case math.IsInf(v, 1):
+			return "+inf", true
+		case math.IsInf(v, -1):
+			return "-inf", true
+		default:
+			return new(big.Rat).SetFloat64(v).RatString(), true
+		}
+	case types.Decimal128:
+		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
+		if err != nil {
+			switch {
+			case errors.Is(err, primitive.ErrParseNaN):
+				return "nan", true
+			case errors.Is(err, primitive.ErrParseInf):
+				return "+inf", true
+			case errors.Is(err, primitive.ErrParseNegInf):
+				return "-inf", true
+			default:
+				return "", false
+			}
+		}
+		r := new(big.Rat)
+		if exp >= 0 {
+			r.SetInt(new(big.Int).Mul(coeff, pow10(exp)))
+		} else {
+			r.SetFrac(coeff, pow10(-exp))
+		}
+		return r.RatString(), true
+	default:
+		return "", false
+	}
+}
+
+func numericToInt64(v any) (int64, bool) {
+	switch v := v.(type) {
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		const twoTo63 = 9223372036854775808.0
+		if v == math.Trunc(v) && v >= -twoTo63 && v < twoTo63 {
+			return int64(v), true
+		}
+		return 0, false
+	case types.Decimal128:
+		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
+		if err != nil {
+			return 0, false
+		}
+		switch {
+		case exp > 0:
+			coeff = new(big.Int).Mul(coeff, pow10(exp))
+		case exp < 0:
+			q, r := new(big.Int).QuoRem(coeff, pow10(-exp), new(big.Int))
+			if r.Sign() != 0 {
+				return 0, false
+			}
+			coeff = q
+		}
+		if !coeff.IsInt64() {
+			return 0, false
+		}
+		return coeff.Int64(), true
+	default:
+		return 0, false
+	}
+}
+
+func pow10(n int) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }
 
 // buildKey creates a key tuple for the encoded MongoDB _id bytes.

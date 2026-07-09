@@ -16,10 +16,12 @@ package types
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"math/big"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"golang.org/x/exp/constraints"
 
 	"github.com/dolthub/dumbodb/internal/util/must"
@@ -92,6 +94,10 @@ func compareScalars(v1, v2 any) CompareResult {
 
 	if !isScalar(v1) || !isScalar(v2) {
 		return compareTypeOrder(v1, v2)
+	}
+
+	if res, ok := compareNumeric(v1, v2); ok {
+		return res
 	}
 
 	switch v1 := v1.(type) {
@@ -274,6 +280,80 @@ func compareNumbers(a float64, b int64) CompareResult {
 	bigB := new(big.Float).SetInt64(b).SetPrec(100000)
 
 	return CompareResult(bigA.Cmp(bigB))
+}
+
+func compareNumeric(v1, v2 any) (CompareResult, bool) {
+	c1, r1, ok1 := numericParts(v1)
+	c2, r2, ok2 := numericParts(v2)
+	if !ok1 || !ok2 {
+		return Equal, false
+	}
+	if c1 != c2 {
+		return compareOrdered(c1, c2), true
+	}
+	if c1 == numFinite {
+		return CompareResult(r1.Cmp(r2)), true
+	}
+	return Equal, true
+}
+
+const (
+	numNaN = iota
+	numNegInf
+	numFinite
+	numPosInf
+)
+
+func numericParts(v any) (class int, rat *big.Rat, ok bool) {
+	switch v := v.(type) {
+	case int32:
+		return numFinite, new(big.Rat).SetInt64(int64(v)), true
+	case int64:
+		return numFinite, new(big.Rat).SetInt64(v), true
+	case float64:
+		switch {
+		case math.IsNaN(v):
+			return numNaN, nil, true
+		case math.IsInf(v, -1):
+			return numNegInf, nil, true
+		case math.IsInf(v, 1):
+			return numPosInf, nil, true
+		default:
+			return numFinite, new(big.Rat).SetFloat64(v), true
+		}
+	case Decimal128:
+		coeff, exp, err := primitive.NewDecimal128(v.H, v.L).BigInt()
+		if err != nil {
+			switch {
+			case errors.Is(err, primitive.ErrParseNaN):
+				return numNaN, nil, true
+			case errors.Is(err, primitive.ErrParseNegInf):
+				return numNegInf, nil, true
+			case errors.Is(err, primitive.ErrParseInf):
+				return numPosInf, nil, true
+			default:
+				return 0, nil, false
+			}
+		}
+		r := new(big.Rat)
+		if exp >= 0 {
+			r.SetInt(new(big.Int).Mul(coeff, pow10big(exp)))
+		} else {
+			r.SetFrac(coeff, pow10big(-exp))
+		}
+		return numFinite, r, true
+	default:
+		return 0, nil, false
+	}
+}
+
+func pow10big(n int) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
+}
+
+func decimalIsNaN(d Decimal128) bool {
+	_, _, err := primitive.NewDecimal128(d.H, d.L).BigInt()
+	return errors.Is(err, primitive.ErrParseNaN)
 }
 
 // compareArrays compares indices of a filter array according to indices of a document array;
