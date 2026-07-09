@@ -226,16 +226,6 @@ func buildDoltTableFlatbuffer(m prolly.Map, schemaHash hash.Hash, indexAM prolly
 	return serial.FinishMessage(b, serial.TableEnd(b), []byte(serial.TableFileID))
 }
 
-// hashID returns a stable 20-byte primary key for a MongoDB _id value. Numeric
-// values MongoDB treats as equal must produce the same key. A scalar integer
-// (any of int32/int64, integer float64/Decimal128) folds to int64 and is
-// hashed from the original BSON encoding, so 42, NumberLong(42) and 42.0
-// collide while every non-numeric scalar _id keeps its original hash (and thus
-// its doc-id order). A scalar non-integer or non-finite number (0.5, Infinity,
-// NaN) is keyed by its exact value. A document/array _id is keyed by a
-// canonical encoding in which every numeric leaf, at any depth, is reduced to
-// its exact value, so {a: NumberLong(42)} == {a: 42.0} and {a: 0.10} ==
-// {a: 0.1} while field order stays significant.
 func hashID(id any) ([20]byte, error) {
 	switch id.(type) {
 	case *types.Document, *types.Array, types.NullType, types.Timestamp, types.MinKeyType, types.MaxKeyType:
@@ -299,10 +289,6 @@ func wirebsonIDHash(id any) ([20]byte, error) {
 	return sha512Key(raw), nil
 }
 
-// exactNumericKey keys a scalar numeric _id whose value cannot be folded to
-// int64 (non-integer or non-finite float64 / Decimal128) by its exact value,
-// so 0.5, NumberDecimal("0.5") and NumberDecimal("0.50") share one key. Reports
-// ok=false for integers and non-numerics, which keep their BSON-bytes hash.
 func exactNumericKey(id any) ([]byte, bool) {
 	if _, ok := numericToInt64(id); ok {
 		return nil, false
@@ -313,10 +299,6 @@ func exactNumericKey(id any) ([]byte, bool) {
 	return nil, false
 }
 
-// appendCanonicalValue encodes a document/array _id (recursively) so that every
-// numeric leaf is reduced to its exact value while non-numeric leaves keep a
-// type-tagged encoding. Values MongoDB treats as equal encode identically;
-// distinct field order encodes differently.
 func appendCanonicalValue(dst []byte, v any) ([]byte, error) {
 	if tok, ok := numericValueToken(v); ok {
 		return appendLenBytes(append(dst, 'N'), []byte(tok)), nil
@@ -381,9 +363,6 @@ func appendLenBytes(dst, b []byte) []byte {
 	return append(binary.AppendUvarint(dst, uint64(len(b))), b...)
 }
 
-// numericValueToken returns a canonical string for a numeric value's exact
-// mathematical value -- an integer, a reduced fraction, or a nan/inf sentinel.
-// Equal values share one token regardless of subtype or decimal scale.
 func numericValueToken(v any) (string, bool) {
 	switch v := v.(type) {
 	case int32:
@@ -427,8 +406,6 @@ func numericValueToken(v any) (string, bool) {
 	}
 }
 
-// numericToInt64 reports whether v is an integer-valued number within int64
-// range and returns that int64.
 func numericToInt64(v any) (int64, bool) {
 	switch v := v.(type) {
 	case int32:

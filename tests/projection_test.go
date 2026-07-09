@@ -238,10 +238,6 @@ func TestSort_FourFields(t *testing.T) {
 	}
 }
 
-// TestSort_Natural_Descending verifies that {$natural: -1} returns the exact
-// reverse of {$natural: 1}. DumboDB has no global insertion order (see capped
-// collections), so $natural is storage (doc-id) order, not insertion order;
-// the guarantee it provides is that -1 reverses +1 over the same documents.
 func TestSort_Natural_Descending(t *testing.T) {
 	t.Parallel()
 

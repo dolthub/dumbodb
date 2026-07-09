@@ -141,9 +141,6 @@ func (d *Document) validateData(isTopLevel bool) error {
 	return nil
 }
 
-// validateNoDollarInID rejects a document _id that contains a $-prefixed field
-// name at any depth, matching MongoDB, which permits $-prefixed names only when
-// a subdocument is a valid DBRef ({$ref, $id[, $db]}).
 func validateNoDollarInID(doc *Document) error {
 	dbRef := isDBRef(doc)
 	keys := doc.Keys()
@@ -151,8 +148,6 @@ func validateNoDollarInID(doc *Document) error {
 
 	for i, key := range keys {
 		if !dbRef && strings.HasPrefix(key, "$") {
-			// %s (not %q) reproduces MongoDB's message verbatim; parity tests
-			// compare on the error code.
 			return newValidationError(ErrDollarPrefixedID, fmt.Errorf(
 				"_id fields may not contain '$'-prefixed fields: %s is not valid for storage.", key))
 		}
@@ -176,9 +171,6 @@ func validateNoDollarInID(doc *Document) error {
 	return nil
 }
 
-// isDBRef reports whether doc is a DBRef: first field $ref (string), second
-// field $id, an optional $db (string), and no other $-prefixed fields. MongoDB
-// exempts this shape from the _id $-prefix restriction.
 func isDBRef(doc *Document) bool {
 	keys := doc.Keys()
 	values := doc.Values()

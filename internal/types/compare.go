@@ -282,10 +282,6 @@ func compareNumbers(a float64, b int64) CompareResult {
 	return CompareResult(bigA.Cmp(bigB))
 }
 
-// compareNumeric compares two numeric values (int32/int64/float64/Decimal128)
-// by exact mathematical value, matching MongoDB's cross-type numeric ordering
-// (NaN < -Inf < finite < +Inf, finite by value). It reports ok=false unless
-// both operands are numeric, so callers fall back to type-order comparison.
 func compareNumeric(v1, v2 any) (CompareResult, bool) {
 	c1, r1, ok1 := numericParts(v1)
 	c2, r2, ok2 := numericParts(v2)
@@ -355,8 +351,6 @@ func pow10big(n int) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }
 
-// decimalIsNaN reports whether d is a Decimal128 NaN, which sorts with double
-// NaN as the lowest number rather than among finite numbers.
 func decimalIsNaN(d Decimal128) bool {
 	_, _, err := primitive.NewDecimal128(d.H, d.L).BigInt()
 	return errors.Is(err, primitive.ErrParseNaN)
