@@ -608,7 +608,9 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	lsid := ci.EnsureLSID()
 
 	shadow, cachedLsid := ci.CachedShadow()
-	if shadow == nil || cachedLsid != lsid {
+	staleReap := shadow != nil && cachedLsid == lsid && !shadow.Active() &&
+		shadow.Purged() && !c.h.SessionIsolation() && !ci.InTransaction()
+	if shadow == nil || cachedLsid != lsid || staleReap {
 		// Release the prior lsid (synthetic-to-real upgrade, or pooled
 		// implicit sessions rotating between frames) before opening the
 		// new one.
@@ -622,11 +624,6 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		ci.SetCachedShadow(lsid, s)
 		shadow = s
 	}
-	// A re-Connect here would ping-pong supersedes between this
-	// connection and the one that took over; surface the terminal
-	// error instead. Distinguish supersede (another connection took
-	// over) from purge (Sweep / End reaped the session) so the wire
-	// code matches MongoDB's semantics.
 	if !shadow.Active() {
 		return nil, shadowGoneError(shadow)
 	}
