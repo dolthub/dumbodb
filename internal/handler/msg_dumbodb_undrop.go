@@ -79,7 +79,7 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	toDatabase, err := common.GetOptionalParam[string](document, "to_database", "")
+	toDatabase, err := common.GetOptionalParam[string](document, "toDatabase", "")
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 	if toDatabase != "" && name == "" {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
-			"dumboUndrop: to_database requires name",
+			"dumboUndrop: toDatabase requires name",
 		)
 	}
 
@@ -116,7 +116,7 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	if err = rejectRevisionQualifiedName(toDatabase, "to_database"); err != nil {
+	if err = rejectRevisionQualifiedName(toDatabase, "toDatabase"); err != nil {
 		return nil, err
 	}
 
@@ -159,7 +159,7 @@ var purgeMatchingDroppedDatabaseFields = map[string]struct{}{
 // purgeMatchingDroppedDatabases handles `dumboUndrop` with a purgeMatching filter:
 // it permanently removes preserved drops matching {name, dropId, droppedBefore}.
 func (h *Handler) purgeMatchingDroppedDatabases(connCtx context.Context, vb backends.VersioningBackend, document, pm *types.Document) (*wire.OpMsg, error) {
-	for _, k := range []string{"name", "dropId", "to_database"} {
+	for _, k := range []string{"name", "dropId", "toDatabase"} {
 		if document.Has(k) {
 			return nil, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrOperationFailed,
