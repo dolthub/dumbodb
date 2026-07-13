@@ -59,7 +59,7 @@ func handleVersionFlag() {
 				fmt.Fprintln(os.Stderr, "--version/-v cannot be combined with other arguments")
 				os.Exit(2)
 			}
-			fmt.Printf("dumbodb %s (commit %s)\n", version.Version, version.GitVersion)
+			fmt.Printf("dumbodb %s\n", version.Get().Version)
 			os.Exit(0)
 		}
 	}

@@ -20,14 +20,9 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-const (
-	// Version is the DumboDB build version.
-	Version = "v0.1.0"
-
-	// MongoDBVersion is the MongoDB version DumboDB advertises to clients
-	// that gate behavior on major.minor.
-	MongoDBVersion = "8.0.20"
-)
+// MongoDBVersion is the MongoDB version DumboDB advertises to clients
+// that gate behavior on major.minor.
+const MongoDBVersion = "8.0.20"
 
 // GitVersion is the source git commit hash. Set at build time via:
 //
@@ -54,7 +49,7 @@ type Info struct {
 }
 
 var info = &Info{
-	Version:             Version,
+	Version:             GitVersion,
 	Commit:              GitVersion,
 	Branch:              "unknown",
 	Dirty:               false,
