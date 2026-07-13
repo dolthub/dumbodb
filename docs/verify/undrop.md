@@ -11,7 +11,7 @@ setup.
 preserved-drops directory at `<dataDir>/.dumbodb_dropped_databases/<name>/<dropId>/`, where
 `dropId` is the nanosecond timestamp of the drop. `dumboUndrop` restores a
 **copy**: the drop stays preserved and listed, so it can be restored again (for
-example under several names via `to_database`). Repeat drops of the same name are
+example under several names via `toDatabase`). Repeat drops of the same name are
 all retained, distinguished by `dropId`. A background job runs hourly and
 permanently deletes any preserved drop more than 30 days old, logging an INFO
 line per deletion.
@@ -27,7 +27,7 @@ because it operates across the whole instance rather than on a single database.
 |-----------|--------|----------|---------|----------------------------------------------------------------------------------------------|
 | `name`    | string | no       |  --      | Database to restore. Omit to list databases available to undrop. Must be a root name (no `@`). |
 | `dropId`  | string | no       |  --      | Selects one drop when `name` has more than one preserved copy. Use the `dropId` from the list. |
-| `to_database` | string | no   |  --      | Restore the drop under this name instead of its original. Requires `name`; must be a root name (no `@`) and not a system database (`admin`, `config`, `local`). |
+| `toDatabase` | string | no   |  --      | Restore the drop under this name instead of its original. Requires `name`; must be a root name (no `@`) and not a system database (`admin`, `config`, `local`). |
 | `purgeMatching` | object | no |  --      | Purge mode: permanently delete drops matching `{name (required), dropId, droppedBefore}` (AND). Mutually exclusive with the restore parameters. |
 
 ## Prerequisites
@@ -258,9 +258,9 @@ Key checks:
 
 ---
 
-## Scenario 4c: Restore under different names (to_database), repeatedly
+## Scenario 4c: Restore under different names (toDatabase), repeatedly
 
-Pass `to_database` to restore a drop under a new name. Because restore copies,
+Pass `toDatabase` to restore a drop under a new name. Because restore copies,
 one drop can seed several independent live databases.
 
 ```js
@@ -270,7 +270,7 @@ s.runCommand({ doltCommit: 1, message: "s1", author: "a <a@a>" })
 s.dropDatabase()
 
 // First copy
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", to_database: "destdb" })
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", toDatabase: "destdb" })
 // Expected: { undropped: "destdb", dropId: <id>, ok: 1 }
 db.getSiblingDB("destdb").items.findOne({ _id: 1 }).tag
 // Expected: "orig"
@@ -280,7 +280,7 @@ db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 }).dropped.map(d => d.name)
 // Expected: true
 
 // Second copy from the same drop, under another name
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", to_database: "destdb2" })
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "srcdb", toDatabase: "destdb2" })
 db.getSiblingDB("destdb2").items.findOne({ _id: 1 }).tag
 // Expected: "orig" -- an independent copy
 
@@ -339,16 +339,16 @@ db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger" })
 db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger@main" })
 // Expected: ok: 0; errmsg says name must be a root database
 
-// to_database without name is an error
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, to_database: "somewhere" })
-// Expected: ok: 0; errmsg contains "to_database requires name"
+// toDatabase without name is an error
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, toDatabase: "somewhere" })
+// Expected: ok: 0; errmsg contains "toDatabase requires name"
 
-// to_database must be a root name
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", to_database: "dest@main" })
-// Expected: ok: 0; errmsg says to_database must be a root database
+// toDatabase must be a root name
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", toDatabase: "dest@main" })
+// Expected: ok: 0; errmsg says toDatabase must be a root database
 
 // cannot restore onto a reserved system database
-db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", to_database: "config" })
+db.getSiblingDB("admin").runCommand({ dumboUndrop: 1, name: "ledger", toDatabase: "config" })
 // Expected: ok: 0; errmsg says cannot restore to system database
 ```
 
@@ -504,13 +504,13 @@ restore succeeds.
 | `db.getSiblingDB("admin").runCommand({ dumboUndrop: 1 })`           | List databases available to undrop                |
 | `... runCommand({ dumboUndrop: 1, name: "x" })`                     | Restore `x` (the most recent drop)                |
 | `... runCommand({ dumboUndrop: 1, name: "x", dropId: "<id>" })`     | Restore a specific drop of `x`                     |
-| `... runCommand({ dumboUndrop: 1, name: "x", to_database: "y" })`   | Restore `x`'s drop under the name `y`             |
+| `... runCommand({ dumboUndrop: 1, name: "x", toDatabase: "y" })`   | Restore `x`'s drop under the name `y`             |
 | `... runCommand({ dumboUndrop: 1, purgeMatching: { name: "x" } })`  | Permanently delete drops matching the filter      |
 
 - `dropDatabase` only works on a root database name; system databases (`admin`, `config`, `local`) cannot be dropped.
 - `dumboUndrop` must be run against `admin`.
 - Repeat drops of one name are all retained; `dropId` selects among them.
-- `to_database` restores under a new name; it requires `name`.
+- `toDatabase` restores under a new name; it requires `name`.
 - Undrop restores the complete commit history, not just the latest data.
 - Undrop copies the drop; it stays listed and can be restored again until purged. Restoring onto a live database name is rejected.
 - `purgeMatching` deletes drops early: `name` is required, optionally narrowed by `dropId` and/or `droppedBefore` (AND).

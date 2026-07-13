@@ -196,7 +196,7 @@ func TestUndropVerify(t *testing.T) {
 		undropDropDB(t, env, "srcdb")
 
 		res, err := undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "to_database", Value: "destdb"},
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "toDatabase", Value: "destdb"},
 		})
 		require.NoError(t, err)
 		assert.EqualValues(t, "destdb", res["undropped"], "restored under the alternate name")
@@ -208,10 +208,10 @@ func TestUndropVerify(t *testing.T) {
 
 		list, err := undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}})
 		require.NoError(t, err)
-		assert.Contains(t, droppedNames(list), "srcdb", "drop remains after a to_database restore")
+		assert.Contains(t, droppedNames(list), "srcdb", "drop remains after a toDatabase restore")
 
 		_, err = undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "to_database", Value: "destdb2"},
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "srcdb"}, {Key: "toDatabase", Value: "destdb2"},
 		})
 		require.NoError(t, err)
 		require.NoError(t, env.Client.Database("destdb2").Collection("items").
@@ -261,19 +261,19 @@ func TestUndropVerify(t *testing.T) {
 		_, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger@main"}})
 		require.Error(t, err)
 
-		_, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "to_database", Value: "somewhere"}})
+		_, err = undropAdmin(t, env, bson.D{{Key: "dumboUndrop", Value: 1}, {Key: "toDatabase", Value: "somewhere"}})
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "to_database requires name")
+		assert.Contains(t, strings.ToLower(err.Error()), "todatabase requires name")
 
 		_, err = undropAdmin(t, env, bson.D{
-			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "to_database", Value: "dest@main"},
+			{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "toDatabase", Value: "dest@main"},
 		})
 		require.Error(t, err)
-		assert.Contains(t, strings.ToLower(err.Error()), "to_database must be a root database")
+		assert.Contains(t, strings.ToLower(err.Error()), "todatabase must be a root database")
 
 		for _, sys := range []string{"config", "local"} {
 			_, err = undropAdmin(t, env, bson.D{
-				{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "to_database", Value: sys},
+				{Key: "dumboUndrop", Value: 1}, {Key: "name", Value: "ledger"}, {Key: "toDatabase", Value: sys},
 			})
 			require.Error(t, err, "undrop to %q must be rejected", sys)
 			assert.Contains(t, strings.ToLower(err.Error()), "system database")
