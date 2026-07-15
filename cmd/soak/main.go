@@ -187,15 +187,18 @@ func main() {
 		alertCount              int
 		allSamples              []sample
 		serverExit              string
+		serverCrashTail         []string
 	)
 
 	defer func() {
 		// Send a summary at the end of every run, including clean
 		// no-alert runs. A silent cron is indistinguishable from a
-		// broken cron; the summary email is the heartbeat.
+		// broken cron; the summary email is the heartbeat. On a crash
+		// the run exits immediately, so this same summary doubles as
+		// the crash report and carries the server-log tail.
 		text, htmlBody := summaryReport(hostname, buildVer, pid, addr, startedAt, time.Now(),
 			sampleCount, alertCount, firstSample, lastSample, allSamples,
-			wl.cycleCount(), wl.errCount(), serverExit)
+			wl.cycleCount(), wl.errCount(), serverExit, serverCrashTail)
 		subj := fmt.Sprintf("dumbodb soak: %d alert(s)", alertCount)
 		if alertCount == 0 {
 			subj = "dumbodb soak: clean"
@@ -230,20 +233,14 @@ func main() {
 			uptime := roundDuration(time.Since(startedAt))
 			log.Printf("SERVER CRASH after %s: %s; cycles=%d errors=%d",
 				uptime, serverExit, wl.cycleCount(), wl.errCount())
-			tail := srv.logTail(200)
-			log.Printf("--- last %d line(s) of server log %s ---", len(tail), srv.logPath)
-			for _, line := range tail {
+			serverCrashTail = srv.logTail(200)
+			log.Printf("--- last %d line(s) of server log %s ---", len(serverCrashTail), srv.logPath)
+			for _, line := range serverCrashTail {
 				log.Printf("  | %s", line)
 			}
 			log.Printf("--- end server log ---")
-			text, htmlBody := crashReport(hostname, buildVer, pid, addr, serverExit,
-				uptime, lastSample, tail, allSamples, wl.cycleCount(), wl.errCount())
-			notify(ctx, alertMessage{
-				Subject:  "dumbodb soak: SERVER CRASH",
-				TextBody: text,
-				HTMLBody: htmlBody,
-				ChartPNG: pngChart(allSamples, 640, 200),
-			})
+			// Return so the deferred summary fires now; it carries the
+			// crash detail, so no separate alert email is needed.
 			return
 		case t := <-ticker.C:
 			s, err := sampler.sample()
@@ -341,7 +338,7 @@ func alertReport(host, buildVer string, pid int, addr string, a alert, recent []
 
 // summaryReport renders the end-of-run summary email as both plain
 // text and HTML.
-func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64, serverExit string) (text, htmlBody string) {
+func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64, serverExit string, serverCrashTail []string) (text, htmlBody string) {
 	title := fmt.Sprintf("dumbodb soak summary on %s", host)
 	stats := []string{
 		fmt.Sprintf("build: %s", buildVer),
@@ -366,26 +363,13 @@ func summaryReport(host, buildVer string, pid int, addr string, startedAt, ended
 		stats = append(stats, fmt.Sprintf("rss: first=%d kB, last=%d kB, delta=%+d kB (%+.2f MB/hour)",
 			first.RssKB, last.RssKB, deltaKB, ratePerHour))
 	}
-	return textBlock(title, stats, allSamples), htmlReport(title, stats, len(allSamples) >= 2)
-}
-
-// crashReport renders the alert sent when the managed server exits
-// mid-run. It leads with the exit status (signal vs code) and folds in
-// the tail of the server log so the cause survives even when the data
-// dir is later removed.
-func crashReport(host, buildVer string, pid int, addr, exitStatus string, uptime time.Duration, last procSample, logTail []string, allSamples []sample, cycles, errs int64) (text, htmlBody string) {
-	title := fmt.Sprintf("dumbodb soak SERVER CRASH on %s", host)
-	stats := []string{
-		fmt.Sprintf("build: %s", buildVer),
-		fmt.Sprintf("pid: %d (%s)", pid, addr),
-		fmt.Sprintf("exit: %s", exitStatus),
-		fmt.Sprintf("uptime: %s before exit", uptime),
-		fmt.Sprintf("last rss: %d kB (anon %d kB) at %d threads", last.RssKB, last.RssAnonKB, last.Threads),
-		fmt.Sprintf("cycles: %d workload cycles, %d errors", cycles, errs),
-	}
-	stats = append(stats, "server log tail:")
-	for _, line := range lastN(logTail, 40) {
-		stats = append(stats, "  "+line)
+	// On a crash, fold in the tail of the server log so the cause
+	// travels in the same email that reports the crash.
+	if len(serverCrashTail) > 0 {
+		stats = append(stats, "server log tail:")
+		for _, line := range lastN(serverCrashTail, 40) {
+			stats = append(stats, "  "+line)
+		}
 	}
 	return textBlock(title, stats, allSamples), htmlReport(title, stats, len(allSamples) >= 2)
 }
