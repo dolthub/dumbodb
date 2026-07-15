@@ -53,7 +53,7 @@ func TestAutoCommit(t *testing.T) {
 		}).Decode(&raw))
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 2, "expected Initialize + 1 auto-insert commit")
-		assert.Equal(t, "auto: insert into items", lr.Commits[0].Message)
+		assert.Equal(t, "auto: insert 1 docs into items", lr.Commits[0].Message)
 		assert.Equal(t, "Initialize database", lr.Commits[1].Message)
 	})
 
@@ -72,7 +72,7 @@ func TestAutoCommit(t *testing.T) {
 		lr := decodeLogResult(t, raw)
 		require.Len(t, lr.Commits, 3, "expected Initialize + insert + update commits")
 		assert.Equal(t, "auto: update items", lr.Commits[0].Message)
-		assert.Equal(t, "auto: insert into items", lr.Commits[1].Message)
+		assert.Equal(t, "auto: insert 1 docs into items", lr.Commits[1].Message)
 		assert.Equal(t, "Initialize database", lr.Commits[2].Message)
 	})
 
@@ -89,7 +89,7 @@ func TestAutoCommit(t *testing.T) {
 		require.Len(t, lr.Commits, 4, "expected Initialize + insert + update + delete commits")
 		assert.Equal(t, "auto: delete from items", lr.Commits[0].Message)
 		assert.Equal(t, "auto: update items", lr.Commits[1].Message)
-		assert.Equal(t, "auto: insert into items", lr.Commits[2].Message)
+		assert.Equal(t, "auto: insert 1 docs into items", lr.Commits[2].Message)
 		assert.Equal(t, "Initialize database", lr.Commits[3].Message)
 	})
 }

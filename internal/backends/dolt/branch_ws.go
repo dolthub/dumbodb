@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
@@ -215,4 +217,80 @@ func (s *dbState) updateBranchWS(
 	e.ws = persisted
 	e.wsHash = newHash
 	return nil
+}
+
+// commitBranchWS commits branch's working root as one Dolt commit, or returns
+// false without committing when the root already matches HEAD. Caller must hold
+// state.mu.
+func (s *dbState) commitBranchWS(ctx context.Context, branch, message string) (committed bool, err error) {
+	e := s.branchEntry(branch)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	wsRef := doltref.NewWorkingSetRef("heads/" + branch)
+	if e.ws == nil {
+		ws, resErr := s.doltDB.ResolveWorkingSet(ctx, wsRef)
+		if resErr != nil {
+			return false, fmt.Errorf("commitBranchWS: resolving %q: %w", branch, resErr)
+		}
+		h, hErr := ws.HashOf()
+		if hErr != nil {
+			return false, fmt.Errorf("commitBranchWS: hashing %q: %w", branch, hErr)
+		}
+		e.ws = ws
+		e.wsHash = h
+	}
+
+	workingRoot := e.ws.WorkingRoot()
+	headRoot, err := headRootValueForBranch(ctx, s, branch)
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: reading HEAD root for %q: %w", branch, err)
+	}
+	workingHash, err := workingRoot.HashOf()
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: hashing working root for %q: %w", branch, err)
+	}
+	headHash, err := headRoot.HashOf()
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: hashing HEAD root for %q: %w", branch, err)
+	}
+	if workingHash == headHash {
+		return false, nil
+	}
+
+	headRef, err := wsRef.ToHeadRef()
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: head ref for %q: %w", branch, err)
+	}
+	cm, err := datas.NewCommitMetaWithAuthor("dumbodb", "dumbodb@localhost", message, time.Now())
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: commit meta for %q: %w", branch, err)
+	}
+	pending, err := s.doltDB.NewPendingCommit(ctx, doltdb.Roots{
+		Head:    headRoot,
+		Working: workingRoot,
+		Staged:  workingRoot,
+	}, nil, false, cm)
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: pending commit for %q: %w", branch, err)
+	}
+
+	cleanWS := e.ws.WithStagedRoot(workingRoot).ClearMerge()
+	var rsc doltdb.ReplicationStatusController
+	if _, err := s.doltDB.CommitWithWorkingSet(ctx, headRef, wsRef, pending, cleanWS, e.wsHash, doltdb.TodoWorkingSetMeta(), &rsc); err != nil {
+		return false, fmt.Errorf("commitBranchWS: committing %q: %w", branch, err)
+	}
+
+	persisted, err := s.doltDB.ResolveWorkingSet(ctx, wsRef)
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: post-commit resolve for %q: %w", branch, err)
+	}
+	newHash, err := persisted.HashOf()
+	if err != nil {
+		return false, fmt.Errorf("commitBranchWS: post-commit hash for %q: %w", branch, err)
+	}
+	e.ws = persisted
+	e.wsHash = newHash
+	return true, nil
 }

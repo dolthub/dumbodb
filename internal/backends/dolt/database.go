@@ -277,7 +277,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if err != nil {
 		return err
 	}
-	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
 		return ed.Add(ctx, params.Name, dtblHash)
 	}); err != nil {
 		return err
@@ -351,7 +351,7 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 			fmt.Errorf("collection %q does not exist in %q", params.Name, db.name))
 	}
 
-	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: drop collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
 		return ed.Delete(ctx, params.Name)
 	}); err != nil {
 		return err
@@ -405,7 +405,7 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
 
-	if err := state.updateAddressMap(ctx, db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: rename collection %s to %s", params.OldName, params.NewName), func(ed prolly.AddressMapEditor) error {
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}

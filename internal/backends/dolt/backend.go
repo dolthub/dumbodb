@@ -1090,6 +1090,23 @@ func commitCollectionsAM(ctx context.Context, datasDB datas.Database, ds datas.D
 	return newDS, am, nil
 }
 
+func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error) {
+	state, err := b.getOrOpenDB(ctx, dbName, false)
+	if err != nil {
+		return false, fmt.Errorf("AutoCommit: opening db %q: %w", dbName, err)
+	}
+	if state == nil {
+		return false, nil
+	}
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	if state.mergeState != nil && state.mergeState.intoBranch == branch {
+		return false, nil
+	}
+	return state.commitBranchWS(ctx, branch, message)
+}
+
 // commitCollectionsAMAs creates a new dolt commit with the given collections
 // AddressMap as its root value, using the provided author name and timestamp.
 // Returns the updated dataset and the (unchanged) AM.
@@ -1668,7 +1685,11 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("DumboDBMerge: continue: clearing artifacts: %w", clearErr)
 		}
 
-		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, ms.resolvedAM, params.Message, params.Author)
+		contAM, amErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if amErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", amErr)
+		}
+		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, contAM, params.Message, params.Author)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
 		}
@@ -1821,6 +1842,16 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM, params.Message, params.Author)
 }
 
+// currentWorkingAM returns the collections AddressMap of branch's working root.
+// Caller must hold state.mu.
+func (b *Backend) currentWorkingAM(ctx context.Context, db *dbState, branch string) (prolly.AddressMap, error) {
+	ws, err := db.loadBranchWS(ctx, branch)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("currentWorkingAM: loading WS for %q: %w", branch, err)
+	}
+	return amFromWorkingRoot(ctx, ws.WorkingRoot(), db.ns)
+}
+
 // commitMerge creates a merge commit on intoBranch with both branch HEADs as parents.
 // Called for clean merges (no conflicts) and for continue (conflict-resolved) merges from DumboDBMerge.
 // message and author are optional; if empty, defaults are used.
@@ -1959,7 +1990,11 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: reading pick commit meta: %w", contMetaErr)
 		}
 
-		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, contPickMeta, ms.originalMsg, params.Message, params.Committer)
+		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if contAMErr != nil {
+			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", contAMErr)
+		}
+		pickRes, pickErr := b.commitCherryPick(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, contAM, contPickMeta, ms.originalMsg, params.Message, params.Committer)
 		if pickErr != nil {
 			return nil, fmt.Errorf("DumboDBCherryPick: continue: %w", pickErr)
 		}
@@ -3127,7 +3162,11 @@ func (b *Backend) DumboDBRebase(ctx context.Context, params *backends.RebasePara
 			return nil, fmt.Errorf("DumboDBRebase: continue: reading meta for paused commit: %w", metaErr)
 		}
 
-		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, ms.resolvedAM, pickMeta, rebaserName, rebaserEmail)
+		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if contAMErr != nil {
+			return nil, fmt.Errorf("DumboDBRebase: continue: %w", contAMErr)
+		}
+		newTipHash, commitErr := b.commitRebasedPick(ctx, db, ms.intoBranch, ms.intoHash, ms.rebaseCurrentPick, contAM, pickMeta, rebaserName, rebaserEmail)
 		if commitErr != nil {
 			return nil, fmt.Errorf("DumboDBRebase: continue: committing paused commit: %w", commitErr)
 		}
@@ -3517,7 +3556,11 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		}
 
 		// pickHash is the commit being reverted; fromHash is the parent hash.
-		revertRes, revertErr := b.commitRevert(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, ms.resolvedAM, ms.originalMsg, params.Message, params.Author)
+		contAM, contAMErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
+		if contAMErr != nil {
+			return nil, fmt.Errorf("DumboDBRevert: continue: %w", contAMErr)
+		}
+		revertRes, revertErr := b.commitRevert(ctx, db, ms.intoBranch, intoBranchDS, ms.intoHash, ms.pickHash, contAM, ms.originalMsg, params.Message, params.Author)
 		if revertErr != nil {
 			return nil, fmt.Errorf("DumboDBRevert: continue: %w", revertErr)
 		}

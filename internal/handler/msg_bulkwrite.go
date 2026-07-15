@@ -23,6 +23,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -182,6 +183,9 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		}
 		firstBatch.Append(entry)
 	}
+
+	conninfo.Get(connCtx).SetAutoCommitMessage(fmt.Sprintf(
+		"auto: bulkWrite (%d inserted, %d updated, %d deleted)", nInserted, nModified+nUpserted, nDeleted))
 
 	resDoc := must.NotFail(types.NewDocument(
 		"cursor", must.NotFail(types.NewDocument(

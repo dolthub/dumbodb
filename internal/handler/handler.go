@@ -283,6 +283,30 @@ func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 	return nil
 }
 
+// AutoCommitBoundary commits each branch a write recorded on the connection
+// during the just-finished command. Safe to call unconditionally: a no-op when
+// nothing was recorded.
+func (h *Handler) AutoCommitBoundary(ctx context.Context) error {
+	ci := conninfo.GetIfPresent(ctx)
+	if ci == nil {
+		return nil
+	}
+	targets := ci.DrainAutoCommit()
+	if len(targets) == 0 {
+		return nil
+	}
+	ac, ok := h.b.(backends.AutoCommitBackend)
+	if !ok {
+		return nil
+	}
+	for _, t := range targets {
+		if _, err := ac.AutoCommit(ctx, t.DB, t.Branch, t.Message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AbortPendingTransaction discards any per-connection pending overlay
 // and marks the txn as aborted, so a subsequent commitTransaction
 // returns NoSuchTransaction (251). Used when the wire layer rejects an

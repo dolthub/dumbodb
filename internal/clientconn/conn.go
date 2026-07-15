@@ -674,7 +674,12 @@ func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name stri
 			fmt.Sprintf("no such command: '%s'", name),
 		)
 	}
-	return cmd.Handler(connCtx, msg)
+	resMsg, err := cmd.Handler(connCtx, msg)
+
+	if acErr := c.h.AutoCommitBoundary(connCtx); acErr != nil && err == nil {
+		err = acErr
+	}
+	return resMsg, err
 }
 
 // logResponse dumps the header+body at DEBUG (ERROR on closeConn) and

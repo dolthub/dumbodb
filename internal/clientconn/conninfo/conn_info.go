@@ -63,6 +63,15 @@ type ConnInfo struct {
 	// See where it is used for more details.
 	bypassBackendAuth  bool // protected by rw
 	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
+
+	pendingAutoCommit map[string]AutoCommitTarget // protected by rw; keyed by db+"\x00"+branch, last writer wins
+	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
+}
+
+type AutoCommitTarget struct {
+	DB      string
+	Branch  string
+	Message string
 }
 
 func New() *ConnInfo {
@@ -262,4 +271,45 @@ func GetIfPresent(ctx context.Context) *ConnInfo {
 		return nil
 	}
 	return connInfo
+}
+
+// RecordAutoCommit notes that a write advanced db@branch, with the message to
+// commit it under. Last writer for a branch wins.
+func (connInfo *ConnInfo) RecordAutoCommit(db, branch, message string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	if connInfo.pendingAutoCommit == nil {
+		connInfo.pendingAutoCommit = make(map[string]AutoCommitTarget)
+	}
+	connInfo.pendingAutoCommit[db+"\x00"+branch] = AutoCommitTarget{DB: db, Branch: branch, Message: message}
+}
+
+// SetAutoCommitMessage overrides the message for every branch drained by the
+// next DrainAutoCommit, e.g. a bulkWrite summary.
+func (connInfo *ConnInfo) SetAutoCommitMessage(message string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.autoCommitMsg = message
+}
+
+// DrainAutoCommit returns and clears the branches recorded since the last drain.
+func (connInfo *ConnInfo) DrainAutoCommit() []AutoCommitTarget {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	override := connInfo.autoCommitMsg
+	connInfo.autoCommitMsg = ""
+	if len(connInfo.pendingAutoCommit) == 0 {
+		return nil
+	}
+	out := make([]AutoCommitTarget, 0, len(connInfo.pendingAutoCommit))
+	for _, t := range connInfo.pendingAutoCommit {
+		if override != "" {
+			t.Message = override
+		}
+		out = append(out, t)
+	}
+	connInfo.pendingAutoCommit = nil
+	return out
 }

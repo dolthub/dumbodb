@@ -42,10 +42,48 @@ import (
 var buildOnce sync.Once
 
 type Env struct {
-	cmd     *exec.Cmd
-	Client  *mongo.Client
-	dataDir string
-	Port    int
+	cmd       *exec.Cmd
+	Client    *mongo.Client
+	dataDir   string
+	Port      int
+	extraArgs []string
+}
+
+// Restart stops the server and starts a fresh one on the same port, data dir,
+// and flags, then reconnects the client.
+func (env *Env) Restart(tb testing.TB) {
+	tb.Helper()
+	if env.Client != nil {
+		env.Client.Disconnect(context.Background()) //nolint:errcheck
+	}
+	env.cmd.Process.Kill() //nolint:errcheck
+	env.cmd.Wait()         //nolint:errcheck
+
+	addr := fmt.Sprintf("127.0.0.1:%d", env.Port)
+	binary := filepath.Join(RepoRoot(), ".runtime", "bin", "dolt")
+	args := append([]string{"--addr", addr, "--data-dir", env.dataDir}, env.extraArgs...)
+	cmd := exec.Command(binary, args...)
+	require.NoError(tb, cmd.Start())
+	env.cmd = cmd
+	tb.Cleanup(func() {
+		cmd.Process.Kill() //nolint:errcheck
+		cmd.Wait()         //nolint:errcheck
+	})
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	client, err := mongo.Connect(options.Client().
+		ApplyURI(fmt.Sprintf("mongodb://%s/", addr)).
+		SetBSONOptions(&options.BSONOptions{DefaultDocumentM: true}))
+	require.NoError(tb, err)
+	env.Client = client
 }
 
 // DataDir returns the server's --data-dir, for tests that inspect on-disk state.
@@ -96,9 +134,10 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 	require.NoError(tb, cmd.Start())
 
 	env := &Env{
-		cmd:     cmd,
-		dataDir: dataDir,
-		Port:    port,
+		cmd:       cmd,
+		dataDir:   dataDir,
+		Port:      port,
+		extraArgs: extraArgs,
 	}
 
 	tb.Cleanup(func() {
