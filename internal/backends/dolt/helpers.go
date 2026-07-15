@@ -32,8 +32,8 @@ import (
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/pool"
@@ -691,7 +691,7 @@ func headRootAMForBranch(ctx context.Context, state *dbState, branch string) (pr
 // stores the updated WorkingSet in state, and persists it via doltDB unless
 // skipSync is true (in which case the branch is marked dirty for later flush).
 // The caller must hold state.mu (write lock).
-func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn func(doltdb.RootValue) (doltdb.RootValue, error), skipSync bool) error {
+func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg string, fn func(doltdb.RootValue) (doltdb.RootValue, error), skipSync bool) error {
 	ws, err := state.getOrInitBranchWS(ctx, branch)
 	if err != nil {
 		return err
@@ -740,6 +740,14 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 	}); err != nil {
 		return fmt.Errorf("updating working set: %w", err)
 	}
+
+	// Under --auto-commit, record this branch (and the proposed message) so the
+	// command boundary commits it once when the command completes.
+	if state.backend.autoCommit {
+		if ci := conninfo.GetIfPresent(ctx); ci != nil {
+			ci.RecordAutoCommit(state.name, branch, commitMsg)
+		}
+	}
 	return nil
 }
 
@@ -747,12 +755,12 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch string, fn f
 // callers that still use the AddressMapEditor pattern. The fn receives a
 // RootValue whose AM is modified and returns the updated RootValue.
 // The caller must hold state.mu (write lock).
-func (state *dbState) updateAddressMap(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error) error {
-	return state.updateAddressMapWithSync(ctx, branch, fn, false)
+func (state *dbState) updateAddressMap(ctx context.Context, branch, commitMsg string, fn func(prolly.AddressMapEditor) error) error {
+	return state.updateAddressMapWithSync(ctx, branch, commitMsg, fn, false)
 }
 
-func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch string, fn func(prolly.AddressMapEditor) error, skipSync bool) error {
-	return state.updateWorkingRoot(ctx, branch, func(rv doltdb.RootValue) (doltdb.RootValue, error) {
+func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch, commitMsg string, fn func(prolly.AddressMapEditor) error, skipSync bool) error {
+	return state.updateWorkingRoot(ctx, branch, commitMsg, func(rv doltdb.RootValue) (doltdb.RootValue, error) {
 		am, err := amFromWorkingRoot(ctx, rv, state.ns)
 		if err != nil {
 			return nil, err
@@ -777,4 +785,3 @@ func (state *dbState) updateAddressMapWithSync(ctx context.Context, branch strin
 func (state *dbState) headRootAM(ctx context.Context) (prolly.AddressMap, error) {
 	return headRootAMForBranch(ctx, state, defaultBranch)
 }
-

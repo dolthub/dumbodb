@@ -231,7 +231,6 @@ const (
 	rangeProbeBail
 )
 
-
 // simpleIDEquality reports whether filter contains an "_id" field bound to a
 // concrete scalar value that can be hashed into a primary key. It rejects
 // operator forms ({_id: {$eq: x}}), array equality ({_id: [1,2]}), and null.
@@ -503,7 +502,7 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 //   - bare scalar v                          -> [KS(v)+0x04, KS(v)+0x05)
 //   - operator doc using only $eq / $gt /
 //     $gte / $lt / $lte                      -> bounds derived from the
-//                                              tightest clause on each side.
+//     tightest clause on each side.
 //
 // Returns ok=false for value shapes the index path can't handle (regex,
 // $in, $ne, nested operators, mixed comparisons against arrays, ...); the
@@ -1511,7 +1510,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: insert %d docs into %s", len(params.Docs), c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
 	}, skipSync); err != nil {
 		return nil, err
@@ -1786,7 +1785,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: update %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
 	}, skipSync); err != nil {
 		return nil, err
@@ -1966,7 +1965,7 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 	if err != nil {
 		return nil, err
 	}
-	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMapWithSync(ctx, c.db.rootish, fmt.Sprintf("auto: delete from %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Update(ctx, c.name, dtblHash)
 	}, skipSync); err != nil {
 		return nil, err
@@ -2505,7 +2504,7 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 		return nil, fmt.Errorf("building index AM: %w", err)
 	}
 
-	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM); err != nil {
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM, fmt.Sprintf("auto: create index %s on %s", indexNames(params.Indexes), c.name)); err != nil {
 		return nil, fmt.Errorf("rewriting DTBL for %q: %w", c.name, err)
 	}
 
@@ -2520,7 +2519,15 @@ func (c *collection) CreateIndexes(ctx context.Context, params *backends.CreateI
 // uses a freshly created empty map  -- the same path as loadOrCreateMap.
 //
 // The caller must hold state.mu (write lock).
-func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexAM prolly.AddressMap) error {
+func indexNames(indexes []backends.IndexInfo) string {
+	names := make([]string, len(indexes))
+	for i, idx := range indexes {
+		names[i] = idx.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbState, indexAM prolly.AddressMap, commitMsg string) error {
 	am, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
 		return err
@@ -2547,7 +2554,7 @@ func (c *collection) rewriteDTBLAfterIndexChange(ctx context.Context, state *dbS
 	if err != nil {
 		return err
 	}
-	return state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	return state.updateAddressMap(ctx, c.db.rootish, commitMsg, func(ed prolly.AddressMapEditor) error {
 		if rootHash.IsEmpty() {
 			return ed.Add(ctx, c.name, dtblHash)
 		}
@@ -2796,7 +2803,7 @@ func (c *collection) DropIndexes(ctx context.Context, params *backends.DropIndex
 	if err != nil {
 		return nil, fmt.Errorf("building index AM after drop: %w", err)
 	}
-	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM); err != nil {
+	if err := c.rewriteDTBLAfterIndexChange(ctx, state, newIdxAM, fmt.Sprintf("auto: drop index %s on %s", strings.Join(params.Indexes, ", "), c.name)); err != nil {
 		return nil, fmt.Errorf("rewriting DTBL after drop for %q: %w", c.name, err)
 	}
 
@@ -2833,7 +2840,7 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	if err := state.updateAddressMap(ctx, c.db.rootish, func(ed prolly.AddressMapEditor) error {
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: create collection %s", c.name), func(ed prolly.AddressMapEditor) error {
 		return ed.Add(ctx, c.name, dtblHash)
 	}); err != nil {
 		return prolly.Map{}, err

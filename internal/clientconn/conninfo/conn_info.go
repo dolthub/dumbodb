@@ -63,6 +63,20 @@ type ConnInfo struct {
 	// See where it is used for more details.
 	bypassBackendAuth  bool // protected by rw
 	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
+
+	// pendingAutoCommit records, for the current command, which (db,branch)
+	// roots a write advanced and the proposed commit message. Keyed by
+	// db+"\x00"+branch, last writer wins. The command boundary drains it to
+	// create one commit per branch. Plain data, not deferred closures.
+	pendingAutoCommit map[string]AutoCommitTarget // protected by rw
+}
+
+// AutoCommitTarget identifies a branch whose accumulated writes should be
+// committed at the command boundary, with the message to use.
+type AutoCommitTarget struct {
+	DB      string
+	Branch  string
+	Message string
 }
 
 func New() *ConnInfo {
@@ -262,4 +276,34 @@ func GetIfPresent(ctx context.Context) *ConnInfo {
 		return nil
 	}
 	return connInfo
+}
+
+// RecordAutoCommit notes that a write in the current command advanced db@branch,
+// with the proposed commit message. Last writer for a given branch wins, so
+// repeated writes to one branch collapse to a single commit of its final state.
+func (connInfo *ConnInfo) RecordAutoCommit(db, branch, message string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	if connInfo.pendingAutoCommit == nil {
+		connInfo.pendingAutoCommit = make(map[string]AutoCommitTarget)
+	}
+	connInfo.pendingAutoCommit[db+"\x00"+branch] = AutoCommitTarget{DB: db, Branch: branch, Message: message}
+}
+
+// DrainAutoCommit returns the branches recorded since the last drain and clears
+// the record. The command boundary calls this once per command to commit each.
+func (connInfo *ConnInfo) DrainAutoCommit() []AutoCommitTarget {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	if len(connInfo.pendingAutoCommit) == 0 {
+		return nil
+	}
+	out := make([]AutoCommitTarget, 0, len(connInfo.pendingAutoCommit))
+	for _, t := range connInfo.pendingAutoCommit {
+		out = append(out, t)
+	}
+	connInfo.pendingAutoCommit = nil
+	return out
 }
