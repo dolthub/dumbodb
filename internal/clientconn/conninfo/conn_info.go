@@ -69,6 +69,7 @@ type ConnInfo struct {
 	// db+"\x00"+branch, last writer wins. The command boundary drains it to
 	// create one commit per branch. Plain data, not deferred closures.
 	pendingAutoCommit map[string]AutoCommitTarget // protected by rw
+	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
 }
 
 // AutoCommitTarget identifies a branch whose accumulated writes should be
@@ -291,17 +292,33 @@ func (connInfo *ConnInfo) RecordAutoCommit(db, branch, message string) {
 	connInfo.pendingAutoCommit[db+"\x00"+branch] = AutoCommitTarget{DB: db, Branch: branch, Message: message}
 }
 
+// SetAutoCommitMessage overrides the commit message for every branch drained by
+// the next DrainAutoCommit. A command that makes several heterogeneous writes
+// (e.g. bulkWrite) sets a single summary message rather than letting the last
+// write's per-write message win.
+func (connInfo *ConnInfo) SetAutoCommitMessage(message string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.autoCommitMsg = message
+}
+
 // DrainAutoCommit returns the branches recorded since the last drain and clears
 // the record. The command boundary calls this once per command to commit each.
+// A message set via SetAutoCommitMessage overrides each target's message.
 func (connInfo *ConnInfo) DrainAutoCommit() []AutoCommitTarget {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
+	override := connInfo.autoCommitMsg
+	connInfo.autoCommitMsg = ""
 	if len(connInfo.pendingAutoCommit) == 0 {
 		return nil
 	}
 	out := make([]AutoCommitTarget, 0, len(connInfo.pendingAutoCommit))
 	for _, t := range connInfo.pendingAutoCommit {
+		if override != "" {
+			t.Message = override
+		}
 		out = append(out, t)
 	}
 	connInfo.pendingAutoCommit = nil

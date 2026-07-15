@@ -29,7 +29,10 @@ import (
 func acCommitCount(t *testing.T, db *mongo.Database) int {
 	t.Helper()
 	var raw bson.M
-	require.NoError(t, db.RunCommand(context.Background(), bson.D{{Key: "doltLog", Value: int32(1)}}).Decode(&raw))
+	if err := db.RunCommand(context.Background(), bson.D{{Key: "doltLog", Value: int32(1)}}).Decode(&raw); err != nil {
+		// A database with no writes yet has no history.
+		return 0
+	}
 	return len(decodeLogResult(t, raw).Commits)
 }
 
