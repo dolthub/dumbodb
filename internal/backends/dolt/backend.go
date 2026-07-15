@@ -1105,6 +1105,14 @@ func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string
 	}
 	state.mu.RLock()
 	defer state.mu.RUnlock()
+
+	// While a merge/cherry-pick/revert/rebase is paused on this branch,
+	// auto-commit is disabled: resolving conflicts requires editing documents,
+	// and those edits accumulate uncommitted until the operation's --continue
+	// (which commits them as one commit). See docs/design/auto-commit-chokepoint.md.
+	if state.mergeState != nil && state.mergeState.intoBranch == branch {
+		return false, nil
+	}
 	return state.commitBranchWS(ctx, branch, message)
 }
 
