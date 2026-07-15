@@ -119,10 +119,7 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
-	stateProvider, err := state.NewProvider("")
-	if err != nil {
-		return err
-	}
+	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
 		Logger:             logger,

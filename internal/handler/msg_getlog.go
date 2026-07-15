@@ -19,13 +19,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
 	"github.com/FerretDB/wire/wirebson"
 
-	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -33,6 +31,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/version"
 )
 
 // MsgGetLog implements `getLog` command.
@@ -91,37 +90,15 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		))
 
 	case "startupWarnings":
-		state := h.StateProvider.Get()
-
 		info := version.Get()
 
-		// it may be empty if no connection was established yet
-		var b string
-		if state.BackendVersion != "" {
-			b, _, _ = strings.Cut(state.BackendVersion, " (")
-			b = " and " + state.BackendName + " " + strings.TrimSpace(b)
-		}
-
 		startupWarnings := []string{
-			fmt.Sprintf("Powered by DumboDB %s%s.", info.Commit, b),
+			fmt.Sprintf("Powered by DumboDB %s.", info.Commit),
 			"Star Us! https://github.com/dolthub/dumbodb",
 		}
 
 		if h.L.Enabled(connCtx, slog.LevelDebug) {
 			startupWarnings = append(startupWarnings, "Debug logging enabled. The security and performance will be affected.")
-		}
-
-		switch {
-		case state.UpdateInfo != "", state.UpdateAvailable:
-			msg := state.UpdateInfo
-			if msg == "" {
-				msg = fmt.Sprintf(
-					"A new version available! The latest version: %s. The current version: %s.",
-					state.LatestVersion, info.Version,
-				)
-			}
-
-			startupWarnings = append(startupWarnings, msg)
 		}
 
 		var log types.Array

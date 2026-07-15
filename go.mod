@@ -3,7 +3,6 @@ module github.com/dolthub/dumbodb
 go 1.26.2
 
 require (
-	github.com/AlekSi/pointer v1.2.0
 	github.com/FerretDB/wire v0.0.8
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.29.8

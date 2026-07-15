@@ -14,102 +14,24 @@
 
 package state
 
-import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
-)
+import "time"
 
 // Provider provides access to DumboDB process state.
+//
+// State is set once at construction and never mutated, so all methods are
+// safe for concurrent use.
 type Provider struct {
-	filename string
-
-	rw   sync.RWMutex
-	s    *State
-	subs map[chan struct{}]struct{}
+	s *State
 }
 
-// NewProvider creates a new Provider that stores state in the given file.
-//
-// If filename is empty, then the state is not persisted.
-//
-// All provider's methods are thread-safe.
-func NewProvider(filename string) (*Provider, error) {
-	p := &Provider{
-		filename: filename,
-		s:        new(State),
-		subs:     make(map[chan struct{}]struct{}, 1),
+// NewProvider creates a new Provider with the process start time set to now.
+func NewProvider() *Provider {
+	return &Provider{
+		s: &State{Start: time.Now()},
 	}
-
-	if p.filename != "" {
-		b, _ := os.ReadFile(p.filename)
-		_ = json.Unmarshal(b, p.s)
-	}
-
-	p.s.fill()
-
-	// Simply overwrite state to handle all errors and edge cases
-	// like missing directory, corrupted file, invalid UUID, etc.,
-	// and also to check permissions.
-	if err := persistState(p.s, p.filename); err != nil {
-		return p, fmt.Errorf("failed to persist state: %w", err)
-	}
-
-	return p, nil
 }
 
 // Get returns a copy of the current process state.
-//
-// It is okay to call this function often.
-// The caller should not cache result; Provider does everything needed itself.
 func (p *Provider) Get() *State {
-	p.rw.RLock()
-	defer p.rw.RUnlock()
-
 	return p.s.deepCopy()
-}
-
-// Update gets the current state, calls the given function, updates state, and notifies all subscribers.
-func (p *Provider) Update(update func(s *State)) error {
-	p.rw.Lock()
-	defer p.rw.Unlock()
-
-	update(p.s)
-	p.s = p.s.deepCopy()
-	p.s.fill()
-
-	err := persistState(p.s, p.filename)
-	if err != nil {
-		err = fmt.Errorf("failed to persist state: %w", err)
-	}
-
-	// skip subscribers that already have notification waiting for them
-	for ch := range p.subs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	}
-
-	return err
-}
-
-// persistState saves state to the given file without modifying (filling) it.
-//
-// It exist immediately if filename is empty.
-func persistState(s *State, filename string) error {
-	if filename == "" {
-		return nil
-	}
-
-	b, err := json.Marshal(s)
-
-	if err == nil {
-		_ = os.MkdirAll(filepath.Dir(filename), 0o777)
-		err = os.WriteFile(filename, b, 0o666)
-	}
-
-	return err
 }
