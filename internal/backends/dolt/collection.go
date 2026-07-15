@@ -24,7 +24,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/FerretDB/wire/wirebson"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -1516,26 +1515,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	if c.db.backend.autoCommit {
-		fallbackWS, fbErr := state.loadBranchWS(ctx, c.db.rootish)
-		if fbErr != nil {
-			return nil, fmt.Errorf("auto-commit: loading WS: %w", fbErr)
-		}
-		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), fallbackWS, c.db.name, c.db.rootish)
-		if rvErr != nil {
-			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
-		}
-		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, workingRV, state.ns)
-		msg := fmt.Sprintf("auto: insert into %s", c.name)
-		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
-		if dsErr != nil {
-			return nil, fmt.Errorf("auto-commit after insert: resolving main dataset: %w", dsErr)
-		}
-		if _, _, err := commitCollectionsAMAs(ctx, state.datasDB, mainDS, workingAMForAutoCommit, msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
-			return nil, fmt.Errorf("auto-commit after insert: %w", err)
-		}
-	}
-
 	return &backends.InsertAllResult{}, nil
 }
 
@@ -1791,26 +1770,6 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
-	if c.db.backend.autoCommit {
-		fallbackWS, fbErr := state.loadBranchWS(ctx, c.db.rootish)
-		if fbErr != nil {
-			return nil, fmt.Errorf("auto-commit: loading WS: %w", fbErr)
-		}
-		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), fallbackWS, c.db.name, c.db.rootish)
-		if rvErr != nil {
-			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
-		}
-		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, workingRV, state.ns)
-		msg := fmt.Sprintf("auto: update %s", c.name)
-		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
-		if dsErr != nil {
-			return nil, fmt.Errorf("auto-commit after update: resolving main dataset: %w", dsErr)
-		}
-		if _, _, err := commitCollectionsAMAs(ctx, state.datasDB, mainDS, workingAMForAutoCommit, msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
-			return nil, fmt.Errorf("auto-commit after update: %w", err)
-		}
-	}
-
 	return &backends.UpdateAllResult{Updated: updated}, nil
 }
 
@@ -1969,26 +1928,6 @@ func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllPa
 		return ed.Update(ctx, c.name, dtblHash)
 	}, skipSync); err != nil {
 		return nil, err
-	}
-
-	if c.db.backend.autoCommit {
-		fallbackWS, fbErr := state.loadBranchWS(ctx, c.db.rootish)
-		if fbErr != nil {
-			return nil, fmt.Errorf("auto-commit: loading WS: %w", fbErr)
-		}
-		workingRV, rvErr := workingRootViaSession(ctx, sessionFromContext(ctx), fallbackWS, c.db.name, c.db.rootish)
-		if rvErr != nil {
-			return nil, fmt.Errorf("auto-commit: reading working root: %w", rvErr)
-		}
-		workingAMForAutoCommit, _ := amFromWorkingRoot(ctx, workingRV, state.ns)
-		msg := fmt.Sprintf("auto: delete from %s", c.name)
-		mainDS, dsErr := state.datasDB.GetDataset(ctx, mainDataset)
-		if dsErr != nil {
-			return nil, fmt.Errorf("auto-commit after delete: resolving main dataset: %w", dsErr)
-		}
-		if _, _, err := commitCollectionsAMAs(ctx, state.datasDB, mainDS, workingAMForAutoCommit, msg, "dumbodb <dumbodb@localhost>", time.Now()); err != nil {
-			return nil, fmt.Errorf("auto-commit after delete: %w", err)
-		}
 	}
 
 	return &backends.DeleteAllResult{Deleted: deleted}, nil

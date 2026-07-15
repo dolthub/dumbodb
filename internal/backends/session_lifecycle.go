@@ -27,3 +27,10 @@ type SessionAwareBackend interface {
 	SessionIsolation() bool
 	SessionRegistry() *sqlctx.SessionRegistry
 }
+
+// AutoCommitBackend is the optional capability to commit a branch's accumulated
+// working root at the command boundary under --auto-commit. Returns whether a
+// commit was created (false when the working root already matches HEAD).
+type AutoCommitBackend interface {
+	AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error)
+}

@@ -1090,6 +1090,24 @@ func commitCollectionsAM(ctx context.Context, datasDB datas.Database, ds datas.D
 	return newDS, am, nil
 }
 
+// AutoCommit commits the accumulated working root of dbName@branch as one Dolt
+// commit with message, at the command boundary under --auto-commit. Returns
+// whether a commit was created (false when the working root already matches
+// HEAD). Called by the handler once per command for each branch a write
+// recorded on the connection.
+func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error) {
+	state, err := b.getOrOpenDB(ctx, dbName, false)
+	if err != nil {
+		return false, fmt.Errorf("AutoCommit: opening db %q: %w", dbName, err)
+	}
+	if state == nil {
+		return false, nil
+	}
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.commitBranchWS(ctx, branch, message)
+}
+
 // commitCollectionsAMAs creates a new dolt commit with the given collections
 // AddressMap as its root value, using the provided author name and timestamp.
 // Returns the updated dataset and the (unchanged) AM.

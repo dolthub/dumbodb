@@ -674,7 +674,17 @@ func (c *conn) invokeHandler(connCtx context.Context, msg *wire.OpMsg, name stri
 			fmt.Sprintf("no such command: '%s'", name),
 		)
 	}
-	return cmd.Handler(connCtx, msg)
+	resMsg, err := cmd.Handler(connCtx, msg)
+
+	// Command boundary: under --auto-commit, commit every branch this command
+	// wrote (one commit per branch). Runs even on handler error so partial
+	// writes that landed are still committed, matching the prior per-write
+	// behavior. A committed auto-commit error surfaces only if the handler
+	// itself succeeded.
+	if acErr := c.h.AutoCommitBoundary(connCtx); acErr != nil && err == nil {
+		err = acErr
+	}
+	return resMsg, err
 }
 
 // logResponse dumps the header+body at DEBUG (ERROR on closeConn) and
