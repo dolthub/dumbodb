@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -34,6 +36,77 @@ type server struct {
 	dataDir  string
 	keepData bool
 	logPath  string
+
+	waited   chan struct{} // closed once the process has been reaped
+	state    *os.ProcessState
+	stopping atomic.Bool // set before we send our own SIGTERM
+}
+
+// reap waits on the process exactly once and records its exit state.
+// state is written before waited is closed, so any reader that first
+// observes waited sees a consistent state.
+func (s *server) reap() {
+	_ = s.cmd.Wait()
+	s.state = s.cmd.ProcessState
+	close(s.waited)
+}
+
+// died returns a channel closed when the process exits, for whatever
+// reason (crash or a stop we initiated).
+func (s *server) died() <-chan struct{} { return s.waited }
+
+func (s *server) hasExited() bool {
+	select {
+	case <-s.waited:
+		return true
+	default:
+		return false
+	}
+}
+
+// crashed reports whether the process exited on its own rather than in
+// response to a stop we initiated.
+func (s *server) crashed() bool { return s.hasExited() && !s.stopping.Load() }
+
+// exitStatus describes how the process exited. A signal (especially
+// SIGKILL) points at the OOM killer; a plain non-zero exit code with a
+// panic in the log points at a Go panic.
+func (s *server) exitStatus() string {
+	if !s.hasExited() {
+		return "still running"
+	}
+	if s.state == nil {
+		return "exited (status unavailable)"
+	}
+	if ws, ok := s.state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		sig := ws.Signal()
+		hint := ""
+		if sig == syscall.SIGKILL {
+			hint = " (likely OOM killer)"
+		}
+		return fmt.Sprintf("killed by signal %d/%s%s", int(sig), sig, hint)
+	}
+	return fmt.Sprintf("exit code %d", s.state.ExitCode())
+}
+
+// logTail returns the last n lines of the server log, for folding into
+// the soak's own durable stdout when the server dies.
+func (s *server) logTail(n int) []string {
+	f, err := os.Open(s.logPath)
+	if err != nil {
+		return []string{fmt.Sprintf("(log unavailable: %v)", err)}
+	}
+	defer f.Close()
+	ring := make([]string, 0, n)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if len(ring) == n {
+			ring = ring[1:]
+		}
+		ring = append(ring, scanner.Text())
+	}
+	return ring
 }
 
 // startServer starts dumbodb on the given port with a fresh data
@@ -92,9 +165,11 @@ func startServer(binaryPath, extraArgs, dataDir string, port int, keepData bool,
 		dataDir:  dataDir,
 		keepData: keepData,
 		logPath:  logPath,
+		waited:   make(chan struct{}),
 	}
+	go s.reap()
 
-	if err := waitForListen(addr, readyTimeout, cmd); err != nil {
+	if err := waitForListen(s, addr, readyTimeout); err != nil {
 		s.stop(5 * time.Second)
 		return nil, err
 	}
@@ -104,7 +179,7 @@ func startServer(binaryPath, extraArgs, dataDir string, port int, keepData bool,
 // waitForListen polls TCP-connect against addr until it succeeds or
 // the timeout elapses, also detecting an early process exit so we
 // don't poll forever on a dumbodb that crashed at startup.
-func waitForListen(addr string, timeout time.Duration, cmd *exec.Cmd) error {
+func waitForListen(s *server, addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		c, err := net.DialTimeout("tcp", addr, time.Second)
@@ -112,8 +187,8 @@ func waitForListen(addr string, timeout time.Duration, cmd *exec.Cmd) error {
 			c.Close()
 			return nil
 		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return fmt.Errorf("dumbodb exited during startup (exit code %d); see log", cmd.ProcessState.ExitCode())
+		if s.hasExited() {
+			return fmt.Errorf("dumbodb exited during startup (%s); see log %s", s.exitStatus(), s.logPath)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("dumbodb did not start listening on %s within %s", addr, timeout)
@@ -129,20 +204,24 @@ func (s *server) stop(graceTimeout time.Duration) {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return
 	}
-	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
-
-	done := make(chan error, 1)
-	go func() { done <- s.cmd.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(graceTimeout):
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
-		<-done
+	if !s.hasExited() {
+		s.stopping.Store(true)
+		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+		select {
+		case <-s.waited:
+		case <-time.After(graceTimeout):
+			_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+			<-s.waited
+		}
 	}
 
 	if !s.keepData {
 		os.RemoveAll(s.dataDir)
-		os.Remove(s.logPath)
+		// Preserve the log when the server died on its own so the
+		// crash output survives for post-mortem analysis.
+		if !s.crashed() {
+			os.Remove(s.logPath)
+		}
 	}
 }
 

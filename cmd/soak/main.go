@@ -126,11 +126,18 @@ func main() {
 		ctx, _ = context.WithTimeout(ctx, *runtime)
 	}
 
-	addr, pid, stopServer, err := resolveServer(ctx, *attachAddr, *attachPid, *dumbodbBinary, *dumbodbArgs, *dataDir, *port, *keepData, *readyTimeout, *stopGrace)
+	addr, pid, srv, stopServer, err := resolveServer(ctx, *attachAddr, *attachPid, *dumbodbBinary, *dumbodbArgs, *dataDir, *port, *keepData, *readyTimeout, *stopGrace)
 	if err != nil {
 		log.Fatalf("dumbodb: %v", err)
 	}
 	defer stopServer()
+
+	// serverDied fires when the managed process exits. A nil channel
+	// (attach mode) blocks forever, so the select case never runs.
+	var serverDied <-chan struct{}
+	if srv != nil {
+		serverDied = srv.died()
+	}
 
 	sampler := newSampler(pid)
 	if _, err := sampler.sample(); err != nil {
@@ -179,6 +186,7 @@ func main() {
 		sampleCount             int
 		alertCount              int
 		allSamples              []sample
+		serverExit              string
 	)
 
 	defer func() {
@@ -187,10 +195,13 @@ func main() {
 		// broken cron; the summary email is the heartbeat.
 		text, htmlBody := summaryReport(hostname, buildVer, pid, addr, startedAt, time.Now(),
 			sampleCount, alertCount, firstSample, lastSample, allSamples,
-			wl.cycleCount(), wl.errCount())
+			wl.cycleCount(), wl.errCount(), serverExit)
 		subj := fmt.Sprintf("dumbodb soak: %d alert(s)", alertCount)
 		if alertCount == 0 {
 			subj = "dumbodb soak: clean"
+		}
+		if serverExit != "" {
+			subj = "dumbodb soak: SERVER CRASH"
 		}
 		log.Printf("SUMMARY: %s", strings.ReplaceAll(strings.TrimSpace(text), "\n", " | "))
 		// Use a fresh context so summary delivery doesn't get cancelled
@@ -210,6 +221,30 @@ func main() {
 		case <-ctx.Done():
 			log.Printf("soak stopping: %v; cycles=%d errors=%d", ctx.Err(), wl.cycleCount(), wl.errCount())
 			return
+		case <-serverDied:
+			if !srv.crashed() {
+				// A stop we initiated; ctx.Done handles the exit.
+				continue
+			}
+			serverExit = srv.exitStatus()
+			uptime := roundDuration(time.Since(startedAt))
+			log.Printf("SERVER CRASH after %s: %s; cycles=%d errors=%d",
+				uptime, serverExit, wl.cycleCount(), wl.errCount())
+			tail := srv.logTail(200)
+			log.Printf("--- last %d line(s) of server log %s ---", len(tail), srv.logPath)
+			for _, line := range tail {
+				log.Printf("  | %s", line)
+			}
+			log.Printf("--- end server log ---")
+			text, htmlBody := crashReport(hostname, buildVer, pid, addr, serverExit,
+				uptime, lastSample, tail, allSamples, wl.cycleCount(), wl.errCount())
+			notify(ctx, alertMessage{
+				Subject:  "dumbodb soak: SERVER CRASH",
+				TextBody: text,
+				HTMLBody: htmlBody,
+				ChartPNG: pngChart(allSamples, 640, 200),
+			})
+			return
 		case t := <-ticker.C:
 			s, err := sampler.sample()
 			if err != nil {
@@ -217,6 +252,8 @@ func main() {
 				continue
 			}
 			writer.Write(t, s, wl.cycleCount(), wl.errCount())
+			log.Printf("sample rss=%d kB anon=%d kB vm=%d kB threads=%d cycles=%d errors=%d",
+				s.RssKB, s.RssAnonKB, s.VmSizeKB, s.Threads, wl.cycleCount(), wl.errCount())
 			if sampleCount == 0 {
 				firstSample = s
 			}
@@ -275,17 +312,17 @@ func summaryBody(host string, pid int, addr string, startedAt, endedAt time.Time
 // resolveServer either starts a managed dumbodb (default) or returns
 // caller-supplied attach coordinates. The returned stop func is safe
 // to call even in attach mode (it's a no-op there).
-func resolveServer(ctx context.Context, attachAddr string, attachPid int, binary, extraArgs, dataDir string, port int, keepData bool, readyTimeout, stopGrace time.Duration) (string, int, func(), error) {
+func resolveServer(ctx context.Context, attachAddr string, attachPid int, binary, extraArgs, dataDir string, port int, keepData bool, readyTimeout, stopGrace time.Duration) (string, int, *server, func(), error) {
 	if attachAddr != "" {
-		return attachAddr, attachPid, func() {}, nil
+		return attachAddr, attachPid, nil, func() {}, nil
 	}
 	s, err := startServer(binary, extraArgs, dataDir, port, keepData, readyTimeout)
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, nil, nil, err
 	}
 	log.Printf("managed dumbodb started pid=%d addr=%s data=%s log=%s", s.pid, s.addr, s.dataDir, s.logPath)
 	stop := s.waitOnContext(ctx, stopGrace)
-	return s.addr, s.pid, stop, nil
+	return s.addr, s.pid, s, stop, nil
 }
 
 // alertReport renders the in-flight alert email as both plain text
@@ -304,7 +341,7 @@ func alertReport(host, buildVer string, pid int, addr string, a alert, recent []
 
 // summaryReport renders the end-of-run summary email as both plain
 // text and HTML.
-func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64) (text, htmlBody string) {
+func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64, serverExit string) (text, htmlBody string) {
 	title := fmt.Sprintf("dumbodb soak summary on %s", host)
 	stats := []string{
 		fmt.Sprintf("build: %s", buildVer),
@@ -315,6 +352,9 @@ func summaryReport(host, buildVer string, pid int, addr string, startedAt, ended
 		fmt.Sprintf("samples: %d collected", samples),
 		fmt.Sprintf("alerts: %d emitted during this run", alerts),
 		fmt.Sprintf("cycles: %d workload cycles, %d errors", cycles, errs),
+	}
+	if serverExit != "" {
+		stats = append(stats, fmt.Sprintf("server: CRASHED - %s", serverExit))
 	}
 	if samples > 0 {
 		deltaKB := last.RssKB - first.RssKB
@@ -327,6 +367,34 @@ func summaryReport(host, buildVer string, pid int, addr string, startedAt, ended
 			first.RssKB, last.RssKB, deltaKB, ratePerHour))
 	}
 	return textBlock(title, stats, allSamples), htmlReport(title, stats, len(allSamples) >= 2)
+}
+
+// crashReport renders the alert sent when the managed server exits
+// mid-run. It leads with the exit status (signal vs code) and folds in
+// the tail of the server log so the cause survives even when the data
+// dir is later removed.
+func crashReport(host, buildVer string, pid int, addr, exitStatus string, uptime time.Duration, last procSample, logTail []string, allSamples []sample, cycles, errs int64) (text, htmlBody string) {
+	title := fmt.Sprintf("dumbodb soak SERVER CRASH on %s", host)
+	stats := []string{
+		fmt.Sprintf("build: %s", buildVer),
+		fmt.Sprintf("pid: %d (%s)", pid, addr),
+		fmt.Sprintf("exit: %s", exitStatus),
+		fmt.Sprintf("uptime: %s before exit", uptime),
+		fmt.Sprintf("last rss: %d kB (anon %d kB) at %d threads", last.RssKB, last.RssAnonKB, last.Threads),
+		fmt.Sprintf("cycles: %d workload cycles, %d errors", cycles, errs),
+	}
+	stats = append(stats, "server log tail:")
+	for _, line := range lastN(logTail, 40) {
+		stats = append(stats, "  "+line)
+	}
+	return textBlock(title, stats, allSamples), htmlReport(title, stats, len(allSamples) >= 2)
+}
+
+func lastN(lines []string, n int) []string {
+	if len(lines) <= n {
+		return lines
+	}
+	return lines[len(lines)-n:]
 }
 
 // textBlock renders the plain-text view consumed by -alert-cmd and
