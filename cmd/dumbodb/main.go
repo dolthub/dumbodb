@@ -80,6 +80,10 @@ func run(logger *slog.Logger) error {
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	fs.Parse(os.Args[1:])
 
+	if *autoCommit && *sessionIsolation {
+		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
+	}
+
 	if *pprofAddr != "" {
 		go func() {
 			logger.Info("pprof listening", "addr", *pprofAddr)
@@ -121,11 +125,11 @@ func run(logger *slog.Logger) error {
 	}
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
-		Logger:           logger,
-		StateProvider:    stateProvider,
-		TCPHost:          *addr,
-		ReplSetName:      "",
-		DoltDataDir:      *dataDir,
+		Logger:             logger,
+		StateProvider:      stateProvider,
+		TCPHost:            *addr,
+		ReplSetName:        "",
+		DoltDataDir:        *dataDir,
 		AutoCommit:         *autoCommit,
 		SessionIsolation:   *sessionIsolation,
 		SessionTimeout:     *sessionTimeout,

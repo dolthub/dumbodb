@@ -137,3 +137,22 @@ func TestAutoCommitFlag(t *testing.T) {
 	assert.GreaterOrEqual(t, len(lr.Commits), 2,
 		"auto-commit must produce at least Initialize + 1 auto-insert commit")
 }
+
+// TestAutoCommitSessionIsolationMutuallyExclusive verifies the server refuses
+// to start when both --auto-commit and --session-isolation are set, since they
+// model incompatible commit-ownership. Builds its own binary so the check is
+// exercised against current source, not a stale pre-built one.
+func TestAutoCommitSessionIsolationMutuallyExclusive(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "dumbodb")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
+	build.Dir = repoRoot()
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building binary: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command(binary, "--auto-commit", "--session-isolation", "--data-dir", t.TempDir())
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "server must exit non-zero when both flags are set")
+	assert.Contains(t, string(out), "mutually exclusive",
+		"error must explain the flags are mutually exclusive; got: %s", out)
+}
