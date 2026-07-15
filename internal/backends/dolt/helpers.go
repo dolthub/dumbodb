@@ -741,8 +741,6 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 		return fmt.Errorf("updating working set: %w", err)
 	}
 
-	// Under --auto-commit, record this branch (and the proposed message) so the
-	// command boundary commits it once when the command completes.
 	if state.backend.autoCommit {
 		if ci := conninfo.GetIfPresent(ctx); ci != nil {
 			ci.RecordAutoCommit(state.name, branch, commitMsg)

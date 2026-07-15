@@ -219,18 +219,9 @@ func (s *dbState) updateBranchWS(
 	return nil
 }
 
-// commitBranchWS commits branch's current working root as a new Dolt commit
-// with the given message, in a single atomic write that advances HEAD and
-// installs a clean working set (working == staged == the committed root). This
-// mirrors Dolt's own dolt_transaction_commit path: doltDB.CommitWithWorkingSet
-// with a PendingCommit, guarded by entry.wsHash as the optimistic lock -- the
-// same lock value updateBranchWS uses.
-//
-// It returns (false, nil) without committing when the working root already
-// matches HEAD (empty-commit / no-op-write guard). The commit lands on branch's
-// own ref (refs/heads/<branch>), not main.
-//
-// The caller must hold state.mu (read or write lock) for headRootValueForBranch.
+// commitBranchWS commits branch's working root as one Dolt commit, or returns
+// false without committing when the root already matches HEAD. Caller must hold
+// state.mu.
 func (s *dbState) commitBranchWS(ctx context.Context, branch, message string) (committed bool, err error) {
 	e := s.branchEntry(branch)
 

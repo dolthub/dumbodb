@@ -30,16 +30,12 @@ func acCommitCount(t *testing.T, db *mongo.Database) int {
 	t.Helper()
 	var raw bson.M
 	if err := db.RunCommand(context.Background(), bson.D{{Key: "doltLog", Value: int32(1)}}).Decode(&raw); err != nil {
-		// A database with no writes yet has no history.
 		return 0
 	}
 	return len(decodeLogResult(t, raw).Commits)
 }
 
-// TestAutoCommit_ConflictWindow_Merge verifies the conflict-window contract
-// under --auto-commit for a merge: while the merge is paused on conflict,
-// edits do not auto-commit; --continue produces one commit that includes the
-// edits made during the window; auto-commit resumes afterward.
+// TestAutoCommit_ConflictWindow_Merge: conflict-window contract for a merge.
 func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -60,8 +56,6 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "merge_in", Value: "feature"}})
 	require.EqualValues(t, 0, raw["ok"], "merge must conflict on _id:1")
 
-	// Auto-commit is disabled while paused: edits to the conflicting doc and to
-	// an unrelated doc do not create commits.
 	paused := acCommitCount(t, main)
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}, {Key: "v", Value: "during"}})
 	require.NoError(t, err)
@@ -69,14 +63,11 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, paused, acCommitCount(t, main), "writes during a conflict must not auto-commit")
 
-	// Resolve and continue: the edits made during the window are in the commit.
 	resolveAllConflicts(t, main, "ours")
 	mergeContinue(t, main)
 	assert.True(t, docExists(t, main.Collection("items"), 99), "edit during conflict must survive --continue")
 	assert.True(t, docExists(t, main.Collection("items"), 98), "second edit during conflict must survive --continue")
 
-	// Auto-commit resumes after --continue: a plain insert on main advances
-	// history by exactly one commit.
 	resumed := acCommitCount(t, main)
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "after"}})
 	require.NoError(t, err)
@@ -92,10 +83,7 @@ func acHeadHash(t *testing.T, db *mongo.Database) string {
 	return lr.Commits[0].CommitID
 }
 
-// assertConflictWindow runs the shared conflict-window assertions: while paused,
-// a write does not auto-commit; after resolve+continue the write is captured and
-// auto-commit resumes. opDB is the branch under the operation; continueCmd
-// finalizes it.
+// assertConflictWindow: no auto-commit while paused; continue captures the edit and resumes.
 func assertConflictWindow(t *testing.T, opDB *mongo.Database, continueCmd bson.D) {
 	t.Helper()
 	ctx := context.Background()
@@ -117,7 +105,7 @@ func assertConflictWindow(t *testing.T, opDB *mongo.Database, continueCmd bson.D
 	assert.Equal(t, resumed+1, acCommitCount(t, opDB), "auto-commit must resume after continue")
 }
 
-// TestAutoCommit_ConflictWindow_CherryPick: hb9.7.2.
+// TestAutoCommit_ConflictWindow_CherryPick: conflict-window contract for cherry-pick.
 func TestAutoCommit_ConflictWindow_CherryPick(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -140,7 +128,7 @@ func TestAutoCommit_ConflictWindow_CherryPick(t *testing.T) {
 	assertConflictWindow(t, main, bson.D{{Key: "dumboCherryPick", Value: int32(1)}, {Key: "continue", Value: int32(1)}})
 }
 
-// TestAutoCommit_ConflictWindow_Revert: hb9.7.3.
+// TestAutoCommit_ConflictWindow_Revert: conflict-window contract for revert.
 func TestAutoCommit_ConflictWindow_Revert(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -161,7 +149,7 @@ func TestAutoCommit_ConflictWindow_Revert(t *testing.T) {
 	assertConflictWindow(t, main, bson.D{{Key: "dumboRevert", Value: int32(1)}, {Key: "continue", Value: int32(1)}})
 }
 
-// TestAutoCommit_ConflictWindow_Rebase: hb9.7.4.
+// TestAutoCommit_ConflictWindow_Rebase: conflict-window contract for rebase.
 func TestAutoCommit_ConflictWindow_Rebase(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()

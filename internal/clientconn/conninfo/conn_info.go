@@ -64,16 +64,10 @@ type ConnInfo struct {
 	bypassBackendAuth  bool // protected by rw
 	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
 
-	// pendingAutoCommit records, for the current command, which (db,branch)
-	// roots a write advanced and the proposed commit message. Keyed by
-	// db+"\x00"+branch, last writer wins. The command boundary drains it to
-	// create one commit per branch. Plain data, not deferred closures.
-	pendingAutoCommit map[string]AutoCommitTarget // protected by rw
+	pendingAutoCommit map[string]AutoCommitTarget // protected by rw; keyed by db+"\x00"+branch, last writer wins
 	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
 }
 
-// AutoCommitTarget identifies a branch whose accumulated writes should be
-// committed at the command boundary, with the message to use.
 type AutoCommitTarget struct {
 	DB      string
 	Branch  string
@@ -279,9 +273,8 @@ func GetIfPresent(ctx context.Context) *ConnInfo {
 	return connInfo
 }
 
-// RecordAutoCommit notes that a write in the current command advanced db@branch,
-// with the proposed commit message. Last writer for a given branch wins, so
-// repeated writes to one branch collapse to a single commit of its final state.
+// RecordAutoCommit notes that a write advanced db@branch, with the message to
+// commit it under. Last writer for a branch wins.
 func (connInfo *ConnInfo) RecordAutoCommit(db, branch, message string) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -292,19 +285,15 @@ func (connInfo *ConnInfo) RecordAutoCommit(db, branch, message string) {
 	connInfo.pendingAutoCommit[db+"\x00"+branch] = AutoCommitTarget{DB: db, Branch: branch, Message: message}
 }
 
-// SetAutoCommitMessage overrides the commit message for every branch drained by
-// the next DrainAutoCommit. A command that makes several heterogeneous writes
-// (e.g. bulkWrite) sets a single summary message rather than letting the last
-// write's per-write message win.
+// SetAutoCommitMessage overrides the message for every branch drained by the
+// next DrainAutoCommit, e.g. a bulkWrite summary.
 func (connInfo *ConnInfo) SetAutoCommitMessage(message string) {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 	connInfo.autoCommitMsg = message
 }
 
-// DrainAutoCommit returns the branches recorded since the last drain and clears
-// the record. The command boundary calls this once per command to commit each.
-// A message set via SetAutoCommitMessage overrides each target's message.
+// DrainAutoCommit returns and clears the branches recorded since the last drain.
 func (connInfo *ConnInfo) DrainAutoCommit() []AutoCommitTarget {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()

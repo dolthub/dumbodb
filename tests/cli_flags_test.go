@@ -138,10 +138,8 @@ func TestAutoCommitFlag(t *testing.T) {
 		"auto-commit must produce at least Initialize + 1 auto-insert commit")
 }
 
-// TestAutoCommitSessionIsolationMutuallyExclusive verifies the server refuses
-// to start when both --auto-commit and --session-isolation are set, since they
-// model incompatible commit-ownership. Builds its own binary so the check is
-// exercised against current source, not a stale pre-built one.
+// TestAutoCommitSessionIsolationMutuallyExclusive: the server refuses to start
+// when both --auto-commit and --session-isolation are set.
 func TestAutoCommitSessionIsolationMutuallyExclusive(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "dumbodb")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")

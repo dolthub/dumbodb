@@ -49,9 +49,8 @@ type Env struct {
 	extraArgs []string
 }
 
-// Restart stops the server and starts a fresh one on the same port and data
-// directory with the same flags, then reconnects the client. Used to verify
-// on-disk state (e.g. in-progress merge state) survives a restart.
+// Restart stops the server and starts a fresh one on the same port, data dir,
+// and flags, then reconnects the client.
 func (env *Env) Restart(tb testing.TB) {
 	tb.Helper()
 	if env.Client != nil {

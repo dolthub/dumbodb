@@ -38,10 +38,7 @@ func acMessages(t *testing.T, db *mongo.Database) []string {
 	return msgs
 }
 
-// acMatrixDB returns a fresh database seeded with one doc, so the database-init
-// commit already exists and subsequent single-command writes are clean +1
-// deltas (the first write to a brand-new database otherwise also produces the
-// Initialize commit).
+// acMatrixDB returns a fresh database pre-seeded so later writes are clean +1 deltas.
 func acMatrixDB(t *testing.T, env *dumboDBTestEnv) *mongo.Database {
 	t.Helper()
 	ctx := context.Background()
@@ -52,9 +49,7 @@ func acMatrixDB(t *testing.T, env *dumboDBTestEnv) *mongo.Database {
 	return db
 }
 
-// TestAutoCommit_Insert covers insert shapes: single, multi-doc (one command),
-// and into an existing collection -- each exactly one commit with a counted
-// message.
+// TestAutoCommit_Insert: single/multi/existing insert = one counted commit each.
 func TestAutoCommit_Insert(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -74,7 +69,7 @@ func TestAutoCommit_Insert(t *testing.T) {
 	assert.Equal(t, "auto: insert 3 docs into items", acMessages(t, db)[0])
 }
 
-// TestAutoCommit_UpdateDelete covers update/delete shapes and the no-op guard.
+// TestAutoCommit_UpdateDelete: update/delete = one commit; no-op = zero.
 func TestAutoCommit_UpdateDelete(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -98,7 +93,6 @@ func TestAutoCommit_UpdateDelete(t *testing.T) {
 	assert.Equal(t, n+1, acCommitCount(t, db), "delete = 1 commit")
 	assert.Equal(t, "auto: delete from items", acMessages(t, db)[0])
 
-	// No-op update / delete -> zero commits.
 	n = acCommitCount(t, db)
 	_, err = coll.UpdateMany(ctx, bson.D{{Key: "_id", Value: int32(999)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: 9}}}})
 	require.NoError(t, err)
@@ -107,7 +101,7 @@ func TestAutoCommit_UpdateDelete(t *testing.T) {
 	assert.Equal(t, n, acCommitCount(t, db), "no-op update/delete = 0 commits")
 }
 
-// TestAutoCommit_FindAndModify covers findAndModify update/remove/upsert.
+// TestAutoCommit_FindAndModify: findAndModify update/remove = one commit each.
 func TestAutoCommit_FindAndModify(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -125,7 +119,7 @@ func TestAutoCommit_FindAndModify(t *testing.T) {
 	assert.Equal(t, n+1, acCommitCount(t, db), "findAndModify remove = 1 commit")
 }
 
-// TestAutoCommit_Aggregate covers $out and $merge, one commit each.
+// TestAutoCommit_Aggregate: $out and $merge = one commit each.
 func TestAutoCommit_Aggregate(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -149,16 +143,13 @@ func TestAutoCommit_Aggregate(t *testing.T) {
 	assert.Equal(t, n+1, acCommitCount(t, db), "$merge = 1 commit")
 }
 
-// TestAutoCommit_DDL covers create/drop/rename collection and index DDL, each
-// one commit with a specific message, plus the reported-bug regression.
+// TestAutoCommit_DDL: collection/index DDL = one specific-message commit each; delete_me regression.
 func TestAutoCommit_DDL(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
-	// Unseeded db so the log is exactly the operations below plus Initialize.
 	db := env.Client.Database(fmt.Sprintf("acmddl_%d", rand.Int64N(1_000_000)))
 	require.NoError(t, db.Drop(ctx))
 
-	// Reported bug: create + drop + import are three distinct commits.
 	require.NoError(t, db.CreateCollection(ctx, "delete_me"))
 	require.NoError(t, db.Collection("delete_me").Drop(ctx))
 	_, err := db.Collection("orders").InsertMany(ctx, []any{bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "_id", Value: int32(2)}}})
@@ -170,14 +161,12 @@ func TestAutoCommit_DDL(t *testing.T) {
 		"Initialize database",
 	}, acMessages(t, db))
 
-	// Index create/drop with name-bearing messages.
 	name, err := db.Collection("orders").Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "cat", Value: int32(1)}}})
 	require.NoError(t, err)
 	assert.Equal(t, fmt.Sprintf("auto: create index %s on orders", name), acMessages(t, db)[0])
 	require.NoError(t, db.Collection("orders").Indexes().DropOne(ctx, name))
 	assert.Equal(t, fmt.Sprintf("auto: drop index %s on orders", name), acMessages(t, db)[0])
 
-	// Rename.
 	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "renameCollection", Value: db.Name() + ".orders"},
 		{Key: "to", Value: db.Name() + ".purchases"},
@@ -185,8 +174,7 @@ func TestAutoCommit_DDL(t *testing.T) {
 	assert.Equal(t, "auto: rename collection orders to purchases", acMessages(t, db)[0])
 }
 
-// TestAutoCommit_BulkWriteSummary verifies one commit for the whole bulkWrite
-// with a summary message.
+// TestAutoCommit_BulkWriteSummary: one bulkWrite = one commit with a summary message.
 func TestAutoCommit_BulkWriteSummary(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -211,8 +199,7 @@ func TestAutoCommit_BulkWriteSummary(t *testing.T) {
 	assert.Equal(t, "auto: bulkWrite (2 inserted, 1 updated, 1 deleted)", acMessages(t, db)[0])
 }
 
-// TestAutoCommit_BranchScoping verifies a write on a non-main branch commits to
-// that branch, leaving main untouched.
+// TestAutoCommit_BranchScoping: a non-main write commits to that branch, not main.
 func TestAutoCommit_BranchScoping(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()

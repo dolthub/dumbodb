@@ -37,9 +37,7 @@ func headMeta(t *testing.T, state *dbState) *datas.CommitMeta {
 	return meta
 }
 
-// TestCommitBranchWS verifies the atomic commit primitive: it commits the
-// current working root as one new commit with the given message, leaves the
-// tree clean, and no-ops (no commit) when the working root already matches HEAD.
+// TestCommitBranchWS: commit the working root once, leave a clean tree, no-op when root==HEAD.
 func TestCommitBranchWS(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-commit-branch-ws-*")
 	require.NoError(t, err)
@@ -68,7 +66,6 @@ func TestCommitBranchWS(t *testing.T) {
 	_, err = coll.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 	require.NoError(t, err)
 
-	// A dirty working set (the insert) commits exactly once, with our message.
 	state.mu.RLock()
 	committed, err := state.commitBranchWS(ctx, defaultBranch, "auto: insert 1 doc into col")
 	state.mu.RUnlock()
@@ -80,7 +77,6 @@ func TestCommitBranchWS(t *testing.T) {
 	require.NotEqual(t, initAddr, afterAddr, "HEAD must advance")
 	require.Equal(t, "auto: insert 1 doc into col", headMeta(t, state).Description)
 
-	// Tree is clean: working root now equals HEAD root.
 	ws, err := state.loadBranchWS(ctx, defaultBranch)
 	require.NoError(t, err)
 	wHash, err := ws.WorkingRoot().HashOf()
@@ -91,7 +87,6 @@ func TestCommitBranchWS(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, hHash, wHash, "working root must equal HEAD after commit")
 
-	// Empty-commit guard: no new write -> no commit, HEAD unchanged.
 	state.mu.RLock()
 	committed, err = state.commitBranchWS(ctx, defaultBranch, "should not happen")
 	state.mu.RUnlock()

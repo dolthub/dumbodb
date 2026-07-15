@@ -27,9 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// TestAutoCommitRecording verifies that under --auto-commit a write records the
-// touched (db, branch) and a proposed message on the connection's ConnInfo, for
-// the command boundary to drain and commit.
+// TestAutoCommitRecording: a write under --auto-commit records its branch+message on ConnInfo.
 func TestAutoCommitRecording(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-autocommit-record-*")
 	require.NoError(t, err)
@@ -66,6 +64,5 @@ func TestAutoCommitRecording(t *testing.T) {
 	require.Equal(t, defaultBranch, targets[0].Branch)
 	require.Equal(t, "auto: insert 1 docs into col", targets[0].Message)
 
-	// Drain is one-shot: a second drain returns nothing.
 	require.Empty(t, ci.DrainAutoCommit())
 }

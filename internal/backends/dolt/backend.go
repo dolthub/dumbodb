@@ -1090,11 +1090,6 @@ func commitCollectionsAM(ctx context.Context, datasDB datas.Database, ds datas.D
 	return newDS, am, nil
 }
 
-// AutoCommit commits the accumulated working root of dbName@branch as one Dolt
-// commit with message, at the command boundary under --auto-commit. Returns
-// whether a commit was created (false when the working root already matches
-// HEAD). Called by the handler once per command for each branch a write
-// recorded on the connection.
 func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error) {
 	state, err := b.getOrOpenDB(ctx, dbName, false)
 	if err != nil {
@@ -1106,10 +1101,6 @@ func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
-	// While a merge/cherry-pick/revert/rebase is paused on this branch,
-	// auto-commit is disabled: resolving conflicts requires editing documents,
-	// and those edits accumulate uncommitted until the operation's --continue
-	// (which commits them as one commit). See docs/design/auto-commit-chokepoint.md.
 	if state.mergeState != nil && state.mergeState.intoBranch == branch {
 		return false, nil
 	}
@@ -1694,8 +1685,6 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			return nil, fmt.Errorf("DumboDBMerge: continue: clearing artifacts: %w", clearErr)
 		}
 
-		// Commit the working root, not ms.resolvedAM, so edits made while the
-		// conflict was paused are included in the merge commit.
 		contAM, amErr := b.currentWorkingAM(ctx, db, ms.intoBranch)
 		if amErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", amErr)
@@ -1853,11 +1842,8 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM, params.Message, params.Author)
 }
 
-// currentWorkingAM returns the collections AddressMap of branch's current
-// working root. At an operation's --continue this is the post-resolution state
-// including any edits made while the conflict was paused, so committing it
-// (rather than the merge-state resolvedAM) preserves those edits. The caller
-// must hold state.mu.
+// currentWorkingAM returns the collections AddressMap of branch's working root.
+// Caller must hold state.mu.
 func (b *Backend) currentWorkingAM(ctx context.Context, db *dbState, branch string) (prolly.AddressMap, error) {
 	ws, err := db.loadBranchWS(ctx, branch)
 	if err != nil {

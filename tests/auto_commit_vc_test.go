@@ -25,8 +25,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// TestAutoCommit_CleanTreeAfterWrite verifies the working tree is clean
-// (working == HEAD) after an auto-committed write.
+// TestAutoCommit_CleanTreeAfterWrite: the working tree is clean after an auto-committed write.
 func TestAutoCommit_CleanTreeAfterWrite(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -39,7 +38,7 @@ func TestAutoCommit_CleanTreeAfterWrite(t *testing.T) {
 	assert.NotEmpty(t, sr.CommitID, "a clean tree reports a HEAD commit id")
 }
 
-// TestAutoCommit_ReadsDoNotCommit verifies read-only VC commands create no commit.
+// TestAutoCommit_ReadsDoNotCommit: read-only VC commands create no commit.
 func TestAutoCommit_ReadsDoNotCommit(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -58,8 +57,7 @@ func TestAutoCommit_ReadsDoNotCommit(t *testing.T) {
 	assert.Equal(t, before, acCommitCount(t, db), "read-only VC commands must not create commits")
 }
 
-// TestAutoCommit_ExplicitCommitNothing verifies an explicit doltCommit on the
-// already-clean tree (auto-commit keeps it clean) reports nothing to commit.
+// TestAutoCommit_ExplicitCommitNothing: explicit doltCommit on the clean tree reports nothing to commit.
 func TestAutoCommit_ExplicitCommitNothing(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -72,8 +70,7 @@ func TestAutoCommit_ExplicitCommitNothing(t *testing.T) {
 	require.Error(t, err, "explicit commit on a clean tree must fail with nothing to commit")
 }
 
-// TestAutoCommit_ResetNoSpuriousCommit verifies reset moves HEAD without
-// creating a new commit.
+// TestAutoCommit_ResetNoSpuriousCommit: reset moves HEAD without creating a commit.
 func TestAutoCommit_ResetNoSpuriousCommit(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -89,8 +86,7 @@ func TestAutoCommit_ResetNoSpuriousCommit(t *testing.T) {
 	assert.Equal(t, before-1, acCommitCount(t, db), "reset must move HEAD back, not add a commit")
 }
 
-// TestAutoCommit_BranchTagNoDataCommit verifies branch and tag creation add no
-// data commit to the branch.
+// TestAutoCommit_BranchTagNoDataCommit: branch/tag creation adds no data commit.
 func TestAutoCommit_BranchTagNoDataCommit(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -105,8 +101,7 @@ func TestAutoCommit_BranchTagNoDataCommit(t *testing.T) {
 	assert.Equal(t, before, acCommitCount(t, main), "branch/tag must not create data commits")
 }
 
-// TestAutoCommit_CleanMergeOneCommit verifies a non-conflicting merge succeeds
-// under auto-commit and brings the other branch's change in.
+// TestAutoCommit_CleanMergeOneCommit: a non-conflicting merge succeeds under auto-commit.
 func TestAutoCommit_CleanMergeOneCommit(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -127,8 +122,7 @@ func TestAutoCommit_CleanMergeOneCommit(t *testing.T) {
 	assert.True(t, docExists(t, main.Collection("items"), 3), "merge must bring feature's _id:3 into main")
 }
 
-// TestAutoCommit_MergeStateSurvivesRestart verifies a paused conflict still
-// suppresses auto-commit after a server restart (mergeState is reloaded).
+// TestAutoCommit_MergeStateSurvivesRestart: a paused conflict still suppresses auto-commit after restart.
 func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 	env := startDumboDB(t, "--auto-commit")
 	ctx := context.Background()
@@ -149,8 +143,6 @@ func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 	env.Restart(t)
 	main = env.Client.Database(dbBase + "@main")
 
-	// After restart the conflict is still in progress, so a write must not
-	// auto-commit.
 	paused := acCommitCount(t, main)
 	_, err = main.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(99)}})
 	require.NoError(t, err)

@@ -184,8 +184,6 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		firstBatch.Append(entry)
 	}
 
-	// Under --auto-commit the whole bulkWrite is one commit per branch; give it a
-	// summary message rather than the last sub-op's per-write message.
 	conninfo.Get(connCtx).SetAutoCommitMessage(fmt.Sprintf(
 		"auto: bulkWrite (%d inserted, %d updated, %d deleted)", nInserted, nModified+nUpserted, nDeleted))
 

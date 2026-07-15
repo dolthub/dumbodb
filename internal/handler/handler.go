@@ -283,12 +283,9 @@ func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 	return nil
 }
 
-// AutoCommitBoundary commits every branch a write recorded on the connection
-// during the just-finished command, one commit per branch. It is a no-op when
-// nothing was recorded (auto-commit off, read-only command, or a write parked
-// on an open transaction), so callers invoke it unconditionally after each
-// command. The commit-count guard lives in the backend (working root == HEAD ->
-// no commit).
+// AutoCommitBoundary commits each branch a write recorded on the connection
+// during the just-finished command. Safe to call unconditionally: a no-op when
+// nothing was recorded.
 func (h *Handler) AutoCommitBoundary(ctx context.Context) error {
 	ci := conninfo.GetIfPresent(ctx)
 	if ci == nil {
