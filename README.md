@@ -6,9 +6,9 @@
 
 DumboDB leverages the power of the [Dolt](https://github.com/dolthub/dolt) storage engine. Dolt's [prolly trees](https://docs.dolthub.com/architecture/storage-engine/prolly-tree) enable efficient storage of data over time thanks to structural sharing between commits. This means you can have a rich history of changes without worrying about storage bloat. 
 
-## Quick Start
+DumboDB is pre-1.0 software and not yet ready for production use -- come chat with us on our [Discord server](https://discord.gg/gqr7K4VNKe), where the developers hang out all day.
 
-> **DumboDB v0.1 is Alpha quality software.** We don't recommend it for production use, but it's great for testing your existing applications and seeing how they change data over time. It has no authentication, so run it only in trusted environments and local development -- do not expose it to untrusted networks.
+## Quick Start
 
 The fastest way to try DumboDB is with Docker. This starts the server on port 27017 and persists your data to a named volume so it survives container restarts:
 
@@ -57,12 +57,12 @@ DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity
 - Transactions: Multi-document transactions (`startTransaction` / `commitTransaction` / `abortTransaction`) are supported in the default operating mode.
 
 ### Limitations & Scope
-- No Authentication. DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. Do not expose DumboDB instances to untrusted networks. Planned for v0.6.
+- No Authentication. DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. Do not expose DumboDB instances to untrusted networks. Coming soon in v0.4.
 - Single Node: Replication (Replica Sets) and Sharding are out of scope. Support not planned.
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 - Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
 - Expiration (TTL): `expireAfterSeconds` is not supported; specifying it on a collection or index is rejected with an error rather than silently accepted. Support not planned.
-- Reserved System Databases: the `config` and `local` databases carry special MongoDB semantics that DumboDB does not implement, so creating them is rejected with an error. `admin` is supported.
+- Reserved System Databases: the `config` and `local` databases carry special MongoDB semantics that DumboDB does not implement, so creating them is rejected with an error. The `admin` database exists only to satisfy MongoDB's requirement that certain commands be issued via `runCommand` against `admin`; it is not a real admin database, and collections placed there that carry meaning for MongoDB users will not work in DumboDB.
 
 If you are needing missing features, please file an [issue](https://github.com/dolthub/dumbodb/issues), or join our [Discord server](https://discord.gg/gqr7K4VNKe) to start a conversation with us. We'd love your feedback!
 
