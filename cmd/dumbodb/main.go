@@ -90,6 +90,10 @@ func run(logger *slog.Logger) error {
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
+	// auth is accepted for MongoDB launch-parity (mongod --auth) but is not
+	// yet enforced; access control is a no-op in this build. See
+	// docs/design/authentication-and-authorization.md.
+	auth := fs.Bool("auth", false, "enable access control (accepted for MongoDB compatibility; not yet enforced -- currently a no-op)")
 	fs.Parse(os.Args[1:])
 
 	if *autoCommit && *sessionIsolation {
@@ -116,6 +120,10 @@ func run(logger *slog.Logger) error {
 		Level: level,
 	}, "")
 	logger = slog.Default()
+
+	if *auth {
+		logger.Warn("--auth accepted but access control is not yet enforced in this build (no-op)")
+	}
 
 	if *port != 0 {
 		addrExplicit := false
