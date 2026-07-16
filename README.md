@@ -10,11 +10,10 @@ DumboDB is pre-1.0 software and not yet ready for production use -- come chat wi
 
 ## Quick Start
 
-The fastest way to try DumboDB is with Docker. This starts the server on port 27017 and persists your data to a named volume so it survives container restarts:
+The fastest way to try DumboDB is with Docker. This starts the server on port 27017 and persists your data to a `dumbodb-data` directory in your current working directory so it survives container restarts:
 
 ```bash
-docker volume create dumbodb-data
-docker run -p 27017:27017 -v dumbodb-data:/var/lib/dumbodb dolthub/dumbodb:latest
+docker run -p 27017:27017 -v $(pwd)/dumbodb-data:/var/lib/dumbodb dolthub/dumbodb:latest
 ```
 
 Then connect with `mongosh` [shell](https://www.mongodb.com/try/download/shell), or any [MongoDB driver](https://www.mongodb.com/docs/drivers/):
