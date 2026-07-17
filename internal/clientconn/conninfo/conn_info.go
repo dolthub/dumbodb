@@ -118,13 +118,22 @@ func (connInfo *ConnInfo) SetMetadataRecv() {
 	connInfo.metadataRecv = true
 }
 
-// SetSCRAMAuthenticated marks that SCRAM authentication completed successfully on this connection.
-// This is never cleared, even after logout.
+// SetSCRAMAuthenticated marks that SCRAM authentication completed successfully
+// on this connection. Cleared by ClearSCRAMAuthenticated on logout.
 func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
 
 	connInfo.scramAuthenticated = true
+}
+
+// ClearSCRAMAuthenticated returns the connection to its pre-auth state so a
+// subsequent privileged command is gated again until re-authentication.
+func (connInfo *ConnInfo) ClearSCRAMAuthenticated() {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.scramAuthenticated = false
 }
 
 func (connInfo *ConnInfo) SCRAMAuthenticated() bool {

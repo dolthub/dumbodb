@@ -28,7 +28,9 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgLogout(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	conninfo.Get(connCtx).SetAuth("", "", nil, "")
+	ci := conninfo.Get(connCtx)
+	ci.SetAuth("", "", nil, "")
+	ci.ClearSCRAMAuthenticated()
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(

@@ -97,7 +97,7 @@ func (h *Handler) initCommands() {
 		"listCommands":            {Handler: h.MsgListCommands, Help: "Returns a list of currently supported commands."},
 		"listDatabases":           {Handler: h.MsgListDatabases, Help: "Returns a summary of all the databases."},
 		"listIndexes":             {Handler: h.MsgListIndexes, Help: "Returns a summary of indexes of the specified collection."},
-		"logout":                  {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Logs out from the current session."},
+		"logout":                  {Handler: h.MsgLogout, anonymous: true, Help: "Logs out from the current session."},
 		"startSession":            {Handler: h.MsgStartSession, anonymous: true, Help: "Creates a new server session."},
 		"top":                     {Handler: h.MsgTop, Help: "Returns per-collection usage statistics (degenerate -- DumboDB does not track per-op counters)."},
 		"createSearchIndexes":     {Handler: h.MsgCreateSearchIndexes, Help: "Creates Atlas Search indexes (not supported)."},

@@ -151,6 +151,57 @@ func TestAuthGate_LocalhostExceptionLatchIsPermanent(t *testing.T) {
 	require.True(t, isForcedLoginError(err), "latched exception must not be reusable, got %v", err)
 }
 
+func TestLogout_ClearsAuthAndSCRAMLatch(t *testing.T) {
+	h := authGateHandler(t, true)
+
+	ci := conninfo.New()
+	ci.SetAuth("alice", "", nil, "admin")
+	ci.SetSCRAMAuthenticated()
+	ctx := conninfo.Ctx(context.Background(), ci)
+
+	_, err := h.commands["logout"].Handler(ctx, gateCmd(t, "logout"))
+	require.NoError(t, err)
+
+	user, _, _, _ := ci.Auth()
+	require.Equal(t, "", user, "logout must clear the authenticated user")
+	require.False(t, ci.SCRAMAuthenticated(), "logout must clear the scramAuthenticated latch")
+}
+
+func TestConnectionStatus_ReportsUserAndStoredRoles(t *testing.T) {
+	h := authGateHandler(t, true)
+
+	// Bootstrap a user with a role via the localhost exception.
+	bootstrapCtx := peerCtx("127.0.0.1:40000")
+	_, err := h.commands["createUser"].Handler(bootstrapCtx, must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"createUser", "alice",
+		"pwd", "pw",
+		"roles", must.NotFail(types.NewArray("readWrite")),
+		"$db", "admin",
+	)))))
+	require.NoError(t, err)
+
+	// Present the connection as authenticated as that user.
+	ci := conninfo.New()
+	ci.SetAuth("alice", "", nil, "admin")
+	ctx := conninfo.Ctx(context.Background(), ci)
+
+	res, err := h.commands["connectionStatus"].Handler(ctx, gateCmd(t, "connectionStatus"))
+	require.NoError(t, err)
+
+	doc, err := opMsgDocument(res)
+	require.NoError(t, err)
+	authInfo := must.NotFail(doc.Get("authInfo")).(*types.Document)
+	authUsers := must.NotFail(authInfo.Get("authenticatedUsers")).(*types.Array)
+	authRoles := must.NotFail(authInfo.Get("authenticatedUserRoles")).(*types.Array)
+
+	require.Equal(t, 1, authUsers.Len(), "authenticatedUsers must list the user")
+	require.Equal(t, 1, authRoles.Len(), "authenticatedUserRoles must reflect the stored roles")
+
+	role0 := must.NotFail(authRoles.Get(0)).(*types.Document)
+	require.Equal(t, "readWrite", must.NotFail(role0.Get("role")))
+	require.Equal(t, "admin", must.NotFail(role0.Get("db")))
+}
+
 func TestAuthGate_DisabledAllowsUnauthenticated(t *testing.T) {
 	h := authGateHandler(t, false)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
