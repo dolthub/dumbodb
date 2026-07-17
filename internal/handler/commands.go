@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -185,6 +186,9 @@ func (h *Handler) initCommands() {
 						return nil, err
 					}
 				}
+				if guardErr := guardSystemCollection(wireCommandTarget(msg)); guardErr != nil {
+					return nil, guardErr
+				}
 				return authed(ctx, msg)
 			}
 		}
@@ -336,6 +340,58 @@ func (h *Handler) userCount(ctx context.Context) (int64, error) {
 	}
 
 	return res.Count, nil
+}
+
+// systemWriteDenyCode maps a collection-mutating command to the error code
+// DumboDB returns when it targets a system.* collection. The auth store is
+// writable only through the user management commands.
+var systemWriteDenyCode = map[string]handlererrors.ErrorCode{
+	"insert":        handlererrors.ErrUnauthorized,
+	"update":        handlererrors.ErrUnauthorized,
+	"delete":        handlererrors.ErrUnauthorized,
+	"findAndModify": handlererrors.ErrUnauthorized,
+	"findandmodify": handlererrors.ErrUnauthorized,
+	"create":        handlererrors.ErrUnauthorized,
+	"drop":          handlererrors.ErrIllegalOperation,
+}
+
+// wireCommandTarget returns the command name and its target collection (the
+// first BSON field's name and string value), or empty strings on parse failure.
+func wireCommandTarget(msg *wire.OpMsg) (command, collection string) {
+	doc, err := opMsgDocument(msg)
+	if err != nil {
+		return "", ""
+	}
+	keys := doc.Keys()
+	if len(keys) == 0 {
+		return "", ""
+	}
+	command = keys[0]
+	if v, err := doc.Get(keys[0]); err == nil {
+		if s, ok := v.(string); ok {
+			collection = s
+		}
+	}
+	return command, collection
+}
+
+// guardSystemCollection rejects a collection-mutating command that targets a
+// system.* collection.
+func guardSystemCollection(command, collection string) error {
+	if !strings.HasPrefix(collection, "system.") {
+		return nil
+	}
+
+	code, guarded := systemWriteDenyCode[command]
+	if !guarded {
+		return nil
+	}
+
+	return handlererrors.NewCommandErrorMsgWithArgument(
+		code,
+		fmt.Sprintf("cannot %s system collection %q directly; use the user management commands", command, collection),
+		command,
+	)
 }
 
 func (h *Handler) Commands() map[string]*Command {

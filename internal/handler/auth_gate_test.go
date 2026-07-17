@@ -85,6 +85,65 @@ func gateCmd(t *testing.T, name string, extra ...any) *wire.OpMsg {
 	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(pairs...))))
 }
 
+func collCmd(t *testing.T, name, coll string) *wire.OpMsg {
+	t.Helper()
+
+	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(name, coll, "$db", "admin"))))
+}
+
+func commandErrorCode(err error) (handlererrors.ErrorCode, bool) {
+	var ce *handlererrors.CommandError
+	if !errors.As(err, &ce) {
+		return 0, false
+	}
+	return ce.Code(), true
+}
+
+func TestGuardSystemCollection(t *testing.T) {
+	for _, tc := range []struct {
+		cmd  string
+		code handlererrors.ErrorCode
+	}{
+		{"insert", handlererrors.ErrUnauthorized},
+		{"update", handlererrors.ErrUnauthorized},
+		{"delete", handlererrors.ErrUnauthorized},
+		{"findAndModify", handlererrors.ErrUnauthorized},
+		{"create", handlererrors.ErrUnauthorized},
+		{"drop", handlererrors.ErrIllegalOperation},
+	} {
+		err := guardSystemCollection(tc.cmd, "system.users")
+		require.Error(t, err, "%s on system.users must be rejected", tc.cmd)
+		code, ok := commandErrorCode(err)
+		require.True(t, ok, "%s: want CommandError, got %v", tc.cmd, err)
+		require.Equal(t, tc.code, code, "%s on system.users: wrong error code", tc.cmd)
+	}
+
+	// A non-system collection is never guarded.
+	require.NoError(t, guardSystemCollection("insert", "widgets"))
+
+	// Reads of a system collection are not mutations and are not guarded.
+	require.NoError(t, guardSystemCollection("find", "system.users"))
+	require.NoError(t, guardSystemCollection("aggregate", "system.users"))
+}
+
+func TestGuardSystemCollection_WiredAfterAuthGate(t *testing.T) {
+	// With enforcement off, an unauthenticated connection passes the gate and
+	// reaches the guard, proving the guard is wired into dispatch.
+	h := authGateHandler(t, false)
+	ctx := conninfo.Ctx(context.Background(), conninfo.New())
+
+	_, err := h.commands["drop"].Handler(ctx, collCmd(t, "drop", "system.users"))
+	code, ok := commandErrorCode(err)
+	require.True(t, ok, "want CommandError, got %v", err)
+	require.Equal(t, handlererrors.ErrIllegalOperation, code)
+
+	// With enforcement on, the auth gate fires before the guard: an
+	// unauthenticated system.* mutation is a forced-login rejection.
+	hEnforced := authGateHandler(t, true)
+	_, err = hEnforced.commands["insert"].Handler(ctx, collCmd(t, "insert", "system.users"))
+	require.True(t, isForcedLoginError(err), "auth gate must precede the system guard, got %v", err)
+}
+
 func TestAuthGate_ForcedLoginRejectsUnauthenticated(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
