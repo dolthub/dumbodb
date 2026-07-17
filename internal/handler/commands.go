@@ -296,15 +296,6 @@ func (h *Handler) msgAuthNotSupported(_ context.Context, _ *wire.OpMsg) (*wire.O
 	)
 }
 
-// msgTransactionsNotSupported returns an OperationFailed error for transaction
-// commands. Transactions are not implemented in this release.
-func (h *Handler) msgTransactionsNotSupported(_ context.Context, _ *wire.OpMsg) (*wire.OpMsg, error) {
-	return nil, handlererrors.NewCommandErrorMsg(
-		handlererrors.ErrOperationFailed,
-		"transactions are not supported in this release of DumboDB",
-	)
-}
-
 // msgFreeMonitoringNotSupported returns an OperationFailed error for free
 // monitoring commands. Free monitoring is a MongoDB Atlas feature not
 // applicable to DumboDB.

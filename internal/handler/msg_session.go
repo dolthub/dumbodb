@@ -31,13 +31,10 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgStartSession implements the `startSession` command.
-//
-// DumboDB does not implement multi-document transactions, but the driver
-// requires a valid session ID to annotate operations. We return a
-// well-formed session document so the driver can proceed. Operations
-// tagged with lsid/txnNumber are handled on a per-command basis (the
-// fields are accepted and ignored).
+// MsgStartSession implements the `startSession` command. It returns a
+// freshly generated logical session id that the driver uses to annotate
+// subsequent operations, including the lsid/txnNumber that scope a
+// multi-document transaction.
 func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
