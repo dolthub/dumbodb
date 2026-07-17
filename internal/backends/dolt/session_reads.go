@@ -39,6 +39,18 @@ func dbNameDsessFriendly(dbName string) bool {
 	return !strings.ContainsAny(dbName, "/@")
 }
 
+// alwaysAutoCommit reports whether writes to dbName must be committed
+// immediately, independent of the server's --auto-commit / --session-isolation
+// mode. The admin database holds authentication data (admin.system.users) that
+// must be durable the instant a command returns and must never sit in a
+// per-connection working-set overlay. So admin bypasses the session overlay
+// entirely -- reads and writes go straight to the committed main branch, and
+// each write auto-commits at the command boundary. This makes --auto-commit
+// effectively database-specific.
+func alwaysAutoCommit(dbName string) bool {
+	return dbName == "admin"
+}
+
 // ensureDsessTxn: dsess.StartTransaction wipes every per-db branchState,
 // so callers MUST invoke this only at txn-entry boundaries.
 func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, error) {

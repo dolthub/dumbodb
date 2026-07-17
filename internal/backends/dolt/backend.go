@@ -239,7 +239,7 @@ func (s *dbState) setAM(ctx context.Context, branch string, am prolly.AddressMap
 // stays: marking idle sessions dirty makes session.Commit / merge
 // paths behave inconsistently for non-txn writes.
 func (s *dbState) pushWSToSession(ctx context.Context, branch string, newWS *doltdb.WorkingSet) {
-	if !dbNameDsessFriendly(s.name) {
+	if !dbNameDsessFriendly(s.name) || alwaysAutoCommit(s.name) {
 		return
 	}
 	sess := sessionFromContext(ctx)

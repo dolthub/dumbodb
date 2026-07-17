@@ -106,7 +106,7 @@ func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.W
 	if sess == nil {
 		return nil, false
 	}
-	if !dbNameDsessFriendly(state.name) {
+	if !dbNameDsessFriendly(state.name) || alwaysAutoCommit(state.name) {
 		return nil, false
 	}
 	qualified := qualifiedDbName(state.name, branch)
