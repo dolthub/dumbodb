@@ -199,6 +199,40 @@ func TestAuthGate_LocalhostExceptionLatchIsPermanent(t *testing.T) {
 	require.True(t, isForcedLoginError(err), "latched exception must not be reusable, got %v", err)
 }
 
+func saslStartMsg(t *testing.T) *wire.OpMsg {
+	t.Helper()
+
+	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"saslStart", int32(1),
+		"mechanism", "SCRAM-SHA-256",
+		"payload", types.Binary{B: []byte("n,,n=u,r=abcdefgh")},
+		"$db", "admin",
+	))))
+}
+
+func TestSASLStart_RejectsSecondAuthOnAuthenticatedConnection(t *testing.T) {
+	h := authGateHandler(t, true)
+
+	ci := conninfo.New()
+	ci.SetSCRAMAuthenticated()
+	ctx := conninfo.Ctx(context.Background(), ci)
+
+	_, err := h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
+	code, ok := commandErrorCode(err)
+	require.True(t, ok, "want CommandError, got %v", err)
+	require.Equal(t, handlererrors.ErrAuthenticationFailed, code)
+}
+
+func TestSASLStart_AllowedOnUnauthenticatedConnection(t *testing.T) {
+	h := authGateHandler(t, true)
+	ctx := conninfo.Ctx(context.Background(), conninfo.New())
+
+	// A first saslStart begins the conversation (unknown user gets fake
+	// credentials); it must not be the reject-second-auth path.
+	_, err := h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
+	require.NoError(t, err)
+}
+
 func TestLogout_ClearsAuthAndSCRAMLatch(t *testing.T) {
 	h := authGateHandler(t, true)
 

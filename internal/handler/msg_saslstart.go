@@ -284,6 +284,14 @@ func scramFakeCredentials(mechanism string) scram.StoredCredentials {
 // saslStartSCRAM extracts the initial challenge and attempts to move the
 // authentication conversation forward returning a challenge response.
 func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, doc *types.Document) (string, error) {
+	if conninfo.Get(ctx).SCRAMAuthenticated() {
+		return "", handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrAuthenticationFailed,
+			"Authentication failed.",
+			"saslStart",
+		)
+	}
+
 	var payload []byte
 
 	// most drivers follow spec and send payload as a binary
