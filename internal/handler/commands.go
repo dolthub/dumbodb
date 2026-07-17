@@ -113,11 +113,11 @@ func (h *Handler) initCommands() {
 		"update":                  {Handler: h.MsgUpdate, Help: "Updates documents that are matched by the query."},
 		"validate":                {Handler: h.MsgValidate, Help: "Validates collection."},
 		"whatsmyuri":              {Handler: h.MsgWhatsMyURI, anonymous: true, Help: "Returns peer information."},
-		"createUser":              {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Creates a new user."},
-		"dropAllUsersFromDatabase": {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Drops all users from database."},
-		"dropUser":                {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Drops user."},
-		"updateUser":              {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Updates user."},
-		"usersInfo":               {Handler: h.msgAuthNotSupported, anonymous: true, Help: "Returns information about users."},
+		"createUser":              {Handler: h.MsgCreateUser, anonymous: true, Help: "Creates a new user."},
+		"dropAllUsersFromDatabase": {Handler: h.MsgDropAllUsersFromDatabase, anonymous: true, Help: "Drops all users from database."},
+		"dropUser":                {Handler: h.MsgDropUser, anonymous: true, Help: "Drops user."},
+		"updateUser":              {Handler: h.MsgUpdateUser, anonymous: true, Help: "Updates user."},
+		"usersInfo":               {Handler: h.MsgUsersInfo, anonymous: true, Help: "Returns information about users."},
 	}
 
 	// Lowercase-variant handshake / introspection aliases.

@@ -78,7 +78,8 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	if _, err = common.GetRequiredParam[*types.Array](document, "roles"); err != nil {
+	roles, err := common.GetRequiredParam[*types.Array](document, "roles")
+	if err != nil {
 		var ce *handlererrors.CommandError
 		if errors.As(err, &ce) && ce.Code() == handlererrors.ErrBadValue {
 			return nil, handlererrors.NewCommandErrorMsg(
@@ -90,9 +91,8 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Accept any roles array; dumbodb doesn't enforce RBAC but must not reject
-	// non-empty roles to be compatible with MongoDB clients.
-	common.Ignored(document, h.L, "roles")
+	// Roles are stored on the user document for MongoDB compatibility but not
+	// enforced; dumbodb does not implement RBAC.
 
 	if err = common.UnimplementedNonDefault(document, "digestPassword", func(v any) bool {
 		if v == nil || v == types.Null {
@@ -172,6 +172,7 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			Username:   username,
 			Password:   password.WrapPassword(userPassword),
 			Mechanisms: mechanisms,
+			Roles:      roles,
 		})
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {

@@ -38,6 +38,7 @@ type CreateUserParams struct {
 	Username   string
 	Password   password.Password
 	Mechanisms *types.Array
+	Roles      *types.Array
 }
 
 // CreateUser stores a new user in the given backend.
@@ -49,13 +50,18 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		return err
 	}
 
+	roles, err := NormalizeRoles(params.Roles, params.Database)
+	if err != nil {
+		return err
+	}
+
 	id := uuid.New()
 	saved := must.NotFail(types.NewDocument(
 		"_id", params.Database+"."+params.Username,
 		"credentials", credentials,
 		"user", params.Username,
 		"db", params.Database,
-		"roles", types.MakeArray(0),
+		"roles", roles,
 		"userId", types.Binary{Subtype: types.BinaryUUID, B: must.NotFail(id.MarshalBinary())},
 	))
 
@@ -67,6 +73,57 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 	})
 
 	return err
+}
+
+// NormalizeRoles converts a createUser/updateUser roles array into the canonical
+// stored form: an array of {role, db} documents. A shorthand string entry resolves
+// its db to defaultDB (the database the command runs against). Roles are stored for
+// MongoDB compatibility but not enforced. A nil input yields an empty array.
+func NormalizeRoles(roles *types.Array, defaultDB string) (*types.Array, error) {
+	if roles == nil {
+		return types.MakeArray(0), nil
+	}
+
+	out := types.MakeArray(roles.Len())
+
+	iter := roles.Iterator()
+	defer iter.Close()
+
+	for {
+		_, v, err := iter.Next()
+
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		switch r := v.(type) {
+		case string:
+			out.Append(must.NotFail(types.NewDocument("role", r, "db", defaultDB)))
+		case *types.Document:
+			role, _ := r.Get("role")
+			db, _ := r.Get("db")
+
+			roleStr, ok := role.(string)
+			if !ok {
+				return nil, lazyerrors.Errorf("role name must be a string, got %T", role)
+			}
+
+			dbStr, ok := db.(string)
+			if !ok {
+				return nil, lazyerrors.Errorf("role db must be a string, got %T", db)
+			}
+
+			out.Append(must.NotFail(types.NewDocument("role", roleStr, "db", dbStr)))
+		default:
+			return nil, lazyerrors.Errorf("unsupported role entry type %T", v)
+		}
+	}
+
+	return out, nil
 }
 
 // MakeCredentials creates a document with credentials for the chosen mechanisms.

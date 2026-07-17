@@ -63,9 +63,7 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	// Accept any roles value; dumbodb doesn't enforce RBAC but must not reject
-	// non-empty roles to be compatible with MongoDB clients.
-	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment", "roles")
+	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment")
 
 	defMechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
 
@@ -195,9 +193,20 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 	if document.Has("roles") {
 		changes = true
-		// Roles are accepted but not enforced (no RBAC). The stored value remains
-		// an empty array; we only set changes=true to satisfy the "at least one
-		// field" requirement.
+
+		roles, err := common.GetRequiredParam[*types.Array](document, "roles")
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		// Roles replace the stored set wholesale (MongoDB semantics). They are
+		// stored for compatibility but not enforced; dumbodb has no RBAC.
+		normalized, err := users.NormalizeRoles(roles, dbName)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		saved.Set("roles", normalized)
 	}
 
 	if !changes {
