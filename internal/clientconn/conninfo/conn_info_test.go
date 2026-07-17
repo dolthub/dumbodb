@@ -36,7 +36,7 @@ func TestLSIDRoundTrip(t *testing.T) {
 func TestOwnerPrefersLSID(t *testing.T) {
 	c := New()
 	c.SetLSID("real-lsid-uuid")
-	assert.Equal(t, "real-lsid-uuid", c.Owner())
+	assert.Equal(t, "\x00real-lsid-uuid", c.Owner())
 }
 
 func TestOwnerFallsBackToConnSyntheticID(t *testing.T) {
@@ -47,7 +47,7 @@ func TestOwnerFallsBackToConnSyntheticID(t *testing.T) {
 	o1b := c1.Owner()
 	o2 := c2.Owner()
 
-	assert.True(t, strings.HasPrefix(o1a, "conn:"),
+	assert.Contains(t, o1a, "conn:",
 		"synthetic owner should be unambiguous: got %q", o1a)
 	assert.Equal(t, o1a, o1b, "Owner must be stable across calls on same ConnInfo")
 	assert.NotEqual(t, o1a, o2, "Owner must distinguish different connections")
@@ -67,10 +67,10 @@ func TestInTransactionRoundTrip(t *testing.T) {
 func TestSetLSIDOverridesFallback(t *testing.T) {
 	c := New()
 	syntheticOwner := c.Owner()
-	assert.True(t, strings.HasPrefix(syntheticOwner, "conn:"))
+	assert.Contains(t, syntheticOwner, "conn:")
 
 	c.SetLSID("real-lsid")
-	assert.Equal(t, "real-lsid", c.Owner(),
+	assert.Equal(t, "\x00real-lsid", c.Owner(),
 		"Owner must prefer lsid once it is set, not the synthetic fallback")
 }
 
@@ -113,11 +113,33 @@ func TestEnsureLSID_NoopOnDriverSupplied(t *testing.T) {
 
 func TestEnsureLSID_OwnerPrefersSyntheticOverConnFallback(t *testing.T) {
 	c := New()
-	require.True(t, strings.HasPrefix(c.Owner(), "conn:"))
+	// Owner is the (user, lsid) session key; with no lsid and no auth it falls
+	// back to a conn-scoped id under the empty user.
+	require.Contains(t, c.Owner(), "conn:")
 
 	id := c.EnsureLSID()
-	assert.Equal(t, id, c.Owner())
-	assert.True(t, strings.HasPrefix(c.Owner(), "synthetic:"))
+	assert.Equal(t, "\x00"+id, c.Owner())
+	assert.Contains(t, c.Owner(), "synthetic:")
+}
+
+func TestOwner_ScopesByAuthenticatedUser(t *testing.T) {
+	c := New()
+	c.SetLSID("lsid-shared")
+
+	anon := c.Owner()
+
+	c.SetAuth("alice", "", nil, "admin")
+	alice := c.Owner()
+
+	c.SetAuth("bob", "", nil, "admin")
+	bob := c.Owner()
+
+	// The same lsid under different users yields distinct session keys, and the
+	// key an explicit endSessions entry resolves to matches the current user's.
+	assert.NotEqual(t, anon, alice)
+	assert.NotEqual(t, alice, bob)
+	assert.Equal(t, bob, c.SessionKeyFor("lsid-shared"))
+	assert.Contains(t, alice, "lsid-shared")
 }
 
 func TestEnsureLSID_StableAcrossCalls(t *testing.T) {

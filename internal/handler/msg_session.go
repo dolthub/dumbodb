@@ -111,7 +111,7 @@ func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 	ci.SetInTransaction(false)
 
-	endLsidsFromMsg(h, msg)
+	endLsidsFromMsg(h, connCtx, msg)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
@@ -122,11 +122,12 @@ func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 // endLsidsFromMsg silently skips malformed entries; endSessions is
 // advisory and a bad wire frame should never produce a server error.
-func endLsidsFromMsg(h *Handler, msg *wire.OpMsg) {
+func endLsidsFromMsg(h *Handler, connCtx context.Context, msg *wire.OpMsg) {
 	reg := h.SessionRegistry()
 	if reg == nil || msg == nil {
 		return
 	}
+	ci := conninfo.Get(connCtx)
 	doc, err := opMsgDocument(msg)
 	if err != nil || doc == nil || !doc.Has("endSessions") {
 		return
@@ -156,6 +157,6 @@ func endLsidsFromMsg(h *Handler, msg *wire.OpMsg) {
 		if !ok {
 			continue
 		}
-		reg.End(hex.EncodeToString(bin.B))
+		reg.End(ci.SessionKeyFor(hex.EncodeToString(bin.B)))
 	}
 }

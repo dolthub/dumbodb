@@ -231,11 +231,32 @@ func (connInfo *ConnInfo) SetTxnAborted(v bool) {
 	connInfo.txnAborted = v
 }
 
+// Owner returns the registry key that scopes this connection's logical session.
+// MongoDB scopes sessions by (lsid-id, authenticated-user): the same lsid
+// presented by a different user is a distinct session that must never be
+// shared. The key therefore combines the authenticated user with the lsid, so
+// the user is recorded in the session's identity. See sessionKey.
 func (connInfo *ConnInfo) Owner() string {
-	if id := connInfo.LSID(); id != "" {
-		return id
+	id := connInfo.LSID()
+	if id == "" {
+		id = fmt.Sprintf("conn:%p", connInfo)
 	}
-	return fmt.Sprintf("conn:%p", connInfo)
+	user, _, _, _ := connInfo.Auth()
+	return sessionKey(user, id)
+}
+
+// SessionKeyFor returns the registry key for an lsid id named explicitly by the
+// client (e.g. an endSessions entry), scoped to this connection's authenticated
+// user so a client can only reach its own sessions.
+func (connInfo *ConnInfo) SessionKeyFor(id string) string {
+	user, _, _, _ := connInfo.Auth()
+	return sessionKey(user, id)
+}
+
+// sessionKey composes the (user, lsid) registry key. The NUL separator cannot
+// appear in a MongoDB username, so the mapping is unambiguous.
+func sessionKey(user, id string) string {
+	return user + "\x00" + id
 }
 
 // Ctx returns a derived context with the given ConnInfo.
