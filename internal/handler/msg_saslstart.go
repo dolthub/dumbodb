@@ -27,6 +27,7 @@ import (
 	"github.com/FerretDB/wire"
 	"github.com/xdg-go/scram"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -184,9 +185,12 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 
 	filter := must.NotFail(types.NewDocument("_id", dbName+"."+username))
 
-	// Filter isn't being passed to the query as we are filtering after retrieving all data
-	// from the database due to limitations of the internal/backends filters.
-	qr, err := usersCol.Query(ctx, nil)
+	// system.users is clustered on _id, so an _id-equality filter takes the
+	// pointLookupByID fast path (O(log N)); drivers re-authenticate per socket,
+	// so a full scan here would be O(N) on every connect. The loop below still
+	// re-checks with FilterDocument because a backend may apply the filter only
+	// partially.
+	qr, err := usersCol.Query(ctx, &backends.QueryParams{Filter: filter})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -306,6 +310,11 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 		panic("unsupported SCRAM mechanism")
 	}
 
+	// lookupCmdErr preserves a specific lookup error (e.g. MechanismUnavailable
+	// for an existing user lacking the requested mechanism) so it can be surfaced
+	// after Step instead of being flattened into a generic AuthenticationFailed.
+	var lookupCmdErr *handlererrors.CommandError
+
 	scramServer, err := f.NewServer(func(username string) (scram.StoredCredentials, error) {
 		cred, lookupErr := h.scramCredentialLookup(ctx, dbName, username, mechanism)
 		if lookupErr != nil {
@@ -315,6 +324,10 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 				// This prevents username enumeration. Authentication will fail at saslContinue.
 				// Empty usernames are not valid and fail immediately without fake credentials.
 				return scramFakeCredentials(mechanism), nil
+			}
+
+			if errors.As(lookupErr, &cmdErr) {
+				lookupCmdErr = cmdErr
 			}
 
 			return scram.StoredCredentials{}, lookupErr
@@ -342,6 +355,10 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 		}
 
 		h.L.WarnContext(ctx, "saslStartSCRAM: step failed", attrs...)
+
+		if lookupCmdErr != nil {
+			return "", lookupCmdErr
+		}
 
 		return "", handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrAuthenticationFailed,
