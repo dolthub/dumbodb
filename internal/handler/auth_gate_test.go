@@ -99,7 +99,7 @@ func commandErrorCode(err error) (handlererrors.ErrorCode, bool) {
 	return ce.Code(), true
 }
 
-func TestGuardSystemCollection(t *testing.T) {
+func TestGuardAdminMutation(t *testing.T) {
 	for _, tc := range []struct {
 		cmd  string
 		code handlererrors.ErrorCode
@@ -111,26 +111,26 @@ func TestGuardSystemCollection(t *testing.T) {
 		{"create", handlererrors.ErrUnauthorized},
 		{"drop", handlererrors.ErrIllegalOperation},
 	} {
-		err := guardSystemCollection(tc.cmd, "admin", "system.users")
-		require.Error(t, err, "%s on admin.system.users must be rejected", tc.cmd)
-		code, ok := commandErrorCode(err)
-		require.True(t, ok, "%s: want CommandError, got %v", tc.cmd, err)
-		require.Equal(t, tc.code, code, "%s on admin.system.users: wrong error code", tc.cmd)
+		// The whole admin database is reserved: system and non-system collections.
+		for _, coll := range []string{"system.users", "widgets"} {
+			err := guardAdminMutation(tc.cmd, "admin", coll)
+			require.Error(t, err, "%s on admin.%s must be rejected", tc.cmd, coll)
+			code, ok := commandErrorCode(err)
+			require.True(t, ok, "%s: want CommandError, got %v", tc.cmd, err)
+			require.Equal(t, tc.code, code, "%s on admin.%s: wrong error code", tc.cmd, coll)
+		}
 	}
 
-	// A system collection in a user database is not guarded.
-	require.NoError(t, guardSystemCollection("insert", "mydb", "system.foobar"))
-	require.NoError(t, guardSystemCollection("drop", "mydb", "system.users"))
+	// User databases are not guarded, including their own system.* collections.
+	require.NoError(t, guardAdminMutation("insert", "mydb", "system.foobar"))
+	require.NoError(t, guardAdminMutation("drop", "mydb", "widgets"))
 
-	// A non-system collection in admin is not guarded.
-	require.NoError(t, guardSystemCollection("insert", "admin", "widgets"))
-
-	// Reads of an admin system collection are not mutations and are not guarded.
-	require.NoError(t, guardSystemCollection("find", "admin", "system.users"))
-	require.NoError(t, guardSystemCollection("aggregate", "admin", "system.users"))
+	// Reads of admin collections are not mutations and are not guarded.
+	require.NoError(t, guardAdminMutation("find", "admin", "system.users"))
+	require.NoError(t, guardAdminMutation("aggregate", "admin", "widgets"))
 }
 
-func TestGuardSystemCollection_WiredAfterAuthGate(t *testing.T) {
+func TestGuardAdminMutation_WiredAfterAuthGate(t *testing.T) {
 	// With enforcement off, an unauthenticated connection passes the gate and
 	// reaches the guard, proving the guard is wired into dispatch.
 	h := authGateHandler(t, false)

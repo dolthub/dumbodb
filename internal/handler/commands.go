@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -186,7 +185,7 @@ func (h *Handler) initCommands() {
 						return nil, err
 					}
 				}
-				if guardErr := guardSystemCollection(wireCommandTarget(msg)); guardErr != nil {
+				if guardErr := guardAdminMutation(wireCommandTarget(msg)); guardErr != nil {
 					return nil, guardErr
 				}
 				return authed(ctx, msg)
@@ -342,10 +341,11 @@ func (h *Handler) userCount(ctx context.Context) (int64, error) {
 	return res.Count, nil
 }
 
-// systemWriteDenyCode maps a collection-mutating command to the error code
-// DumboDB returns when it targets an admin system collection. The auth store is
-// writable only through the user management commands.
-var systemWriteDenyCode = map[string]handlererrors.ErrorCode{
+// adminMutationDenyCode maps a collection-mutating command to the error code
+// DumboDB returns when it targets the reserved admin database. admin is
+// server-managed; the auth store it holds is changed only through the user
+// management commands.
+var adminMutationDenyCode = map[string]handlererrors.ErrorCode{
 	"insert":        handlererrors.ErrUnauthorized,
 	"update":        handlererrors.ErrUnauthorized,
 	"delete":        handlererrors.ErrUnauthorized,
@@ -381,22 +381,22 @@ func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
 	return command, db, collection
 }
 
-// guardSystemCollection rejects a collection-mutating command that targets an
-// admin system collection (admin.system.*), where the auth store lives. System
-// collections in user databases are not guarded.
-func guardSystemCollection(command, db, collection string) error {
-	if db != "admin" || !strings.HasPrefix(collection, "system.") {
+// guardAdminMutation rejects a collection-mutating command that targets the
+// reserved admin database. Collections in user databases (including their own
+// system.* collections) are not guarded.
+func guardAdminMutation(command, db, collection string) error {
+	if db != "admin" {
 		return nil
 	}
 
-	code, guarded := systemWriteDenyCode[command]
+	code, guarded := adminMutationDenyCode[command]
 	if !guarded {
 		return nil
 	}
 
 	return handlererrors.NewCommandErrorMsgWithArgument(
 		code,
-		fmt.Sprintf("cannot %s system collection %q directly; use the user management commands", command, collection),
+		fmt.Sprintf("cannot %s %q: the admin database is reserved; manage its contents through the user management commands", command, collection),
 		command,
 	)
 }
