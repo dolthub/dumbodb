@@ -61,7 +61,7 @@ DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 - Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
 - Expiration (TTL): `expireAfterSeconds` is not supported; specifying it on a collection or index is rejected with an error rather than silently accepted. Support not planned.
-- Reserved System Databases: the `config` and `local` databases carry special MongoDB semantics that DumboDB does not implement, so creating them is rejected with an error. The `admin` database exists only to satisfy MongoDB's requirement that certain commands be issued via `runCommand` against `admin`; it is not a real admin database, and collections placed there that carry meaning for MongoDB users will not work in DumboDB.
+- Reserved System Databases: the `config` and `local` databases carry special MongoDB semantics that DumboDB does not implement, so creating them is rejected with an error. DumboDB uses the `admin` database to store users and roles, but it is not at full parity with MongoDB's `admin` database.
 
 If you are needing missing features, please file an [issue](https://github.com/dolthub/dumbodb/issues), or join our [Discord server](https://discord.gg/gqr7K4VNKe) to start a conversation with us. We'd love your feedback!
 
