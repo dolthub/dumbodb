@@ -60,6 +60,15 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 		return nil, err
 	}
 
+	if ci := conninfo.Get(connCtx); ci.ReauthPending() {
+		ci.SetReauthPending(false)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrAuthenticationFailed,
+			"Authentication failed.",
+			"saslContinue",
+		)
+	}
+
 	_, _, conv, _ := conninfo.Get(connCtx).Auth()
 
 	if conv == nil {

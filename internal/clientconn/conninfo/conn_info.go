@@ -62,7 +62,8 @@ type ConnInfo struct {
 	// and by the new authentication.
 	// See where it is used for more details.
 	bypassBackendAuth  bool // protected by rw
-	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
+	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, cleared on logout
+	reauthPending      bool // protected by rw; set when a saslStart begins on an already-authenticated connection, rejected at saslContinue
 
 	pendingAutoCommit map[string]AutoCommitTarget // protected by rw; keyed by db+"\x00"+branch, last writer wins
 	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
@@ -137,6 +138,20 @@ func (connInfo *ConnInfo) SCRAMAuthenticated() bool {
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.scramAuthenticated
+}
+
+func (connInfo *ConnInfo) SetReauthPending(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.reauthPending = v
+}
+
+func (connInfo *ConnInfo) ReauthPending() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.reauthPending
 }
 
 // SetBypassBackendAuth marks the connection as not requiring backend authentication.

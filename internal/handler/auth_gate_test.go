@@ -210,25 +210,57 @@ func saslStartMsg(t *testing.T) *wire.OpMsg {
 	))))
 }
 
-func TestSASLStart_RejectsSecondAuthOnAuthenticatedConnection(t *testing.T) {
+func saslContinueMsg(t *testing.T) *wire.OpMsg {
+	t.Helper()
+
+	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"saslContinue", int32(1),
+		"conversationId", int32(1),
+		"payload", types.Binary{B: []byte("c=biws,r=abcdefgh,p=proof")},
+		"$db", "admin",
+	))))
+}
+
+func TestSASLStart_SecondAuthBeginsButDoesNotAdoptIdentity(t *testing.T) {
 	h := authGateHandler(t, true)
 
 	ci := conninfo.New()
+	ci.SetAuth("alice", "", nil, "admin")
 	ci.SetSCRAMAuthenticated()
 	ctx := conninfo.Ctx(context.Background(), ci)
 
 	_, err := h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
+	require.NoError(t, err)
+	require.True(t, ci.ReauthPending())
+
+	user, _, _, _ := ci.Auth()
+	require.Equal(t, "alice", user)
+}
+
+func TestSASLContinue_RejectsPendingReauthAndKeepsFirstUser(t *testing.T) {
+	h := authGateHandler(t, true)
+
+	ci := conninfo.New()
+	ci.SetAuth("alice", "", nil, "admin")
+	ci.SetSCRAMAuthenticated()
+	ci.SetReauthPending(true)
+	ctx := conninfo.Ctx(context.Background(), ci)
+
+	_, err := h.commands["saslContinue"].Handler(ctx, saslContinueMsg(t))
 	code, ok := commandErrorCode(err)
 	require.True(t, ok, "want CommandError, got %v", err)
 	require.Equal(t, handlererrors.ErrAuthenticationFailed, code)
+
+	require.False(t, ci.ReauthPending())
+	require.True(t, ci.SCRAMAuthenticated())
+	user, _, _, _ := ci.Auth()
+	require.Equal(t, "alice", user)
 }
 
 func TestSASLStart_AllowedOnUnauthenticatedConnection(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
-	// A first saslStart begins the conversation (unknown user gets fake
-	// credentials); it must not be the reject-second-auth path.
 	_, err := h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
 	require.NoError(t, err)
 }
