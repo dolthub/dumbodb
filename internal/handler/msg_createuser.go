@@ -91,9 +91,6 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Roles are stored on the user document for MongoDB compatibility but not
-	// enforced; dumbodb does not implement RBAC.
-
 	if err = common.UnimplementedNonDefault(document, "digestPassword", func(v any) bool {
 		if v == nil || v == types.Null {
 			return true

@@ -113,8 +113,6 @@ func TestEnsureLSID_NoopOnDriverSupplied(t *testing.T) {
 
 func TestEnsureLSID_OwnerPrefersSyntheticOverConnFallback(t *testing.T) {
 	c := New()
-	// Owner is the (user, lsid) session key; with no lsid and no auth it falls
-	// back to a conn-scoped id under the empty user.
 	require.Contains(t, c.Owner(), "conn:")
 
 	id := c.EnsureLSID()
@@ -134,8 +132,6 @@ func TestOwner_ScopesByAuthenticatedUser(t *testing.T) {
 	c.SetAuth("bob", "", nil, "admin")
 	bob := c.Owner()
 
-	// The same lsid under different users yields distinct session keys, and the
-	// key an explicit endSessions entry resolves to matches the current user's.
 	assert.NotEqual(t, anon, alice)
 	assert.NotEqual(t, alice, bob)
 	assert.Equal(t, bob, c.SessionKeyFor("lsid-shared"))

@@ -62,9 +62,6 @@ func (h *Handler) MsgConnectionStatus(connCtx context.Context, msg *wire.OpMsg) 
 	)
 }
 
-// authenticatedUserRoles returns the roles stored on the given user's
-// admin.system.users document, in {role, db} form. Returns an empty array if
-// the user document is not found.
 func (h *Handler) authenticatedUserRoles(ctx context.Context, db, username string) (*types.Array, error) {
 	adminDB, err := h.b.Database("admin")
 	if err != nil {

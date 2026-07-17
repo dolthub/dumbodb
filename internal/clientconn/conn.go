@@ -606,17 +606,12 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 
 	ci := conninfo.Get(connCtx)
 	ci.EnsureLSID()
-	// sessKey scopes the session by (lsid-id, authenticated-user); the same lsid
-	// under a different user is a distinct session and never shared.
 	sessKey := ci.Owner()
 
 	shadow, cachedKey := ci.CachedShadow()
 	staleReap := shadow != nil && cachedKey == sessKey && !shadow.Active() &&
 		shadow.Purged() && !c.h.SessionIsolation() && !ci.InTransaction()
 	if shadow == nil || cachedKey != sessKey || staleReap {
-		// Release the prior session (synthetic-to-real upgrade, pooled implicit
-		// sessions rotating between frames, or a user change on the connection)
-		// before opening the new one.
 		if cachedKey != "" && cachedKey != sessKey {
 			reg.End(cachedKey)
 		}

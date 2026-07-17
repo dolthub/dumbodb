@@ -75,10 +75,9 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 	return err
 }
 
-// NormalizeRoles converts a createUser/updateUser roles array into the canonical
-// stored form: an array of {role, db} documents. A shorthand string entry resolves
-// its db to defaultDB (the database the command runs against). Roles are stored for
-// MongoDB compatibility but not enforced. A nil input yields an empty array.
+// NormalizeRoles converts a roles array into an array of {role, db} documents.
+// A shorthand string entry resolves its db to defaultDB. A nil input yields an
+// empty array.
 func NormalizeRoles(roles *types.Array, defaultDB string) (*types.Array, error) {
 	if roles == nil {
 		return types.MakeArray(0), nil

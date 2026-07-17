@@ -185,11 +185,6 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 
 	filter := must.NotFail(types.NewDocument("_id", dbName+"."+username))
 
-	// system.users is clustered on _id, so an _id-equality filter takes the
-	// pointLookupByID fast path (O(log N)); drivers re-authenticate per socket,
-	// so a full scan here would be O(N) on every connect. The loop below still
-	// re-checks with FilterDocument because a backend may apply the filter only
-	// partially.
 	qr, err := usersCol.Query(ctx, &backends.QueryParams{Filter: filter})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -310,9 +305,6 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 		panic("unsupported SCRAM mechanism")
 	}
 
-	// lookupCmdErr preserves a specific lookup error (e.g. MechanismUnavailable
-	// for an existing user lacking the requested mechanism) so it can be surfaced
-	// after Step instead of being flattened into a generic AuthenticationFailed.
 	var lookupCmdErr *handlererrors.CommandError
 
 	scramServer, err := f.NewServer(func(username string) (scram.StoredCredentials, error) {

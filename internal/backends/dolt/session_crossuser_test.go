@@ -30,9 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// ctxWithSessionAs mirrors dispatchThroughSession for an authenticated user:
-// the registry key is (lsid, user) via ci.Owner(), so the same lsid under a
-// different user resolves to a distinct session.
 func ctxWithSessionAs(t *testing.T, be *Backend, lsid, user string) (context.Context, *conninfo.ConnInfo) {
 	t.Helper()
 
@@ -49,8 +46,6 @@ func ctxWithSessionAs(t *testing.T, be *Backend, lsid, user string) (context.Con
 	return conninfo.Ctx(context.Background(), ci), ci
 }
 
-// countDocsCtx counts documents visible to ctx's session; a missing collection
-// counts as zero (the session does not see it at all).
 func countDocsCtx(t *testing.T, ctx context.Context, b *Backend, dbName, collName string) int {
 	t.Helper()
 
@@ -74,10 +69,6 @@ func countDocsCtx(t *testing.T, ctx context.Context, b *Backend, dbName, collNam
 	return n
 }
 
-// TestSession_CrossUserSameLsidIsolated is the observable guard for the
-// (lsid, user) registry keying. In session-isolation mode, user A's uncommitted
-// write in logical session id L must not be visible to user B presenting the
-// SAME id L on a separate connection: B gets its own session and overlay.
 func TestSession_CrossUserSameLsidIsolated(t *testing.T) {
 	be, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, true, 0, 0)
 	require.NoError(t, err)
@@ -94,7 +85,6 @@ func TestSession_CrossUserSameLsidIsolated(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.CreateCollection(ctxA, &backends.CreateCollectionParams{Name: "items"}))
 
-	// A writes inside its session transaction and does not commit.
 	sqlCtxA := sqlctx.Wrap(ctxA, sessA)
 	_, err = sessA.StartTransaction(sqlCtxA, sql.ReadWrite)
 	require.NoError(t, err)
@@ -106,18 +96,14 @@ func TestSession_CrossUserSameLsidIsolated(t *testing.T) {
 	_, err = collA.InsertAll(ctxA, &backends.InsertAllParams{Docs: []*types.Document{doc}})
 	require.NoError(t, err)
 
-	// B presents the SAME lsid under a different user.
 	ctxB, _ := ctxWithSessionAs(t, be, lsid, "bob")
 	sessB := sessionFromContext(ctxB)
 	require.NotNil(t, sessB)
 
-	// The keying guarantees a distinct session, and A's session is not
-	// superseded by B connecting (different registry key).
 	require.NotSame(t, sessA, sessB, "same lsid under a different user must resolve to a distinct session")
 	shadowA, _ := ciA.CachedShadow()
 	require.True(t, shadowA.Active(), "A's session must survive B connecting under the same lsid")
 
-	// The observable guard: A sees its own uncommitted write; B does not.
 	assert.Equal(t, 1, countDocsCtx(t, ctxA, be, dbName, "items"), "A must see its own uncommitted write")
 	assert.Equal(t, 0, countDocsCtx(t, ctxB, be, dbName, "items"), "B must not see A's uncommitted write")
 }

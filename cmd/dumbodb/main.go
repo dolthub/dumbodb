@@ -90,10 +90,6 @@ func run(logger *slog.Logger) error {
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
-	// auth enables forced login: non-anonymous commands on an unauthenticated
-	// connection are rejected with Unauthorized(13). There is no per-command
-	// authorization -- an authenticated connection has full access. See
-	// docs/design/authentication-and-authorization.md.
 	auth := fs.Bool("auth", false, "enable access control (forced login; an authenticated connection has full access)")
 	fs.Parse(os.Args[1:])
 

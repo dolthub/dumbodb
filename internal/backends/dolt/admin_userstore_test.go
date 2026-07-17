@@ -32,7 +32,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/password"
 )
 
-// getUserDoc reads a document from admin.system.users by _id, failing if absent.
 func getUserDoc(t *testing.T, b *Backend, id string) *types.Document {
 	t.Helper()
 
@@ -62,10 +61,6 @@ func getUserDoc(t *testing.T, b *Backend, id string) *types.Document {
 	return nil
 }
 
-// TestUserStore_CreateUserPersistsAndCommits proves the centralized-admin
-// storage decision end to end: createUser writes to admin.system.users, the
-// write always commits to admin's main (audit history), and the committed
-// document has the expected shape including the SCRAM credential blob.
 func TestUserStore_CreateUserPersistsAndCommits(t *testing.T) {
 	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
@@ -82,8 +77,6 @@ func TestUserStore_CreateUserPersistsAndCommits(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// admin writes always record an auto-commit regardless of server mode;
-	// apply them exactly like the handler's AutoCommitBoundary.
 	targets := ci.DrainAutoCommit()
 	require.NotEmpty(t, targets, "createUser must record an admin auto-commit")
 
@@ -96,7 +89,6 @@ func TestUserStore_CreateUserPersistsAndCommits(t *testing.T) {
 	}
 	require.True(t, committed, "the user write must produce a commit")
 
-	// The committed document has the expected shape.
 	doc := getUserDoc(t, b, "testdb.alice")
 	require.Equal(t, "testdb.alice", must.NotFail(doc.Get("_id")))
 	require.Equal(t, "testdb", must.NotFail(doc.Get("db")))
@@ -109,7 +101,6 @@ func TestUserStore_CreateUserPersistsAndCommits(t *testing.T) {
 	require.Equal(t, "readWrite", must.NotFail(role0.Get("role")))
 	require.Equal(t, "testdb", must.NotFail(role0.Get("db")))
 
-	// SCRAM-SHA-256 credential blob shape.
 	creds := must.NotFail(doc.Get("credentials")).(*types.Document)
 	sha256 := must.NotFail(creds.Get("SCRAM-SHA-256")).(*types.Document)
 	require.Equal(t, int32(15000), must.NotFail(sha256.Get("iterationCount")))
@@ -117,7 +108,6 @@ func TestUserStore_CreateUserPersistsAndCommits(t *testing.T) {
 	require.NotEmpty(t, must.NotFail(sha256.Get("storedKey")))
 	require.NotEmpty(t, must.NotFail(sha256.Get("serverKey")))
 
-	// admin's dolt log records the write, confirming durable audit history.
 	logRes, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "admin", Branch: "main"})
 	require.NoError(t, err)
 	require.NotEmpty(t, logRes.Commits, "admin main log must show the user write")

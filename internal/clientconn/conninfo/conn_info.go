@@ -118,8 +118,6 @@ func (connInfo *ConnInfo) SetMetadataRecv() {
 	connInfo.metadataRecv = true
 }
 
-// SetSCRAMAuthenticated marks that SCRAM authentication completed successfully
-// on this connection. Cleared by ClearSCRAMAuthenticated on logout.
 func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -127,8 +125,6 @@ func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
 	connInfo.scramAuthenticated = true
 }
 
-// ClearSCRAMAuthenticated returns the connection to its pre-auth state so a
-// subsequent privileged command is gated again until re-authentication.
 func (connInfo *ConnInfo) ClearSCRAMAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -240,11 +236,8 @@ func (connInfo *ConnInfo) SetTxnAborted(v bool) {
 	connInfo.txnAborted = v
 }
 
-// Owner returns the registry key that scopes this connection's logical session.
-// MongoDB scopes sessions by (lsid-id, authenticated-user): the same lsid
-// presented by a different user is a distinct session that must never be
-// shared. The key therefore combines the authenticated user with the lsid, so
-// the user is recorded in the session's identity. See sessionKey.
+// Owner returns the registry key that scopes this connection's session by
+// (authenticated-user, lsid).
 func (connInfo *ConnInfo) Owner() string {
 	id := connInfo.LSID()
 	if id == "" {
@@ -254,16 +247,13 @@ func (connInfo *ConnInfo) Owner() string {
 	return sessionKey(user, id)
 }
 
-// SessionKeyFor returns the registry key for an lsid id named explicitly by the
-// client (e.g. an endSessions entry), scoped to this connection's authenticated
-// user so a client can only reach its own sessions.
+// SessionKeyFor returns the registry key for an lsid named by the client,
+// scoped to this connection's authenticated user.
 func (connInfo *ConnInfo) SessionKeyFor(id string) string {
 	user, _, _, _ := connInfo.Auth()
 	return sessionKey(user, id)
 }
 
-// sessionKey composes the (user, lsid) registry key. The NUL separator cannot
-// appear in a MongoDB username, so the mapping is unambiguous.
 func sessionKey(user, id string) string {
 	return user + "\x00" + id
 }

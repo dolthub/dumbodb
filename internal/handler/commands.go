@@ -67,59 +67,59 @@ func (h *Handler) initCommands() {
 		// Single-name commands. Aliased and flag-bearing commands are
 		// registered below via h.register(...). Keep this map sorted
 		// alphabetically.
-		"aggregate":               {Handler: h.MsgAggregate, Help: "Returns aggregated data."},
-		"autoCompact":             {Handler: h.MsgAutoCompact, Help: "Enables or disables background compaction (MongoDB 8.0+)."},
-		"bulkWrite":               {Handler: h.MsgBulkWrite, Help: "Performs multiple write operations across collections in a single command."},
-		"convertToCapped":         {Handler: h.MsgConvertToCapped, Help: "Converts an existing collection to a capped collection."},
-		"collStats":               {Handler: h.MsgCollStats, Help: "Returns storage data for a collection."},
-		"compact":                 {Handler: h.MsgCompact, Help: "Reduces the disk space collection takes and refreshes its statistics."},
-		"connectionStatus":        {Handler: h.MsgConnectionStatus, anonymous: true, Help: "Returns information about the current connection, specifically the state of authenticated users and their available permissions."},
-		"count":                   {Handler: h.MsgCount, Help: "Returns the count of documents that's matched by the query."},
-		"create":                  {Handler: h.MsgCreate, Help: "Creates the collection."},
-		"currentOp":               {Handler: h.MsgCurrentOp, Help: "Returns information about operations currently in progress."},
-		"dataSize":                {Handler: h.MsgDataSize, Help: "Returns the size of the collection in bytes."},
-		"debugError":              {Handler: h.MsgDebugError, Help: "Returns error for debugging."},
-		"delete":                  {Handler: h.MsgDelete, Help: "Deletes documents matched by the query."},
-		"distinct":                {Handler: h.MsgDistinct, Help: "Returns an array of distinct values for the given field."},
-		"dropIndexes":             {Handler: h.MsgDropIndexes, Help: "Drops indexes on a collection."},
-		"explain":                 {Handler: h.MsgExplain, Help: "Returns the execution plan."},
-		"find":                    {Handler: h.MsgFind, Help: "Returns documents matched by the query."},
-		"getCmdLineOpts":          {Handler: h.MsgGetCmdLineOpts, Help: "Returns a summary of all runtime and configuration options."},
-		"getFreeMonitoringStatus": {Handler: h.msgFreeMonitoringNotSupported, Help: "Returns a status of the free monitoring."},
-		"getLog":                  {Handler: h.MsgGetLog, Help: "Returns the most recent logged events from memory."},
-		"getMore":                 {Handler: h.MsgGetMore, Help: "Returns the next batch of documents from a cursor."},
-		"getParameter":            {Handler: h.MsgGetParameter, Help: "Returns the value of the parameter."},
-		"hello":                   {Handler: h.MsgHello, anonymous: true, Help: "Returns the role of the DumboDB instance."},
-		"hostInfo":                {Handler: h.MsgHostInfo, Help: "Returns a summary of the system information."},
-		"insert":                  {Handler: h.MsgInsert, Help: "Inserts documents into the database."},
-		"killCursors":             {Handler: h.MsgKillCursors, Help: "Closes server cursors."},
-		"listCollections":         {Handler: h.MsgListCollections, Help: "Returns the information of the collections and views in the database."},
-		"listCommands":            {Handler: h.MsgListCommands, Help: "Returns a list of currently supported commands."},
-		"listDatabases":           {Handler: h.MsgListDatabases, Help: "Returns a summary of all the databases."},
-		"listIndexes":             {Handler: h.MsgListIndexes, Help: "Returns a summary of indexes of the specified collection."},
-		"logout":                  {Handler: h.MsgLogout, anonymous: true, Help: "Logs out from the current session."},
-		"startSession":            {Handler: h.MsgStartSession, anonymous: true, Help: "Creates a new server session."},
-		"top":                     {Handler: h.MsgTop, Help: "Returns per-collection usage statistics (degenerate -- DumboDB does not track per-op counters)."},
-		"createSearchIndexes":     {Handler: h.MsgCreateSearchIndexes, Help: "Creates Atlas Search indexes (not supported)."},
-		"listSearchIndexes":       {Handler: h.MsgListSearchIndexes, Help: "Lists Atlas Search indexes (not supported)."},
-		"dropSearchIndex":         {Handler: h.MsgDropSearchIndex, Help: "Drops an Atlas Search index (not supported)."},
-		"updateSearchIndex":       {Handler: h.MsgUpdateSearchIndex, Help: "Updates an Atlas Search index (not supported)."},
-		"abortTransaction":        {Handler: h.MsgAbortTransaction, Help: "Aborts a MongoDB transaction."},
-		"endSessions":             {Handler: h.MsgEndSessions, anonymous: true, Help: "Ends server sessions."},
-		"ping":                    {Handler: h.MsgPing, anonymous: true, Help: "Returns a pong response."},
-		"saslStart":               {Handler: h.MsgSASLStart, anonymous: true},
-		"saslContinue":            {Handler: h.MsgSASLContinue, anonymous: true},
-		"serverStatus":            {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
-		"setFreeMonitoring":       {Handler: h.msgFreeMonitoringNotSupported, Help: "Toggles free monitoring."},
-		"setParameter":            {Handler: h.MsgSetParameter, Help: "Sets the value of a runtime-settable server parameter."},
-		"update":                  {Handler: h.MsgUpdate, Help: "Updates documents that are matched by the query."},
-		"validate":                {Handler: h.MsgValidate, Help: "Validates collection."},
-		"whatsmyuri":              {Handler: h.MsgWhatsMyURI, anonymous: true, Help: "Returns peer information."},
-		"createUser":              {Handler: h.MsgCreateUser, Help: "Creates a new user."},
+		"aggregate":                {Handler: h.MsgAggregate, Help: "Returns aggregated data."},
+		"autoCompact":              {Handler: h.MsgAutoCompact, Help: "Enables or disables background compaction (MongoDB 8.0+)."},
+		"bulkWrite":                {Handler: h.MsgBulkWrite, Help: "Performs multiple write operations across collections in a single command."},
+		"convertToCapped":          {Handler: h.MsgConvertToCapped, Help: "Converts an existing collection to a capped collection."},
+		"collStats":                {Handler: h.MsgCollStats, Help: "Returns storage data for a collection."},
+		"compact":                  {Handler: h.MsgCompact, Help: "Reduces the disk space collection takes and refreshes its statistics."},
+		"connectionStatus":         {Handler: h.MsgConnectionStatus, anonymous: true, Help: "Returns information about the current connection, specifically the state of authenticated users and their available permissions."},
+		"count":                    {Handler: h.MsgCount, Help: "Returns the count of documents that's matched by the query."},
+		"create":                   {Handler: h.MsgCreate, Help: "Creates the collection."},
+		"currentOp":                {Handler: h.MsgCurrentOp, Help: "Returns information about operations currently in progress."},
+		"dataSize":                 {Handler: h.MsgDataSize, Help: "Returns the size of the collection in bytes."},
+		"debugError":               {Handler: h.MsgDebugError, Help: "Returns error for debugging."},
+		"delete":                   {Handler: h.MsgDelete, Help: "Deletes documents matched by the query."},
+		"distinct":                 {Handler: h.MsgDistinct, Help: "Returns an array of distinct values for the given field."},
+		"dropIndexes":              {Handler: h.MsgDropIndexes, Help: "Drops indexes on a collection."},
+		"explain":                  {Handler: h.MsgExplain, Help: "Returns the execution plan."},
+		"find":                     {Handler: h.MsgFind, Help: "Returns documents matched by the query."},
+		"getCmdLineOpts":           {Handler: h.MsgGetCmdLineOpts, Help: "Returns a summary of all runtime and configuration options."},
+		"getFreeMonitoringStatus":  {Handler: h.msgFreeMonitoringNotSupported, Help: "Returns a status of the free monitoring."},
+		"getLog":                   {Handler: h.MsgGetLog, Help: "Returns the most recent logged events from memory."},
+		"getMore":                  {Handler: h.MsgGetMore, Help: "Returns the next batch of documents from a cursor."},
+		"getParameter":             {Handler: h.MsgGetParameter, Help: "Returns the value of the parameter."},
+		"hello":                    {Handler: h.MsgHello, anonymous: true, Help: "Returns the role of the DumboDB instance."},
+		"hostInfo":                 {Handler: h.MsgHostInfo, Help: "Returns a summary of the system information."},
+		"insert":                   {Handler: h.MsgInsert, Help: "Inserts documents into the database."},
+		"killCursors":              {Handler: h.MsgKillCursors, Help: "Closes server cursors."},
+		"listCollections":          {Handler: h.MsgListCollections, Help: "Returns the information of the collections and views in the database."},
+		"listCommands":             {Handler: h.MsgListCommands, Help: "Returns a list of currently supported commands."},
+		"listDatabases":            {Handler: h.MsgListDatabases, Help: "Returns a summary of all the databases."},
+		"listIndexes":              {Handler: h.MsgListIndexes, Help: "Returns a summary of indexes of the specified collection."},
+		"logout":                   {Handler: h.MsgLogout, anonymous: true, Help: "Logs out from the current session."},
+		"startSession":             {Handler: h.MsgStartSession, anonymous: true, Help: "Creates a new server session."},
+		"top":                      {Handler: h.MsgTop, Help: "Returns per-collection usage statistics (degenerate -- DumboDB does not track per-op counters)."},
+		"createSearchIndexes":      {Handler: h.MsgCreateSearchIndexes, Help: "Creates Atlas Search indexes (not supported)."},
+		"listSearchIndexes":        {Handler: h.MsgListSearchIndexes, Help: "Lists Atlas Search indexes (not supported)."},
+		"dropSearchIndex":          {Handler: h.MsgDropSearchIndex, Help: "Drops an Atlas Search index (not supported)."},
+		"updateSearchIndex":        {Handler: h.MsgUpdateSearchIndex, Help: "Updates an Atlas Search index (not supported)."},
+		"abortTransaction":         {Handler: h.MsgAbortTransaction, Help: "Aborts a MongoDB transaction."},
+		"endSessions":              {Handler: h.MsgEndSessions, anonymous: true, Help: "Ends server sessions."},
+		"ping":                     {Handler: h.MsgPing, anonymous: true, Help: "Returns a pong response."},
+		"saslStart":                {Handler: h.MsgSASLStart, anonymous: true},
+		"saslContinue":             {Handler: h.MsgSASLContinue, anonymous: true},
+		"serverStatus":             {Handler: h.MsgServerStatus, Help: "Returns an overview of the databases state."},
+		"setFreeMonitoring":        {Handler: h.msgFreeMonitoringNotSupported, Help: "Toggles free monitoring."},
+		"setParameter":             {Handler: h.MsgSetParameter, Help: "Sets the value of a runtime-settable server parameter."},
+		"update":                   {Handler: h.MsgUpdate, Help: "Updates documents that are matched by the query."},
+		"validate":                 {Handler: h.MsgValidate, Help: "Validates collection."},
+		"whatsmyuri":               {Handler: h.MsgWhatsMyURI, anonymous: true, Help: "Returns peer information."},
+		"createUser":               {Handler: h.MsgCreateUser, Help: "Creates a new user."},
 		"dropAllUsersFromDatabase": {Handler: h.MsgDropAllUsersFromDatabase, Help: "Drops all users from database."},
-		"dropUser":                {Handler: h.MsgDropUser, Help: "Drops user."},
-		"updateUser":              {Handler: h.MsgUpdateUser, Help: "Updates user."},
-		"usersInfo":               {Handler: h.MsgUsersInfo, Help: "Returns information about users."},
+		"dropUser":                 {Handler: h.MsgDropUser, Help: "Drops user."},
+		"updateUser":               {Handler: h.MsgUpdateUser, Help: "Updates user."},
+		"usersInfo":                {Handler: h.MsgUsersInfo, Help: "Returns information about users."},
 	}
 
 	// Lowercase-variant handshake / introspection aliases.
@@ -174,9 +174,6 @@ func (h *Handler) initCommands() {
 			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 				if enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated() {
 					if err := checkSCRAMConversation(ctx, wireCommandName(msg), h.L); err != nil {
-						// Localhost exception: a loopback connection may create the
-						// first user to bootstrap access control. On success the
-						// exception latches off for the process lifetime.
 						if h.localhostExceptionApplies(ctx, wireCommandName(msg)) {
 							res, createErr := authed(ctx, msg)
 							if createErr == nil {
@@ -296,10 +293,9 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 	)
 }
 
-// localhostExceptionApplies reports whether an unauthenticated command may run
-// under the MongoDB localhost exception: when access control is on and no users
-// exist yet, a loopback connection is allowed to create the first user. The
-// exception covers only createUser and latches off permanently once used.
+// localhostExceptionApplies reports whether an unauthenticated createUser may
+// run to bootstrap the first user: a loopback connection, no users yet, and the
+// one-shot latch not yet tripped.
 func (h *Handler) localhostExceptionApplies(ctx context.Context, command string) bool {
 	if command != "createUser" {
 		return false
@@ -323,7 +319,6 @@ func (h *Handler) localhostExceptionApplies(ctx context.Context, command string)
 	return n == 0
 }
 
-// userCount returns the number of documents in admin.system.users.
 func (h *Handler) userCount(ctx context.Context) (int64, error) {
 	adminDB, err := h.b.Database("admin")
 	if err != nil {

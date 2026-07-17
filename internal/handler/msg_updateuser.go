@@ -199,8 +199,6 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			return nil, lazyerrors.Error(err)
 		}
 
-		// Roles replace the stored set wholesale (MongoDB semantics). They are
-		// stored for compatibility but not enforced; dumbodb has no RBAC.
 		normalized, err := users.NormalizeRoles(roles, dbName)
 		if err != nil {
 			return nil, lazyerrors.Error(err)

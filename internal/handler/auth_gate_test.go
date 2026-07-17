@@ -33,14 +33,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// peerCtx returns a context carrying a conninfo whose peer is the given address.
 func peerCtx(addr string) context.Context {
 	ci := conninfo.New()
 	ci.Peer = netip.MustParseAddrPort(addr)
 	return conninfo.Ctx(context.Background(), ci)
 }
 
-// createUserMsg builds a createUser command for the admin database.
 func createUserMsg(t *testing.T, user, pwd string) *wire.OpMsg {
 	t.Helper()
 
@@ -52,8 +50,6 @@ func createUserMsg(t *testing.T, user, pwd string) *wire.OpMsg {
 	))))
 }
 
-// authGateHandler builds a handler with its command wrappers installed so the
-// forced-login gate is exercised. EnableNewAuth toggles enforcement.
 func authGateHandler(t *testing.T, enableNewAuth bool) *Handler {
 	t.Helper()
 
@@ -74,8 +70,6 @@ func authGateHandler(t *testing.T, enableNewAuth bool) *Handler {
 	return h
 }
 
-// isForcedLoginError reports whether err is the gate's Unauthorized(13)
-// "requires authentication" rejection.
 func isForcedLoginError(err error) bool {
 	var ce *handlererrors.CommandError
 	if !errors.As(err, &ce) {
@@ -95,7 +89,6 @@ func TestAuthGate_ForcedLoginRejectsUnauthenticated(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
-	// Non-anonymous commands are rejected before their handler runs.
 	for _, name := range []string{"listDatabases", "find", "insert", "createUser", "usersInfo"} {
 		_, err := h.commands[name].Handler(ctx, gateCmd(t, name))
 		require.Error(t, err, "command %q must be gated", name)
@@ -107,8 +100,6 @@ func TestAuthGate_AnonymousCommandsStayOpen(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
-	// Handshake/diagnostic commands must never hit the gate even with
-	// enforcement on and no authenticated user.
 	for _, name := range []string{"ping", "hello", "saslStart", "saslContinue", "connectionStatus", "logout", "whatsmyuri", "buildInfo"} {
 		_, err := h.commands[name].Handler(ctx, gateCmd(t, name))
 		require.False(t, isForcedLoginError(err), "anonymous command %q must not be gated, got %v", name, err)
@@ -119,13 +110,10 @@ func TestAuthGate_LocalhostExceptionBootstrap(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := peerCtx("127.0.0.1:40000")
 
-	// With enforcement on and zero users, a loopback connection may create the
-	// first user.
 	_, err := h.commands["createUser"].Handler(ctx, createUserMsg(t, "root", "pw"))
 	require.NoError(t, err, "localhost exception must permit bootstrapping the first user")
 	require.True(t, h.bootstrapLatch.Load(), "exception must latch after a successful bootstrap")
 
-	// A second createUser is rejected: a user now exists and the latch is set.
 	_, err = h.commands["createUser"].Handler(ctx, createUserMsg(t, "second", "pw"))
 	require.True(t, isForcedLoginError(err), "second createUser must require auth, got %v", err)
 }
@@ -134,7 +122,6 @@ func TestAuthGate_LocalhostExceptionRejectsNonLoopback(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := peerCtx("10.0.0.5:40000")
 
-	// A non-loopback connection never gets the exception, even with zero users.
 	_, err := h.commands["createUser"].Handler(ctx, createUserMsg(t, "root", "pw"))
 	require.True(t, isForcedLoginError(err), "non-loopback createUser must be rejected, got %v", err)
 	require.False(t, h.bootstrapLatch.Load())
@@ -144,8 +131,6 @@ func TestAuthGate_LocalhostExceptionLatchIsPermanent(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := peerCtx("127.0.0.1:40000")
 
-	// Once the latch is tripped, the exception is gone even from loopback with
-	// zero users.
 	h.bootstrapLatch.Store(true)
 	_, err := h.commands["createUser"].Handler(ctx, createUserMsg(t, "root", "pw"))
 	require.True(t, isForcedLoginError(err), "latched exception must not be reusable, got %v", err)
@@ -170,7 +155,6 @@ func TestLogout_ClearsAuthAndSCRAMLatch(t *testing.T) {
 func TestConnectionStatus_ReportsUserAndStoredRoles(t *testing.T) {
 	h := authGateHandler(t, true)
 
-	// Bootstrap a user with a role via the localhost exception.
 	bootstrapCtx := peerCtx("127.0.0.1:40000")
 	_, err := h.commands["createUser"].Handler(bootstrapCtx, must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
 		"createUser", "alice",
@@ -180,7 +164,6 @@ func TestConnectionStatus_ReportsUserAndStoredRoles(t *testing.T) {
 	)))))
 	require.NoError(t, err)
 
-	// Present the connection as authenticated as that user.
 	ci := conninfo.New()
 	ci.SetAuth("alice", "", nil, "admin")
 	ctx := conninfo.Ctx(context.Background(), ci)
@@ -206,9 +189,6 @@ func TestAuthGate_DisabledAllowsUnauthenticated(t *testing.T) {
 	h := authGateHandler(t, false)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
-	// With enforcement off and no authenticated user, the gate is a no-op: a
-	// non-anonymous command may fail for unrelated reasons but never with the
-	// forced-login error.
 	_, err := h.commands["listDatabases"].Handler(ctx, gateCmd(t, "listDatabases"))
 	require.False(t, isForcedLoginError(err), "gate must be inactive when EnableNewAuth is false, got %v", err)
 }

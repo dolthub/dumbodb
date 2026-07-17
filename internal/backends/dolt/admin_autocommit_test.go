@@ -42,7 +42,6 @@ func acInsert(t *testing.T, ctx context.Context, b *Backend, dbName, coll string
 	require.NoError(t, err)
 }
 
-// drainDBs returns the set of database names recorded for auto-commit.
 func drainDBs(ci *conninfo.ConnInfo) map[string]bool {
 	out := map[string]bool{}
 	for _, t := range ci.DrainAutoCommit() {
@@ -51,9 +50,6 @@ func drainDBs(ci *conninfo.ConnInfo) map[string]bool {
 	return out
 }
 
-// TestAdminAutoCommit_DefaultMode: with --auto-commit OFF and no session, a
-// write to a user database is NOT recorded for auto-commit, but a write to the
-// admin database always is. Auto-commit is database-specific.
 func TestAdminAutoCommit_DefaultMode(t *testing.T) {
 	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, false, 0, 0)
 	require.NoError(t, err)
@@ -70,10 +66,6 @@ func TestAdminAutoCommit_DefaultMode(t *testing.T) {
 		"admin write must always record an auto-commit, independent of --auto-commit")
 }
 
-// TestAdminAutoCommit_SessionIsolationBypass: in session-isolation mode with an
-// active transaction, a user-db write is deferred onto the session (not
-// recorded), but an admin write bypasses the session overlay and records an
-// immediate auto-commit anyway.
 func TestAdminAutoCommit_SessionIsolationBypass(t *testing.T) {
 	b, err := newBackend(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)), false, true, 0, 0)
 	require.NoError(t, err)
@@ -89,12 +81,10 @@ func TestAdminAutoCommit_SessionIsolationBypass(t *testing.T) {
 	ci := conninfo.GetIfPresent(ctx)
 	require.NotNil(t, ci)
 
-	// Prime both databases and clear any setup recordings.
 	acInsert(t, ctx, b, "userdb", "col", 1)
 	acInsert(t, ctx, b, "admin", "system.users", 1)
 	_ = ci.DrainAutoCommit()
 
-	// Measured writes.
 	acInsert(t, ctx, b, "userdb", "col", 2)
 	got := drainDBs(ci)
 	require.NotContains(t, got, "userdb", "user-db write in session-isolation must defer, not auto-commit")
