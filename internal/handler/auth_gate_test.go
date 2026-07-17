@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -31,6 +32,25 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+// peerCtx returns a context carrying a conninfo whose peer is the given address.
+func peerCtx(addr string) context.Context {
+	ci := conninfo.New()
+	ci.Peer = netip.MustParseAddrPort(addr)
+	return conninfo.Ctx(context.Background(), ci)
+}
+
+// createUserMsg builds a createUser command for the admin database.
+func createUserMsg(t *testing.T, user, pwd string) *wire.OpMsg {
+	t.Helper()
+
+	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
+		"createUser", user,
+		"pwd", pwd,
+		"roles", types.MakeArray(0),
+		"$db", "admin",
+	))))
+}
 
 // authGateHandler builds a handler with its command wrappers installed so the
 // forced-login gate is exercised. EnableNewAuth toggles enforcement.
@@ -93,6 +113,42 @@ func TestAuthGate_AnonymousCommandsStayOpen(t *testing.T) {
 		_, err := h.commands[name].Handler(ctx, gateCmd(t, name))
 		require.False(t, isForcedLoginError(err), "anonymous command %q must not be gated, got %v", name, err)
 	}
+}
+
+func TestAuthGate_LocalhostExceptionBootstrap(t *testing.T) {
+	h := authGateHandler(t, true)
+	ctx := peerCtx("127.0.0.1:40000")
+
+	// With enforcement on and zero users, a loopback connection may create the
+	// first user.
+	_, err := h.commands["createUser"].Handler(ctx, createUserMsg(t, "root", "pw"))
+	require.NoError(t, err, "localhost exception must permit bootstrapping the first user")
+	require.True(t, h.bootstrapLatch.Load(), "exception must latch after a successful bootstrap")
+
+	// A second createUser is rejected: a user now exists and the latch is set.
+	_, err = h.commands["createUser"].Handler(ctx, createUserMsg(t, "second", "pw"))
+	require.True(t, isForcedLoginError(err), "second createUser must require auth, got %v", err)
+}
+
+func TestAuthGate_LocalhostExceptionRejectsNonLoopback(t *testing.T) {
+	h := authGateHandler(t, true)
+	ctx := peerCtx("10.0.0.5:40000")
+
+	// A non-loopback connection never gets the exception, even with zero users.
+	_, err := h.commands["createUser"].Handler(ctx, createUserMsg(t, "root", "pw"))
+	require.True(t, isForcedLoginError(err), "non-loopback createUser must be rejected, got %v", err)
+	require.False(t, h.bootstrapLatch.Load())
+}
+
+func TestAuthGate_LocalhostExceptionLatchIsPermanent(t *testing.T) {
+	h := authGateHandler(t, true)
+	ctx := peerCtx("127.0.0.1:40000")
+
+	// Once the latch is tripped, the exception is gone even from loopback with
+	// zero users.
+	h.bootstrapLatch.Store(true)
+	_, err := h.commands["createUser"].Handler(ctx, createUserMsg(t, "root", "pw"))
+	require.True(t, isForcedLoginError(err), "latched exception must not be reusable, got %v", err)
 }
 
 func TestAuthGate_DisabledAllowsUnauthenticated(t *testing.T) {

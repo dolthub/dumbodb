@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -66,6 +67,11 @@ type Handler struct {
 	paramStore *parameterStore
 	wg         sync.WaitGroup
 	processID  types.ObjectID
+
+	// bootstrapLatch trips once the localhost exception has been used to create
+	// the first user. Once set it never clears for the process lifetime, so the
+	// exception cannot be reused even if every user is later dropped.
+	bootstrapLatch atomic.Bool
 
 	cappedCleanupStop chan struct{}
 }

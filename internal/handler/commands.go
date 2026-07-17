@@ -22,8 +22,10 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 )
 
@@ -172,6 +174,17 @@ func (h *Handler) initCommands() {
 			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 				if enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated() {
 					if err := checkSCRAMConversation(ctx, wireCommandName(msg), h.L); err != nil {
+						// Localhost exception: a loopback connection may create the
+						// first user to bootstrap access control. On success the
+						// exception latches off for the process lifetime.
+						if h.localhostExceptionApplies(ctx, wireCommandName(msg)) {
+							res, createErr := authed(ctx, msg)
+							if createErr == nil {
+								h.bootstrapLatch.Store(true)
+							}
+							return res, createErr
+						}
+
 						return nil, err
 					}
 				}
@@ -281,6 +294,53 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 		fmt.Sprintf("Command %s requires authentication", command),
 		"checkSCRAMConversation",
 	)
+}
+
+// localhostExceptionApplies reports whether an unauthenticated command may run
+// under the MongoDB localhost exception: when access control is on and no users
+// exist yet, a loopback connection is allowed to create the first user. The
+// exception covers only createUser and latches off permanently once used.
+func (h *Handler) localhostExceptionApplies(ctx context.Context, command string) bool {
+	if command != "createUser" {
+		return false
+	}
+
+	if h.bootstrapLatch.Load() {
+		return false
+	}
+
+	info := conninfo.Get(ctx)
+	if info == nil || !info.Peer.IsValid() || !info.Peer.Addr().IsLoopback() {
+		return false
+	}
+
+	n, err := h.userCount(ctx)
+	if err != nil {
+		h.L.WarnContext(ctx, "localhostExceptionApplies: user count failed", logging.Error(err))
+		return false
+	}
+
+	return n == 0
+}
+
+// userCount returns the number of documents in admin.system.users.
+func (h *Handler) userCount(ctx context.Context) (int64, error) {
+	adminDB, err := h.b.Database("admin")
+	if err != nil {
+		return 0, lazyerrors.Error(err)
+	}
+
+	usersCol, err := adminDB.Collection("system.users")
+	if err != nil {
+		return 0, lazyerrors.Error(err)
+	}
+
+	res, err := usersCol.Count(ctx, new(backends.CountParams))
+	if err != nil {
+		return 0, lazyerrors.Error(err)
+	}
+
+	return res.Count, nil
 }
 
 func (h *Handler) Commands() map[string]*Command {
