@@ -111,19 +111,23 @@ func TestGuardSystemCollection(t *testing.T) {
 		{"create", handlererrors.ErrUnauthorized},
 		{"drop", handlererrors.ErrIllegalOperation},
 	} {
-		err := guardSystemCollection(tc.cmd, "system.users")
-		require.Error(t, err, "%s on system.users must be rejected", tc.cmd)
+		err := guardSystemCollection(tc.cmd, "admin", "system.users")
+		require.Error(t, err, "%s on admin.system.users must be rejected", tc.cmd)
 		code, ok := commandErrorCode(err)
 		require.True(t, ok, "%s: want CommandError, got %v", tc.cmd, err)
-		require.Equal(t, tc.code, code, "%s on system.users: wrong error code", tc.cmd)
+		require.Equal(t, tc.code, code, "%s on admin.system.users: wrong error code", tc.cmd)
 	}
 
-	// A non-system collection is never guarded.
-	require.NoError(t, guardSystemCollection("insert", "widgets"))
+	// A system collection in a user database is not guarded.
+	require.NoError(t, guardSystemCollection("insert", "mydb", "system.foobar"))
+	require.NoError(t, guardSystemCollection("drop", "mydb", "system.users"))
 
-	// Reads of a system collection are not mutations and are not guarded.
-	require.NoError(t, guardSystemCollection("find", "system.users"))
-	require.NoError(t, guardSystemCollection("aggregate", "system.users"))
+	// A non-system collection in admin is not guarded.
+	require.NoError(t, guardSystemCollection("insert", "admin", "widgets"))
+
+	// Reads of an admin system collection are not mutations and are not guarded.
+	require.NoError(t, guardSystemCollection("find", "admin", "system.users"))
+	require.NoError(t, guardSystemCollection("aggregate", "admin", "system.users"))
 }
 
 func TestGuardSystemCollection_WiredAfterAuthGate(t *testing.T) {

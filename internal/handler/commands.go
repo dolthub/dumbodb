@@ -343,7 +343,7 @@ func (h *Handler) userCount(ctx context.Context) (int64, error) {
 }
 
 // systemWriteDenyCode maps a collection-mutating command to the error code
-// DumboDB returns when it targets a system.* collection. The auth store is
+// DumboDB returns when it targets an admin system collection. The auth store is
 // writable only through the user management commands.
 var systemWriteDenyCode = map[string]handlererrors.ErrorCode{
 	"insert":        handlererrors.ErrUnauthorized,
@@ -355,16 +355,22 @@ var systemWriteDenyCode = map[string]handlererrors.ErrorCode{
 	"drop":          handlererrors.ErrIllegalOperation,
 }
 
-// wireCommandTarget returns the command name and its target collection (the
-// first BSON field's name and string value), or empty strings on parse failure.
-func wireCommandTarget(msg *wire.OpMsg) (command, collection string) {
+// wireCommandTarget returns the command name, its database, and its target
+// collection (the first BSON field's name and string value), or empty strings
+// on parse failure.
+func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
 	doc, err := opMsgDocument(msg)
 	if err != nil {
-		return "", ""
+		return "", "", ""
+	}
+	if v, err := doc.Get("$db"); err == nil {
+		if s, ok := v.(string); ok {
+			db = s
+		}
 	}
 	keys := doc.Keys()
 	if len(keys) == 0 {
-		return "", ""
+		return "", db, ""
 	}
 	command = keys[0]
 	if v, err := doc.Get(keys[0]); err == nil {
@@ -372,13 +378,14 @@ func wireCommandTarget(msg *wire.OpMsg) (command, collection string) {
 			collection = s
 		}
 	}
-	return command, collection
+	return command, db, collection
 }
 
-// guardSystemCollection rejects a collection-mutating command that targets a
-// system.* collection.
-func guardSystemCollection(command, collection string) error {
-	if !strings.HasPrefix(collection, "system.") {
+// guardSystemCollection rejects a collection-mutating command that targets an
+// admin system collection (admin.system.*), where the auth store lives. System
+// collections in user databases are not guarded.
+func guardSystemCollection(command, db, collection string) error {
+	if db != "admin" || !strings.HasPrefix(collection, "system.") {
 		return nil
 	}
 
