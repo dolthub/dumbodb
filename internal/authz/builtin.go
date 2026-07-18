@@ -61,6 +61,16 @@ func IsBuiltinRole(role string) bool {
 	return ok
 }
 
+// IsBuiltinRoleOnDB reports whether role is a built-in role available on db.
+func IsBuiltinRoleOnDB(role, db string) bool {
+	for _, n := range BuiltinRoleNames(db) {
+		if n == role {
+			return true
+		}
+	}
+	return false
+}
+
 // BuiltinRoleNames returns the built-in role names available on db: the
 // database-scoped roles for any database, plus the all-database, cluster, and
 // backup/restore/root roles for the admin database.

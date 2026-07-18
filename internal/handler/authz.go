@@ -208,10 +208,10 @@ func (h *Handler) effectivePrivileges(ctx context.Context) (authz.PrivilegeSet, 
 	return privs, nil
 }
 
-// roleResolver resolves user-defined roles from admin.system.roles. Track A2
-// has no custom roles.
-func (h *Handler) roleResolver(context.Context) authz.RoleResolver {
-	return authz.NoCustomRoles
+// roleResolver resolves user-defined roles from admin.system.roles so that a
+// user's effective privileges include the transitive closure over custom roles.
+func (h *Handler) roleResolver(ctx context.Context) authz.RoleResolver {
+	return h.customRoleResolver(ctx)
 }
 
 // loadUserRoles reads the roles granted to a user from admin.system.users.

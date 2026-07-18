@@ -75,6 +75,10 @@ func (h *Handler) MsgDropRole(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		)
 	}
 
+	if err = h.cascadeRoleRemoval(connCtx, dbName, roleName); err != nil {
+		return nil, err
+	}
+
 	h.BumpAuthGeneration()
 
 	return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))

@@ -197,7 +197,7 @@ func resourceKey(rd *types.Document) string {
 
 // roleExists reports whether {role, db} names a built-in or a stored role.
 func (h *Handler) roleExists(ctx context.Context, db, role string) (bool, error) {
-	if db == "admin" && authz.IsBuiltinRole(role) {
+	if authz.IsBuiltinRoleOnDB(role, db) {
 		return true, nil
 	}
 
@@ -354,6 +354,80 @@ func validateResourceScope(resource *types.Document, roleDB string) error {
 	}
 
 	return nil
+}
+
+// cascadeRoleRemoval strips the dropped role {db, role} from the inherited-role
+// arrays of every stored role and user, mirroring MongoDB's dropRole cascade.
+func (h *Handler) cascadeRoleRemoval(ctx context.Context, db, role string) error {
+	removed := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("role", role, "db", db))))
+
+	rolesColl, err := h.systemRolesCollection()
+	if err != nil {
+		return err
+	}
+
+	adminDB, err := h.b.Database("admin")
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+
+	usersColl, err := adminDB.Collection("system.users")
+	if err != nil {
+		return lazyerrors.Error(err)
+	}
+
+	for _, coll := range []backends.Collection{rolesColl, usersColl} {
+		updated, err := changedRoleHolders(ctx, coll, removed)
+		if err != nil {
+			return err
+		}
+
+		if len(updated) > 0 {
+			if _, err = coll.UpdateAll(ctx, &backends.UpdateAllParams{Docs: updated}); err != nil {
+				return lazyerrors.Error(err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// changedRoleHolders returns the documents in coll whose "roles" array contained
+// any entry in removed, with that entry stripped.
+func changedRoleHolders(ctx context.Context, coll backends.Collection, removed *types.Array) ([]*types.Document, error) {
+	qr, err := coll.Query(ctx, nil)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	defer qr.Iter.Close()
+
+	var updated []*types.Document
+	for {
+		_, doc, err := qr.Iter.Next()
+
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		rolesVal, _ := doc.Get("roles")
+		rolesArr, _ := rolesVal.(*types.Array)
+		if rolesArr == nil {
+			continue
+		}
+
+		pruned := removeRoles(rolesArr, removed)
+		if pruned.Len() != rolesArr.Len() {
+			doc.Set("roles", pruned)
+			updated = append(updated, doc)
+		}
+	}
+
+	return updated, nil
 }
 
 // requiredArray returns document[key] as an array, translating a missing field

@@ -20,6 +20,7 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -162,6 +163,16 @@ func (h *Handler) MsgGrantRolesToRole(connCtx context.Context, msg *wire.OpMsg) 
 	refs, err := h.normalizeInheritedRoles(connCtx, granted, roleName, dbName)
 	if err != nil {
 		return nil, err
+	}
+
+	target := authz.Role{Role: roleName, DB: dbName}
+	for _, r := range h.roleRefClosure(connCtx, rolesFromArray(refs)) {
+		if r == target {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrInvalidRoleModification,
+				fmt.Sprintf("Granting roles to %s@%s would introduce a cycle in the role graph", roleName, dbName),
+			)
+		}
 	}
 
 	err = h.modifyRole(connCtx, dbName, roleName, func(doc *types.Document) error {
