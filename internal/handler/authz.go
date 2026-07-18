@@ -107,6 +107,10 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"rolesInfo":                {{authz.ActionViewRole, scopeDatabase}},
 	"grantRolesToUser":         {{authz.ActionGrantRole, scopeDatabase}},
 	"revokeRolesFromUser":      {{authz.ActionRevokeRole, scopeDatabase}},
+	"grantPrivilegesToRole":    {{authz.ActionGrantRole, scopeDatabase}},
+	"revokePrivilegesFromRole": {{authz.ActionRevokeRole, scopeDatabase}},
+	"grantRolesToRole":         {{authz.ActionGrantRole, scopeDatabase}},
+	"revokeRolesFromRole":      {{authz.ActionRevokeRole, scopeDatabase}},
 
 	"serverStatus":  {{authz.ActionServerStatus, scopeCluster}},
 	"listDatabases": {{authz.ActionListDatabases, scopeCluster}},

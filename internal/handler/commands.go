@@ -124,6 +124,11 @@ func (h *Handler) initCommands() {
 		"updateRole":               {Handler: h.MsgUpdateRole, Help: "Updates a user-defined role."},
 		"dropRole":                 {Handler: h.MsgDropRole, Help: "Drops a user-defined role."},
 		"dropAllRolesFromDatabase": {Handler: h.MsgDropAllRolesFromDatabase, Help: "Drops all user-defined roles from database."},
+		"grantPrivilegesToRole":    {Handler: h.MsgGrantPrivilegesToRole, Help: "Grants privileges to a user-defined role."},
+		"revokePrivilegesFromRole": {Handler: h.MsgRevokePrivilegesFromRole, Help: "Revokes privileges from a user-defined role."},
+		"grantRolesToRole":         {Handler: h.MsgGrantRolesToRole, Help: "Grants inherited roles to a user-defined role."},
+		"revokeRolesFromRole":      {Handler: h.MsgRevokeRolesFromRole, Help: "Revokes inherited roles from a user-defined role."},
+		"rolesInfo":                {Handler: h.MsgRolesInfo, Help: "Returns information about roles."},
 	}
 
 	// Lowercase-variant handshake / introspection aliases.

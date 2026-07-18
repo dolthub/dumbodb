@@ -61,6 +61,21 @@ func IsBuiltinRole(role string) bool {
 	return ok
 }
 
+// BuiltinRoleNames returns the built-in role names available on db: the
+// database-scoped roles for any database, plus the all-database, cluster, and
+// backup/restore/root roles for the admin database.
+func BuiltinRoleNames(db string) []string {
+	names := []string{"read", "readWrite", "dbAdmin", "userAdmin", "dbOwner"}
+	if db == "admin" {
+		names = append(names,
+			"readAnyDatabase", "readWriteAnyDatabase", "dbAdminAnyDatabase", "userAdminAnyDatabase",
+			"clusterMonitor", "clusterManager", "hostManager", "clusterAdmin",
+			"backup", "restore", "root",
+		)
+	}
+	return names
+}
+
 // BuiltinRole synthesizes the privilege set for a built-in role granted on db
 // (the role's {role, db}). The all-database, cluster, and backup/restore roles
 // are admin-scoped; db is ignored for the resources they span. Returns false if

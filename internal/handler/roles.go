@@ -80,6 +80,121 @@ func (h *Handler) loadRoleDoc(ctx context.Context, db, role string) (*types.Docu
 	return nil, nil
 }
 
+// customRoleResolver reads user-defined roles from admin.system.roles. Built-in
+// roles are never passed to it; authz.Resolve synthesizes those.
+func (h *Handler) customRoleResolver(ctx context.Context) authz.RoleResolver {
+	return func(r authz.Role) (authz.PrivilegeSet, []authz.Role, bool) {
+		doc, err := h.loadRoleDoc(ctx, r.DB, r.Role)
+		if err != nil || doc == nil {
+			return nil, nil, false
+		}
+
+		privs, _ := doc.Get("privileges")
+		privArr, _ := privs.(*types.Array)
+
+		inherited, _ := doc.Get("roles")
+		inheritedArr, _ := inherited.(*types.Array)
+
+		return parseStoredPrivileges(privArr), rolesFromArray(inheritedArr), true
+	}
+}
+
+// roleRefClosure returns the transitive set of roles inherited via direct: the
+// direct roles plus, recursively, the roles they inherit, in a stable order.
+func (h *Handler) roleRefClosure(ctx context.Context, direct []authz.Role) []authz.Role {
+	seen := map[authz.Role]bool{}
+	var out []authz.Role
+	resolver := h.customRoleResolver(ctx)
+
+	var walk func(r authz.Role)
+	walk = func(r authz.Role) {
+		if seen[r] {
+			return
+		}
+		seen[r] = true
+		out = append(out, r)
+
+		if _, ok := authz.BuiltinRole(r.Role, r.DB); ok {
+			return
+		}
+
+		_, inherits, ok := resolver(r)
+		if !ok {
+			return
+		}
+		for _, ir := range inherits {
+			walk(ir)
+		}
+	}
+
+	for _, r := range direct {
+		walk(r)
+	}
+	return out
+}
+
+// parseStoredPrivileges converts stored {resource, actions} documents into an
+// authz.PrivilegeSet.
+func parseStoredPrivileges(arr *types.Array) authz.PrivilegeSet {
+	if arr == nil {
+		return nil
+	}
+
+	out := make(authz.PrivilegeSet, 0, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		pd, ok := must.NotFail(arr.Get(i)).(*types.Document)
+		if !ok {
+			continue
+		}
+
+		rd, _ := must.NotFail(pd.Get("resource")).(*types.Document)
+		actionsArr, _ := must.NotFail(pd.Get("actions")).(*types.Array)
+
+		var actions []authz.Action
+		if actionsArr != nil {
+			for j := 0; j < actionsArr.Len(); j++ {
+				if a, ok := must.NotFail(actionsArr.Get(j)).(string); ok {
+					actions = append(actions, authz.Action(a))
+				}
+			}
+		}
+
+		out = append(out, authz.Privilege{Resource: parseResourceDoc(rd), Actions: actions})
+	}
+	return out
+}
+
+func parseResourceDoc(rd *types.Document) authz.Resource {
+	if rd == nil {
+		return authz.Resource{}
+	}
+	if any, _ := rd.Get("anyResource"); any == true {
+		return authz.Resource{AnyResource: true}
+	}
+	if cluster, _ := rd.Get("cluster"); cluster == true {
+		return authz.Resource{Cluster: true}
+	}
+	db, _ := rd.Get("db")
+	coll, _ := rd.Get("collection")
+	dbStr, _ := db.(string)
+	collStr, _ := coll.(string)
+	return authz.Resource{DB: dbStr, Collection: collStr}
+}
+
+// resourceKey renders a resource document as a stable identity for exact
+// matching in grant/revoke.
+func resourceKey(rd *types.Document) string {
+	r := parseResourceDoc(rd)
+	switch {
+	case r.AnyResource:
+		return "any"
+	case r.Cluster:
+		return "cluster"
+	default:
+		return "db:" + r.DB + "|coll:" + r.Collection
+	}
+}
+
 // roleExists reports whether {role, db} names a built-in or a stored role.
 func (h *Handler) roleExists(ctx context.Context, db, role string) (bool, error) {
 	if db == "admin" && authz.IsBuiltinRole(role) {
