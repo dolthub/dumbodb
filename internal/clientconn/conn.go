@@ -145,6 +145,10 @@ func (c *conn) run(ctx context.Context) (err error) {
 		if err != nil {
 			return
 		}
+
+		if local, localErr := netip.ParseAddrPort(c.netConn.LocalAddr().String()); localErr == nil {
+			connInfo.Local = local
+		}
 	}
 
 	ctx = conninfo.Ctx(ctx, connInfo)

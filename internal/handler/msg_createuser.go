@@ -111,7 +111,12 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment")
+	common.Ignored(document, h.L, "writeConcern", "comment")
+
+	restrictions, err := common.GetOptionalParam[*types.Array](document, "authenticationRestrictions", types.MakeArray(0))
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
 
 	defMechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
 
@@ -174,11 +179,12 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		}
 
 		err = users.CreateUser(connCtx, h.b, &users.CreateUserParams{
-			Database:   dbName,
-			Username:   username,
-			Password:   password.WrapPassword(userPassword),
-			Mechanisms: mechanisms,
-			Roles:      roles,
+			Database:                   dbName,
+			Username:                   username,
+			Password:                   password.WrapPassword(userPassword),
+			Mechanisms:                 mechanisms,
+			Roles:                      roles,
+			AuthenticationRestrictions: restrictions,
 		})
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {

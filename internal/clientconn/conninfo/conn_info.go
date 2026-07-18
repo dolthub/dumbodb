@@ -41,7 +41,8 @@ type ConnInfo struct {
 	sc *scram.ServerConversation // protected by rw
 	db string                    // protected by rw
 
-	Peer netip.AddrPort // invalid for Unix domain sockets
+	Peer  netip.AddrPort // invalid for Unix domain sockets
+	Local netip.AddrPort // server address the connection was accepted on
 
 	username string // protected by rw
 	password string // protected by rw

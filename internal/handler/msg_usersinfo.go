@@ -63,10 +63,15 @@ func (h *Handler) MsgUsersInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	common.Ignored(
 		document, h.L,
 		"showCustomData",
-		"showAuthenticationRestrictions", "comment", "filter",
+		"comment", "filter",
 	)
 
 	showPrivileges, err := common.GetOptionalParam(document, "showPrivileges", false)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	showAuthenticationRestrictions, err := common.GetOptionalParam(document, "showAuthenticationRestrictions", false)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -190,6 +195,10 @@ func (h *Handler) MsgUsersInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		if !showCredentials {
 			v.Remove("credentials")
+		}
+
+		if !showAuthenticationRestrictions {
+			v.Remove("authenticationRestrictions")
 		}
 
 		if showPrivileges {

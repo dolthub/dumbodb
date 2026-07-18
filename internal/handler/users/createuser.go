@@ -34,11 +34,12 @@ import (
 //
 //nolint:vet // for readability
 type CreateUserParams struct {
-	Database   string
-	Username   string
-	Password   password.Password
-	Mechanisms *types.Array
-	Roles      *types.Array
+	Database                   string
+	Username                   string
+	Password                   password.Password
+	Mechanisms                 *types.Array
+	Roles                      *types.Array
+	AuthenticationRestrictions *types.Array
 }
 
 // CreateUser stores a new user in the given backend.
@@ -55,6 +56,11 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		return err
 	}
 
+	restrictions := params.AuthenticationRestrictions
+	if restrictions == nil {
+		restrictions = types.MakeArray(0)
+	}
+
 	id := uuid.New()
 	saved := must.NotFail(types.NewDocument(
 		"_id", params.Database+"."+params.Username,
@@ -62,6 +68,7 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		"user", params.Username,
 		"db", params.Database,
 		"roles", roles,
+		"authenticationRestrictions", restrictions,
 		"userId", types.Binary{Subtype: types.BinaryUUID, B: must.NotFail(id.MarshalBinary())},
 	))
 
