@@ -16,11 +16,139 @@ package handler
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+type resourceScope int
+
+const (
+	scopeCollection resourceScope = iota
+	scopeDatabase
+	scopeCluster
+)
+
+type commandPrivilege struct {
+	action authz.Action
+	scope  resourceScope
+}
+
+// commandPrivileges lists the privileges each authenticated command requires.
+// The target resource is built from the command's database and collection
+// (design 4.2). Commands absent from this map require no privilege.
+var commandPrivileges = map[string][]commandPrivilege{
+	"find":             {{authz.ActionFind, scopeCollection}},
+	"count":            {{authz.ActionFind, scopeCollection}},
+	"distinct":         {{authz.ActionFind, scopeCollection}},
+	"aggregate":        {{authz.ActionFind, scopeCollection}},
+	"collStats":        {{authz.ActionCollStats, scopeCollection}},
+	"listIndexes":      {{authz.ActionListIndexes, scopeCollection}},
+	"dataSize":         {{authz.ActionFind, scopeCollection}},
+	"insert":           {{authz.ActionInsert, scopeCollection}},
+	"update":           {{authz.ActionUpdate, scopeCollection}},
+	"delete":           {{authz.ActionRemove, scopeCollection}},
+	"findAndModify":    {{authz.ActionFind, scopeCollection}, {authz.ActionUpdate, scopeCollection}},
+	"create":           {{authz.ActionCreateCollection, scopeCollection}},
+	"createIndexes":    {{authz.ActionCreateIndex, scopeCollection}},
+	"drop":             {{authz.ActionDropCollection, scopeCollection}},
+	"dropIndexes":      {{authz.ActionDropIndex, scopeCollection}},
+	"collMod":          {{authz.ActionCollMod, scopeCollection}},
+	"validate":         {{authz.ActionValidate, scopeCollection}},
+	"convertToCapped":  {{authz.ActionConvertToCapped, scopeCollection}},
+	"renameCollection": {{authz.ActionRenameCollectionSameDB, scopeCollection}},
+
+	"dbStats":                  {{authz.ActionDBStats, scopeDatabase}},
+	"listCollections":          {{authz.ActionListCollections, scopeDatabase}},
+	"dropDatabase":             {{authz.ActionDropDatabase, scopeDatabase}},
+	"createUser":               {{authz.ActionCreateUser, scopeDatabase}},
+	"dropUser":                 {{authz.ActionDropUser, scopeDatabase}},
+	"dropAllUsersFromDatabase": {{authz.ActionDropUser, scopeDatabase}},
+	"updateUser":               {{authz.ActionChangePassword, scopeDatabase}},
+	"usersInfo":                {{authz.ActionViewUser, scopeDatabase}},
+	"createRole":               {{authz.ActionCreateRole, scopeDatabase}},
+	"updateRole":               {{authz.ActionGrantRole, scopeDatabase}},
+	"dropRole":                 {{authz.ActionDropRole, scopeDatabase}},
+	"dropAllRolesFromDatabase": {{authz.ActionDropRole, scopeDatabase}},
+	"rolesInfo":                {{authz.ActionViewRole, scopeDatabase}},
+	"grantRolesToUser":         {{authz.ActionGrantRole, scopeDatabase}},
+	"revokeRolesFromUser":      {{authz.ActionRevokeRole, scopeDatabase}},
+
+	"serverStatus":  {{authz.ActionServerStatus, scopeCluster}},
+	"listDatabases": {{authz.ActionListDatabases, scopeCluster}},
+	"getParameter":  {{authz.ActionGetParameter, scopeCluster}},
+	"setParameter":  {{authz.ActionSetParameter, scopeCluster}},
+	"hostInfo":      {{authz.ActionHostInfo, scopeCluster}},
+	"top":           {{authz.ActionTop, scopeCluster}},
+	"getLog":        {{authz.ActionGetLog, scopeCluster}},
+}
+
+// authorize enforces the privileges a command requires against the connection's
+// effective privilege set, returning Unauthorized(13) when any is unsatisfied.
+func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
+	command, db, collection := wireCommandTarget(msg)
+
+	reqs, ok := commandPrivileges[command]
+	if !ok {
+		return nil
+	}
+
+	privs, err := h.effectivePrivileges(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, r := range reqs {
+		target := targetResource(r.scope, db, collection)
+		if privs.Authorized(r.action, target) {
+			continue
+		}
+		if h.selfServiceAllowed(ctx, command, db, collection, r.action, privs) {
+			continue
+		}
+		return handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrUnauthorized,
+			fmt.Sprintf("not authorized on %s to execute command %s", db, command),
+			command,
+		)
+	}
+	return nil
+}
+
+func targetResource(scope resourceScope, db, collection string) authz.Resource {
+	switch scope {
+	case scopeCluster:
+		return authz.ClusterResource
+	case scopeDatabase:
+		return authz.DatabaseResource(db)
+	default:
+		return authz.CollectionResource(db, collection)
+	}
+}
+
+// selfServiceAllowed lets a user edit their own record via the changeOwn*
+// actions without the corresponding change* action on others.
+func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string, action authz.Action, privs authz.PrivilegeSet) bool {
+	if command != "updateUser" {
+		return false
+	}
+	user, _, _, userDB := conninfo.Get(ctx).Auth()
+	if targetUser != user || db != userDB {
+		return false
+	}
+	switch action {
+	case authz.ActionChangePassword:
+		return privs.Authorized(authz.ActionChangeOwnPassword, authz.DatabaseResource(db))
+	case authz.ActionChangeCustomData:
+		return privs.Authorized(authz.ActionChangeOwnCustomData, authz.DatabaseResource(db))
+	}
+	return false
+}
 
 // effectivePrivileges returns the connection's effective privilege set, computed
 // from the authenticated user's roles and cached per auth generation. An

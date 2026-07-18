@@ -172,7 +172,8 @@ func (h *Handler) initCommands() {
 			authed := inner
 			enableNewAuth := h.EnableNewAuth
 			inner = func(ctx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-				if enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated() {
+				authenticated := enableNewAuth || conninfo.Get(ctx).SCRAMAuthenticated()
+				if authenticated {
 					if err := checkSCRAMConversation(ctx, wireCommandName(msg), h.L); err != nil {
 						if h.localhostExceptionApplies(ctx, wireCommandName(msg)) {
 							res, createErr := authed(ctx, msg)
@@ -187,6 +188,11 @@ func (h *Handler) initCommands() {
 				}
 				if guardErr := guardAdminMutation(wireCommandTarget(msg)); guardErr != nil {
 					return nil, guardErr
+				}
+				if authenticated {
+					if err := h.authorize(ctx, msg); err != nil {
+						return nil, err
+					}
 				}
 				return authed(ctx, msg)
 			}

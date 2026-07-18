@@ -16,12 +16,15 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/FerretDB/wire"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -65,6 +68,59 @@ func TestEffectivePrivileges_Unauthenticated(t *testing.T) {
 	privs, err := h.effectivePrivileges(ctx)
 	require.NoError(t, err)
 	require.Nil(t, privs)
+}
+
+func authzCmd(t *testing.T, name, db, coll string) *wire.OpMsg {
+	t.Helper()
+	return must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(name, coll, "$db", db))))
+}
+
+func isUnauthorized(t *testing.T, err error) bool {
+	t.Helper()
+	var ce *handlererrors.CommandError
+	return errors.As(err, &ce) && ce.Code() == handlererrors.ErrUnauthorized
+}
+
+func TestAuthorize_EnforcesBuiltinRoles(t *testing.T) {
+	h := authGateHandler(t, true)
+	createUserWithRole(t, h, "mydb", "reader", "read")
+	createUserWithRole(t, h, "mydb", "writer", "readWrite")
+	createUserWithRole(t, h, "admin", "boss", "root")
+
+	authAs := func(user, db string) context.Context {
+		ci := conninfo.New()
+		ci.SetAuth(user, "", nil, db)
+		return conninfo.Ctx(context.Background(), ci)
+	}
+
+	reader := authAs("reader", "mydb")
+	require.NoError(t, h.authorize(reader, authzCmd(t, "find", "mydb", "c")))
+	require.NoError(t, h.authorize(reader, authzCmd(t, "collStats", "mydb", "c")))
+	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "insert", "mydb", "c"))))
+	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "dropDatabase", "mydb", "c"))))
+	require.True(t, isUnauthorized(t, h.authorize(reader, authzCmd(t, "find", "other", "c"))))
+
+	writer := authAs("writer", "mydb")
+	require.NoError(t, h.authorize(writer, authzCmd(t, "insert", "mydb", "c")))
+	require.NoError(t, h.authorize(writer, authzCmd(t, "find", "mydb", "c")))
+	require.True(t, isUnauthorized(t, h.authorize(writer, authzCmd(t, "createUser", "mydb", "c"))))
+	require.True(t, isUnauthorized(t, h.authorize(writer, authzCmd(t, "insert", "other", "c"))))
+
+	boss := authAs("boss", "admin")
+	require.NoError(t, h.authorize(boss, authzCmd(t, "insert", "anydb", "c")))
+	require.NoError(t, h.authorize(boss, authzCmd(t, "createUser", "anydb", "c")))
+	require.NoError(t, h.authorize(boss, authzCmd(t, "dropDatabase", "anydb", "c")))
+	require.NoError(t, h.authorize(boss, authzCmd(t, "serverStatus", "admin", "c")))
+}
+
+func TestAuthorize_UnmappedCommandNeedsNoPrivilege(t *testing.T) {
+	h := authGateHandler(t, true)
+	createUserWithRole(t, h, "mydb", "reader", "read")
+	ci := conninfo.New()
+	ci.SetAuth("reader", "", nil, "mydb")
+	ctx := conninfo.Ctx(context.Background(), ci)
+
+	require.NoError(t, h.authorize(ctx, authzCmd(t, "someUnmappedCommand", "mydb", "c")))
 }
 
 func TestEffectivePrivileges_CacheInvalidatesOnBump(t *testing.T) {
