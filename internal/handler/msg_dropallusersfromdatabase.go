@@ -96,6 +96,8 @@ func (h *Handler) MsgDropAllUsersFromDatabase(connCtx context.Context, msg *wire
 		deleted = res.Deleted
 	}
 
+	h.BumpAuthGeneration()
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"n", deleted,

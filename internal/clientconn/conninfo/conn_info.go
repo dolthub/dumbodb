@@ -25,6 +25,7 @@ import (
 
 	"github.com/xdg-go/scram"
 
+	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
@@ -64,6 +65,10 @@ type ConnInfo struct {
 	bypassBackendAuth  bool // protected by rw
 	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, cleared on logout
 	reauthPending      bool // protected by rw; set when a saslStart begins on an already-authenticated connection, rejected at saslContinue
+
+	cachedPrivs   authz.PrivilegeSet // protected by rw
+	cachedPrivGen uint64             // protected by rw
+	cachedPrivsOK bool               // protected by rw
 
 	pendingAutoCommit map[string]AutoCommitTarget // protected by rw; keyed by db+"\x00"+branch, last writer wins
 	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
@@ -152,6 +157,24 @@ func (connInfo *ConnInfo) ReauthPending() bool {
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.reauthPending
+}
+
+// PrivilegeCache returns the cached effective privilege set and the auth
+// generation it was computed at.
+func (connInfo *ConnInfo) PrivilegeCache() (authz.PrivilegeSet, uint64, bool) {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.cachedPrivs, connInfo.cachedPrivGen, connInfo.cachedPrivsOK
+}
+
+func (connInfo *ConnInfo) SetPrivilegeCache(gen uint64, privs authz.PrivilegeSet) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.cachedPrivGen = gen
+	connInfo.cachedPrivs = privs
+	connInfo.cachedPrivsOK = true
 }
 
 // SetBypassBackendAuth marks the connection as not requiring backend authentication.

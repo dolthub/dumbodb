@@ -73,6 +73,8 @@ func (h *Handler) MsgDropUser(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		)
 	}
 
+	h.BumpAuthGeneration()
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),

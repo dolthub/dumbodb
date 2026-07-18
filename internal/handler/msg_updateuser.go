@@ -219,6 +219,8 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
+	h.BumpAuthGeneration()
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
