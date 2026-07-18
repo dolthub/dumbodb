@@ -29,6 +29,7 @@ var (
 		ActionCollMod, ActionCompact, ActionCreateCollection, ActionCreateIndex,
 		ActionDropCollection, ActionDropDatabase, ActionDropIndex, ActionDBStats,
 		ActionCollStats, ActionDataSize, ActionValidate, ActionRenameCollectionSameDB,
+		ActionListCollections, ActionListIndexes,
 	}
 	userAdminActions = []Action{
 		ActionChangeCustomData, ActionChangePassword, ActionCreateRole, ActionCreateUser,
@@ -39,7 +40,10 @@ var (
 		ActionServerStatus, ActionGetParameter, ActionHostInfo,
 		ActionListDatabases, ActionTop, ActionGetLog,
 	}
-	clusterManagerActions = []Action{ActionCompact, ActionSetParameter}
+	clusterManagerActions   = []Action{ActionCompact, ActionSetParameter}
+	clusterMonitorDBActions = []Action{
+		ActionDBStats, ActionCollStats, ActionListCollections, ActionListIndexes,
+	}
 )
 
 // builtinRoles maps each built-in role name to nothing but its presence; used by
@@ -77,18 +81,26 @@ func BuiltinRole(role, db string) (PrivilegeSet, bool) {
 	case "dbOwner":
 		return PrivilegeSet{{dbRes, concat(readActions, writeActions, dbAdminActions, userAdminActions)}}, true
 	case "readAnyDatabase":
-		return PrivilegeSet{{allDB, readActions}}, true
+		return PrivilegeSet{{allDB, readActions}, {ClusterResource, []Action{ActionListDatabases}}}, true
 	case "readWriteAnyDatabase":
-		return PrivilegeSet{{allDB, concat(readActions, writeActions)}}, true
+		return PrivilegeSet{{allDB, concat(readActions, writeActions)}, {ClusterResource, []Action{ActionListDatabases}}}, true
 	case "dbAdminAnyDatabase":
-		return PrivilegeSet{{allDB, dbAdminActions}}, true
+		return PrivilegeSet{{allDB, dbAdminActions}, {ClusterResource, []Action{ActionListDatabases}}}, true
 	case "userAdminAnyDatabase":
-		return PrivilegeSet{{allDB, userAdminActions}}, true
+		return PrivilegeSet{{allDB, userAdminActions}, {ClusterResource, []Action{ActionListDatabases}}}, true
 	case "clusterMonitor":
-		return PrivilegeSet{{ClusterResource, clusterMonitorActions}}, true
-	case "clusterManager", "hostManager", "clusterAdmin":
+		return PrivilegeSet{
+			{ClusterResource, clusterMonitorActions},
+			{allDB, clusterMonitorDBActions},
+		}, true
+	case "clusterManager", "clusterAdmin":
 		return PrivilegeSet{
 			{ClusterResource, concat(clusterMonitorActions, clusterManagerActions)},
+			{allDB, []Action{ActionDropDatabase}},
+		}, true
+	case "hostManager":
+		return PrivilegeSet{
+			{ClusterResource, clusterManagerActions},
 			{allDB, []Action{ActionDropDatabase}},
 		}, true
 	case "backup":
