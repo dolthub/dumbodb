@@ -33,8 +33,19 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgConnectionStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	showPrivileges, err := common.GetOptionalParam(document, "showPrivileges", false)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
 	users := types.MakeArray(1)
 	roles := types.MakeArray(0)
+	privileges := types.MakeArray(0)
 
 	if username, _, _, db := conninfo.Get(connCtx).Auth(); username != "" {
 		users.Append(must.NotFail(types.NewDocument(
@@ -49,14 +60,27 @@ func (h *Handler) MsgConnectionStatus(connCtx context.Context, msg *wire.OpMsg) 
 		if stored != nil {
 			roles = stored
 		}
+
+		if showPrivileges {
+			ps, err := h.effectivePrivileges(connCtx)
+			if err != nil {
+				return nil, err
+			}
+			privileges = privilegesToArray(ps)
+		}
+	}
+
+	authInfo := must.NotFail(types.NewDocument(
+		"authenticatedUsers", users,
+		"authenticatedUserRoles", roles,
+	))
+	if showPrivileges {
+		authInfo.Set("authenticatedUserPrivileges", privileges)
 	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"authInfo", must.NotFail(types.NewDocument(
-				"authenticatedUsers", users,
-				"authenticatedUserRoles", roles,
-			)),
+			"authInfo", authInfo,
 			"ok", float64(1),
 		)),
 	)

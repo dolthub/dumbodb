@@ -24,7 +24,36 @@ import (
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
+
+// privilegesToArray renders a privilege set as MongoDB {resource, actions}
+// documents.
+func privilegesToArray(ps authz.PrivilegeSet) *types.Array {
+	arr := types.MakeArray(len(ps))
+	for _, p := range ps {
+		actions := types.MakeArray(len(p.Actions))
+		for _, a := range p.Actions {
+			actions.Append(string(a))
+		}
+		arr.Append(must.NotFail(types.NewDocument(
+			"resource", resourceDoc(p.Resource),
+			"actions", actions,
+		)))
+	}
+	return arr
+}
+
+func resourceDoc(r authz.Resource) *types.Document {
+	switch {
+	case r.AnyResource:
+		return must.NotFail(types.NewDocument("anyResource", true))
+	case r.Cluster:
+		return must.NotFail(types.NewDocument("cluster", true))
+	default:
+		return must.NotFail(types.NewDocument("db", r.DB, "collection", r.Collection))
+	}
+}
 
 type resourceScope int
 
