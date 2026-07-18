@@ -204,6 +204,10 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			return nil, lazyerrors.Error(err)
 		}
 
+		if err = h.validateUserRoles(connCtx, normalized); err != nil {
+			return nil, err
+		}
+
 		saved.Set("roles", normalized)
 	}
 

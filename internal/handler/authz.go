@@ -164,21 +164,24 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	}
 }
 
-// selfServiceAllowed lets a user edit their own record via the changeOwn*
-// actions without the corresponding change* action on others.
+// selfServiceAllowed lets a user act on its own record without the privilege
+// required to act on others: viewing itself via usersInfo, and editing itself
+// via the changeOwn* actions.
 func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string, action authz.Action, privs authz.PrivilegeSet) bool {
-	if command != "updateUser" {
-		return false
-	}
 	user, _, _, userDB := conninfo.Get(ctx).Auth()
-	if targetUser != user || db != userDB {
+	if targetUser == "" || targetUser != user || db != userDB {
 		return false
 	}
-	switch action {
-	case authz.ActionChangePassword:
-		return privs.Authorized(authz.ActionChangeOwnPassword, authz.DatabaseResource(db))
-	case authz.ActionChangeCustomData:
-		return privs.Authorized(authz.ActionChangeOwnCustomData, authz.DatabaseResource(db))
+	switch command {
+	case "usersInfo":
+		return true
+	case "updateUser":
+		switch action {
+		case authz.ActionChangePassword:
+			return privs.Authorized(authz.ActionChangeOwnPassword, authz.DatabaseResource(db))
+		case authz.ActionChangeCustomData:
+			return privs.Authorized(authz.ActionChangeOwnCustomData, authz.DatabaseResource(db))
+		}
 	}
 	return false
 }

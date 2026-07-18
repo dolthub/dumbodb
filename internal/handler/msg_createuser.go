@@ -91,6 +91,15 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
+	roleRefs, err := normalizeRoleRefs(roles, dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = h.validateUserRoles(connCtx, roleRefs); err != nil {
+		return nil, err
+	}
+
 	if err = common.UnimplementedNonDefault(document, "digestPassword", func(v any) bool {
 		if v == nil || v == types.Null {
 			return true
