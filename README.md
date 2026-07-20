@@ -254,6 +254,19 @@ db.runCommand({ dumboMerge: 1, merge_in: "feature"})
 ```
 There are also legitimate merges which join two commit histories, complete with conflict detection and resolution. Look at the [Command Reference](https://github.com/dolthub/dumbodb/wiki/Commands) for more details and examples.
 
+## Anonymous Usage Metrics
+By default, a running DumboDB server reports anonymous usage metrics to DoltHub when it starts and once a day while it runs. This is a heartbeat that lets us count how many servers are running; it contains only an anonymous per-machine id, the DumboDB version, the OS platform, and the event type. It never includes your data, database or collection names, queries, or any personally identifying information. The server logs whether metrics are enabled at startup.
+
+To disable metrics, use either the `--no-metrics` flag or the `DUMBODB_NO_METRICS=1` environment variable (equivalent):
+
+```bash
+# binary
+$ dumbodb --data-dir /tmp/dumbodb-data --no-metrics
+
+# Docker (append the flag after the image name, or set the env var)
+$ docker run -p 27017:27017 dolthub/dumbodb:latest --no-metrics
+$ docker run -p 27017:27017 -e DUMBODB_NO_METRICS=1 dolthub/dumbodb:latest
+```
 
 ## Acknowledgements
 

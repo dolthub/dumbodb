@@ -29,12 +29,23 @@ import (
 	"strconv"
 	"syscall"
 
+	doltevents "github.com/dolthub/dolt/go/libraries/events"
+	eventsapi "github.com/dolthub/eventsapi_schema/dolt/services/eventsapi/v1alpha1"
+
 	"github.com/dolthub/dumbodb/internal/clientconn"
 	"github.com/dolthub/dumbodb/internal/handler/registry"
+	"github.com/dolthub/dumbodb/internal/metrics"
 	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/state"
 	"github.com/dolthub/dumbodb/internal/version"
 )
+
+// Tag any events emitted through dolt's global events machinery as DumboDB.
+// Our own reporter sets the app id explicitly; this covers any dolt library
+// code path that might emit through the shared global.
+func init() {
+	doltevents.Application = eventsapi.AppID_APP_DUMBODB
+}
 
 func main() {
 	handleVersionFlag()
@@ -78,11 +89,14 @@ func run(logger *slog.Logger) error {
 	sessionTimeout := fs.Duration("session-timeout", 0, "idle timeout for lsid-keyed sessions; default is 30m (matches MongoDB logicalSessionTimeoutMinutes)")
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
+	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
 	fs.Parse(os.Args[1:])
 
 	if *autoCommit && *sessionIsolation {
 		return fmt.Errorf("--auto-commit and --session-isolation are mutually exclusive: auto-commit commits every write at the command boundary, while session-isolation defers commits to an explicit doltCommit merge")
 	}
+
+	metricsEnabled := !*noMetrics && !envDisablesMetrics()
 
 	if *pprofAddr != "" {
 		go func() {
@@ -119,10 +133,7 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
-	stateProvider, err := state.NewProvider("")
-	if err != nil {
-		return err
-	}
+	stateProvider := state.NewProvider()
 
 	h, closeBackend, err := registry.NewHandler("dolt", &registry.NewHandlerOpts{
 		Logger:             logger,
@@ -155,6 +166,23 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if metricsEnabled {
+		logger.Info("anonymous usage metrics enabled; disable with --no-metrics or DUMBODB_NO_METRICS=1")
+	} else {
+		logger.Info("anonymous usage metrics disabled")
+	}
+	go metrics.RunReporter(ctx, logger, version.Get().Version, metricsEnabled)
+
 	listener.Run(ctx)
 	return nil
+}
+
+// envDisablesMetrics reports whether DUMBODB_NO_METRICS is set to a truthy value.
+func envDisablesMetrics() bool {
+	v, ok := os.LookupEnv("DUMBODB_NO_METRICS")
+	if !ok {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	return err == nil && b
 }
