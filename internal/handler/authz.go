@@ -144,9 +144,13 @@ func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 		if h.selfServiceAllowed(ctx, command, db, collection, r.action, privs) {
 			continue
 		}
+		commandEcho := command
+		if doc, derr := opMsgDocument(msg); derr == nil {
+			commandEcho = mongoCommandString(doc)
+		}
 		return handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrUnauthorized,
-			fmt.Sprintf("not authorized on %s to execute command %s", db, command),
+			fmt.Sprintf("not authorized on %s to execute command %s", db, commandEcho),
 			command,
 		)
 	}
