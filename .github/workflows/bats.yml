@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  # CI-launched servers must not phone home; their SQL_SERVER boot events
+  # would skew DoltHub's running-server metrics.
+  DUMBODB_NO_METRICS: "1"
+
 jobs:
   bats:
     runs-on: ubuntu-latest
