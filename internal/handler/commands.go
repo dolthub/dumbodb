@@ -313,9 +313,6 @@ func checkSCRAMConversation(ctx context.Context, command string, l *slog.Logger)
 	)
 }
 
-// localhostExceptionApplies reports whether an unauthenticated createUser may
-// run to bootstrap the first user: a loopback connection, no users yet, and the
-// one-shot latch not yet tripped.
 func (h *Handler) localhostExceptionApplies(ctx context.Context, command string) bool {
 	if command != "createUser" {
 		return false
@@ -358,10 +355,6 @@ func (h *Handler) userCount(ctx context.Context) (int64, error) {
 	return res.Count, nil
 }
 
-// adminMutationDenyCode maps a collection-mutating command to the error code
-// DumboDB returns when it targets the reserved admin database. admin is
-// server-managed; the auth store it holds is changed only through the user
-// management commands.
 var adminMutationDenyCode = map[string]handlererrors.ErrorCode{
 	"insert":        handlererrors.ErrUnauthorized,
 	"update":        handlererrors.ErrUnauthorized,
@@ -372,9 +365,6 @@ var adminMutationDenyCode = map[string]handlererrors.ErrorCode{
 	"drop":          handlererrors.ErrIllegalOperation,
 }
 
-// wireCommandTarget returns the command name, its database, and its target
-// collection (the first BSON field's name and string value), or empty strings
-// on parse failure.
 func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
 	doc, err := opMsgDocument(msg)
 	if err != nil {
@@ -398,9 +388,6 @@ func wireCommandTarget(msg *wire.OpMsg) (command, db, collection string) {
 	return command, db, collection
 }
 
-// guardAdminMutation rejects a collection-mutating command that targets the
-// reserved admin database. Collections in user databases (including their own
-// system.* collections) are not guarded.
 func guardAdminMutation(command, db, collection string) error {
 	if db != "admin" {
 		return nil

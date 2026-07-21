@@ -30,8 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// loadUserDoc returns the stored user document for {user, db}, or nil when no
-// such user exists.
 func (h *Handler) loadUserDoc(ctx context.Context, db, user string) (*types.Document, error) {
 	adminDB, err := h.b.Database("admin")
 	if err != nil {
@@ -70,8 +68,6 @@ func (h *Handler) loadUserDoc(ctx context.Context, db, user string) (*types.Docu
 	return nil, nil
 }
 
-// validateUserRoles reports RoleNotFound for the first {role, db} reference in
-// refs that names neither a built-in nor a stored role.
 func (h *Handler) validateUserRoles(ctx context.Context, refs *types.Array) error {
 	for i := 0; i < refs.Len(); i++ {
 		ref := must.NotFail(refs.Get(i)).(*types.Document)
@@ -94,8 +90,6 @@ func (h *Handler) validateUserRoles(ctx context.Context, refs *types.Array) erro
 	return nil
 }
 
-// modifyUser loads a stored user, applies fn to its document, and writes it
-// back. A missing user is UserNotFound(11).
 func (h *Handler) modifyUser(ctx context.Context, dbName, username string, fn func(doc *types.Document) error) error {
 	stored, err := h.loadUserDoc(ctx, dbName, username)
 	if err != nil {
@@ -131,10 +125,6 @@ func (h *Handler) modifyUser(ctx context.Context, dbName, username string, fn fu
 	return nil
 }
 
-// MsgGrantRolesToUser implements `grantRolesToUser`, adding role grants to a
-// user. Referenced roles must exist (RoleNotFound 31).
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgGrantRolesToUser(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -175,10 +165,6 @@ func (h *Handler) MsgGrantRolesToUser(connCtx context.Context, msg *wire.OpMsg) 
 	return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))
 }
 
-// MsgRevokeRolesFromUser implements `revokeRolesFromUser`, removing role grants
-// from a user.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgRevokeRolesFromUser(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

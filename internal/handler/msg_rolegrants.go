@@ -29,8 +29,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// modifyRole loads a stored role, applies fn to its document, and writes it
-// back. A missing role is RoleNotFound(31).
 func (h *Handler) modifyRole(ctx context.Context, dbName, roleName string, fn func(doc *types.Document) error) error {
 	stored, err := h.loadRoleDoc(ctx, dbName, roleName)
 	if err != nil {
@@ -61,11 +59,6 @@ func (h *Handler) modifyRole(ctx context.Context, dbName, roleName string, fn fu
 	return nil
 }
 
-// MsgGrantPrivilegesToRole implements `grantPrivilegesToRole`. A granted
-// privilege whose resource already exists unions its actions; a new resource is
-// appended.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgGrantPrivilegesToRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -102,12 +95,6 @@ func (h *Handler) MsgGrantPrivilegesToRole(connCtx context.Context, msg *wire.Op
 	return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))
 }
 
-// MsgRevokePrivilegesFromRole implements `revokePrivilegesFromRole`. A revoked
-// privilege matches an existing one by exact resource; the named actions are
-// removed and an emptied privilege is dropped. A non-matching resource is a
-// no-op.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgRevokePrivilegesFromRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -139,9 +126,6 @@ func (h *Handler) MsgRevokePrivilegesFromRole(connCtx context.Context, msg *wire
 	return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))
 }
 
-// MsgGrantRolesToRole implements `grantRolesToRole`, adding inheritance edges.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgGrantRolesToRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -188,10 +172,6 @@ func (h *Handler) MsgGrantRolesToRole(connCtx context.Context, msg *wire.OpMsg) 
 	return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))
 }
 
-// MsgRevokeRolesFromRole implements `revokeRolesFromRole`, removing inheritance
-// edges.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgRevokeRolesFromRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

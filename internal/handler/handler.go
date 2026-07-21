@@ -70,15 +70,11 @@ type Handler struct {
 
 	bootstrapLatch atomic.Bool
 
-	// authGen bumps on every user/role mutation; connections cache their
-	// effective privilege set keyed by this generation.
 	authGen atomic.Uint64
 
 	cappedCleanupStop chan struct{}
 }
 
-// BumpAuthGeneration invalidates every connection's cached privilege set. Call
-// after any user or role mutation.
 func (h *Handler) BumpAuthGeneration() { h.authGen.Add(1) }
 
 // NewOpts represents handler configuration.

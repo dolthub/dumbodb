@@ -28,9 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgRolesInfo implements `rolesInfo` command.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgRolesInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

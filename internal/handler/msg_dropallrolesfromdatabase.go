@@ -28,10 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgDropAllRolesFromDatabase implements `dropAllRolesFromDatabase` command,
-// returning the number of user-defined roles removed from the database.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDropAllRolesFromDatabase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

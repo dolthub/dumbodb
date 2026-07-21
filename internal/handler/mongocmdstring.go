@@ -24,9 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// mongoCommandString renders a command document in MongoDB's shell-style debug
-// format, matching the text MongoDB embeds when it reports a command in an
-// "not authorized on <db> to execute command <doc>" error.
 func mongoCommandString(doc *types.Document) string {
 	if doc == nil {
 		return "{}"
@@ -97,9 +94,6 @@ func mongoValueString(v any) string {
 	}
 }
 
-// mongoDoubleString renders a double the way MongoDB does, keeping a decimal
-// point on whole values (1.0, not 1) while leaving NaN/Inf and exponent forms
-// untouched.
 func mongoDoubleString(f float64) string {
 	s := strconv.FormatFloat(f, 'g', -1, 64)
 	for _, r := range s {

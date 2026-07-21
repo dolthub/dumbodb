@@ -82,9 +82,6 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 	return err
 }
 
-// NormalizeRoles converts a roles array into an array of {role, db} documents.
-// A shorthand string entry resolves its db to defaultDB. A nil input yields an
-// empty array.
 func NormalizeRoles(roles *types.Array, defaultDB string) (*types.Array, error) {
 	if roles == nil {
 		return types.MakeArray(0), nil

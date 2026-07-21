@@ -24,11 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// checkAuthRestrictions enforces a user's authenticationRestrictions against the
-// connection. The restriction documents are OR-ed: authentication is permitted
-// when the list is empty or any one document is satisfied. A server-side
-// AuthenticationRestrictionUnmet is masked to the client as a generic
-// AuthenticationFailed, matching MongoDB.
 func (h *Handler) checkAuthRestrictions(ctx context.Context, db, user string) error {
 	doc, err := h.loadUserDoc(ctx, db, user)
 	if err != nil {
@@ -67,9 +62,6 @@ func (h *Handler) checkAuthRestrictions(ctx context.Context, db, user string) er
 	)
 }
 
-// restrictionSatisfied reports whether a single restriction document admits the
-// connection: a present clientSource must contain clientAddr and a present
-// serverAddress must contain serverAddr; an absent field is unconstrained.
 func restrictionSatisfied(doc *types.Document, clientAddr, serverAddr netip.Addr) bool {
 	if v, err := doc.Get("clientSource"); err == nil {
 		if list, ok := v.(*types.Array); ok && !addrMatches(clientAddr, list) {
@@ -86,8 +78,6 @@ func restrictionSatisfied(doc *types.Document, clientAddr, serverAddr netip.Addr
 	return true
 }
 
-// addrMatches reports whether addr equals or is contained by any IP or CIDR
-// entry in list.
 func addrMatches(addr netip.Addr, list *types.Array) bool {
 	if !addr.IsValid() {
 		return false

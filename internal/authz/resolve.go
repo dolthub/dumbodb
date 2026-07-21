@@ -14,23 +14,15 @@
 
 package authz
 
-// Role is a role reference {role, db}.
 type Role struct {
 	Role string
 	DB   string
 }
 
-// RoleResolver returns a user-defined role's own privileges and the roles it
-// inherits. ok is false when the role does not exist. Built-in roles are never
-// passed to a resolver; they are synthesized.
 type RoleResolver func(r Role) (privs PrivilegeSet, inherits []Role, ok bool)
 
-// NoCustomRoles is a resolver with no user-defined roles.
 func NoCustomRoles(Role) (PrivilegeSet, []Role, bool) { return nil, nil, false }
 
-// Resolve computes the effective privilege set for the granted roles, taking the
-// transitive closure over role inheritance. Cycles are broken by visiting each
-// role once.
 func Resolve(roles []Role, resolver RoleResolver) PrivilegeSet {
 	var out PrivilegeSet
 	seen := map[Role]bool{}

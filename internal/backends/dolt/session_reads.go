@@ -39,9 +39,6 @@ func dbNameDsessFriendly(dbName string) bool {
 	return !strings.ContainsAny(dbName, "/@")
 }
 
-// alwaysAutoCommit reports whether writes to dbName must commit immediately,
-// bypassing the session overlay, regardless of the server's --auto-commit or
-// --session-isolation mode.
 func alwaysAutoCommit(dbName string) bool {
 	return dbName == "admin"
 }

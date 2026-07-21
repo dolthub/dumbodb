@@ -29,10 +29,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgDropRole implements `dropRole` command. Only user-defined roles can be
-// dropped; a missing (or built-in) role is RoleNotFound(31).
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgDropRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

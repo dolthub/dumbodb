@@ -28,11 +28,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgUpdateRole implements `updateRole` command. The supplied privileges and
-// roles arrays each replace the stored array wholesale; omitting one leaves it
-// unchanged.
-//
-// The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgUpdateRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

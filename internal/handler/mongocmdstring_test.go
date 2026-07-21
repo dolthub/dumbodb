@@ -24,8 +24,6 @@ import (
 )
 
 func TestMongoCommandString(t *testing.T) {
-	// Mirrors the command document MongoDB echoes in an "not authorized ... to
-	// execute command <doc>" error, so DumboDB's message carries the same shape.
 	uuid := types.Binary{
 		Subtype: types.BinaryUUID,
 		B: []byte{

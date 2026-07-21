@@ -41,8 +41,8 @@ type ConnInfo struct {
 	sc *scram.ServerConversation // protected by rw
 	db string                    // protected by rw
 
-	Peer  netip.AddrPort // invalid for Unix domain sockets
-	Local netip.AddrPort // server address the connection was accepted on
+	Peer  netip.AddrPort
+	Local netip.AddrPort
 
 	username string // protected by rw
 	password string // protected by rw
@@ -64,8 +64,8 @@ type ConnInfo struct {
 	// and by the new authentication.
 	// See where it is used for more details.
 	bypassBackendAuth  bool // protected by rw
-	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, cleared on logout
-	reauthPending      bool // protected by rw; set when a saslStart begins on an already-authenticated connection, rejected at saslContinue
+	scramAuthenticated bool // protected by rw
+	reauthPending      bool // protected by rw
 
 	cachedPrivs   authz.PrivilegeSet // protected by rw
 	cachedPrivGen uint64             // protected by rw
@@ -160,8 +160,6 @@ func (connInfo *ConnInfo) ReauthPending() bool {
 	return connInfo.reauthPending
 }
 
-// PrivilegeCache returns the cached effective privilege set and the auth
-// generation it was computed at.
 func (connInfo *ConnInfo) PrivilegeCache() (authz.PrivilegeSet, uint64, bool) {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
@@ -275,8 +273,6 @@ func (connInfo *ConnInfo) SetTxnAborted(v bool) {
 	connInfo.txnAborted = v
 }
 
-// Owner returns the registry key that scopes this connection's session by
-// (authenticated-user, lsid).
 func (connInfo *ConnInfo) Owner() string {
 	id := connInfo.LSID()
 	if id == "" {
@@ -286,8 +282,6 @@ func (connInfo *ConnInfo) Owner() string {
 	return sessionKey(user, id)
 }
 
-// SessionKeyFor returns the registry key for an lsid named by the client,
-// scoped to this connection's authenticated user.
 func (connInfo *ConnInfo) SessionKeyFor(id string) string {
 	user, _, _, _ := connInfo.Auth()
 	return sessionKey(user, id)

@@ -135,7 +135,6 @@ func TestEffectivePrivileges_CacheInvalidatesOnBump(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, privs.Authorized(authz.ActionInsert, authz.CollectionResource("mydb", "c")))
 
-	// Change alice's role and bump the generation; the recomputed set reflects it.
 	_, err = h.MsgUpdateUser(ctx, must.NotFail(documentOpMsg(must.NotFail(types.NewDocument(
 		"updateUser", "alice",
 		"roles", must.NotFail(types.NewArray("readWrite")),

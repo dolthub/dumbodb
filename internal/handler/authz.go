@@ -27,8 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// privilegesToArray renders a privilege set as MongoDB {resource, actions}
-// documents.
 func privilegesToArray(ps authz.PrivilegeSet) *types.Array {
 	arr := types.MakeArray(len(ps))
 	for _, p := range ps {
@@ -68,9 +66,6 @@ type commandPrivilege struct {
 	scope  resourceScope
 }
 
-// commandPrivileges lists the privileges each authenticated command requires.
-// The target resource is built from the command's database and collection
-// (design 4.2). Commands absent from this map require no privilege.
 var commandPrivileges = map[string][]commandPrivilege{
 	"find":             {{authz.ActionFind, scopeCollection}},
 	"count":            {{authz.ActionFind, scopeCollection}},
@@ -121,8 +116,6 @@ var commandPrivileges = map[string][]commandPrivilege{
 	"getLog":        {{authz.ActionGetLog, scopeCluster}},
 }
 
-// authorize enforces the privileges a command requires against the connection's
-// effective privilege set, returning Unauthorized(13) when any is unsatisfied.
 func (h *Handler) authorize(ctx context.Context, msg *wire.OpMsg) error {
 	command, db, collection := wireCommandTarget(msg)
 
@@ -168,9 +161,6 @@ func targetResource(scope resourceScope, db, collection string) authz.Resource {
 	}
 }
 
-// selfServiceAllowed lets a user act on its own record without the privilege
-// required to act on others: viewing itself via usersInfo, and editing itself
-// via the changeOwn* actions.
 func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUser string, action authz.Action, privs authz.PrivilegeSet) bool {
 	user, _, _, userDB := conninfo.Get(ctx).Auth()
 	if targetUser == "" || targetUser != user || db != userDB {
@@ -190,9 +180,6 @@ func (h *Handler) selfServiceAllowed(ctx context.Context, command, db, targetUse
 	return false
 }
 
-// effectivePrivileges returns the connection's effective privilege set, computed
-// from the authenticated user's roles and cached per auth generation. An
-// unauthenticated connection has no privileges.
 func (h *Handler) effectivePrivileges(ctx context.Context) (authz.PrivilegeSet, error) {
 	ci := conninfo.Get(ctx)
 	user, _, _, userDB := ci.Auth()
@@ -215,13 +202,10 @@ func (h *Handler) effectivePrivileges(ctx context.Context) (authz.PrivilegeSet, 
 	return privs, nil
 }
 
-// roleResolver resolves user-defined roles from admin.system.roles so that a
-// user's effective privileges include the transitive closure over custom roles.
 func (h *Handler) roleResolver(ctx context.Context) authz.RoleResolver {
 	return h.customRoleResolver(ctx)
 }
 
-// loadUserRoles reads the roles granted to a user from admin.system.users.
 func (h *Handler) loadUserRoles(ctx context.Context, db, user string) ([]authz.Role, error) {
 	rolesArr, err := h.authenticatedUserRoles(ctx, db, user)
 	if err != nil {

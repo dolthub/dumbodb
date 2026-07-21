@@ -43,8 +43,6 @@ func (h *Handler) systemRolesCollection() (backends.Collection, error) {
 	return coll, nil
 }
 
-// loadRoleDoc returns the stored role document for {role, db}, or nil when no
-// such user-defined role exists.
 func (h *Handler) loadRoleDoc(ctx context.Context, db, role string) (*types.Document, error) {
 	coll, err := h.systemRolesCollection()
 	if err != nil {
@@ -80,8 +78,6 @@ func (h *Handler) loadRoleDoc(ctx context.Context, db, role string) (*types.Docu
 	return nil, nil
 }
 
-// customRoleResolver reads user-defined roles from admin.system.roles. Built-in
-// roles are never passed to it; authz.Resolve synthesizes those.
 func (h *Handler) customRoleResolver(ctx context.Context) authz.RoleResolver {
 	return func(r authz.Role) (authz.PrivilegeSet, []authz.Role, bool) {
 		doc, err := h.loadRoleDoc(ctx, r.DB, r.Role)
@@ -99,8 +95,6 @@ func (h *Handler) customRoleResolver(ctx context.Context) authz.RoleResolver {
 	}
 }
 
-// roleRefClosure returns the transitive set of roles inherited via direct: the
-// direct roles plus, recursively, the roles they inherit, in a stable order.
 func (h *Handler) roleRefClosure(ctx context.Context, direct []authz.Role) []authz.Role {
 	seen := map[authz.Role]bool{}
 	var out []authz.Role
@@ -133,8 +127,6 @@ func (h *Handler) roleRefClosure(ctx context.Context, direct []authz.Role) []aut
 	return out
 }
 
-// parseStoredPrivileges converts stored {resource, actions} documents into an
-// authz.PrivilegeSet.
 func parseStoredPrivileges(arr *types.Array) authz.PrivilegeSet {
 	if arr == nil {
 		return nil
@@ -181,8 +173,6 @@ func parseResourceDoc(rd *types.Document) authz.Resource {
 	return authz.Resource{DB: dbStr, Collection: collStr}
 }
 
-// resourceKey renders a resource document as a stable identity for exact
-// matching in grant/revoke.
 func resourceKey(rd *types.Document) string {
 	r := parseResourceDoc(rd)
 	switch {
@@ -195,7 +185,6 @@ func resourceKey(rd *types.Document) string {
 	}
 }
 
-// roleExists reports whether {role, db} names a built-in or a stored role.
 func (h *Handler) roleExists(ctx context.Context, db, role string) (bool, error) {
 	if authz.IsBuiltinRoleOnDB(role, db) {
 		return true, nil
@@ -209,10 +198,6 @@ func (h *Handler) roleExists(ctx context.Context, db, role string) (bool, error)
 	return doc != nil, nil
 }
 
-// normalizeInheritedRoles validates that every inherited role exists and returns
-// the {role, db} array to store. Built-in roles are accepted without lookup. A
-// missing inherited role is reported as RoleNotFound against the grantee role
-// {granteeRole, granteeDB}.
 func (h *Handler) normalizeInheritedRoles(ctx context.Context, roles *types.Array, granteeRole, granteeDB string) (*types.Array, error) {
 	refs, err := normalizeRoleRefs(roles, granteeDB)
 	if err != nil {
@@ -240,8 +225,6 @@ func (h *Handler) normalizeInheritedRoles(ctx context.Context, roles *types.Arra
 	return refs, nil
 }
 
-// normalizeRoleRefs converts a roles array into {role, db} documents, resolving a
-// shorthand string entry's db to defaultDB.
 func normalizeRoleRefs(roles *types.Array, defaultDB string) (*types.Array, error) {
 	out := types.MakeArray(0)
 	if roles == nil {
@@ -277,10 +260,6 @@ func normalizeRoleRefs(roles *types.Array, defaultDB string) (*types.Array, erro
 	return out, nil
 }
 
-// normalizePrivileges validates and rebuilds a privileges array as {resource,
-// actions} documents. A role outside the admin database may only grant on
-// collection resources within its own database; cluster, anyResource, and
-// cross-database resources are BadValue.
 func normalizePrivileges(privileges *types.Array, roleDB string) (*types.Array, error) {
 	out := types.MakeArray(0)
 	if privileges == nil {
@@ -327,8 +306,6 @@ func normalizePrivileges(privileges *types.Array, roleDB string) (*types.Array, 
 	return out, nil
 }
 
-// validateResourceScope enforces the design's resource-scoping rule: a non-admin
-// role may only name a collection resource within its own database.
 func validateResourceScope(resource *types.Document, roleDB string) error {
 	if roleDB == "admin" {
 		return nil
@@ -356,8 +333,6 @@ func validateResourceScope(resource *types.Document, roleDB string) error {
 	return nil
 }
 
-// cascadeRoleRemoval strips the dropped role {db, role} from the inherited-role
-// arrays of every stored role and user, mirroring MongoDB's dropRole cascade.
 func (h *Handler) cascadeRoleRemoval(ctx context.Context, db, role string) error {
 	removed := must.NotFail(types.NewArray(must.NotFail(types.NewDocument("role", role, "db", db))))
 
@@ -392,8 +367,6 @@ func (h *Handler) cascadeRoleRemoval(ctx context.Context, db, role string) error
 	return nil
 }
 
-// changedRoleHolders returns the documents in coll whose "roles" array contained
-// any entry in removed, with that entry stripped.
 func changedRoleHolders(ctx context.Context, coll backends.Collection, removed *types.Array) ([]*types.Document, error) {
 	qr, err := coll.Query(ctx, nil)
 	if err != nil {
@@ -430,8 +403,6 @@ func changedRoleHolders(ctx context.Context, coll backends.Collection, removed *
 	return updated, nil
 }
 
-// requiredArray returns document[key] as an array, translating a missing field
-// into a MissingField error naming the command.
 func requiredArray(document *types.Document, command, key string) (*types.Array, error) {
 	v, err := common.GetOptionalParam[*types.Array](document, key, nil)
 	if err != nil {

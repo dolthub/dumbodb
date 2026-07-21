@@ -111,7 +111,6 @@ func TestGuardAdminMutation(t *testing.T) {
 		{"create", handlererrors.ErrUnauthorized},
 		{"drop", handlererrors.ErrIllegalOperation},
 	} {
-		// The whole admin database is reserved: system and non-system collections.
 		for _, coll := range []string{"system.users", "widgets"} {
 			err := guardAdminMutation(tc.cmd, "admin", coll)
 			require.Error(t, err, "%s on admin.%s must be rejected", tc.cmd, coll)
@@ -121,18 +120,14 @@ func TestGuardAdminMutation(t *testing.T) {
 		}
 	}
 
-	// User databases are not guarded, including their own system.* collections.
 	require.NoError(t, guardAdminMutation("insert", "mydb", "system.foobar"))
 	require.NoError(t, guardAdminMutation("drop", "mydb", "widgets"))
 
-	// Reads of admin collections are not mutations and are not guarded.
 	require.NoError(t, guardAdminMutation("find", "admin", "system.users"))
 	require.NoError(t, guardAdminMutation("aggregate", "admin", "widgets"))
 }
 
 func TestGuardAdminMutation_WiredAfterAuthGate(t *testing.T) {
-	// With enforcement off, an unauthenticated connection passes the gate and
-	// reaches the guard, proving the guard is wired into dispatch.
 	h := authGateHandler(t, false)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
@@ -141,8 +136,6 @@ func TestGuardAdminMutation_WiredAfterAuthGate(t *testing.T) {
 	require.True(t, ok, "want CommandError, got %v", err)
 	require.Equal(t, handlererrors.ErrIllegalOperation, code)
 
-	// With enforcement on, the auth gate fires before the guard: an
-	// unauthenticated system.* mutation is a forced-login rejection.
 	hEnforced := authGateHandler(t, true)
 	_, err = hEnforced.commands["insert"].Handler(ctx, collCmd(t, "insert", "system.users"))
 	require.True(t, isForcedLoginError(err), "auth gate must precede the system guard, got %v", err)

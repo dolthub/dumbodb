@@ -16,11 +16,8 @@ package authz
 
 import "strings"
 
-// Action is a MongoDB privilege action name.
 type Action string
 
-// The DumboDB-enforced MongoDB actions. Action names outside this set stay valid
-// in custom roles for parity, but never gate a command.
 const (
 	ActionFind                         Action = "find"
 	ActionInsert                       Action = "insert"
@@ -68,13 +65,9 @@ const (
 	ActionViewRole                     Action = "viewRole"
 	ActionSetAuthenticationRestriction Action = "setAuthenticationRestriction"
 
-	// AnyAction grants every action on the resource it is attached to.
 	AnyAction Action = "anyAction"
 )
 
-// Resource is a privilege resource pattern. Exactly one form is used:
-// {DB,Collection}, {DB,""}, {"",Collection}, {"",""}, {Cluster:true}, or
-// {AnyResource:true}.
 type Resource struct {
 	DB          string
 	Collection  string
@@ -82,20 +75,14 @@ type Resource struct {
 	AnyResource bool
 }
 
-// CollectionResource is the {db, collection} resource for one collection.
 func CollectionResource(db, collection string) Resource {
 	return Resource{DB: db, Collection: collection}
 }
 
-// DatabaseResource is the {db, ""} database-wide resource.
 func DatabaseResource(db string) Resource { return Resource{DB: db} }
 
-// ClusterResource is the {cluster:true} server-wide resource.
 var ClusterResource = Resource{Cluster: true}
 
-// Covers reports whether this resource pattern grants access to a concrete
-// target resource. A collection-wildcard pattern ({db,""} or {"",""}) excludes
-// system collections unless {AnyResource:true}.
 func (r Resource) Covers(target Resource) bool {
 	if r.AnyResource {
 		return true
@@ -115,22 +102,17 @@ func (r Resource) Covers(target Resource) bool {
 	return !IsSystemCollection(target.Collection)
 }
 
-// IsSystemCollection reports whether a collection name is in the reserved
-// system.* namespace.
 func IsSystemCollection(collection string) bool {
 	return strings.HasPrefix(collection, "system.")
 }
 
-// Privilege is one resource plus the actions permitted on it.
 type Privilege struct {
 	Resource Resource
 	Actions  []Action
 }
 
-// PrivilegeSet is a computed effective privilege set.
 type PrivilegeSet []Privilege
 
-// Authorized reports whether the set grants action on the target resource.
 func (ps PrivilegeSet) Authorized(action Action, target Resource) bool {
 	for _, p := range ps {
 		if !p.Resource.Covers(target) {

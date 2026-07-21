@@ -46,8 +46,6 @@ var (
 	}
 )
 
-// builtinRoles maps each built-in role name to nothing but its presence; used by
-// IsBuiltinRole and rolesInfo.
 var builtinRoles = map[string]struct{}{
 	"read": {}, "readWrite": {}, "dbAdmin": {}, "userAdmin": {}, "dbOwner": {},
 	"readAnyDatabase": {}, "readWriteAnyDatabase": {}, "dbAdminAnyDatabase": {}, "userAdminAnyDatabase": {},
@@ -55,13 +53,11 @@ var builtinRoles = map[string]struct{}{
 	"backup": {}, "restore": {}, "root": {},
 }
 
-// IsBuiltinRole reports whether role names a MongoDB built-in role.
 func IsBuiltinRole(role string) bool {
 	_, ok := builtinRoles[role]
 	return ok
 }
 
-// IsBuiltinRoleOnDB reports whether role is a built-in role available on db.
 func IsBuiltinRoleOnDB(role, db string) bool {
 	for _, n := range BuiltinRoleNames(db) {
 		if n == role {
@@ -71,9 +67,6 @@ func IsBuiltinRoleOnDB(role, db string) bool {
 	return false
 }
 
-// BuiltinRoleNames returns the built-in role names available on db: the
-// database-scoped roles for any database, plus the all-database, cluster, and
-// backup/restore/root roles for the admin database.
 func BuiltinRoleNames(db string) []string {
 	names := []string{"read", "readWrite", "dbAdmin", "userAdmin", "dbOwner"}
 	if db == "admin" {
@@ -86,10 +79,6 @@ func BuiltinRoleNames(db string) []string {
 	return names
 }
 
-// BuiltinRole synthesizes the privilege set for a built-in role granted on db
-// (the role's {role, db}). The all-database, cluster, and backup/restore roles
-// are admin-scoped; db is ignored for the resources they span. Returns false if
-// role is not a built-in role name.
 func BuiltinRole(role, db string) (PrivilegeSet, bool) {
 	dbRes := DatabaseResource(db)
 	allDB := Resource{}
