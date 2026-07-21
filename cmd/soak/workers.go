@@ -51,7 +51,7 @@ func (w *workload) runSessionWorker(ctx context.Context, uri string, delay time.
 			return
 		}
 		if err := connectPingDisconnect(ctx, uri); err != nil {
-			w.errors.Add(1)
+			w.errs.record("session", err)
 		}
 		w.cycles.Add(1)
 		if !sleep(ctx, delay) {
@@ -69,7 +69,7 @@ func (w *workload) runCRUDWorker(ctx context.Context, uri, collName string, work
 	defer w.wg.Done()
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -83,7 +83,7 @@ func (w *workload) runCRUDWorker(ctx context.Context, uri, collName string, work
 		op := r.Intn(4)
 		key := fmt.Sprintf("crud-w%d-k%05d", workerID, r.Intn(500))
 		if err := w.runOneCRUD(ctx, coll, op, key, r); err != nil {
-			w.errors.Add(1)
+			w.errs.record("crud", err)
 		}
 		w.cycles.Add(1)
 		if !sleep(ctx, opsInterval) {
@@ -127,7 +127,7 @@ func (w *workload) runBulkWorker(ctx context.Context, uri, collName string, work
 	defer w.wg.Done()
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -151,7 +151,7 @@ func (w *workload) runBulkWorker(ctx context.Context, uri, collName string, work
 		_, err := coll.InsertMany(cctx, docs, options.InsertMany().SetOrdered(false))
 		cancel()
 		if err != nil {
-			w.errors.Add(1)
+			w.errs.record("bulk-insert", err)
 		}
 		w.cycles.Add(1)
 		// Bulk inserts are heavier; back off proportionally.
@@ -168,7 +168,7 @@ func (w *workload) runAggWorker(ctx context.Context, uri, collName string, worke
 	defer w.wg.Done()
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -188,7 +188,7 @@ func (w *workload) runAggWorker(ctx context.Context, uri, collName string, worke
 			}
 			cur.Close(cctx)
 		} else {
-			w.errors.Add(1)
+			w.errs.record("agg", err)
 		}
 		cancel()
 		w.cycles.Add(1)
@@ -244,7 +244,7 @@ func (w *workload) runIndexedWorker(ctx context.Context, uri, collName string, w
 	defer w.wg.Done()
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -266,7 +266,7 @@ func (w *workload) runIndexedWorker(ctx context.Context, uri, collName string, w
 				Options: options.Index().SetName(idxName),
 			})
 			if err != nil {
-				w.errors.Add(1)
+				w.errs.record("index-create", err)
 			}
 		}
 		lo := r.Intn(900)
@@ -276,7 +276,7 @@ func (w *workload) runIndexedWorker(ctx context.Context, uri, collName string, w
 			}
 			cur.Close(cctx)
 		} else {
-			w.errors.Add(1)
+			w.errs.record("indexed-find", err)
 		}
 		cancel()
 		cycle++
@@ -295,7 +295,7 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 	defer w.wg.Done()
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -314,13 +314,13 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 			_, _ = mainColl.InsertOne(ctx, makeDoc(r, key, pickSize(r)))
 		}
 		if err := runCmd(ctx, mainDB, 30*time.Second, bson.D{{"dumboCommit", 1}, {"message", fmt.Sprintf("vcs-w%d main commit", workerID)}}); err != nil {
-			w.errors.Add(1)
+			w.errs.record("vcs-commit", err)
 		}
 
 		// Create + populate + commit on the feature branch.
 		branch := fmt.Sprintf("vcs-w%d-b%d", workerID, branchSeq.Add(1))
 		if err := runCmd(ctx, mainDB, 30*time.Second, bson.D{{"dumboBranch", 1}, {"branch", branch}}); err != nil {
-			w.errors.Add(1)
+			w.errs.record("vcs-branch", err)
 		}
 		branchDB := client.Database("soak@" + branch)
 		branchColl := branchDB.Collection(collName)
@@ -329,7 +329,7 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 			_, _ = branchColl.InsertOne(ctx, makeDoc(r, key, pickSize(r)))
 		}
 		if err := runCmd(ctx, branchDB, 30*time.Second, bson.D{{"dumboCommit", 1}, {"message", "branch commit"}}); err != nil {
-			w.errors.Add(1)
+			w.errs.record("vcs-commit", err)
 		}
 
 		// Merge the branch back to main. Conflicts can arise when
@@ -341,7 +341,7 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 			{"message", fmt.Sprintf("soak merge of %s", branch)},
 			{"author", "soak <soak@dumbodb>"},
 		}); err != nil {
-			w.errors.Add(1)
+			w.errs.record("vcs-merge", err)
 		}
 
 		w.cycles.Add(1)
@@ -367,7 +367,7 @@ func (w *workload) runTxnWorker(ctx context.Context, uri, collName string, worke
 	defer w.wg.Done()
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -380,7 +380,7 @@ func (w *workload) runTxnWorker(ctx context.Context, uri, collName string, worke
 		}
 		sess, err := client.StartSession()
 		if err != nil {
-			w.errors.Add(1)
+			w.errs.record("txn-begin", err)
 			if !sleep(ctx, opsInterval) {
 				return
 			}
@@ -400,7 +400,7 @@ func (w *workload) runTxnWorker(ctx context.Context, uri, collName string, worke
 		cancel()
 		sess.EndSession(context.Background())
 		if err != nil {
-			w.errors.Add(1)
+			w.errs.record("txn", err)
 		}
 		w.cycles.Add(1)
 		if !sleep(ctx, opsInterval*3) {
@@ -431,7 +431,7 @@ func (w *workload) runTrimWorker(ctx context.Context, uri, collName string, cap 
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		w.errors.Add(1)
+		w.errs.record("connect", err)
 		return
 	}
 	defer client.Disconnect(context.Background())
@@ -445,10 +445,10 @@ func (w *workload) runTrimWorker(ctx context.Context, uri, collName string, cap 
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		count, err := coll.EstimatedDocumentCount(cctx)
 		if err != nil {
-			w.errors.Add(1)
+			w.errs.record("trim-count", err)
 		} else if del := trimBudget(int(count), cap, lowWater, interval); del > 0 {
 			if err := deleteOldest(cctx, coll, del); err != nil {
-				w.errors.Add(1)
+				w.errs.record("trim-delete", err)
 			}
 		}
 		cancel()

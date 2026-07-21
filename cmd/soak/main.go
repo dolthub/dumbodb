@@ -198,7 +198,7 @@ func main() {
 		// the crash report and carries the server-log tail.
 		text, htmlBody := summaryReport(hostname, buildVer, pid, addr, startedAt, time.Now(),
 			sampleCount, alertCount, firstSample, lastSample, allSamples,
-			wl.cycleCount(), wl.errCount(), serverExit, serverCrashTail)
+			wl.cycleCount(), wl.errCount(), wl.errorBreakdown(), serverExit, serverCrashTail)
 		subj := fmt.Sprintf("dumbodb soak: %d alert(s)", alertCount)
 		if alertCount == 0 {
 			subj = "dumbodb soak: clean"
@@ -338,7 +338,7 @@ func alertReport(host, buildVer string, pid int, addr string, a alert, recent []
 
 // summaryReport renders the end-of-run summary email as both plain
 // text and HTML.
-func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64, serverExit string, serverCrashTail []string) (text, htmlBody string) {
+func summaryReport(host, buildVer string, pid int, addr string, startedAt, endedAt time.Time, samples, alerts int, first, last procSample, allSamples []sample, cycles, errs int64, errorBreakdown []errorTally, serverExit string, serverCrashTail []string) (text, htmlBody string) {
 	title := fmt.Sprintf("dumbodb soak summary on %s", host)
 	stats := []string{
 		fmt.Sprintf("build: %s", buildVer),
@@ -349,6 +349,12 @@ func summaryReport(host, buildVer string, pid int, addr string, startedAt, ended
 		fmt.Sprintf("samples: %d collected", samples),
 		fmt.Sprintf("alerts: %d emitted during this run", alerts),
 		fmt.Sprintf("cycles: %d workload cycles, %d errors", cycles, errs),
+	}
+	if len(errorBreakdown) > 0 {
+		stats = append(stats, "errors by type (count / op / classification / example):")
+		for _, t := range errorBreakdown {
+			stats = append(stats, fmt.Sprintf("  %6d  %s  e.g. %s", t.Count, t.Key, t.Sample))
+		}
 	}
 	if serverExit != "" {
 		stats = append(stats, fmt.Sprintf("server: CRASHED - %s", serverExit))
