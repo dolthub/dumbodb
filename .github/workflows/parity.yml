@@ -42,6 +42,19 @@ jobs:
       - name: Build DumboDB
         run: go build -o /usr/local/bin/dumbodb ./cmd/dumbodb
 
+      # The harness spawns the auth pair and replica set from a mongod binary;
+      # the service container above only supplies the plain MONGO_URI server.
+      - name: Install mongod binary
+        run: |
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/mongodb-server-8.0.gpg
+          echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${codename}/mongodb-org/8.0 multiverse" \
+            | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org-server
+          mongod --version
+
       - name: Start DumboDB
         run: |
           dumbodb --port 27018 --data-dir /tmp/dumbodb-data > /tmp/dumbodb.log 2>&1 &
@@ -96,6 +109,9 @@ jobs:
 
       - name: Run parity suite
         working-directory: parity-testing
+        env:
+          MONGOD_BIN: /usr/bin/mongod
+          DUMBODB_BIN: /usr/local/bin/dumbodb
         run: |
           mkdir -p results
           go test ./tests/ -v -timeout 15m -json | tee results/parity.json
