@@ -29,7 +29,7 @@ type workload struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	cycles atomic.Int64
-	errors atomic.Int64
+	errs   *errorStats
 }
 
 // workloadConfig is what main.go fills out from flags.
@@ -48,8 +48,9 @@ type workloadConfig struct {
 	TrimInterval   time.Duration
 }
 
-func (w *workload) cycleCount() int64 { return w.cycles.Load() }
-func (w *workload) errCount() int64   { return w.errors.Load() }
+func (w *workload) cycleCount() int64            { return w.cycles.Load() }
+func (w *workload) errCount() int64              { return w.errs.count() }
+func (w *workload) errorBreakdown() []errorTally { return w.errs.snapshot() }
 
 func (w *workload) stop() {
 	w.cancel()
@@ -61,7 +62,7 @@ func (w *workload) stop() {
 // workers.
 func startWorkload(parent context.Context, cfg workloadConfig) (*workload, error) {
 	ctx, cancel := context.WithCancel(parent)
-	w := &workload{cancel: cancel}
+	w := &workload{cancel: cancel, errs: newErrorStats()}
 
 	// Shared collection across the long-lived-client pools so they
 	// all contend for the same address-map / chunk store.
