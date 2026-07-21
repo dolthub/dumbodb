@@ -310,7 +310,8 @@ func TestUndropVerify(t *testing.T) {
 
 		_, err := env.Client.Database("admin").Collection("probe").
 			InsertOne(ctx, bson.D{{Key: "_id", Value: 1}})
-		require.NoError(t, err, "admin must remain writable")
+		require.Error(t, err, "admin is reserved and rejects direct writes")
+		assert.Contains(t, strings.ToLower(err.Error()), "reserved")
 	})
 
 	t.Run("Scenario8_PurgeMatching", func(t *testing.T) {
