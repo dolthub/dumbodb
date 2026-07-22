@@ -16,11 +16,11 @@ package authz
 
 var (
 	readActions = []Action{
-		ActionFind, ActionCollStats, ActionDBStats, ActionDataSize,
+		ActionFind, ActionCollStats, ActionDBStats,
 		ActionKillCursors, ActionListCollections, ActionListIndexes, ActionListSearchIndexes,
 	}
 	writeActions = []Action{
-		ActionInsert, ActionUpdate, ActionRemove, ActionBypassDocumentValidation,
+		ActionInsert, ActionUpdate, ActionRemove,
 		ActionCreateCollection, ActionCreateIndex, ActionCreateSearchIndexes,
 		ActionDropCollection, ActionDropIndex, ActionDropSearchIndex,
 		ActionRenameCollectionSameDB, ActionUpdateSearchIndex, ActionConvertToCapped,
@@ -28,7 +28,7 @@ var (
 	dbAdminActions = []Action{
 		ActionCollMod, ActionCompact, ActionCreateCollection, ActionCreateIndex,
 		ActionDropCollection, ActionDropDatabase, ActionDropIndex, ActionDBStats,
-		ActionCollStats, ActionDataSize, ActionValidate, ActionRenameCollectionSameDB,
+		ActionCollStats, ActionValidate, ActionRenameCollectionSameDB,
 		ActionListCollections, ActionListIndexes,
 	}
 	userAdminActions = []Action{
@@ -107,26 +107,38 @@ func BuiltinRole(role, db string) (PrivilegeSet, bool) {
 			{ClusterResource, clusterMonitorActions},
 			{allDB, clusterMonitorDBActions},
 		}, true
-	case "clusterManager", "clusterAdmin":
+	case "clusterAdmin":
 		return PrivilegeSet{
 			{ClusterResource, concat(clusterMonitorActions, clusterManagerActions)},
 			{allDB, []Action{ActionDropDatabase}},
 		}, true
+	case "clusterManager":
+		return PrivilegeSet{}, true
 	case "hostManager":
 		return PrivilegeSet{
 			{ClusterResource, clusterManagerActions},
-			{allDB, []Action{ActionDropDatabase}},
 		}, true
 	case "backup":
 		return PrivilegeSet{
-			{allDB, readActions},
+			{allDB, []Action{
+				ActionFind, ActionCollStats, ActionListCollections,
+				ActionListIndexes, ActionListSearchIndexes,
+			}},
 			{ClusterResource, []Action{ActionServerStatus, ActionListDatabases}},
-			{CollectionResource("admin", "system.users"), []Action{ActionViewUser}},
-			{CollectionResource("admin", "system.roles"), []Action{ActionViewRole}},
+			{CollectionResource("admin", "system.users"), []Action{ActionFind}},
+			{CollectionResource("admin", "system.roles"), []Action{ActionFind}},
 		}, true
 	case "restore":
 		return PrivilegeSet{
-			{allDB, concat(writeActions, dbAdminActions, userAdminActions)},
+			{allDB, []Action{
+				ActionInsert, ActionUpdate, ActionRemove, ActionBypassDocumentValidation,
+				ActionCreateCollection, ActionCreateIndex, ActionCreateSearchIndexes,
+				ActionDropCollection, ActionUpdateSearchIndex, ActionConvertToCapped,
+				ActionCollMod, ActionListCollections,
+				ActionChangeCustomData, ActionChangePassword, ActionCreateRole, ActionCreateUser,
+				ActionDropRole, ActionDropUser, ActionGrantRole, ActionRevokeRole,
+				ActionSetAuthenticationRestriction, ActionViewRole, ActionViewUser,
+			}},
 		}, true
 	case "root":
 		return PrivilegeSet{
