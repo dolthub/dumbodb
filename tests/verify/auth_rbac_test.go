@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/xdg-go/scram"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -264,21 +265,35 @@ func TestAuthRBACVerify(t *testing.T) {
 		t.Cleanup(func() { _ = c.Disconnect(context.Background()) })
 		require.NoError(t, c.Database("admin").RunCommand(ctx, bson.D{{Key: "ping", Value: 1}}).Err())
 
+		// A full, valid SCRAM handshake for reader over the connection already
+		// authenticated as admin. saslStart is accepted, but completing it does
+		// not authenticate reader: the connection keeps its single identity.
+		cl, err := scram.SHA256.NewClient("reader", "pw", "")
+		require.NoError(t, err)
+		conv := cl.NewConversation()
+		clientFirst, err := conv.Step("")
+		require.NoError(t, err)
+
 		var start bson.M
-		firstMsg := []byte("n,,n=admin,r=verifynonce123456789")
-		require.NoError(t, c.Database("admin").RunCommand(ctx, bson.D{
+		require.NoError(t, c.Database("appdb").RunCommand(ctx, bson.D{
 			{Key: "saslStart", Value: 1},
 			{Key: "mechanism", Value: "SCRAM-SHA-256"},
-			{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: firstMsg}},
-		}).Decode(&start))
+			{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte(clientFirst)}},
+		}).Decode(&start), "a second SASL conversation may start")
 
-		err = c.Database("admin").RunCommand(ctx, bson.D{
+		clientFinal, err := conv.Step(string(start["payload"].(bson.Binary).Data))
+		require.NoError(t, err)
+		_ = c.Database("appdb").RunCommand(ctx, bson.D{
 			{Key: "saslContinue", Value: 1},
 			{Key: "conversationId", Value: start["conversationId"]},
-			{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte("c=biws,r=x,p=x")}},
+			{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte(clientFinal)}},
 		}).Err()
-		require.Error(t, err, "a second authentication on a connection must be rejected")
-		require.Contains(t, strings.ToLower(err.Error()), "authentication failed")
+
+		var cs bson.M
+		require.NoError(t, c.Database("admin").RunCommand(ctx, bson.D{{Key: "connectionStatus", Value: 1}}).Decode(&cs))
+		users, _ := cs["authInfo"].(bson.M)["authenticatedUsers"].(bson.A)
+		require.Len(t, users, 1, "a connection never accumulates a second identity")
+		require.Equal(t, "admin", users[0].(bson.M)["user"], "the connection stays authenticated as admin")
 	})
 
 	t.Run("Scenario13_RoleManagementErrors", func(t *testing.T) {

@@ -339,14 +339,22 @@ ai.authenticatedUserPrivileges   // -> the read role's {resource, actions} list
 
 ## Scenario 12: One authentication per connection
 
-On the `admin` connection (already authenticated):
+A connection carries a single authenticated identity; MongoDB never stacks two
+users on one connection. On the `admin` connection (already authenticated):
 
 ```js
 db.getSiblingDB("appdb").auth("reader", "pw")
 ```
 
-**Expect:** rejected -- a connection authenticates once; a second `auth` on an
-already-authenticated connection fails.
+**Expect:** `{ ok: 1 }`. This does *not* prove a second identity was added --
+mongosh re-authenticates through the driver, so the call succeeds and the shell
+now acts as `reader`, not as `admin` + `reader`. `connectionStatus` always lists
+exactly one user, never two.
+
+The underlying wire-level guarantee -- that a raw second SCRAM handshake on the
+same connection is accepted at `saslStart` but does not authenticate the second
+user, leaving the original identity in place -- is what `TestAuthRBACVerify`
+Scenario12 asserts, since mongosh hides the SASL exchange.
 
 ---
 
