@@ -132,6 +132,8 @@ func BuiltinRole(role, db string) (PrivilegeSet, bool) {
 		return PrivilegeSet{
 			{allDB, concat(readActions, writeActions, dbAdminActions, userAdminActions)},
 			{ClusterResource, concat(clusterMonitorActions, clusterManagerActions)},
+			{CollectionResource("admin", "system.users"), readActions},
+			{CollectionResource("admin", "system.roles"), readActions},
 		}, true
 	}
 	return nil, false

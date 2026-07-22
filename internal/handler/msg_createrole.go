@@ -70,7 +70,7 @@ func (h *Handler) MsgCreateRole(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	restrictions, err := common.GetOptionalParam[*types.Array](document, "authenticationRestrictions", types.MakeArray(0))
+	restrictions, err := common.GetOptionalParam[*types.Array](document, "authenticationRestrictions", nil)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -81,8 +81,11 @@ func (h *Handler) MsgCreateRole(connCtx context.Context, msg *wire.OpMsg) (*wire
 		"db", dbName,
 		"privileges", storedPrivileges,
 		"roles", storedRoles,
-		"authenticationRestrictions", restrictions,
 	))
+
+	if restrictions != nil && restrictions.Len() > 0 {
+		saved.Set("authenticationRestrictions", restrictions)
+	}
 
 	coll, err := h.systemRolesCollection()
 	if err != nil {

@@ -56,11 +56,6 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		return err
 	}
 
-	restrictions := params.AuthenticationRestrictions
-	if restrictions == nil {
-		restrictions = types.MakeArray(0)
-	}
-
 	id := uuid.New()
 	saved := must.NotFail(types.NewDocument(
 		"_id", params.Database+"."+params.Username,
@@ -68,9 +63,12 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		"user", params.Username,
 		"db", params.Database,
 		"roles", roles,
-		"authenticationRestrictions", restrictions,
 		"userId", types.Binary{Subtype: types.BinaryUUID, B: must.NotFail(id.MarshalBinary())},
 	))
+
+	if r := params.AuthenticationRestrictions; r != nil && r.Len() > 0 {
+		saved.Set("authenticationRestrictions", r)
+	}
 
 	db := must.NotFail(b.Database("admin"))
 	coll := must.NotFail(db.Collection("system.users"))
