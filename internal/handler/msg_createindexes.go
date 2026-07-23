@@ -410,10 +410,17 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 				command,
 			)
 
+		case "collation":
+			// Collation identity is tracked so MongoDB's rule of distinct
+			// indexes per (key, collation) holds; runtime collation
+			// enforcement is not yet implemented.
+			if coll, ok := must.NotFail(indexDoc.Get("collation")).(*types.Document); ok {
+				index.Collation = coll
+			}
+
 		case "hidden", "storageEngine",
-			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
+			"bits", "min", "max", "bucketSize", "wildcardProjection":
 			// Accepted but not enforced  -- stored index behaves as a regular index.
-			// collation enforcement, etc. are not yet implemented.
 
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -547,6 +554,40 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 	return strings.Join(res, ", ")
 }
 
+var collationFields = []string{
+	"locale", "caseLevel", "caseFirst", "strength", "numericOrdering",
+	"alternate", "maxVariable", "normalization", "backwards",
+}
+
+// collationIdentity renders a comparable identity for an index collation. A nil
+// spec and a {locale:"simple"} spec both denote the binary default and return
+// "", matching MongoDB's treatment.
+func collationIdentity(c *types.Document) string {
+	if c == nil {
+		return ""
+	}
+
+	if loc, err := c.Get("locale"); err == nil {
+		if s, ok := loc.(string); ok && s == "simple" {
+			return ""
+		}
+	}
+
+	var b strings.Builder
+
+	for _, f := range collationFields {
+		if v, err := c.Get(f); err == nil {
+			fmt.Fprintf(&b, "%s=%v;", f, v)
+		}
+	}
+
+	return b.String()
+}
+
+func sameCollation(a, b *types.Document) bool {
+	return collationIdentity(a) == collationIdentity(b)
+}
+
 // validateIndexesForCreation filters duplicates out of toCreate and returns an
 // error if any index conflicts with an existing one or has an invalid spec.
 func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo) ([]backends.IndexInfo, error) {
@@ -603,7 +644,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
 			}
 
-			if newKey == otherKey {
+			if newKey == otherKey && sameCollation(newIdx.Collation, toCreate[j].Collation) {
 				msg := fmt.Sprintf(
 					"Index already exists with a different name: %s", otherName,
 				)
@@ -615,7 +656,8 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 		for _, existingIdx := range existing {
 			existingKey := formatIndexKey(existingIdx.Key)
 
-			if (newIdx.Name == existingIdx.Name && newKey == existingKey) || newKey == "_id: 1" {
+			if (newIdx.Name == existingIdx.Name && newKey == existingKey &&
+				sameCollation(newIdx.Collation, existingIdx.Collation)) || newKey == "_id: 1" {
 				// Fully identical indexes are ignored, no need to attempt to create them.
 				filteredToCreate = slices.Delete(filteredToCreate, i, i+1)
 				break
@@ -633,7 +675,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
 			}
 
-			if newKey == existingKey {
+			if newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation) {
 				msg := fmt.Sprintf("Index already exists with a different name: %s", existingIdx.Name)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
 			}

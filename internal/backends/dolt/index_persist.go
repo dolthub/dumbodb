@@ -32,14 +32,15 @@ import (
 // entry (stored as a BSON chunk): the IndexInfo metadata plus the
 // 20-byte hash of the index's prolly.Map root.
 type indexEntryDoc struct {
-	Name           string         `json:"name"`
-	Keys           []indexKeyJSON `json:"keys"`
-	Unique         bool           `json:"unique,omitempty"`
-	Sparse         bool           `json:"sparse,omitempty"`
-	PartialBSONHex string         `json:"partial,omitempty"` // hex-encoded BSON of PartialFilterExpression
-	Lossy          bool           `json:"lossy,omitempty"`   // index stored a value with no faithful encoding
-	Multikey       bool           `json:"multikey,omitempty"` // index expanded an array value into per-element entries
-	MapRoot        string         `json:"map_root"`          // hex-encoded 20-byte hash
+	Name             string         `json:"name"`
+	Keys             []indexKeyJSON `json:"keys"`
+	Unique           bool           `json:"unique,omitempty"`
+	Sparse           bool           `json:"sparse,omitempty"`
+	PartialBSONHex   string         `json:"partial,omitempty"`   // hex-encoded BSON of PartialFilterExpression
+	CollationBSONHex string         `json:"collation,omitempty"` // hex-encoded BSON of the collation spec
+	Lossy            bool           `json:"lossy,omitempty"`     // index stored a value with no faithful encoding
+	Multikey         bool           `json:"multikey,omitempty"`  // index expanded an array value into per-element entries
+	MapRoot          string         `json:"map_root"`            // hex-encoded 20-byte hash
 }
 
 type indexKeyJSON struct {
@@ -63,28 +64,54 @@ func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc,
 			Hashed:      k.Hashed,
 		}
 	}
-	var pfHex string
-	if idx.PartialFilterExpression != nil {
-		wdoc, err := bson.FromDocument(idx.PartialFilterExpression)
-		if err != nil {
-			return indexEntryDoc{}, fmt.Errorf("encoding partial filter to wirebson: %w", err)
-		}
-		pfBytes, err := wdoc.Encode()
-		if err != nil {
-			return indexEntryDoc{}, fmt.Errorf("encoding partial filter BSON: %w", err)
-		}
-		pfHex = hex.EncodeToString(pfBytes)
+	pfHex, err := docToHex(idx.PartialFilterExpression)
+	if err != nil {
+		return indexEntryDoc{}, fmt.Errorf("encoding partial filter: %w", err)
+	}
+	collHex, err := docToHex(idx.Collation)
+	if err != nil {
+		return indexEntryDoc{}, fmt.Errorf("encoding collation: %w", err)
 	}
 	return indexEntryDoc{
-		Name:           idx.Name,
-		Keys:           keys,
-		Unique:         idx.Unique,
-		Sparse:         idx.Sparse,
-		PartialBSONHex: pfHex,
-		Lossy:          idx.Lossy,
-		Multikey:       idx.Multikey,
-		MapRoot:        hex.EncodeToString(mapRoot[:]),
+		Name:             idx.Name,
+		Keys:             keys,
+		Unique:           idx.Unique,
+		Sparse:           idx.Sparse,
+		PartialBSONHex:   pfHex,
+		CollationBSONHex: collHex,
+		Lossy:            idx.Lossy,
+		Multikey:         idx.Multikey,
+		MapRoot:          hex.EncodeToString(mapRoot[:]),
 	}, nil
+}
+
+// docToHex encodes an optional document as hex-encoded BSON; a nil document
+// yields "".
+func docToHex(doc *types.Document) (string, error) {
+	if doc == nil {
+		return "", nil
+	}
+	wdoc, err := bson.FromDocument(doc)
+	if err != nil {
+		return "", err
+	}
+	b, err := wdoc.Encode()
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// hexToDoc decodes hex-encoded BSON produced by docToHex; "" yields nil.
+func hexToDoc(h string) (*types.Document, error) {
+	if h == "" {
+		return nil, nil
+	}
+	b, err := hex.DecodeString(h)
+	if err != nil {
+		return nil, err
+	}
+	return bson.ToDocument(wirebson.RawDocument(b))
 }
 
 // entryToIndexInfo rebuilds MatchesPartialFilter to call
@@ -103,16 +130,13 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 			Hashed:      k.Hashed,
 		}
 	}
-	var pf *types.Document
-	if d.PartialBSONHex != "" {
-		pfBytes, err := hex.DecodeString(d.PartialBSONHex)
-		if err != nil {
-			return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding partial filter hex: %w", err)
-		}
-		pf, err = bson.ToDocument(wirebson.RawDocument(pfBytes))
-		if err != nil {
-			return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding partial filter BSON: %w", err)
-		}
+	pf, err := hexToDoc(d.PartialBSONHex)
+	if err != nil {
+		return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding partial filter: %w", err)
+	}
+	coll, err := hexToDoc(d.CollationBSONHex)
+	if err != nil {
+		return backends.IndexInfo{}, hash.Hash{}, fmt.Errorf("decoding collation: %w", err)
 	}
 	rootBytes, err := hex.DecodeString(d.MapRoot)
 	if err != nil {
@@ -129,6 +153,7 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 		Unique:                  d.Unique,
 		Sparse:                  d.Sparse,
 		PartialFilterExpression: pf,
+		Collation:               coll,
 		Lossy:                   d.Lossy,
 		Multikey:                d.Multikey,
 	}
@@ -192,6 +217,7 @@ func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
 		"unique", entry.Unique,
 		"sparse", entry.Sparse,
 		"partial", entry.PartialBSONHex,
+		"collation", entry.CollationBSONHex,
 		"lossy", entry.Lossy,
 		"multikey", entry.Multikey,
 		"map_root", entry.MapRoot,
@@ -224,6 +250,7 @@ func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
 	entry.Unique = getBool(doc, "unique")
 	entry.Sparse = getBool(doc, "sparse")
 	entry.PartialBSONHex = getString("partial")
+	entry.CollationBSONHex = getString("collation")
 	entry.Lossy = getBool(doc, "lossy")
 	entry.Multikey = getBool(doc, "multikey")
 	entry.MapRoot = getString("map_root")
@@ -258,4 +285,3 @@ func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
 	}
 	return entry, nil
 }
-
