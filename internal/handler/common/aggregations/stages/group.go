@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/common"
@@ -377,11 +379,11 @@ type groupedDocuments struct {
 type groupMap struct {
 	specs []groupBy
 	docs  []groupedDocuments
-	// fast indexes docs by key for keys that cannot collide with
-	// numerically-equal keys of another Go type. Numeric keys are
-	// intentionally excluded because CompareForAggregation treats
-	// int32(1)/int64(1)/float64(1.0) as equal.
-	fast map[any]int
+	// fast indexes docs by a canonical string key so groups (including
+	// array and document keys) resolve in O(1) instead of a linear
+	// CompareForAggregation scan. Numeric keys hash lossily and are
+	// reconciled by a one-time backstop scan; see index.
+	fast map[string]int
 }
 
 func newGroupMap(specs []groupBy) *groupMap {
@@ -405,42 +407,34 @@ func (m *groupMap) accumulate(groupKey any, doc *types.Document) error {
 // index returns the slot for groupKey, creating a new group with fresh
 // accumulators when none exists yet.
 func (m *groupMap) index(groupKey any) int {
-	if hashable, key := hashableGroupKey(groupKey); hashable {
-		if m.fast == nil {
-			m.fast = make(map[any]int)
-		}
+	key, numericFree := canonicalGroupKey(groupKey)
 
-		if i, ok := m.fast[key]; ok {
-			return i
-		}
+	if m.fast == nil {
+		m.fast = make(map[string]int)
+	}
 
-		// No entry yet  -- but a numeric-equal entry might already exist in
-		// m.docs from a prior add with a differently-typed numeric key.
-		// Scan once to stay consistent with CompareForAggregation semantics.
-		for i, g := range m.docs {
-			if types.CompareForAggregation(groupKey, g.groupID) == types.Equal {
+	if i, ok := m.fast[key]; ok {
+		return i
+	}
+
+	// A numeric key hashes lossily: differently-typed but equal numbers
+	// (int32(1)/int64(1)/float64(1.0)/Decimal128(1)) must land in one group,
+	// and float64 normalization can collide distinct large integers. Reconcile
+	// against existing groups via CompareForAggregation before creating a new
+	// one. Numeric-free keys are exact, so they skip the scan entirely.
+	if !numericFree {
+		for i := range m.docs {
+			if types.CompareForAggregation(groupKey, m.docs[i].groupID) == types.Equal {
 				m.fast[key] = i
 				return i
 			}
 		}
-
-		i := m.newGroup(groupKey)
-		m.fast[key] = i
-
-		return i
 	}
 
-	for i, g := range m.docs {
-		// groupID is a distinct key and can be any BSON type including array and Binary,
-		// so we cannot use structure like map.
-		// Compare is used to check if groupID exists in groupMap, because
-		// numbers are grouped for the same value regardless of their number type.
-		if types.CompareForAggregation(groupKey, g.groupID) == types.Equal {
-			return i
-		}
-	}
+	i := m.newGroup(groupKey)
+	m.fast[key] = i
 
-	return m.newGroup(groupKey)
+	return i
 }
 
 // newGroup appends a group for groupKey with a fresh accumulation per spec and
@@ -456,31 +450,128 @@ func (m *groupMap) newGroup(groupKey any) int {
 	return len(m.docs) - 1
 }
 
-// hashableGroupKey returns true and a map-friendly key when groupKey is a
-// Go-comparable type. Numeric types are normalized into a float64 bucket
-// because CompareForAggregation treats int32(1)/int64(1)/float64(1.0) as
-// equal; a mismatched numeric hit is disambiguated in addOrAppend via a
-// CompareForAggregation scan on first insert.
-func hashableGroupKey(groupKey any) (bool, any) {
-	switch k := groupKey.(type) {
+// canonicalGroupKey builds a string that is identical for two group keys
+// exactly when they should land in the same group, so lookups are O(1). The
+// returned bool is true when the key contains no numeric value: numeric-free
+// keys are exact, while numeric keys hash lossily and need the backstop scan
+// in index. Arrays and documents are encoded recursively, which is the case
+// the old scalar-only fast path missed.
+func canonicalGroupKey(groupKey any) (string, bool) {
+	var b strings.Builder
+	numericFree := appendGroupKey(&b, groupKey)
+	return b.String(), numericFree
+}
+
+// appendGroupKey writes v's canonical encoding and reports whether v (and
+// everything nested in it) is numeric-free. Length-prefixing keeps the
+// encoding injective so distinct values never share a key.
+func appendGroupKey(b *strings.Builder, v any) bool {
+	switch v := v.(type) {
+	case *types.Document:
+		b.WriteByte('D')
+		numericFree := true
+		for _, k := range v.Keys() {
+			val, _ := v.Get(k)
+			appendLenString(b, k)
+			if !appendGroupKey(b, val) {
+				numericFree = false
+			}
+		}
+		b.WriteByte(';')
+		return numericFree
+	case *types.Array:
+		b.WriteByte('A')
+		numericFree := true
+		for i := 0; i < v.Len(); i++ {
+			val, _ := v.Get(i)
+			if !appendGroupKey(b, val) {
+				numericFree = false
+			}
+		}
+		b.WriteByte(';')
+		return numericFree
 	case string:
-		return true, k
+		b.WriteByte('s')
+		appendLenString(b, v)
+		return true
 	case bool:
-		return true, k
-	case types.ObjectID:
-		return true, k
+		if v {
+			b.WriteByte('T')
+		} else {
+			b.WriteByte('F')
+		}
+		return true
 	case types.NullType:
-		return true, k
-	case int32:
-		return true, float64(k)
-	case int64:
-		return true, float64(k)
-	case float64:
-		return true, k
+		b.WriteByte('z')
+		return true
+	case types.ObjectID:
+		b.WriteByte('o')
+		b.Write(v[:])
+		return true
 	case time.Time:
-		return true, k.UnixNano()
+		b.WriteByte('t')
+		b.WriteString(strconv.FormatInt(v.UnixNano(), 10))
+		b.WriteByte(';')
+		return true
+	case types.Timestamp:
+		b.WriteByte('u')
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+		b.WriteByte(';')
+		return true
+	case types.Regex:
+		b.WriteByte('r')
+		appendLenString(b, v.Pattern)
+		appendLenString(b, v.Options)
+		return true
+	case types.Binary:
+		b.WriteByte('x')
+		b.WriteByte(byte(v.Subtype))
+		appendLenString(b, string(v.B))
+		return true
+	case types.MinKeyType:
+		b.WriteByte('<')
+		return true
+	case types.MaxKeyType:
+		b.WriteByte('>')
+		return true
+	case int32:
+		appendNumericKey(b, float64(v))
+		return false
+	case int64:
+		appendNumericKey(b, float64(v))
+		return false
+	case float64:
+		appendNumericKey(b, v)
+		return false
+	case types.Decimal128:
+		// Decimal128 is not folded into the float64 bucket; equal values with
+		// a different representation (or an equal int/float) are reconciled by
+		// the backstop scan. numericFree is false so that scan runs.
+		b.WriteByte('n')
+		b.WriteString(strconv.FormatUint(v.H, 10))
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatUint(v.L, 10))
+		b.WriteByte(';')
+		return false
+	default:
+		// Unknown type: emit a per-type marker and force the backstop scan.
+		fmt.Fprintf(b, "?%T;", v)
+		return false
 	}
-	return false, nil
+}
+
+// appendNumericKey writes a numeric marker plus the exact float64 bit pattern
+// so int32(1)/int64(1)/float64(1.0) share one bucket.
+func appendNumericKey(b *strings.Builder, f float64) {
+	b.WriteByte('#')
+	b.WriteString(strconv.FormatFloat(f, 'b', -1, 64))
+	b.WriteByte(';')
+}
+
+func appendLenString(b *strings.Builder, s string) {
+	b.WriteString(strconv.Itoa(len(s)))
+	b.WriteByte(':')
+	b.WriteString(s)
 }
 
 // processGroupStageError takes internal error related to operator evaluation and
