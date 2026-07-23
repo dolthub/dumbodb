@@ -16,6 +16,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -644,10 +646,58 @@ func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Doc
 		return h.aggregateDocuments(connCtx, document, firstStage, pipeline, dbName)
 	}
 
+	if stageName == "$listLocalSessions" {
+		return h.aggregateListLocalSessions(connCtx, dbName)
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"cursor", must.NotFail(types.NewDocument(
 				"firstBatch", must.NotFail(types.NewArray()),
+				"id", int64(0),
+				"ns", dbName+".$cmd.aggregate",
+			)),
+			"ok", float64(1),
+		)),
+	)
+}
+
+// aggregateListLocalSessions implements the $listLocalSessions source
+// stage: one document per logical session cached on this node. Each
+// session's _id.id is the lsid UUID and _id.uid is the SHA-256 digest of
+// the authenticated user (the empty-string digest when unauthenticated),
+// matching MongoDB's session identity encoding.
+func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName string) (*wire.OpMsg, error) {
+	firstBatch := types.MakeArray(0)
+	if reg := h.SessionRegistry(); reg != nil {
+		for _, s := range reg.Snapshot() {
+			// The registry key is sessionKey(user, id) == user + "\x00" + id.
+			// Only real driver lsids (a 16-byte hex UUID) have a MongoDB
+			// counterpart; skip synthetic ids assigned to connections that
+			// never supplied an lsid.
+			user, id, ok := strings.Cut(s.Lsid, "\x00")
+			if !ok {
+				continue
+			}
+			idBytes, err := hex.DecodeString(id)
+			if err != nil || len(idBytes) != 16 {
+				continue
+			}
+			uidSum := sha256.Sum256([]byte(user))
+			firstBatch.Append(must.NotFail(types.NewDocument(
+				"_id", must.NotFail(types.NewDocument(
+					"id", types.Binary{Subtype: types.BinaryUUID, B: idBytes},
+					"uid", types.Binary{Subtype: types.BinaryGeneric, B: uidSum[:]},
+				)),
+				"lastUse", s.LastUsed,
+			)))
+		}
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"cursor", must.NotFail(types.NewDocument(
+				"firstBatch", firstBatch,
 				"id", int64(0),
 				"ns", dbName+".$cmd.aggregate",
 			)),
