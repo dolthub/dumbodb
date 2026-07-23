@@ -32,6 +32,7 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/bsonindexed"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
@@ -1369,58 +1370,39 @@ func allNull(key []any) bool {
 }
 
 func indexKeysEqual(a, b []any) bool {
-	return indexKeysEqualFold(a, b, false)
+	return indexKeysEqualColl(a, b, nil)
 }
 
-// indexKeysEqualFold compares two index keys, case-folding string components
-// when fold is set. Folding is an ASCII/Unicode lowercase approximation of a
-// case-insensitive collation (strength <= 2), matching the regex-based
-// approximation used for case-insensitive queries; locale is not honored.
-func indexKeysEqualFold(a, b []any, fold bool) bool {
+// indexKeysEqualColl compares two index keys. When cmp is non-nil, string
+// components are compared under that collation; other types and the nil case
+// use binary comparison.
+func indexKeysEqualColl(a, b []any, cmp *collation.Comparator) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		x, y := a[i], b[i]
-		if fold {
-			x = foldValue(x)
-			y = foldValue(y)
+		if cmp != nil {
+			as, aok := a[i].(string)
+			bs, bok := b[i].(string)
+			if aok && bok {
+				if !cmp.EqualStrings(as, bs) {
+					return false
+				}
+				continue
+			}
 		}
-		if types.Compare(x, y) != types.Equal {
+		if types.Compare(a[i], b[i]) != types.Equal {
 			return false
 		}
 	}
 	return true
 }
 
-func foldValue(v any) any {
-	if s, ok := v.(string); ok {
-		return strings.ToLower(s)
-	}
-	return v
-}
-
-// caseInsensitiveCollation reports whether idx carries a collation of strength
-// <= 2 (case-insensitive). A collation with no strength defaults to MongoDB's
-// strength 3 (case-sensitive).
-func caseInsensitiveCollation(idx backends.IndexInfo) bool {
-	if idx.Collation == nil {
-		return false
-	}
-	v, err := idx.Collation.Get("strength")
-	if err != nil {
-		return false
-	}
-	switch n := v.(type) {
-	case int32:
-		return n <= 2
-	case int64:
-		return n <= 2
-	case float64:
-		return n <= 2
-	default:
-		return false
-	}
+// collatedIndex reports whether idx carries a non-binary collation, so its
+// uniqueness must be enforced by collation-aware value comparison rather than a
+// byte-exact key probe.
+func collatedIndex(idx backends.IndexInfo) bool {
+	return !collation.Parse(idx.Collation).IsSimple()
 }
 
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
@@ -1508,10 +1490,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				continue
 			}
 
-			// Byte probes are case-sensitive; a case-insensitive collation
-			// needs the value-level scan path, comparing under a fold.
-			fold := caseInsensitiveCollation(idx)
-			if lossy || idx.Lossy || fold {
+			// Byte probes are binary; a non-simple collation needs the
+			// value-level scan path, comparing under the collator.
+			collated := collatedIndex(idx)
+			if lossy || idx.Lossy || collated {
 				// Probes collide on collapsed bytes; compare values.
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
@@ -1524,8 +1506,12 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 					)
 				}
 				newKey := extractIndexKey(doc, idx)
+				var cmp *collation.Comparator
+				if collated {
+					cmp = collation.Parse(idx.Collation).Comparator()
+				}
 				for _, batchKey := range batchLossyKeys[i] {
-					if indexKeysEqualFold(newKey, batchKey, fold) {
+					if indexKeysEqualColl(newKey, batchKey, cmp) {
 						return nil, backends.NewError(
 							backends.ErrorCodeInsertDuplicateID,
 							fmt.Errorf("duplicate key for unique index %s", idx.Name),
@@ -2677,6 +2663,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 // faithful byte encoding (Decimal128); the common path is the probe.
 func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfHash [20]byte) (bool, error) {
 	newKey := extractIndexKey(doc, idx)
+	cmp := collation.Parse(idx.Collation).Comparator()
 	iter, err := m.IterAll(ctx)
 	if err != nil {
 		return false, err
@@ -2710,7 +2697,7 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 		if idx.Sparse && allNull(existKey) {
 			continue
 		}
-		if indexKeysEqualFold(newKey, existKey, caseInsensitiveCollation(idx)) {
+		if indexKeysEqualColl(newKey, existKey, cmp) {
 			return true, nil
 		}
 	}
@@ -2728,7 +2715,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 		if len(rows) == 0 {
 			continue
 		}
-		if lossy || idx.Lossy || caseInsensitiveCollation(idx) {
+		if lossy || idx.Lossy || collatedIndex(idx) {
 			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
 			if err != nil {
 				return err
