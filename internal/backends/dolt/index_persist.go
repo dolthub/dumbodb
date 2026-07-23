@@ -38,6 +38,7 @@ type indexEntryDoc struct {
 	Sparse           bool           `json:"sparse,omitempty"`
 	PartialBSONHex   string         `json:"partial,omitempty"`   // hex-encoded BSON of PartialFilterExpression
 	CollationBSONHex string         `json:"collation,omitempty"` // hex-encoded BSON of the collation spec
+	Hidden           bool           `json:"hidden,omitempty"`    // index invisible to the query planner
 	Lossy            bool           `json:"lossy,omitempty"`     // index stored a value with no faithful encoding
 	Multikey         bool           `json:"multikey,omitempty"`  // index expanded an array value into per-element entries
 	MapRoot          string         `json:"map_root"`            // hex-encoded 20-byte hash
@@ -79,6 +80,7 @@ func indexInfoToEntry(idx backends.IndexInfo, mapRoot hash.Hash) (indexEntryDoc,
 		Sparse:           idx.Sparse,
 		PartialBSONHex:   pfHex,
 		CollationBSONHex: collHex,
+		Hidden:           idx.Hidden,
 		Lossy:            idx.Lossy,
 		Multikey:         idx.Multikey,
 		MapRoot:          hex.EncodeToString(mapRoot[:]),
@@ -154,6 +156,7 @@ func entryToIndexInfo(d indexEntryDoc) (backends.IndexInfo, hash.Hash, error) {
 		Sparse:                  d.Sparse,
 		PartialFilterExpression: pf,
 		Collation:               coll,
+		Hidden:                  d.Hidden,
 		Lossy:                   d.Lossy,
 		Multikey:                d.Multikey,
 	}
@@ -218,6 +221,7 @@ func indexEntryToDocument(entry indexEntryDoc) (*types.Document, error) {
 		"sparse", entry.Sparse,
 		"partial", entry.PartialBSONHex,
 		"collation", entry.CollationBSONHex,
+		"hidden", entry.Hidden,
 		"lossy", entry.Lossy,
 		"multikey", entry.Multikey,
 		"map_root", entry.MapRoot,
@@ -251,6 +255,7 @@ func documentToIndexEntry(doc *types.Document) (indexEntryDoc, error) {
 	entry.Sparse = getBool(doc, "sparse")
 	entry.PartialBSONHex = getString("partial")
 	entry.CollationBSONHex = getString("collation")
+	entry.Hidden = getBool(doc, "hidden")
 	entry.Lossy = getBool(doc, "lossy")
 	entry.Multikey = getBool(doc, "multikey")
 	entry.MapRoot = getString("map_root")

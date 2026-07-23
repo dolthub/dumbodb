@@ -127,6 +127,21 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 			indexDoc.Set("sparse", index.Sparse)
 		}
 
+		if index.PartialFilterExpression != nil {
+			indexDoc.Set("partialFilterExpression", index.PartialFilterExpression)
+		}
+
+		// The stored collation spec is echoed as requested. MongoDB reports the
+		// resolved spec (defaults plus an ICU version); reproducing that
+		// requires collation resolution (workspace-dxn).
+		if index.Collation != nil {
+			indexDoc.Set("collation", index.Collation)
+		}
+
+		if index.Hidden {
+			indexDoc.Set("hidden", index.Hidden)
+		}
+
 		firstBatch.Append(indexDoc)
 	}
 

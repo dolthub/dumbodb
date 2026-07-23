@@ -492,6 +492,11 @@ type IndexInfo struct {
 	// indexes may share a key pattern when their collations differ.
 	Collation *types.Document
 
+	// Hidden marks the index invisible to the query planner while still
+	// maintained. Tracked and echoed by listIndexes; planner-level hiding
+	// is not yet applied.
+	Hidden bool
+
 	// Lossy: the index stored a value the KeyString encoding cannot
 	// represent faithfully (Decimal128); the planner never consults a
 	// lossy index. Sticky until rebuild.

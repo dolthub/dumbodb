@@ -418,7 +418,14 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 				index.Collation = coll
 			}
 
-		case "hidden", "storageEngine",
+		case "hidden":
+			// Tracked and echoed by listIndexes; planner-level hiding is not
+			// yet applied.
+			if hidden, ok := must.NotFail(indexDoc.Get("hidden")).(bool); ok {
+				index.Hidden = hidden
+			}
+
+		case "storageEngine",
 			"bits", "min", "max", "bucketSize", "wildcardProjection":
 			// Accepted but not enforced  -- stored index behaves as a regular index.
 
