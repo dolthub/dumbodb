@@ -902,10 +902,69 @@ func keyPatternOf(idx backends.IndexInfo) *types.Document {
 	return kp
 }
 
+// canonicalizeParsedQuery rewrites a raw filter into MongoDB's parsedQuery
+// shape: a field mapped to a literal value becomes {field: {$eq: value}},
+// while a field already mapped to an operator document ({$gt: ...}) is left
+// unchanged. Logical operators ($and/$or/$nor) recurse into their clause
+// arrays. This matches the canonical query MongoDB reports under
+// queryPlanner.parsedQuery.
+func canonicalizeParsedQuery(filter *types.Document) *types.Document {
+	if filter == nil {
+		return types.MakeDocument(0)
+	}
+	out := types.MakeDocument(filter.Len())
+	for _, k := range filter.Keys() {
+		v, _ := filter.Get(k)
+		if strings.HasPrefix(k, "$") {
+			if arr, ok := v.(*types.Array); ok {
+				na := types.MakeArray(arr.Len())
+				for i := 0; i < arr.Len(); i++ {
+					e, _ := arr.Get(i)
+					if ed, ok := e.(*types.Document); ok {
+						na.Append(canonicalizeParsedQuery(ed))
+					} else {
+						na.Append(e)
+					}
+				}
+				out.Set(k, na)
+			} else {
+				out.Set(k, v)
+			}
+			continue
+		}
+		out.Set(k, canonicalizeFieldPredicate(v))
+	}
+	return out
+}
+
+func canonicalizeFieldPredicate(v any) any {
+	if doc, ok := v.(*types.Document); ok && isOperatorDoc(doc) {
+		return doc
+	}
+	return must.NotFail(types.NewDocument("$eq", v))
+}
+
+// isOperatorDoc reports whether every key in doc is an operator ($-prefixed),
+// which distinguishes a predicate expression ({$gt: 2}) from a literal
+// document value that equality should match against.
+func isOperatorDoc(doc *types.Document) bool {
+	if doc.Len() == 0 {
+		return false
+	}
+	for _, k := range doc.Keys() {
+		if !strings.HasPrefix(k, "$") {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
-	parsedQuery := types.MakeDocument(0)
-	if params != nil && params.Filter != nil {
-		parsedQuery = params.Filter.DeepCopy()
+	var parsedQuery *types.Document
+	if params != nil {
+		parsedQuery = canonicalizeParsedQuery(params.Filter)
+	} else {
+		parsedQuery = types.MakeDocument(0)
 	}
 
 	var idxInfos []backends.IndexInfo
@@ -1023,6 +1082,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			"namespace", c.db.name+"."+c.name,
 			"parsedQuery", parsedQuery,
 			"winningPlan", orStage.toDoc(),
+			"rejectedPlans", types.MakeArray(0),
 		))
 		return &backends.ExplainResult{QueryPlanner: qp}, nil
 	}
@@ -1033,6 +1093,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		"namespace", c.db.name+"."+c.name,
 		"parsedQuery", parsedQuery,
 		"winningPlan", winningPlan.toDoc(),
+		"rejectedPlans", types.MakeArray(0),
 	))
 	return &backends.ExplainResult{
 		QueryPlanner: qp,
@@ -1073,6 +1134,16 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 			return &explainStage{stage: "PROJECTION_COVERED", input: leaf}
 		}
 		return &explainStage{stage: "COLLSCAN"}
+
+	case "update", "delete":
+		// MongoDB wraps the query plan in an UPDATE / DELETE stage. The
+		// inner scan follows the same index-vs-collection choice as find.
+		inner := buildFindExplainPlan(params, picked, indexPicked, sortByIndex, covered)
+		stage := "UPDATE"
+		if command == "delete" {
+			stage = "DELETE"
+		}
+		return &explainStage{stage: stage, input: inner}
 
 	default:
 		// "find" and "aggregate" (the latter via pushed-down $match) share
