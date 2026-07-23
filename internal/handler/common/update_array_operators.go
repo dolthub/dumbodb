@@ -615,7 +615,7 @@ func processPullArrayUpdateExpression(command string, doc *types.Document, key s
 			// Wrap the element in a temp doc so filterDocumentPair can evaluate it.
 			tmpDoc := must.NotFail(types.NewDocument("v", elem))
 
-			match, err = filterDocumentPair(tmpDoc, "v", pullDoc)
+			match, err = filterDocumentPair(tmpDoc, "v", pullDoc, nil)
 			if err != nil {
 				return false, lazyerrors.Error(err)
 			}

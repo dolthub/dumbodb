@@ -42,9 +42,6 @@ type FindParams struct {
 	Collation *types.Document `dumbo:"collation,opt"`
 	Let       *types.Document `dumbo:"let,unimplemented"`
 
-	// ParsedCollation is derived from Collation after ExtractParams.
-	ParsedCollation *Collation `dumbo:"-"`
-
 	AllowDiskUse     bool            `dumbo:"allowDiskUse,ignored"`
 	ReadConcern      *types.Document `dumbo:"readConcern,ignored"`
 	Max              *types.Document `dumbo:"max,opt"`
@@ -103,8 +100,6 @@ func GetFindParams(doc *types.Document, l *slog.Logger) (*FindParams, error) {
 	if err := handlerparams.ExtractParams(doc, "find", &params, l); err != nil {
 		return nil, err
 	}
-
-	params.ParsedCollation = ParseCollation(params.Collation)
 
 	if params.AwaitData && !params.Tailable {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(

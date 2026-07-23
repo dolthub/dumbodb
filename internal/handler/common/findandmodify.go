@@ -44,7 +44,7 @@ type FindAndModifyParams struct {
 	Fields *types.Document `dumbo:"fields,opt"`
 
 	Let          *types.Document `dumbo:"let,unimplemented"`
-	Collation    *types.Document `dumbo:"collation,unimplemented"`
+	Collation    *types.Document `dumbo:"collation,opt"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
 	Hint                     string          `dumbo:"hint,ignored"`

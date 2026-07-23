@@ -32,14 +32,14 @@ type DeleteParams struct {
 
 	Let *types.Document `dumbo:"let,unimplemented"`
 
-	MaxTimeMS      int64           `dumbo:"maxTimeMS,ignored"`
-	WriteConcern   *types.Document `dumbo:"writeConcern,opt"`
+	MaxTimeMS        int64           `dumbo:"maxTimeMS,ignored"`
+	WriteConcern     *types.Document `dumbo:"writeConcern,opt"`
 	LSID             any             `dumbo:"lsid,ignored"`
 	TxnNumber        int64           `dumbo:"txnNumber,ignored"`
 	StartTransaction bool            `dumbo:"startTransaction,ignored"`
 	Autocommit       bool            `dumbo:"autocommit,ignored"`
 	ClusterTime      any             `dumbo:"$clusterTime,ignored"`
-	ReadPreference *types.Document `dumbo:"$readPreference,ignored"`
+	ReadPreference   *types.Document `dumbo:"$readPreference,ignored"`
 
 	ApiVersion           string `dumbo:"apiVersion,ignored"`
 	ApiStrict            bool   `dumbo:"apiStrict,ignored"`
@@ -56,7 +56,7 @@ type Delete struct {
 	Filter  *types.Document `dumbo:"q"`
 	Limited bool            `dumbo:"limit,zeroOrOneAsDeleteLimit"`
 
-	Collation *types.Document `dumbo:"collation,unimplemented"`
+	Collation *types.Document `dumbo:"collation,opt"`
 
 	Hint string `dumbo:"hint,ignored"`
 }
