@@ -2607,6 +2607,16 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		return prolly.Map{}, false, false, fmt.Errorf("index: iterating primary: %w", err)
 	}
 
+	// For a unique index, detect pre-existing duplicate values while scanning
+	// so the build fails like a duplicate-key write (matching MongoDB). Uses
+	// the same byte-prefix probe as the insert/merge paths; lossy indexes have
+	// no faithful encoding, so build-time enforcement is skipped and the
+	// write path validates later (same convention as merge).
+	var seenUnique map[string][]byte
+	if idx.Unique && !idx.Lossy {
+		seenUnique = make(map[string][]byte)
+	}
+
 	for {
 		k, v, err := iter.Next(ctx)
 		if err != nil {
@@ -2632,6 +2642,13 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		rows, rowMultikey, rowLossy := indexEntriesForDoc(doc, idx)
 		multikey = multikey || rowMultikey
 		lossy = lossy || rowLossy
+
+		if seenUnique != nil && !rowLossy {
+			if err := checkUniqueBuildConflict(seenUnique, idx, doc, idBytes, rows); err != nil {
+				return prolly.Map{}, false, false, err
+			}
+		}
+
 		for _, fv := range rows {
 			if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
 				return prolly.Map{}, false, false, fmt.Errorf("index: inserting entry: %w", err)
@@ -2644,6 +2661,43 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		return prolly.Map{}, false, false, fmt.Errorf("index: flushing map: %w", err)
 	}
 	return built, multikey, lossy, nil
+}
+
+// checkUniqueBuildConflict records each row's equality-probe prefix in seen
+// (prefix -> owning _id) and returns a duplicate-key error the first time a
+// prefix is claimed by a different document. Sparse indexes skip all-null
+// keys and partial indexes skip documents outside the filter, matching the
+// insert-time enforcement so a build does not reject rows a later insert
+// would accept.
+func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, doc *types.Document, idBytes []byte, rows [][]any) error {
+	if idx.MatchesPartialFilter != nil {
+		matches, err := idx.MatchesPartialFilter(doc)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return nil
+		}
+	}
+	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
+		return nil
+	}
+	for _, row := range rows {
+		prefix, _ := idxpkg.EqualityProbeBounds(row)
+		key := string(prefix)
+		owner, ok := seen[key]
+		if !ok {
+			seen[key] = append([]byte(nil), idBytes...)
+			continue
+		}
+		if !bytes.Equal(owner, idBytes) {
+			return backends.NewError(
+				backends.ErrorCodeInsertDuplicateID,
+				fmt.Errorf("duplicate key over existing data for unique index %s", idx.Name),
+			)
+		}
+	}
+	return nil
 }
 
 // scanUniqueConflict is the O(N) value-level fallback for rows with no
