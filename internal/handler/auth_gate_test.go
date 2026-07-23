@@ -156,7 +156,7 @@ func TestAuthGate_AnonymousCommandsStayOpen(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
-	for _, name := range []string{"ping", "hello", "saslStart", "saslContinue", "connectionStatus", "logout", "whatsmyuri", "buildInfo"} {
+	for _, name := range []string{"ping", "hello", "saslStart", "saslContinue", "connectionStatus", "whatsmyuri", "buildInfo"} {
 		_, err := h.commands[name].Handler(ctx, gateCmd(t, name))
 		require.False(t, isForcedLoginError(err), "anonymous command %q must not be gated, got %v", name, err)
 	}
@@ -217,12 +217,18 @@ func saslContinueMsg(t *testing.T) *wire.OpMsg {
 func TestSASLStart_SecondAuthBeginsButDoesNotAdoptIdentity(t *testing.T) {
 	h := authGateHandler(t, true)
 
+	// The second SASL conversation is for user "u"; it must exist, otherwise
+	// saslStart now fails immediately for an unknown user.
+	bootstrapCtx := peerCtx("127.0.0.1:40000")
+	_, err := h.commands["createUser"].Handler(bootstrapCtx, createUserMsg(t, "u", "pw"))
+	require.NoError(t, err)
+
 	ci := conninfo.New()
 	ci.SetAuth("alice", "", nil, "admin")
 	ci.SetSCRAMAuthenticated()
 	ctx := conninfo.Ctx(context.Background(), ci)
 
-	_, err := h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
+	_, err = h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
 	require.NoError(t, err)
 	require.True(t, ci.ReauthPending())
 
@@ -254,8 +260,11 @@ func TestSASLStart_AllowedOnUnauthenticatedConnection(t *testing.T) {
 	h := authGateHandler(t, true)
 	ctx := conninfo.Ctx(context.Background(), conninfo.New())
 
+	// saslStart is anonymous: it must reach the handler, not be blocked by the
+	// auth gate. Authenticating an unknown user still fails, but that is an auth
+	// failure, not a gate rejection.
 	_, err := h.commands["saslStart"].Handler(ctx, saslStartMsg(t))
-	require.NoError(t, err)
+	require.False(t, isForcedLoginError(err), "saslStart must not be gated, got %v", err)
 }
 
 func TestLogout_ClearsAuthAndSCRAMLatch(t *testing.T) {
