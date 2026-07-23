@@ -90,6 +90,7 @@ func run(logger *slog.Logger) error {
 	sessionSweepPeriod := fs.Duration("session-sweep-period", 0, "how often to walk the session registry looking for idle entries; default 1m")
 	pprofAddr := fs.String("pprof-addr", "", "if non-empty, expose net/http/pprof on this address (e.g. 127.0.0.1:6060)")
 	noMetrics := fs.Bool("no-metrics", false, "disable anonymous daily usage metrics reported to DoltHub")
+	auth := fs.Bool("auth", false, "enable access control (forced login; an authenticated connection has full access)")
 	fs.Parse(os.Args[1:])
 
 	if *autoCommit && *sessionIsolation {
@@ -145,6 +146,9 @@ func run(logger *slog.Logger) error {
 		SessionIsolation:   *sessionIsolation,
 		SessionTimeout:     *sessionTimeout,
 		SessionSweepPeriod: *sessionSweepPeriod,
+		TestOpts: registry.TestOpts{
+			EnableNewAuth: *auth,
+		},
 	})
 	if err != nil {
 		return err

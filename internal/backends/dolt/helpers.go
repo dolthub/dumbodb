@@ -517,7 +517,7 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // Caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
 	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
-		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) {
+		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name) {
 			sqlCtx := sqlctx.Wrap(ctx, sess)
 			qualified := qualifiedDbName(state.name, branch)
 			sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
@@ -719,7 +719,7 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 	// would overwrite the latest writer's disk state with each idle
 	// session's stale per-session WS snapshot every tick.
 	sess := sessionFromContext(ctx)
-	if sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) {
+	if sess != nil && sess.GetTransaction() != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name) {
 		sqlCtx := sqlctx.Wrap(ctx, sess)
 		qualified := qualifiedDbName(state.name, branch)
 		if err := sess.SetWorkingSet(sqlCtx, qualified, newWS); err != nil {
@@ -741,7 +741,7 @@ func (state *dbState) updateWorkingRoot(ctx context.Context, branch, commitMsg s
 		return fmt.Errorf("updating working set: %w", err)
 	}
 
-	if state.backend.autoCommit {
+	if state.backend.autoCommit || alwaysAutoCommit(state.name) {
 		if ci := conninfo.GetIfPresent(ctx); ci != nil {
 			ci.RecordAutoCommit(state.name, branch, commitMsg)
 		}

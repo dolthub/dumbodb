@@ -1,4 +1,4 @@
-// Copyright 2021 FerretDB Inc.
+// Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -28,10 +29,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgDropUser implements `dropUser` command.
-//
-// The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDropUser(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDropRole(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -44,40 +42,40 @@ func (h *Handler) MsgDropUser(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, err
 	}
 
-	username, err := common.GetRequiredParam[string](document, document.Command())
+	roleName, err := common.GetRequiredParam[string](document, document.Command())
 	if err != nil {
 		return nil, err
 	}
 
-	adminDB, err := h.b.Database("admin")
-	if err != nil {
-		return nil, lazyerrors.Error(err)
+	if authz.IsBuiltinRole(roleName) {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrBadValue,
+			fmt.Sprintf("%s@%s is a built-in role and cannot be modified", roleName, dbName),
+		)
 	}
 
-	users, err := adminDB.Collection("system.users")
+	coll, err := h.systemRolesCollection()
 	if err != nil {
-		return nil, lazyerrors.Error(err)
+		return nil, err
 	}
 
-	res, err := users.DeleteAll(connCtx, &backends.DeleteAllParams{
-		IDs: []any{dbName + "." + username},
-	})
+	res, err := coll.DeleteAll(connCtx, &backends.DeleteAllParams{IDs: []any{dbName + "." + roleName}})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
 	if res.Deleted == 0 {
 		return nil, handlererrors.NewCommandErrorMsg(
-			handlererrors.ErrUserNotFound,
-			fmt.Sprintf("User '%s@%s' not found", username, dbName),
+			handlererrors.ErrRoleNotFound,
+			fmt.Sprintf("Could not find role: %s@%s", roleName, dbName),
 		)
+	}
+
+	if err = h.cascadeRoleRemoval(connCtx, dbName, roleName); err != nil {
+		return nil, err
 	}
 
 	h.BumpAuthGeneration()
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"ok", float64(1),
-		)),
-	)
+	return documentOpMsg(must.NotFail(types.NewDocument("ok", float64(1))))
 }

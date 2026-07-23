@@ -60,7 +60,16 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 		return nil, err
 	}
 
-	_, _, conv, _ := conninfo.Get(connCtx).Auth()
+	if ci := conninfo.Get(connCtx); ci.ReauthPending() {
+		ci.SetReauthPending(false)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrAuthenticationFailed,
+			"Authentication failed.",
+			"saslContinue",
+		)
+	}
+
+	_, _, conv, authDB := conninfo.Get(connCtx).Auth()
 
 	if conv == nil {
 		h.L.WarnContext(connCtx, "saslContinue: no conversation to continue")
@@ -82,6 +91,11 @@ func (h *Handler) saslContinue(connCtx context.Context, doc *types.Document) (*t
 
 	if valid {
 		h.L.DebugContext(connCtx, "saslContinue: conversation success", attrs...)
+
+		if err = h.checkAuthRestrictions(connCtx, authDB, conv.Username()); err != nil {
+			conninfo.Get(connCtx).SetAuth("", "", nil, "")
+			return nil, err
+		}
 
 		conninfo.Get(connCtx).SetBypassBackendAuth()
 		conninfo.Get(connCtx).SetSCRAMAuthenticated()

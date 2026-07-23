@@ -25,6 +25,7 @@ import (
 
 	"github.com/xdg-go/scram"
 
+	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 )
 
@@ -40,7 +41,8 @@ type ConnInfo struct {
 	sc *scram.ServerConversation // protected by rw
 	db string                    // protected by rw
 
-	Peer netip.AddrPort // invalid for Unix domain sockets
+	Peer  netip.AddrPort
+	Local netip.AddrPort
 
 	username string // protected by rw
 	password string // protected by rw
@@ -62,7 +64,12 @@ type ConnInfo struct {
 	// and by the new authentication.
 	// See where it is used for more details.
 	bypassBackendAuth  bool // protected by rw
-	scramAuthenticated bool // protected by rw; set when SCRAM conversation succeeds, never cleared
+	scramAuthenticated bool // protected by rw
+	reauthPending      bool // protected by rw
+
+	cachedPrivs   authz.PrivilegeSet // protected by rw
+	cachedPrivGen uint64             // protected by rw
+	cachedPrivsOK bool               // protected by rw
 
 	pendingAutoCommit map[string]AutoCommitTarget // protected by rw; keyed by db+"\x00"+branch, last writer wins
 	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
@@ -118,8 +125,6 @@ func (connInfo *ConnInfo) SetMetadataRecv() {
 	connInfo.metadataRecv = true
 }
 
-// SetSCRAMAuthenticated marks that SCRAM authentication completed successfully on this connection.
-// This is never cleared, even after logout.
 func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
 	connInfo.rw.Lock()
 	defer connInfo.rw.Unlock()
@@ -127,11 +132,48 @@ func (connInfo *ConnInfo) SetSCRAMAuthenticated() {
 	connInfo.scramAuthenticated = true
 }
 
+func (connInfo *ConnInfo) ClearSCRAMAuthenticated() {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.scramAuthenticated = false
+}
+
 func (connInfo *ConnInfo) SCRAMAuthenticated() bool {
 	connInfo.rw.RLock()
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.scramAuthenticated
+}
+
+func (connInfo *ConnInfo) SetReauthPending(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.reauthPending = v
+}
+
+func (connInfo *ConnInfo) ReauthPending() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.reauthPending
+}
+
+func (connInfo *ConnInfo) PrivilegeCache() (authz.PrivilegeSet, uint64, bool) {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.cachedPrivs, connInfo.cachedPrivGen, connInfo.cachedPrivsOK
+}
+
+func (connInfo *ConnInfo) SetPrivilegeCache(gen uint64, privs authz.PrivilegeSet) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.cachedPrivGen = gen
+	connInfo.cachedPrivs = privs
+	connInfo.cachedPrivsOK = true
 }
 
 // SetBypassBackendAuth marks the connection as not requiring backend authentication.
@@ -232,10 +274,21 @@ func (connInfo *ConnInfo) SetTxnAborted(v bool) {
 }
 
 func (connInfo *ConnInfo) Owner() string {
-	if id := connInfo.LSID(); id != "" {
-		return id
+	id := connInfo.LSID()
+	if id == "" {
+		id = fmt.Sprintf("conn:%p", connInfo)
 	}
-	return fmt.Sprintf("conn:%p", connInfo)
+	user, _, _, _ := connInfo.Auth()
+	return sessionKey(user, id)
+}
+
+func (connInfo *ConnInfo) SessionKeyFor(id string) string {
+	user, _, _, _ := connInfo.Auth()
+	return sessionKey(user, id)
+}
+
+func sessionKey(user, id string) string {
+	return user + "\x00" + id
 }
 
 // Ctx returns a derived context with the given ConnInfo.

@@ -17,16 +17,15 @@ package handler
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"github.com/FerretDB/wire"
 	"github.com/xdg-go/scram"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -184,9 +183,7 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 
 	filter := must.NotFail(types.NewDocument("_id", dbName+"."+username))
 
-	// Filter isn't being passed to the query as we are filtering after retrieving all data
-	// from the database due to limitations of the internal/backends filters.
-	qr, err := usersCol.Query(ctx, nil)
+	qr, err := usersCol.Query(ctx, &backends.QueryParams{Filter: filter})
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -250,38 +247,6 @@ func (h *Handler) scramCredentialLookup(ctx context.Context, dbName, username, m
 	)
 }
 
-// scramFakeCredentials returns fake SCRAM stored credentials for a non-existent user.
-// The credentials contain random salt and keys, so the SCRAM handshake will proceed but
-// authentication will always fail at the saslContinue step.
-func scramFakeCredentials(mechanism string) scram.StoredCredentials {
-	const saltLen = 28
-
-	var keyLen int
-	switch mechanism {
-	case "SCRAM-SHA-256":
-		keyLen = 32
-	default: // SCRAM-SHA-1
-		keyLen = 20
-	}
-
-	salt := make([]byte, saltLen)
-	storedKey := make([]byte, keyLen)
-	serverKey := make([]byte, keyLen)
-
-	_, _ = io.ReadFull(rand.Reader, salt)
-	_, _ = io.ReadFull(rand.Reader, storedKey)
-	_, _ = io.ReadFull(rand.Reader, serverKey)
-
-	return scram.StoredCredentials{
-		KeyFactors: scram.KeyFactors{
-			Salt:  string(salt),
-			Iters: 15000,
-		},
-		StoredKey: storedKey,
-		ServerKey: serverKey,
-	}
-}
-
 // saslStartSCRAM extracts the initial challenge and attempts to move the
 // authentication conversation forward returning a challenge response.
 func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, doc *types.Document) (string, error) {
@@ -306,15 +271,14 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 		panic("unsupported SCRAM mechanism")
 	}
 
+	var lookupCmdErr *handlererrors.CommandError
+
 	scramServer, err := f.NewServer(func(username string) (scram.StoredCredentials, error) {
 		cred, lookupErr := h.scramCredentialLookup(ctx, dbName, username, mechanism)
 		if lookupErr != nil {
 			var cmdErr *handlererrors.CommandError
-			if errors.As(lookupErr, &cmdErr) && cmdErr.Code() == handlererrors.ErrAuthenticationFailed && username != "" {
-				// User not found: return fake credentials so the SCRAM handshake can continue.
-				// This prevents username enumeration. Authentication will fail at saslContinue.
-				// Empty usernames are not valid and fail immediately without fake credentials.
-				return scramFakeCredentials(mechanism), nil
+			if errors.As(lookupErr, &cmdErr) {
+				lookupCmdErr = cmdErr
 			}
 
 			return scram.StoredCredentials{}, lookupErr
@@ -343,6 +307,10 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 
 		h.L.WarnContext(ctx, "saslStartSCRAM: step failed", attrs...)
 
+		if lookupCmdErr != nil {
+			return "", lookupCmdErr
+		}
+
 		return "", handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrAuthenticationFailed,
 			"Authentication failed.",
@@ -352,7 +320,15 @@ func (h *Handler) saslStartSCRAM(ctx context.Context, dbName, mechanism string, 
 
 	h.L.DebugContext(ctx, "saslStartSCRAM: step succeed", attrs...)
 
-	conninfo.Get(ctx).SetAuth(conv.Username(), "", conv, dbName)
+	ci := conninfo.Get(ctx)
+
+	if ci.SCRAMAuthenticated() {
+		ci.SetReauthPending(true)
+		return response, nil
+	}
+
+	ci.SetReauthPending(false)
+	ci.SetAuth(conv.Username(), "", conv, dbName)
 
 	return response, nil
 }

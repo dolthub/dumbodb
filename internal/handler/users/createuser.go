@@ -34,10 +34,13 @@ import (
 //
 //nolint:vet // for readability
 type CreateUserParams struct {
-	Database   string
-	Username   string
-	Password   password.Password
-	Mechanisms *types.Array
+	Database                   string
+	Username                   string
+	Password                   password.Password
+	Mechanisms                 *types.Array
+	Roles                      *types.Array
+	AuthenticationRestrictions *types.Array
+	CustomData                 *types.Document
 }
 
 // CreateUser stores a new user in the given backend.
@@ -49,15 +52,28 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		return err
 	}
 
+	roles, err := NormalizeRoles(params.Roles, params.Database)
+	if err != nil {
+		return err
+	}
+
 	id := uuid.New()
 	saved := must.NotFail(types.NewDocument(
 		"_id", params.Database+"."+params.Username,
 		"credentials", credentials,
 		"user", params.Username,
 		"db", params.Database,
-		"roles", types.MakeArray(0),
+		"roles", roles,
 		"userId", types.Binary{Subtype: types.BinaryUUID, B: must.NotFail(id.MarshalBinary())},
 	))
+
+	if params.CustomData != nil {
+		saved.Set("customData", params.CustomData)
+	}
+
+	if r := params.AuthenticationRestrictions; r != nil && r.Len() > 0 {
+		saved.Set("authenticationRestrictions", r)
+	}
 
 	db := must.NotFail(b.Database("admin"))
 	coll := must.NotFail(db.Collection("system.users"))
@@ -67,6 +83,53 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 	})
 
 	return err
+}
+
+func NormalizeRoles(roles *types.Array, defaultDB string) (*types.Array, error) {
+	if roles == nil {
+		return types.MakeArray(0), nil
+	}
+
+	out := types.MakeArray(roles.Len())
+
+	iter := roles.Iterator()
+	defer iter.Close()
+
+	for {
+		_, v, err := iter.Next()
+
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		switch r := v.(type) {
+		case string:
+			out.Append(must.NotFail(types.NewDocument("role", r, "db", defaultDB)))
+		case *types.Document:
+			role, _ := r.Get("role")
+			db, _ := r.Get("db")
+
+			roleStr, ok := role.(string)
+			if !ok {
+				return nil, lazyerrors.Errorf("role name must be a string, got %T", role)
+			}
+
+			dbStr, ok := db.(string)
+			if !ok {
+				return nil, lazyerrors.Errorf("role db must be a string, got %T", db)
+			}
+
+			out.Append(must.NotFail(types.NewDocument("role", roleStr, "db", dbStr)))
+		default:
+			return nil, lazyerrors.Errorf("unsupported role entry type %T", v)
+		}
+	}
+
+	return out, nil
 }
 
 // MakeCredentials creates a document with credentials for the chosen mechanisms.

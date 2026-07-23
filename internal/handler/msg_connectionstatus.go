@@ -16,11 +16,16 @@ package handler
 
 import (
 	"context"
+	"errors"
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/iterator"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -28,22 +33,102 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgConnectionStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	showPrivileges, err := common.GetOptionalParam(document, "showPrivileges", false)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
 	users := types.MakeArray(1)
+	roles := types.MakeArray(0)
+	privileges := types.MakeArray(0)
 
 	if username, _, _, db := conninfo.Get(connCtx).Auth(); username != "" {
 		users.Append(must.NotFail(types.NewDocument(
 			"user", username,
 			"db", db,
 		)))
+
+		stored, err := h.authenticatedUserRoles(connCtx, db, username)
+		if err != nil {
+			return nil, err
+		}
+		if stored != nil {
+			roles = stored
+		}
+
+		if showPrivileges {
+			ps, err := h.effectivePrivileges(connCtx)
+			if err != nil {
+				return nil, err
+			}
+			privileges = privilegesToArray(ps)
+		}
+	}
+
+	authInfo := must.NotFail(types.NewDocument(
+		"authenticatedUsers", users,
+		"authenticatedUserRoles", roles,
+	))
+	if showPrivileges {
+		authInfo.Set("authenticatedUserPrivileges", privileges)
 	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"authInfo", must.NotFail(types.NewDocument(
-				"authenticatedUsers", users,
-				"authenticatedUserRoles", must.NotFail(types.NewArray()),
-			)),
+			"authInfo", authInfo,
 			"ok", float64(1),
 		)),
 	)
+}
+
+func (h *Handler) authenticatedUserRoles(ctx context.Context, db, username string) (*types.Array, error) {
+	adminDB, err := h.b.Database("admin")
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	usersCol, err := adminDB.Collection("system.users")
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	filter := must.NotFail(types.NewDocument("_id", db+"."+username))
+
+	qr, err := usersCol.Query(ctx, &backends.QueryParams{Filter: filter})
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	defer qr.Iter.Close()
+
+	for {
+		_, doc, err := qr.Iter.Next()
+
+		if errors.Is(err, iterator.ErrIteratorDone) {
+			break
+		}
+
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		matches, err := common.FilterDocument(doc, filter)
+		if err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		if matches {
+			if r, ok := must.NotFail(doc.Get("roles")).(*types.Array); ok {
+				return r, nil
+			}
+			break
+		}
+	}
+
+	return types.MakeArray(0), nil
 }

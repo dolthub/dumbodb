@@ -23,11 +23,9 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/bson"
-	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
-	"github.com/dolthub/dumbodb/internal/util/logging"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -69,44 +67,6 @@ func (h *Handler) CmdQuery(connCtx context.Context, query *wire.OpQuery) (*wire.
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
-
-		v, _ := q.Get("speculativeAuthenticate")
-		if v == nil {
-			return wire.NewOpReply(must.NotFail(bson.FromDocument(reply)))
-		}
-
-		authDoc, ok := v.(*types.Document)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrTypeMismatch,
-				fmt.Sprintf("speculativeAuthenticate type wrong; expected: document; got: %T", v),
-				"OpQuery: "+q.Command(),
-			)
-		}
-
-		dbName, err := common.GetRequiredParam[string](authDoc, "db")
-		if err != nil {
-			h.L.DebugContext(connCtx, "No `db` in `speculativeAuthenticate`", logging.Error(err))
-
-			return wire.NewOpReply(must.NotFail(bson.FromDocument(reply)))
-		}
-
-		speculativeAuthenticate, err := h.saslStart(connCtx, dbName, authDoc)
-		if err != nil {
-			h.L.DebugContext(connCtx, "Speculative authentication failed", logging.Error(err))
-
-			// unsuccessful speculative authentication leave `speculativeAuthenticate` field unset
-			// and let `saslStart` return an error
-			return wire.NewOpReply(must.NotFail(bson.FromDocument(reply)))
-		}
-
-		reply.Set("speculativeAuthenticate", speculativeAuthenticate)
-
-		// ok field is the last field
-		reply.Remove("ok")
-		reply.Set("ok", float64(1))
-
-		h.L.DebugContext(connCtx, "Speculative authentication passed")
 
 		return wire.NewOpReply(must.NotFail(bson.FromDocument(reply)))
 	case "saslContinue":

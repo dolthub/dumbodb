@@ -63,6 +63,8 @@ const (
 	// ErrUnsuitableValueType indicates that field could not be created for given value.
 	ErrUnsuitableValueType = ErrorCode(28) // PathNotViable
 
+	ErrRoleNotFound = ErrorCode(31) // RoleNotFound
+
 	// ErrConflictingUpdateOperators indicates that $set, $inc or $setOnInsert were used together.
 	ErrConflictingUpdateOperators = ErrorCode(40) // ConflictingUpdateOperators
 
@@ -70,6 +72,8 @@ const (
 
 	// ErrNamespaceExists indicates that the collection already exists.
 	ErrNamespaceExists = ErrorCode(48) // NamespaceExists
+
+	ErrInvalidRoleModification = ErrorCode(49) // InvalidRoleModification
 
 	ErrMaxTimeMSExpired = ErrorCode(50) // MaxTimeMSExpired
 
@@ -323,6 +327,8 @@ const (
 	// ErrFreeMonitoringDisabled indicates that free monitoring is disabled
 	// by command-line or config file.
 	ErrFreeMonitoringDisabled = ErrorCode(50840) // Location50840
+
+	ErrRoleAlreadyExists = ErrorCode(51002) // Location51002
 
 	// ErrUserAlreadyExists indicates that user already exists.
 	ErrUserAlreadyExists = ErrorCode(51003) // Location51003

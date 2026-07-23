@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -67,8 +68,14 @@ type Handler struct {
 	wg         sync.WaitGroup
 	processID  types.ObjectID
 
+	bootstrapLatch atomic.Bool
+
+	authGen atomic.Uint64
+
 	cappedCleanupStop chan struct{}
 }
+
+func (h *Handler) BumpAuthGeneration() { h.authGen.Add(1) }
 
 // NewOpts represents handler configuration.
 //

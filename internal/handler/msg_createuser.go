@@ -48,6 +48,13 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
+	if dbName == "local" {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrBadValue,
+			"Cannot create users in the local database",
+		)
+	}
+
 	if dbName != "$external" && !document.Has("pwd") {
 		return nil, handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrBadValue,
@@ -67,18 +74,13 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 	}
 
-	if err = common.UnimplementedNonDefault(document, "customData", func(v any) bool {
-		if v == nil || v == types.Null {
-			return true
-		}
-
-		cd, ok := v.(*types.Document)
-		return ok && cd.Len() == 0
-	}); err != nil {
+	customData, err := parseCustomData(document)
+	if err != nil {
 		return nil, err
 	}
 
-	if _, err = common.GetRequiredParam[*types.Array](document, "roles"); err != nil {
+	roles, err := common.GetRequiredParam[*types.Array](document, "roles")
+	if err != nil {
 		var ce *handlererrors.CommandError
 		if errors.As(err, &ce) && ce.Code() == handlererrors.ErrBadValue {
 			return nil, handlererrors.NewCommandErrorMsg(
@@ -90,9 +92,14 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	// Accept any roles array; dumbodb doesn't enforce RBAC but must not reject
-	// non-empty roles to be compatible with MongoDB clients.
-	common.Ignored(document, h.L, "roles")
+	roleRefs, err := normalizeRoleRefs(roles, dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = h.validateUserRoles(connCtx, roleRefs); err != nil {
+		return nil, err
+	}
 
 	if err = common.UnimplementedNonDefault(document, "digestPassword", func(v any) bool {
 		if v == nil || v == types.Null {
@@ -105,7 +112,12 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment")
+	common.Ignored(document, h.L, "writeConcern", "comment")
+
+	restrictions, err := common.GetOptionalParam[*types.Array](document, "authenticationRestrictions", types.MakeArray(0))
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
 
 	defMechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
 
@@ -168,10 +180,13 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		}
 
 		err = users.CreateUser(connCtx, h.b, &users.CreateUserParams{
-			Database:   dbName,
-			Username:   username,
-			Password:   password.WrapPassword(userPassword),
-			Mechanisms: mechanisms,
+			Database:                   dbName,
+			Username:                   username,
+			Password:                   password.WrapPassword(userPassword),
+			Mechanisms:                 mechanisms,
+			Roles:                      roles,
+			AuthenticationRestrictions: restrictions,
+			CustomData:                 customData,
 		})
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
@@ -192,9 +207,32 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		}
 	}
 
+	h.BumpAuthGeneration()
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"ok", float64(1),
 		)),
 	)
+}
+
+// parseCustomData returns the customData document from a create/update command,
+// or nil when it is absent or null.
+func parseCustomData(document *types.Document) (*types.Document, error) {
+	v, err := document.Get("customData")
+	if err != nil || v == nil || v == types.Null {
+		return nil, nil
+	}
+
+	cd, ok := v.(*types.Document)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrTypeMismatch,
+			fmt.Sprintf("BSON field 'customData' is the wrong type '%s', expected type 'object'",
+				handlerparams.AliasFromType(v),
+			),
+		)
+	}
+
+	return cd, nil
 }

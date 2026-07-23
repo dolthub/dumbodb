@@ -1,4 +1,4 @@
-// Copyright 2021 FerretDB Inc.
+// Copyright 2026 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,10 +28,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgDropAllUsersFromDatabase implements `dropAllUsersFromDatabase` command.
-//
-// The passed context is canceled when the client connection is closed.
-func (h *Handler) MsgDropAllUsersFromDatabase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+func (h *Handler) MsgDropAllRolesFromDatabase(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -44,64 +41,48 @@ func (h *Handler) MsgDropAllUsersFromDatabase(connCtx context.Context, msg *wire
 		return nil, err
 	}
 
-	adminDB, err := h.b.Database("admin")
+	coll, err := h.systemRolesCollection()
+	if err != nil {
+		return nil, err
+	}
+
+	qr, err := coll.Query(connCtx, nil)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
-
-	users, err := adminDB.Collection("system.users")
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	qr, err := users.Query(connCtx, nil)
-	if err != nil {
-		return nil, lazyerrors.Error(err)
-	}
-
-	var ids []any
 
 	defer qr.Iter.Close()
 
-	filter := must.NotFail(types.NewDocument("db", dbName))
-
+	var ids []any
 	for {
-		_, v, err := qr.Iter.Next()
+		_, doc, err := qr.Iter.Next()
+
 		if errors.Is(err, iterator.ErrIteratorDone) {
 			break
 		}
 
-		matches, err := common.FilterDocument(v, filter)
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
 
-		if matches {
-			ids = append(ids, must.NotFail(v.Get("_id")))
+		if db, _ := doc.Get("db"); db == dbName {
+			ids = append(ids, must.NotFail(doc.Get("_id")))
 		}
 	}
 
 	var deleted int32
-
 	if len(ids) > 0 {
-		var res *backends.DeleteAllResult
-
-		res, err = users.DeleteAll(connCtx, &backends.DeleteAllParams{
-			IDs: ids,
-		})
+		res, err := coll.DeleteAll(connCtx, &backends.DeleteAllParams{IDs: ids})
 		if err != nil {
 			return nil, lazyerrors.Error(err)
 		}
-
 		deleted = res.Deleted
 	}
 
 	h.BumpAuthGeneration()
 
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"n", deleted,
-			"ok", float64(1),
-		)),
-	)
+	return documentOpMsg(must.NotFail(types.NewDocument(
+		"n", deleted,
+		"ok", float64(1),
+	)))
 }

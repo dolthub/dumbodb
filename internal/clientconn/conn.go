@@ -145,6 +145,10 @@ func (c *conn) run(ctx context.Context) (err error) {
 		if err != nil {
 			return
 		}
+
+		if local, localErr := netip.ParseAddrPort(c.netConn.LocalAddr().String()); localErr == nil {
+			connInfo.Local = local
+		}
 	}
 
 	ctx = conninfo.Ctx(ctx, connInfo)
@@ -153,8 +157,8 @@ func (c *conn) run(ctx context.Context) (err error) {
 	// bound lsid sits in the registry until the idle sweep.
 	defer func() {
 		if reg := c.h.SessionRegistry(); reg != nil {
-			if lsid := connInfo.LSID(); lsid != "" {
-				reg.End(lsid)
+			if connInfo.LSID() != "" {
+				reg.End(connInfo.Owner())
 			}
 		}
 	}()
@@ -605,23 +609,21 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 	}
 
 	ci := conninfo.Get(connCtx)
-	lsid := ci.EnsureLSID()
+	ci.EnsureLSID()
+	sessKey := ci.Owner()
 
-	shadow, cachedLsid := ci.CachedShadow()
-	staleReap := shadow != nil && cachedLsid == lsid && !shadow.Active() &&
+	shadow, cachedKey := ci.CachedShadow()
+	staleReap := shadow != nil && cachedKey == sessKey && !shadow.Active() &&
 		shadow.Purged() && !c.h.SessionIsolation() && !ci.InTransaction()
-	if shadow == nil || cachedLsid != lsid || staleReap {
-		// Release the prior lsid (synthetic-to-real upgrade, or pooled
-		// implicit sessions rotating between frames) before opening the
-		// new one.
-		if cachedLsid != "" && cachedLsid != lsid {
-			reg.End(cachedLsid)
+	if shadow == nil || cachedKey != sessKey || staleReap {
+		if cachedKey != "" && cachedKey != sessKey {
+			reg.End(cachedKey)
 		}
-		s, err := reg.Connect(lsid)
+		s, err := reg.Connect(sessKey)
 		if err != nil {
-			return nil, fmt.Errorf("session registry: Connect for %q: %w", lsid, err)
+			return nil, fmt.Errorf("session registry: Connect for %q: %w", sessKey, err)
 		}
-		ci.SetCachedShadow(lsid, s)
+		ci.SetCachedShadow(sessKey, s)
 		shadow = s
 	}
 	if !shadow.Active() {

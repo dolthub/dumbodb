@@ -39,6 +39,10 @@ func dbNameDsessFriendly(dbName string) bool {
 	return !strings.ContainsAny(dbName, "/@")
 }
 
+func alwaysAutoCommit(dbName string) bool {
+	return dbName == "admin"
+}
+
 // ensureDsessTxn: dsess.StartTransaction wipes every per-db branchState,
 // so callers MUST invoke this only at txn-entry boundaries.
 func ensureDsessTxn(sqlCtx *sql.Context, sess *dsess.DoltSession) (sql.Transaction, error) {

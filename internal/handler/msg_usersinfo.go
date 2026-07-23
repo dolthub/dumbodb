@@ -21,6 +21,7 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/authz"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -61,9 +62,18 @@ func (h *Handler) MsgUsersInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	common.Ignored(
 		document, h.L,
-		"showCustomData", "showPrivileges",
-		"showAuthenticationRestrictions", "comment", "filter",
+		"comment", "filter",
 	)
+
+	showPrivileges, err := common.GetOptionalParam(document, "showPrivileges", false)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	showAuthenticationRestrictions, err := common.GetOptionalParam(document, "showAuthenticationRestrictions", false)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
 
 	var (
 		users    []usersInfoPair
@@ -72,6 +82,11 @@ func (h *Handler) MsgUsersInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	)
 
 	showCredentials, err := common.GetOptionalParam(document, "showCredentials", false)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	showCustomData, err := common.GetOptionalParam(document, "showCustomData", true)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
@@ -184,6 +199,21 @@ func (h *Handler) MsgUsersInfo(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		if !showCredentials {
 			v.Remove("credentials")
+		}
+
+		if !showAuthenticationRestrictions {
+			v.Remove("authenticationRestrictions")
+		}
+
+		if !showCustomData {
+			v.Remove("customData")
+		}
+
+		if showPrivileges {
+			rolesArr, _ := v.Get("roles")
+			ra, _ := rolesArr.(*types.Array)
+			privs := authz.Resolve(rolesFromArray(ra), h.roleResolver(connCtx))
+			v.Set("inheritedPrivileges", privilegesToArray(privs))
 		}
 
 		if matches {

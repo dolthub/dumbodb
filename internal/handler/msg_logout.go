@@ -20,6 +20,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
@@ -28,7 +29,17 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgLogout(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	conninfo.Get(connCtx).SetAuth("", "", nil, "")
+	ci := conninfo.Get(connCtx)
+
+	if user, _, _, _ := ci.Auth(); h.EnableNewAuth && user == "" && !ci.SCRAMAuthenticated() {
+		return nil, handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrUnauthorized,
+			"Command logout requires authentication",
+		)
+	}
+
+	ci.SetAuth("", "", nil, "")
+	ci.ClearSCRAMAuthenticated()
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(

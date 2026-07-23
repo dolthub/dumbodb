@@ -16,7 +16,6 @@ package clientconn
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,7 +55,7 @@ func TestExtractAndSetLSIDNoLSIDIsNoop(t *testing.T) {
 	extractAndSetLSID(ctx, cmd)
 	assert.Equal(t, "", ci.LSID())
 
-	assert.True(t, strings.HasPrefix(ci.Owner(), "conn:"))
+	assert.Contains(t, ci.Owner(), "conn:")
 }
 
 func TestExtractAndSetLSIDMalformedIsNoop(t *testing.T) {

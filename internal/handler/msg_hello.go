@@ -89,10 +89,6 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 		if resSupportedMechs, err = h.getUserSupportedMechs(ctx, db, username); err != nil {
 			return nil, lazyerrors.Error(err)
 		}
-
-		if resSupportedMechs == nil {
-			resSupportedMechs = must.NotFail(types.NewArray("PLAIN"))
-		}
 	}
 
 	if name != "" {
@@ -128,6 +124,24 @@ func (h *Handler) hello(ctx context.Context, doc *types.Document, tcpHost, name 
 
 	if resSupportedMechs != nil && resSupportedMechs.Len() != 0 {
 		res.Set("saslSupportedMechs", resSupportedMechs)
+	}
+
+	if v, _ := doc.Get("speculativeAuthenticate"); v != nil {
+		authDoc, ok := v.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrTypeMismatch,
+				fmt.Sprintf("speculativeAuthenticate type wrong; expected: document; got: %T", v),
+			)
+		}
+
+		if specDB, dbErr := common.GetRequiredParam[string](authDoc, "db"); dbErr == nil {
+			// A failed speculative attempt (unknown user, wrong mechanism) leaves
+			// the field unset; the client falls back to a normal handshake.
+			if specAuth, saslErr := h.saslStart(ctx, specDB, authDoc); saslErr == nil {
+				res.Set("speculativeAuthenticate", specAuth)
+			}
+		}
 	}
 
 	res.Set("ok", float64(1))
