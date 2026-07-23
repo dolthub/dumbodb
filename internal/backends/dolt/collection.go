@@ -1369,15 +1369,58 @@ func allNull(key []any) bool {
 }
 
 func indexKeysEqual(a, b []any) bool {
+	return indexKeysEqualFold(a, b, false)
+}
+
+// indexKeysEqualFold compares two index keys, case-folding string components
+// when fold is set. Folding is an ASCII/Unicode lowercase approximation of a
+// case-insensitive collation (strength <= 2), matching the regex-based
+// approximation used for case-insensitive queries; locale is not honored.
+func indexKeysEqualFold(a, b []any, fold bool) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if types.Compare(a[i], b[i]) != types.Equal {
+		x, y := a[i], b[i]
+		if fold {
+			x = foldValue(x)
+			y = foldValue(y)
+		}
+		if types.Compare(x, y) != types.Equal {
 			return false
 		}
 	}
 	return true
+}
+
+func foldValue(v any) any {
+	if s, ok := v.(string); ok {
+		return strings.ToLower(s)
+	}
+	return v
+}
+
+// caseInsensitiveCollation reports whether idx carries a collation of strength
+// <= 2 (case-insensitive). A collation with no strength defaults to MongoDB's
+// strength 3 (case-sensitive).
+func caseInsensitiveCollation(idx backends.IndexInfo) bool {
+	if idx.Collation == nil {
+		return false
+	}
+	v, err := idx.Collation.Get("strength")
+	if err != nil {
+		return false
+	}
+	switch n := v.(type) {
+	case int32:
+		return n <= 2
+	case int64:
+		return n <= 2
+	case float64:
+		return n <= 2
+	default:
+		return false
+	}
 }
 
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
@@ -1465,7 +1508,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				continue
 			}
 
-			if lossy || idx.Lossy {
+			// Byte probes are case-sensitive; a case-insensitive collation
+			// needs the value-level scan path, comparing under a fold.
+			fold := caseInsensitiveCollation(idx)
+			if lossy || idx.Lossy || fold {
 				// Probes collide on collapsed bytes; compare values.
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
@@ -1479,7 +1525,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				}
 				newKey := extractIndexKey(doc, idx)
 				for _, batchKey := range batchLossyKeys[i] {
-					if indexKeysEqual(newKey, batchKey) {
+					if indexKeysEqualFold(newKey, batchKey, fold) {
 						return nil, backends.NewError(
 							backends.ErrorCodeInsertDuplicateID,
 							fmt.Errorf("duplicate key for unique index %s", idx.Name),
@@ -2664,7 +2710,7 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 		if idx.Sparse && allNull(existKey) {
 			continue
 		}
-		if indexKeysEqual(newKey, existKey) {
+		if indexKeysEqualFold(newKey, existKey, caseInsensitiveCollation(idx)) {
 			return true, nil
 		}
 	}
@@ -2682,7 +2728,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 		if len(rows) == 0 {
 			continue
 		}
-		if lossy || idx.Lossy {
+		if lossy || idx.Lossy || caseInsensitiveCollation(idx) {
 			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
 			if err != nil {
 				return err
