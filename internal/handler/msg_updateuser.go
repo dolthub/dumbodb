@@ -52,17 +52,6 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
-	if err = common.UnimplementedNonDefault(document, "customData", func(v any) bool {
-		if v == nil || v == types.Null {
-			return true
-		}
-
-		cd, ok := v.(*types.Document)
-		return ok && cd.Len() == 0
-	}); err != nil {
-		return nil, err
-	}
-
 	common.Ignored(document, h.L, "writeConcern", "authenticationRestrictions", "comment")
 
 	defMechanisms := must.NotFail(types.NewArray("SCRAM-SHA-1", "SCRAM-SHA-256"))
@@ -71,6 +60,8 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if err != nil {
 		return nil, lazyerrors.Error(err)
 	}
+
+	var requestedMechanisms []string
 
 	iter := mechanisms.Iterator()
 	defer iter.Close()
@@ -89,7 +80,7 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 
 		switch v {
 		case "SCRAM-SHA-1", "SCRAM-SHA-256":
-			// do nothing
+			requestedMechanisms = append(requestedMechanisms, v.(string))
 		default:
 			return nil, handlererrors.NewCommandErrorMsg(
 				handlererrors.ErrBadValue,
@@ -191,6 +182,31 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		saved.Set("credentials", credentials)
 	}
 
+	if credentials == nil && document.Has("mechanisms") {
+		narrowed, err := narrowCredentials(saved, requestedMechanisms)
+		if err != nil {
+			return nil, err
+		}
+
+		saved.Set("credentials", narrowed)
+		changes = true
+	}
+
+	if document.Has("customData") {
+		customData, err := parseCustomData(document)
+		if err != nil {
+			return nil, err
+		}
+
+		if customData != nil {
+			saved.Set("customData", customData)
+		} else {
+			saved.Remove("customData")
+		}
+
+		changes = true
+	}
+
 	if document.Has("roles") {
 		changes = true
 
@@ -230,4 +246,34 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			"ok", float64(1),
 		)),
 	)
+}
+
+// narrowCredentials restricts a user's stored credentials to the requested SCRAM
+// mechanisms. Narrowing reuses the existing hashes, so no password is needed; a
+// mechanism the user lacks cannot be added this way.
+func narrowCredentials(saved *types.Document, mechanisms []string) (*types.Document, error) {
+	ev, err := saved.Get("credentials")
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	existing, ok := ev.(*types.Document)
+	if !ok {
+		return nil, lazyerrors.Errorf("credentials is not a document")
+	}
+
+	narrowed := types.MakeDocument(0)
+
+	for _, m := range mechanisms {
+		if !existing.Has(m) {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("Cannot set mechanism '%s' without a password: the user has no stored credential for it", m),
+			)
+		}
+
+		narrowed.Set(m, must.NotFail(existing.Get(m)))
+	}
+
+	return narrowed, nil
 }

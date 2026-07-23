@@ -40,6 +40,7 @@ type CreateUserParams struct {
 	Mechanisms                 *types.Array
 	Roles                      *types.Array
 	AuthenticationRestrictions *types.Array
+	CustomData                 *types.Document
 }
 
 // CreateUser stores a new user in the given backend.
@@ -65,6 +66,10 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 		"roles", roles,
 		"userId", types.Binary{Subtype: types.BinaryUUID, B: must.NotFail(id.MarshalBinary())},
 	))
+
+	if params.CustomData != nil {
+		saved.Set("customData", params.CustomData)
+	}
 
 	if r := params.AuthenticationRestrictions; r != nil && r.Len() > 0 {
 		saved.Set("authenticationRestrictions", r)
