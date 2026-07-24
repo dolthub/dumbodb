@@ -5,10 +5,29 @@
 
 load helpers
 
-DUMBODB_PORT=37030
+# free_port returns a random high TCP port that nothing is currently
+# listening on. gc used to hardcode a fixed port, which fails with
+# "address already in use" whenever the CI runner already has that port
+# occupied -- observed as every gc test failing to bind for the whole
+# file run while the other bats files (on different fixed ports) passed.
+# A fresh port per test sidesteps fixed-port collisions and any lingering
+# socket state from a prior test.
+free_port() {
+    local p
+    for _ in $(seq 1 50); do
+        p=$(( (RANDOM % 20000) + 20000 ))
+        if ! port_open 127.0.0.1 "$p"; then
+            echo "$p"
+            return 0
+        fi
+    done
+    echo "ERROR: could not find a free port" >&2
+    return 1
+}
 
 setup() {
     DUMBODB_DATA_DIR="$(mktemp -d)"
+    DUMBODB_PORT="$(free_port)"
     start_dumbodb "$DUMBODB_DATA_DIR" "$DUMBODB_PORT"
 }
 
