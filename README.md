@@ -48,6 +48,8 @@ $ dumbodb --data-dir /tmp/dumbodb-data
 ## MongoDB Compatibility
 DumboDB implements the MongoDB 8.0 wire protocol and is designed for high parity with core MongoDB operations. It functions as a drop-in replacement for [standard drivers](https://www.mongodb.com/docs/drivers/) and [`mongosh`](https://www.mongodb.com/docs/mongodb-shell/) in single-node environments.
 
+Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This is the version DumboDB advertises (e.g. via `buildInfo`) and the version the parity test suite runs against in CI. We bump this to a newer 8.0.x periodically.
+
 ### Parity
 - BSON Engine: Full support for BSON type fidelity, including nested documents, arrays, and ObjectIDs.
 - Query & Update: Supports complex MQL operators (e.g., $elemMatch, $all, $rename) and atomic array modifiers ($push, $pull, $bit).

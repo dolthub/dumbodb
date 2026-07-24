@@ -21,8 +21,10 @@ import (
 )
 
 // MongoDBVersion is the MongoDB version DumboDB advertises to clients
-// that gate behavior on major.minor.
-const MongoDBVersion = "8.0.20"
+// that gate behavior on major.minor. This is the MongoDB release DumboDB
+// is tested for parity against; keep it in sync with the pinned mongo
+// version in both repos' .github/workflows/parity.yml and the README.
+const MongoDBVersion = "8.0.28"
 
 // GitVersion is the source git commit hash. Set at build time via:
 //
@@ -57,7 +59,7 @@ var info = &Info{
 	DebugBuild:          false,
 	BuildEnvironment:    must.NotFail(types.NewDocument()),
 	MongoDBVersion:      MongoDBVersion,
-	MongoDBVersionArray: must.NotFail(types.NewArray(int32(8), int32(0), int32(20), int32(0))),
+	MongoDBVersionArray: must.NotFail(types.NewArray(int32(8), int32(0), int32(28), int32(0))),
 }
 
 func Get() *Info {

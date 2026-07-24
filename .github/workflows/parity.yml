@@ -18,7 +18,10 @@ jobs:
 
     services:
       mongo:
-        image: mongo:8.0
+        # Pinned to the MongoDB release DumboDB is tested against; keep in
+        # sync with internal/version MongoDBVersion and the README. Bump
+        # deliberately to a newer 8.0.x when adopting it.
+        image: mongo:8.0.28
         ports:
           - 27017:27017
         options: >-
@@ -52,7 +55,8 @@ jobs:
           echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu ${codename}/mongodb-org/8.0 multiverse" \
             | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
           sudo apt-get update
-          sudo apt-get install -y mongodb-org-server
+          # Pin to the same release as the mongo service image above.
+          sudo apt-get install -y mongodb-org-server=8.0.28
           mongod --version
 
       - name: Start DumboDB
