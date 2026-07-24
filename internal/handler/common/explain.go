@@ -123,6 +123,32 @@ func GetExplainParams(document *types.Document, l *slog.Logger) (*ExplainParams,
 			return nil, lazyerrors.Error(err)
 		}
 	}
+	// update / delete carry the predicate inside the first element of the
+	// updates / deletes array as "q", not as a top-level filter.
+	if filter == nil {
+		var writeArrayKey string
+		switch commandName {
+		case "update":
+			writeArrayKey = "updates"
+		case "delete":
+			writeArrayKey = "deletes"
+		}
+		if writeArrayKey != "" {
+			if arrVal, _ := explain.Get(writeArrayKey); arrVal != nil {
+				if arr, ok := arrVal.(*types.Array); ok && arr.Len() > 0 {
+					if first, ferr := arr.Get(0); ferr == nil {
+						if fd, ok := first.(*types.Document); ok {
+							if q, qerr := fd.Get("q"); qerr == nil {
+								if qd, ok := q.(*types.Document); ok {
+									filter = qd
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 
 	sort, err = GetOptionalParam(explain, "sort", sort)
 	if err != nil {

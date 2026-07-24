@@ -16,6 +16,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -580,7 +582,7 @@ var dbLevelSourceStages = map[string]struct{}{
 	"$changeStream":      {},
 }
 
-func (h *Handler) aggregateDatabase(_ context.Context, document *types.Document, dbName string) (*wire.OpMsg, error) {
+func (h *Handler) aggregateDatabase(connCtx context.Context, document *types.Document, dbName string) (*wire.OpMsg, error) {
 	v, _ := document.Get("cursor")
 	if v == nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -640,11 +642,164 @@ func (h *Handler) aggregateDatabase(_ context.Context, document *types.Document,
 		)
 	}
 
+	if stageName == "$documents" {
+		return h.aggregateDocuments(connCtx, document, firstStage, pipeline, dbName)
+	}
+
+	if stageName == "$listLocalSessions" {
+		return h.aggregateListLocalSessions(connCtx, dbName)
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"cursor", must.NotFail(types.NewDocument(
 				"firstBatch", must.NotFail(types.NewArray()),
 				"id", int64(0),
+				"ns", dbName+".$cmd.aggregate",
+			)),
+			"ok", float64(1),
+		)),
+	)
+}
+
+// aggregateListLocalSessions implements the $listLocalSessions source
+// stage: one document per logical session cached on this node. Each
+// session's _id.id is the lsid UUID and _id.uid is the SHA-256 digest of
+// the authenticated user (the empty-string digest when unauthenticated),
+// matching MongoDB's session identity encoding.
+func (h *Handler) aggregateListLocalSessions(connCtx context.Context, dbName string) (*wire.OpMsg, error) {
+	firstBatch := types.MakeArray(0)
+	if reg := h.SessionRegistry(); reg != nil {
+		for _, s := range reg.Snapshot() {
+			// The registry key is sessionKey(user, id) == user + "\x00" + id.
+			// Only real driver lsids (a 16-byte hex UUID) have a MongoDB
+			// counterpart; skip synthetic ids assigned to connections that
+			// never supplied an lsid.
+			user, id, ok := strings.Cut(s.Lsid, "\x00")
+			if !ok {
+				continue
+			}
+			idBytes, err := hex.DecodeString(id)
+			if err != nil || len(idBytes) != 16 {
+				continue
+			}
+			uidSum := sha256.Sum256([]byte(user))
+			firstBatch.Append(must.NotFail(types.NewDocument(
+				"_id", must.NotFail(types.NewDocument(
+					"id", types.Binary{Subtype: types.BinaryUUID, B: idBytes},
+					"uid", types.Binary{Subtype: types.BinaryGeneric, B: uidSum[:]},
+				)),
+				"lastUse", s.LastUsed,
+			)))
+		}
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"cursor", must.NotFail(types.NewDocument(
+				"firstBatch", firstBatch,
+				"id", int64(0),
+				"ns", dbName+".$cmd.aggregate",
+			)),
+			"ok", float64(1),
+		)),
+	)
+}
+
+// aggregateDocuments runs a database-level pipeline whose source stage is
+// $documents: an inline array of documents used as the pipeline input. The
+// array elements are fed through any remaining pipeline stages and returned
+// through the normal cursor/batch machinery.
+func (h *Handler) aggregateDocuments(connCtx context.Context, document, firstStage *types.Document, pipeline *types.Array, dbName string) (*wire.OpMsg, error) {
+	arr, ok := must.NotFail(firstStage.Get("$documents")).(*types.Array)
+	if !ok {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrTypeMismatch,
+			"$documents value must be an array of objects",
+			document.Command(),
+		)
+	}
+
+	srcDocs := make([]*types.Document, 0, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		d, ok := must.NotFail(arr.Get(i)).(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"$documents array element must be an object",
+				document.Command(),
+			)
+		}
+		srcDocs = append(srcDocs, d)
+	}
+
+	pipelineStages := make([]aggregations.Stage, 0, pipeline.Len()-1)
+	for i := 1; i < pipeline.Len(); i++ {
+		sd, ok := must.NotFail(pipeline.Get(i)).(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrTypeMismatch,
+				"Each element of the 'pipeline' array must be an object",
+				document.Command(),
+			)
+		}
+		s, err := stages.NewStage(sd)
+		if err != nil {
+			return nil, err
+		}
+		pipelineStages = append(pipelineStages, s)
+	}
+
+	cursorDoc := must.NotFail(document.Get("cursor")).(*types.Document)
+	bsVal, _ := cursorDoc.Get("batchSize")
+	if bsVal == nil {
+		bsVal = int32(101)
+	}
+	batchSize, err := handlerparams.GetValidatedNumberParamWithMinValue("cursor", "batchSize", bsVal, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	closer := iterator.NewMultiCloser()
+	iter := iterator.Values(iterator.ForSlice(srcDocs))
+	for _, s := range pipelineStages {
+		if iter, err = s.Process(connCtx, iter, closer); err != nil {
+			closer.Close()
+			return nil, err
+		}
+	}
+	closer.Add(iter)
+
+	cur := h.cursors.NewCursor(connCtx, iterator.WithClose(iter, closer.Close), &cursor.NewParams{
+		DB:         dbName,
+		Collection: "$cmd.aggregate",
+		Username:   conninfo.Get(connCtx).Username(),
+		Type:       cursor.Normal,
+	})
+
+	cursorID := cur.ID
+
+	docs, err := iterator.ConsumeValuesN(cur, int(batchSize))
+	if err != nil {
+		h.cursors.CloseAndRemove(cur)
+		return nil, err
+	}
+
+	firstBatch := types.MakeArray(len(docs))
+	for _, doc := range docs {
+		firstBatch.Append(doc)
+	}
+
+	if firstBatch.Len() < int(batchSize) {
+		cursorID = 0
+		cur.Close()
+	}
+
+	return documentOpMsg(
+		must.NotFail(types.NewDocument(
+			"cursor", must.NotFail(types.NewDocument(
+				"firstBatch", firstBatch,
+				"id", cursorID,
 				"ns", dbName+".$cmd.aggregate",
 			)),
 			"ok", float64(1),

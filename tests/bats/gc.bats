@@ -5,10 +5,11 @@
 
 load helpers
 
-DUMBODB_PORT=37030
-
+# A fresh free port per test (see helpers.bash free_port) avoids the
+# fixed-port "bind: address already in use" flake.
 setup() {
     DUMBODB_DATA_DIR="$(mktemp -d)"
+    DUMBODB_PORT="$(free_port)"
     start_dumbodb "$DUMBODB_DATA_DIR" "$DUMBODB_PORT"
 }
 

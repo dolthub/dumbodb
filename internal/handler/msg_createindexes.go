@@ -153,6 +153,14 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	_, err = c.CreateIndexes(connCtx, &backends.CreateIndexesParams{Indexes: toCreate})
 	if err != nil {
+		// Building a unique index over data that already contains duplicate
+		// values fails like a duplicate-key write (E11000), matching MongoDB.
+		if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
+			return nil, handlererrors.NewCommandErrorMsg(
+				handlererrors.ErrDuplicateKeyInsert,
+				fmt.Sprintf("E11000 duplicate key error collection: %s.%s", dbName, collection),
+			)
+		}
 		return nil, lazyerrors.Error(err)
 	}
 

@@ -535,6 +535,10 @@ var executorWrapSkip = map[handlererrors.ErrorCode]bool{
 	handlererrors.ErrFailedToParse:          true,
 	handlererrors.ErrGroupInvalidFieldPath:  true,
 	handlererrors.ErrGroupUndefinedVariable: true,
+	// A malformed query (e.g. an invalid $jsonSchema structure) is a
+	// validation error MongoDB reports at parse time, bare, rather than
+	// wrapped in "Executor error during find command".
+	handlererrors.ErrTypeMismatch: true,
 }
 
 // handleMaxTimeMSError returns the MaxTimeMSExpired error if provided error is a result of context cancellation.

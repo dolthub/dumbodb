@@ -33,6 +33,11 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
 	host, err := os.Hostname()
 	if err != nil {
 		return nil, lazyerrors.Error(err)
@@ -76,7 +81,35 @@ func (h *Handler) MsgServerStatus(connCtx context.Context, msg *wire.OpMsg) (*wi
 		"ok", float64(1),
 	))
 
+	// Honor section include/exclude filters: {serverStatus: 1, <section>: 0}
+	// omits that section, matching MongoDB. Only the sub-document sections are
+	// excludable; the scalar top-level fields are always present.
+	for _, section := range []string{"metrics", "catalogStats"} {
+		if serverStatusSectionExcluded(document, section) {
+			res.Remove(section)
+		}
+	}
+
 	return documentOpMsg(
 		res,
 	)
+}
+
+// serverStatusSectionExcluded reports whether the serverStatus command
+// requested that section be excluded, i.e. {<section>: 0} or {<section>:
+// false}. A missing or truthy value leaves the section included.
+func serverStatusSectionExcluded(document *types.Document, section string) bool {
+	v, _ := document.Get(section)
+	switch x := v.(type) {
+	case bool:
+		return !x
+	case int32:
+		return x == 0
+	case int64:
+		return x == 0
+	case float64:
+		return x == 0
+	default:
+		return false
+	}
 }

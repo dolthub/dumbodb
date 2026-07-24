@@ -902,10 +902,69 @@ func keyPatternOf(idx backends.IndexInfo) *types.Document {
 	return kp
 }
 
+// canonicalizeParsedQuery rewrites a raw filter into MongoDB's parsedQuery
+// shape: a field mapped to a literal value becomes {field: {$eq: value}},
+// while a field already mapped to an operator document ({$gt: ...}) is left
+// unchanged. Logical operators ($and/$or/$nor) recurse into their clause
+// arrays. This matches the canonical query MongoDB reports under
+// queryPlanner.parsedQuery.
+func canonicalizeParsedQuery(filter *types.Document) *types.Document {
+	if filter == nil {
+		return types.MakeDocument(0)
+	}
+	out := types.MakeDocument(filter.Len())
+	for _, k := range filter.Keys() {
+		v, _ := filter.Get(k)
+		if strings.HasPrefix(k, "$") {
+			if arr, ok := v.(*types.Array); ok {
+				na := types.MakeArray(arr.Len())
+				for i := 0; i < arr.Len(); i++ {
+					e, _ := arr.Get(i)
+					if ed, ok := e.(*types.Document); ok {
+						na.Append(canonicalizeParsedQuery(ed))
+					} else {
+						na.Append(e)
+					}
+				}
+				out.Set(k, na)
+			} else {
+				out.Set(k, v)
+			}
+			continue
+		}
+		out.Set(k, canonicalizeFieldPredicate(v))
+	}
+	return out
+}
+
+func canonicalizeFieldPredicate(v any) any {
+	if doc, ok := v.(*types.Document); ok && isOperatorDoc(doc) {
+		return doc
+	}
+	return must.NotFail(types.NewDocument("$eq", v))
+}
+
+// isOperatorDoc reports whether every key in doc is an operator ($-prefixed),
+// which distinguishes a predicate expression ({$gt: 2}) from a literal
+// document value that equality should match against.
+func isOperatorDoc(doc *types.Document) bool {
+	if doc.Len() == 0 {
+		return false
+	}
+	for _, k := range doc.Keys() {
+		if !strings.HasPrefix(k, "$") {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams) (*backends.ExplainResult, error) {
-	parsedQuery := types.MakeDocument(0)
-	if params != nil && params.Filter != nil {
-		parsedQuery = params.Filter.DeepCopy()
+	var parsedQuery *types.Document
+	if params != nil {
+		parsedQuery = canonicalizeParsedQuery(params.Filter)
+	} else {
+		parsedQuery = types.MakeDocument(0)
 	}
 
 	var idxInfos []backends.IndexInfo
@@ -1023,6 +1082,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			"namespace", c.db.name+"."+c.name,
 			"parsedQuery", parsedQuery,
 			"winningPlan", orStage.toDoc(),
+			"rejectedPlans", types.MakeArray(0),
 		))
 		return &backends.ExplainResult{QueryPlanner: qp}, nil
 	}
@@ -1033,6 +1093,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		"namespace", c.db.name+"."+c.name,
 		"parsedQuery", parsedQuery,
 		"winningPlan", winningPlan.toDoc(),
+		"rejectedPlans", types.MakeArray(0),
 	))
 	return &backends.ExplainResult{
 		QueryPlanner: qp,
@@ -1073,6 +1134,16 @@ func buildExplainPlan(command string, params *backends.ExplainParams, picked bac
 			return &explainStage{stage: "PROJECTION_COVERED", input: leaf}
 		}
 		return &explainStage{stage: "COLLSCAN"}
+
+	case "update", "delete":
+		// MongoDB wraps the query plan in an UPDATE / DELETE stage. The
+		// inner scan follows the same index-vs-collection choice as find.
+		inner := buildFindExplainPlan(params, picked, indexPicked, sortByIndex, covered)
+		stage := "UPDATE"
+		if command == "delete" {
+			stage = "DELETE"
+		}
+		return &explainStage{stage: stage, input: inner}
 
 	default:
 		// "find" and "aggregate" (the latter via pushed-down $match) share
@@ -2536,6 +2607,16 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		return prolly.Map{}, false, false, fmt.Errorf("index: iterating primary: %w", err)
 	}
 
+	// For a unique index, detect pre-existing duplicate values while scanning
+	// so the build fails like a duplicate-key write (matching MongoDB). Uses
+	// the same byte-prefix probe as the insert/merge paths; lossy indexes have
+	// no faithful encoding, so build-time enforcement is skipped and the
+	// write path validates later (same convention as merge).
+	var seenUnique map[string][]byte
+	if idx.Unique && !idx.Lossy {
+		seenUnique = make(map[string][]byte)
+	}
+
 	for {
 		k, v, err := iter.Next(ctx)
 		if err != nil {
@@ -2561,6 +2642,13 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		rows, rowMultikey, rowLossy := indexEntriesForDoc(doc, idx)
 		multikey = multikey || rowMultikey
 		lossy = lossy || rowLossy
+
+		if seenUnique != nil && !rowLossy {
+			if err := checkUniqueBuildConflict(seenUnique, idx, doc, idBytes, rows); err != nil {
+				return prolly.Map{}, false, false, err
+			}
+		}
+
 		for _, fv := range rows {
 			if err := idxpkg.InsertEntry(ctx, mut, fv, idBytes); err != nil {
 				return prolly.Map{}, false, false, fmt.Errorf("index: inserting entry: %w", err)
@@ -2573,6 +2661,43 @@ func (c *collection) buildSecondaryIndex(ctx context.Context, state *dbState, id
 		return prolly.Map{}, false, false, fmt.Errorf("index: flushing map: %w", err)
 	}
 	return built, multikey, lossy, nil
+}
+
+// checkUniqueBuildConflict records each row's equality-probe prefix in seen
+// (prefix -> owning _id) and returns a duplicate-key error the first time a
+// prefix is claimed by a different document. Sparse indexes skip all-null
+// keys and partial indexes skip documents outside the filter, matching the
+// insert-time enforcement so a build does not reject rows a later insert
+// would accept.
+func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, doc *types.Document, idBytes []byte, rows [][]any) error {
+	if idx.MatchesPartialFilter != nil {
+		matches, err := idx.MatchesPartialFilter(doc)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return nil
+		}
+	}
+	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
+		return nil
+	}
+	for _, row := range rows {
+		prefix, _ := idxpkg.EqualityProbeBounds(row)
+		key := string(prefix)
+		owner, ok := seen[key]
+		if !ok {
+			seen[key] = append([]byte(nil), idBytes...)
+			continue
+		}
+		if !bytes.Equal(owner, idBytes) {
+			return backends.NewError(
+				backends.ErrorCodeInsertDuplicateID,
+				fmt.Errorf("duplicate key over existing data for unique index %s", idx.Name),
+			)
+		}
+	}
+	return nil
 }
 
 // scanUniqueConflict is the O(N) value-level fallback for rows with no

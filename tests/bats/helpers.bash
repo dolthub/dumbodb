@@ -20,6 +20,29 @@ port_open() {
     fi
 }
 
+# free_port
+# Echo a random TCP port that nothing is currently listening on, chosen
+# from a range BELOW the Linux ephemeral range (default 32768-60999).
+# A server port inside the ephemeral range can collide with an outbound
+# client connection that the kernel assigned the same local port to,
+# causing an intermittent "bind: address already in use" -- the cause of
+# flaky bats failures when files hardcoded ports like 37027-37030. Tests
+# should call this per run instead of hardcoding a port.
+free_port() {
+    local p
+    for _ in $(seq 1 50); do
+        # 20000-32767: above the well-known/registered-low range, below
+        # the ephemeral range.
+        p=$(( (RANDOM % 12767) + 20000 ))
+        if ! port_open 127.0.0.1 "$p"; then
+            echo "$p"
+            return 0
+        fi
+    done
+    echo "ERROR: could not find a free port" >&2
+    return 1
+}
+
 # start_dumbodb <data-dir> <port>
 # Build and start the dumbodb server, wait until it accepts connections.
 start_dumbodb() {

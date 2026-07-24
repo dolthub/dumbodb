@@ -162,3 +162,27 @@ func (r *SessionRegistry) Len() int {
 	return len(r.sessions)
 }
 
+// SessionInfo describes one cached logical session for enumeration
+// (e.g. $listLocalSessions).
+type SessionInfo struct {
+	Lsid     string
+	LastUsed time.Time
+}
+
+// Snapshot returns the lsid and last-used time of every live session in
+// the registry. Ended sessions (lastUsed==0, awaiting sweep) are omitted.
+func (r *SessionRegistry) Snapshot() []SessionInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]SessionInfo, 0, len(r.sessions))
+	for lsid, entry := range r.sessions {
+		sh := entry.shadow.Load()
+		lu := sh.LastUsed()
+		if lu.UnixNano() == 0 {
+			continue
+		}
+		out = append(out, SessionInfo{Lsid: lsid, LastUsed: lu})
+	}
+	return out
+}
+

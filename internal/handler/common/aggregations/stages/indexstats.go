@@ -38,18 +38,11 @@ func NewIndexStatsStage(stage *types.Document, ctx context.Context, c backends.C
 	res, err := c.ListIndexes(ctx, nil)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
-			// Collection with no documents  -- only the _id_ index exists.
-			res = &backends.ListIndexesResult{
-				Indexes: []backends.IndexInfo{
-					{
-						Name: backends.DefaultIndexName,
-						Key:  []backends.IndexKeyPair{{Field: "_id"}},
-					},
-				},
-			}
-		} else {
-			return nil, err
+			// A collection that does not exist has no indexes to report;
+			// $indexStats returns an empty result set, matching MongoDB.
+			return &indexStatsStage{docs: nil}, nil
 		}
+		return nil, err
 	}
 
 	now := time.Now().UTC()

@@ -380,6 +380,10 @@ const (
 
 	// ErrWindowIntegralUnitRequiresDate indicates that $integral with 'unit' requires a Date sort field.
 	ErrWindowIntegralUnitRequiresDate = ErrorCode(5423901) // Location5423901
+
+	// ErrGeoNearNotAllowedInContext indicates that $geoNear/$near/$nearSphere
+	// were used in a context that does not sort (e.g. a $match stage or count).
+	ErrGeoNearNotAllowedInContext = ErrorCode(5626500) // Location5626500
 )
 
 // ErrInfo represents additional optional error information.
