@@ -5,26 +5,8 @@
 
 load helpers
 
-# free_port returns a random high TCP port that nothing is currently
-# listening on. gc used to hardcode a fixed port, which fails with
-# "address already in use" whenever the CI runner already has that port
-# occupied -- observed as every gc test failing to bind for the whole
-# file run while the other bats files (on different fixed ports) passed.
-# A fresh port per test sidesteps fixed-port collisions and any lingering
-# socket state from a prior test.
-free_port() {
-    local p
-    for _ in $(seq 1 50); do
-        p=$(( (RANDOM % 20000) + 20000 ))
-        if ! port_open 127.0.0.1 "$p"; then
-            echo "$p"
-            return 0
-        fi
-    done
-    echo "ERROR: could not find a free port" >&2
-    return 1
-}
-
+# A fresh free port per test (see helpers.bash free_port) avoids the
+# fixed-port "bind: address already in use" flake.
 setup() {
     DUMBODB_DATA_DIR="$(mktemp -d)"
     DUMBODB_PORT="$(free_port)"

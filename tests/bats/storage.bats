@@ -4,11 +4,13 @@
 
 load helpers
 
-DUMBODB_PORT=37027
-
 setup() {
     # Create a fresh temp dir for each test.
     DUMBODB_DATA_DIR="$(mktemp -d)"
+
+    # Fresh free port per test (see helpers.bash free_port); a hardcoded
+    # port in the ephemeral range flakes with "address already in use".
+    DUMBODB_PORT="$(free_port)"
 
     # Start dumbodb with a fresh data dir.
     start_dumbodb "$DUMBODB_DATA_DIR" "$DUMBODB_PORT"
