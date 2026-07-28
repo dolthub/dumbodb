@@ -66,7 +66,6 @@ func newEmptyMap(ctx context.Context, ns tree.NodeStore) (prolly.Map, error) {
 }
 
 // openCollection opens a prolly.Map for a collection from a hash stored in the ADRM.
-// Handles both the current DTBL format and the legacy TUPM format for migration.
 func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, collHash hash.Hash) (prolly.Map, error) {
 	chunk, err := cs.Get(ctx, collHash)
 	if err != nil {
@@ -74,30 +73,20 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	}
 
 	fileID := serial.GetFileID(chunk.Data())
-	switch fileID {
-	case serial.ProllyTreeNodeFileID:
-		// Legacy TUPM format: ADRM entry points directly to prolly.Map root node.
-		node, _, err := tree.NodeFromChunk(&chunk)
-		if err != nil {
-			return prolly.Map{}, fmt.Errorf("parsing TUPM node: %w", err)
-		}
-		return prolly.NewMap(node, ns, keyDesc, valDesc), nil
-
-	case serial.TableFileID:
-		// DTBL format: read primary_index inline bytes to reconstruct the prolly.Map.
-		tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
-		if err != nil {
-			return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)
-		}
-		node, _, err := tree.NodeFromBytes(tbl.PrimaryIndexBytes())
-		if err != nil {
-			return prolly.Map{}, fmt.Errorf("parsing DTBL primary_index: %w", err)
-		}
-		return prolly.NewMap(node, ns, keyDesc, valDesc), nil
-
-	default:
-		return prolly.Map{}, fmt.Errorf("unexpected file ID %q for collection (want DTBL or TUPM)", fileID)
+	if fileID != serial.TableFileID {
+		return prolly.Map{}, fmt.Errorf("unexpected file ID %q for collection (want DTBL)", fileID)
 	}
+
+	// DTBL format: read primary_index inline bytes to reconstruct the prolly.Map.
+	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
+	if err != nil {
+		return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)
+	}
+	node, _, err := tree.NodeFromBytes(tbl.PrimaryIndexBytes())
+	if err != nil {
+		return prolly.Map{}, fmt.Errorf("parsing DTBL primary_index: %w", err)
+	}
+	return prolly.NewMap(node, ns, keyDesc, valDesc), nil
 }
 
 // buildCollectionTableSchema builds the DSCH flatbuffer for every
