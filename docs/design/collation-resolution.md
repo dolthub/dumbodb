@@ -52,7 +52,7 @@ at several scopes. All statements here were verified against MongoDB 8.0.4 (see
 |-------|---------|-----------|----------|-----------------|
 | **Database** | NO | -- | -- | Nothing. There is no DB-level default collation. Collections in one DB may each have a different collation; `dbStats` reports none. New collections default to simple regardless of DB. |
 | **Collection** | yes | `createCollection({collation})` | NO (immutable; `collMod` rejects `collation` as an unknown field) | The default comparator for every operation on the collection that does not specify its own; and the collation inherited by any index created without its own (including `_id`). |
-| **View** | yes | `createCollection/createView({viewOn, collation})` | NO | Same role as a collection default, but for a view. A view is a collection-like object with its own collation. |
+| **View** | yes, but EPHEMERAL | `createCollection/createView({viewOn, collation})` | NO | Same role as a collection default, but for a view. CAVEAT: DumboDB views work only within a running server -- the view definition (and its collation) lives in an in-memory map (`state.views`) and is NOT persisted, so it is lost on restart (same gap as workspace-alp.16). View collation is therefore gated on both view durability and the metadata catalog. |
 | **Index** | yes | `createIndex({collation})`, else inherited from collection default | fixed at create | (a) uniqueness enforcement -- a unique index enforces under ITS collation; (b) index eligibility -- an index can serve a query only if the query's effective collation equals the index's. |
 | **Operation** | yes | `collation` option on find/aggregate/count/distinct/update/delete/findAndModify | per-call | Overrides the collection/view default for that one operation; governs all string comparisons in it. Can opt *down* to simple. |
 
@@ -81,7 +81,12 @@ default is rejected with BadValue). See 3.6.
 - Operation default: `find({u:"bob"})` with no op collation in an en/2
   collection matched "BOB"; the same find with `collation:{locale:"simple"}`
   matched nothing.
-- View: `listCollections` reported the view's fully-resolved collation.
+- View: supported in-session (create/query with pipeline applied, writes
+  rejected, `listCollections type:"view"`, parity-tested Full) and
+  `listCollections` reports the view's fully-resolved collation -- BUT DumboDB
+  stores the view definition only in memory (`state.views`, no persistence, no
+  hydration on open), so views do not survive a restart. Verified live 8.0.4 +
+  DumboDB source (internal/backends/dolt/database.go:256).
 - `_id`: `listIndexes` reported `_id_` as en/2; inserting `_id:"a"` then
   `_id:"A"` in an en/2 collection -> duplicate-key error; `createIndex` on `_id`
   with a non-default collation -> BadValue "The _id index must have the same
@@ -344,10 +349,15 @@ E4-E9 exercise the collation fields the current collator does not honor
 | H2 | op collation {locale:"simple"} | binary | Full |
 | H3 | collection default {locale:"simple"} | binary default (same as unset) | XFail (needs default) |
 
-#### I. View collation
+#### I. View collation (gated on view durability -- views are in-memory today)
+
+Note: views currently do not persist across restart (in-memory `state.views`).
+I0 pins that gap; I1-I4 are in-session behavior and additionally need the
+metadata catalog for their collation to be durable.
 
 | ID | Setup | Operation | Expected (verify) | Support |
 |----|-------|-----------|-------------------|---------|
+| I0 | createView; restart server | listCollections | view still present (durability) | XFail (in-memory today) |
 | I1 | createCollection view {viewOn, collation D} | listCollections | view reports resolved D in options.collation | XFail |
 | I2 | view with collation D over a simple source; source has "Alice" | find on the view {u:"alice"} no op collation | matches (view default D applies) | XFail |
 | I3 | view with collation D | find on the view with op collation simple | binary (op overrides view default) | XFail |
