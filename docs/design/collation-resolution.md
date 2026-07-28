@@ -10,10 +10,13 @@ persistence)
 
 Define exactly how DumboDB decides *which* collation governs a given string
 comparison, so that behavior matches MongoDB 8.0. The hard part is not the
-comparison itself (we already have a locale-aware collator in
-`internal/collation`); it is **resolution**: given an operation, a collection,
-and an index, which collation actually applies, and when may an index serve a
-query.
+comparison itself (a locale-aware collator is a separable concern -- an earlier
+`internal/collation` implementation was reset, see 4.1); it is **resolution**:
+across the scopes MongoDB actually has -- operation, collection/view default,
+and index, but deliberately NOT database (2.1) -- which collation applies to a
+given operation, which one an index carries, and when an index may serve a
+query. Section 2 enumerates every scope and what it affects; this doc is not
+index-specific.
 
 This doc leads with the **parity test matrix** (section 4). The matrix is the
 contract. MongoDB 8.0 is the reference platform; we do not hardcode expected
@@ -37,40 +40,79 @@ libicudata`); it currently binds only ICU's regex API, not its collation API
 (`ucol`). This opens a real option for the collator, discussed in 5.1. Which
 comparator we use does not change the resolution rules below.
 
-## 2. The collation model (recap)
+## 2. The collation model (scopes)
 
-A collation is a rule set for comparing strings. It can be attached at three
-scopes, most-specific first:
+A collation is a rule set for comparing strings. In MongoDB it can be attached
+at several scopes. All statements here were verified against MongoDB 8.0.4 (see
+2.2); we do not assume, we probe.
 
-1. **Operation** -- the `collation` option on find/aggregate/count/distinct/
-   update/delete/findAndModify.
-2. **Index** -- each index stores its own collation.
-3. **Collection default** -- set once at `createCollection`, immutable after.
+### 2.1 The scopes, and what each affects
+
+| Scope | Exists? | Set where | Mutable? | What it affects |
+|-------|---------|-----------|----------|-----------------|
+| **Database** | NO | -- | -- | Nothing. There is no DB-level default collation. Collections in one DB may each have a different collation; `dbStats` reports none. New collections default to simple regardless of DB. |
+| **Collection** | yes | `createCollection({collation})` | NO (immutable; `collMod` rejects `collation` as an unknown field) | The default comparator for every operation on the collection that does not specify its own; and the collation inherited by any index created without its own (including `_id`). |
+| **View** | yes | `createCollection/createView({viewOn, collation})` | NO | Same role as a collection default, but for a view. A view is a collection-like object with its own collation. |
+| **Index** | yes | `createIndex({collation})`, else inherited from collection default | fixed at create | (a) uniqueness enforcement -- a unique index enforces under ITS collation; (b) index eligibility -- an index can serve a query only if the query's effective collation equals the index's. |
+| **Operation** | yes | `collation` option on find/aggregate/count/distinct/update/delete/findAndModify | per-call | Overrides the collection/view default for that one operation; governs all string comparisons in it. Can opt *down* to simple. |
 
 `locale: "simple"` (or absent) means binary comparison.
 
-Status in DumboDB today:
+So the layering is: **operation > collection-or-view default > simple**. There is
+no database rung. Indexes are not a precedence rung for *matching*; they are a
+constraint (uniqueness) and an optimization (eligibility) that must line up with
+whatever collation the query resolves to.
 
-- Operation scope: implemented (this session) for matching + sort across all
-  the commands above.
-- Index scope: stored and echoed; enforced for uniqueness.
-- Collection default scope: NOT implemented; blocked on metadata persistence
-  (workspace-alp.16). This is the main missing piece and the reason resolution
-  needs a written spec.
+The `_id` index is a special case, corrected from an earlier wrong assumption:
+it is NOT always simple. It inherits the collection default like any other
+index, its uniqueness is enforced under that collation (so in a strength-2
+collection `_id` "a" and "A" collide), and it may not be given a collation that
+differs from the collection default (`createIndex({_id:1},{collation:...})` !=
+default is rejected with BadValue). See 3.6.
+
+### 2.2 Reference-verified facts (MongoDB 8.0.4)
+
+- DB level: `dbStats` has no collation; two collections in one DB held en/2 and
+  en/3 simultaneously -> collation is per-collection, not per-db.
+- Collection immutable: `collMod {collation:...}` -> `IDLUnknownField` ("BSON
+  field 'collMod.collation' is an unknown field").
+- Index inheritance: an index created with no collation in an en/2 collection
+  reported en/2; an explicit en/3 index kept en/3.
+- Operation default: `find({u:"bob"})` with no op collation in an en/2
+  collection matched "BOB"; the same find with `collation:{locale:"simple"}`
+  matched nothing.
+- View: `listCollections` reported the view's fully-resolved collation.
+- `_id`: `listIndexes` reported `_id_` as en/2; inserting `_id:"a"` then
+  `_id:"A"` in an en/2 collection -> duplicate-key error; `createIndex` on `_id`
+  with a non-default collation -> BadValue "The _id index must have the same
+  collation as the collection".
+
+### 2.3 Status in DumboDB today (all reset; to build)
+
+- Database scope: nothing to do (does not exist).
+- Collection + View default scope: NOT implemented; blocked on collection-
+  metadata persistence (workspace-alp.16). This is the keystone.
+- Index scope: prior WIP stored/echoed an explicit index collation and enforced
+  uniqueness, but had no inheritance and a raw (non-normalized) identity check;
+  reset. To rebuild on top of resolution.
+- Operation scope: prior WIP wired matching+sort; reset. To rebuild once
+  resolution consults the collection/view default.
 
 ## 3. Resolution and precedence
 
 ### 3.1 Effective collation of an operation
 
 ```
-effective(op, coll):
-    if op.collation is set:      return normalize(op.collation)
-    if coll.defaultCollation set: return coll.defaultCollation
+effective(op, target):        # target is a collection or a view
+    if op.collation is set:        return normalize(op.collation)
+    if target.defaultCollation set: return target.defaultCollation
     return SIMPLE
 ```
 
-`normalize` fills MongoDB's defaults and maps `{locale:"simple"}` to SIMPLE
-(no collation). SIMPLE means binary comparison; `Comparator()` returns nil.
+There is no database term -- resolution stops at the collection/view default.
+`target.defaultCollation` is the collection's (or view's) collation. `normalize`
+fills MongoDB's defaults and maps `{locale:"simple"}` to SIMPLE (no collation).
+SIMPLE means binary comparison; `Comparator()` returns nil.
 
 Note the override direction: an explicit `op.collation: {locale:"simple"}` on a
 collection whose default is non-simple forces binary for that operation. So
@@ -130,29 +172,32 @@ rejects inserting "A@x.com" when "a@x.com" exists, even for an insert that
 carries no collation. Implemented today via the value-level scan path folding
 through the index's collator.
 
-### 3.6 The `_id` exception
+### 3.6 The `_id` index (verified; earlier assumption was wrong)
 
-MongoDB special-cases `_id`:
+`_id` is NOT special-cased to simple. Verified against MongoDB 8.0.4:
 
-- The `_id` index is ALWAYS simple (binary); it cannot inherit a non-simple
-  collection default and cannot be given a non-simple collation
-  (createIndex/creation is rejected).
-- Because the `_id` index is simple, it cannot serve an `_id` query that runs
-  under a non-simple collation; such a query scans.
-- **But** `_id` *value comparison in a query* still uses the effective operation
-  collation. So in a collated collection you can have `_id: "a"` and `_id: "A"`
-  coexisting (uniqueness is on the simple `_id` index), while `find({_id:"a"})`
-  under the collection collation matches both.
+- The `_id` index **inherits the collection default collation** like any other
+  index. `listIndexes` reports `_id_` with the collection collation (en/2 in the
+  probe), not simple.
+- `_id` **uniqueness is enforced under that collation**. In a strength-2
+  collection, inserting `_id:"a"` then `_id:"A"` fails with duplicate-key (11000).
+  In a simple collection they coexist.
+- The `_id` index **may not be given a collation different from the collection
+  default**: `createIndex({_id:1}, {collation: X})` with X != default is rejected
+  with `BadValue` "The _id index must have the same collation as the collection."
+  (An explicit collation equal to the default, or none at all, is fine.)
 
-These interactions are subtle and are exactly the cases to pin against the
-reference platform (section 4, dimension D). Do not assume the above is precise
-until the harness confirms it.
+Net rule: `_id`'s collation is *pinned to* the collection default -- it always
+equals it, and cannot diverge. This is the opposite of "always simple." Query
+matching on `_id` therefore uses the effective collation like any field.
+(section 4, dimension D pins each of these.)
 
 ### 3.7 Immutability
 
-`createCollection` collation is set-once. `collMod` cannot change it. Renaming a
-collection preserves it. (Verify the exact MongoDB error/no-op shape -- section
-4, dimension F.)
+`createCollection` collation is set-once. `collMod` cannot change it -- MongoDB
+does not even recognize a `collation` field on `collMod` (`IDLUnknownField`).
+Renaming a collection preserves it. Views likewise: their collation is fixed at
+creation.
 
 ### 3.8 What resolution feeds
 
@@ -204,6 +249,14 @@ to-be-built.
 
 ### 4.2 New cases to add
 
+#### DB. Database scope (prove it does not exist)
+
+| ID | Setup | Operation | Expected (verified 8.0.4) | Support |
+|----|-------|-----------|---------------------------|---------|
+| DB1 | fresh db | dbStats | no `collation` field present | Full |
+| DB2 | one db: createCollection c1{en,2}, c2{en,3} | listCollections | c1 and c2 report their own distinct collations (no db-level coupling) | XFail (needs collection default) |
+| DB3 | db with default-collated collection; create a second collection with no collation | listCollections | second collection is simple (no inheritance from a "db default") | XFail |
+
 #### A. Collection default + inheritance (blocked on alp.16/.1)
 
 | ID | Setup | Operation | Expected (verify) | Support |
@@ -233,14 +286,15 @@ to-be-built.
 | C2 | default D, index D | find op collation X (!=D) | matches under X, NOT index-served (scan) | XFail |
 | C3 | default D | find op collation == D | index-served | XFail |
 
-#### D. The _id exception (pin hard against reference)
+#### D. The _id index (verified semantics -- pin all four)
 
-| ID | Setup | Operation | Expected (verify) | Support |
-|----|-------|-----------|-------------------|---------|
-| D1 | createCollection D | listIndexes | _id_ index collation is simple, NOT D | XFail |
-| D2 | any collection | createIndex on {_id:1} with collation | rejected; assert error code | Full(?) |
-| D3 | createCollection D; insert _id "a" and _id "A" | both inserts | both succeed (uniqueness on simple _id index) (?) | XFail |
-| D4 | from D3 | find({_id:"a"}) no op collation | matches both "a" and "A" (?) | XFail |
+| ID | Setup | Operation | Expected (verified 8.0.4) | Support |
+|----|-------|-----------|---------------------------|---------|
+| D1 | createCollection D(en,2) | listIndexes | `_id_` collation == resolved D (NOT simple) | XFail |
+| D2 | createCollection D(en,2); insert _id "a" | insert _id "A" | duplicate-key error 11000 (uniqueness under D) | XFail |
+| D3 | simple collection; insert _id "a" | insert _id "A" | both coexist (binary _id) | Full |
+| D4 | createCollection D(en,2) | createIndex {_id:1} collation en,3 | BadValue "_id index must have the same collation as the collection" | XFail |
+| D5 | createCollection D(en,2) | createIndex {_id:1} collation == D (or none) | accepted / idempotent | XFail |
 
 #### E. Strength / option semantics (value-level; lean entirely on reference)
 
@@ -265,7 +319,7 @@ E4-E9 exercise the collation fields the current collator does not honor
 
 | ID | Case | Expected (verify) | Support |
 |----|------|-------------------|---------|
-| F1 | collMod attempt to change collection collation | error / no-op (match exact shape) | XFail |
+| F1 | collMod attempt to change collection collation | IDLUnknownField (collMod has no `collation` field) | XFail |
 | F2 | rename collection with default D | default preserved | XFail |
 | F3 | createCollection with invalid locale | error; assert code | Full(?) |
 | F4 | createCollection with unknown collation field | error; assert code | Full(?) |
@@ -290,6 +344,15 @@ E4-E9 exercise the collation fields the current collator does not honor
 | H2 | op collation {locale:"simple"} | binary | Full |
 | H3 | collection default {locale:"simple"} | binary default (same as unset) | XFail (needs default) |
 
+#### I. View collation
+
+| ID | Setup | Operation | Expected (verify) | Support |
+|----|-------|-----------|-------------------|---------|
+| I1 | createCollection view {viewOn, collation D} | listCollections | view reports resolved D in options.collation | XFail |
+| I2 | view with collation D over a simple source; source has "Alice" | find on the view {u:"alice"} no op collation | matches (view default D applies) | XFail |
+| I3 | view with collation D | find on the view with op collation simple | binary (op overrides view default) | XFail |
+| I4 | view with collation D | aggregate on the view, $match string | uses D | XFail |
+
 ## 5. Open questions
 
 - O1: Where does the collection default live? (alp.16) Recommended: a persisted
@@ -302,7 +365,9 @@ E4-E9 exercise the collation fields the current collator does not honor
   snapshot at createIndex.
 - O3: Do we implement collation-keyed indexes for collated reads (alp.15), or
   keep the correct-but-scan behavior and document the perf gap?
-- O4: `_id` semantics (dimension D) -- confirm against reference before coding.
+- O4: RESOLVED (2026-07-28, verified vs 8.0.4): `_id` inherits and is pinned to
+  the collection default collation; uniqueness enforced under it; may not differ
+  from the collection default. No database-level collation exists. See 2.2, 3.6.
 - O5: Is `version` part of index-eligibility identity? Assume no; verify.
 - O6: Collated collection + `_id` string values: uniqueness vs query-match
   behavior (D3/D4) -- confirm.
