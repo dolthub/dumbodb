@@ -66,7 +66,7 @@ Gaps (code-confirmed; see anchors):
 |---|-----|----------|
 | G1 | RESOLVED (workspace-z0i.1) -- view def is now a durable `BlobFileID` entry in the collections AddressMap (`view_storage.go`); `state.views` removed | was: `database.go:256` set `state.views` then returned before `updateAddressMap` |
 | G2 | **`distinct` ignores views** -- queries the empty stored name | `msg_distinct.go` has no `IsView` branch |
-| G3 | **No nested views** -- source fetched as a base collection | `view_pipeline.go:91` `db.Collection(viewOn).Query`; no view resolution, no cycle/depth check |
+| G3 | RESOLVED (workspace-z0i.2) -- read path resolves the view source chain (`resolveViewChain`, view_pipeline.go) with cycle + depth-20 checks; create validates acyclicity | was: source fetched as a base collection, no resolution |
 | G4 | **`collMod` cannot redefine a view** | `viewOn` is in collMod's ignored-fields list |
 | G5 | **`rename` loses a view** | `RenameCollection` does not move `state.views`; views absent from the AddressMap |
 | G6 | **`$lookup` in a view loads the whole foreign collection** into memory; foreign-is-a-view unresolved | `view_pipeline.go:57` fetcher `ConsumeValues` |
@@ -280,9 +280,9 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V2 | insert/update/delete on view | CommandNotSupportedOnView | Full (have) |
 | V3 | listCollections | type:"view", options{viewOn,pipeline,collation} | Full (have) |
 | V4 | distinct on a view | works (matches base+pipeline) | XFail (G2) |
-| V5 | nested view (v2 on v1 on base) | resolves through chain | XFail (G3) |
-| V6 | view cycle | error (View cycle detected) | XFail (G3) |
-| V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | XFail (G3) |
+| V5 | nested view (v2 on v1 on base) | resolves through chain | Full (workspace-z0i.2) |
+| V6 | view cycle | error (GraphContainsCycle) | XFail (code/codeName match; MongoDB's message spells out the full namespace chain) |
+| V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | Full (workspace-z0i.2) |
 | V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | XFail (G4) |
 | V9 | rename a view | renamed view still resolves | XFail (G5) |
 | V10 | create view named as existing collection | NamespaceExists | XFail (same code/codeName, message differs today) |
@@ -377,7 +377,11 @@ metadata, validators, collection default collation).
    create/drop/list/read durability: a view is a `BlobFileID` blob in the
    collections AddressMap, classified on read by chunk type; `state.views`
    removed. Per-collection metadata carrier (`__dumbo_metadata__`) still pending.
-3. **Nesting + cycles + depth** (4.2): flips V5-V7.
+3. **Nesting + cycles + depth** (4.2): flips V5-V7. DONE (workspace-z0i.2):
+   `resolveViewChain` flattens the source chain on the read path (find/count/
+   aggregate) with cycle (GraphContainsCycle) and depth-20 (ViewDepthLimitExceeded)
+   checks; create-time validation rejects cyclic/too-deep view definitions. V6
+   stays XFail only on MongoDB's exact cycle-message text.
 4. **Command coverage** (4.3): distinct etc.; flips V4.
 5. **Redefine + rename + collisions** (4.4/4.5): flips V8-V11.
 6. **View collation** (4.6) once the catalog exists; flips V14.

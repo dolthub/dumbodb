@@ -35,6 +35,9 @@ const (
 	// ErrBadValue indicates wrong input.
 	ErrBadValue = ErrorCode(2) // BadValue
 
+	// ErrGraphContainsCycle indicates a view definition forms a cycle.
+	ErrGraphContainsCycle = ErrorCode(5) // GraphContainsCycle
+
 	// ErrFailedToParse indicates user input parsing failure.
 	ErrFailedToParse = ErrorCode(9) // FailedToParse
 
@@ -111,6 +114,10 @@ const (
 	ErrDocumentValidationFailure = ErrorCode(121) // DocumentValidationFailure
 
 	ErrInvalidIndexSpecificationOption = ErrorCode(197) // InvalidIndexSpecificationOption
+
+	// ErrViewDepthLimitExceeded indicates a view resolves through more than the
+	// maximum nesting depth (20).
+	ErrViewDepthLimitExceeded = ErrorCode(165) // ViewDepthLimitExceeded
 
 	// ErrCommandNotSupportedOnView indicates that the command does not support views.
 	ErrCommandNotSupportedOnView = ErrorCode(166) // CommandNotSupportedOnView

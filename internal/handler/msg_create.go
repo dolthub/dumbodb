@@ -278,6 +278,14 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	// A view whose source chain cycles or nests too deep is rejected at create
+	// time, as MongoDB does (it validates the view graph on creation).
+	if params.ViewOn != "" {
+		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
+			return nil, verr
+		}
+	}
+
 	err = db.CreateCollection(connCtx, &params)
 
 	switch {
@@ -331,4 +339,3 @@ func invalidDatabaseNameMsg(dbName, collectionName string) string {
 
 	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
 }
-
