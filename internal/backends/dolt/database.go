@@ -161,14 +161,33 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 
 	var colls []backends.CollectionInfo
 
-	// Include regular collections from the address map.
-	if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
+	// Each collections-AddressMap entry is either a collection (DTBL chunk) or
+	// a view (BlobFileID metadata chunk); classify by chunk type and surface
+	// views with their definition.
+	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
 		if params != nil && params.Name != "" && name != params.Name {
 			return nil
 		}
 
-		collUUID := state.uuids[name]
-		ci := backends.CollectionInfo{Name: name, UUID: collUUID}
+		isView, err := isViewEntry(ctx, state.cs, h)
+		if err != nil {
+			return err
+		}
+		if isView {
+			vm, err := readViewChunk(ctx, state.ns, h)
+			if err != nil {
+				return err
+			}
+			colls = append(colls, backends.CollectionInfo{
+				Name:         name,
+				IsView:       true,
+				ViewOn:       vm.ViewOn,
+				ViewPipeline: vm.Pipeline,
+			})
+			return nil
+		}
+
+		ci := backends.CollectionInfo{Name: name, UUID: state.uuids[name]}
 		if v, ok := state.validators[name]; ok {
 			ci.Validator = v.Validator
 			ci.ValidationLevel = v.ValidationLevel
@@ -182,22 +201,6 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		return nil
 	}); err != nil {
 		return nil, err
-	}
-
-	// Include views.
-	for name, v := range state.views {
-		if params != nil && params.Name != "" && name != params.Name {
-			continue
-		}
-		collUUID := state.uuids[name]
-		ci := backends.CollectionInfo{
-			Name:         name,
-			UUID:         collUUID,
-			IsView:       true,
-			ViewOn:       v.ViewOn,
-			ViewPipeline: v.Pipeline,
-		}
-		colls = append(colls, ci)
 	}
 
 	// Include time series collections (already in the address map, but add TS metadata).
@@ -230,13 +233,8 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// Check if already exists as a view.
-	if _, isView := state.views[params.Name]; isView {
-		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
-			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
-	}
-
-	// Check if already exists as a regular collection.
+	// A view and a collection share the collections AddressMap namespace, so a
+	// single existence check below covers a name already taken by either.
 	branchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
 		return err
@@ -251,16 +249,20 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
 	}
 
-	// If viewOn is set, this is a view  -- store metadata only, no prolly map.
+	// If viewOn is set, this is a view: persist a self-describing metadata blob
+	// under the view name in the collections AddressMap (no prolly map). This is
+	// what makes views durable, branch-scoped, and versioned like collections.
 	if params.ViewOn != "" {
-		state.views[params.Name] = &viewMeta{
+		viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
 			ViewOn:   params.ViewOn,
 			Pipeline: params.ViewPipeline,
+		})
+		if err != nil {
+			return err
 		}
-		// Generate a UUID for the view.
-		collUUID := uuid.New()
-		state.uuids[params.Name] = collUUID.String()
-		return nil
+		return state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create view %s", params.Name), func(ed prolly.AddressMapEditor) error {
+			return ed.Add(ctx, params.Name, viewHash)
+		})
 	}
 
 	// Create an empty prolly map for this collection.
@@ -330,13 +332,8 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// Check if it's a view.
-	if _, isView := state.views[params.Name]; isView {
-		delete(state.views, params.Name)
-		delete(state.uuids, params.Name)
-		return nil
-	}
-
+	// A view lives in the collections AddressMap like a collection, so the
+	// generic existence check and AddressMap delete below drop it uniformly.
 	dropBranchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
 		return err
@@ -530,6 +527,14 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 
 	if err := am.IterAll(ctx, func(_ string, collHash hash.Hash) error {
 		if collHash.IsEmpty() {
+			return nil
+		}
+
+		isView, err := isViewEntry(ctx, state.cs, collHash)
+		if err != nil {
+			return err
+		}
+		if isView {
 			return nil
 		}
 

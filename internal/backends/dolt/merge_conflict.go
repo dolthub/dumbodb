@@ -50,11 +50,11 @@ import (
 // originalMsg holds the original commit message of the cherry-picked commit for
 // the default annotation.
 type mergeInProgress struct {
-	fromBranch  string
-	intoBranch  string
-	premergeAM  prolly.AddressMap // ours branch AM before the operation started (used to abort)
-	fromHash    hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)
-	intoHash    hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
+	fromBranch string
+	intoBranch string
+	premergeAM prolly.AddressMap // ours branch AM before the operation started (used to abort)
+	fromHash   hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)
+	intoHash   hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
 	// conflicts: collection name -> ordered list of conflict entries.
 	// Entries are never removed; resolved ones have resolved==true.
 	conflicts map[string][]*conflictEntry
@@ -130,7 +130,7 @@ func (m *mergeInProgress) summaries() []backends.ConflictSummary {
 // The raw key and value tuples are stored as byte slices so they can be decoded lazily on demand.
 type conflictEntry struct {
 	id     string
-	typ    string // "documentEdit" (default) or "uniqueKeyCollision"
+	typ    string    // "documentEdit" (default) or "uniqueKeyCollision"
 	rawKey val.Tuple // encoded _id key bytes (the document identity for a documentEdit)
 
 	// Per-side key overrides. For a documentEdit all three coincide with
@@ -1162,10 +1162,20 @@ func captureConflictsForCollection(
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
 func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, error) {
+	// View entries are metadata blobs, not document maps. Merging view
+	// definitions (and view merge conflicts) is not yet implemented
+	// (workspace-z0i.6); skip them here so the document-level merge never opens
+	// a view blob as a collection. Into's view entries are left untouched.
 	allNames := make(map[string]struct{})
 	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
-		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
-			allNames[name] = struct{}{}
+		if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
+			isView, err := isViewEntry(ctx, state.cs, h)
+			if err != nil {
+				return err
+			}
+			if !isView {
+				allNames[name] = struct{}{}
+			}
 			return nil
 		}); err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("iterating collections AM: %w", err)

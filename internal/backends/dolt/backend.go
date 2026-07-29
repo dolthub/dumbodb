@@ -116,10 +116,13 @@ type cappedCollectionMeta struct {
 	CappedDocuments int64
 }
 
-// viewMeta holds collection view definition (in-memory only).
+// viewMeta holds a view definition. It is persisted as a self-describing blob
+// entry in the collections AddressMap (see view_storage.go), so views survive
+// restart and participate in commit/branch/merge like collections.
 type viewMeta struct {
-	ViewOn   string
-	Pipeline *types.Array
+	ViewOn    string
+	Pipeline  *types.Array
+	Collation *types.Document // reserved for view default collation; nil today
 }
 
 // timeSeriesMeta holds time series collection configuration (in-memory only).
@@ -157,7 +160,6 @@ type dbState struct {
 	validators     map[string]*collectionValidator
 	capped         map[string]*cappedCollectionMeta
 	insertionOrder map[string][]any
-	views          map[string]*viewMeta
 	timeSeries     map[string]*timeSeriesMeta
 
 	collSchemaHash hash.Hash
@@ -1021,7 +1023,6 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 		validators:     make(map[string]*collectionValidator),
 		capped:         make(map[string]*cappedCollectionMeta),
 		insertionOrder: make(map[string][]any),
-		views:          make(map[string]*viewMeta),
 		timeSeries:     make(map[string]*timeSeriesMeta),
 	}
 
@@ -2425,7 +2426,7 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				}
 			}
 
-			names, nameErr := unionCollectionNames(ctx, parentAM, commitAM)
+			names, nameErr := unionCollectionNames(ctx, db.cs, parentAM, commitAM)
 			if nameErr != nil {
 				return nil, fmt.Errorf("DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
 			}
@@ -2683,7 +2684,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("DumboDBStatus: reading working AM for branch %q: %w", branch, err)
 	}
 
-	names, err := unionCollectionNames(ctx, headAM, workingAM)
+	names, err := unionCollectionNames(ctx, state.cs, headAM, workingAM)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBStatus: collecting collection names for db %q: %w", params.DBName, err)
 	}
@@ -2946,7 +2947,7 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		}
 	}
 
-	names, err := unionCollectionNames(ctx, aAM, bAM)
+	names, err := unionCollectionNames(ctx, state.cs, aAM, bAM)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBDiff: collecting collection names for db %q: %w", params.DBName, err)
 	}

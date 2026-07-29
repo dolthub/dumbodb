@@ -24,10 +24,11 @@ import (
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
-	"github.com/dolthub/dolt/go/store/val"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -107,7 +108,6 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 	}
 	return prolly.AddressMap{}, fmt.Errorf("rootish %q: tag has no commit address", rootish)
 }
-
 
 // resolveRootishToCommitHash resolves any rootish expression to the Dolt commit hash
 // it points to. Resolution order mirrors amFromRootish:
@@ -329,20 +329,29 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 // no public diff primitive (only IterAll/Get), so a DiffMaps-style walk is not
 // available here. The document-level diffs that do scale with collection size
 // use forEachCollectionChange (collection_diff.go).
-func unionCollectionNames(ctx context.Context, aAM, bAM prolly.AddressMap) ([]string, error) {
+func unionCollectionNames(ctx context.Context, cs *nbs.GenerationalNBS, aAM, bAM prolly.AddressMap) ([]string, error) {
 	seen := make(map[string]struct{})
 
-	if err := aAM.IterAll(ctx, func(name string, _ hash.Hash) error {
-		seen[name] = struct{}{}
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("iterating a AM: %w", err)
+	// View entries are metadata blobs, not document maps. They are not yet
+	// surfaced in version-control diff/status (workspace-z0i.7); skip them so
+	// the collection walk never opens a view blob as a document map.
+	collect := func(am prolly.AddressMap) error {
+		return am.IterAll(ctx, func(name string, h hash.Hash) error {
+			isView, err := isViewEntry(ctx, cs, h)
+			if err != nil {
+				return err
+			}
+			if !isView {
+				seen[name] = struct{}{}
+			}
+			return nil
+		})
 	}
 
-	if err := bAM.IterAll(ctx, func(name string, _ hash.Hash) error {
-		seen[name] = struct{}{}
-		return nil
-	}); err != nil {
+	if err := collect(aAM); err != nil {
+		return nil, fmt.Errorf("iterating a AM: %w", err)
+	}
+	if err := collect(bAM); err != nil {
 		return nil, fmt.Errorf("iterating b AM: %w", err)
 	}
 

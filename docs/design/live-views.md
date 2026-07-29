@@ -64,7 +64,7 @@ Gaps (code-confirmed; see anchors):
 
 | # | Gap | Evidence |
 |---|-----|----------|
-| G1 | **Not durable** -- view def is in-memory only, lost on restart | `database.go:256` sets `state.views` then returns before `updateAddressMap`; `getOrOpenDB` inits `state.views` empty, no hydration |
+| G1 | RESOLVED (workspace-z0i.1) -- view def is now a durable `BlobFileID` entry in the collections AddressMap (`view_storage.go`); `state.views` removed | was: `database.go:256` set `state.views` then returned before `updateAddressMap` |
 | G2 | **`distinct` ignores views** -- queries the empty stored name | `msg_distinct.go` has no `IsView` branch |
 | G3 | **No nested views** -- source fetched as a base collection | `view_pipeline.go:91` `db.Collection(viewOn).Query`; no view resolution, no cycle/depth check |
 | G4 | **`collMod` cannot redefine a view** | `viewOn` is in collMod's ignored-fields list |
@@ -287,7 +287,7 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V9 | rename a view | renamed view still resolves | XFail (G5) |
 | V10 | create view named as existing collection | NamespaceExists | XFail (same code/codeName, message differs today) |
 | V11 | create collection named as existing view | NamespaceExists | XFail (DumboDB allows it today, no error) |
-| V12 | durability: create view, restart servers (same data dir), read | view still resolves | XFail (G1; needs the 5.2 restartable-pair primitive) |
+| V12 | durability: create view, restart servers (same data dir), read | view still resolves | Full (catalog persists views; workspace-z0i.1) |
 | V13 | view with $lookup pipeline | correct join | Full (have) |
 | V14 | view default collation applied to a no-collation read | collation semantics (dimension I) | XFail |
 
@@ -373,7 +373,10 @@ metadata, validators, collection default collation).
    V12 (durability) is a real `PairTest`. Version-control tests (5.1) live in the
    dumbodb repo.
 2. **Catalog** (4.1): durable, versioned per-branch storage of view defs; flips
-   V12 to Full. Coordinate with workspace-alp.16.
+   V12 to Full. Coordinate with workspace-alp.16. DONE (workspace-z0i.1) for
+   create/drop/list/read durability: a view is a `BlobFileID` blob in the
+   collections AddressMap, classified on read by chunk type; `state.views`
+   removed. Per-collection metadata carrier (`__dumbo_metadata__`) still pending.
 3. **Nesting + cycles + depth** (4.2): flips V5-V7.
 4. **Command coverage** (4.3): distinct etc.; flips V4.
 5. **Redefine + rename + collisions** (4.4/4.5): flips V8-V11.
