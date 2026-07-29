@@ -120,3 +120,103 @@ func TestViewStatusAndDiff(t *testing.T) {
 		t.Fatalf("deleted view diff wrong: %+v", vs)
 	}
 }
+
+// TestViewMergeClean verifies a view created on a branch merges cleanly into a
+// branch that did not touch it (workspace-z0i.6, non-conflicting case).
+func TestViewMergeClean(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "vmdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	insertDocForTest(t, ctx, b, "vmdb", 1)
+	commitBranch(t, b, "vmdb", "main", "seed base")
+	branchFrom(t, b, "vmdb", "main", "feature")
+
+	featDB, err := b.Database("vmdb@feature")
+	if err != nil {
+		t.Fatalf("Database(feature): %v", err)
+	}
+	if err := featDB.CreateCollection(ctx, &backends.CreateCollectionParams{
+		Name: "fv", ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "active"),
+	}); err != nil {
+		t.Fatalf("CreateCollection(view on feature): %v", err)
+	}
+	commitBranch(t, b, "vmdb", "feature", "add view fv")
+
+	if _, err := b.DumboDBMerge(ctx, &backends.MergeParams{
+		DBName: "vmdb", Into: "main", From: "feature",
+		Message: "merge feature", Author: "t <t@e>",
+	}); err != nil {
+		t.Fatalf("DumboDBMerge: %v", err)
+	}
+
+	mainDB, err := b.Database("vmdb")
+	if err != nil {
+		t.Fatalf("Database(main): %v", err)
+	}
+	res, err := mainDB.ListCollections(ctx, &backends.ListCollectionsParams{Name: "fv"})
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(res.Collections) != 1 || !res.Collections[0].IsView || res.Collections[0].ViewOn != "col" {
+		t.Fatalf("merged view not present on main: %+v", res.Collections)
+	}
+}
+
+// TestViewMergeConflict verifies that a view redefined divergently on both
+// branches fails the merge loudly rather than silently picking a side
+// (workspace-z0i.6; interactive resolution is a follow-up).
+func TestViewMergeConflict(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "vcdb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	insertDocForTest(t, ctx, b, "vcdb", 1)
+
+	mainDB, err := b.Database("vcdb")
+	if err != nil {
+		t.Fatalf("Database(main): %v", err)
+	}
+	if err := mainDB.CreateCollection(ctx, &backends.CreateCollectionParams{
+		Name: "cv", ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "active"),
+	}); err != nil {
+		t.Fatalf("CreateCollection(view): %v", err)
+	}
+	commitBranch(t, b, "vcdb", "main", "seed base + view cv")
+	branchFrom(t, b, "vcdb", "main", "feature")
+
+	// Redefine cv differently on each branch.
+	featDB, err := b.Database("vcdb@feature")
+	if err != nil {
+		t.Fatalf("Database(feature): %v", err)
+	}
+	if err := featDB.CollMod(ctx, &backends.CollModParams{
+		Name: "cv", SetView: true, ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "inactive"),
+	}); err != nil {
+		t.Fatalf("CollMod(feature): %v", err)
+	}
+	commitBranch(t, b, "vcdb", "feature", "redefine cv on feature")
+
+	if err := mainDB.CollMod(ctx, &backends.CollModParams{
+		Name: "cv", SetView: true, ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "pending"),
+	}); err != nil {
+		t.Fatalf("CollMod(main): %v", err)
+	}
+	commitBranch(t, b, "vcdb", "main", "redefine cv on main")
+
+	_, err = b.DumboDBMerge(ctx, &backends.MergeParams{
+		DBName: "vcdb", Into: "main", From: "feature",
+		Message: "merge feature", Author: "t <t@e>",
+	})
+	if err == nil {
+		t.Fatal("DumboDBMerge: expected a view merge conflict, got nil")
+	}
+}

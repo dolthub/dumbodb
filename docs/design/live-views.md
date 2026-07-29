@@ -243,6 +243,12 @@ collections AddressMap):
 - branching a DB carries its views; merging two branches merges the AddressMap,
   so a view added on one side merges in.
 - reading `mydb@<oldcommit>` sees the views as of that commit.
+- branch + non-conflicting merge DONE (workspace-z0i.6): a view lives in the
+  branched AddressMap, so branching carries it and a view added or dropped on
+  one side merges in cleanly. A view redefined divergently on both branches
+  currently fails the merge loudly (GraphContainsCycle-style hard error); the
+  interactive doltConflicts/doltResolveConflict workflow for view definitions
+  (below) is the remaining piece.
 
 **View-definition merge conflicts (DumboDB-only; no MongoDB oracle).** A view
 redefined (or created, or dropped) divergently on both branches is a conflict on

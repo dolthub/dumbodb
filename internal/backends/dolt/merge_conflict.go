@@ -1162,20 +1162,14 @@ func captureConflictsForCollection(
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
 func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, error) {
-	// View entries are metadata blobs, not document maps. Merging view
-	// definitions (and view merge conflicts) is not yet implemented
-	// (workspace-z0i.6); skip them here so the document-level merge never opens
-	// a view blob as a collection. Into's view entries are left untouched.
+	// Includes both collections and views: the AddressMap-level lifecycle logic
+	// below (add/update/delete of an entry hash) is identical for either. Only
+	// the both-sides-modified branch differs, where a view is diffed as a
+	// definition rather than a document map (see the isViewEntry check there).
 	allNames := make(map[string]struct{})
 	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
-		if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
-			isView, err := isViewEntry(ctx, state.cs, h)
-			if err != nil {
-				return err
-			}
-			if !isView {
-				allNames[name] = struct{}{}
-			}
+		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
+			allNames[name] = struct{}{}
 			return nil
 		}); err != nil {
 			return prolly.AddressMap{}, nil, fmt.Errorf("iterating collections AM: %w", err)
@@ -1230,8 +1224,25 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			continue
 		}
 		if fromH.IsEmpty() || intoH.IsEmpty() {
-			// Collection-level conflict: one side deleted, the other modified  -- unresolvable here.
-			return prolly.AddressMap{}, nil, fmt.Errorf("conflict in collection %q: deleted on one branch and modified on the other", name)
+			// One side deleted, the other modified -- unresolvable here.
+			return prolly.AddressMap{}, nil, fmt.Errorf("conflict in %q: deleted on one branch and modified on the other", name)
+		}
+
+		// A view (or a collection-vs-view name clash) cannot be document-merged.
+		// Both sides diverged on the same view definition: a view merge conflict.
+		// Interactive resolution via doltConflicts/doltResolveConflict for views
+		// is not yet implemented (workspace-z0i.6), so fail the merge loudly
+		// rather than silently pick a side.
+		intoIsView, err := isViewEntry(ctx, state.cs, intoH)
+		if err != nil {
+			return prolly.AddressMap{}, nil, err
+		}
+		fromIsView, err := isViewEntry(ctx, state.cs, fromH)
+		if err != nil {
+			return prolly.AddressMap{}, nil, err
+		}
+		if intoIsView || fromIsView {
+			return prolly.AddressMap{}, nil, fmt.Errorf("conflict in view %q: redefined on both branches (view merge-conflict resolution is not yet supported)", name)
 		}
 
 		// Both sides modified the collection  -- merge at document level, capturing conflicts.
