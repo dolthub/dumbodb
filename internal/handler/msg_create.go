@@ -301,10 +301,16 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionAlreadyExists):
-		// MongoDB 8.0: idempotent OK for no-options create outside a txn,
-		// NamespaceExists (48) inside a txn or with explicit options.
+		// MongoDB 8.0: idempotent OK for a no-options plain-collection create
+		// over an existing plain collection outside a txn; NamespaceExists (48)
+		// inside a txn, with explicit options, or when a view is involved on
+		// either side (creating a collection over a view, or vice versa).
 		ci := conninfo.Get(connCtx)
-		if hasExplicitOptions || ci.InTransaction() {
+		existingIsView := false
+		if info, verr := lookupCollectionInfo(connCtx, db, collectionName); verr == nil && info != nil {
+			existingIsView = info.IsView
+		}
+		if hasExplicitOptions || ci.InTransaction() || existingIsView {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
 			}

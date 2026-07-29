@@ -68,7 +68,7 @@ Gaps (code-confirmed; see anchors):
 | G2 | RESOLVED (workspace-z0i.3) -- `distinct` resolves views via `viewSourceIterator`; `listIndexes`/`collStats` on a view return CommandNotSupportedOnView | was: `msg_distinct.go` had no `IsView` branch |
 | G3 | RESOLVED (workspace-z0i.2) -- read path resolves the view source chain (`resolveViewChain`, view_pipeline.go) with cycle + depth-20 checks; create validates acyclicity | was: source fetched as a base collection, no resolution |
 | G4 | RESOLVED (workspace-z0i.4) -- `collMod {viewOn,pipeline}` rewrites the view's metadata blob in place; cyclic/too-deep redefinitions are rejected | was: `viewOn` in collMod's ignored-fields list |
-| G5 | **`rename` loses a view** | `RenameCollection` does not move `state.views`; views absent from the AddressMap |
+| G5 | RESOLVED (workspace-z0i.5) -- rename of a view is rejected with CommandNotSupportedOnView ("cannot rename view: <ns>"), matching MongoDB, which does not support renaming a view | was: rename silently lost the view |
 | G6 | **`$lookup` in a view loads the whole foreign collection** into memory; foreign-is-a-view unresolved | `view_pipeline.go:57` fetcher `ConsumeValues` |
 
 ## 4. Design
@@ -202,11 +202,13 @@ ignored, as before).
 
 ### 4.5 Rename, drop, collisions
 
-- rename: move the catalog entry old->new (G5).
-- drop: remove the catalog entry (works today for the in-memory map; must work
-  for the catalog).
+- rename: DONE (workspace-z0i.5). MongoDB does not support renaming a view;
+  DumboDB rejects it with CommandNotSupportedOnView ("cannot rename view: <ns>").
+- drop: remove the catalog entry (done via the AddressMap in workspace-z0i.1).
 - create over an existing name (collection or view) -> `NamespaceExists`
-  (verified).
+  (workspace-z0i.5: a no-options create over an existing view is no longer
+  idempotent). Error code/codeName match MongoDB; V10/V11 diverge only on
+  MongoDB's message text (a random UUID in V10, the view-source phrasing in V11).
 
 ### 4.6 View collation
 
@@ -287,9 +289,9 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V6 | view cycle | error (GraphContainsCycle) | XFail (code/codeName match; MongoDB's message spells out the full namespace chain) |
 | V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | Full (workspace-z0i.2) |
 | V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | Full (workspace-z0i.4) |
-| V9 | rename a view | renamed view still resolves | XFail (G5) |
-| V10 | create view named as existing collection | NamespaceExists | XFail (same code/codeName, message differs today) |
-| V11 | create collection named as existing view | NamespaceExists | XFail (DumboDB allows it today, no error) |
+| V9 | rename a view | CommandNotSupportedOnView ("cannot rename view") | Full (workspace-z0i.5) |
+| V10 | create view named as existing collection | NamespaceExists | XFail (code/codeName match; MongoDB's message embeds a random collection UUID) |
+| V11 | create collection named as existing view | NamespaceExists | XFail (code/codeName match; MongoDB's message spells out "is a view on <viewOn>") |
 | V12 | durability: create view, restart servers (same data dir), read | view still resolves | Full (catalog persists views; workspace-z0i.1) |
 | V13 | view with $lookup pipeline | correct join | Full (have) |
 | V14 | view default collation applied to a no-collation read | collation semantics (dimension I) | XFail |
