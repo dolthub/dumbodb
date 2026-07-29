@@ -1,0 +1,383 @@
+# Live (Computed) Views
+
+**Issues:** workspace-z0i (epic: live views). Related: workspace-5fg
+(materialized views, separate), workspace-alp.16 (collection-metadata
+persistence), docs/design/collation-resolution.md (view collation).
+**Date:** 2026-07-28
+**Status:** Draft
+
+## 1. Goal and scope
+
+Define how DumboDB should implement MongoDB **standard (computed) views** so it
+matches MongoDB 8.0, and close the gap between that and what exists today (basic
+in-session read-through, but non-durable and incomplete).
+
+In scope: view creation, durable storage, read resolution (including nesting),
+the full set of read commands, redefine/rename/drop, name collisions, view
+collation, and how views behave in a versioned (Dolt) store.
+
+Out of scope: **materialized views** -- these are not a distinct object; they
+are the `$merge`/`$out`-into-a-collection pattern, owned by workspace-5fg. The
+comparator/ICU questions (collation-resolution.md) are referenced, not
+re-opened.
+
+Reference platform is MongoDB 8.0.4. Facts labelled "verified" were probed
+directly; everything else is marked (verify) and pinned by the test matrix.
+
+## 2. What a live view is (reference-verified)
+
+A view is `{name, viewOn, pipeline, collation}`. It stores no data. A read
+against a view resolves to: run `pipeline` over the source `viewOn`, then apply
+the caller's own filter/sort/skip/limit/projection on top -- i.e. a read on a
+view is an aggregation over its source. Writes are rejected.
+
+Verified against MongoDB 8.0.4:
+
+- **Nested views**: a view may be defined on another view; reads resolve through
+  the chain (v2 on v1 on base returned the correctly double-filtered row).
+- **Cycles**: detected and rejected ("View cycle detected").
+- **Max nesting depth = 20**: the 20th level errors with
+  `ViewDepthLimitExceeded` ("View depth too deep or view cycle detected").
+- **Redefine**: `collMod {viewOn, pipeline}` re-defines a view in place (a
+  redefine that narrowed the pipeline changed the read from 2 docs to 1).
+- **distinct**: works on a view.
+- **Name collision**: creating a view with the name of an existing collection ->
+  `NamespaceExists`.
+- **Writes**: insert/update/delete on a view -> `CommandNotSupportedOnView`.
+- **listCollections**: reports `type:"view"` and `options:{viewOn, pipeline,
+  collation}` (collation fully resolved).
+
+## 3. Current DumboDB state (audit)
+
+Model: `{name, viewOn, pipeline}` held in an in-memory map `state.views`; a read
+resolves via `viewSourceIterator` -> `buildViewPipelineStages` over the source.
+
+Works today (in a running server; parity-tested Full):
+
+- create (`create {viewOn, pipeline}` / driver `createView`), read-only;
+- read via **find, count, aggregate** (pipeline applied, caller semantics layered);
+- `listCollections` reports `type:"view"` + options;
+- writes rejected with `CommandNotSupportedOnView`;
+- drop a view.
+
+Gaps (code-confirmed; see anchors):
+
+| # | Gap | Evidence |
+|---|-----|----------|
+| G1 | **Not durable** -- view def is in-memory only, lost on restart | `database.go:256` sets `state.views` then returns before `updateAddressMap`; `getOrOpenDB` inits `state.views` empty, no hydration |
+| G2 | **`distinct` ignores views** -- queries the empty stored name | `msg_distinct.go` has no `IsView` branch |
+| G3 | **No nested views** -- source fetched as a base collection | `view_pipeline.go:91` `db.Collection(viewOn).Query`; no view resolution, no cycle/depth check |
+| G4 | **`collMod` cannot redefine a view** | `viewOn` is in collMod's ignored-fields list |
+| G5 | **`rename` loses a view** | `RenameCollection` does not move `state.views`; views absent from the AddressMap |
+| G6 | **`$lookup` in a view loads the whole foreign collection** into memory; foreign-is-a-view unresolved | `view_pipeline.go:57` fetcher `ConsumeValues` |
+
+## 4. Design
+
+### 4.1 Where metadata lives in the data tree (the keystone)
+
+This is the root of G1/G5: DumboDB has no durable home for a view definition.
+Establish the current tree, then place the view in it.
+
+**Current tree (verified).**
+
+- A database branch persists as a Dolt RootValue (RTVL); its `TablesBytes()` is
+  the collections **AddressMap**: `name -> chunkHash` (`amFromWorkingRoot`).
+- A collection's chunk is a `serial.Table` (DTBL): `Schema` (a single shared hash
+  today, `backend.go:1036`), `PrimaryIndex` (the document prolly map),
+  `SecondaryIndexes` (a prolly AddressMap, `indexName -> index-entry chunk`),
+  plus conflicts/violations/artifacts (`buildDoltTableFlatbuffer`).
+- **Secondary indexes are the only per-collection metadata we persist**, and
+  they are the mechanism worth copying: each index is a content-addressed chunk
+  (`index_persist.go`, `docToBSON` + `ns.WriteBytes`) referenced from the tree,
+  so it is committed/branched/merged/diffed for free.
+- Collections are always DTBL now -- the legacy bare-prolly-node ("TUPM")
+  collection form was removed (pre-1.0, no back-compat). `serial.Table` has no
+  free-form metadata slot and the `Schema` slot is shared.
+
+**Chunks are type-tagged.** Every chunk carries a 4-byte FileID
+(`serial.GetFileID`). After the TUPM removal the collection dispatch has one live
+case: `TableFileID -> collection`.
+
+**Views are blob chunks.** A view has no documents, so it needs no `serial.Table`.
+Store a view as an AddressMap entry whose value is a **`BlobFileID` chunk** -- the
+type `ns.WriteBytes` already produces, and exactly how index-entry chunks are
+stored -- holding `docToBSON` of a self-describing metadata document:
+
+```
+{
+  type:      "view",              // discriminator (see below)
+  viewOn:    <string>,            // source namespace (collection or another view)
+  pipeline:  [ <stageDoc>, ... ],
+  collation: { locale, strength, ... } | null
+}
+```
+
+Namespace classification is then a two-step, no-flag check:
+
+```
+chunk = store.get(collectionsAM.get(name))
+switch serial.GetFileID(chunk):
+  case TableFileID:  -> collection
+  case BlobFileID:   def = bsonToDoc(ns.ReadBytes(hash))
+                      switch def.type:
+                        case "view": -> view
+                        // future kinds ...
+  default:           -> error
+```
+
+**Why the `type` discriminator.** FileID says "this is a metadata blob, not a
+table"; the `type` field says *which kind*. Only `"view"` exists today, but
+making the blob self-describing lets the same blob-in-AddressMap mechanism carry
+other standalone namespace metadata later -- add a `type` value and a case, with
+no new FileID and no format change.
+
+**Properties.** The blob is referenced from the collections AddressMap, which is
+part of the committed RTVL working set, so a view is durable, branch-scoped, and
+committed/branched/merged/diffed with no special path. create/drop/rename reduce
+to AddressMap add/remove/move on the name -- fixing G1 and G5 uniformly. No fake
+empty table, no schema-comment flag. (`CreateCollection`'s current view branch,
+`database.go:255-263`, which sets in-memory `state.views` and returns before
+`updateAddressMap`, is replaced by writing the blob entry.)
+
+**Data-bearing namespaces (collections).** A view is standalone. A collection
+keeps its `serial.Table` for data, so its metadata (default collation, and later
+validators) must attach to that collection. Materialized views are NOT a case
+here: for parity they are ordinary collections with no stored definition
+(workspace-5fg).
+
+Size is not a constraint. Metadata is a BSON document stored as a blob via the
+same plumbing as documents and index-entry chunks (`docToBSON` + `ns.WriteBytes`),
+which spills large values into an out-of-band blob tree -- a large `$jsonSchema`
+validator is just a large blob. So the only question is *where a collection
+references its metadata blob from*, collision-free:
+
+**Decided: a reserved entry in the collection's `SecondaryIndexes` AddressMap.**
+The metadata is a BSON blob stored under the reserved key
+`__dumbo_metadata__` (`backends.ReservedMetadataIndexName`) in the same map that
+holds index-entry chunks -- the exact index-entry plumbing (`docToBSON` +
+`ns.WriteBytes`), no indirection, any size. The blob is self-describing
+(`{type:"collMeta", collation, validator, ...}`) so future metadata rides along.
+Collision with a real index closes by reserving the name: `createIndex` rejects
+it (implemented, alongside the `_id_` reservation) and `listIndexes` filters it
+out. Shared with workspace-alp.16 (collection default collation).
+
+Audited the alternatives (O6): the only unused `serial.Table` field that is a
+usable reference is `Violations`, but it is a deprecated/legacy conflict slot
+(Dolt folded conflicts+violations into `Artifacts`, which DumboDB uses) and
+name-misleading; `AutoIncrementValue` is a scalar; the spare `TableSchema` fields
+(`Checks`, `TargetRowSize`, comment) live in the *shared* schema and are
+SQL-semantic. A namespace-descriptor blob (`{type, data:<tableHash>,
+meta:<blobHash>}`) stays the clean-but-indirect fallback if we ever want a fully
+uniform namespace model. The reserved entry wins: live mechanism, existing
+plumbing, one small reject-rule.
+
+### 4.2 Read resolution, nesting, cycles, depth
+
+Resolve `viewOn` recursively: if the source is itself a view, prepend the inner
+view's resolved pipeline, repeating until a base collection is reached. Enforce:
+
+- **cycle detection** -> error matching MongoDB (`View cycle detected`, code to
+  confirm) (verify O2);
+- **max depth 20** -> `ViewDepthLimitExceeded` at the 20th level.
+
+The resolved pipeline then runs over the base collection; the caller's
+find/count/aggregate semantics layer on top as today.
+
+### 4.3 Read-command coverage
+
+Every read path must resolve views, not just find/count/aggregate. Audit and
+cover: **distinct** (G2), plus confirm the intended behavior for `listIndexes`,
+`dbStats`/`collStats`, `count` with `$where`, and cursor `getMore` against a
+view. Each becomes a matrix row.
+
+### 4.4 Redefine (collMod)
+
+Implement `collMod {viewOn, pipeline}` (and collation) to replace a view's
+definition in the catalog, re-validating the new pipeline. Match MongoDB's
+accepted fields and errors (verify: does collMod allow toggling a collection <->
+view? Expected no).
+
+### 4.5 Rename, drop, collisions
+
+- rename: move the catalog entry old->new (G5).
+- drop: remove the catalog entry (works today for the in-memory map; must work
+  for the catalog).
+- create over an existing name (collection or view) -> `NamespaceExists`
+  (verified).
+
+### 4.6 View collation
+
+A view carries a default collation that is the effective collation for reads
+against it that do not specify their own (see collation-resolution.md 2.1,
+dimension I). The catalog (4.1) stores it; resolution treats the view as the
+"target" default. This is why live-view durability and collation share the
+catalog.
+
+### 4.7 Version-control semantics (DumboDB-specific)
+
+Because view defs live in the branch working set (4.1, blob entries in the
+collections AddressMap):
+
+- creating/dropping/redefining a view is an uncommitted working-set change until
+  `dumboCommit`, and must surface in `dumboStatus`/`dumboDiff`.
+- **Views are first-class in the diff, mirroring indexes.** The diff already
+  reports index changes structurally -- per collection, `addedIndexes` /
+  `modifiedIndexes` / `removedIndexes` carrying the full `IndexInfo`, with
+  `modifiedIndexes` as `{from, to}` (`collectionDiffToDoc`,
+  msg_dumbodb_versioning.go:166-194). Views get the analogous treatment, but at
+  the DB level (they are namespaces, not per-collection): the diff result grows
+  `addedViews` / `modifiedViews` / `removedViews` alongside `collections`, each
+  carrying the view definition `{name, viewOn, pipeline, collation}` and
+  `modifiedViews` as `{from, to}` for a redefine. `dumboStatus` gets the matching
+  name-list summary.
+- **Implementation note:** the diff walks the collections AddressMap; each
+  changed entry must be classified by chunk type (a `serial.Table` -> collection
+  diff of docs+indexes; a view blob -> a view add/remove/modify) so a view is
+  never mis-diffed as a collection's documents. Same classification the read path
+  uses (4.1).
+- branching a DB carries its views; merging two branches merges the AddressMap,
+  so a view added on one side merges in.
+- reading `mydb@<oldcommit>` sees the views as of that commit.
+
+**View-definition merge conflicts (DumboDB-only; no MongoDB oracle).** A view
+redefined (or created, or dropped) divergently on both branches is a conflict on
+that AddressMap entry. This must surface and resolve through the same conflict
+workflow indexes and documents use (`doltConflicts` to inspect, `doltResolveConflict`
+with `theirs`/`ours`/`custom` to resolve; see docs/verify/index-merge.md scenarios
+4-6). Requirements:
+
+- `doltMerge` stops with an unresolved-conflict error when a view entry diverges
+  (redefine/redefine, redefine/drop, create/create-with-different-def under the
+  same name).
+- `doltConflicts` reports a self-describing view conflict naming the view and
+  carrying `ours`/`theirs`/`base` view definitions (`{viewOn, pipeline,
+  collation}`), so the operator can choose.
+- `doltResolveConflict` accepts `theirs`, `ours`, and `custom` (a supplied view
+  definition), and the resolved definition is what reads against the view see
+  after the merge commits.
+- create/create and redefine/drop variants each produce a conflict, not a silent
+  last-writer-wins.
+
+This is a version-control feature with no MongoDB counterpart, so it is **not**
+parity-tested. It is specified and verified by a dedicated human verification
+document, `docs/verify/view-merge.md` (with the matching automated test
+`tests/verify/view_merge_test.go`, per docs/verify/README.md), walking the
+redefine/redefine, redefine/drop, and create/create conflict scenarios and each
+resolution option top to bottom in `mongosh`.
+
+The status/diff *shape* mirrors MongoDB's absence of a versioning analogue by
+being ours to define; the *content* (view defs) matches what MongoDB's
+`listCollections` reports. O3.
+
+## 5. Parity test matrix (reference MongoDB 8.0)
+
+Each row is a `harness.PairTest`. Support: Full where we must match, XFail where
+we knowingly diverge today, MongoOnly if out of scope.
+
+| ID | Case | Expected (verified 8.0.4 unless noted) | Support |
+|----|------|----------------------------------------|---------|
+| V1 | create view; find/count/aggregate apply pipeline + caller filter | correct rows | Full (have) |
+| V2 | insert/update/delete on view | CommandNotSupportedOnView | Full (have) |
+| V3 | listCollections | type:"view", options{viewOn,pipeline,collation} | Full (have) |
+| V4 | distinct on a view | works (matches base+pipeline) | XFail (G2) |
+| V5 | nested view (v2 on v1 on base) | resolves through chain | XFail (G3) |
+| V6 | view cycle | error (View cycle detected) | XFail (G3) |
+| V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | XFail (G3) |
+| V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | XFail (G4) |
+| V9 | rename a view | renamed view still resolves | XFail (G5) |
+| V10 | create view named as existing collection | NamespaceExists | Full(?) |
+| V11 | create collection named as existing view | NamespaceExists | Full(?) |
+| V12 | durability: create view, restart servers (same data dir), read | view still resolves | XFail (G1; needs the 5.2 restartable-pair primitive) |
+| V13 | view with $lookup pipeline | correct join | Full (have) |
+| V14 | view default collation applied to a no-collation read | collation semantics (dimension I) | XFail |
+
+### 5.1 Version control -- dumbodb repo only (no Mongo oracle)
+
+Version-control behavior is verified in the **dumbodb repo** (Go / bats), not
+the parity harness, because `dumbo*` commands have no MongoDB counterpart:
+a view is branch-scoped (invisible on `main` until merged);
+`dumboStatus`/`dumboDiff` surface it as
+`addedViews`/`modifiedViews`/`removedViews` (4.7); branch/merge of view defs.
+
+**Merge-conflict resolution** for divergent view definitions (4.7) is verified by
+a dedicated human verification document `docs/verify/view-merge.md` plus its
+automated equivalent `tests/verify/view_merge_test.go` (README.md), covering the
+redefine/redefine, redefine/drop, and create/create conflicts and the
+`theirs`/`ours`/`custom` resolutions.
+
+### 5.2 Durability across restart -- parity `PairTest` via a new harness primitive
+
+Persisting a view across restart is a parity behavior (MongoDB keeps it; DumboDB
+loses it today, G1), so it is a `PairTest` (V12). It needs a new harness
+capability, because today neither server model can restart on the same data dir:
+the shared servers spawn once (`provisionOnce`), and `EphemeralServers.Stop`
+kills the processes AND removes the data dirs (`serverProc.stop` ->
+`os.RemoveAll(dir)`).
+
+**New primitive (dumbodb-parity-testing/harness): a private, restartable server
+pair.** A non-auth sibling of `EphemeralServers` with a `Restart(t)` method that:
+
+1. shuts each server down **gracefully** (SIGTERM / the `shutdown` command, not
+   SIGKILL) so the test exercises durable state, not crash recovery;
+2. **keeps** the data dirs -- a kill-without-`RemoveAll` variant of
+   `serverProc`; final teardown (`t.Cleanup`) still removes them;
+3. relaunches each binary on its **same data dir**, on a fresh free port;
+4. waits for readiness and returns reconnected clients / new URIs.
+
+The durability test drives its own private pair (not the shared-server
+collection model, since a restart would disrupt other tests) -- exactly how the
+auth tests use `EphemeralServers`.
+
+**Test shape (V12):** start the restartable pair, create a view on both servers,
+`Restart(t)`, reconnect, assert the view still resolves on both. MongoDB passes;
+DumboDB is XFail until the catalog (4.1) lands, then Full.
+
+The same primitive generalizes to any future durability parity test (collection
+metadata, validators, collection default collation).
+
+## 6. Open questions
+
+- O1: View storage is decided (4.1): a `BlobFileID` AddressMap entry holding a
+  self-describing `{type:"view", ...}` BSON doc. Remaining open items: the
+  per-COLLECTION metadata carrier (Schema `Comment` for small vs SecondaryIndexes
+  map with a reserved, collision-proof key for large validators) -- shared with
+  workspace-alp.16; and confirming `listCollections`'s new per-entry chunk read
+  is acceptable (it currently reads no values).
+- O2: Exact MongoDB error codes for cycle and depth (message captured; codes to
+  confirm) and for collMod on views.
+- O3: Version-control semantics for view defs. Diff granularity DECIDED (4.7):
+  DB-level `addedViews`/`modifiedViews`/`removedViews` arrays carrying the view
+  def (`{from,to}` for redefine), mirroring the per-collection index-diff arrays.
+  Merge-conflict resolution DECIDED (4.7): divergent view defs conflict on the
+  AddressMap entry and resolve via `doltConflicts`/`doltResolveConflict`
+  (`theirs`/`ours`/`custom`), like index/doc conflicts; DumboDB-only, verified by
+  `docs/verify/view-merge.md`. No MongoDB reference.
+- O4: `$lookup`/`$graphLookup` inside a view -- keep the load-whole-foreign
+  approach (G6) or stream; and resolve a view-typed foreign target.
+- O5: Interaction with capped/timeseries/validator metadata -- one catalog for
+  all of it, or separate stores.
+- O7: RESOLVED -- (A). Restart-durability is a parity `PairTest` (V12) via a new
+  restartable-pair harness primitive (5.2), not a dumbodb-repo test. The
+  primitive is a prerequisite for V12.
+- O6: RESOLVED (2026-07-29). Per-collection metadata is a self-describing BSON
+  blob stored under the reserved key `__dumbo_metadata__` in the collection's
+  SecondaryIndexes AddressMap; `createIndex` rejects that name (implemented),
+  `listIndexes` filters it. Namespace descriptor blob remains the documented
+  fallback. Materialized views do not drive this (parity MVs are plain
+  collections). Shared with workspace-alp.16.
+
+## 7. Phasing
+
+1. **Parity matrix (section 5)** first: land V1-V14 as Full/XFail against the
+   oracle. This includes building the 5.2 restartable-pair harness primitive so
+   V12 (durability) is a real `PairTest`. Version-control tests (5.1) live in the
+   dumbodb repo.
+2. **Catalog** (4.1): durable, versioned per-branch storage of view defs; flips
+   V12 to Full. Coordinate with workspace-alp.16.
+3. **Nesting + cycles + depth** (4.2): flips V5-V7.
+4. **Command coverage** (4.3): distinct etc.; flips V4.
+5. **Redefine + rename + collisions** (4.4/4.5): flips V8-V11.
+6. **View collation** (4.6) once the catalog exists; flips V14.
+7. **Version-control semantics** (4.7): branch scoping + dumboDiff/dumboStatus
+   surfacing; verified by the 5.1 dumbodb-repo tests.
+</content>

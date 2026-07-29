@@ -63,6 +63,14 @@ no database rung. Indexes are not a precedence rung for *matching*; they are a
 constraint (uniqueness) and an optimization (eligibility) that must line up with
 whatever collation the query resolves to.
 
+"View" above means a **standard (computed) view** -- `createView`/`create
+{viewOn, pipeline}`, read-only, pipeline re-run per query. MongoDB's "on-demand
+materialized view" is NOT a distinct object or scope: it is the pattern of an
+aggregation ending in `$merge`/`$out` (both present in DumboDB) writing into a
+normal collection. Such a collection carries a collection default collation like
+any other and needs no special handling here; it is also durable (a real
+collection), unlike the ephemeral computed-view metadata.
+
 The `_id` index is a special case, corrected from an earlier wrong assumption:
 it is NOT always simple. It inherits the collection default like any other
 index, its uniqueness is enforced under that collation (so in a strength-2
