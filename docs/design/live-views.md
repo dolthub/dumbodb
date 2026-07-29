@@ -285,8 +285,8 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | XFail (G3) |
 | V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | XFail (G4) |
 | V9 | rename a view | renamed view still resolves | XFail (G5) |
-| V10 | create view named as existing collection | NamespaceExists | Full(?) |
-| V11 | create collection named as existing view | NamespaceExists | Full(?) |
+| V10 | create view named as existing collection | NamespaceExists | XFail (same code/codeName, message differs today) |
+| V11 | create collection named as existing view | NamespaceExists | XFail (DumboDB allows it today, no error) |
 | V12 | durability: create view, restart servers (same data dir), read | view still resolves | XFail (G1; needs the 5.2 restartable-pair primitive) |
 | V13 | view with $lookup pipeline | correct join | Full (have) |
 | V14 | view default collation applied to a no-collation read | collation semantics (dimension I) | XFail |
