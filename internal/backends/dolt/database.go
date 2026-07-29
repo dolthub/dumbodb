@@ -467,6 +467,32 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 			fmt.Errorf("collection %q does not exist in %q", params.Name, db.name))
 	}
 
+	// Redefining a view: rewrite its metadata blob in place. Only applies when
+	// the target is actually a view; view fields on a real collection are
+	// ignored (as they were before views became first-class).
+	if params.SetView {
+		entryHash, err := collModBranchAM.Get(ctx, params.Name)
+		if err != nil {
+			return err
+		}
+		isView, err := isViewEntry(ctx, state.cs, entryHash)
+		if err != nil {
+			return err
+		}
+		if isView {
+			viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
+				ViewOn:   params.ViewOn,
+				Pipeline: params.ViewPipeline,
+			})
+			if err != nil {
+				return err
+			}
+			return state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: collMod view %s", params.Name), func(ed prolly.AddressMapEditor) error {
+				return ed.Update(ctx, params.Name, viewHash)
+			})
+		}
+	}
+
 	// Get or create validator entry.
 	v, ok := state.validators[params.Name]
 	if !ok {

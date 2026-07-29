@@ -67,7 +67,7 @@ Gaps (code-confirmed; see anchors):
 | G1 | RESOLVED (workspace-z0i.1) -- view def is now a durable `BlobFileID` entry in the collections AddressMap (`view_storage.go`); `state.views` removed | was: `database.go:256` set `state.views` then returned before `updateAddressMap` |
 | G2 | RESOLVED (workspace-z0i.3) -- `distinct` resolves views via `viewSourceIterator`; `listIndexes`/`collStats` on a view return CommandNotSupportedOnView | was: `msg_distinct.go` had no `IsView` branch |
 | G3 | RESOLVED (workspace-z0i.2) -- read path resolves the view source chain (`resolveViewChain`, view_pipeline.go) with cycle + depth-20 checks; create validates acyclicity | was: source fetched as a base collection, no resolution |
-| G4 | **`collMod` cannot redefine a view** | `viewOn` is in collMod's ignored-fields list |
+| G4 | RESOLVED (workspace-z0i.4) -- `collMod {viewOn,pipeline}` rewrites the view's metadata blob in place; cyclic/too-deep redefinitions are rejected | was: `viewOn` in collMod's ignored-fields list |
 | G5 | **`rename` loses a view** | `RenameCollection` does not move `state.views`; views absent from the AddressMap |
 | G6 | **`$lookup` in a view loads the whole foreign collection** into memory; foreign-is-a-view unresolved | `view_pipeline.go:57` fetcher `ConsumeValues` |
 
@@ -194,10 +194,11 @@ aggregate. Each has a parity matrix row.
 
 ### 4.4 Redefine (collMod)
 
-Implement `collMod {viewOn, pipeline}` (and collation) to replace a view's
-definition in the catalog, re-validating the new pipeline. Match MongoDB's
-accepted fields and errors (verify: does collMod allow toggling a collection <->
-view? Expected no).
+DONE (workspace-z0i.4): `collMod {viewOn, pipeline}` rewrites the view's metadata
+blob in the catalog and re-validates the new source chain (cycle/depth). View
+default collation via collMod is deferred to the collation epic. Toggling a
+collection <-> view is not supported (view fields on a real collection are
+ignored, as before).
 
 ### 4.5 Rename, drop, collisions
 
@@ -285,7 +286,7 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V5 | nested view (v2 on v1 on base) | resolves through chain | Full (workspace-z0i.2) |
 | V6 | view cycle | error (GraphContainsCycle) | XFail (code/codeName match; MongoDB's message spells out the full namespace chain) |
 | V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | Full (workspace-z0i.2) |
-| V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | XFail (G4) |
+| V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | Full (workspace-z0i.4) |
 | V9 | rename a view | renamed view still resolves | XFail (G5) |
 | V10 | create view named as existing collection | NamespaceExists | XFail (same code/codeName, message differs today) |
 | V11 | create collection named as existing view | NamespaceExists | XFail (DumboDB allows it today, no error) |

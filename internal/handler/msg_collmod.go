@@ -39,8 +39,6 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 
 	ignoredFields := []string{
 		"index",
-		"pipeline",
-		"viewOn",
 		"recordPreImages",
 		"changeStreamPreAndPostImages",
 		"expireAfterSeconds",
@@ -53,15 +51,17 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	// Detect unknown fields. Protocol fields ($db, lsid, $readPreference, etc.) are always allowed.
 	// Known fields are the command key plus the ones we handle or ignore.
 	knownFields := map[string]bool{
-		"$db":             true,
-		"lsid":            true,
-		"txnNumber":       true,
-		"$readPreference": true,
-		"$clusterTime":    true,
-		"collMod":         true,
-		"validator":       true,
-		"validationLevel": true,
+		"$db":              true,
+		"lsid":             true,
+		"txnNumber":        true,
+		"$readPreference":  true,
+		"$clusterTime":     true,
+		"collMod":          true,
+		"validator":        true,
+		"validationLevel":  true,
 		"validationAction": true,
+		"viewOn":           true,
+		"pipeline":         true,
 	}
 	for _, ig := range ignoredFields {
 		knownFields[ig] = true
@@ -153,6 +153,25 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 	}
 
+	if viewOnVal, _ := document.Get("viewOn"); viewOnVal != nil {
+		viewOn, ok := viewOnVal.(string)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, "'viewOn' option must be a string", "collMod")
+		}
+		params.SetView = true
+		params.ViewOn = viewOn
+	}
+	if pipelineVal, _ := document.Get("pipeline"); pipelineVal != nil {
+		pipeline, ok := pipelineVal.(*types.Array)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue, "'pipeline' option must be an array", "collMod")
+		}
+		params.SetView = true
+		params.ViewPipeline = pipeline
+	}
+
 	db, err := h.b.Database(dbName)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
@@ -161,6 +180,14 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 
 		return nil, lazyerrors.Error(err)
+	}
+
+	// A redefinition that would introduce a cycle or exceed the nesting depth is
+	// rejected, matching create-time validation.
+	if params.SetView {
+		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
+			return nil, verr
+		}
 	}
 
 	if err = db.CollMod(connCtx, &params); err != nil {

@@ -113,7 +113,7 @@ type CollectionInfo struct {
 	MetaField string
 	// Granularity is the granularity for a time series collection (seconds, minutes, hours).
 	Granularity string
-	_ struct{} // prevent unkeyed literals
+	_           struct{} // prevent unkeyed literals
 }
 
 func (ci *CollectionInfo) Capped() bool {
@@ -172,7 +172,7 @@ type CreateCollectionParams struct {
 	MetaField string
 	// Granularity is the granularity for a time series collection.
 	Granularity string
-	_ struct{} // prevent unkeyed literals
+	_           struct{} // prevent unkeyed literals
 }
 
 func (ccp *CreateCollectionParams) Capped() bool {
@@ -191,7 +191,12 @@ type CollModParams struct {
 	ValidationAction string
 	// CappedSize, when > 0, converts the collection to a capped collection with this size in bytes.
 	CappedSize int64
-	_ struct{} // prevent unkeyed literals
+	// SetView is true when the caller redefines a view (collMod on a view);
+	// ViewOn and ViewPipeline carry the new definition.
+	SetView      bool
+	ViewOn       string
+	ViewPipeline *types.Array
+	_            struct{} // prevent unkeyed literals
 }
 
 // CreateCollection creates a new collection with valid name in the database; it should not already exist.
