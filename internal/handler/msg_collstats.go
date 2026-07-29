@@ -93,6 +93,12 @@ func (h *Handler) MsgCollStats(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		cInfo = collections.Collections[0]
 	}
 
+	// collStats is not supported on a view (a view has no backing storage).
+	if found && cInfo.IsView {
+		msg := fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collection)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, document.Command())
+	}
+
 	indexes, err := c.ListIndexes(connCtx, new(backends.ListIndexesParams))
 	if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionDoesNotExist) {
 		indexes = new(backends.ListIndexesResult)

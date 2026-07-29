@@ -65,7 +65,7 @@ Gaps (code-confirmed; see anchors):
 | # | Gap | Evidence |
 |---|-----|----------|
 | G1 | RESOLVED (workspace-z0i.1) -- view def is now a durable `BlobFileID` entry in the collections AddressMap (`view_storage.go`); `state.views` removed | was: `database.go:256` set `state.views` then returned before `updateAddressMap` |
-| G2 | **`distinct` ignores views** -- queries the empty stored name | `msg_distinct.go` has no `IsView` branch |
+| G2 | RESOLVED (workspace-z0i.3) -- `distinct` resolves views via `viewSourceIterator`; `listIndexes`/`collStats` on a view return CommandNotSupportedOnView | was: `msg_distinct.go` had no `IsView` branch |
 | G3 | RESOLVED (workspace-z0i.2) -- read path resolves the view source chain (`resolveViewChain`, view_pipeline.go) with cycle + depth-20 checks; create validates acyclicity | was: source fetched as a base collection, no resolution |
 | G4 | **`collMod` cannot redefine a view** | `viewOn` is in collMod's ignored-fields list |
 | G5 | **`rename` loses a view** | `RenameCollection` does not move `state.views`; views absent from the AddressMap |
@@ -185,10 +185,12 @@ find/count/aggregate semantics layer on top as today.
 
 ### 4.3 Read-command coverage
 
-Every read path must resolve views, not just find/count/aggregate. Audit and
-cover: **distinct** (G2), plus confirm the intended behavior for `listIndexes`,
-`dbStats`/`collStats`, `count` with `$where`, and cursor `getMore` against a
-view. Each becomes a matrix row.
+Every read path must resolve views, not just find/count/aggregate. DONE
+(workspace-z0i.3): **distinct** resolves the view source (G2); **listIndexes**
+and **collStats** on a view return CommandNotSupportedOnView, matching MongoDB
+(a view has no indexes or backing storage). `getMore` needs no view-specific
+handling -- it iterates a cursor already opened by a view-resolving find or
+aggregate. Each has a parity matrix row.
 
 ### 4.4 Redefine (collMod)
 
@@ -279,7 +281,7 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V1 | create view; find/count/aggregate apply pipeline + caller filter | correct rows | Full (have) |
 | V2 | insert/update/delete on view | CommandNotSupportedOnView | Full (have) |
 | V3 | listCollections | type:"view", options{viewOn,pipeline,collation} | Full (have) |
-| V4 | distinct on a view | works (matches base+pipeline) | XFail (G2) |
+| V4 | distinct on a view | works (matches base+pipeline) | Full (workspace-z0i.3) |
 | V5 | nested view (v2 on v1 on base) | resolves through chain | Full (workspace-z0i.2) |
 | V6 | view cycle | error (GraphContainsCycle) | XFail (code/codeName match; MongoDB's message spells out the full namespace chain) |
 | V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | Full (workspace-z0i.2) |

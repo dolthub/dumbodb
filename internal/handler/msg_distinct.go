@@ -60,6 +60,35 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	// A view has no backing store: distinct runs as an aggregation over the
+	// view's resolved source with the view's pipeline applied, then the caller's
+	// filter and key extraction are layered on top.
+	viewInfo, err := lookupCollectionInfo(connCtx, db, params.Collection)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+	if viewInfo != nil && viewInfo.IsView {
+		closer := iterator.NewMultiCloser()
+		defer closer.Close()
+
+		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, closer)
+		if verr != nil {
+			return nil, verr
+		}
+		iter = common.FilterIterator(iter, closer, params.Filter)
+
+		distinct, derr := common.FilterDistinctValues(iter, params.Key)
+		if derr != nil {
+			return nil, lazyerrors.Error(derr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"values", distinct,
+				"ok", float64(1),
+			)),
+		)
+	}
+
 	c, err := db.Collection(params.Collection)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
