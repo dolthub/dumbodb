@@ -2753,6 +2753,21 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 
 	result := &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}
 
+	viewChanges, err := diffViewEntries(ctx, state.cs, state.ns, headAM, workingAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: diffing views for db %q: %w", params.DBName, err)
+	}
+	for _, vc := range viewChanges {
+		switch vc.Status {
+		case "added":
+			result.AddedViews = append(result.AddedViews, vc.Name)
+		case "modified":
+			result.ModifiedViews = append(result.ModifiedViews, vc.Name)
+		case "deleted":
+			result.RemovedViews = append(result.RemovedViews, vc.Name)
+		}
+	}
+
 	if ms := state.mergeState; ms != nil {
 		switch {
 		case ms.isRebase:
@@ -2771,8 +2786,10 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	}
 
 	// commitId is only set when the working tree is identical to the checked-out
-	// commit: no uncommitted changes AND no merge/cherry-pick/rebase/revert in progress.
-	if len(tables) == 0 && result.MergeOp == "" {
+	// commit: no uncommitted changes (collections or views) AND no
+	// merge/cherry-pick/rebase/revert in progress.
+	viewsChanged := len(result.AddedViews)+len(result.ModifiedViews)+len(result.RemovedViews) > 0
+	if len(tables) == 0 && !viewsChanged && result.MergeOp == "" {
 		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
 			result.CommitID = h.String()
 		}
@@ -3023,7 +3040,12 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		diffs = []backends.CollectionDiff{}
 	}
 
-	return &backends.DiffResult{Collections: diffs}, nil
+	viewChanges, err := diffViewEntries(ctx, state.cs, state.ns, aAM, bAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBDiff: diffing views for db %q: %w", params.DBName, err)
+	}
+
+	return &backends.DiffResult{Collections: diffs, Views: viewChanges}, nil
 }
 
 // collectionMapFromAM opens the prolly.Map for a collection from an AddressMap.

@@ -225,7 +225,7 @@ collections AddressMap):
 
 - creating/dropping/redefining a view is an uncommitted working-set change until
   `dumboCommit`, and must surface in `dumboStatus`/`dumboDiff`.
-- **Views are first-class in the diff, mirroring indexes.** The diff already
+- **Views are first-class in the diff, mirroring indexes (DONE, workspace-z0i.7).** The diff already
   reports index changes structurally -- per collection, `addedIndexes` /
   `modifiedIndexes` / `removedIndexes` carrying the full `IndexInfo`, with
   `modifiedIndexes` as `{from, to}` (`collectionDiffToDoc`,
@@ -391,5 +391,9 @@ metadata, validators, collection default collation).
 5. **Redefine + rename + collisions** (4.4/4.5): flips V8-V11.
 6. **View collation** (4.6) once the catalog exists; flips V14.
 7. **Version-control semantics** (4.7): branch scoping + dumboDiff/dumboStatus
-   surfacing; verified by the 5.1 dumbodb-repo tests.
+   surfacing; verified by the 5.1 dumbodb-repo tests. dumboDiff/dumboStatus
+   surfacing DONE (workspace-z0i.7): diff emits addedViews/modifiedViews/
+   removedViews with full defs ({from,to} for redefine); status emits the
+   matching name lists and counts a view change as dirty. Merge semantics +
+   conflict resolution remain (workspace-z0i.6).
 </content>

@@ -274,6 +274,10 @@ type VersioningStatusResult struct {
 	Tables    []TableStatus
 	MergeOp   string            // "merge", "cherry-pick", "rebase", or "revert"; empty when no operation in progress
 	Conflicts []ConflictSummary // per-collection conflict counts; empty when no conflicts
+	// View lifecycle in the working set versus HEAD, by name.
+	AddedViews    []string
+	ModifiedViews []string
+	RemovedViews  []string
 }
 
 // DiffParams represents the parameters of VersioningBackend.DumboDBDiff method.
@@ -333,10 +337,27 @@ type CollectionDiff struct {
 	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
 }
 
+// ViewDefinition is a view's stored definition, carried in diffs.
+type ViewDefinition struct {
+	ViewOn   string
+	Pipeline *types.Array
+}
+
+// ViewChange represents a view added, removed, or redefined between two
+// revisions. From is nil for an added view; To is nil for a removed view; both
+// are set (with differing definitions) for a redefine.
+type ViewChange struct {
+	Name   string
+	Status string // "added", "deleted", or "modified"
+	From   *ViewDefinition
+	To     *ViewDefinition
+}
+
 // DiffResult represents the result of VersioningBackend.DumboDBDiff method.
-// Only collections with at least one change appear.
+// Only collections and views with at least one change appear.
 type DiffResult struct {
 	Collections []CollectionDiff
+	Views       []ViewChange
 }
 
 type ResetParams struct {
