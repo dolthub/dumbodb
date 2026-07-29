@@ -31,6 +31,12 @@ import (
 // the document primary key.
 const DefaultIndexName = "_id_"
 
+// ReservedMetadataIndexName is a reserved key in a collection's secondary-index
+// AddressMap under which per-collection metadata (collation, validator) is
+// stored as a BSON blob. It is not a real index: user index creation with this
+// name is rejected, and it is filtered from listIndexes.
+const ReservedMetadataIndexName = "__dumbo_metadata__"
+
 // Collection is a generic interface for all backends for accessing collection.
 //
 // Collection object should be stateless and temporary;
