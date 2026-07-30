@@ -63,7 +63,7 @@ db.items.insertMany([
 ])
 db.runCommand({ doltCommit: 1, message: "seed items", author: "alice <alice@acme.com>" })
 
-db.getSiblingDB("vwmrg1@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
 
 // Feature adds the view.
 var feat = db.getSiblingDB("vwmrg1@feature")
@@ -76,7 +76,7 @@ db.items.insertOne({ _id: 4, status: "active" })
 db.runCommand({ doltCommit: 1, message: "main: add item 4", author: "alice <alice@acme.com>" })
 
 // Merge feature into main.
-db.getSiblingDB("vwmrg1@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
 // Expected: { commitId: "<hash>", message: "<merge message>", ok: 1 }
 // The message is NOT "fast-forward" -- a merge commit was created.
 
@@ -103,7 +103,7 @@ db.items.insertMany([
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
 
-db.getSiblingDB("vwmrg2@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
 
 // Feature: cv -> inactive.
 var feat = db.getSiblingDB("vwmrg2@feature")
@@ -115,12 +115,11 @@ db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: 
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
 // Merge surfaces a conflict (mongosh throws / ok:0).
-var main = db.getSiblingDB("vwmrg2@main")
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
 // Expected: unresolved conflicts
 
 // The conflict is self-describing: it names the view and carries ours/theirs.
-var rc = main.runCommand({ doltConflicts: 1 })
+var rc = db.runCommand({ doltConflicts: 1 })
 printjson(rc.views)
 // Expected: views has length 1 with
 //   { conflictId: "view:cv", view: "cv",
@@ -129,8 +128,8 @@ printjson(rc.views)
 //     theirs: { viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ], diffType: "modified" } }
 
 // Resolve to theirs (feature's inactive definition), then complete the merge.
-main.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "theirs" })
-main.runCommand({ doltMerge: 1, continue: 1 })
+db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "theirs" })
+db.runCommand({ doltMerge: 1, continue: 1 })
 // Expected: { ..., ok: 1 }
 
 db.cv.find().sort({ _id: 1 })
@@ -157,7 +156,7 @@ db.items.insertMany([
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.getSiblingDB("vwmrg3@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
 
 var feat = db.getSiblingDB("vwmrg3@feature")
 feat.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ] })
@@ -166,10 +165,9 @@ feat.runCommand({ doltCommit: 1, message: "feature: cv -> inactive", author: "bo
 db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "pending" } } ] })
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
-var main = db.getSiblingDB("vwmrg3@main")
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
-main.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "ours" })
-main.runCommand({ doltMerge: 1, continue: 1 })
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "ours" })
+db.runCommand({ doltMerge: 1, continue: 1 })
 
 db.cv.find().sort({ _id: 1 })
 // Expected: one document: { _id: 3, status: "pending" }  (ours won)
@@ -190,7 +188,7 @@ db.items.insertMany([
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.getSiblingDB("vwmrg4@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
 
 var feat = db.getSiblingDB("vwmrg4@feature")
 feat.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ] })
@@ -199,13 +197,12 @@ feat.runCommand({ doltCommit: 1, message: "feature: cv -> inactive", author: "bo
 db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "pending" } } ] })
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
-var main = db.getSiblingDB("vwmrg4@main")
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
-main.runCommand({
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({
   doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "custom",
   value: { viewOn: "items", pipeline: [ { $match: { status: "active" } } ] }
 })
-main.runCommand({ doltMerge: 1, continue: 1 })
+db.runCommand({ doltMerge: 1, continue: 1 })
 
 db.cv.find().sort({ _id: 1 })
 // Expected: one document: { _id: 1, status: "active" }  (the custom definition)
@@ -227,7 +224,7 @@ db.items.insertMany([
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.getSiblingDB("vwmrg5@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
 
 // Feature drops the view.
 var feat = db.getSiblingDB("vwmrg5@feature")
@@ -238,16 +235,15 @@ feat.runCommand({ doltCommit: 1, message: "feature: drop cv", author: "bob <bob@
 db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "pending" } } ] })
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
-var main = db.getSiblingDB("vwmrg5@main")
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
 
-var rc = main.runCommand({ doltConflicts: 1 })
+var rc = db.runCommand({ doltConflicts: 1 })
 printjson(rc.views)
 // Expected: one entry with ours.diffType == "modified" and theirs == null.
 
 // Resolve to theirs: apply the deletion.
-main.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "theirs" })
-main.runCommand({ doltMerge: 1, continue: 1 })
+db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "theirs" })
+db.runCommand({ doltMerge: 1, continue: 1 })
 
 db.runCommand({ listCollections: 1, filter: { name: "cv" } }).cursor.firstBatch
 // Expected: []  (the view was deleted by the resolution)
