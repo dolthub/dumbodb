@@ -238,7 +238,10 @@ collections AddressMap):
   (`{viewOn, pipeline}`), `from` null for an added view and `to` null for a
   removed one (a redefine carries both). `dumboStatus` gets the matching
   status-tagged summary: `views: [{name, status}]`, parallel to its
-  `collections: [{name, status, ...}]`.
+  `collections: [{name, status, ...}]`. `dumboLog` mirrors this per commit:
+  `stat:1` adds a `viewStat` array (`{name, status}`) beside the collection
+  `stat`, and `patch:1` adds a `viewDiff` array (`{name, status, from, to}`)
+  beside the collection `diff`.
 - **Implementation note:** the diff walks the collections AddressMap; each
   changed entry must be classified by chunk type (a `serial.Table` -> collection
   diff of docs+indexes; a view blob -> a view add/remove/modify) so a view is

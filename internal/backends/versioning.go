@@ -239,6 +239,8 @@ type CommitInfo struct {
 	Refs               []string         // branch/tag decorations; empty when commit is not a branch head
 	Stat               []TableStatus    // per-collection change summary (only when LogParams.Stat is true)
 	Diff               []CollectionDiff // full document diffs (only when LogParams.Patch is true)
+	ViewStat           []ViewStatus     // per-view change summary (only when LogParams.Stat is true)
+	ViewDiff           []ViewChange     // full view definition diffs (only when LogParams.Patch is true)
 }
 
 type LogResult struct {

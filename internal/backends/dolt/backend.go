@@ -2505,6 +2505,25 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					}
 				}
 			}
+
+			// View lifecycle for this commit, mirroring the collection stat/diff
+			// above. Skipped in the document-id-filtered path (a view definition
+			// change is not a document match), matching how index changes are
+			// dropped there.
+			if len(idFilters) == 0 {
+				viewChanges, vErr := diffViewEntries(ctx, db.cs, db.ns, parentAM, commitAM)
+				if vErr != nil {
+					return nil, fmt.Errorf("DumboDBLog: view diffs for commit %q: %w", ci.Hash.String(), vErr)
+				}
+				for _, vc := range viewChanges {
+					if params.Stat {
+						info.ViewStat = append(info.ViewStat, backends.ViewStatus{Name: vc.Name, Status: vc.Status})
+					}
+					if params.Patch {
+						info.ViewDiff = append(info.ViewDiff, vc)
+					}
+				}
+			}
 		}
 
 		commits = append(commits, info)

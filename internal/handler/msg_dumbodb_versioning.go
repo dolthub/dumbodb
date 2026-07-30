@@ -1389,6 +1389,25 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 			entry.Set("diff", diffArr)
 		}
 
+		// Views parallel the collection stat/diff: viewStat is the status
+		// summary ({name, status}); viewDiff is the full definition diff
+		// ({name, status, from, to}).
+		if len(c.ViewStat) > 0 {
+			viewStatArr := types.MakeArray(len(c.ViewStat))
+			for _, v := range c.ViewStat {
+				viewStatArr.Append(must.NotFail(types.NewDocument("name", v.Name, "status", v.Status)))
+			}
+			entry.Set("viewStat", viewStatArr)
+		}
+
+		if len(c.ViewDiff) > 0 {
+			viewDiffArr := types.MakeArray(len(c.ViewDiff))
+			for _, vc := range c.ViewDiff {
+				viewDiffArr.Append(viewChangeToDoc(vc))
+			}
+			entry.Set("viewDiff", viewDiffArr)
+		}
+
 		commits.Append(entry)
 	}
 

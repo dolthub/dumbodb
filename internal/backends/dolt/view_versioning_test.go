@@ -311,3 +311,46 @@ func viewHasStatus(views []backends.ViewStatus, name, status string) bool {
 	}
 	return false
 }
+
+// TestViewLogStatAndPatch verifies dumboLog surfaces view changes: stat as a
+// {name, status} summary (ViewStat) and patch as a full definition diff
+// (ViewDiff), parallel to the collection stat/diff (workspace-z0i.7).
+func TestViewLogStatAndPatch(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+	ctx := context.Background()
+	if _, err := b.getOrOpenDB(ctx, "vldb", true); err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	insertDocForTest(t, ctx, b, "vldb", 1) // base collection "col"
+	commitBranch(t, b, "vldb", "main", "seed")
+
+	db, err := b.Database("vldb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	if err := db.CreateCollection(ctx, &backends.CreateCollectionParams{
+		Name: "v1", ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "active"),
+	}); err != nil {
+		t.Fatalf("CreateCollection(view): %v", err)
+	}
+	commitBranch(t, b, "vldb", "main", "add view v1")
+
+	statRes, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "vldb", Branch: "main", Stat: true, Limit: 1})
+	if err != nil {
+		t.Fatalf("DumboDBLog(stat): %v", err)
+	}
+	if len(statRes.Commits) != 1 || !viewHasStatus(statRes.Commits[0].ViewStat, "v1", "added") {
+		t.Fatalf("view add not in log ViewStat: %+v", statRes.Commits)
+	}
+
+	patchRes, err := b.DumboDBLog(ctx, &backends.LogParams{DBName: "vldb", Branch: "main", Patch: true, Limit: 1})
+	if err != nil {
+		t.Fatalf("DumboDBLog(patch): %v", err)
+	}
+	vd := patchRes.Commits[0].ViewDiff
+	if len(vd) != 1 || vd[0].Name != "v1" || vd[0].Status != "added" || vd[0].To == nil || vd[0].To.ViewOn != "col" {
+		t.Fatalf("view add not in log ViewDiff: %+v", vd)
+	}
+}
