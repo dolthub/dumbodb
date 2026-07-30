@@ -332,11 +332,15 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 func unionCollectionNames(ctx context.Context, cs *nbs.GenerationalNBS, aAM, bAM prolly.AddressMap) ([]string, error) {
 	seen := make(map[string]struct{})
 
-	// View entries are metadata blobs, not document maps. They are not yet
-	// surfaced in version-control diff/status (workspace-z0i.7); skip them so
-	// the collection walk never opens a view blob as a document map.
+	// View entries are metadata blobs, not document maps; they are not yet
+	// surfaced in version-control diff/status (workspace-z0i.7). The internal
+	// __dumbo_catalog__ collection is also hidden from diff/status. Skip both so
+	// the collection walk never opens a view blob and never leaks the catalog.
 	collect := func(am prolly.AddressMap) error {
 		return am.IterAll(ctx, func(name string, h hash.Hash) error {
+			if name == reservedCatalogName {
+				return nil
+			}
 			isView, err := isViewEntry(ctx, cs, h)
 			if err != nil {
 				return err

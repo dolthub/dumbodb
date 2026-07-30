@@ -2911,7 +2911,11 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	}
 
 	if _, exists := state.uuids[c.name]; !exists {
-		state.uuids[c.name] = uuid.New().String()
+		collUUID := uuid.New().String()
+		state.uuids[c.name] = collUUID
+		if err := state.upsertCatalogDoc(ctx, c.db.rootish, c.name, &collMeta{UUID: collUUID}); err != nil {
+			return prolly.Map{}, fmt.Errorf("persisting metadata for auto-created collection %q: %w", c.name, err)
+		}
 	}
 
 	return emptyMap, nil

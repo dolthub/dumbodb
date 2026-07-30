@@ -161,10 +161,20 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 
 	var colls []backends.CollectionInfo
 
+	// Per-collection metadata (UUID, validator, capped, timeseries) is read from
+	// the durable, branch-scoped catalog for this AM.
+	catalog, err := listCatalog(ctx, state, am)
+	if err != nil {
+		return nil, err
+	}
+
 	// Each collections-AddressMap entry is either a collection (DTBL chunk) or
 	// a view (BlobFileID metadata chunk); classify by chunk type and surface
-	// views with their definition.
+	// views with their definition. The internal catalog collection is hidden.
 	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
+		if name == reservedCatalogName {
+			return nil
+		}
 		if params != nil && params.Name != "" && name != params.Name {
 			return nil
 		}
@@ -187,34 +197,23 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			return nil
 		}
 
-		ci := backends.CollectionInfo{Name: name, UUID: state.uuids[name]}
-		if v, ok := state.validators[name]; ok {
-			ci.Validator = v.Validator
-			ci.ValidationLevel = v.ValidationLevel
-			ci.ValidationAction = v.ValidationAction
-		}
-		if c, ok := state.capped[name]; ok {
-			ci.CappedSize = c.CappedSize
-			ci.CappedDocuments = c.CappedDocuments
+		ci := backends.CollectionInfo{Name: name}
+		if m := catalog[name]; m != nil {
+			ci.UUID = m.UUID
+			ci.Validator = m.Validator
+			ci.ValidationLevel = m.ValidationLevel
+			ci.ValidationAction = m.ValidationAction
+			ci.CappedSize = m.CappedSize
+			ci.CappedDocuments = m.CappedDocuments
+			ci.IsTimeSeries = m.IsTimeSeries
+			ci.TimeField = m.TimeField
+			ci.MetaField = m.MetaField
+			ci.Granularity = m.Granularity
 		}
 		colls = append(colls, ci)
 		return nil
 	}); err != nil {
 		return nil, err
-	}
-
-	// Include time series collections (already in the address map, but add TS metadata).
-	for name, ts := range state.timeSeries {
-		// Find and update the existing entry in colls (it's already there from the address map iteration).
-		for i, c := range colls {
-			if c.Name == name {
-				colls[i].IsTimeSeries = true
-				colls[i].TimeField = ts.TimeField
-				colls[i].MetaField = ts.MetaField
-				colls[i].Granularity = ts.Granularity
-				break
-			}
-		}
 	}
 
 	slices.SortFunc(colls, func(a, b backends.CollectionInfo) int {
@@ -285,19 +284,33 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		return err
 	}
 
-	// Generate and store a UUID for this collection.
+	// Persist the collection's metadata (UUID + validator + capped + timeseries)
+	// durably in the branch-scoped catalog. The in-memory maps are kept as a
+	// write-through cache for in-session reads.
 	collUUID := uuid.New()
-	state.uuids[params.Name] = collUUID.String()
+	meta := &collMeta{
+		UUID:             collUUID.String(),
+		Validator:        params.Validator,
+		ValidationLevel:  params.ValidationLevel,
+		ValidationAction: params.ValidationAction,
+		CappedSize:       params.CappedSize,
+		CappedDocuments:  params.CappedDocuments,
+		IsTimeSeries:     params.IsTimeSeries,
+		TimeField:        params.TimeField,
+		MetaField:        params.MetaField,
+		Granularity:      params.Granularity,
+	}
+	if err := state.upsertCatalogDoc(ctx, db.rootish, params.Name, meta); err != nil {
+		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)
+	}
 
-	// Store capped configuration if provided.
+	state.uuids[params.Name] = collUUID.String()
 	if params.CappedSize > 0 {
 		state.capped[params.Name] = &cappedCollectionMeta{
 			CappedSize:      params.CappedSize,
 			CappedDocuments: params.CappedDocuments,
 		}
 	}
-
-	// Store validator if provided.
 	if params.Validator != nil || params.ValidationLevel != "" || params.ValidationAction != "" {
 		state.validators[params.Name] = &collectionValidator{
 			Validator:        params.Validator,
@@ -305,8 +318,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 			ValidationAction: params.ValidationAction,
 		}
 	}
-
-	// Store time series metadata if provided.
 	if params.IsTimeSeries {
 		state.timeSeries[params.Name] = &timeSeriesMeta{
 			TimeField:   params.TimeField,
@@ -352,6 +363,10 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 		return ed.Delete(ctx, params.Name)
 	}); err != nil {
 		return err
+	}
+
+	if err := state.deleteCatalogDoc(ctx, db.rootish, params.Name); err != nil {
+		return fmt.Errorf("removing collection metadata for %q: %w", params.Name, err)
 	}
 
 	delete(state.uuids, params.Name)
@@ -410,6 +425,22 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 		return ed.Add(ctx, params.NewName, oldAddr)
 	}); err != nil {
 		return err
+	}
+
+	// Move the metadata document with the collection, preserving its UUID.
+	renameAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
+		return err
+	}
+	if meta, mErr := readCatalogDoc(ctx, state, renameAM, params.OldName); mErr != nil {
+		return fmt.Errorf("reading collection metadata for %q: %w", params.OldName, mErr)
+	} else if meta != nil {
+		if err := state.upsertCatalogDoc(ctx, db.rootish, params.NewName, meta); err != nil {
+			return fmt.Errorf("moving collection metadata to %q: %w", params.NewName, err)
+		}
+		if err := state.deleteCatalogDoc(ctx, db.rootish, params.OldName); err != nil {
+			return fmt.Errorf("removing old collection metadata for %q: %w", params.OldName, err)
+		}
 	}
 
 	// Transfer UUID from old name to new name.
@@ -523,6 +554,31 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 		}
 	}
 
+	// Persist the changed metadata to the durable catalog (read-modify-write so
+	// unrelated fields such as the UUID are preserved).
+	meta, err := readCatalogDoc(ctx, state, collModBranchAM, params.Name)
+	if err != nil {
+		return fmt.Errorf("reading collection metadata for %q: %w", params.Name, err)
+	}
+	if meta == nil {
+		meta = &collMeta{}
+	}
+	if params.SetValidator {
+		meta.Validator = params.Validator
+	}
+	if params.ValidationLevel != "" {
+		meta.ValidationLevel = params.ValidationLevel
+	}
+	if params.ValidationAction != "" {
+		meta.ValidationAction = params.ValidationAction
+	}
+	if params.CappedSize > 0 {
+		meta.CappedSize = params.CappedSize
+	}
+	if err := state.upsertCatalogDoc(ctx, db.rootish, params.Name, meta); err != nil {
+		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)
+	}
+
 	return nil
 }
 
@@ -551,8 +607,8 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 
 	var totalDocs, totalSizeCollection, totalSizeIndexes int64
 
-	if err := am.IterAll(ctx, func(_ string, collHash hash.Hash) error {
-		if collHash.IsEmpty() {
+	if err := am.IterAll(ctx, func(name string, collHash hash.Hash) error {
+		if collHash.IsEmpty() || name == reservedCatalogName {
 			return nil
 		}
 

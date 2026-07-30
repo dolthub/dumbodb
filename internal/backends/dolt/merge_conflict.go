@@ -1500,6 +1500,14 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
 
+		// The internal metadata catalog must never surface a conflict to the
+		// user. Non-conflicting per-collection metadata docs still merge (the
+		// merged map holds them); a divergent metadata doc auto-resolves to ours
+		// (already what the merged map keeps), so we simply drop its conflicts.
+		if name == reservedCatalogName {
+			collConflicts = nil
+		}
+
 		var artHash hash.Hash // zero = no artifacts
 		if len(collConflicts) > 0 {
 			allConflicts[name] = collConflicts
