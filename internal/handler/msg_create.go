@@ -307,14 +307,22 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		// either side (creating a collection over a view, or vice versa).
 		ci := conninfo.Get(connCtx)
 		existingIsView := false
+		existingUUID := ""
 		if info, verr := lookupCollectionInfo(connCtx, db, collectionName); verr == nil && info != nil {
 			existingIsView = info.IsView
+			existingUUID = info.UUID
 		}
 		if hasExplicitOptions || ci.InTransaction() || existingIsView {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
 			}
+			// Creating a view over an existing collection reports the existing
+			// collection's UUID, matching MongoDB's message (only the UUID value
+			// differs). Other collisions keep the plain message.
 			msg := fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
+			if params.ViewOn != "" && !existingIsView && existingUUID != "" {
+				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\") }", dbName, collectionName, existingUUID)
+			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
 		}
 
