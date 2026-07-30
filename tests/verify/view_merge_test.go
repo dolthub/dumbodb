@@ -177,13 +177,25 @@ func TestViewMergeVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "seed items", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
+		// Feature adds the view.
 		vmCreateView(t, env.Client.Database(dbName+"@feature"), "cv", "items", vmMatchPipeline("active"))
 		dumboDBCommit(t, env, dbName+"@feature", "feature: add view cv", "bob <bob@widgets.io>")
 
+		// Main advances independently so the merge is a real 3-way merge, not a
+		// fast-forward. Without this both branches share a linear history and
+		// doltMerge just advances the main pointer -- the view-add is never
+		// actually merged.
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 4}, {Key: "status", Value: "active"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: add item 4", "alice <alice@acme.com>")
+
 		raw := vmMerge(t, env, dbName, "feature")
 		assert.EqualValues(t, 1, raw["ok"], "adding a view on one branch must merge cleanly: %v", raw)
+		assert.NotEqual(t, "fast-forward", raw["message"], "diverged branches must produce a real merge commit, not a fast-forward: %v", raw)
 
-		assert.Equal(t, []int32{1}, vmViewIDs(t, db, "cv"), "merged view resolves the active doc")
+		// The view merged in from feature resolves both active docs, and main's
+		// independent commit survived the merge.
+		assert.Equal(t, []int32{1, 4}, vmViewIDs(t, db, "cv"), "merged view resolves the active docs from both sides")
 	})
 
 	t.Run("Scenario2_RedefineConflict_ResolveTheirs", func(t *testing.T) {

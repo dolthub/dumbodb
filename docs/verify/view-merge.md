@@ -43,8 +43,14 @@ which definition is in effect:
 
 ## Scenario 1: A view added on a branch merges cleanly
 
-A branch that adds a view merges into a branch that never had it; the view then
-resolves on the target branch.
+A branch that adds a view merges into a branch that advanced independently; the
+view then resolves on the target branch.
+
+Note the extra commit on `main` after branching: without it, `main` and
+`feature` share a single line of history and `doltMerge` just fast-forwards the
+`main` pointer to `feature`'s commit -- no 3-way merge runs and the view-add is
+never actually merged. Advancing `main` with its own commit forces a real merge
+commit, which is what exercises the view-merge path.
 
 ```js
 var db = db.getSiblingDB("vwmrg1")
@@ -64,13 +70,19 @@ var feat = db.getSiblingDB("vwmrg1@feature")
 feat.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 feat.runCommand({ doltCommit: 1, message: "feature: add view cv", author: "bob <bob@widgets.io>" })
 
+// Main advances independently so the merge is a real 3-way merge (not a
+// fast-forward).
+db.items.insertOne({ _id: 4, status: "active" })
+db.runCommand({ doltCommit: 1, message: "main: add item 4", author: "alice <alice@acme.com>" })
+
 // Merge feature into main.
 db.getSiblingDB("vwmrg1@main").runCommand({ doltMerge: 1, merge_in: "feature" })
-// Expected: { ..., ok: 1 }
+// Expected: { commitId: "<hash>", message: "<merge message>", ok: 1 }
+// The message is NOT "fast-forward" -- a merge commit was created.
 
-// The view now resolves on main.
+// The view now resolves on main, over main's own data too.
 db.cv.find().sort({ _id: 1 })
-// Expected: one document: { _id: 1, status: "active" }
+// Expected: two documents: { _id: 1, status: "active" }, { _id: 4, status: "active" }
 ```
 
 ---
