@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 func matchOnPipeline(t *testing.T, field, value string) *types.Array {
@@ -167,21 +168,36 @@ func TestViewMergeClean(t *testing.T) {
 	}
 }
 
-// TestViewMergeConflict verifies that a view redefined divergently on both
-// branches fails the merge loudly rather than silently picking a side
-// (workspace-z0i.6; interactive resolution is a follow-up).
-func TestViewMergeConflict(t *testing.T) {
-	b, dir := newBackendForTest(t)
-	defer os.RemoveAll(dir)
-	defer b.Close()
+// viewMatchValue returns the {$match:{status:<v>}} value of the named view's
+// single-stage pipeline, for asserting which definition a merge resolved to.
+func viewMatchValue(t *testing.T, db backends.Database, name string) string {
+	t.Helper()
+	res, err := db.ListCollections(context.Background(), &backends.ListCollectionsParams{Name: name})
+	if err != nil {
+		t.Fatalf("ListCollections(%q): %v", name, err)
+	}
+	if len(res.Collections) != 1 || res.Collections[0].ViewPipeline == nil {
+		t.Fatalf("view %q not found or has no pipeline: %+v", name, res.Collections)
+	}
+	stage0, _ := res.Collections[0].ViewPipeline.Get(0)
+	match, _ := stage0.(*types.Document).Get("$match")
+	v, _ := match.(*types.Document).Get("status")
+	s, _ := v.(string)
+	return s
+}
 
+// setupViewConflict builds a db where view "cv" is redefined divergently on
+// main (status=pending) and feature (status=inactive), then merges feature into
+// main and returns the resulting conflict (the merge is left paused).
+func setupViewConflict(t *testing.T, b *Backend, dbName string) backends.Database {
+	t.Helper()
 	ctx := context.Background()
-	if _, err := b.getOrOpenDB(ctx, "vcdb", true); err != nil {
+	if _, err := b.getOrOpenDB(ctx, dbName, true); err != nil {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
-	insertDocForTest(t, ctx, b, "vcdb", 1)
+	insertDocForTest(t, ctx, b, dbName, 1)
 
-	mainDB, err := b.Database("vcdb")
+	mainDB, err := b.Database(dbName)
 	if err != nil {
 		t.Fatalf("Database(main): %v", err)
 	}
@@ -190,11 +206,10 @@ func TestViewMergeConflict(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateCollection(view): %v", err)
 	}
-	commitBranch(t, b, "vcdb", "main", "seed base + view cv")
-	branchFrom(t, b, "vcdb", "main", "feature")
+	commitBranch(t, b, dbName, "main", "seed base + view cv")
+	branchFrom(t, b, dbName, "main", "feature")
 
-	// Redefine cv differently on each branch.
-	featDB, err := b.Database("vcdb@feature")
+	featDB, err := b.Database(dbName + "@feature")
 	if err != nil {
 		t.Fatalf("Database(feature): %v", err)
 	}
@@ -203,20 +218,86 @@ func TestViewMergeConflict(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CollMod(feature): %v", err)
 	}
-	commitBranch(t, b, "vcdb", "feature", "redefine cv on feature")
+	commitBranch(t, b, dbName, "feature", "redefine cv on feature")
 
 	if err := mainDB.CollMod(ctx, &backends.CollModParams{
 		Name: "cv", SetView: true, ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "pending"),
 	}); err != nil {
 		t.Fatalf("CollMod(main): %v", err)
 	}
-	commitBranch(t, b, "vcdb", "main", "redefine cv on main")
+	commitBranch(t, b, dbName, "main", "redefine cv on main")
 
-	_, err = b.DumboDBMerge(ctx, &backends.MergeParams{
-		DBName: "vcdb", Into: "main", From: "feature",
-		Message: "merge feature", Author: "t <t@e>",
-	})
-	if err == nil {
+	if _, err := b.DumboDBMerge(ctx, &backends.MergeParams{
+		DBName: dbName, Into: "main", From: "feature", Message: "merge", Author: "t <t@e>",
+	}); err == nil {
 		t.Fatal("DumboDBMerge: expected a view merge conflict, got nil")
+	}
+	return mainDB
+}
+
+// TestViewMergeConflictResolveTheirs verifies the doltConflicts /
+// doltResolveConflict("theirs") / continue flow for a view-definition conflict
+// (workspace-z0i.6).
+func TestViewMergeConflictResolveTheirs(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+	ctx := context.Background()
+
+	mainDB := setupViewConflict(t, b, "vcdb")
+
+	confl, err := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "vcdb", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DumboDBConflicts: %v", err)
+	}
+	if len(confl.Views) != 1 || confl.Views[0].Name != "cv" || confl.Views[0].ConflictID != "view:cv" {
+		t.Fatalf("expected one view conflict for cv, got %+v", confl.Views)
+	}
+	if confl.Views[0].Ours == nil || confl.Views[0].Theirs == nil {
+		t.Fatalf("view conflict missing ours/theirs: %+v", confl.Views[0])
+	}
+
+	if _, err := b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
+		DBName: "vcdb", Branch: "main", Collection: "cv", ConflictID: "view:cv", Resolution: "theirs",
+	}); err != nil {
+		t.Fatalf("DumboDBResolveConflict(theirs): %v", err)
+	}
+	if _, err := b.DumboDBMerge(ctx, &backends.MergeParams{
+		DBName: "vcdb", Into: "main", Continue: true, Message: "merge", Author: "t <t@e>",
+	}); err != nil {
+		t.Fatalf("DumboDBMerge continue: %v", err)
+	}
+	if got := viewMatchValue(t, mainDB, "cv"); got != "inactive" {
+		t.Fatalf("after resolving theirs, view cv match = %q, want %q", got, "inactive")
+	}
+}
+
+// TestViewMergeConflictResolveCustom verifies a custom resolution replaces the
+// view definition with a supplied one.
+func TestViewMergeConflictResolveCustom(t *testing.T) {
+	b, dir := newBackendForTest(t)
+	defer os.RemoveAll(dir)
+	defer b.Close()
+	ctx := context.Background()
+
+	mainDB := setupViewConflict(t, b, "vcdb")
+
+	custom := must.NotFail(types.NewDocument(
+		"viewOn", "col",
+		"pipeline", matchOnPipeline(t, "status", "custom"),
+	))
+	if _, err := b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
+		DBName: "vcdb", Branch: "main", Collection: "cv", ConflictID: "view:cv",
+		Resolution: "custom", Value: custom,
+	}); err != nil {
+		t.Fatalf("DumboDBResolveConflict(custom): %v", err)
+	}
+	if _, err := b.DumboDBMerge(ctx, &backends.MergeParams{
+		DBName: "vcdb", Into: "main", Continue: true, Message: "merge", Author: "t <t@e>",
+	}); err != nil {
+		t.Fatalf("DumboDBMerge continue: %v", err)
+	}
+	if got := viewMatchValue(t, mainDB, "cv"); got != "custom" {
+		t.Fatalf("after custom resolution, view cv match = %q, want %q", got, "custom")
 	}
 }

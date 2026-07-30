@@ -243,12 +243,15 @@ collections AddressMap):
 - branching a DB carries its views; merging two branches merges the AddressMap,
   so a view added on one side merges in.
 - reading `mydb@<oldcommit>` sees the views as of that commit.
-- branch + non-conflicting merge DONE (workspace-z0i.6): a view lives in the
-  branched AddressMap, so branching carries it and a view added or dropped on
-  one side merges in cleanly. A view redefined divergently on both branches
-  currently fails the merge loudly (GraphContainsCycle-style hard error); the
-  interactive doltConflicts/doltResolveConflict workflow for view definitions
-  (below) is the remaining piece.
+- branch + merge DONE (workspace-z0i.6): a view lives in the branched
+  AddressMap, so branching carries it and a view added or dropped on one side
+  merges in cleanly. A view redefined divergently on both branches is a merge
+  conflict that pauses the merge and is resolved interactively via
+  doltConflicts (reports the view conflict with base/ours/theirs definitions and
+  a "view:<name>" conflictId) and doltResolveConflict (theirs/ours/custom, where
+  custom supplies a {viewOn, pipeline} definition), then dumboMerge continue
+  commits. View conflicts persist in the merge-state file (inline BSON) so an
+  in-progress view conflict survives a restart. Verified by view_versioning_test.go.
 
 **View-definition merge conflicts (DumboDB-only; no MongoDB oracle).** A view
 redefined (or created, or dropped) divergently on both branches is a conflict on
@@ -359,10 +362,10 @@ metadata, validators, collection default collation).
 - O3: Version-control semantics for view defs. Diff granularity DECIDED (4.7):
   DB-level `addedViews`/`modifiedViews`/`removedViews` arrays carrying the view
   def (`{from,to}` for redefine), mirroring the per-collection index-diff arrays.
-  Merge-conflict resolution DECIDED (4.7): divergent view defs conflict on the
-  AddressMap entry and resolve via `doltConflicts`/`doltResolveConflict`
-  (`theirs`/`ours`/`custom`), like index/doc conflicts; DumboDB-only, verified by
-  `docs/verify/view-merge.md`. No MongoDB reference.
+  Merge-conflict resolution DONE (4.7, workspace-z0i.6): divergent view defs
+  conflict on the AddressMap entry and resolve via
+  `doltConflicts`/`doltResolveConflict` (`theirs`/`ours`/`custom`), like
+  index/doc conflicts; DumboDB-only. No MongoDB reference.
 - O4: `$lookup`/`$graphLookup` inside a view -- keep the load-whole-foreign
   approach (G6) or stream; and resolve a view-typed foreign target.
 - O5: Interaction with capped/timeseries/validator metadata -- one catalog for

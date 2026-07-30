@@ -36,13 +36,13 @@ const mergeStateFileName = ".dumbodb_merge_state.json"
 // Only operation metadata is stored; conflict entries are reconstructed
 // from the ArtifactMap stored in the DTBL for each conflicting collection.
 type mergeStateDisk struct {
-	Operation   string `json:"op"`             // "merge", "cherry-pick", "rebase"
-	IntoBranch  string `json:"into"`
-	FromBranch  string `json:"from,omitempty"` // merge only
-	OntoBranch  string `json:"onto,omitempty"` // rebase only
-	FromHash    string `json:"fromHash,omitempty"`
-	IntoHash    string `json:"intoHash"`
-	PremergeAM  string `json:"premergeAM"`     // hash of the premerge AddressMap RTVL
+	Operation  string `json:"op"` // "merge", "cherry-pick", "rebase"
+	IntoBranch string `json:"into"`
+	FromBranch string `json:"from,omitempty"` // merge only
+	OntoBranch string `json:"onto,omitempty"` // rebase only
+	FromHash   string `json:"fromHash,omitempty"`
+	IntoHash   string `json:"intoHash"`
+	PremergeAM string `json:"premergeAM"` // hash of the premerge AddressMap RTVL
 
 	// Cherry-pick specific.
 	PickHash    string `json:"pickHash,omitempty"`
@@ -56,6 +56,22 @@ type mergeStateDisk struct {
 
 	// Collections that have conflict artifacts in the working set.
 	ConflictCollections []string `json:"conflictCols"`
+
+	// View-definition conflicts (no ArtifactMap; persisted inline).
+	ViewConflicts []viewConflictDisk `json:"viewConflicts,omitempty"`
+}
+
+// viewConflictDisk persists one view-definition merge conflict. Each side's
+// definition is hex-encoded BSON (empty when that side deleted or lacked it).
+type viewConflictDisk struct {
+	Name      string `json:"name"`
+	ID        string `json:"id"`
+	OurDiff   string `json:"ourDiff"`
+	TheirDiff string `json:"theirDiff"`
+	Resolved  bool   `json:"resolved"`
+	BaseHex   string `json:"base,omitempty"`
+	OursHex   string `json:"ours,omitempty"`
+	TheirsHex string `json:"theirs,omitempty"`
 }
 
 func (state *dbState) mergeStateFilePath() string {
@@ -92,17 +108,37 @@ func saveMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) er
 	}
 
 	disk := mergeStateDisk{
-		Operation:           op,
-		IntoBranch:          ms.intoBranch,
-		FromBranch:          ms.fromBranch,
-		OntoBranch:          ms.ontoBranch,
-		FromHash:            ms.fromHash.String(),
-		IntoHash:            ms.intoHash.String(),
-		PremergeAM:          preMergeRef.TargetHash().String(),
-		PickHash:            ms.pickHash.String(),
-		OriginalMsg:         ms.originalMsg,
+		Operation:             op,
+		IntoBranch:            ms.intoBranch,
+		FromBranch:            ms.fromBranch,
+		OntoBranch:            ms.ontoBranch,
+		FromHash:              ms.fromHash.String(),
+		IntoHash:              ms.intoHash.String(),
+		PremergeAM:            preMergeRef.TargetHash().String(),
+		PickHash:              ms.pickHash.String(),
+		OriginalMsg:           ms.originalMsg,
 		RebaseCommitsReplayed: ms.rebaseCommitsReplayed,
-		ConflictCollections: conflictCols,
+		ConflictCollections:   conflictCols,
+	}
+
+	for _, v := range ms.viewConflicts {
+		vd := viewConflictDisk{Name: v.name, ID: v.id, OurDiff: v.ourDiff, TheirDiff: v.theirDiff, Resolved: v.resolved}
+		if v.base != nil {
+			if vd.BaseHex, err = viewMetaToBSONHex(v.base); err != nil {
+				return fmt.Errorf("encoding base view conflict %q: %w", v.name, err)
+			}
+		}
+		if v.ours != nil {
+			if vd.OursHex, err = viewMetaToBSONHex(v.ours); err != nil {
+				return fmt.Errorf("encoding ours view conflict %q: %w", v.name, err)
+			}
+		}
+		if v.theirs != nil {
+			if vd.TheirsHex, err = viewMetaToBSONHex(v.theirs); err != nil {
+				return fmt.Errorf("encoding theirs view conflict %q: %w", v.name, err)
+			}
+		}
+		disk.ViewConflicts = append(disk.ViewConflicts, vd)
 	}
 
 	if ms.isRebase {
@@ -166,15 +202,15 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 	}
 
 	ms := &mergeInProgress{
-		intoBranch:   disk.IntoBranch,
-		fromBranch:   disk.FromBranch,
-		ontoBranch:   disk.OntoBranch,
-		premergeAM:   preMergeAM,
-		resolvedAM:   resolvedAM,
-		isCherryPick: disk.Operation == "cherry-pick",
-		isRebase:     disk.Operation == "rebase",
-		isRevert:     disk.Operation == "revert",
-		originalMsg:  disk.OriginalMsg,
+		intoBranch:            disk.IntoBranch,
+		fromBranch:            disk.FromBranch,
+		ontoBranch:            disk.OntoBranch,
+		premergeAM:            preMergeAM,
+		resolvedAM:            resolvedAM,
+		isCherryPick:          disk.Operation == "cherry-pick",
+		isRebase:              disk.Operation == "rebase",
+		isRevert:              disk.Operation == "revert",
+		originalMsg:           disk.OriginalMsg,
 		rebaseCommitsReplayed: disk.RebaseCommitsReplayed,
 	}
 
@@ -210,6 +246,29 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 		}
 		if len(entries) > 0 {
 			ms.conflicts[collName] = entries
+		}
+	}
+
+	if len(disk.ViewConflicts) > 0 {
+		ms.viewConflicts = make(map[string]*viewConflictEntry, len(disk.ViewConflicts))
+		for _, vd := range disk.ViewConflicts {
+			vce := &viewConflictEntry{name: vd.Name, id: vd.ID, ourDiff: vd.OurDiff, theirDiff: vd.TheirDiff, resolved: vd.Resolved}
+			if vd.BaseHex != "" {
+				if vce.base, err = viewMetaFromBSONHex(vd.BaseHex); err != nil {
+					return nil, fmt.Errorf("decoding base view conflict %q: %w", vd.Name, err)
+				}
+			}
+			if vd.OursHex != "" {
+				if vce.ours, err = viewMetaFromBSONHex(vd.OursHex); err != nil {
+					return nil, fmt.Errorf("decoding ours view conflict %q: %w", vd.Name, err)
+				}
+			}
+			if vd.TheirsHex != "" {
+				if vce.theirs, err = viewMetaFromBSONHex(vd.TheirsHex); err != nil {
+					return nil, fmt.Errorf("decoding theirs view conflict %q: %w", vd.Name, err)
+				}
+			}
+			ms.viewConflicts[vd.Name] = vce
 		}
 	}
 

@@ -993,9 +993,38 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		)))
 	}
 
+	viewsArr := types.MakeArray(len(res.Views))
+	for _, vc := range res.Views {
+		buildViewSide := func(def *backends.ViewDefinition, diffType string) any {
+			if def == nil {
+				return types.Null
+			}
+			pipeline := def.Pipeline
+			if pipeline == nil {
+				pipeline = types.MakeArray(0)
+			}
+			side := must.NotFail(types.NewDocument(
+				"viewOn", def.ViewOn,
+				"pipeline", pipeline,
+			))
+			if diffType != "" {
+				side.Set("diffType", diffType)
+			}
+			return side
+		}
+		viewsArr.Append(must.NotFail(types.NewDocument(
+			"conflictId", vc.ConflictID,
+			"view", vc.Name,
+			"base", buildViewSide(vc.Base, ""),
+			"ours", buildViewSide(vc.Ours, vc.OurDiffType),
+			"theirs", buildViewSide(vc.Theirs, vc.TheirDiffType),
+		)))
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"collections", collectionsArr,
+			"views", viewsArr,
 			"ok", float64(1),
 		)),
 	)

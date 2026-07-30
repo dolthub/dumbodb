@@ -164,8 +164,23 @@ type CollectionConflicts struct {
 
 // ConflictsResult represents the result of VersioningBackend.DumboDBConflicts method.
 // Returns all conflict details for all collections.
+// ViewConflict describes a view definition that diverged on both branches of a
+// merge (a DumboDB-only conflict; MongoDB has no versioning analogue). Base is
+// the common-ancestor definition (nil if the view did not exist there); Ours and
+// Theirs are the two sides (nil if that side deleted the view).
+type ViewConflict struct {
+	Name          string
+	ConflictID    string
+	Base          *ViewDefinition
+	Ours          *ViewDefinition
+	Theirs        *ViewDefinition
+	OurDiffType   string // "added", "modified", "deleted"
+	TheirDiffType string // "added", "modified", "deleted"
+}
+
 type ConflictsResult struct {
 	Collections []CollectionConflicts
+	Views       []ViewConflict
 }
 
 type ResolveConflictParams struct {
