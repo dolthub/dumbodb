@@ -273,11 +273,11 @@ with `theirs`/`ours`/`custom` to resolve; see docs/verify/index-merge.md scenari
   last-writer-wins.
 
 This is a version-control feature with no MongoDB counterpart, so it is **not**
-parity-tested. It is specified and verified by a dedicated human verification
-document, `docs/verify/view-merge.md` (with the matching automated test
-`tests/verify/view_merge_test.go`, per docs/verify/README.md), walking the
-redefine/redefine, redefine/drop, and create/create conflict scenarios and each
-resolution option top to bottom in `mongosh`.
+parity-tested. DONE (workspace-z0i.9): specified and verified by the human
+verification document `docs/verify/view-merge.md` and its matching automated
+test `tests/verify/view_merge_test.go` (`TestViewMergeVerify`, per
+docs/verify/README.md), covering clean merge, divergent-redefine with
+theirs/ours/custom resolution, and the redefine/drop conflict.
 
 The status/diff *shape* mirrors MongoDB's absence of a versioning analogue by
 being ours to define; the *content* (view defs) matches what MongoDB's
