@@ -100,54 +100,46 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 		collections.Append(collectionDiffToDoc(cd))
 	}
 
-	addedViews, modifiedViews, removedViews := viewChangeArrays(res.Views)
+	views := types.MakeArray(len(res.Views))
+	for _, vc := range res.Views {
+		views.Append(viewChangeToDoc(vc))
+	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"collections", collections,
-			"addedViews", addedViews,
-			"modifiedViews", modifiedViews,
-			"removedViews", removedViews,
+			"views", views,
 			"ok", float64(1),
 		)),
 	)
 }
 
-// viewDefToDoc renders a view definition for the diff wire output.
-func viewDefToDoc(name string, def *backends.ViewDefinition) *types.Document {
+// viewDefWireDoc renders a view definition (or null) for the diff wire output.
+func viewDefWireDoc(def *backends.ViewDefinition) any {
+	if def == nil {
+		return types.Null
+	}
 	pipeline := def.Pipeline
 	if pipeline == nil {
 		pipeline = types.MakeArray(0)
 	}
 	return must.NotFail(types.NewDocument(
-		"name", name,
 		"viewOn", def.ViewOn,
 		"pipeline", pipeline,
 	))
 }
 
-// viewChangeArrays splits view changes into the added/modified/removed wire
-// arrays. Added entries carry the new definition; removed entries the old one;
-// modified entries carry {name, from, to}.
-func viewChangeArrays(changes []backends.ViewChange) (added, modified, removed *types.Array) {
-	added = types.MakeArray(0)
-	modified = types.MakeArray(0)
-	removed = types.MakeArray(0)
-	for _, vc := range changes {
-		switch vc.Status {
-		case "added":
-			added.Append(viewDefToDoc(vc.Name, vc.To))
-		case "deleted":
-			removed.Append(viewDefToDoc(vc.Name, vc.From))
-		case "modified":
-			modified.Append(must.NotFail(types.NewDocument(
-				"name", vc.Name,
-				"from", viewDefToDoc(vc.Name, vc.From),
-				"to", viewDefToDoc(vc.Name, vc.To),
-			)))
-		}
-	}
-	return added, modified, removed
+// viewChangeToDoc renders one view change as a status-tagged wire document,
+// mirroring the collections diff shape: a single list where each entry carries
+// its status and from/to definitions (from is null for an added view, to is null
+// for a removed one).
+func viewChangeToDoc(vc backends.ViewChange) *types.Document {
+	return must.NotFail(types.NewDocument(
+		"name", vc.Name,
+		"status", vc.Status,
+		"from", viewDefWireDoc(vc.From),
+		"to", viewDefWireDoc(vc.To),
+	))
 }
 
 // tableStatusToDoc renders a backends.TableStatus as a wire document.
@@ -1696,13 +1688,20 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	viewsChanged := len(res.AddedViews)+len(res.ModifiedViews)+len(res.RemovedViews) > 0
-	dirty := len(res.Tables) > 0 || res.MergeOp != "" || viewsChanged
+	dirty := len(res.Tables) > 0 || res.MergeOp != "" || len(res.Views) > 0
 
 	collections := types.MakeArray(len(res.Tables))
 
 	for _, t := range res.Tables {
 		collections.Append(tableStatusToDoc(t))
+	}
+
+	views := types.MakeArray(len(res.Views))
+	for _, v := range res.Views {
+		views.Append(must.NotFail(types.NewDocument(
+			"name", v.Name,
+			"status", v.Status,
+		)))
 	}
 
 	statusDoc := must.NotFail(types.NewDocument(
@@ -1714,9 +1713,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		statusDoc.Set("commitId", res.CommitID)
 	}
 	statusDoc.Set("collections", collections)
-	statusDoc.Set("addedViews", stringArray(res.AddedViews))
-	statusDoc.Set("modifiedViews", stringArray(res.ModifiedViews))
-	statusDoc.Set("removedViews", stringArray(res.RemovedViews))
+	statusDoc.Set("views", views)
 
 	if res.MergeOp != "" {
 		statusDoc.Set("mergeState", res.MergeOp)

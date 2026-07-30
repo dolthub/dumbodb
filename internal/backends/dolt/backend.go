@@ -2729,14 +2729,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("DumboDBStatus: diffing views for db %q: %w", params.DBName, err)
 	}
 	for _, vc := range viewChanges {
-		switch vc.Status {
-		case "added":
-			result.AddedViews = append(result.AddedViews, vc.Name)
-		case "modified":
-			result.ModifiedViews = append(result.ModifiedViews, vc.Name)
-		case "deleted":
-			result.RemovedViews = append(result.RemovedViews, vc.Name)
-		}
+		result.Views = append(result.Views, backends.ViewStatus{Name: vc.Name, Status: vc.Status})
 	}
 
 	if ms := state.mergeState; ms != nil {
@@ -2759,8 +2752,7 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	// commitId is only set when the working tree is identical to the checked-out
 	// commit: no uncommitted changes (collections or views) AND no
 	// merge/cherry-pick/rebase/revert in progress.
-	viewsChanged := len(result.AddedViews)+len(result.ModifiedViews)+len(result.RemovedViews) > 0
-	if len(tables) == 0 && !viewsChanged && result.MergeOp == "" {
+	if len(tables) == 0 && len(result.Views) == 0 && result.MergeOp == "" {
 		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
 			result.CommitID = h.String()
 		}

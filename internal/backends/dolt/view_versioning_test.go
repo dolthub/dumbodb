@@ -17,7 +17,6 @@ package dolt
 import (
 	"context"
 	"os"
-	"slices"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -88,8 +87,8 @@ func TestViewStatusAndDiff(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateCollection(view): %v", err)
 	}
-	if st := status(); !slices.Contains(st.AddedViews, "v1") {
-		t.Fatalf("added view not in status.AddedViews: %+v", st.AddedViews)
+	if st := status(); !viewHasStatus(st.Views, "v1", "added") {
+		t.Fatalf("added view not in status.Views: %+v", st.Views)
 	}
 	if vs := diffViews(); len(vs) != 1 || vs[0].Name != "v1" || vs[0].Status != "added" || vs[0].To == nil || vs[0].To.ViewOn != "col" {
 		t.Fatalf("added view diff wrong: %+v", vs)
@@ -102,8 +101,8 @@ func TestViewStatusAndDiff(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CollMod(view): %v", err)
 	}
-	if st := status(); !slices.Contains(st.ModifiedViews, "v1") {
-		t.Fatalf("redefined view not in status.ModifiedViews: %+v", st.ModifiedViews)
+	if st := status(); !viewHasStatus(st.Views, "v1", "modified") {
+		t.Fatalf("redefined view not in status.Views: %+v", st.Views)
 	}
 	if vs := diffViews(); len(vs) != 1 || vs[0].Status != "modified" || vs[0].From == nil || vs[0].To == nil {
 		t.Fatalf("modified view diff wrong: %+v", vs)
@@ -114,8 +113,8 @@ func TestViewStatusAndDiff(t *testing.T) {
 	if err := db.DropCollection(ctx, &backends.DropCollectionParams{Name: "v1"}); err != nil {
 		t.Fatalf("DropCollection(view): %v", err)
 	}
-	if st := status(); !slices.Contains(st.RemovedViews, "v1") {
-		t.Fatalf("dropped view not in status.RemovedViews: %+v", st.RemovedViews)
+	if st := status(); !viewHasStatus(st.Views, "v1", "deleted") {
+		t.Fatalf("dropped view not in status.Views: %+v", st.Views)
 	}
 	if vs := diffViews(); len(vs) != 1 || vs[0].Status != "deleted" || vs[0].From == nil {
 		t.Fatalf("deleted view diff wrong: %+v", vs)
@@ -300,4 +299,15 @@ func TestViewMergeConflictResolveCustom(t *testing.T) {
 	if got := viewMatchValue(t, mainDB, "cv"); got != "custom" {
 		t.Fatalf("after custom resolution, view cv match = %q, want %q", got, "custom")
 	}
+}
+
+// viewHasStatus reports whether views contains an entry for name with the given
+// status.
+func viewHasStatus(views []backends.ViewStatus, name, status string) bool {
+	for _, v := range views {
+		if v.Name == name && v.Status == status {
+			return true
+		}
+	}
+	return false
 }

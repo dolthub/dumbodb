@@ -289,10 +289,15 @@ type VersioningStatusResult struct {
 	Tables    []TableStatus
 	MergeOp   string            // "merge", "cherry-pick", "rebase", or "revert"; empty when no operation in progress
 	Conflicts []ConflictSummary // per-collection conflict counts; empty when no conflicts
-	// View lifecycle in the working set versus HEAD, by name.
-	AddedViews    []string
-	ModifiedViews []string
-	RemovedViews  []string
+	// Views is the view lifecycle in the working set versus HEAD, one entry per
+	// changed view with its status. Mirrors Tables (a single status-tagged list).
+	Views []ViewStatus
+}
+
+// ViewStatus is a changed view in a versioning status result.
+type ViewStatus struct {
+	Name   string
+	Status string // "added", "modified", or "deleted"
 }
 
 // DiffParams represents the parameters of VersioningBackend.DumboDBDiff method.
