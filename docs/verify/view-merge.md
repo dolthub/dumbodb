@@ -90,8 +90,8 @@ db.cv.find().sort({ _id: 1 })
 ## Scenario 2: Divergent redefine -- resolve "theirs"
 
 The same view is redefined differently on each branch. The merge stops with a
-conflict; `doltConflicts` reports it under `views`; resolving "theirs" applies
-the other branch's definition.
+conflict; `doltConflicts` reports it as a `type: "view"` entry in the unified
+`conflicts` array; resolving "theirs" applies the other branch's definition.
 
 ```js
 var db = db.getSiblingDB("vwmrg2")
@@ -120,15 +120,16 @@ db.runCommand({ doltMerge: 1, merge_in: "feature" })
 
 // The conflict is self-describing: it names the view and carries ours/theirs.
 var rc = db.runCommand({ doltConflicts: 1 })
-printjson(rc.views)
-// Expected: views has length 1 with
-//   { conflictId: "view:cv", view: "cv",
+printjson(rc.conflicts)
+// Expected: conflicts has length 1 with a type:"view" entry
+//   { conflictId: "<hash>", type: "view", name: "cv",
 //     base:   { viewOn: "items", pipeline: [ { $match: { status: "active"  } } ] },
 //     ours:   { viewOn: "items", pipeline: [ { $match: { status: "pending"  } } ], diffType: "modified" },
 //     theirs: { viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ], diffType: "modified" } }
 
 // Resolve to theirs (feature's inactive definition), then complete the merge.
-db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "theirs" })
+var cid = rc.conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: cid, resolution: "theirs" })
 db.runCommand({ doltMerge: 1, continue: 1 })
 // Expected: { ..., ok: 1 }
 
@@ -137,8 +138,8 @@ db.cv.find().sort({ _id: 1 })
 ```
 
 Key checks:
-- `doltConflicts` returns a `views` array with one entry, not a document
-  conflict under `collections`.
+- `doltConflicts` returns the conflict as a single `type: "view"` entry in the
+  unified `conflicts` array (not a `type: "document"` entry).
 - The entry names the view and carries `base`, `ours`, and `theirs` definitions.
 - After resolving "theirs" and continuing, the view resolves the inactive doc.
 
@@ -166,7 +167,8 @@ db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: 
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
 db.runCommand({ doltMerge: 1, merge_in: "feature" })
-db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "ours" })
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: cid, resolution: "ours" })
 db.runCommand({ doltMerge: 1, continue: 1 })
 
 db.cv.find().sort({ _id: 1 })
@@ -198,8 +200,9 @@ db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: 
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
 db.runCommand({ doltMerge: 1, merge_in: "feature" })
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
 db.runCommand({
-  doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "custom",
+  doltResolveConflict: 1, collection: "cv", conflictId: cid, resolution: "custom",
   value: { viewOn: "items", pipeline: [ { $match: { status: "active" } } ] }
 })
 db.runCommand({ doltMerge: 1, continue: 1 })
@@ -238,11 +241,12 @@ db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <a
 db.runCommand({ doltMerge: 1, merge_in: "feature" })
 
 var rc = db.runCommand({ doltConflicts: 1 })
-printjson(rc.views)
-// Expected: one entry with ours.diffType == "modified" and theirs == null.
+printjson(rc.conflicts)
+// Expected: one type:"view" entry with ours.diffType == "modified" and theirs == null.
 
 // Resolve to theirs: apply the deletion.
-db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: "view:cv", resolution: "theirs" })
+var cid = rc.conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: cid, resolution: "theirs" })
 db.runCommand({ doltMerge: 1, continue: 1 })
 
 db.runCommand({ listCollections: 1, filter: { name: "cv" } }).cursor.firstBatch

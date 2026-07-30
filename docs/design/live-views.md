@@ -259,8 +259,9 @@ collections AddressMap):
   AddressMap, so branching carries it and a view added or dropped on one side
   merges in cleanly. A view redefined divergently on both branches is a merge
   conflict that pauses the merge and is resolved interactively via
-  doltConflicts (reports the view conflict with base/ours/theirs definitions and
-  a "view:<name>" conflictId) and doltResolveConflict (theirs/ours/custom, where
+  doltConflicts (reports the view conflict as a type:"view" entry in the unified
+  conflicts array, with base/ours/theirs definitions and a hash conflictId) and
+  doltResolveConflict (theirs/ours/custom, where
   custom supplies a {viewOn, pipeline} definition), then dumboMerge continue
   commits. View conflicts persist in the merge-state file (inline BSON) so an
   in-progress view conflict survives a restart. Verified by view_versioning_test.go.

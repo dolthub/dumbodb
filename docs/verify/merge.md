@@ -218,7 +218,7 @@ printjson(rStatus)
 //   branch: "main",
 //   dirty: true,
 //   readonly: false,
-//   collections: [...],
+//   changes: [...],
 //   mergeState: "merge",
 //   conflicts: [ { collection: "inventory", count: 1 } ],
 //   ok: 1
@@ -232,34 +232,31 @@ Key checks:
 - `conflicts` lists per-collection conflict counts
 
 ```js
-// Inspect conflicts  -- returns all conflicts grouped by collection.
+// Inspect conflicts  -- returns all conflicts in a single array.
 const rConflicts = db.getSiblingDB("mergedb@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
 // Expected:
 // {
-//   collections: [
-//     {
-//       collection: "inventory",
-//       conflicts: [
-//         { conflictId: "<base64-id>",
-//           type: "documentEdit",
-//           reason: { code: "bothModified",
-//                     message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
-//           base:   { _id: 1, doc: { _id: 1, v: 1 } },
-//           ours:   { _id: 1, doc: { _id: 1, v: 10 }, diffType: "modified" },
-//           theirs: { _id: 1, doc: { _id: 1, v: 20 }, diffType: "modified" } }
-//       ]
-//     }
+//   conflicts: [
+//     { conflictId: "<base64-id>",
+//       type: "document",
+//       name: "inventory",
+//       reason: { code: "bothModified",
+//                 message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
+//       base:   { _id: 1, doc: { _id: 1, v: 1 } },
+//       ours:   { _id: 1, doc: { _id: 1, v: 10 }, diffType: "modified" },
+//       theirs: { _id: 1, doc: { _id: 1, v: 20 }, diffType: "modified" } }
 //   ],
 //   ok: 1
 // }
-const conflictId = rConflicts.collections[0].conflicts[0].conflictId
+const conflictId = rConflicts.conflicts[0].conflictId
 ```
 
 Key checks:
-- `collections` lists per-collection conflict groups, each with a `collection` name and `conflicts` array.
-- Each conflict entry has `conflictId`, a `type` (`"documentEdit"` here), a `reason`
-  (`code` + human `message`), and `base` / `ours` / `theirs` sides.
+- `conflicts` is a single flat array, one entry per conflict, each tagged with a
+  `type` (`"document"` or `"view"`) and the owning namespace `name`.
+- Each entry has `conflictId` (a content hash), a `type` (`"document"` here), a
+  `reason` (`code` + human `message`), and `base` / `ours` / `theirs` sides.
 - Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (there is
   no top-level `_id`), `doc` is the full document, and `base` carries no `diffType`.
 - `base` is the document at the common ancestor (null for new documents).
@@ -306,7 +303,7 @@ printjson(rResolve)
 // Expected: { ok: 1 }
 ```
 
-After resolution, `doltConflicts` returns an empty `collections` array.
+After resolution, `doltConflicts` returns an empty `conflicts` array.
 
 ---
 
@@ -435,7 +432,7 @@ try {
 const conflicts13 = db13.getSiblingDB("mergedb13@main").runCommand({ doltConflicts: 1 })
 printjson(conflicts13)
 // Expected: one conflict for _id:1, no conflict for _id:2
-const cid = conflicts13.collections[0].conflicts[0].conflictId
+const cid = conflicts13.conflicts[0].conflictId
 
 // Resolve _id:1 with "theirs" (feature's value).
 db13.getSiblingDB("mergedb13@main").runCommand({

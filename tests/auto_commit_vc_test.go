@@ -150,6 +150,6 @@ func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 
 	var conflictsRaw bson.M
 	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&conflictsRaw))
-	colls, _ := conflictsRaw["collections"].(bson.A)
-	assert.NotEmpty(t, colls, "conflict must still be reported after restart")
+	conflicts, _ := conflictsRaw["conflicts"].(bson.A)
+	assert.NotEmpty(t, conflicts, "conflict must still be reported after restart")
 }

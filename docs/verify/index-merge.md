@@ -294,15 +294,15 @@ db.items.find({ sku: "S-1" })
 // colliding key, and carries BOTH contenders with their own _ids.
 const rConflicts = db.getSiblingDB("idxmrg4@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
-// Expected: collections[0].conflicts[0] has
-//   type: "uniqueKeyCollision",
+// Expected: conflicts[0] has
+//   type: "document", name: "items",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
 //   base:   null,
 //   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },
 //   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
-const conflictId = rConflicts.collections[0].conflicts[0].conflictId
+const conflictId = rConflicts.conflicts[0].conflictId
 
 // For a collision, "theirs" is a key-ownership swap: evict ours's
 // surviving doc 10 and install theirs's doc 20 under the key. (Resolving
@@ -364,12 +364,12 @@ db.getSiblingDB("idxmrg4b@main").runCommand({ doltMerge: 1, merge_in: "feature" 
 
 const r = db.getSiblingDB("idxmrg4b@main").runCommand({ doltConflicts: 1 })
 printjson(r)
-// Expected: collections[0].conflicts has length 2; one entry with
+// Expected: conflicts has length 2; one entry with
 //   reason.index "by_sku" (ours._id 10, theirs._id 20) and one with
 //   reason.index "by_code" (ours._id 11, theirs._id 21).
 
 // Each collision resolves independently with "ours".
-r.collections[0].conflicts.forEach(function (c) {
+r.conflicts.forEach(function (c) {
   db.getSiblingDB("idxmrg4b@main").runCommand({
     doltResolveConflict: 1, collection: "items",
     conflictId: c.conflictId, resolution: "ours"
@@ -423,9 +423,9 @@ db.getSiblingDB("idxmrg5@main").runCommand({ doltMerge: 1, merge_in: "feature" }
 
 const rc = db.getSiblingDB("idxmrg5@main").runCommand({ doltConflicts: 1 })
 // _id now lives on each side ({ _id, doc, diffType }), not at the top level.
-// For a documentEdit all sides share it; a deleted side is null.
+// For a document conflict all sides share it; a deleted side is null.
 const byDocID = {}
-rc.collections[0].conflicts.forEach(c => { byDocID[(c.ours || c.theirs)._id] = c.conflictId })
+rc.conflicts.forEach(c => { byDocID[(c.ours || c.theirs)._id] = c.conflictId })
 
 // Doc 1: take theirs. Doc 2: take a custom value.
 db.getSiblingDB("idxmrg5@main").runCommand({
@@ -488,15 +488,15 @@ db.getSiblingDB("idxmrg6@main").runCommand({ doltCherryPick: 1, commit: pick })
 
 const r = db.getSiblingDB("idxmrg6@main").runCommand({ doltConflicts: 1 })
 printjson(r)
-// Expected: collections[0].conflicts[0] has
-//   type: "uniqueKeyCollision",
+// Expected: conflicts[0] has
+//   type: "document", name: "items",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and commit \'<pick>\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
 //   base:   null,
 //   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },
 //   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
-const cid = r.collections[0].conflicts[0].conflictId
+const cid = r.conflicts[0].conflictId
 
 // Resolve "ours" (keep main's doc 10) and continue.
 db.getSiblingDB("idxmrg6@main").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
@@ -544,12 +544,12 @@ db.getSiblingDB("idxmrg7@feature").runCommand({ doltRebase: 1, onto: "main" })
 
 const r = db.getSiblingDB("idxmrg7@feature").runCommand({ doltConflicts: 1 })
 printjson(r)
-// Expected: collections[0].conflicts[0] has
-//   type: "uniqueKeyCollision",
+// Expected: conflicts[0] has
+//   type: "document", name: "items",
 //   reason.message: 'unique index "by_sku": commit \'<pick>\' (ours) and branch \'main\' (theirs) both have sku = "S-1"',
 //   ours:   { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" },   // the replayed commit
 //   theirs: { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" }    // onto/main
-const cid = r.collections[0].conflicts[0].conflictId
+const cid = r.conflicts[0].conflictId
 
 db.getSiblingDB("idxmrg7@feature").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
 db.getSiblingDB("idxmrg7@feature").runCommand({ doltRebase: 1, continue: 1 })
@@ -602,12 +602,12 @@ db.getSiblingDB("idxmrg8@main").runCommand({ doltRevert: 1, commit: del })
 
 const r = db.getSiblingDB("idxmrg8@main").runCommand({ doltConflicts: 1 })
 printjson(r)
-// Expected: collections[0].conflicts[0] has
-//   type: "uniqueKeyCollision",
+// Expected: conflicts[0] has
+//   type: "document", name: "items",
 //   reason.message: 'unique index "by_sku": branch \'main\' (ours) and commit \'<del>\' (theirs) both have sku = "S-1"',
 //   ours:   { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" },
 //   theirs: { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" }    // re-added by the revert
-const cid = r.collections[0].conflicts[0].conflictId
+const cid = r.conflicts[0].conflictId
 
 db.getSiblingDB("idxmrg8@main").runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
 db.getSiblingDB("idxmrg8@main").runCommand({ doltRevert: 1, continue: 1 })

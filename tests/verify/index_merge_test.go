@@ -308,13 +308,12 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		var rc bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-		colls := rc["collections"].(bson.A)
-		require.Len(t, colls, 1)
-		conflicts := colls[0].(bson.M)["conflicts"].(bson.A)
+		conflicts := rc["conflicts"].(bson.A)
 		require.Len(t, conflicts, 1)
 		entry := conflicts[0].(bson.M)
-		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		assert.Equal(t, "document", entry["type"])
 		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", reason["code"])
 		assert.Equal(t, "by_sku", reason["index"], "reason names the offending index")
 		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"], "reason carries the colliding key")
 		assert.Equal(t, `unique index "by_sku": branch 'main' (ours) and branch 'feature' (theirs) both have sku = "S-1"`,
@@ -394,12 +393,12 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		var rc bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-		conflicts := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)
+		conflicts := rc["conflicts"].(bson.A)
 		require.Len(t, conflicts, 2)
 		byDocID := map[int32]string{}
 		for _, c := range conflicts {
 			e := c.(bson.M)
-			assert.Equal(t, "documentEdit", e["type"])
+			assert.Equal(t, "document", e["type"])
 			assert.Equal(t, "bothModified", e["reason"].(bson.M)["code"])
 			// A documentEdit shares one _id across base/ours/theirs.
 			side := e["ours"]
@@ -478,13 +477,14 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		var rc bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-		conflicts := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)
+		conflicts := rc["conflicts"].(bson.A)
 		require.Len(t, conflicts, 2, "one conflict per colliding index")
 
 		byIndex := map[string]bson.M{}
 		for _, c := range conflicts {
 			e := c.(bson.M)
-			assert.Equal(t, "uniqueKeyCollision", e["type"])
+			assert.Equal(t, "document", e["type"])
+			assert.Equal(t, "uniqueKeyCollision", e["reason"].(bson.M)["code"])
 			byIndex[e["reason"].(bson.M)["index"].(string)] = e
 		}
 		require.Contains(t, byIndex, "by_sku")
@@ -544,9 +544,10 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		var rc bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-		entry := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)[0].(bson.M)
-		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		entry := rc["conflicts"].(bson.A)[0].(bson.M)
+		assert.Equal(t, "document", entry["type"])
 		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", reason["code"])
 		assert.Equal(t, "by_sku", reason["index"])
 		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"])
 		assert.Equal(t, fmt.Sprintf(`unique index "by_sku": branch 'main' (ours) and commit '%s' (theirs) both have sku = "S-1"`, pickHash),
@@ -595,9 +596,10 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		var rc bson.M
 		require.NoError(t, featureDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-		entry := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)[0].(bson.M)
-		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		entry := rc["conflicts"].(bson.A)[0].(bson.M)
+		assert.Equal(t, "document", entry["type"])
 		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", reason["code"])
 		assert.Equal(t, "by_sku", reason["index"])
 		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"])
 		assert.Equal(t, fmt.Sprintf(`unique index "by_sku": commit '%s' (ours) and branch 'main' (theirs) both have sku = "S-1"`, pickHash),
@@ -653,9 +655,10 @@ func TestIndexMergeVerify(t *testing.T) {
 
 		var rc bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-		entry := rc["collections"].(bson.A)[0].(bson.M)["conflicts"].(bson.A)[0].(bson.M)
-		assert.Equal(t, "uniqueKeyCollision", entry["type"])
+		entry := rc["conflicts"].(bson.A)[0].(bson.M)
+		assert.Equal(t, "document", entry["type"])
 		reason := entry["reason"].(bson.M)
+		assert.Equal(t, "uniqueKeyCollision", reason["code"])
 		assert.Equal(t, "by_sku", reason["index"])
 		assert.Equal(t, "S-1", reason["key"].(bson.M)["sku"])
 		assert.Equal(t, fmt.Sprintf(`unique index "by_sku": branch 'main' (ours) and commit '%s' (theirs) both have sku = "S-1"`, delHash),

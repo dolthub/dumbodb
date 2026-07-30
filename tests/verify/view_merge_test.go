@@ -96,15 +96,23 @@ func vmMerge(t *testing.T, env *dumboDBTestEnv, dbName, branch string) bson.M {
 	})
 }
 
-// vmViewConflict runs doltConflicts and returns the single view conflict entry.
+// vmViewConflict runs doltConflicts and returns the single view conflict entry
+// from the unified conflicts array (type == "view").
 func vmViewConflict(t *testing.T, mainDB *mongo.Database) bson.M {
 	t.Helper()
 	var rc bson.M
 	require.NoError(t, mainDB.RunCommand(context.Background(), bson.D{{Key: "doltConflicts", Value: int32(1)}}).Decode(&rc))
-	views, ok := rc["views"].(bson.A)
-	require.True(t, ok, "doltConflicts response missing views array: %v", rc)
-	require.Len(t, views, 1, "expected exactly one view conflict: %v", views)
-	return views[0].(bson.M)
+	all, ok := rc["conflicts"].(bson.A)
+	require.True(t, ok, "doltConflicts response missing conflicts array: %v", rc)
+	var views []bson.M
+	for _, c := range all {
+		entry := c.(bson.M)
+		if entry["type"] == "view" {
+			views = append(views, entry)
+		}
+	}
+	require.Len(t, views, 1, "expected exactly one view conflict: %v", all)
+	return views[0]
 }
 
 func vmResolve(t *testing.T, mainDB *mongo.Database, view, conflictID, resolution string, value bson.D) {
@@ -153,7 +161,7 @@ func setupRedefineConflict(t *testing.T, env *dumboDBTestEnv, dbName string) (*m
 
 	mainDB := env.Client.Database(dbName + "@main")
 	entry := vmViewConflict(t, mainDB)
-	assert.Equal(t, "cv", entry["view"])
+	assert.Equal(t, "cv", entry["name"])
 	assert.Equal(t, "modified", entry["ours"].(bson.M)["diffType"])
 	assert.Equal(t, "modified", entry["theirs"].(bson.M)["diffType"])
 	return mainDB, entry["conflictId"].(string)

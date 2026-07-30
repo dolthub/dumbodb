@@ -998,9 +998,19 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	collectionsArr := types.MakeArray(len(res.Collections))
+	// All conflicts -- document-level and view-definition -- go into a single
+	// status-tagged array, one entry per conflict, each carrying a `type`
+	// discriminator ("document" or "view") and the owning namespace `name`.
+	// The document sub-type (documentEdit vs uniqueKeyCollision) is carried by
+	// reason.code. Entries are ordered by name then conflictId for stability.
+	type conflictOut struct {
+		name string
+		id   string
+		doc  *types.Document
+	}
+	var entries []conflictOut
+
 	for _, cc := range res.Collections {
-		conflictsArr := types.MakeArray(len(cc.Conflicts))
 		for _, cf := range cc.Conflicts {
 			// Each side carries its own _id: a uniqueKeyCollision has
 			// distinct identities for ours and theirs. base carries no
@@ -1031,23 +1041,22 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 				reason.Set("key", cf.Reason.Key)
 			}
 
-			conflictsArr.Append(must.NotFail(types.NewDocument(
-				"conflictId", cf.ConflictID,
-				"type", cf.Type,
-				"reason", reason,
-				"base", buildSide(cf.Base, ""),
-				"ours", buildSide(cf.Ours, cf.OurDiffType),
-				"theirs", buildSide(cf.Theirs, cf.TheirDiffType),
-			)))
+			entries = append(entries, conflictOut{
+				name: cc.Collection,
+				id:   cf.ConflictID,
+				doc: must.NotFail(types.NewDocument(
+					"conflictId", cf.ConflictID,
+					"type", "document",
+					"name", cc.Collection,
+					"reason", reason,
+					"base", buildSide(cf.Base, ""),
+					"ours", buildSide(cf.Ours, cf.OurDiffType),
+					"theirs", buildSide(cf.Theirs, cf.TheirDiffType),
+				)),
+			})
 		}
-
-		collectionsArr.Append(must.NotFail(types.NewDocument(
-			"collection", cc.Collection,
-			"conflicts", conflictsArr,
-		)))
 	}
 
-	viewsArr := types.MakeArray(len(res.Views))
 	for _, vc := range res.Views {
 		buildViewSide := func(def *backends.ViewDefinition, diffType string) any {
 			if def == nil {
@@ -1066,19 +1075,35 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 			}
 			return side
 		}
-		viewsArr.Append(must.NotFail(types.NewDocument(
-			"conflictId", vc.ConflictID,
-			"view", vc.Name,
-			"base", buildViewSide(vc.Base, ""),
-			"ours", buildViewSide(vc.Ours, vc.OurDiffType),
-			"theirs", buildViewSide(vc.Theirs, vc.TheirDiffType),
-		)))
+		entries = append(entries, conflictOut{
+			name: vc.Name,
+			id:   vc.ConflictID,
+			doc: must.NotFail(types.NewDocument(
+				"conflictId", vc.ConflictID,
+				"type", "view",
+				"name", vc.Name,
+				"base", buildViewSide(vc.Base, ""),
+				"ours", buildViewSide(vc.Ours, vc.OurDiffType),
+				"theirs", buildViewSide(vc.Theirs, vc.TheirDiffType),
+			)),
+		})
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].name != entries[j].name {
+			return entries[i].name < entries[j].name
+		}
+		return entries[i].id < entries[j].id
+	})
+
+	conflictsArr := types.MakeArray(len(entries))
+	for _, e := range entries {
+		conflictsArr.Append(e.doc)
 	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"collections", collectionsArr,
-			"views", viewsArr,
+			"conflicts", conflictsArr,
 			"ok", float64(1),
 		)),
 	)

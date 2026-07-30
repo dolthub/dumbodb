@@ -144,7 +144,7 @@ func (m *mergeInProgress) summaries() []backends.ConflictSummary {
 // each side (nil where the view was absent or deleted).
 type viewConflictEntry struct {
 	name      string
-	id        string    // "view:<name>"
+	id        string    // conflictID hash of the view name + theirs commit hash
 	base      *viewMeta // nil if the view was absent in the common ancestor
 	ours      *viewMeta // nil if our branch deleted the view
 	theirs    *viewMeta // nil if their branch deleted the view
@@ -1407,7 +1407,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		if intoIsView || fromIsView || baseIsView {
 			vce := &viewConflictEntry{
 				name:      name,
-				id:        "view:" + name,
+				id:        conflictID(val.Tuple(name), theirHash),
 				ourDiff:   viewSideDiff(baseIsView, intoIsView),
 				theirDiff: viewSideDiff(baseIsView, fromIsView),
 			}

@@ -225,22 +225,17 @@ func TestCherryPickVerify(t *testing.T) {
 		require.NoError(t, err, "doltConflicts must succeed while cherry-pick in progress")
 		assert.EqualValues(t, 1, conflictsRes["ok"])
 
-		colls, ok := conflictsRes["collections"].(bson.A)
-		require.True(t, ok, "collections must be an array, got %T", conflictsRes["collections"])
-		require.Len(t, colls, 1, "one collection must have conflicts")
-		collEntry := colls[0].(bson.M)
-		assert.Equal(t, "items", collEntry["collection"])
-
-		conflicts, ok := collEntry["conflicts"].(bson.A)
-		require.True(t, ok, "conflicts must be an array")
+		conflicts, ok := conflictsRes["conflicts"].(bson.A)
+		require.True(t, ok, "conflicts must be an array, got %T", conflictsRes["conflicts"])
 		require.Len(t, conflicts, 1, "must have exactly one conflict in 'items'")
 
 		cf := conflicts[0].(bson.M)
+		assert.Equal(t, "items", cf["name"])
 		conflictID, ok := cf["conflictId"].(string)
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
-		assert.Equal(t, "documentEdit", cf["type"])
+		assert.Equal(t, "document", cf["type"])
 		assert.Equal(t, "bothModified", cf["reason"].(bson.M)["code"])
 		assert.Equal(t, fmt.Sprintf("branch 'main' (ours) and commit '%s' (theirs) both modified document 1", hashConflictFeat),
 			cf["reason"].(bson.M)["message"])
@@ -277,9 +272,9 @@ func TestCherryPickVerify(t *testing.T) {
 			{Key: "doltConflicts", Value: int32(1)},
 		}).Decode(&postResolveRes)
 		require.NoError(t, err)
-		postColls, ok := postResolveRes["collections"].(bson.A)
-		require.True(t, ok, "collections must be an array after resolution")
-		assert.Len(t, postColls, 0, "no more conflicts after resolution")
+		postConflicts, ok := postResolveRes["conflicts"].(bson.A)
+		require.True(t, ok, "conflicts must be an array after resolution")
+		assert.Len(t, postConflicts, 0, "no more conflicts after resolution")
 
 		// Continue mirrors doltMerge continue:1.
 		raw := runCommandRaw(t, mainDB, bson.D{

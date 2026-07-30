@@ -30,7 +30,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-
 func TestLogPaginationHandler(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -243,9 +242,9 @@ func TestLogIDFilterHandler(t *testing.T) {
 			{Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}},
 			{Key: "patch", Value: true}, {Key: "limit", Value: int32(1)},
 		})
-		diff := raw["commits"].(bson.A)[0].(bson.M)["diff"].(bson.A)
-		require.Len(t, diff, 1)
-		assert.Equal(t, "orders", diff[0].(bson.M)["name"])
+		changes := raw["commits"].(bson.A)[0].(bson.M)["changes"].(bson.A)
+		require.Len(t, changes, 1)
+		assert.Equal(t, "orders", changes[0].(bson.M)["name"])
 	})
 
 	t.Run("NotAnArray_Errors", func(t *testing.T) {

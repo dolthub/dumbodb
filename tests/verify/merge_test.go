@@ -265,9 +265,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
 		}).Decode(&detailRaw))
-		colls := detailRaw["collections"].(bson.A)
-		collEntry := colls[0].(bson.M)
-		conflicts := collEntry["conflicts"].(bson.A)
+		conflicts := detailRaw["conflicts"].(bson.A)
 		cf := conflicts[0].(bson.M)
 		conflictID := cf["conflictId"].(string)
 
@@ -384,20 +382,16 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		}).Decode(&conflictsRaw))
 		assert.EqualValues(t, 1, conflictsRaw["ok"])
 
-		colls := conflictsRaw["collections"].(bson.A)
-		require.Len(t, colls, 1, "one collection with conflicts")
-		collEntry := colls[0].(bson.M)
-		assert.Equal(t, "inventory", collEntry["collection"])
-
-		conflicts := collEntry["conflicts"].(bson.A)
-		require.Len(t, conflicts, 1, "one conflict in 'inventory'")
+		conflicts := conflictsRaw["conflicts"].(bson.A)
+		require.Len(t, conflicts, 1, "one conflict")
 
 		cf := conflicts[0].(bson.M)
+		assert.Equal(t, "inventory", cf["name"])
 		conflictID, ok := cf["conflictId"].(string)
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
 
-		assert.Equal(t, "documentEdit", cf["type"])
+		assert.Equal(t, "document", cf["type"])
 		reason := cf["reason"].(bson.M)
 		assert.Equal(t, "bothModified", reason["code"])
 		assert.Equal(t, "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1", reason["message"],
@@ -442,9 +436,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
 		}).Decode(&detailRaw))
-		colls := detailRaw["collections"].(bson.A)
-		collEntry := colls[0].(bson.M)
-		conflicts := collEntry["conflicts"].(bson.A)
+		conflicts := detailRaw["conflicts"].(bson.A)
 		cf := conflicts[0].(bson.M)
 		conflictID := cf["conflictId"].(string)
 
@@ -461,8 +453,8 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltConflicts", Value: int32(1)},
 		}).Decode(&postResolveRaw))
-		postColls := postResolveRaw["collections"].(bson.A)
-		assert.Len(t, postColls, 0, "no more conflicts after resolution")
+		postConflicts := postResolveRaw["conflicts"].(bson.A)
+		assert.Len(t, postConflicts, 0, "no more conflicts after resolution")
 
 		// dumboDBCommit is blocked even when all conflicts are resolved  -- merge in progress
 		err := mainDB.RunCommand(ctx, bson.D{
@@ -604,9 +596,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltConflicts", Value: int32(1)},
 	}).Decode(&detailRaw))
-	colls := detailRaw["collections"].(bson.A)
-	collEntry := colls[0].(bson.M)
-	conflicts := collEntry["conflicts"].(bson.A)
+	conflicts := detailRaw["conflicts"].(bson.A)
 	cf := conflicts[0].(bson.M)
 	conflictID := cf["conflictId"].(string)
 
@@ -675,9 +665,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltConflicts", Value: int32(1)},
 	}).Decode(&detailRaw))
-	colls := detailRaw["collections"].(bson.A)
-	collEntry := colls[0].(bson.M)
-	conflicts := collEntry["conflicts"].(bson.A)
+	conflicts := detailRaw["conflicts"].(bson.A)
 	cf := conflicts[0].(bson.M)
 	conflictID := cf["conflictId"].(string)
 
@@ -761,14 +749,10 @@ func TestMergePartialConflict(t *testing.T) {
 		{Key: "doltConflicts", Value: int32(1)},
 	}).Decode(&conflictsRaw))
 
-	colls := conflictsRaw["collections"].(bson.A)
-	require.Len(t, colls, 1, "one collection with conflicts")
-	collEntry := colls[0].(bson.M)
-	assert.Equal(t, "items", collEntry["collection"])
-
-	conflicts := collEntry["conflicts"].(bson.A)
+	conflicts := conflictsRaw["conflicts"].(bson.A)
 	require.Len(t, conflicts, 1, "exactly one conflict (_id:1 only)")
 	cf := conflicts[0].(bson.M)
+	assert.Equal(t, "items", cf["name"])
 	assert.EqualValues(t, int32(1), cf["ours"].(bson.M)["_id"], "conflicting document must be _id:1")
 	conflictID := cf["conflictId"].(string)
 

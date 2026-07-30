@@ -249,15 +249,15 @@ func TestViewMergeConflictResolveTheirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DumboDBConflicts: %v", err)
 	}
-	if len(confl.Views) != 1 || confl.Views[0].Name != "cv" || confl.Views[0].ConflictID != "view:cv" {
-		t.Fatalf("expected one view conflict for cv, got %+v", confl.Views)
+	if len(confl.Views) != 1 || confl.Views[0].Name != "cv" || confl.Views[0].ConflictID == "" {
+		t.Fatalf("expected one view conflict for cv with a hash id, got %+v", confl.Views)
 	}
 	if confl.Views[0].Ours == nil || confl.Views[0].Theirs == nil {
 		t.Fatalf("view conflict missing ours/theirs: %+v", confl.Views[0])
 	}
 
 	if _, err := b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
-		DBName: "vcdb", Branch: "main", Collection: "cv", ConflictID: "view:cv", Resolution: "theirs",
+		DBName: "vcdb", Branch: "main", Collection: "cv", ConflictID: confl.Views[0].ConflictID, Resolution: "theirs",
 	}); err != nil {
 		t.Fatalf("DumboDBResolveConflict(theirs): %v", err)
 	}
@@ -281,12 +281,20 @@ func TestViewMergeConflictResolveCustom(t *testing.T) {
 
 	mainDB := setupViewConflict(t, b, "vcdb")
 
+	confl, err := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "vcdb", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DumboDBConflicts: %v", err)
+	}
+	if len(confl.Views) != 1 {
+		t.Fatalf("expected one view conflict, got %+v", confl.Views)
+	}
+
 	custom := must.NotFail(types.NewDocument(
 		"viewOn", "col",
 		"pipeline", matchOnPipeline(t, "status", "custom"),
 	))
 	if _, err := b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
-		DBName: "vcdb", Branch: "main", Collection: "cv", ConflictID: "view:cv",
+		DBName: "vcdb", Branch: "main", Collection: "cv", ConflictID: confl.Views[0].ConflictID,
 		Resolution: "custom", Value: custom,
 	}); err != nil {
 		t.Fatalf("DumboDBResolveConflict(custom): %v", err)
