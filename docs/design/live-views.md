@@ -207,8 +207,10 @@ ignored, as before).
 - drop: remove the catalog entry (done via the AddressMap in workspace-z0i.1).
 - create over an existing name (collection or view) -> `NamespaceExists`
   (workspace-z0i.5: a no-options create over an existing view is no longer
-  idempotent). Error code/codeName match MongoDB; V10/V11 diverge only on
-  MongoDB's message text (a random UUID in V10, the view-source phrasing in V11).
+  idempotent). V6/V10/V11 assert error code + codeName parity rather than
+  byte-identical messages, since MongoDB's text carries values that need not be
+  reproduced (a random collection UUID in V10, a spelled-out namespace chain in
+  V6/V11); V10 additionally asserts MongoDB's message embeds a UUID.
 
 ### 4.6 View collation
 
@@ -295,12 +297,12 @@ we knowingly diverge today, MongoOnly if out of scope.
 | V3 | listCollections | type:"view", options{viewOn,pipeline,collation} | Full (have) |
 | V4 | distinct on a view | works (matches base+pipeline) | Full (workspace-z0i.3) |
 | V5 | nested view (v2 on v1 on base) | resolves through chain | Full (workspace-z0i.2) |
-| V6 | view cycle | error (GraphContainsCycle) | XFail (code/codeName match; MongoDB's message spells out the full namespace chain) |
+| V6 | view cycle | error (GraphContainsCycle) | Full (asserts code+codeName; message not compared -- MongoDB spells out the namespace chain) |
 | V7 | nesting depth 20 | ViewDepthLimitExceeded at level 20 | Full (workspace-z0i.2) |
 | V8 | collMod {viewOn,pipeline} redefine | new definition applied to reads | Full (workspace-z0i.4) |
 | V9 | rename a view | CommandNotSupportedOnView ("cannot rename view") | Full (workspace-z0i.5) |
-| V10 | create view named as existing collection | NamespaceExists | XFail (code/codeName match; MongoDB's message embeds a random collection UUID) |
-| V11 | create collection named as existing view | NamespaceExists | XFail (code/codeName match; MongoDB's message spells out "is a view on <viewOn>") |
+| V10 | create view named as existing collection | NamespaceExists | Full (asserts code+codeName and that MongoDB's message embeds a UUID; text not compared) |
+| V11 | create collection named as existing view | NamespaceExists | Full (asserts code+codeName; message not compared -- MongoDB spells out "is a view on <viewOn>") |
 | V12 | durability: create view, restart servers (same data dir), read | view still resolves | Full (catalog persists views; workspace-z0i.1) |
 | V13 | view with $lookup pipeline | correct join | Full (have) |
 | V14 | view default collation applied to a no-collation read | collation semantics (dimension I) | XFail |
