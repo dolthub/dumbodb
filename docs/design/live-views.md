@@ -231,17 +231,22 @@ collections AddressMap):
   `dumboCommit`, and must surface in `dumboStatus`/`dumboDiff`.
 - **Views are first-class in the diff (DONE, workspace-z0i.7).** Views are
   top-level namespaces -- siblings of collections, not per-collection sub-objects
-  like indexes -- so they follow the **collections** convention, not the index
-  one: a single `views` array alongside `collections`, one entry per changed
-  view carrying `{name, status, from, to}` where `status` is
-  `added`/`modified`/`deleted` and `from`/`to` are the view definitions
-  (`{viewOn, pipeline}`), `from` null for an added view and `to` null for a
-  removed one (a redefine carries both). `dumboStatus` gets the matching
-  status-tagged summary: `views: [{name, status}]`, parallel to its
-  `collections: [{name, status, ...}]`. `dumboLog` mirrors this per commit:
-  `stat:1` adds a `viewStat` array (`{name, status}`) beside the collection
-  `stat`, and `patch:1` adds a `viewDiff` array (`{name, status, from, to}`)
-  beside the collection `diff`.
+  like indexes. `dumboDiff`, `dumboStatus`, and `dumboLog` all emit a single
+  unified `changes` array, one entry per changed namespace, each tagged with a
+  `type` discriminator (`collection` or `view`) and a `status`
+  (`added`/`modified`/`deleted`). Verbosity is one shape at two fill levels, not
+  two keys: a summary entry carries counts, a full entry carries documents.
+  - A **collection** entry groups its detail under `documents` (`added`/
+    `removed`/`modified`), `indexes` (`added`/`removed`/`modified`), and
+    `metadata` (reserved, empty for now). At summary verbosity the sub-objects
+    hold counts/names; at full verbosity they hold the documents/diffs.
+  - A **view** entry carries `from`/`to` view definitions (`{viewOn, pipeline}`),
+    `from` null for an added view and `to` null for a removed one (a redefine
+    carries both).
+  - `dumboDiff` returns full-verbosity `changes`. `dumboStatus` returns summary
+    `changes`. `dumboLog` attaches `changes` per commit: `stat:1` fills summary
+    verbosity, `patch:1` fills full verbosity (`patch` supersedes `stat` when
+    both are set).
 - **Implementation note:** the diff walks the collections AddressMap; each
   changed entry must be classified by chunk type (a `serial.Table` -> collection
   diff of docs+indexes; a view blob -> a view add/remove/modify) so a view is
@@ -318,7 +323,8 @@ Version-control behavior is verified in the **dumbodb repo** (Go / bats), not
 the parity harness, because `dumbo*` commands have no MongoDB counterpart:
 a view is branch-scoped (invisible on `main` until merged);
 `dumboStatus`/`dumboDiff` surface it as
-a single status-tagged `views` array (4.7); branch/merge of view defs.
+a `type: "view"` entry in the unified `changes` array (4.7); branch/merge of
+view defs.
 
 **Merge-conflict resolution** for divergent view definitions (4.7) is verified by
 a dedicated human verification document `docs/verify/view-merge.md` plus its
@@ -367,8 +373,9 @@ metadata, validators, collection default collation).
 - O2: Exact MongoDB error codes for cycle and depth (message captured; codes to
   confirm) and for collMod on views.
 - O3: Version-control semantics for view defs. Diff granularity DECIDED (4.7):
-  DB-level single status-tagged `views` array carrying `{name, status, from, to}`,
-  mirroring the collections diff shape (not the three per-collection index arrays).
+  a view is a `type: "view"` entry in the unified `changes` array carrying
+  `{name, status, from, to}`, a sibling of collection entries (not the three
+  per-collection index arrays).
   Merge-conflict resolution DONE (4.7, workspace-z0i.6): divergent view defs
   conflict on the AddressMap entry and resolve via
   `doltConflicts`/`doltResolveConflict` (`theirs`/`ours`/`custom`), like
@@ -408,8 +415,8 @@ metadata, validators, collection default collation).
 6. **View collation** (4.6) once the catalog exists; flips V14.
 7. **Version-control semantics** (4.7): branch scoping + dumboDiff/dumboStatus
    surfacing; verified by the 5.1 dumbodb-repo tests. dumboDiff/dumboStatus
-   surfacing DONE (workspace-z0i.7): diff emits a single status-tagged `views`
-   array ({name, status, from, to}) mirroring `collections`; status emits
-   `views: [{name, status}]` and counts a view change as dirty. Merge semantics +
-   conflict resolution remain (workspace-z0i.6).
+   surfacing DONE (workspace-z0i.7): dumboDiff/dumboStatus/dumboLog emit a
+   unified `changes` array with a `type` discriminator; a view is a
+   `type: "view"` entry ({name, status, from, to}) and counts a view change as
+   dirty. Merge semantics + conflict resolution remain (workspace-z0i.6).
 </content>

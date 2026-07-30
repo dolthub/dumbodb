@@ -63,35 +63,34 @@ var am = db.getSiblingDB("idxisovdb@am")
 am.items.createIndex({ name: 1 }, { name: "by_name" })
 
 // dumboStatus reports the working-set delta. The "modified" status
-// with zero doc changes plus the addedIndexes list tells the user
-// what is about to be committed. modifiedIndexes / removedIndexes
+// with zero doc changes plus the indexes.added list tells the user
+// what is about to be committed. indexes.modified / indexes.removed
 // are always present as empty arrays here.
 am.runCommand({ dumboStatus: 1 })
 // Expected: {
 //   branch: "am", dirty: true, readonly: false,
-//   collections: [{
-//     name: "items", status: "modified",
-//     added: 0, modified: 0, deleted: 0,
-//     addedIndexes: [ "by_name" ],
-//     modifiedIndexes: [],
-//     removedIndexes: []
+//   changes: [{
+//     type: "collection", name: "items", status: "modified",
+//     documents: { added: 0, removed: 0, modified: 0 },
+//     indexes: { added: [ "by_name" ], modified: [], removed: [] },
+//     metadata: {}
 //   }],
 //   ok: 1
 // }
 
 // dumboDiff shows the full definition of the new index so the user
 // can confirm the keys and options before committing. Each of the
-// six change arrays (3 doc + 3 index) is always present.
+// change arrays under documents / indexes is always present.
 am.runCommand({ dumboDiff: 1 })
 // Expected: {
-//   collections: [{
-//     name: "items", status: "modified",
-//     added: [], removed: [], modified: [],
-//     addedIndexes: [
-//       { name: "by_name", keys: [{ field: "name", direction: 1 }] }
-//     ],
-//     modifiedIndexes: [],
-//     removedIndexes: []
+//   changes: [{
+//     type: "collection", name: "items", status: "modified",
+//     documents: { added: [], removed: [], modified: [] },
+//     indexes: {
+//       added: [ { name: "by_name", keys: [{ field: "name", direction: 1 }] } ],
+//       modified: [], removed: []
+//     },
+//     metadata: {}
 //   }],
 //   ok: 1
 // }
@@ -113,12 +112,12 @@ db.getSiblingDB("idxisovdb@nz").items.getIndexes().map(i => i.name)
 ```
 
 Key checks:
-- `dumboStatus` shows `addedIndexes: ["by_name"]` on `am` before commit;
-  `modifiedIndexes: []` and `removedIndexes: []` are present as empty
+- `dumboStatus` shows `indexes.added: ["by_name"]` on `am` before commit;
+  `indexes.modified: []` and `indexes.removed: []` are present as empty
   arrays.
-- `dumboDiff` shows the full `by_name` definition in `addedIndexes[0]`;
-  the other five change arrays (`added`, `removed`, `modified`,
-  `modifiedIndexes`, `removedIndexes`) are present as empty arrays.
+- `dumboDiff` shows the full `by_name` definition in `indexes.added[0]`;
+  the other five change arrays (`documents.added/removed/modified`,
+  `indexes.modified/removed`) are present as empty arrays.
 - `am` lists `["_id_", "by_name"]` after commit
 - `main` lists `["_id_"]`
 - `nz` lists `["_id_"]`
@@ -341,34 +340,34 @@ mdb.runCommand({ doltCommit: 1, message: "seed + by_x on age", author: "alice <a
 mdb.items.dropIndex("by_x")
 mdb.items.createIndex({ name: 1 }, { name: "by_x" })
 
-// dumboStatus shows the index in modifiedIndexes (not added or removed).
+// dumboStatus shows the index in indexes.modified (not added or removed).
 mdb.runCommand({ dumboStatus: 1 })
-// Expected: collections[0] = {
-//   ...,
-//   addedIndexes: [],
-//   modifiedIndexes: [ "by_x" ],
-//   removedIndexes: []
+// Expected: changes[0] = {
+//   type: "collection", ...,
+//   indexes: { added: [], modified: [ "by_x" ], removed: [] }
 // }
 
-// dumboDiff shows a single modifiedIndexes entry with both definitions.
+// dumboDiff shows a single indexes.modified entry with both definitions.
 mdb.runCommand({ dumboDiff: 1 })
-// Expected: collections[0] = {
-//   ...,
-//   addedIndexes: [],
-//   modifiedIndexes: [
-//     {
-//       from: { name: "by_x", keys: [{ field: "age",  direction: 1 }] },
-//       to:   { name: "by_x", keys: [{ field: "name", direction: 1 }] }
-//     }
-//   ],
-//   removedIndexes: []
+// Expected: changes[0] = {
+//   type: "collection", ...,
+//   indexes: {
+//     added: [],
+//     modified: [
+//       {
+//         from: { name: "by_x", keys: [{ field: "age",  direction: 1 }] },
+//         to:   { name: "by_x", keys: [{ field: "name", direction: 1 }] }
+//       }
+//     ],
+//     removed: []
+//   }
 // }
 ```
 
 Key checks:
-- `dumboStatus` lists `by_x` in `modifiedIndexes` (not `addedIndexes` or
-  `removedIndexes`).
-- `dumboDiff` returns one `modifiedIndexes` entry with both `from` (old
+- `dumboStatus` lists `by_x` in `indexes.modified` (not `indexes.added` or
+  `indexes.removed`).
+- `dumboDiff` returns one `indexes.modified` entry with both `from` (old
   keys) and `to` (new keys) populated.
 
 ---

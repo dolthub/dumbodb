@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,24 +95,76 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	collections := types.MakeArray(len(res.Collections))
-
-	for _, cd := range res.Collections {
-		collections.Append(collectionDiffToDoc(cd))
-	}
-
-	views := types.MakeArray(len(res.Views))
-	for _, vc := range res.Views {
-		views.Append(viewChangeToDoc(vc))
-	}
+	changes := changesArray(res.Collections, res.Views, nil, nil)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"collections", collections,
-			"views", views,
+			"changes", changes,
 			"ok", float64(1),
 		)),
 	)
+}
+
+// changesArray renders a set of collection and view changes into the unified
+// `changes` wire array, sorted by name. Full-verbosity inputs (collDiffs /
+// viewDiffs) render full detail; summary inputs (collStats / viewStats) render
+// counts and names. Exactly one of collDiffs/collStats (and viewDiffs/viewStats)
+// is non-nil for a given call.
+func changesArray(collDiffs []backends.CollectionDiff, viewDiffs []backends.ViewChange, collStats []backends.TableStatus, viewStats []backends.ViewStatus) *types.Array {
+	type namedDoc struct {
+		name string
+		doc  *types.Document
+	}
+	var items []namedDoc
+	for _, cd := range collDiffs {
+		items = append(items, namedDoc{cd.Name, collectionChangeFull(cd)})
+	}
+	for _, ts := range collStats {
+		items = append(items, namedDoc{ts.Name, collectionChangeSummary(ts)})
+	}
+	for _, vc := range viewDiffs {
+		items = append(items, namedDoc{vc.Name, viewChangeToDoc(vc)})
+	}
+	for _, vs := range viewStats {
+		items = append(items, namedDoc{vs.Name, viewStatusToChange(vs)})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
+
+	out := types.MakeArray(len(items))
+	for _, it := range items {
+		out.Append(it.doc)
+	}
+	return out
+}
+
+// collectionChangeSummary renders a collection status as a unified `changes`
+// element at summary verbosity: documents/index counts and index names.
+func collectionChangeSummary(t backends.TableStatus) *types.Document {
+	return must.NotFail(types.NewDocument(
+		"type", "collection",
+		"name", t.Name,
+		"status", t.Status,
+		"documents", must.NotFail(types.NewDocument(
+			"added", int32(t.Added),
+			"removed", int32(t.Deleted),
+			"modified", int32(t.Modified),
+		)),
+		"indexes", must.NotFail(types.NewDocument(
+			"added", stringArray(t.AddedIndexes),
+			"removed", stringArray(t.RemovedIndexes),
+			"modified", stringArray(t.ModifiedIndexes),
+		)),
+		"metadata", must.NotFail(types.NewDocument()),
+	))
+}
+
+// viewStatusToChange renders a view status as a summary `changes` element.
+func viewStatusToChange(v backends.ViewStatus) *types.Document {
+	return must.NotFail(types.NewDocument(
+		"type", "view",
+		"name", v.Name,
+		"status", v.Status,
+	))
 }
 
 // viewDefWireDoc renders a view definition (or null) for the diff wire output.
@@ -135,28 +188,11 @@ func viewDefWireDoc(def *backends.ViewDefinition) any {
 // for a removed one).
 func viewChangeToDoc(vc backends.ViewChange) *types.Document {
 	return must.NotFail(types.NewDocument(
+		"type", "view",
 		"name", vc.Name,
 		"status", vc.Status,
 		"from", viewDefWireDoc(vc.From),
 		"to", viewDefWireDoc(vc.To),
-	))
-}
-
-// tableStatusToDoc renders a backends.TableStatus as a wire document.
-// Shared by MsgDumboDBStatus and the Stat block of MsgDumboDBLog. The
-// three index name lists are ALWAYS emitted, as empty arrays when
-// nothing of that kind changed, so consumers do not have to branch on
-// field presence.
-func tableStatusToDoc(t backends.TableStatus) *types.Document {
-	return must.NotFail(types.NewDocument(
-		"name", t.Name,
-		"status", t.Status,
-		"added", int32(t.Added),
-		"modified", int32(t.Modified),
-		"deleted", int32(t.Deleted),
-		"addedIndexes", stringArray(t.AddedIndexes),
-		"modifiedIndexes", stringArray(t.ModifiedIndexes),
-		"removedIndexes", stringArray(t.RemovedIndexes),
 	))
 }
 
@@ -226,6 +262,32 @@ func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
 		"addedIndexes", addedIdx,
 		"modifiedIndexes", modifiedIdx,
 		"removedIndexes", removedIdx,
+	))
+}
+
+// collectionChangeFull renders a collection diff as a unified `changes` element
+// at full verbosity: {type, name, status, documents, indexes, metadata}. Reuses
+// collectionDiffToDoc's per-kind arrays, regrouped under documents/indexes.
+// metadata is reserved (populated by a later change) and emitted empty for now.
+func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
+	inner := collectionDiffToDoc(cd)
+	documents := must.NotFail(types.NewDocument(
+		"added", must.NotFail(inner.Get("added")),
+		"removed", must.NotFail(inner.Get("removed")),
+		"modified", must.NotFail(inner.Get("modified")),
+	))
+	indexes := must.NotFail(types.NewDocument(
+		"added", must.NotFail(inner.Get("addedIndexes")),
+		"removed", must.NotFail(inner.Get("removedIndexes")),
+		"modified", must.NotFail(inner.Get("modifiedIndexes")),
+	))
+	return must.NotFail(types.NewDocument(
+		"type", "collection",
+		"name", cd.Name,
+		"status", cd.Status,
+		"documents", documents,
+		"indexes", indexes,
+		"metadata", must.NotFail(types.NewDocument()),
 	))
 }
 
@@ -1373,39 +1435,13 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 		entry := must.NotFail(types.NewDocument(pairs...))
 
-		if len(c.Stat) > 0 {
-			statArr := types.MakeArray(len(c.Stat))
-			for _, s := range c.Stat {
-				statArr.Append(tableStatusToDoc(s))
-			}
-			entry.Set("stat", statArr)
-		}
-
-		if len(c.Diff) > 0 {
-			diffArr := types.MakeArray(len(c.Diff))
-			for _, cd := range c.Diff {
-				diffArr.Append(collectionDiffToDoc(cd))
-			}
-			entry.Set("diff", diffArr)
-		}
-
-		// Views parallel the collection stat/diff: viewStat is the status
-		// summary ({name, status}); viewDiff is the full definition diff
-		// ({name, status, from, to}).
-		if len(c.ViewStat) > 0 {
-			viewStatArr := types.MakeArray(len(c.ViewStat))
-			for _, v := range c.ViewStat {
-				viewStatArr.Append(must.NotFail(types.NewDocument("name", v.Name, "status", v.Status)))
-			}
-			entry.Set("viewStat", viewStatArr)
-		}
-
-		if len(c.ViewDiff) > 0 {
-			viewDiffArr := types.MakeArray(len(c.ViewDiff))
-			for _, vc := range c.ViewDiff {
-				viewDiffArr.Append(viewChangeToDoc(vc))
-			}
-			entry.Set("viewDiff", viewDiffArr)
+		// One `changes` array per commit, mirroring dumboDiff/dumboStatus.
+		// Verbosity: full detail when patch was requested (c.Diff/c.ViewDiff
+		// populated), otherwise the summary from stat.
+		if len(c.Diff) > 0 || len(c.ViewDiff) > 0 {
+			entry.Set("changes", changesArray(c.Diff, c.ViewDiff, nil, nil))
+		} else if len(c.Stat) > 0 || len(c.ViewStat) > 0 {
+			entry.Set("changes", changesArray(nil, nil, c.Stat, c.ViewStat))
 		}
 
 		commits.Append(entry)
@@ -1709,20 +1745,6 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 
 	dirty := len(res.Tables) > 0 || res.MergeOp != "" || len(res.Views) > 0
 
-	collections := types.MakeArray(len(res.Tables))
-
-	for _, t := range res.Tables {
-		collections.Append(tableStatusToDoc(t))
-	}
-
-	views := types.MakeArray(len(res.Views))
-	for _, v := range res.Views {
-		views.Append(must.NotFail(types.NewDocument(
-			"name", v.Name,
-			"status", v.Status,
-		)))
-	}
-
 	statusDoc := must.NotFail(types.NewDocument(
 		"branch", res.Branch,
 		"dirty", dirty,
@@ -1731,8 +1753,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	if res.CommitID != "" {
 		statusDoc.Set("commitId", res.CommitID)
 	}
-	statusDoc.Set("collections", collections)
-	statusDoc.Set("views", views)
+	statusDoc.Set("changes", changesArray(nil, nil, res.Tables, res.Views))
 
 	if res.MergeOp != "" {
 		statusDoc.Set("mergeState", res.MergeOp)

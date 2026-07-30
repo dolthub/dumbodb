@@ -110,7 +110,7 @@ After the hard reset, both HEAD and the working set reflect the C1 state:
 
 ```js
 db.runCommand({ doltDiff: 1 })
-// Expected: { "collections": [], "ok": 1 }
+// Expected: { "changes": [], "ok": 1 }
 ```
 
 The diff is empty  -- the working set matches HEAD exactly. Only `_id:1` is visible
@@ -180,7 +180,7 @@ Key checks:
 
 ```js
 db.runCommand({ doltDiff: 1 })
-// Expected: { "collections": [], "ok": 1 }
+// Expected: { "changes": [], "ok": 1 }
 
 db.tasks.find()
 // Expected: only the documents present in the HEAD commit
@@ -365,7 +365,7 @@ Key checks:
 ```js
 mdb.runCommand({ doltLog: 1 }).commits[0].commitId   // Expected: hashF1
 mdb.tasks.find()                                      // Expected: _id:1 and _id:2 (2 docs)
-mdb.runCommand({ doltDiff: 1 })                       // Expected: { collections: [], ok: 1 }
+mdb.runCommand({ doltDiff: 1 })                       // Expected: { changes: [], ok: 1 }
 ```
 
 - **feature** is untouched: its HEAD is still F2 and all three docs are present.

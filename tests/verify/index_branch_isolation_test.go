@@ -129,36 +129,38 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 		var statusRes bson.M
 		require.NoError(t, amDB.RunCommand(ctx, bson.D{{Key: "dumboStatus", Value: 1}}).Decode(&statusRes),
 			"dumboStatus on am before commit must succeed")
-		statusColls := mustArrayOfMaps(t, statusRes["collections"])
+		statusColls := collectionChanges(t, statusRes)
 		require.Len(t, statusColls, 1, "expected one collection in status")
 		assert.Equal(t, "items", statusColls[0]["name"])
 		assert.Equal(t, "modified", statusColls[0]["status"])
-		assert.Equal(t, []string{"by_name"}, mustStringSlice(t, statusColls[0]["addedIndexes"]),
-			"dumboStatus must surface by_name in addedIndexes before the commit")
-		// modifiedIndexes and removedIndexes are always present as empty arrays.
-		assert.Empty(t, mustStringSlice(t, statusColls[0]["modifiedIndexes"]),
-			"modifiedIndexes must be an empty array when nothing modified")
-		assert.Empty(t, mustStringSlice(t, statusColls[0]["removedIndexes"]),
-			"removedIndexes must be an empty array when nothing removed")
+		statusIdx := indexesOf(t, statusColls[0])
+		assert.Equal(t, []string{"by_name"}, mustStringSlice(t, statusIdx["added"]),
+			"dumboStatus must surface by_name in indexes.added before the commit")
+		// modified and removed are always present as empty arrays.
+		assert.Empty(t, mustStringSlice(t, statusIdx["modified"]),
+			"indexes.modified must be an empty array when nothing modified")
+		assert.Empty(t, mustStringSlice(t, statusIdx["removed"]),
+			"indexes.removed must be an empty array when nothing removed")
 
 		// dumboDiff returns the full index definition (keys + direction).
 		var diffRes bson.M
 		require.NoError(t, amDB.RunCommand(ctx, bson.D{{Key: "dumboDiff", Value: int32(1)}}).Decode(&diffRes),
 			"dumboDiff on am before commit must succeed")
-		diffColls := mustArrayOfMaps(t, diffRes["collections"])
+		diffColls := collectionChanges(t, diffRes)
 		require.Len(t, diffColls, 1, "expected one collection in diff")
-		addedIdx := mustArrayOfMaps(t, diffColls[0]["addedIndexes"])
-		require.Len(t, addedIdx, 1, "expected one entry in addedIndexes")
+		diffIdx := indexesOf(t, diffColls[0])
+		addedIdx := mustArrayOfMaps(t, diffIdx["added"])
+		require.Len(t, addedIdx, 1, "expected one entry in indexes.added")
 		assert.Equal(t, "by_name", addedIdx[0]["name"])
 		addedKeys := mustArrayOfMaps(t, addedIdx[0]["keys"])
 		require.Len(t, addedKeys, 1, "expected one key field")
 		assert.Equal(t, "name", addedKeys[0]["field"])
 		assert.EqualValues(t, 1, addedKeys[0]["direction"])
 		// The other two index arrays are always present and empty here.
-		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["modifiedIndexes"]),
-			"modifiedIndexes must be an empty array when nothing modified")
-		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["removedIndexes"]),
-			"removedIndexes must be an empty array when nothing removed")
+		assert.Empty(t, mustArrayOfMaps(t, diffIdx["modified"]),
+			"indexes.modified must be an empty array when nothing modified")
+		assert.Empty(t, mustArrayOfMaps(t, diffIdx["removed"]),
+			"indexes.removed must be an empty array when nothing removed")
 
 		dumboDBCommit(t, env, dbName+"@am", "am: create by_name", "alice <alice@acme.com>")
 
@@ -315,25 +317,27 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 		// dumboStatus reports the same name in modifiedIndexes (not added or removed).
 		var statusRes bson.M
 		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboStatus", Value: 1}}).Decode(&statusRes))
-		statusColls := mustArrayOfMaps(t, statusRes["collections"])
+		statusColls := collectionChanges(t, statusRes)
 		require.Len(t, statusColls, 1)
-		assert.Empty(t, mustStringSlice(t, statusColls[0]["addedIndexes"]),
-			"addedIndexes must be an empty array, not absent")
-		assert.Empty(t, mustStringSlice(t, statusColls[0]["removedIndexes"]),
-			"removedIndexes must be an empty array, not absent")
-		assert.Equal(t, []string{"by_x"}, mustStringSlice(t, statusColls[0]["modifiedIndexes"]))
+		statusIdx := indexesOf(t, statusColls[0])
+		assert.Empty(t, mustStringSlice(t, statusIdx["added"]),
+			"indexes.added must be an empty array, not absent")
+		assert.Empty(t, mustStringSlice(t, statusIdx["removed"]),
+			"indexes.removed must be an empty array, not absent")
+		assert.Equal(t, []string{"by_x"}, mustStringSlice(t, statusIdx["modified"]))
 
-		// dumboDiff returns one entry in modifiedIndexes carrying both
-		// from (age) and to (name) definitions. addedIndexes and
-		// removedIndexes are always present and empty here.
+		// dumboDiff returns one entry in indexes.modified carrying both
+		// from (age) and to (name) definitions. indexes.added and
+		// indexes.removed are always present and empty here.
 		var diffRes bson.M
 		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboDiff", Value: int32(1)}}).Decode(&diffRes))
-		diffColls := mustArrayOfMaps(t, diffRes["collections"])
+		diffColls := collectionChanges(t, diffRes)
 		require.Len(t, diffColls, 1)
-		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["addedIndexes"]))
-		assert.Empty(t, mustArrayOfMaps(t, diffColls[0]["removedIndexes"]))
+		diffIdx := indexesOf(t, diffColls[0])
+		assert.Empty(t, mustArrayOfMaps(t, diffIdx["added"]))
+		assert.Empty(t, mustArrayOfMaps(t, diffIdx["removed"]))
 
-		modifiedIdx := mustArrayOfMaps(t, diffColls[0]["modifiedIndexes"])
+		modifiedIdx := mustArrayOfMaps(t, diffIdx["modified"])
 		require.Len(t, modifiedIdx, 1)
 		fromDoc := mustMap(t, modifiedIdx[0]["from"])
 		assert.Equal(t, "by_x", fromDoc["name"])
@@ -395,4 +399,23 @@ func mustStringSlice(t *testing.T, v interface{}) []string {
 		out[i] = s
 	}
 	return out
+}
+
+// collectionChanges returns the collection entries (type=="collection") from the
+// `changes` array of a dumboStatus/dumboDiff response.
+func collectionChanges(t *testing.T, raw bson.M) []bson.M {
+	t.Helper()
+	var out []bson.M
+	for _, c := range mustArrayOfMaps(t, raw["changes"]) {
+		if c["type"] == "collection" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// indexesOf returns the `indexes` sub-document of a collection change entry.
+func indexesOf(t *testing.T, entry bson.M) bson.M {
+	t.Helper()
+	return mustMap(t, entry["indexes"])
 }

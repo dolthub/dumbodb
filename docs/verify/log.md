@@ -462,8 +462,9 @@ Key checks:
 
 ## Scenario 10: stat flag -- per-collection change summary
 
-The `stat` flag adds a `stat` array to each commit showing per-collection
-change counts (added, modified, deleted). This is analogous to `git log --stat`.
+The `stat` flag adds a `changes` array to each commit -- the same change-set
+shape as `dumboStatus`, at summary verbosity (document/index counts). This is
+analogous to `git log --stat`.
 
 ```js
 db.runCommand({ doltLog: 1, limit: 1, stat: true })
@@ -482,8 +483,13 @@ Expected (commit "third" added one document to "events"):
       "author": "carol <carol@startup.dev>",
       "committer": "<...>",
       "committerTimestamp": "<...>",
-      "stat": [
-        { "name": "events", "status": "modified", "added": 1, "modified": 0, "deleted": 0 }
+      "changes": [
+        {
+          "type": "collection", "name": "events", "status": "modified",
+          "documents": { "added": 1, "removed": 0, "modified": 0 },
+          "indexes": { "added": [], "removed": [], "modified": [] },
+          "metadata": {}
+        }
       ]
     }
   ],
@@ -492,18 +498,19 @@ Expected (commit "third" added one document to "events"):
 ```
 
 Key checks:
-- `stat` is present on the commit entry
-- `stat[0].name` is `"events"` (the only collection changed)
-- `stat[0].added` is `1` (one document inserted in this commit)
-- `stat[0].modified` and `stat[0].deleted` are `0`
+- `changes` is present on the commit entry (summary verbosity)
+- `changes[0]` has `type: "collection"`, `name: "events"` (the only change)
+- `changes[0].documents.added` is `1` (one document inserted in this commit)
+- `changes[0].documents.modified` and `documents.removed` are `0`
 
 ---
 
 ## Scenario 11: patch flag -- full document diffs
 
-The `patch` flag adds a `diff` array to each commit showing the full
-document-level diff between the commit and its first parent. The shape
-matches `doltDiff` output. This is analogous to `git log --patch`.
+The `patch` flag emits the same `changes` array at full verbosity: each
+commit's `changes` carries the full document-level diff between the commit and
+its first parent, matching `dumboDiff`. This is analogous to `git log --patch`.
+(When both `stat` and `patch` are requested, `changes` is full.)
 
 ```js
 db.runCommand({ doltLog: 1, limit: 1, patch: true })
@@ -522,13 +529,16 @@ Expected (commit "third" added `{_id: 3, label: "gamma"}` to "events"):
       "author": "carol <carol@startup.dev>",
       "committer": "<...>",
       "committerTimestamp": "<...>",
-      "diff": [
+      "changes": [
         {
-          "name": "events",
-          "status": "modified",
-          "added": [ { "_id": 3, "label": "gamma" } ],
-          "removed": [],
-          "modified": []
+          "type": "collection", "name": "events", "status": "modified",
+          "documents": {
+            "added": [ { "_id": 3, "label": "gamma" } ],
+            "removed": [],
+            "modified": []
+          },
+          "indexes": { "added": [], "removed": [], "modified": [] },
+          "metadata": {}
         }
       ]
     }
@@ -538,18 +548,17 @@ Expected (commit "third" added `{_id: 3, label: "gamma"}` to "events"):
 ```
 
 Key checks:
-- `diff` is present on the commit entry
-- `diff[0].name` is `"events"`
-- `diff[0].added` contains the document `{_id: 3, label: "gamma"}`
-- `diff[0].removed` and `diff[0].modified` are empty arrays
+- `changes` is present at full verbosity
+- `changes[0].name` is `"events"`
+- `changes[0].documents.added` contains the document `{_id: 3, label: "gamma"}`
+- `changes[0].documents.removed` and `documents.modified` are empty arrays
 
 ---
 
 ## Scenario 12: stat and patch surface index changes
 
-`stat` lists per-collection index lifecycle (added/changed/deleted) and
-`patch` includes a per-index diff carrying the full definition on each
-side. An index-only commit (no document changes) still appears in both
+At summary verbosity `changes[].indexes` lists index names; at full
+verbosity it carries the full definition on each side. An index-only commit (no document changes) still appears in both
 outputs.
 
 Run this in a fresh database:
@@ -565,44 +574,42 @@ idb.runCommand({ doltCommit: 1, message: "seed", author: "alice <alice@acme.com>
 idb.items.createIndex({ age: 1 }, { name: "by_age" })
 idb.runCommand({ doltCommit: 1, message: "add by_age", author: "alice <alice@acme.com>" })
 
-// stat shows addedIndexes on the head commit. modifiedIndexes and
-// removedIndexes are always present as empty arrays.
+// stat shows indexes.added on the head commit. indexes.modified and
+// indexes.removed are always present as empty arrays.
 idb.runCommand({ doltLog: 1, limit: 1, stat: true })
-// Expected: commits[0].stat[0] = {
-//   name: "items", status: "modified",
-//   added: 0, modified: 0, deleted: 0,
-//   addedIndexes: [ "by_age" ],
-//   modifiedIndexes: [],
-//   removedIndexes: []
+// Expected: commits[0].changes[0] = {
+//   type: "collection", name: "items", status: "modified",
+//   documents: { added: 0, removed: 0, modified: 0 },
+//   indexes: { added: [ "by_age" ], modified: [], removed: [] },
+//   metadata: {}
 // }
 
-// patch shows the full index definition in addedIndexes. All other
-// change arrays (added/removed/modified docs, modifiedIndexes,
-// removedIndexes) are present as empty arrays.
+// patch shows the full index definition under indexes.added. All other
+// change arrays (documents.added/removed/modified, indexes.modified/removed)
+// are present as empty arrays.
 idb.runCommand({ doltLog: 1, limit: 1, patch: true })
-// Expected: commits[0].diff[0] = {
+// Expected: commits[0].changes[0] = {
 //   ...,
-//   addedIndexes: [
-//     { name: "by_age", keys: [{ field: "age", direction: 1 }] }
-//   ],
-//   modifiedIndexes: [],
-//   removedIndexes: []
+//   indexes: {
+//     added: [ { name: "by_age", keys: [{ field: "age", direction: 1 }] } ],
+//     modified: [], removed: []
+//   }
 // }
 ```
 
 Key checks:
-- `stat[0].addedIndexes` contains `"by_age"` even though `added/modified/
-  deleted` are all `0`. `modifiedIndexes` and `removedIndexes` are
+- `changes[0].indexes.added` contains `"by_age"` even though the
+  `documents` counts are all `0`. `indexes.modified` and `indexes.removed`
+  are present as empty arrays.
+- At full verbosity, `changes[0].indexes.added` has one entry: full IndexInfo
+  (name, keys with direction). `indexes.modified` and `indexes.removed` are
   present as empty arrays.
-- `diff[0].addedIndexes` has one entry: full IndexInfo (name, keys with
-  direction). `modifiedIndexes` and `removedIndexes` are present as
-  empty arrays.
-- The commit is NOT silently dropped from `diff`; before this fix, an
+- The commit is NOT silently dropped from `changes`; before this fix, an
   index-only commit would not appear in patch output because the
   document-level diff was empty.
 
-For the drop+recreate-with-different-spec case, `stat` lists the name in
-`modifiedIndexes` and `patch` shows a single `modifiedIndexes` entry
+For the drop+recreate-with-different-spec case, summary lists the name in
+`indexes.modified` and full verbosity shows a single `indexes.modified` entry
 with both `from` and `to` (see `index-branch-isolation.md` Scenario 8).
 
 ---

@@ -68,35 +68,46 @@ Expected result structure:
 
 ```json
 {
-  "collections": [
+  "changes": [
     {
+      "type": "collection",
       "name": "items",
       "status": "modified",
-      "added": [
-        { "_id": 3, "label": "gamma", "score": 30 }
-      ],
-      "removed": [
-        { "_id": 2, "label": "beta", "score": 20 }
-      ],
-      "modified": [
-        {
-          "_id": 1,
-          "diff": [
-            { "type": "modified", "path": "$.score", "from": 10, "to": 99 }
-          ]
-        }
-      ]
+      "documents": {
+        "added": [
+          { "_id": 3, "label": "gamma", "score": 30 }
+        ],
+        "removed": [
+          { "_id": 2, "label": "beta", "score": 20 }
+        ],
+        "modified": [
+          {
+            "_id": 1,
+            "diff": [
+              { "type": "modified", "path": "$.score", "from": 10, "to": 99 }
+            ]
+          }
+        ]
+      },
+      "indexes": { "added": [], "removed": [], "modified": [] },
+      "metadata": {}
     }
   ],
   "ok": 1
 }
 ```
 
+The change set is a single `changes` array, one entry per changed namespace,
+each tagged with its `type` (`collection` or `view`) and `status`. A collection
+entry groups its detail under `documents` / `indexes` / `metadata` (metadata is
+reserved and empty for now). A view entry instead carries `from` / `to`
+definitions.
+
 Key checks:
-- `status` is `"modified"` (the collection existed in both sides)
-- `added` contains exactly `_id:3`
-- `removed` contains exactly `_id:2`
-- `modified` contains exactly `_id:1` with a `score` field diff (`a: 10`, `b: 99`)
+- the entry has `type: "collection"` and `status: "modified"` (existed in both sides)
+- `documents.added` contains exactly `_id:3`
+- `documents.removed` contains exactly `_id:2`
+- `documents.modified` contains exactly `_id:1` with a `score` field diff (`from: 10`, `to: 99`)
 - `label` does not appear in `_id:1`'s diff (it was not changed)
 
 ---
@@ -119,7 +130,7 @@ two committed snapshots rather than HEAD vs working set.
 
 ---
 
-## Scenario 3: No changes  -- diff returns an empty collections array
+## Scenario 3: No changes  -- diff returns an empty changes array
 
 After committing, the working set matches HEAD. Diffing HEAD vs working set produces
 no output.
@@ -127,7 +138,7 @@ no output.
 ```js
 db.runCommand({ doltDiff: 1 })
 // Expected:
-// { "collections": [], "ok": 1 }
+// { "changes": [], "ok": 1 }
 ```
 
 ---
@@ -289,7 +300,7 @@ Expected: same result  -- `_id:5` added.
 featureDB.runCommand({ doltDiff: 1, from: hash3, to: "HEAD" })
 ```
 
-Expected: `{ "collections": [], "ok": 1 }`  -- feature HEAD equals hash3, no diff.
+Expected: `{ "changes": [], "ok": 1 }`  -- feature HEAD equals hash3, no diff.
 
 ```js
 // 4. REVERSE: from=HEAD, to=HEAD~1  -- swaps direction.
@@ -327,15 +338,16 @@ Key checks:
 | `{ doltDiff: 1, from: "HEAD", to: "HEAD~1" }` | connection HEAD | connection HEAD~1 (reverse) |
 | `{ doltDiff: 1, from: "branch", to: "HEAD" }` | branch tip | connection HEAD |
 
-- Only collections with at least one change appear in the result.
-- Each collection entry carries a `status` field describing the collection's
-  lifecycle between the two sides:
-  - `"added"`  -- collection exists in `to` but not in `from` (newly created).
-  - `"deleted"`  -- collection exists in `from` but not in `to` (dropped).
-  - `"modified"`  -- collection exists in both sides with at least one document-level change.
-- `added` and `removed` contain full documents.
-- `modified` contains only the changed fields with `from` (old) and `to` (new) values.
-- Unchanged fields do not appear in `modified[].diff`.
+- Only namespaces with at least one change appear in the `changes` array.
+- Each entry carries a `type` (`collection` or `view`) and a `status` describing
+  its lifecycle between the two sides:
+  - `"added"`  -- exists in `to` but not in `from` (newly created).
+  - `"deleted"`  -- exists in `from` but not in `to` (dropped).
+  - `"modified"`  -- exists in both sides with at least one change.
+- For a collection entry, `documents.added` / `documents.removed` contain full
+  documents; `documents.modified` contains only the changed fields with `from`
+  (old) and `to` (new) values; unchanged fields do not appear. `indexes` groups
+  index changes the same way; `metadata` is reserved.
 - `HEAD` always resolves to the connection's own branch tip, not necessarily main.
 
 ---
@@ -363,29 +375,33 @@ Expected:
 
 ```json
 {
-  "collections": [
+  "changes": [
     {
+      "type": "collection",
       "name": "arrival",
       "status": "added",
-      "added": [ { "_id": 42, "label": "new" } ],
-      "removed": [],
-      "modified": []
+      "documents": { "added": [ { "_id": 42, "label": "new" } ], "removed": [], "modified": [] },
+      "indexes": { "added": [], "removed": [], "modified": [] },
+      "metadata": {}
     },
     {
+      "type": "collection",
       "name": "going",
       "status": "deleted",
-      "added": [],
-      "removed": [ { "_id": 1 } ],
-      "modified": []
+      "documents": { "added": [], "removed": [ { "_id": 1 } ], "modified": [] },
+      "indexes": { "added": [], "removed": [], "modified": [] },
+      "metadata": {}
     },
     {
+      "type": "collection",
       "name": "staying",
       "status": "modified",
-      "added": [],
-      "removed": [],
-      "modified": [
-        { "_id": 1, "diff": [ { "type": "modified", "path": "$.v", "from": 1, "to": 2 } ] }
-      ]
+      "documents": {
+        "added": [], "removed": [],
+        "modified": [ { "_id": 1, "diff": [ { "type": "modified", "path": "$.v", "from": 1, "to": 2 } ] } ]
+      },
+      "indexes": { "added": [], "removed": [], "modified": [] },
+      "metadata": {}
     }
   ],
   "ok": 1
@@ -393,6 +409,7 @@ Expected:
 ```
 
 Key checks:
-- `arrival.status == "added"`  -- created since baseline; all docs appear in `added`.
-- `going.status == "deleted"`  -- dropped since baseline; all prior docs appear in `removed`.
+- entries are sorted by `name` (`arrival`, `going`, `staying`).
+- `arrival.status == "added"`  -- created since baseline; all docs appear in `documents.added`.
+- `going.status == "deleted"`  -- dropped since baseline; all prior docs appear in `documents.removed`.
 - `staying.status == "modified"`  -- present in both sides with at least one doc-level change.
