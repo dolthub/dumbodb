@@ -285,9 +285,8 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	// Persist the collection's metadata (UUID + validator + capped + timeseries)
 	// durably in the branch-scoped catalog. The in-memory maps are kept as a
 	// write-through cache for in-session reads.
-	collUUID := uuid.New()
 	meta := &collMeta{
-		UUID:             collUUID.String(),
+		UUID:             uuid.New().String(),
 		Validator:        params.Validator,
 		ValidationLevel:  params.ValidationLevel,
 		ValidationAction: params.ValidationAction,
@@ -298,28 +297,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	}
 	if err := state.upsertCatalogDoc(ctx, db.rootish, params.Name, meta); err != nil {
 		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)
-	}
-
-	state.uuids[params.Name] = collUUID.String()
-	if params.CappedSize > 0 {
-		state.capped[params.Name] = &cappedCollectionMeta{
-			CappedSize:      params.CappedSize,
-			CappedDocuments: params.CappedDocuments,
-		}
-	}
-	if params.Validator != nil || params.ValidationLevel != "" || params.ValidationAction != "" {
-		state.validators[params.Name] = &collectionValidator{
-			Validator:        params.Validator,
-			ValidationLevel:  params.ValidationLevel,
-			ValidationAction: params.ValidationAction,
-		}
-	}
-	if params.IsTimeSeries {
-		state.timeSeries[params.Name] = &timeSeriesMeta{
-			TimeField:   params.TimeField,
-			MetaField:   params.MetaField,
-			Granularity: params.Granularity,
-		}
 	}
 
 	return nil
@@ -364,12 +341,6 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	if err := state.deleteCatalogDoc(ctx, db.rootish, params.Name); err != nil {
 		return fmt.Errorf("removing collection metadata for %q: %w", params.Name, err)
 	}
-
-	delete(state.uuids, params.Name)
-	delete(state.validators, params.Name)
-	delete(state.capped, params.Name)
-	delete(state.insertionOrder, params.Name)
-	delete(state.timeSeries, params.Name)
 
 	return nil
 }
@@ -439,30 +410,6 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 		}
 	}
 
-	// Transfer UUID from old name to new name.
-	if collUUID, ok := state.uuids[params.OldName]; ok {
-		state.uuids[params.NewName] = collUUID
-		delete(state.uuids, params.OldName)
-	}
-
-	// Transfer validator from old name to new name.
-	if v, ok := state.validators[params.OldName]; ok {
-		state.validators[params.NewName] = v
-		delete(state.validators, params.OldName)
-	}
-
-	// Transfer capped metadata from old name to new name.
-	if c, ok := state.capped[params.OldName]; ok {
-		state.capped[params.NewName] = c
-		delete(state.capped, params.OldName)
-	}
-
-	// Transfer insertion order from old name to new name.
-	if ord, ok := state.insertionOrder[params.OldName]; ok {
-		state.insertionOrder[params.NewName] = ord
-		delete(state.insertionOrder, params.OldName)
-	}
-
 	return nil
 }
 
@@ -520,37 +467,7 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 		}
 	}
 
-	// Get or create validator entry.
-	v, ok := state.validators[params.Name]
-	if !ok {
-		v = &collectionValidator{}
-	}
-
-	if params.SetValidator {
-		v.Validator = params.Validator
-	}
-	if params.ValidationLevel != "" {
-		v.ValidationLevel = params.ValidationLevel
-	}
-	if params.ValidationAction != "" {
-		v.ValidationAction = params.ValidationAction
-	}
-
-	// Store (or clear if all fields are empty).
-	if v.Validator == nil && v.ValidationLevel == "" && v.ValidationAction == "" {
-		delete(state.validators, params.Name)
-	} else {
-		state.validators[params.Name] = v
-	}
-
-	// Update capped metadata if CappedSize is specified.
-	if params.CappedSize > 0 {
-		state.capped[params.Name] = &cappedCollectionMeta{
-			CappedSize: params.CappedSize,
-		}
-	}
-
-	// Persist the changed metadata to the durable catalog (read-modify-write so
+	// Update the validator in the durable catalog (read-modify-write so
 	// unrelated fields such as the UUID are preserved).
 	meta, err := readCatalogDoc(ctx, state, collModBranchAM, params.Name)
 	if err != nil {

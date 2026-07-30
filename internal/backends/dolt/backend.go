@@ -103,19 +103,6 @@ const (
 	dbBranchSep = "@"
 )
 
-// collectionValidator holds schema validation options for a single collection (in-memory only).
-type collectionValidator struct {
-	Validator        *types.Document
-	ValidationLevel  string
-	ValidationAction string
-}
-
-// cappedCollectionMeta holds capped collection configuration (in-memory only).
-type cappedCollectionMeta struct {
-	CappedSize      int64
-	CappedDocuments int64
-}
-
 // viewMeta holds a view definition. It is persisted as a self-describing blob
 // entry in the collections AddressMap (see view_storage.go), so views survive
 // restart and participate in commit/branch/merge like collections.
@@ -123,13 +110,6 @@ type viewMeta struct {
 	ViewOn    string
 	Pipeline  *types.Array
 	Collation *types.Document // reserved for view default collation; nil today
-}
-
-// timeSeriesMeta holds time series collection configuration (in-memory only).
-type timeSeriesMeta struct {
-	TimeField   string
-	MetaField   string
-	Granularity string
 }
 
 // dbState holds the open Dolt store for a single MongoDB database.
@@ -155,12 +135,6 @@ type dbState struct {
 	// ws and wsHash fields. See branch_ws.go.
 	branchWSMu sync.RWMutex
 	branchWS   map[string]*branchWS
-
-	uuids          map[string]string
-	validators     map[string]*collectionValidator
-	capped         map[string]*cappedCollectionMeta
-	insertionOrder map[string][]any
-	timeSeries     map[string]*timeSeriesMeta
 
 	collSchemaHash hash.Hash
 	mergeState     *mergeInProgress
@@ -1010,20 +984,15 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	}
 
 	db = &dbState{
-		backend:        b,
-		name:           dbName,
-		dbDir:          dbDir,
-		cs:             cs,
-		ns:             ns,
-		vs:             vs,
-		doltDB:         doltDB,
-		datasDB:        datasDB,
-		branchWS:       make(map[string]*branchWS),
-		uuids:          make(map[string]string),
-		validators:     make(map[string]*collectionValidator),
-		capped:         make(map[string]*cappedCollectionMeta),
-		insertionOrder: make(map[string][]any),
-		timeSeries:     make(map[string]*timeSeriesMeta),
+		backend:  b,
+		name:     dbName,
+		dbDir:    dbDir,
+		cs:       cs,
+		ns:       ns,
+		vs:       vs,
+		doltDB:   doltDB,
+		datasDB:  datasDB,
+		branchWS: make(map[string]*branchWS),
 	}
 
 	// Write the shared DSCH chunk once; the empty secondary-index AM is
