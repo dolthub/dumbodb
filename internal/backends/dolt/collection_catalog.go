@@ -22,6 +22,7 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
@@ -30,17 +31,17 @@ import (
 // collection name). Because it is an ordinary per-branch collection, metadata is
 // durable, branch-scoped, and participates in commit/branch/merge for free. It
 // is hidden from listCollections and the version-control diff/status walks, and
-// user writes to it are rejected.
-const reservedCatalogName = "__dumbo_catalog__"
+// rejected as a user collection name (see backends.validateCollectionName).
+const reservedCatalogName = backends.ReservedCatalogName
 
-// collMeta is the persisted per-collection metadata document.
+// collMeta is the persisted per-collection metadata document. Capped
+// configuration is deliberately absent: capped collections are rejected at the
+// API, so no capped collection can exist.
 type collMeta struct {
 	UUID             string
 	Validator        *types.Document
 	ValidationLevel  string
 	ValidationAction string
-	CappedSize       int64
-	CappedDocuments  int64
 	IsTimeSeries     bool
 	TimeField        string
 	MetaField        string
@@ -58,8 +59,6 @@ func collMetaToDoc(collName string, m *collMeta) (*types.Document, error) {
 		"validator", validator,
 		"validationLevel", m.ValidationLevel,
 		"validationAction", m.ValidationAction,
-		"cappedSize", m.CappedSize,
-		"cappedDocuments", m.CappedDocuments,
 		"isTimeSeries", m.IsTimeSeries,
 		"timeField", m.TimeField,
 		"metaField", m.MetaField,
@@ -77,19 +76,6 @@ func docToCollMeta(doc *types.Document) *collMeta {
 		s, _ := v.(string)
 		return s
 	}
-	getI64 := func(k string) int64 {
-		v, err := doc.Get(k)
-		if err != nil {
-			return 0
-		}
-		switch n := v.(type) {
-		case int64:
-			return n
-		case int32:
-			return int64(n)
-		}
-		return 0
-	}
 	m.UUID = getStr("uuid")
 	if v, err := doc.Get("validator"); err == nil {
 		if vd, ok := v.(*types.Document); ok {
@@ -98,8 +84,6 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	}
 	m.ValidationLevel = getStr("validationLevel")
 	m.ValidationAction = getStr("validationAction")
-	m.CappedSize = getI64("cappedSize")
-	m.CappedDocuments = getI64("cappedDocuments")
 	if v, err := doc.Get("isTimeSeries"); err == nil {
 		m.IsTimeSeries, _ = v.(bool)
 	}

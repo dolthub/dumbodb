@@ -203,8 +203,6 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 			ci.Validator = m.Validator
 			ci.ValidationLevel = m.ValidationLevel
 			ci.ValidationAction = m.ValidationAction
-			ci.CappedSize = m.CappedSize
-			ci.CappedDocuments = m.CappedDocuments
 			ci.IsTimeSeries = m.IsTimeSeries
 			ci.TimeField = m.TimeField
 			ci.MetaField = m.MetaField
@@ -293,8 +291,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		Validator:        params.Validator,
 		ValidationLevel:  params.ValidationLevel,
 		ValidationAction: params.ValidationAction,
-		CappedSize:       params.CappedSize,
-		CappedDocuments:  params.CappedDocuments,
 		IsTimeSeries:     params.IsTimeSeries,
 		TimeField:        params.TimeField,
 		MetaField:        params.MetaField,
@@ -571,9 +567,6 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	}
 	if params.ValidationAction != "" {
 		meta.ValidationAction = params.ValidationAction
-	}
-	if params.CappedSize > 0 {
-		meta.CappedSize = params.CappedSize
 	}
 	if err := state.upsertCatalogDoc(ctx, db.rootish, params.Name, meta); err != nil {
 		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)

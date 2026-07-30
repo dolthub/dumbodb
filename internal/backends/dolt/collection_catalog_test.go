@@ -227,3 +227,38 @@ func TestCatalogMergeConflictInvisible(t *testing.T) {
 		t.Fatalf("expected ours (strict) after metadata merge, got %q", ci.ValidationLevel)
 	}
 }
+
+// TestCatalogNameRejected verifies the internal catalog collection cannot be
+// created or accessed by name through the public API (workspace-alp.16 (1)),
+// while DumboDB's own low-level catalog writes (exercised by the durability
+// tests) still succeed.
+func TestCatalogNameRejected(t *testing.T) {
+	dir, err := os.MkdirTemp("", "dolt-catalog-reject-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	b, err := NewBackend(dir, slog.Default(), false, false, 0, 0)
+	if err != nil {
+		t.Fatalf("NewBackend: %v", err)
+	}
+	defer b.Close()
+	db, err := b.Database("metadb")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+
+	if err := db.CreateCollection(ctx, &backends.CreateCollectionParams{Name: reservedCatalogName}); err == nil {
+		t.Fatal("creating a collection named as the catalog must be rejected")
+	} else if !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
+		t.Errorf("create catalog name: want CollectionNameIsInvalid, got %v", err)
+	}
+
+	if _, err := db.Collection(reservedCatalogName); err == nil {
+		t.Fatal("accessing the catalog collection by name must be rejected")
+	} else if !backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
+		t.Errorf("access catalog name: want CollectionNameIsInvalid, got %v", err)
+	}
+}

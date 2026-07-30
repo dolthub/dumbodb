@@ -70,5 +70,12 @@ func validateCollectionName(name string) error {
 		return NewError(ErrorCodeCollectionNameIsInvalid, nil)
 	}
 
+	// The internal metadata catalog is application-managed and never a valid
+	// user collection: reject both creating and accessing it by name. DumboDB's
+	// own catalog operations use lower-level helpers that bypass this check.
+	if name == ReservedCatalogName {
+		return NewError(ErrorCodeCollectionNameIsInvalid, nil)
+	}
+
 	return nil
 }
