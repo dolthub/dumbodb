@@ -165,6 +165,37 @@ func viewSideDiff(baseIsView, sideIsView bool) string {
 	}
 }
 
+// catalogConflictCollections decodes the owning collection names from a set of
+// divergent __dumbo_catalog__ document conflicts (each catalog doc's _id is its
+// collection name), so a merge refusal can name the affected collections without
+// ever exposing the internal catalog. Names are sorted for a stable message.
+func catalogConflictCollections(ctx context.Context, state *dbState, conflicts []*conflictEntry) ([]string, error) {
+	var names []string
+	for _, c := range conflicts {
+		v := c.oursRawVal
+		if v == nil {
+			v = c.theirsRawVal
+		}
+		if v == nil {
+			v = c.baseRawVal
+		}
+		if v == nil {
+			continue
+		}
+		doc, err := readBSONDocFromValue(ctx, state.ns, v)
+		if err != nil {
+			return nil, err
+		}
+		if id, err := doc.Get("_id"); err == nil {
+			if s, ok := id.(string); ok {
+				names = append(names, s)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // conflictEntry represents a single document-level conflict captured during a merge.
 // The raw key and value tuples are stored as byte slices so they can be decoded lazily on demand.
 type conflictEntry struct {
@@ -1500,11 +1531,26 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
 
-		// The internal metadata catalog must never surface a conflict to the
-		// user. Non-conflicting per-collection metadata docs still merge (the
-		// merged map holds them); a divergent metadata doc auto-resolves to ours
-		// (already what the merged map keeps), so we simply drop its conflicts.
+		// The internal metadata catalog must never surface as a raw conflict
+		// (users must never see reservedCatalogName). Non-conflicting per-
+		// collection metadata docs merge cleanly. But a DIVERGENT metadata doc
+		// -- the same collection's validator/options changed on both branches --
+		// must NOT be silently dropped: that would lose one side's change
+		// invisibly. Until the metadata conflict-resolution workflow lands
+		// (workspace-xhm surfaces it as a resolvable conflict on the owning
+		// collection), refuse the merge loudly, naming the owning collection(s)
+		// rather than the internal catalog.
 		if name == reservedCatalogName {
+			if len(collConflicts) > 0 {
+				colls, nerr := catalogConflictCollections(ctx, state, collConflicts)
+				if nerr != nil {
+					return prolly.AddressMap{}, nil, nil, nerr
+				}
+				return prolly.AddressMap{}, nil, nil, fmt.Errorf(
+					"cannot merge: collection metadata (validator/options) changed on both branches for %s; "+
+						"automatic metadata conflict resolution is not yet supported -- align the metadata on "+
+						"both branches before merging", strings.Join(colls, ", "))
+			}
 			collConflicts = nil
 		}
 

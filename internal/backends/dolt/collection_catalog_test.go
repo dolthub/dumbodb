@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -178,10 +179,11 @@ func TestCatalogMergeCarriesMetadata(t *testing.T) {
 	}
 }
 
-// TestCatalogMergeConflictInvisible verifies that a metadata change diverging on
-// both branches completes the merge cleanly (keep-ours) and never surfaces the
-// internal __dumbo_catalog__ collection as a conflict (user constraint).
-func TestCatalogMergeConflictInvisible(t *testing.T) {
+// TestCatalogMergeConflictRefused verifies that a metadata change diverging on
+// both branches is NOT silently dropped: the merge is refused loudly, naming the
+// owning collection while never exposing the internal __dumbo_catalog__ name.
+// (Interim behavior; workspace-xhm makes it a resolvable conflict instead.)
+func TestCatalogMergeConflictRefused(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -215,16 +217,31 @@ func TestCatalogMergeConflictInvisible(t *testing.T) {
 	}
 	commitBranch(t, b, "mcdb", "main", "orders -> strict")
 
-	// The merge completes cleanly despite the divergent metadata.
-	if _, err := b.DumboDBMerge(ctx, &backends.MergeParams{
+	// A divergent metadata change on both branches must NOT be silently dropped.
+	// Until the metadata conflict-resolution workflow lands (workspace-xhm), the
+	// merge is refused loudly, naming the owning collection and never exposing
+	// the internal catalog.
+	_, err = b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName: "mcdb", Into: "main", From: "feature", Message: "merge", Author: "t <t@e>",
-	}); err != nil {
-		t.Fatalf("DumboDBMerge should complete cleanly (metadata conflict is invisible): %v", err)
+	})
+	if err == nil {
+		t.Fatal("divergent metadata merge must be refused, not silently completed")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "orders") {
+		t.Fatalf("refusal must name the owning collection 'orders': %v", msg)
+	}
+	if strings.Contains(msg, reservedCatalogName) {
+		t.Fatalf("refusal must NOT expose the internal catalog name: %v", msg)
 	}
 
-	// Keep-ours: main's value wins.
+	// Nothing was dropped: both sides keep their own value (the merge did not
+	// apply). main stays strict; feature stays moderate.
 	if ci := collInfo(t, mainDB, "orders"); ci.ValidationLevel != "strict" {
-		t.Fatalf("expected ours (strict) after metadata merge, got %q", ci.ValidationLevel)
+		t.Fatalf("main's validationLevel must be intact after a refused merge, got %q", ci.ValidationLevel)
+	}
+	if ci := collInfo(t, featDB, "orders"); ci.ValidationLevel != "moderate" {
+		t.Fatalf("feature's validationLevel must be intact after a refused merge, got %q", ci.ValidationLevel)
 	}
 }
 

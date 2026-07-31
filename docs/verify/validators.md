@@ -220,16 +220,16 @@ Key checks:
 Both branches change the **same** collection's validator to different
 definitions, then merge.
 
-> **Known gap -- pending workspace-xhm.** This scenario documents the *target*
-> behavior, which is NOT yet implemented. Today the merge completes silently and
-> keeps the target branch's ("ours") validator, discarding the other side with
-> no notice -- a violation of the rule that a writer's change is never silently
-> dropped. The intended behavior is that a divergent validator surfaces as a
-> **resolvable conflict on the owning collection** (`items`), resolved through
-> the same `doltConflicts` / `doltResolveConflict` workflow that document, index,
-> and view conflicts use -- and the internal catalog collection is never named in
-> that output. Until workspace-xhm lands, the "Today" block below is what a
-> verifier will actually observe.
+A divergent metadata change is **never silently dropped**. Today the merge is
+**refused** loudly -- it fails with an error naming the owning collection
+(`items`), and nothing is lost: each branch keeps its own validator. The
+internal catalog collection is never named in the error.
+
+> **Pending workspace-xhm.** The hard refusal below is an interim: it guarantees
+> no silent data loss, but it is blunt. workspace-xhm upgrades it to a
+> **resolvable conflict on the owning collection**, resolved through the same
+> `doltConflicts` / `doltResolveConflict` workflow that document, index, and view
+> conflicts use -- still never naming the internal catalog.
 
 ```js
 var db = db.getSiblingDB("valconflict")
@@ -249,12 +249,16 @@ db.runCommand({ collMod: "items", validator: { age: { $gte: 21 } } })
 db.runCommand({ doltCommit: 1, message: "main: age >= 21", author: "alice <alice@acme.com>" })
 
 db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// MongoServerError: cannot merge: collection metadata (validator/options)
+//   changed on both branches for items; automatic metadata conflict resolution
+//   is not yet supported -- align the metadata on both branches before merging
 ```
 
-**Today (pre-workspace-xhm):**
-- The merge returns `{ ok: 1 }` with no conflict.
-- `main`'s validator is unchanged (`age >= 21`); feature's `age >= 18` is
-  silently discarded.
+**Today (interim):**
+- The merge is refused: the command errors, naming the collection `items` (never
+  `__dumbo_catalog__`).
+- Nothing is dropped: `main` still has `age >= 21` and `feature` still has
+  `age >= 18`. The merge simply did not apply.
 
 **Target (workspace-xhm):**
 - The merge stops with a conflict: `doltConflicts` reports a metadata conflict on
@@ -262,3 +266,8 @@ db.runCommand({ doltMerge: 1, merge_in: "feature" })
   definitions -- never the internal catalog name.
 - `doltResolveConflict` chooses `ours` / `theirs` / `custom`, then
   `doltMerge continue:1` completes the merge with the chosen validator.
+
+Key checks:
+- The merge **fails** (it does not silently succeed).
+- The error names `items`, not `__dumbo_catalog__`.
+- Both branches' validators are intact afterward -- no side was dropped.

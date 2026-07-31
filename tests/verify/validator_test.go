@@ -160,12 +160,13 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 	})
 
-	// Scenario8: divergent validators on both branches. This asserts the CURRENT
-	// behavior -- the merge completes and keeps ours (main), silently dropping
-	// theirs. docs/verify/validators.md flags this as a known gap; workspace-xhm
-	// will flip it to surface a resolvable conflict, at which point this subtest
-	// is replaced by a surfaces-and-resolves assertion.
-	t.Run("Scenario8_DivergentValidators_TodayKeepsOurs", func(t *testing.T) {
+	// Scenario8: divergent validators on both branches. A divergent metadata
+	// change must NOT be silently dropped. Interim behavior: the merge is refused
+	// loudly, naming the owning collection while never exposing the internal
+	// catalog, and NOTHING is dropped (both branches keep their own validator).
+	// workspace-xhm will upgrade this from a hard refusal to a resolvable
+	// conflict surfaced on the owning collection.
+	t.Run("Scenario8_DivergentValidators_MergeRefused", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -189,14 +190,19 @@ func TestValidatorVerify(t *testing.T) {
 		}).Err())
 		dumboDBCommit(t, env, dbName, "main: age >= 21", "alice <alice@acme.com>")
 
-		raw := vmMerge(t, env, dbName, "feature")
-		// TODAY: silent keep-ours, no conflict. (TARGET, workspace-xhm: conflict.)
-		require.EqualValues(t, 1, raw["ok"], "today the divergent-validator merge completes silently: %v", raw)
+		// The merge is refused (not silently completed).
+		mergeErr := env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltMerge", Value: 1},
+			{Key: "merge_in", Value: "feature"},
+		}).Err()
+		require.Error(t, mergeErr, "divergent-validator merge must be refused, not silently completed")
+		assert.Contains(t, mergeErr.Error(), "items", "refusal names the owning collection")
+		assert.NotContains(t, mergeErr.Error(), "__dumbo_catalog__", "refusal must not expose the internal catalog")
 
-		mainDB := env.Client.Database(dbName + "@main")
-		v := validatorOf(t, mainDB, "items")
-		require.NotNil(t, v)
-		age, _ := v["age"].(bson.M)
-		assert.EqualValues(t, 21, age["$gte"], "today keeps ours (main's age >= 21); theirs is dropped")
+		// Nothing dropped: each branch keeps its own validator.
+		mainAge, _ := validatorOf(t, env.Client.Database(dbName+"@main"), "items")["age"].(bson.M)
+		assert.EqualValues(t, 21, mainAge["$gte"], "main keeps its own validator (age >= 21)")
+		featAge, _ := validatorOf(t, env.Client.Database(dbName+"@feature"), "items")["age"].(bson.M)
+		assert.EqualValues(t, 18, featAge["$gte"], "feature keeps its own validator (age >= 18) -- nothing dropped")
 	})
 }
