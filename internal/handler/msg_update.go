@@ -123,7 +123,11 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		return 0, 0, nil, lazyerrors.Error(err)
 	}
 
-	validator, valLevel, valAction := collectionValidator(ctx, db, params.Collection)
+	var validator *types.Document
+	var valLevel, valAction string
+	if !params.BypassDocumentValidation {
+		validator, valLevel, valAction = collectionValidator(ctx, db, params.Collection)
+	}
 
 	for _, u := range params.Updates {
 		c, err := db.Collection(params.Collection)

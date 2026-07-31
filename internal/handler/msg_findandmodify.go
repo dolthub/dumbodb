@@ -198,7 +198,11 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		return result, nil
 	}
 
-	validator, valLevel, valAction := collectionValidator(ctx, db, params.Collection)
+	var validator *types.Document
+	var valLevel, valAction string
+	if !params.BypassDocumentValidation {
+		validator, valLevel, valAction = collectionValidator(ctx, db, params.Collection)
+	}
 	update := &common.Update{
 		Filter:             params.Query,
 		Update:             params.Update,

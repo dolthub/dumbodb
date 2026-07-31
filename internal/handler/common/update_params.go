@@ -37,7 +37,7 @@ type UpdateParams struct {
 	Let *types.Document `dumbo:"let,unimplemented"`
 
 	Ordered                  bool            `dumbo:"ordered,ignored"`
-	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
 	LSID                     any             `dumbo:"lsid,ignored"`

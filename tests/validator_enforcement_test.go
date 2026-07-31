@@ -169,6 +169,29 @@ func TestValidator_Warn_AllowsInvalidWrite(t *testing.T) {
 	assert.EqualValues(t, -5, got["age"], "warn write must have applied")
 }
 
+func TestValidator_Bypass_AllowsInvalid(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	coll := newValidatedColl(t, env, "strict", "error")
+
+	// insert with bypass: invalid doc allowed.
+	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-9)}},
+		options.InsertOne().SetBypassDocumentValidation(true))
+	require.NoError(t, err, "bypassDocumentValidation must allow an invalid insert")
+
+	// update with bypass: turn a valid doc invalid, allowed.
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 3}, {Key: "age", Value: int32(5)}})
+	require.NoError(t, err)
+	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 3}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-1)}}}},
+		options.UpdateOne().SetBypassDocumentValidation(true))
+	require.NoError(t, err, "bypassDocumentValidation must allow an invalid update")
+
+	var got bson.M
+	require.NoError(t, coll.FindOne(ctx, bson.D{{Key: "_id", Value: 3}}).Decode(&got))
+	assert.EqualValues(t, -1, got["age"], "bypassed update must have applied")
+}
+
 // TestValidator_Moderate_GrandfathersInvalidPreImage verifies the moderate
 // distinction: an update to a document that was ALREADY invalid is allowed,
 // while an update that turns a valid document invalid is rejected.

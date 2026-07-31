@@ -55,6 +55,13 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		)
 	}
 
+	bypass := false
+	if v, err := document.Get("bypassDocumentValidation"); err == nil {
+		if b, ok := v.(bool); ok {
+			bypass = b
+		}
+	}
+
 	ordered := true
 	if v, err := document.Get("ordered"); err == nil {
 		if b, ok := v.(bool); ok {
@@ -141,7 +148,7 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			)
 		}
 
-		res, opErr := h.execBulkWriteOp(connCtx, opDoc, namespaces, skipDurableSync)
+		res, opErr := h.execBulkWriteOp(connCtx, opDoc, namespaces, skipDurableSync, bypass)
 		entry := must.NotFail(types.NewDocument("idx", int32(i)))
 
 		if opErr != nil {
@@ -225,7 +232,7 @@ type bulkWriteOpResult struct {
 // execBulkWriteOp dispatches a single op document to the matching backend
 // call. It returns either a populated result or a command error that the
 // caller wraps into the per-op firstBatch entry.
-func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, namespaces []bulkWriteNS, skipDurableSync bool) (bulkWriteOpResult, error) {
+func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, namespaces []bulkWriteNS, skipDurableSync, bypass bool) (bulkWriteOpResult, error) {
 	// Identify the op kind by looking for the first of insert / update /
 	// delete. The value is the index into the namespaces array.
 	var (
@@ -298,9 +305,9 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 
 	switch kind {
 	case "insert":
-		return execBulkWriteInsert(ctx, db, c, ns, op, skipDurableSync)
+		return execBulkWriteInsert(ctx, db, c, ns, op, skipDurableSync, bypass)
 	case "update":
-		return execBulkWriteUpdate(ctx, db, c, ns, op, skipDurableSync, h.DisablePushdown)
+		return execBulkWriteUpdate(ctx, db, c, ns, op, skipDurableSync, bypass, h.DisablePushdown)
 	case "delete":
 		return execBulkWriteDelete(ctx, c, op, skipDurableSync, h.DisablePushdown)
 	}
@@ -313,7 +320,7 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 	)
 }
 
-func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync bool) (bulkWriteOpResult, error) {
+func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, bypass bool) (bulkWriteOpResult, error) {
 	docVal, err := op.Get("document")
 	if err != nil {
 		return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
@@ -343,7 +350,7 @@ func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.C
 		return bulkWriteOpResult{}, lazyerrors.Error(err)
 	}
 
-	if validator, _, action := collectionValidator(ctx, db, ns.coll); validator != nil {
+	if validator, _, action := collectionValidator(ctx, db, ns.coll); validator != nil && !bypass {
 		ok, verr := common.FilterDocument(doc, validator)
 		if verr != nil {
 			return bulkWriteOpResult{}, lazyerrors.Error(verr)
@@ -371,7 +378,7 @@ func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.C
 	return bulkWriteOpResult{kind: "insert", inserted: 1}, nil
 }
 
-func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, disablePushdown bool) (bulkWriteOpResult, error) {
+func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, bypass, disablePushdown bool) (bulkWriteOpResult, error) {
 	filter, _ := getDocumentField(op, "filter")
 	if filter == nil {
 		filter = must.NotFail(types.NewDocument())
@@ -410,7 +417,11 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 		}
 	}
 
-	validator, valLevel, valAction := collectionValidator(ctx, db, ns.coll)
+	var validator *types.Document
+	var valLevel, valAction string
+	if !bypass {
+		validator, valLevel, valAction = collectionValidator(ctx, db, ns.coll)
+	}
 	update := &common.Update{
 		Filter:           filter,
 		UpdateRaw:        modsVal,
