@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
-	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
@@ -276,17 +275,12 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if err != nil {
 		return err
 	}
-	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
-		return ed.Add(ctx, params.Name, dtblHash)
-	}); err != nil {
-		return err
-	}
-
-	// Persist the collection's metadata (UUID + validator + capped + timeseries)
-	// durably in the branch-scoped catalog. The in-memory maps are kept as a
-	// write-through cache for in-session reads.
+	// The collection and its catalog metadata land in one commit: the catalog
+	// write rides along in the same AddressMap transaction as the create, so a
+	// user sees "create collection X" (never the internal catalog) and no
+	// separate catalog commit races a concurrent session's commit.
 	meta := &collMeta{
-		UUID:             uuid.New().String(),
+		UUID:             collectionUUID(db.name, params.Name),
 		Validator:        params.Validator,
 		ValidationLevel:  params.ValidationLevel,
 		ValidationAction: params.ValidationAction,
@@ -295,8 +289,17 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 		MetaField:        params.MetaField,
 		Granularity:      params.Granularity,
 	}
-	if err := state.upsertCatalogDoc(ctx, db.rootish, params.Name, meta); err != nil {
-		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)
+	createAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
+		return err
+	}
+	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
+		if err := ed.Add(ctx, params.Name, dtblHash); err != nil {
+			return err
+		}
+		return state.applyCatalogUpsert(ctx, createAM, ed, params.Name, meta)
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -333,13 +336,12 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	}
 
 	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: drop collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
-		return ed.Delete(ctx, params.Name)
+		if err := ed.Delete(ctx, params.Name); err != nil {
+			return err
+		}
+		return state.applyCatalogDelete(ctx, dropBranchAM, ed, params.Name)
 	}); err != nil {
 		return err
-	}
-
-	if err := state.deleteCatalogDoc(ctx, db.rootish, params.Name); err != nil {
-		return fmt.Errorf("removing collection metadata for %q: %w", params.Name, err)
 	}
 
 	return nil
@@ -384,30 +386,25 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
 
+	// Read the metadata before the transaction so the rename moves it in the
+	// same commit as the collection entry (preserving the UUID).
+	meta, mErr := readCatalogDoc(ctx, state, renameBranchAM, params.OldName)
+	if mErr != nil {
+		return fmt.Errorf("reading collection metadata for %q: %w", params.OldName, mErr)
+	}
 	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: rename collection %s to %s", params.OldName, params.NewName), func(ed prolly.AddressMapEditor) error {
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}
-
-		return ed.Add(ctx, params.NewName, oldAddr)
+		if err := ed.Add(ctx, params.NewName, oldAddr); err != nil {
+			return err
+		}
+		if meta != nil {
+			return state.applyCatalogRename(ctx, renameBranchAM, ed, params.OldName, params.NewName, meta)
+		}
+		return nil
 	}); err != nil {
 		return err
-	}
-
-	// Move the metadata document with the collection, preserving its UUID.
-	renameAM, err := state.getOrInitBranchAM(ctx, db.rootish)
-	if err != nil {
-		return err
-	}
-	if meta, mErr := readCatalogDoc(ctx, state, renameAM, params.OldName); mErr != nil {
-		return fmt.Errorf("reading collection metadata for %q: %w", params.OldName, mErr)
-	} else if meta != nil {
-		if err := state.upsertCatalogDoc(ctx, db.rootish, params.NewName, meta); err != nil {
-			return fmt.Errorf("moving collection metadata to %q: %w", params.NewName, err)
-		}
-		if err := state.deleteCatalogDoc(ctx, db.rootish, params.OldName); err != nil {
-			return fmt.Errorf("removing old collection metadata for %q: %w", params.OldName, err)
-		}
 	}
 
 	return nil
@@ -485,7 +482,8 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 	if params.ValidationAction != "" {
 		meta.ValidationAction = params.ValidationAction
 	}
-	if err := state.upsertCatalogDoc(ctx, db.rootish, params.Name, meta); err != nil {
+	if err := state.upsertCatalogDocMsg(ctx, db.rootish, params.Name,
+		fmt.Sprintf("auto: modify collection %s", params.Name), meta); err != nil {
 		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)
 	}
 

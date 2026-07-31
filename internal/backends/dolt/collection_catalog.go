@@ -21,10 +21,23 @@ import (
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
+	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+// collectionUUID derives a stable, name-based (v5) UUID for a collection from
+// its database and collection name. A deterministic UUID -- rather than a random
+// one -- means two clients that concurrently create (or auto-create on first
+// write) the same collection produce byte-identical catalog metadata, so their
+// branches merge cleanly instead of conflicting on a divergent random uuid field
+// (which under --session-isolation surfaced as a hard commit serialization
+// failure). MongoDB collection UUIDs are random and change on drop+recreate;
+// DumboDB parity only requires that a UUID is present, not its value.
+func collectionUUID(dbName, collName string) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(dbName+"\x00"+collName)).String()
+}
 
 // reservedCatalogName is the internal collection that durably stores
 // per-collection metadata (one document per user collection, keyed by the
@@ -115,9 +128,13 @@ func catalogMapFromAM(ctx context.Context, state *dbState, am prolly.AddressMap)
 	return openCollection(ctx, state.cs, state.ns, h)
 }
 
-// writeCatalogMap rebuilds the catalog DTBL from m and stores it in the branch's
-// collections AddressMap. The caller holds state.mu (write lock).
-func (state *dbState) writeCatalogMap(ctx context.Context, rootish string, m prolly.Map) error {
+// setCatalogEntry rebuilds the catalog DTBL from m and stages it in ed under the
+// reserved catalog name (Add if the catalog does not yet exist in am, else
+// Update). It performs no commit -- the catalog write rides along in the
+// caller's AddressMap transaction, so a DDL op (create/drop/rename) and its
+// metadata change land as a single commit rather than a stray "update catalog"
+// commit racing the DDL. The caller holds state.mu (write lock).
+func (state *dbState) setCatalogEntry(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, m prolly.Map) error {
 	emptyIdx, err := emptyIndexAM(state.ns)
 	if err != nil {
 		return err
@@ -126,29 +143,20 @@ func (state *dbState) writeCatalogMap(ctx context.Context, rootish string, m pro
 	if err != nil {
 		return err
 	}
-	am, err := state.getOrInitBranchAM(ctx, rootish)
-	if err != nil {
-		return err
-	}
 	exists, err := am.Has(ctx, reservedCatalogName)
 	if err != nil {
 		return err
 	}
-	return state.updateAddressMap(ctx, rootish, "auto: update collection catalog", func(ed prolly.AddressMapEditor) error {
-		if exists {
-			return ed.Update(ctx, reservedCatalogName, dtblHash)
-		}
-		return ed.Add(ctx, reservedCatalogName, dtblHash)
-	})
+	if exists {
+		return ed.Update(ctx, reservedCatalogName, dtblHash)
+	}
+	return ed.Add(ctx, reservedCatalogName, dtblHash)
 }
 
-// upsertCatalogDoc writes (or replaces) the metadata document for collName. The
-// caller holds state.mu (write lock).
-func (state *dbState) upsertCatalogDoc(ctx context.Context, rootish, collName string, meta *collMeta) error {
-	am, err := state.getOrInitBranchAM(ctx, rootish)
-	if err != nil {
-		return err
-	}
+// applyCatalogUpsert stages the metadata document for collName into ed, reading
+// the current catalog from am (the pre-transaction AM, same source ed edits).
+// Folds into the caller's transaction; performs no commit.
+func (state *dbState) applyCatalogUpsert(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, collName string, meta *collMeta) error {
 	catMap, err := catalogMapFromAM(ctx, state, am)
 	if err != nil {
 		return err
@@ -173,16 +181,13 @@ func (state *dbState) upsertCatalogDoc(ctx context.Context, rootish, collName st
 	if err != nil {
 		return err
 	}
-	return state.writeCatalogMap(ctx, rootish, newMap)
+	return state.setCatalogEntry(ctx, am, ed, newMap)
 }
 
-// deleteCatalogDoc removes the metadata document for collName (a no-op if the
-// catalog or entry is absent). The caller holds state.mu (write lock).
-func (state *dbState) deleteCatalogDoc(ctx context.Context, rootish, collName string) error {
-	am, err := state.getOrInitBranchAM(ctx, rootish)
-	if err != nil {
-		return err
-	}
+// applyCatalogDelete stages removal of collName's metadata document into ed (a
+// no-op if the catalog or entry is absent). Folds into the caller's
+// transaction; performs no commit.
+func (state *dbState) applyCatalogDelete(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, collName string) error {
 	if h, err := am.Get(ctx, reservedCatalogName); err != nil || h.IsEmpty() {
 		return err
 	}
@@ -202,7 +207,62 @@ func (state *dbState) deleteCatalogDoc(ctx context.Context, rootish, collName st
 	if err != nil {
 		return err
 	}
-	return state.writeCatalogMap(ctx, rootish, newMap)
+	return state.setCatalogEntry(ctx, am, ed, newMap)
+}
+
+// applyCatalogRename moves oldName's metadata document to newName in a single
+// catalog rebuild (put newName, delete oldName), staged into ed. A single
+// setCatalogEntry is required because two independent applyCatalog* calls would
+// each rebuild the whole catalog DTBL from am and the second would clobber the
+// first. Folds into the caller's transaction; performs no commit.
+func (state *dbState) applyCatalogRename(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, oldName, newName string, meta *collMeta) error {
+	catMap, err := catalogMapFromAM(ctx, state, am)
+	if err != nil {
+		return err
+	}
+	oldKey, err := catalogKey(oldName)
+	if err != nil {
+		return err
+	}
+	newKey, err := catalogKey(newName)
+	if err != nil {
+		return err
+	}
+	doc, err := collMetaToDoc(newName, meta)
+	if err != nil {
+		return err
+	}
+	value, err := writeBSONDocToValue(ctx, state.ns, doc)
+	if err != nil {
+		return err
+	}
+	mut := catMap.Mutate()
+	if err := mut.Put(ctx, newKey, value); err != nil {
+		return err
+	}
+	if err := mut.Delete(ctx, oldKey); err != nil {
+		return err
+	}
+	newMap, err := mut.Map(ctx)
+	if err != nil {
+		return err
+	}
+	return state.setCatalogEntry(ctx, am, ed, newMap)
+}
+
+// upsertCatalogDocMsg writes collName's metadata as a standalone commit with the
+// given message. Used only by metadata-only ops (collMod) that have no
+// collections-AM edit of their own to fold the catalog write into. The message
+// describes the user-facing operation -- never the internal catalog. The caller
+// holds state.mu (write lock).
+func (state *dbState) upsertCatalogDocMsg(ctx context.Context, rootish, collName, message string, meta *collMeta) error {
+	am, err := state.getOrInitBranchAM(ctx, rootish)
+	if err != nil {
+		return err
+	}
+	return state.updateAddressMap(ctx, rootish, message, func(ed prolly.AddressMapEditor) error {
+		return state.applyCatalogUpsert(ctx, am, ed, collName, meta)
+	})
 }
 
 // readCatalogDoc returns the metadata for collName from the catalog in am, or nil

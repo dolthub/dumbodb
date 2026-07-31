@@ -30,7 +30,6 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
-	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
@@ -2832,25 +2831,21 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	if err != nil {
 		return prolly.Map{}, err
 	}
+	// The freshly auto-created collection and its catalog metadata (a durable
+	// UUID) land in one commit. The collection did not exist, so neither does a
+	// catalog entry for it -- write it unconditionally.
+	createAM, err := state.getOrInitBranchAM(ctx, c.db.rootish)
+	if err != nil {
+		return prolly.Map{}, err
+	}
+	meta := &collMeta{UUID: collectionUUID(c.db.name, c.name)}
 	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: create collection %s", c.name), func(ed prolly.AddressMapEditor) error {
-		return ed.Add(ctx, c.name, dtblHash)
+		if err := ed.Add(ctx, c.name, dtblHash); err != nil {
+			return err
+		}
+		return state.applyCatalogUpsert(ctx, createAM, ed, c.name, meta)
 	}); err != nil {
 		return prolly.Map{}, err
-	}
-
-	// Give the freshly auto-created collection a durable UUID if it has none.
-	curAM, err := state.getOrInitBranchAM(ctx, c.db.rootish)
-	if err != nil {
-		return prolly.Map{}, err
-	}
-	existing, err := readCatalogDoc(ctx, state, curAM, c.name)
-	if err != nil {
-		return prolly.Map{}, err
-	}
-	if existing == nil {
-		if err := state.upsertCatalogDoc(ctx, c.db.rootish, c.name, &collMeta{UUID: uuid.New().String()}); err != nil {
-			return prolly.Map{}, fmt.Errorf("persisting metadata for auto-created collection %q: %w", c.name, err)
-		}
 	}
 
 	return emptyMap, nil
