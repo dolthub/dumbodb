@@ -118,6 +118,15 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 		}
 
+		// Snapshot the pre-image for "moderate" validation: MongoDB validates a
+		// moderate-level update only when the document ALREADY satisfied the
+		// validator, so we must inspect the pre-mutation state. Only needed for
+		// a matched update (upserts are inserts and always validate).
+		var preImage *types.Document
+		if !upsert && param.Validator != nil && param.ValidationLevel == "moderate" {
+			preImage = doc.DeepCopy()
+		}
+
 		// Snapshot simple $set/$unset mutations before applying the operator:
 		// processUpdateOperator mutates doc in place, so after it runs we can
 		// no longer see the "old" state needed to derive a partial update.
@@ -142,6 +151,38 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 		if err = doc.ValidateData(); err != nil {
 			return nil, lazyerrors.Error(err)
+		}
+
+		// Collection document validator. strict validates every insert and
+		// update; moderate validates inserts and updates whose pre-image already
+		// satisfied the validator, skipping updates to already-non-compliant
+		// documents. validationAction "warn" allows the write; "error" rejects
+		// it with DocumentValidationFailure (the envelope -- CommandError for
+		// findAndModify, WriteError for update/bulkWrite -- is chosen by cmd).
+		if param.Validator != nil {
+			mustValidate := true
+			if !upsert && param.ValidationLevel == "moderate" {
+				preOK, verr := FilterDocument(preImage, param.Validator)
+				if verr != nil {
+					return nil, lazyerrors.Error(verr)
+				}
+				mustValidate = preOK
+			}
+			if mustValidate {
+				ok, verr := FilterDocument(doc, param.Validator)
+				if verr != nil {
+					return nil, lazyerrors.Error(verr)
+				}
+				if !ok && param.ValidationAction != "warn" {
+					// Persist the already-validated batch before rejecting this
+					// document, matching MongoDB's partial application when a
+					// multi-update hits an invalid result mid-stream.
+					if err := flushPending(); err != nil {
+						return nil, err
+					}
+					return nil, NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd)
+				}
+			}
 		}
 
 		if upsert {

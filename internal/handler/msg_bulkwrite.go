@@ -298,7 +298,7 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 
 	switch kind {
 	case "insert":
-		return execBulkWriteInsert(ctx, c, op, skipDurableSync)
+		return execBulkWriteInsert(ctx, db, c, ns, op, skipDurableSync)
 	case "update":
 		return execBulkWriteUpdate(ctx, db, c, ns, op, skipDurableSync, h.DisablePushdown)
 	case "delete":
@@ -313,7 +313,7 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 	)
 }
 
-func execBulkWriteInsert(ctx context.Context, c backends.Collection, op *types.Document, skipDurableSync bool) (bulkWriteOpResult, error) {
+func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync bool) (bulkWriteOpResult, error) {
 	docVal, err := op.Get("document")
 	if err != nil {
 		return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
@@ -341,6 +341,17 @@ func execBulkWriteInsert(ctx context.Context, c backends.Collection, op *types.D
 			return bulkWriteOpResult{kind: "insert"}, validationErrToUpdateErr("bulkWrite", ve)
 		}
 		return bulkWriteOpResult{}, lazyerrors.Error(err)
+	}
+
+	if validator, _, action := collectionValidator(ctx, db, ns.coll); validator != nil {
+		ok, verr := common.FilterDocument(doc, validator)
+		if verr != nil {
+			return bulkWriteOpResult{}, lazyerrors.Error(verr)
+		}
+		if !ok && action != "warn" {
+			return bulkWriteOpResult{kind: "insert"}, common.NewUpdateError(
+				handlererrors.ErrDocumentValidationFailure, "Document failed validation", "bulkWrite")
+		}
 	}
 
 	if _, err := c.InsertAll(ctx, &backends.InsertAllParams{
@@ -399,12 +410,16 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 		}
 	}
 
+	validator, valLevel, valAction := collectionValidator(ctx, db, ns.coll)
 	update := &common.Update{
-		Filter:       filter,
-		UpdateRaw:    modsVal,
-		Multi:        multi,
-		Upsert:       upsert,
-		ArrayFilters: arrayFilters,
+		Filter:           filter,
+		UpdateRaw:        modsVal,
+		Multi:            multi,
+		Upsert:           upsert,
+		ArrayFilters:     arrayFilters,
+		Validator:        validator,
+		ValidationLevel:  valLevel,
+		ValidationAction: valAction,
 	}
 
 	switch u := modsVal.(type) {

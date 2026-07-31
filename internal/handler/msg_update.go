@@ -123,6 +123,8 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		return 0, 0, nil, lazyerrors.Error(err)
 	}
 
+	validator, valLevel, valAction := collectionValidator(ctx, db, params.Collection)
+
 	for _, u := range params.Updates {
 		c, err := db.Collection(params.Collection)
 		if err != nil {
@@ -133,6 +135,10 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 			return 0, 0, nil, lazyerrors.Error(err)
 		}
+
+		u.Validator = validator
+		u.ValidationLevel = valLevel
+		u.ValidationAction = valAction
 
 		var qp backends.QueryParams
 		if !h.DisablePushdown {

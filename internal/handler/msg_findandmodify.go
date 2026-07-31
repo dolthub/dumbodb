@@ -198,12 +198,16 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		return result, nil
 	}
 
+	validator, valLevel, valAction := collectionValidator(ctx, db, params.Collection)
 	update := &common.Update{
 		Filter:             params.Query,
 		Update:             params.Update,
 		Upsert:             params.Upsert,
 		HasUpdateOperators: params.HasUpdateOperators,
 		ArrayFilters:       params.ArrayFilters,
+		Validator:          validator,
+		ValidationLevel:    valLevel,
+		ValidationAction:   valAction,
 	}
 
 	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update, params.SkipDurableSync)

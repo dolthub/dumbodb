@@ -70,6 +70,14 @@ type Update struct {
 	HasUpdateOperators bool            `dumbo:"-"`
 	IsPipeline         bool            `dumbo:"-"`
 
+	// Collection document validator, populated by the handler from the
+	// collection's durable metadata. Validator is nil when no active validator
+	// applies (absent, or validationLevel "off"). ValidationLevel is "strict"
+	// or "moderate"; ValidationAction is "error" or "warn".
+	Validator        *types.Document `dumbo:"-"`
+	ValidationLevel  string          `dumbo:"-"`
+	ValidationAction string          `dumbo:"-"`
+
 	C            *types.Document `dumbo:"c,unimplemented"`
 	Collation    *types.Document `dumbo:"collation,unimplemented"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
