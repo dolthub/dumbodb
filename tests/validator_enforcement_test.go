@@ -169,6 +169,47 @@ func TestValidator_Warn_AllowsInvalidWrite(t *testing.T) {
 	assert.EqualValues(t, -5, got["age"], "warn write must have applied")
 }
 
+// TestValidator_SurvivesRestart asserts a validator is durable AND still
+// enforces after a server restart -- covering both the metadata persistence and
+// that enforcement re-hydrates from the durable catalog (workspace-pui.3).
+func TestValidator_SurvivesRestart(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("valrestart%d", rand.Int64N(1_000_000))
+	db := env.Client.Database(dbName)
+	opts := options.CreateCollection().SetValidator(nonNegAge).
+		SetValidationLevel("strict").SetValidationAction("error")
+	require.NoError(t, db.CreateCollection(ctx, "items", opts))
+
+	// Enforced before restart.
+	_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-1)}})
+	require.Error(t, err)
+	assert.EqualValues(t, docValidationFailure, mongoCommandCode(err))
+
+	env.Restart(t)
+	db = env.Client.Database(dbName) // client is refreshed by Restart
+	coll := db.Collection("items")
+
+	// Metadata survived: listCollections still reports the validator.
+	var lc bson.M
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "listCollections", Value: 1},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: "items"}}},
+	}).Decode(&lc))
+	batch := lc["cursor"].(bson.M)["firstBatch"].(bson.A)
+	require.Len(t, batch, 1, "collection must still exist after restart")
+	collOpts, _ := batch[0].(bson.M)["options"].(bson.M)
+	assert.NotNil(t, collOpts["validator"], "validator must survive restart")
+
+	// Enforcement still works: invalid rejected, valid accepted.
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-5)}})
+	require.Error(t, err, "validator must still reject after restart")
+	assert.EqualValues(t, docValidationFailure, mongoCommandCode(err))
+
+	_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 3}, {Key: "age", Value: int32(5)}})
+	require.NoError(t, err, "valid insert must succeed after restart")
+}
+
 func TestValidator_Bypass_AllowsInvalid(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
