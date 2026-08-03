@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/dolthub/dolt/go/store/prolly"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
@@ -163,6 +164,38 @@ func metaFromResolveValue(value *types.Document, mce *metaConflictEntry) *collMe
 	return &m
 }
 
+// reconcileMetaCollExistence makes the collection's DTBL entry in the resolved
+// AddressMap match the side chosen for the metadata resolution (ours/custom ->
+// intoHash, theirs -> theirHash). Used only for modify/delete metadata
+// conflicts, where the collection was added or dropped on one side.
+func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, ms *mergeInProgress, editor prolly.AddressMapEditor, coll, resolution string) error {
+	chosenHash := ms.intoHash
+	if resolution == "theirs" {
+		chosenHash = ms.theirHash()
+	}
+	srcAM, err := amFromCommitHash(ctx, db, chosenHash.String())
+	if err != nil {
+		return fmt.Errorf("DumboDBResolveConflict: loading chosen-side AM for %q: %w", coll, err)
+	}
+	srcHash, err := srcAM.Get(ctx, coll)
+	if err != nil {
+		return fmt.Errorf("DumboDBResolveConflict: reading chosen-side entry for %q: %w", coll, err)
+	}
+	has, err := ms.resolvedAM.Has(ctx, coll)
+	if err != nil {
+		return fmt.Errorf("DumboDBResolveConflict: probing resolved AM for %q: %w", coll, err)
+	}
+	switch {
+	case !srcHash.IsEmpty() && !has:
+		return editor.Add(ctx, coll, srcHash)
+	case !srcHash.IsEmpty() && has:
+		return editor.Update(ctx, coll, srcHash)
+	case srcHash.IsEmpty() && has:
+		return editor.Delete(ctx, coll)
+	}
+	return nil
+}
+
 // resolveMetaConflict resolves a single collection-metadata merge conflict by
 // choosing ours, theirs, or a custom definition, rewriting the collection's
 // metadata in the resolved __dumbo_catalog__. The caller holds db.mu (write
@@ -172,15 +205,15 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 		return nil, fmt.Errorf("DumboDBResolveConflict: metadata conflict for %q is already resolved", params.Collection)
 	}
 
-	// "ours" is already reflected in resolvedAM (the catalog doc kept ours during
-	// capture); just mark resolved.
-	if params.Resolution == "ours" {
-		mce.resolved = true
-		return &backends.ResolveConflictResult{}, nil
-	}
-
-	var newMeta *collMeta // nil => the resolution deletes the collection's metadata
+	// newMeta is the metadata to write for the chosen side (nil => that side has
+	// no metadata for the collection, i.e. deletes it). Unlike views, "ours" is
+	// not a no-op here: a modify/delete metadata conflict may need the
+	// collection's existence reconciled below, so all three resolutions flow
+	// through the same rewrite path.
+	var newMeta *collMeta
 	switch params.Resolution {
+	case "ours":
+		newMeta = mce.ours
 	case "theirs":
 		newMeta = mce.theirs
 	case "custom":
@@ -200,6 +233,19 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 	} else {
 		if err := db.applyCatalogUpsert(ctx, ms.resolvedAM, editor, mce.coll, newMeta); err != nil {
 			return nil, fmt.Errorf("DumboDBResolveConflict: writing resolved metadata for %q: %w", mce.coll, err)
+		}
+	}
+
+	// When the collection was dropped on one side while its metadata changed on
+	// the other (a modify/delete), the AM merge already picked one side's
+	// existence for the collection's DTBL -- which may disagree with the side
+	// the user just chose. Reconcile the collection entry to the chosen side so
+	// existence and metadata never disagree. Gated to the delete case: a plain
+	// modify/modify metadata conflict leaves the DTBL consistent, and such a
+	// deleted collection has no document-level merge to clobber.
+	if mce.ourDiff == "deleted" || mce.theirDiff == "deleted" {
+		if err := b.reconcileMetaCollExistence(ctx, db, ms, editor, mce.coll, params.Resolution); err != nil {
+			return nil, err
 		}
 	}
 

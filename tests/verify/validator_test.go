@@ -74,6 +74,60 @@ func ageGte(n int32) bson.D {
 	return bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: n}}}}
 }
 
+// jsonSchemaRequiring builds a { $jsonSchema: { required: [field] } } validator.
+func jsonSchemaRequiring(field string) bson.D {
+	return bson.D{{Key: "$jsonSchema", Value: bson.D{
+		{Key: "bsonType", Value: "object"},
+		{Key: "required", Value: bson.A{field}},
+		{Key: "properties", Value: bson.D{{Key: field, Value: bson.D{{Key: "bsonType", Value: "string"}}}}},
+	}}}
+}
+
+// requiredField returns the single required field of a $jsonSchema validator.
+func requiredField(t *testing.T, v bson.M) string {
+	t.Helper()
+	js, ok := v["$jsonSchema"].(bson.M)
+	require.True(t, ok, "not a $jsonSchema validator: %v", v)
+	req, _ := js["required"].(bson.A)
+	require.Len(t, req, 1, "expected one required field: %v", js)
+	return req[0].(string)
+}
+
+// validationActionOf returns the validationAction reported by listCollections.
+func validationActionOf(t *testing.T, db *mongo.Database, coll string) string {
+	t.Helper()
+	var lc bson.M
+	require.NoError(t, db.RunCommand(context.Background(), bson.D{
+		{Key: "listCollections", Value: 1},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: coll}}},
+	}).Decode(&lc))
+	batch := lc["cursor"].(bson.M)["firstBatch"].(bson.A)
+	require.Len(t, batch, 1)
+	opts, _ := batch[0].(bson.M)["options"].(bson.M)
+	s, _ := opts["validationAction"].(string)
+	return s
+}
+
+// resolveMeta resolves the single metadata conflict on coll with the given
+// resolution (and optional custom value), then completes the merge.
+func resolveMeta(t *testing.T, mainDB *mongo.Database, coll, resolution string, value bson.D) {
+	t.Helper()
+	ctx := context.Background()
+	mc := readMetaConflict(t, mainDB)
+	require.Equal(t, coll, mc["name"])
+	cmd := bson.D{
+		{Key: "doltResolveConflict", Value: 1},
+		{Key: "collection", Value: coll},
+		{Key: "conflictId", Value: mc["conflictId"]},
+		{Key: "resolution", Value: resolution},
+	}
+	if value != nil {
+		cmd = append(cmd, bson.E{Key: "value", Value: value})
+	}
+	require.NoError(t, mainDB.RunCommand(ctx, cmd).Err())
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
+}
+
 // setupMetaConflict creates a validated "items", diverges its validator on main
 // (age>=21) and feature (age>=18), and merges feature into main -- leaving a
 // paused metadata conflict. Returns the @main database.
@@ -251,18 +305,174 @@ func TestValidatorVerify(t *testing.T) {
 	t.Run("Scenario9_DivergentValidators_ResolveCustom", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict9_%d", suffix)
 		mainDB := setupMetaConflict(t, env, dbName)
-
-		mc := readMetaConflict(t, mainDB)
-		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-			{Key: "doltResolveConflict", Value: 1},
-			{Key: "collection", Value: "items"},
-			{Key: "conflictId", Value: mc["conflictId"]},
-			{Key: "resolution", Value: "custom"},
-			{Key: "value", Value: bson.D{{Key: "validator", Value: ageGte(5)}}},
-		}).Err())
-		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
+		resolveMeta(t, mainDB, "items", "custom", bson.D{{Key: "validator", Value: ageGte(5)}})
 
 		age, _ := validatorOf(t, env.Client.Database(dbName+"@main"), "items")["age"].(bson.M)
 		assert.EqualValues(t, 5, age["$gte"], "custom validator (age >= 5) applied after resolution")
+	})
+
+	// Scenario10: structurally-different $jsonSchema validators diverge; resolve
+	// "ours" keeps main's schema.
+	t.Run("Scenario10_JsonSchemaDivergence_ResolveOurs", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict10_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(jsonSchemaRequiring("name"))))
+		dumboDBCommit(t, env, dbName, "create items requiring name", "alice <alice@acme.com>")
+		vmBranch(t, env, dbName, "feature")
+
+		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: jsonSchemaRequiring("email")},
+		}).Err())
+		dumboDBCommit(t, env, dbName+"@feature", "feature: require email", "bob <bob@widgets.io>")
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: jsonSchemaRequiring("age")},
+		}).Err())
+		dumboDBCommit(t, env, dbName, "main: require age", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent $jsonSchema must conflict: %v", raw)
+
+		resolveMeta(t, mainDB, "items", "ours", nil)
+		assert.Equal(t, "age", requiredField(t, validatorOf(t, mainDB, "items")),
+			"resolving ours keeps main's $jsonSchema (required: age)")
+	})
+
+	// Scenario11: divergent validationAction (with validator) resolves via theirs;
+	// the action follows the chosen side.
+	t.Run("Scenario11_DivergentValidationAction_ResolveTheirs", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict11_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge).SetValidationAction("error")))
+		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+		vmBranch(t, env, dbName, "feature")
+
+		// Feature: validator age>=1, action warn.
+		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(1)}, {Key: "validationAction", Value: "warn"},
+		}).Err())
+		dumboDBCommit(t, env, dbName+"@feature", "feature: age>=1 warn", "bob <bob@widgets.io>")
+		// Main: validator age>=2, action error.
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(2)}, {Key: "validationAction", Value: "error"},
+		}).Err())
+		dumboDBCommit(t, env, dbName, "main: age>=2 error", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent metadata must conflict: %v", raw)
+
+		resolveMeta(t, mainDB, "items", "theirs", nil)
+		age, _ := validatorOf(t, mainDB, "items")["age"].(bson.M)
+		assert.EqualValues(t, 1, age["$gte"], "theirs validator (age>=1) applied")
+		assert.Equal(t, "warn", validationActionOf(t, mainDB, "items"), "theirs validationAction (warn) applied")
+	})
+
+	// Scenario12: both branches CREATE the same collection with different
+	// validators (add/add). base is null; resolve theirs.
+	t.Run("Scenario12_BothBranchCreate_ResolveTheirs", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict12_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "seed")) // base collection so the catalog exists
+		dumboDBCommit(t, env, dbName, "seed", "alice <alice@acme.com>")
+		vmBranch(t, env, dbName, "feature")
+
+		require.NoError(t, env.Client.Database(dbName+"@feature").CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(ageGte(18))))
+		dumboDBCommit(t, env, dbName+"@feature", "feature: create items age>=18", "bob <bob@widgets.io>")
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(ageGte(21))))
+		dumboDBCommit(t, env, dbName, "main: create items age>=21", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "both-branch create with divergent validators must conflict: %v", raw)
+
+		mc := readMetaConflict(t, mainDB)
+		assert.Nil(t, mc["base"], "base side is null for an add/add metadata conflict")
+
+		resolveMeta(t, mainDB, "items", "theirs", nil)
+		age, _ := validatorOf(t, mainDB, "items")["age"].(bson.M)
+		assert.EqualValues(t, 18, age["$gte"], "theirs (age>=18) won for the concurrently-created collection")
+	})
+
+	// Scenario13: one branch drops the collection while the other modifies its
+	// metadata -- a modify/delete metadata conflict (theirs side null). Resolving
+	// theirs applies the deletion: the collection is gone, with no orphaned
+	// metadata left behind.
+	t.Run("Scenario13_DropVsMetadata_ResolveTheirs", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict13_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+		vmBranch(t, env, dbName, "feature")
+
+		// Feature drops items; main changes its validator.
+		require.NoError(t, env.Client.Database(dbName+"@feature").Collection("items").Drop(ctx))
+		dumboDBCommit(t, env, dbName+"@feature", "feature: drop items", "bob <bob@widgets.io>")
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(21)},
+		}).Err())
+		dumboDBCommit(t, env, dbName, "main: age >= 21", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "drop-vs-metadata must conflict: %v", raw)
+
+		mc := readMetaConflict(t, mainDB)
+		assert.Nil(t, mc["theirs"], "theirs dropped the collection -> theirs side is null")
+
+		resolveMeta(t, mainDB, "items", "theirs", nil)
+
+		// items is gone, and it does not reappear (no orphaned metadata).
+		var lc bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "listCollections", Value: 1},
+			{Key: "filter", Value: bson.D{{Key: "name", Value: "items"}}},
+		}).Decode(&lc))
+		batch := lc["cursor"].(bson.M)["firstBatch"].(bson.A)
+		assert.Len(t, batch, 0, "resolving theirs (drop) leaves no items collection")
+	})
+
+	// Scenario14: same modify/delete conflict, but resolve OURS -- keep the
+	// collection with main's modified validator. The dropped DTBL is restored so
+	// existence and metadata agree.
+	t.Run("Scenario14_DropVsMetadata_ResolveOurs", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict14_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create validated items + doc", "alice <alice@acme.com>")
+		vmBranch(t, env, dbName, "feature")
+
+		require.NoError(t, env.Client.Database(dbName+"@feature").Collection("items").Drop(ctx))
+		dumboDBCommit(t, env, dbName+"@feature", "feature: drop items", "bob <bob@widgets.io>")
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(21)},
+		}).Err())
+		dumboDBCommit(t, env, dbName, "main: age >= 21", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "drop-vs-metadata must conflict: %v", raw)
+
+		resolveMeta(t, mainDB, "items", "ours", nil)
+
+		// The collection is restored with main's validator and its document.
+		age, _ := validatorOf(t, mainDB, "items")["age"].(bson.M)
+		assert.EqualValues(t, 21, age["$gte"], "ours validator (age>=21) kept")
+		n, err := mainDB.Collection("items").CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, n, "resolving ours restores the collection and its data")
 	})
 }

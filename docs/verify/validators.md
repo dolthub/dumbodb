@@ -289,3 +289,15 @@ Key checks:
 - The entry carries `base` / `ours` / `theirs` validator definitions.
 - After resolving and continuing, `items`' validator is the chosen one, and the
   merge completes (`ok: 1`).
+
+The same workflow covers every divergence shape (each has an automated subtest):
+- **`$jsonSchema` validators** (not just query-expression ones) -- the full
+  schema document is carried through `base` / `ours` / `theirs`.
+- **`validationLevel` and `validationAction`** divergence, alongside the
+  validator -- the chosen side's action follows.
+- **Both branches *create* the same collection** with different validators (an
+  add/add conflict): the `base` side is `null`, and resolution picks a side.
+- **One branch drops the collection while the other changes its metadata** (a
+  modify/delete): the conflict's dropped side is `null`. Resolving *theirs* (the
+  drop) removes the collection; resolving *ours* restores it with the chosen
+  metadata and its data -- existence and metadata never disagree.
