@@ -1772,13 +1772,13 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: loading base AM: %w", err)
 	}
 
-	mergedAM, conflicts, viewConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
 		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("branch '%s' (theirs)", params.From))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}
 
-	if len(conflicts) > 0 || len(viewConflicts) > 0 {
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		// Capture the pre-merge working set AM for abort support.
 		preMergeAM, err := db.getOrInitBranchAM(ctx, params.Into)
 		if err != nil {
@@ -1793,6 +1793,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 			intoHash:      intoHash,
 			conflicts:     conflicts,
 			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
 			resolvedAM:    mergedAM,
 		}
 
@@ -2058,13 +2059,13 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	}
 
 	// Perform the 3-way merge: apply cherry-pick diff (base->from) onto current HEAD (into).
-	mergedAM, conflicts, viewConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
 		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", pickHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
 	}
 
-	if len(conflicts) > 0 || len(viewConflicts) > 0 {
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		// Capture the pre-pick AM for abort support.
 		prePickAM, err := db.getOrInitBranchAM(ctx, branch)
 		if err != nil {
@@ -2077,6 +2078,7 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 			intoHash:      intoHash,
 			conflicts:     conflicts,
 			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
 			resolvedAM:    mergedAM,
 			isCherryPick:  true,
 			pickHash:      pickHash,
@@ -3357,16 +3359,17 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		// 3-way merge: apply pick's diff (base->from) onto the current rebased tip (into).
 		// Sides are swapped so the replayed commit presents as "ours" and the
 		// onto/tip as "theirs" (a rebase moves the user's commits onto a base).
-		mergedAM, conflicts, viewConflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
+		mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
 			fmt.Sprintf("commit '%s' (ours)", pickHash.String()), fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {
 			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
 		}
 
-		if len(conflicts) > 0 || len(viewConflicts) > 0 {
+		if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 			ms.rebaseCurrentPick = pickHash
 			ms.conflicts = conflicts
 			ms.viewConflicts = viewConflicts
+			ms.metaConflicts = metaConflicts
 			ms.resolvedAM = mergedAM
 			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
 				return nil, fmt.Errorf("replayRemainingCommits: persisting conflict state: %w", wsErr)
@@ -3664,13 +3667,13 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	//   into = intoAM    (current branch HEAD  -- "ours")
 	// theirHash = parentHash (the "from" side commit hash)
 	// baseHash  = revertHash (the "base" side commit hash)
-	mergedAM, conflicts, viewConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
 		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", revertHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: %w", err)
 	}
 
-	if len(conflicts) > 0 || len(viewConflicts) > 0 {
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		// Capture the pre-revert AM for abort support.
 		preRevertAM, err := db.getOrInitBranchAM(ctx, branch)
 		if err != nil {
@@ -3683,6 +3686,7 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			intoHash:      intoHash,
 			conflicts:     conflicts,
 			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
 			resolvedAM:    mergedAM,
 			isRevert:      true,
 			pickHash:      revertHash, // the commit being reverted

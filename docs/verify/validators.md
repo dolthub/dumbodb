@@ -215,21 +215,14 @@ Key checks:
 
 ---
 
-## Scenario 8: Divergent validators on both branches
+## Scenario 8: Divergent validators on both branches -- resolve the conflict
 
 Both branches change the **same** collection's validator to different
-definitions, then merge.
-
-A divergent metadata change is **never silently dropped**. Today the merge is
-**refused** loudly -- it fails with an error naming the owning collection
-(`items`), and nothing is lost: each branch keeps its own validator. The
-internal catalog collection is never named in the error.
-
-> **Pending workspace-xhm.** The hard refusal below is an interim: it guarantees
-> no silent data loss, but it is blunt. workspace-xhm upgrades it to a
-> **resolvable conflict on the owning collection**, resolved through the same
-> `doltConflicts` / `doltResolveConflict` workflow that document, index, and view
-> conflicts use -- still never naming the internal catalog.
+definitions, then merge. A divergent metadata change is **never silently
+dropped**: it surfaces as a **resolvable conflict on the owning collection**
+(`items`), resolved through the same `doltConflicts` / `doltResolveConflict`
+workflow that document, index, and view conflicts use. The internal catalog
+collection is never named.
 
 ```js
 var db = db.getSiblingDB("valconflict")
@@ -248,26 +241,51 @@ feat.runCommand({ doltCommit: 1, message: "feature: age >= 18", author: "bob <bo
 db.runCommand({ collMod: "items", validator: { age: { $gte: 21 } } })
 db.runCommand({ doltCommit: 1, message: "main: age >= 21", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
-// MongoServerError: cannot merge: collection metadata (validator/options)
-//   changed on both branches for items; automatic metadata conflict resolution
-//   is not yet supported -- align the metadata on both branches before merging
+// The merge pauses with a conflict (ok:0).
+db.getSiblingDB("valconflict@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
 ```
 
-**Today (interim):**
-- The merge is refused: the command errors, naming the collection `items` (never
-  `__dumbo_catalog__`).
-- Nothing is dropped: `main` still has `age >= 21` and `feature` still has
-  `age >= 18`. The merge simply did not apply.
+Inspect the conflict -- it is a `type: "metadata"` entry on `items`, never
+`__dumbo_catalog__`:
 
-**Target (workspace-xhm):**
-- The merge stops with a conflict: `doltConflicts` reports a metadata conflict on
-  the collection `items`, carrying the base / ours / theirs validator
-  definitions -- never the internal catalog name.
-- `doltResolveConflict` chooses `ours` / `theirs` / `custom`, then
-  `doltMerge continue:1` completes the merge with the chosen validator.
+```js
+var main = db.getSiblingDB("valconflict@main")
+printjson(main.runCommand({ doltConflicts: 1 }).conflicts)
+// Expected: one entry
+//   { conflictId: "<hash>", type: "metadata", name: "items",
+//     base:   { validator: { age: { $gte: 0  } }, validationLevel: "...", validationAction: "..." },
+//     ours:   { validator: { age: { $gte: 21 } }, ..., diffType: "modified" },
+//     theirs: { validator: { age: { $gte: 18 } }, ..., diffType: "modified" } }
+```
+
+Resolve to theirs (feature's `age >= 18`), then complete the merge:
+
+```js
+var cid = main.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs" })
+main.runCommand({ doltMerge: 1, continue: 1 })
+// { ..., ok: 1 }
+
+db.runCommand({ listCollections: 1, filter: { name: "items" } }).cursor.firstBatch[0].options.validator
+// { age: { $gte: 18 } }   (theirs won)
+```
+
+For a **custom** resolution, supply a new validator instead:
+
+```js
+// (from a fresh conflict) resolve with your own definition:
+main.runCommand({
+  doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "custom",
+  value: { validator: { age: { $gte: 5 } } }
+})
+main.runCommand({ doltMerge: 1, continue: 1 })
+// items' validator is now { age: { $gte: 5 } }
+```
 
 Key checks:
-- The merge **fails** (it does not silently succeed).
-- The error names `items`, not `__dumbo_catalog__`.
-- Both branches' validators are intact afterward -- no side was dropped.
+- `doltConflicts` reports a single `type: "metadata"` entry on `items`; the
+  string `__dumbo_catalog__` never appears anywhere in the output.
+- The entry carries `base` / `ours` / `theirs` validator definitions.
+- After resolving and continuing, `items`' validator is the chosen one, and the
+  merge completes (`ok: 1`).

@@ -1089,6 +1089,39 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		})
 	}
 
+	for _, mc := range res.Metadata {
+		buildMetaSide := func(m *backends.CollectionMetadata, diffType string) any {
+			if m == nil {
+				return types.Null
+			}
+			var validator any = types.Null
+			if m.Validator != nil {
+				validator = m.Validator
+			}
+			side := must.NotFail(types.NewDocument(
+				"validator", validator,
+				"validationLevel", m.ValidationLevel,
+				"validationAction", m.ValidationAction,
+			))
+			if diffType != "" {
+				side.Set("diffType", diffType)
+			}
+			return side
+		}
+		entries = append(entries, conflictOut{
+			name: mc.Collection,
+			id:   mc.ConflictID,
+			doc: must.NotFail(types.NewDocument(
+				"conflictId", mc.ConflictID,
+				"type", "metadata",
+				"name", mc.Collection,
+				"base", buildMetaSide(mc.Base, ""),
+				"ours", buildMetaSide(mc.Ours, mc.OurDiffType),
+				"theirs", buildMetaSide(mc.Theirs, mc.TheirDiffType),
+			)),
+		})
+	}
+
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].name != entries[j].name {
 			return entries[i].name < entries[j].name

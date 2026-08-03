@@ -178,9 +178,33 @@ type ViewConflict struct {
 	TheirDiffType string // "added", "modified", "deleted"
 }
 
+// CollectionMetadata is the user-facing per-collection metadata surfaced in a
+// metadata merge conflict -- never the internal catalog representation.
+type CollectionMetadata struct {
+	Validator        *types.Document
+	ValidationLevel  string
+	ValidationAction string
+}
+
+// MetaConflict describes a collection whose durable metadata (validator/options)
+// diverged on both branches of a merge. It is surfaced on the owning collection;
+// the internal metadata catalog is never named. Base is the common-ancestor
+// metadata (nil if absent there); Ours and Theirs are the two sides (nil if that
+// side deleted the collection).
+type MetaConflict struct {
+	Collection    string
+	ConflictID    string
+	Base          *CollectionMetadata
+	Ours          *CollectionMetadata
+	Theirs        *CollectionMetadata
+	OurDiffType   string // "added", "modified", "deleted"
+	TheirDiffType string
+}
+
 type ConflictsResult struct {
 	Collections []CollectionConflicts
 	Views       []ViewConflict
+	Metadata    []MetaConflict
 }
 
 type ResolveConflictParams struct {

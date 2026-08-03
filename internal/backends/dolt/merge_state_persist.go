@@ -59,6 +59,22 @@ type mergeStateDisk struct {
 
 	// View-definition conflicts (no ArtifactMap; persisted inline).
 	ViewConflicts []viewConflictDisk `json:"viewConflicts,omitempty"`
+
+	// Collection-metadata conflicts (no ArtifactMap; persisted inline).
+	MetaConflicts []metaConflictDisk `json:"metaConflicts,omitempty"`
+}
+
+// metaConflictDisk persists one collection-metadata merge conflict. Each side's
+// metadata is hex-encoded BSON (empty when that side lacked it).
+type metaConflictDisk struct {
+	Coll      string `json:"coll"`
+	ID        string `json:"id"`
+	OurDiff   string `json:"ourDiff"`
+	TheirDiff string `json:"theirDiff"`
+	Resolved  bool   `json:"resolved"`
+	BaseHex   string `json:"base,omitempty"`
+	OursHex   string `json:"ours,omitempty"`
+	TheirsHex string `json:"theirs,omitempty"`
 }
 
 // viewConflictDisk persists one view-definition merge conflict. Each side's
@@ -139,6 +155,26 @@ func saveMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) er
 			}
 		}
 		disk.ViewConflicts = append(disk.ViewConflicts, vd)
+	}
+
+	for _, mc := range ms.metaConflicts {
+		md := metaConflictDisk{Coll: mc.coll, ID: mc.id, OurDiff: mc.ourDiff, TheirDiff: mc.theirDiff, Resolved: mc.resolved}
+		if mc.base != nil {
+			if md.BaseHex, err = collMetaToBSONHex(mc.coll, mc.base); err != nil {
+				return fmt.Errorf("encoding base metadata conflict %q: %w", mc.coll, err)
+			}
+		}
+		if mc.ours != nil {
+			if md.OursHex, err = collMetaToBSONHex(mc.coll, mc.ours); err != nil {
+				return fmt.Errorf("encoding ours metadata conflict %q: %w", mc.coll, err)
+			}
+		}
+		if mc.theirs != nil {
+			if md.TheirsHex, err = collMetaToBSONHex(mc.coll, mc.theirs); err != nil {
+				return fmt.Errorf("encoding theirs metadata conflict %q: %w", mc.coll, err)
+			}
+		}
+		disk.MetaConflicts = append(disk.MetaConflicts, md)
 	}
 
 	if ms.isRebase {
@@ -269,6 +305,29 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 				}
 			}
 			ms.viewConflicts[vd.Name] = vce
+		}
+	}
+
+	if len(disk.MetaConflicts) > 0 {
+		ms.metaConflicts = make(map[string]*metaConflictEntry, len(disk.MetaConflicts))
+		for _, md := range disk.MetaConflicts {
+			mce := &metaConflictEntry{coll: md.Coll, id: md.ID, ourDiff: md.OurDiff, theirDiff: md.TheirDiff, resolved: md.Resolved}
+			if md.BaseHex != "" {
+				if mce.base, err = collMetaFromBSONHex(md.BaseHex); err != nil {
+					return nil, fmt.Errorf("decoding base metadata conflict %q: %w", md.Coll, err)
+				}
+			}
+			if md.OursHex != "" {
+				if mce.ours, err = collMetaFromBSONHex(md.OursHex); err != nil {
+					return nil, fmt.Errorf("decoding ours metadata conflict %q: %w", md.Coll, err)
+				}
+			}
+			if md.TheirsHex != "" {
+				if mce.theirs, err = collMetaFromBSONHex(md.TheirsHex); err != nil {
+					return nil, fmt.Errorf("decoding theirs metadata conflict %q: %w", md.Coll, err)
+				}
+			}
+			ms.metaConflicts[md.Coll] = mce
 		}
 	}
 

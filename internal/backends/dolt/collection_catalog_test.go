@@ -18,7 +18,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -179,11 +178,11 @@ func TestCatalogMergeCarriesMetadata(t *testing.T) {
 	}
 }
 
-// TestCatalogMergeConflictRefused verifies that a metadata change diverging on
-// both branches is NOT silently dropped: the merge is refused loudly, naming the
-// owning collection while never exposing the internal __dumbo_catalog__ name.
-// (Interim behavior; workspace-xhm makes it a resolvable conflict instead.)
-func TestCatalogMergeConflictRefused(t *testing.T) {
+// TestCatalogMergeConflictResolvable verifies that a metadata change diverging
+// on both branches surfaces as a resolvable conflict ON THE OWNING COLLECTION
+// (never exposing __dumbo_catalog__), is resolved via DumboDBResolveConflict, and
+// the merge completes with the chosen metadata (workspace-alp.16.2).
+func TestCatalogMergeConflictResolvable(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
 	defer b.Close()
@@ -217,32 +216,48 @@ func TestCatalogMergeConflictRefused(t *testing.T) {
 	}
 	commitBranch(t, b, "mcdb", "main", "orders -> strict")
 
-	// A divergent metadata change on both branches must NOT be silently dropped.
-	// Until the metadata conflict-resolution workflow lands (workspace-xhm), the
-	// merge is refused loudly, naming the owning collection and never exposing
-	// the internal catalog.
-	_, err = b.DumboDBMerge(ctx, &backends.MergeParams{
+	// The divergent metadata surfaces as a conflict (merge pauses).
+	if _, err = b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName: "mcdb", Into: "main", From: "feature", Message: "merge", Author: "t <t@e>",
-	})
-	if err == nil {
-		t.Fatal("divergent metadata merge must be refused, not silently completed")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "orders") {
-		t.Fatalf("refusal must name the owning collection 'orders': %v", msg)
-	}
-	if strings.Contains(msg, reservedCatalogName) {
-		t.Fatalf("refusal must NOT expose the internal catalog name: %v", msg)
+	}); err == nil {
+		t.Fatal("divergent metadata merge must surface a conflict, not silently complete")
 	}
 
-	// Nothing was dropped: both sides keep their own value (the merge did not
-	// apply). main stays strict; feature stays moderate.
-	if ci := collInfo(t, mainDB, "orders"); ci.ValidationLevel != "strict" {
-		t.Fatalf("main's validationLevel must be intact after a refused merge, got %q", ci.ValidationLevel)
+	// doltConflicts reports it as a METADATA conflict on the owning collection,
+	// never surfacing __dumbo_catalog__.
+	confl, err := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "mcdb", Branch: "main"})
+	if err != nil {
+		t.Fatalf("DumboDBConflicts: %v", err)
 	}
-	if ci := collInfo(t, featDB, "orders"); ci.ValidationLevel != "moderate" {
-		t.Fatalf("feature's validationLevel must be intact after a refused merge, got %q", ci.ValidationLevel)
+	if len(confl.Metadata) != 1 || confl.Metadata[0].Collection != "orders" {
+		t.Fatalf("expected one metadata conflict for 'orders', got %+v", confl.Metadata)
 	}
+	mc := confl.Metadata[0]
+	if mc.Ours == nil || mc.Ours.ValidationLevel != "strict" || mc.Theirs == nil || mc.Theirs.ValidationLevel != "moderate" {
+		t.Fatalf("metadata conflict must carry ours(strict)/theirs(moderate): %+v", mc)
+	}
+	for _, cc := range confl.Collections {
+		if cc.Collection == reservedCatalogName {
+			t.Fatalf("doltConflicts must not surface the internal catalog %q", reservedCatalogName)
+		}
+	}
+
+	// Resolve to theirs (moderate), then complete the merge.
+	if _, err = b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
+		DBName: "mcdb", Branch: "main", Collection: "orders", ConflictID: mc.ConflictID, Resolution: "theirs",
+	}); err != nil {
+		t.Fatalf("DumboDBResolveConflict(theirs): %v", err)
+	}
+	if _, err = b.DumboDBMerge(ctx, &backends.MergeParams{
+		DBName: "mcdb", Into: "main", Continue: true, Message: "merge", Author: "t <t@e>",
+	}); err != nil {
+		t.Fatalf("DumboDBMerge continue: %v", err)
+	}
+
+	if ci := collInfo(t, mainDB, "orders"); ci.ValidationLevel != "moderate" {
+		t.Fatalf("after resolving theirs, main's validationLevel = %q, want moderate", ci.ValidationLevel)
+	}
+	_ = featDB
 }
 
 // TestCatalogNameRejected verifies the internal catalog collection cannot be

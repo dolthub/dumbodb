@@ -69,6 +69,69 @@ func validatorOf(t *testing.T, db *mongo.Database, coll string) bson.M {
 	return v
 }
 
+// ageGte builds an { age: { $gte: n } } validator.
+func ageGte(n int32) bson.D {
+	return bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: n}}}}
+}
+
+// setupMetaConflict creates a validated "items", diverges its validator on main
+// (age>=21) and feature (age>=18), and merges feature into main -- leaving a
+// paused metadata conflict. Returns the @main database.
+func setupMetaConflict(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {
+	t.Helper()
+	ctx := context.Background()
+	db := env.Client.Database(dbName)
+	require.NoError(t, db.Drop(ctx))
+	require.NoError(t, db.CreateCollection(ctx, "items", options.CreateCollection().SetValidator(valNonNegAge)))
+	dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+	vmBranch(t, env, dbName, "feature")
+
+	require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(18)},
+	}).Err())
+	dumboDBCommit(t, env, dbName+"@feature", "feature: age >= 18", "bob <bob@widgets.io>")
+
+	require.NoError(t, db.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(21)},
+	}).Err())
+	dumboDBCommit(t, env, dbName, "main: age >= 21", "alice <alice@acme.com>")
+
+	raw := vmMerge(t, env, dbName, "feature")
+	require.EqualValues(t, 0, raw["ok"], "divergent metadata must surface a conflict: %v", raw)
+	return env.Client.Database(dbName + "@main")
+}
+
+// readMetaConflict returns the single metadata conflict from doltConflicts,
+// asserting it is attributed to a collection and never exposes the catalog.
+func readMetaConflict(t *testing.T, mainDB *mongo.Database) bson.M {
+	t.Helper()
+	var rc bson.M
+	require.NoError(t, mainDB.RunCommand(context.Background(), bson.D{{Key: "doltConflicts", Value: 1}}).Decode(&rc))
+	all, ok := rc["conflicts"].(bson.A)
+	require.True(t, ok, "doltConflicts missing conflicts array: %v", rc)
+	var meta []bson.M
+	for _, c := range all {
+		e := c.(bson.M)
+		assert.NotEqual(t, "__dumbo_catalog__", e["name"], "internal catalog must never be surfaced")
+		if e["type"] == "metadata" {
+			meta = append(meta, e)
+		}
+	}
+	require.Len(t, meta, 1, "expected exactly one metadata conflict: %v", all)
+	return meta[0]
+}
+
+// assertAgeGte checks a conflict side carries an { age: { $gte: n } } validator.
+func assertAgeGte(t *testing.T, side interface{}, n int32) {
+	t.Helper()
+	m, ok := side.(bson.M)
+	require.True(t, ok, "conflict side is not a document: %T", side)
+	v, ok := m["validator"].(bson.M)
+	require.True(t, ok, "side has no validator: %v", m)
+	age, _ := v["age"].(bson.M)
+	assert.EqualValues(t, n, age["$gte"])
+}
+
 func TestValidatorVerify(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -160,49 +223,46 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 	})
 
-	// Scenario8: divergent validators on both branches. A divergent metadata
-	// change must NOT be silently dropped. Interim behavior: the merge is refused
-	// loudly, naming the owning collection while never exposing the internal
-	// catalog, and NOTHING is dropped (both branches keep their own validator).
-	// workspace-xhm will upgrade this from a hard refusal to a resolvable
-	// conflict surfaced on the owning collection.
-	t.Run("Scenario8_DivergentValidators_MergeRefused", func(t *testing.T) {
-		dbName := fmt.Sprintf("valconflict%d", suffix)
-		db := env.Client.Database(dbName)
-		require.NoError(t, db.Drop(ctx))
-		require.NoError(t, db.CreateCollection(ctx, "items",
-			options.CreateCollection().SetValidator(valNonNegAge)))
-		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
-		vmBranch(t, env, dbName, "feature")
+	// Scenario8/9: divergent validators on both branches surface as a resolvable
+	// metadata conflict ON THE OWNING COLLECTION (never __dumbo_catalog__),
+	// resolved via doltConflicts / doltResolveConflict, then doltMerge continue
+	// completes with the chosen validator.
+	t.Run("Scenario8_DivergentValidators_ResolveTheirs", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict8_%d", suffix)
+		mainDB := setupMetaConflict(t, env, dbName)
 
-		// Feature: age >= 18.
-		featDB := env.Client.Database(dbName + "@feature")
-		require.NoError(t, featDB.RunCommand(ctx, bson.D{
-			{Key: "collMod", Value: "items"},
-			{Key: "validator", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(18)}}}}},
+		mc := readMetaConflict(t, mainDB)
+		assert.Equal(t, "items", mc["name"], "conflict surfaced on the owning collection")
+		assertAgeGte(t, mc["ours"], 21)
+		assertAgeGte(t, mc["theirs"], 18)
+
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: 1},
+			{Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: mc["conflictId"]},
+			{Key: "resolution", Value: "theirs"},
 		}).Err())
-		dumboDBCommit(t, env, dbName+"@feature", "feature: age >= 18", "bob <bob@widgets.io>")
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
 
-		// Main: age >= 21.
-		require.NoError(t, db.RunCommand(ctx, bson.D{
-			{Key: "collMod", Value: "items"},
-			{Key: "validator", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(21)}}}}},
+		age, _ := validatorOf(t, env.Client.Database(dbName+"@main"), "items")["age"].(bson.M)
+		assert.EqualValues(t, 18, age["$gte"], "theirs (age >= 18) won after resolution")
+	})
+
+	t.Run("Scenario9_DivergentValidators_ResolveCustom", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict9_%d", suffix)
+		mainDB := setupMetaConflict(t, env, dbName)
+
+		mc := readMetaConflict(t, mainDB)
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: 1},
+			{Key: "collection", Value: "items"},
+			{Key: "conflictId", Value: mc["conflictId"]},
+			{Key: "resolution", Value: "custom"},
+			{Key: "value", Value: bson.D{{Key: "validator", Value: ageGte(5)}}},
 		}).Err())
-		dumboDBCommit(t, env, dbName, "main: age >= 21", "alice <alice@acme.com>")
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
 
-		// The merge is refused (not silently completed).
-		mergeErr := env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
-			{Key: "doltMerge", Value: 1},
-			{Key: "merge_in", Value: "feature"},
-		}).Err()
-		require.Error(t, mergeErr, "divergent-validator merge must be refused, not silently completed")
-		assert.Contains(t, mergeErr.Error(), "items", "refusal names the owning collection")
-		assert.NotContains(t, mergeErr.Error(), "__dumbo_catalog__", "refusal must not expose the internal catalog")
-
-		// Nothing dropped: each branch keeps its own validator.
-		mainAge, _ := validatorOf(t, env.Client.Database(dbName+"@main"), "items")["age"].(bson.M)
-		assert.EqualValues(t, 21, mainAge["$gte"], "main keeps its own validator (age >= 21)")
-		featAge, _ := validatorOf(t, env.Client.Database(dbName+"@feature"), "items")["age"].(bson.M)
-		assert.EqualValues(t, 18, featAge["$gte"], "feature keeps its own validator (age >= 18) -- nothing dropped")
+		age, _ := validatorOf(t, env.Client.Database(dbName+"@main"), "items")["age"].(bson.M)
+		assert.EqualValues(t, 5, age["$gte"], "custom validator (age >= 5) applied after resolution")
 	})
 }
