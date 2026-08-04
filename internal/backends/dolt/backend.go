@@ -2413,36 +2413,23 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				}
 			}
 
-			names, nameErr := unionCollectionNames(ctx, db.cs, parentAM, commitAM)
-			if nameErr != nil {
-				return nil, fmt.Errorf("DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
-			}
-
-			for _, name := range names {
-				aHash, _ := parentAM.Get(ctx, name)
-				bHash, _ := commitAM.Get(ctx, name)
-
-				if aHash == bHash {
-					continue
+			// Filtered path: scope stat/patch to the matched documents in the
+			// filtered collections only. Collections not named in the filter,
+			// non-matching document changes, index changes, and metadata changes
+			// are all omitted (none is a document match).
+			if len(idFilters) > 0 {
+				names, nameErr := unionCollectionNames(ctx, db.cs, parentAM, commitAM)
+				if nameErr != nil {
+					return nil, fmt.Errorf("DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
 				}
-
-				var status string
-				switch {
-				case aHash.IsEmpty():
-					status = "added"
-				case bHash.IsEmpty():
-					status = "deleted"
-				default:
-					status = "modified"
-				}
-
-				// Filtered path: scope stat/patch to the matched documents in
-				// the filtered collections only. Collections not named in the
-				// filter, and non-matching document changes, are omitted; index
-				// changes are not document matches and are dropped here.
-				if len(idFilters) > 0 {
+				for _, name := range names {
 					filter, ok := idFilters[name]
 					if !ok {
+						continue
+					}
+					aHash, _ := parentAM.Get(ctx, name)
+					bHash, _ := commitAM.Get(ctx, name)
+					if aHash == bHash {
 						continue
 					}
 					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
@@ -2454,72 +2441,49 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					if len(addedDocs)+len(removedDocs)+len(modifiedDocs) == 0 {
 						continue
 					}
+					status := statusOf(aHash, bHash)
 					if params.Stat {
 						info.Stat = append(info.Stat, backends.TableStatus{
-							Name:     name,
-							Status:   status,
-							Added:    len(addedDocs),
-							Modified: len(modifiedDocs),
-							Deleted:  len(removedDocs),
+							Name: name, Status: status,
+							Added: len(addedDocs), Modified: len(modifiedDocs), Deleted: len(removedDocs),
 						})
 					}
 					if params.Patch {
 						info.Diff = append(info.Diff, backends.CollectionDiff{
-							Name:     name,
-							Status:   status,
-							Added:    addedDocs,
-							Removed:  removedDocs,
-							Modified: modifiedDocs,
+							Name: name, Status: status,
+							Added: addedDocs, Removed: removedDocs, Modified: modifiedDocs,
 						})
 					}
-					continue
 				}
-
-				// Index lifecycle is content-addressed; the same helper that
-				// powers DumboDBStatus / DumboDBDiff reduces the two DTBLs
-				// to per-kind added/modified/removed lists.
-				idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, db, aHash, bHash)
-				if idxErr != nil {
-					return nil, fmt.Errorf("DumboDBLog: index diffs for %q in commit %q: %w", name, ci.Hash.String(), idxErr)
-				}
-
-				if params.Stat {
-					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
-					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
-					added, modified, deleted, _ := countCollectionMapDiffs(ctx, aMap, bMap)
-					info.Stat = append(info.Stat, backends.TableStatus{
-						Name:            name,
-						Status:          status,
-						Added:           added,
-						Modified:        modified,
-						Deleted:         deleted,
-						AddedIndexes:    indexNamesOf(idxAdded),
-						ModifiedIndexes: indexChangeNamesOf(idxModified),
-						RemovedIndexes:  indexNamesOf(idxRemoved),
-					})
-				}
-
+			} else if cErr := eachCollectionChange(ctx, db, parentAM, commitAM, func(c collectionChange) error {
+				// Unfiltered: the shared skeleton (status, indexes, metadata) plus
+				// this commit's document changes. When both stat and patch are
+				// requested the document diff is computed once and counts derived.
 				if params.Patch {
-					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
-					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
-					addedDocs, removedDocs, modifiedDocs, _ := diffCollectionMaps(ctx, db.ns, aMap, bMap)
-					// Include the collection's diff entry if any document
-					// OR any index changed. An index-only commit was
-					// silently dropped before this check.
-					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 ||
-						len(idxAdded) > 0 || len(idxModified) > 0 || len(idxRemoved) > 0 {
-						info.Diff = append(info.Diff, backends.CollectionDiff{
-							Name:            name,
-							Status:          status,
-							Added:           addedDocs,
-							Removed:         removedDocs,
-							Modified:        modifiedDocs,
-							AddedIndexes:    idxAdded,
-							ModifiedIndexes: idxModified,
-							RemovedIndexes:  idxRemoved,
-						})
+					addedDocs, removedDocs, modifiedDocs, dErr := diffCollectionMaps(ctx, db.ns, c.AMap, c.BMap)
+					if dErr != nil {
+						return dErr
 					}
+					if len(addedDocs) == 0 && len(removedDocs) == 0 && len(modifiedDocs) == 0 && !c.surfacesWithoutDocChange() {
+						return nil
+					}
+					if params.Stat {
+						info.Stat = append(info.Stat, tableStatusFrom(c, len(addedDocs), len(modifiedDocs), len(removedDocs)))
+					}
+					info.Diff = append(info.Diff, collectionDiffFrom(c, addedDocs, removedDocs, modifiedDocs))
+					return nil
 				}
+				added, modified, deleted, cntErr := countCollectionMapDiffs(ctx, c.AMap, c.BMap)
+				if cntErr != nil {
+					return cntErr
+				}
+				if added == 0 && modified == 0 && deleted == 0 && !c.surfacesWithoutDocChange() {
+					return nil
+				}
+				info.Stat = append(info.Stat, tableStatusFrom(c, added, modified, deleted))
+				return nil
+			}); cErr != nil {
+				return nil, fmt.Errorf("DumboDBLog: diffing commit %q: %w", ci.Hash.String(), cErr)
 			}
 
 			// View lifecycle for this commit, mirroring the collection stat/diff
@@ -2690,86 +2654,21 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("DumboDBStatus: reading working AM for branch %q: %w", branch, err)
 	}
 
-	names, err := unionCollectionNames(ctx, state.cs, headAM, workingAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBStatus: collecting collection names for db %q: %w", params.DBName, err)
-	}
-
-	headCat, err := catalogMapFromAM(ctx, state, headAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBStatus: reading HEAD catalog for db %q: %w", params.DBName, err)
-	}
-	workingCat, err := catalogMapFromAM(ctx, state, workingAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBStatus: reading working catalog for db %q: %w", params.DBName, err)
-	}
-
 	var tables []backends.TableStatus
 
-	for _, name := range names {
-		headHash, headErr := headAM.Get(ctx, name)
-		if headErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: reading HEAD hash for %q: %w", name, headErr)
-		}
-
-		workingHash, workingErr := workingAM.Get(ctx, name)
-		if workingErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: reading working hash for %q: %w", name, workingErr)
-		}
-
-		// A validator-only change (collMod) rewrites __dumbo_catalog__, not the
-		// collection's own DTBL, so headHash == workingHash even though the
-		// metadata changed. Detect that so it is not skipped below.
-		metaFrom, metaTo, metaChanged, metaErr := collectionMetadataDiff(ctx, state, headCat, workingCat, name)
-		if metaErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: metadata diff for %q.%q: %w", params.DBName, name, metaErr)
-		}
-
-		var status string
-		switch {
-		case headHash.IsEmpty() && !workingHash.IsEmpty():
-			status = "added"
-		case !headHash.IsEmpty() && workingHash.IsEmpty():
-			status = "deleted"
-		case headHash != workingHash || metaChanged:
-			status = "modified"
-		default:
-			continue
-		}
-
-		aMap, mapErr := collectionMapFromAM(ctx, state, headAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: opening HEAD map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		bMap, mapErr := collectionMapFromAM(ctx, state, workingAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: opening working map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		addedCount, modifiedCount, deletedCount, countErr := countCollectionMapDiffs(ctx, aMap, bMap)
+	err = eachCollectionChange(ctx, state, headAM, workingAM, func(c collectionChange) error {
+		addedCount, modifiedCount, deletedCount, countErr := countCollectionMapDiffs(ctx, c.AMap, c.BMap)
 		if countErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
+			return fmt.Errorf("counting diffs for %q: %w", c.Name, countErr)
 		}
-
-		idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, state, headHash, workingHash)
-		if idxErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: computing index diffs for %q.%q: %w", params.DBName, name, idxErr)
+		if addedCount == 0 && modifiedCount == 0 && deletedCount == 0 && !c.surfacesWithoutDocChange() {
+			return nil
 		}
-
-		ts := backends.TableStatus{
-			Name:            name,
-			Status:          status,
-			Added:           addedCount,
-			Modified:        modifiedCount,
-			Deleted:         deletedCount,
-			AddedIndexes:    indexNamesOf(idxAdded),
-			ModifiedIndexes: indexChangeNamesOf(idxModified),
-			RemovedIndexes:  indexNamesOf(idxRemoved),
-			MetadataFrom:    metaFrom,
-			MetadataTo:      metaTo,
-		}
-		tables = append(tables, ts)
+		tables = append(tables, tableStatusFrom(c, addedCount, modifiedCount, deletedCount))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: %w", err)
 	}
 
 	if tables == nil {
@@ -2981,92 +2880,23 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		}
 	}
 
-	names, err := unionCollectionNames(ctx, state.cs, aAM, bAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBDiff: collecting collection names for db %q: %w", params.DBName, err)
-	}
-
-	aCat, err := catalogMapFromAM(ctx, state, aAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBDiff: reading a-side catalog for db %q: %w", params.DBName, err)
-	}
-	bCat, err := catalogMapFromAM(ctx, state, bAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBDiff: reading b-side catalog for db %q: %w", params.DBName, err)
-	}
-
 	var diffs []backends.CollectionDiff
 
-	for _, name := range names {
-		aHash, hashErr := aAM.Get(ctx, name)
-		if hashErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: probing a-side AM for %q.%q: %w", params.DBName, name, hashErr)
-		}
-
-		bHash, hashErr := bAM.Get(ctx, name)
-		if hashErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: probing b-side AM for %q.%q: %w", params.DBName, name, hashErr)
-		}
-
-		inA := !aHash.IsEmpty()
-		inB := !bHash.IsEmpty()
-
-		var status string
-		switch {
-		case !inA && inB:
-			status = "added"
-		case inA && !inB:
-			status = "deleted"
-		default:
-			status = "modified"
-		}
-
-		aMap, mapErr := collectionMapFromAM(ctx, state, aAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		bMap, mapErr := collectionMapFromAM(ctx, state, bAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, aMap, bMap)
+	err = eachCollectionChange(ctx, state, aAM, bAM, func(c collectionChange) error {
+		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, c.AMap, c.BMap)
 		if diffErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
+			return fmt.Errorf("diffing collection %q: %w", c.Name, diffErr)
 		}
-
-		idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, state, aHash, bHash)
-		if idxErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: index diffs for %q in db %q: %w", name, params.DBName, idxErr)
+		// A "modified" collection with no document, index, or metadata change is
+		// no diff at all. Added/deleted collections always surface.
+		if len(added) == 0 && len(removed) == 0 && len(modified) == 0 && !c.surfacesWithoutDocChange() {
+			return nil
 		}
-
-		metaFrom, metaTo, metaChanged, metaErr := collectionMetadataDiff(ctx, state, aCat, bCat, name)
-		if metaErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: metadata diff for %q in db %q: %w", name, params.DBName, metaErr)
-		}
-
-		// A "modified" collection with no document-level, index-level, OR
-		// metadata (validator/options) changes is no diff at all. "added" and
-		// "deleted" collections always surface, even when empty, so the caller
-		// can see the lifecycle event.
-		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 &&
-			len(idxAdded) == 0 && len(idxModified) == 0 && len(idxRemoved) == 0 && !metaChanged {
-			continue
-		}
-
-		diffs = append(diffs, backends.CollectionDiff{
-			Name:            name,
-			Status:          status,
-			Added:           added,
-			Removed:         removed,
-			Modified:        modified,
-			AddedIndexes:    idxAdded,
-			ModifiedIndexes: idxModified,
-			RemovedIndexes:  idxRemoved,
-			MetadataFrom:    metaFrom,
-			MetadataTo:      metaTo,
-		})
+		diffs = append(diffs, collectionDiffFrom(c, added, removed, modified))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBDiff: %w", err)
 	}
 
 	if diffs == nil {

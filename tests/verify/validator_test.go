@@ -618,4 +618,43 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 0, fromAge["$gte"])
 		assert.EqualValues(t, 10, toAge["$gte"])
 	})
+
+	// Scenario20: doltLog --stat/--patch surfaces a validator-only commit and its
+	// metadata change. Before, such a commit was invisible in the log (the
+	// collection DTBL hash was unchanged). Both verbosities share the diff core.
+	for _, verbosity := range []string{"stat", "patch"} {
+		verbosity := verbosity
+		t.Run("Scenario20_LogShowsValidatorChange_"+verbosity, func(t *testing.T) {
+			dbName := fmt.Sprintf("vallog20%s_%d", verbosity, suffix)
+			db := env.Client.Database(dbName)
+			require.NoError(t, db.Drop(ctx))
+			require.NoError(t, db.CreateCollection(ctx, "items",
+				options.CreateCollection().SetValidator(ageGte(0))))
+			dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+
+			require.NoError(t, db.RunCommand(ctx, bson.D{
+				{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+			}).Err())
+			dumboDBCommit(t, env, dbName, "tighten validator to age>=10", "alice <alice@acme.com>")
+
+			var raw bson.M
+			require.NoError(t, db.RunCommand(ctx, bson.D{
+				{Key: "doltLog", Value: 1}, {Key: "limit", Value: 1}, {Key: verbosity, Value: true},
+			}).Decode(&raw))
+			commits := raw["commits"].(bson.A)
+			require.Len(t, commits, 1)
+			head := commits[0].(bson.M)
+			changesArr, ok := head["changes"].(bson.A)
+			require.True(t, ok, "validator-only commit must surface changes (%s): %v", verbosity, head)
+			require.Len(t, changesArr, 1)
+			ch := changesArr[0].(bson.M)
+			assert.Equal(t, "items", ch["name"])
+			assert.Equal(t, "modified", ch["status"])
+			meta := ch["metadata"].(bson.M)
+			fromAge, _ := meta["from"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
+			toAge, _ := meta["to"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
+			assert.EqualValues(t, 0, fromAge["$gte"])
+			assert.EqualValues(t, 10, toAge["$gte"])
+		})
+	}
 }

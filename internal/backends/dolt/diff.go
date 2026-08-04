@@ -633,6 +633,176 @@ func countCollectionMapDiffs(
 	return added, modified, deleted, nil
 }
 
+// collectionChange is one changed collection's shared skeleton, produced by
+// eachCollectionChange: lifecycle status, the two document maps, index changes,
+// and metadata (validator/options) change. Callers layer document-level detail
+// (full docs for diff/patch, or counts for status/stat) on top.
+type collectionChange struct {
+	Name        string
+	Status      string // "added", "deleted", "modified"
+	AMap, BMap  prolly.Map
+	IdxAdded    []backends.IndexInfo
+	IdxModified []backends.IndexChange
+	IdxRemoved  []backends.IndexInfo
+	MetaFrom    *backends.CollectionMetadata
+	MetaTo      *backends.CollectionMetadata
+	MetaChanged bool
+}
+
+// surfacesWithoutDocChange reports whether the change must appear in a diff even
+// when no documents changed: an added/deleted lifecycle event, an index change,
+// or a validator/options change. Callers OR this with their own document-change
+// check to decide whether a "modified" collection is a real diff.
+func (c collectionChange) surfacesWithoutDocChange() bool {
+	return c.Status != "modified" ||
+		len(c.IdxAdded) > 0 || len(c.IdxModified) > 0 || len(c.IdxRemoved) > 0 ||
+		c.MetaChanged
+}
+
+func statusOf(aHash, bHash hash.Hash) string {
+	switch {
+	case aHash.IsEmpty() && !bHash.IsEmpty():
+		return "added"
+	case !aHash.IsEmpty() && bHash.IsEmpty():
+		return "deleted"
+	default:
+		return "modified"
+	}
+}
+
+// eachCollectionChange walks the union of collections in aAM and bAM and invokes
+// fn once per collection that changed (lifecycle, documents, indexes, or
+// metadata), with the shared skeleton computed. It is the single source of truth
+// for what a collection-level diff comprises: DumboDBDiff, DumboDBStatus, and
+// DumboDBLog --stat/--patch all build on it, so a new change dimension added
+// here is picked up by every caller.
+//
+// Collections unchanged on both sides (same DTBL hash and no metadata change)
+// are skipped without opening maps or computing index diffs. A metadata-only
+// change (collMod rewrites __dumbo_catalog__, not the collection DTBL, so the
+// hashes match) surfaces as "modified" with empty document/index skeletons.
+func eachCollectionChange(ctx context.Context, state *dbState, aAM, bAM prolly.AddressMap, fn func(collectionChange) error) error {
+	names, err := unionCollectionNames(ctx, state.cs, aAM, bAM)
+	if err != nil {
+		return err
+	}
+
+	// Validator/options live in __dumbo_catalog__; if its hash is unchanged, no
+	// collection's metadata changed and the per-collection catalog reads are
+	// skipped entirely (the common pure-document case).
+	aCatHash, err := aAM.Get(ctx, reservedCatalogName)
+	if err != nil {
+		return err
+	}
+	bCatHash, err := bAM.Get(ctx, reservedCatalogName)
+	if err != nil {
+		return err
+	}
+	catalogChanged := aCatHash != bCatHash
+	var aCat, bCat prolly.Map
+	if catalogChanged {
+		if aCat, err = catalogMapFromAM(ctx, state, aAM); err != nil {
+			return err
+		}
+		if bCat, err = catalogMapFromAM(ctx, state, bAM); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range names {
+		aHash, err := aAM.Get(ctx, name)
+		if err != nil {
+			return err
+		}
+		bHash, err := bAM.Get(ctx, name)
+		if err != nil {
+			return err
+		}
+
+		var metaFrom, metaTo *backends.CollectionMetadata
+		var metaChanged bool
+		if catalogChanged {
+			if metaFrom, metaTo, metaChanged, err = collectionMetadataDiff(ctx, state, aCat, bCat, name); err != nil {
+				return err
+			}
+		}
+
+		// DTBL unchanged: documents and indexes are unchanged (both live in the
+		// DTBL); only a metadata-only change can surface.
+		if aHash == bHash {
+			if !metaChanged {
+				continue
+			}
+			m, err := collectionMapFromAM(ctx, state, aAM, name)
+			if err != nil {
+				return err
+			}
+			if err := fn(collectionChange{
+				Name: name, Status: "modified", AMap: m, BMap: m,
+				MetaFrom: metaFrom, MetaTo: metaTo, MetaChanged: true,
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+
+		idxAdded, idxModified, idxRemoved, err := computeIndexChanges(ctx, state, aHash, bHash)
+		if err != nil {
+			return err
+		}
+		aMap, err := collectionMapFromAM(ctx, state, aAM, name)
+		if err != nil {
+			return err
+		}
+		bMap, err := collectionMapFromAM(ctx, state, bAM, name)
+		if err != nil {
+			return err
+		}
+		if err := fn(collectionChange{
+			Name: name, Status: statusOf(aHash, bHash), AMap: aMap, BMap: bMap,
+			IdxAdded: idxAdded, IdxModified: idxModified, IdxRemoved: idxRemoved,
+			MetaFrom: metaFrom, MetaTo: metaTo, MetaChanged: metaChanged,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// tableStatusFrom builds a summary TableStatus (counts + index names +
+// metadata) from a change skeleton and the caller's document counts.
+func tableStatusFrom(c collectionChange, added, modified, deleted int) backends.TableStatus {
+	return backends.TableStatus{
+		Name:            c.Name,
+		Status:          c.Status,
+		Added:           added,
+		Modified:        modified,
+		Deleted:         deleted,
+		AddedIndexes:    indexNamesOf(c.IdxAdded),
+		ModifiedIndexes: indexChangeNamesOf(c.IdxModified),
+		RemovedIndexes:  indexNamesOf(c.IdxRemoved),
+		MetadataFrom:    c.MetaFrom,
+		MetadataTo:      c.MetaTo,
+	}
+}
+
+// collectionDiffFrom builds a full CollectionDiff (documents + index defs +
+// metadata) from a change skeleton and the caller's document lists.
+func collectionDiffFrom(c collectionChange, added, removed []*types.Document, modified []backends.ModifiedDoc) backends.CollectionDiff {
+	return backends.CollectionDiff{
+		Name:            c.Name,
+		Status:          c.Status,
+		Added:           added,
+		Removed:         removed,
+		Modified:        modified,
+		AddedIndexes:    c.IdxAdded,
+		ModifiedIndexes: c.IdxModified,
+		RemovedIndexes:  c.IdxRemoved,
+		MetadataFrom:    c.MetaFrom,
+		MetadataTo:      c.MetaTo,
+	}
+}
+
 // metadataViewOf projects a collection's durable metadata to the user-facing
 // validator/options, or nil when the collection has no validator. Level/action
 // without a validator are not surfaced (they are meaningless on their own).
