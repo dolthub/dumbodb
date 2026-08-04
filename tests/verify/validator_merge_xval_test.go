@@ -213,9 +213,12 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 	})
 
 	// base = X: a one-sided clean change that stays violating is grandfathered
-	// (the violation set, by identity, did not grow) -- no conflict.
-	t.Run("BaseViolator_OneSidedChange_StillViolating_Grandfathered", func(t *testing.T) {
-		dbName, db := newDB("x1side")
+	// only when the merge leaves the doc untouched. Re-authoring it to another
+	// violating value is a conflict under action "error" (below) and allowed
+	// under "warn" (the following case). Grandfathering under error is limited to
+	// byte-for-byte unchanged documents.
+	t.Run("BaseViolator_OneSidedChange_StillViolating_Error_Conflict", func(t *testing.T) {
+		dbName, db := newDB("x1sideErr")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
 		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
 		require.NoError(t, err)
@@ -229,9 +232,36 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "main: age -> -9", "alice <alice@acme.com>")
 
 		raw := vmMerge(t, env, dbName, "feature")
-		require.EqualValues(t, 1, raw["ok"], "one-sided still-violating change is grandfathered: %v", raw)
+		require.EqualValues(t, 0, raw["ok"], "re-authored violating value conflicts under error: %v", raw)
 		mainDB := env.Client.Database(dbName + "@main")
-		age, _ := ageOf(t, mainDB.Collection("items"), 1)
+		vals := conflictsByType(t, mainDB, "validation")
+		require.Len(t, vals, 1)
+		require.NoError(t, resolveConflict(t, mainDB, "items", vals[0]["conflictId"].(string), "drop", nil))
+		continueMerge(t, mainDB)
+		_, ok := ageOf(t, mainDB.Collection("items"), 1)
+		assert.False(t, ok, "offender dropped")
+	})
+
+	// base = X: the same one-sided re-authored violating value is allowed under
+	// validationAction "warn".
+	t.Run("BaseViolator_OneSidedChange_StillViolating_Warn_Allowed", func(t *testing.T) {
+		dbName, db := newDB("x1sideWarn")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create items with age -5", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "warn")
+
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-9)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: age -> -9", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 1, raw["ok"], "warn allows the re-authored violating value: %v", raw)
+		mainDB := env.Client.Database(dbName + "@main")
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
 		assert.EqualValues(t, -9, age)
 	})
 

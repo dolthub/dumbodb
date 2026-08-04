@@ -237,9 +237,11 @@ already violating at the merge base -- the merge may only ever *remove*
 violations, never introduce one. Two triggers enforce it:
 
 - **A clean auto-merge** that inserts or modifies a document into a violating
-  state surfaces a **`type: "validation"` conflict** -- unless that document was
-  *already* violating at the base (grandfathered; a validator is never
-  retroactive) or the validator's `validationAction` is `"warn"`.
+  state surfaces a **`type: "validation"` conflict** -- unless the validator's
+  `validationAction` is `"warn"`. A pre-existing violator is tolerated only when
+  the merge leaves it byte-for-byte unchanged (a validator is never retroactive);
+  re-authoring a document to a violating value is a conflict even when the base
+  already violated.
 - **A divergent document (data) conflict** is validated at resolution time: the
   value you resolve *to* must conform, or the resolution is rejected (unless
   `validationAction` is `"warn"`). This holds even when the base already
@@ -323,12 +325,15 @@ document versus the *resulting* validator (`A` absent, `C` present & conforms,
 | A | clean insert of a violating doc | **validation conflict** (fix or drop) |
 | A | clean insert of a conforming doc | clean merge |
 | C | clean modify conforming -> violating | **validation conflict** |
-| X | doc unchanged, validator arrives | grandfathered -- no conflict |
-| X | clean one-sided change, stays violating | grandfathered -- no conflict |
-| any | clean change, `validationAction: "warn"` | allowed (no conflict) |
+| X | doc left byte-for-byte unchanged | grandfathered -- no conflict (any action) |
+| X | one-sided change, stays violating, action `error` | **validation conflict** |
+| X | one-sided change, stays violating, action `warn` | allowed |
+| any | clean change to a violating value, action `warn` | allowed |
 | any | divergent data conflict resolved to a violating value | **rejected** (unless `warn`) |
 | any | divergent data conflict resolved to a conforming value / drop | completes |
 
+Grandfathering under action `error` is narrow: a pre-existing violator survives
+only if the merge never touches it. Any value the merge *authors* -- an insert, a
+modify, or a resolved data conflict -- must conform, unless the action is `warn`.
 A clean merge that only ever removes violations (a fix `X -> C`, or a delete)
-never conflicts. A document already in a divergent data conflict is validated
-when you resolve it, not before -- so its row depends on the value you choose.
+never conflicts.

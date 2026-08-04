@@ -28,11 +28,14 @@ import (
 
 // crossValidateMergedDocuments enforces the merge cross-validation invariant
 // (workspace-h0w): a merge may never make data quality more non-conformant than
-// it was. For every user collection with a settled validator, it diffs the base
-// against the merged document map and, for each document the merge cleanly
-// inserted or modified into a violating state that was NOT already violating at
-// the base (grandfathering), emits a typ:"validation" conflict -- unless the
-// validator's action is "warn".
+// it was. For every user collection with a settled validator whose action is
+// "error", it diffs the base against the merged document map and emits a
+// typ:"validation" conflict for every document the merge cleanly inserted or
+// modified into a violating state. A pre-existing violator is grandfathered only
+// when the merge leaves it byte-for-byte unchanged (never visited by the diff);
+// a re-authored violating value is a conflict even when the base already
+// violated. Under action "warn" the collection is skipped entirely (violations
+// allowed, matching the write path).
 //
 // Documents already in a divergent data conflict are skipped here; their
 // resolved value is validated at resolution time (trigger 2). A collection whose
@@ -105,22 +108,13 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 			if conforms {
 				return false, nil
 			}
-			// The merged value violates. Grandfather it only if the base value
-			// was already violating (the merge is not making it worse). base
-			// absent (an insert) is never grandfathered.
-			if c.kind == collModified && c.from != nil {
-				baseDoc, berr := readDocFromValue(ctx, state.ns, c.from)
-				if berr != nil {
-					return false, berr
-				}
-				baseConforms, berr := backends.DocumentSatisfiesValidator(baseDoc, meta.Validator)
-				if berr != nil {
-					return false, berr
-				}
-				if !baseConforms {
-					return false, nil // grandfathered pre-existing violation
-				}
-			}
+			// The merged value violates, and the action is "error" (warn was
+			// skipped above). Every document the merge inserted or modified must
+			// conform: a pre-existing violator is grandfathered only when the
+			// merge leaves it byte-for-byte unchanged, and such a document is
+			// never visited here (forEachCollectionChange skips unchanged docs).
+			// A change that lands on a violating value -- even one-sided, even
+			// when the base already violated -- is a conflict.
 			valEntries = append(valEntries, newValidationConflict(c, mergedDoc, meta.Validator, name, theirHash, theirsDesc))
 			return false, nil
 		})
