@@ -210,6 +210,10 @@ Key checks:
 - After resolving and continuing, `items`' validator is the chosen one, and the
   merge completes (`ok: 1`).
 
+If both branches make the **identical** validator change, there is no
+divergence: it converges and the merge completes cleanly with no conflict (the
+only case a metadata change is resolved without asking).
+
 The same workflow covers every divergence shape (each has an automated subtest):
 - **`$jsonSchema` validators** (not just query-expression ones) -- the full
   schema document is carried through `base` / `ours` / `theirs`.

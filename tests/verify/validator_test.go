@@ -475,4 +475,37 @@ func TestValidatorVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, n, "resolving ours restores the collection and its data")
 	})
+
+	// Scenario15: both branches make the SAME validator change. A divergent
+	// change conflicts (Scenarios 8-14); an identical one converges and merges
+	// cleanly with no conflict -- the only case a metadata change is resolved
+	// without asking.
+	t.Run("Scenario15_ConvergentValidatorChange_NoConflict", func(t *testing.T) {
+		dbName := fmt.Sprintf("valconflict15_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+		vmBranch(t, env, dbName, "feature")
+
+		// Both sides tighten the validator to the IDENTICAL definition age >= 10.
+		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+		dumboDBCommit(t, env, dbName+"@feature", "feature: age >= 10", "bob <bob@widgets.io>")
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+		dumboDBCommit(t, env, dbName, "main: age >= 10", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 1, raw["ok"], "identical validator change must merge cleanly: %v", raw)
+
+		age, _ := validatorOf(t, mainDB, "items")["age"].(bson.M)
+		assert.EqualValues(t, 10, age["$gte"], "converged validator (age>=10) active on main")
+		_, err := mainDB.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
+		require.Error(t, err, "converged validator enforces (age 5 < 10 rejected)")
+	})
 }
