@@ -1012,6 +1012,40 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 
 	for _, cc := range res.Collections {
 		for _, cf := range cc.Conflicts {
+			// A validation conflict has no ours/theirs divergence: the merged
+			// document violates the resulting validator. Surface the offending
+			// document and the validator it failed; it resolves with custom
+			// (replace-to-conform) or drop, not ours/theirs.
+			if cf.Type == "validation" {
+				var docID any = types.Null
+				if cf.Ours != nil {
+					if v, getErr := cf.Ours.Get("_id"); getErr == nil {
+						docID = v
+					}
+				}
+				vreason := must.NotFail(types.NewDocument(
+					"code", cf.Reason.Code,
+					"message", cf.Reason.Message,
+				))
+				vdoc := must.NotFail(types.NewDocument(
+					"conflictId", cf.ConflictID,
+					"type", "validation",
+					"name", cc.Collection,
+					"documentId", docID,
+					"reason", vreason,
+				))
+				if cf.Ours != nil {
+					vdoc.Set("document", cf.Ours)
+				} else {
+					vdoc.Set("document", types.Null)
+				}
+				if cf.Reason.Key != nil {
+					vdoc.Set("validator", cf.Reason.Key)
+				}
+				entries = append(entries, conflictOut{name: cc.Collection, id: cf.ConflictID, doc: vdoc})
+				continue
+			}
+
 			// Each side carries its own _id: a uniqueKeyCollision has
 			// distinct identities for ours and theirs. base carries no
 			// diffType.

@@ -20,10 +20,11 @@ never shown to users -- validators appear only as a collection's `options` in
 `listCollections`.
 
 > **Automated equivalent:** `tests/verify/validator_test.go`
-> (`TestValidatorVerify`) covers the runnable scenarios in this document as
-> subtests. Run it with:
+> (`TestValidatorVerify`) covers Scenarios 1-4; the merge cross-validation matrix
+> (Scenarios 5-6) is covered by `tests/verify/validator_merge_xval_test.go`
+> (`TestValidatorMergeCrossValidation`). Run them with:
 > ```
-> go test ./tests/verify/ -run TestValidatorVerify -v
+> go test ./tests/verify/ -run 'TestValidatorVerify|TestValidatorMergeCrossValidation' -v
 > ```
 
 ## Prerequisites
@@ -225,23 +226,30 @@ The same workflow covers every divergence shape (each has an automated subtest):
 
 ## Scenario 5: Data that violates a validator merged from the other branch
 
-> **STATUS: not yet implemented.** This scenario documents intended behavior and
-> is tracked by epic `workspace-h0w`. Today the merge silently accepts the
-> violating document (see the epic). The scenario below is the target once the
-> cross-validation merge conflict lands; do not treat a passing run as
-> verification until the epic is closed.
-
 Scenario 4 covers divergence in the validator *definition*. This scenario covers
 the orthogonal case: the validator definition does **not** conflict (only one
 branch touches it), but the **documents** the other branch wrote violate it.
 
-The governing rule mirrors write-path validation, lifted onto the merge: a
-document whose merged value differs from the merge base (an insert or a modify)
-must satisfy the merged validator, or the merge surfaces a **validation
-conflict** on that document. Documents unchanged since the base are grandfathered
-(a validator is never retroactive), exactly as when a validator is added to a
-collection of existing data. `validationLevel` and `validationAction` carry the
-same meaning they have on the write path.
+**Guiding rule (monotonicity):** a merge may never make data quality more
+non-conformant than it was. Measured against the resulting validator, the set of
+violating documents in the merged result must be a subset of the set that was
+already violating at the merge base -- the merge may only ever *remove*
+violations, never introduce one. Two triggers enforce it:
+
+- **A clean auto-merge** that inserts or modifies a document into a violating
+  state surfaces a **`type: "validation"` conflict** -- unless that document was
+  *already* violating at the base (grandfathered; a validator is never
+  retroactive) or the validator's `validationAction` is `"warn"`.
+- **A divergent document (data) conflict** is validated at resolution time: the
+  value you resolve *to* must conform, or the resolution is rejected (unless
+  `validationAction` is `"warn"`). This holds even when the base already
+  violated -- resolving a conflict is an authoring act.
+
+A validation conflict has no ours/theirs divergence, so it resolves by
+**replace-to-conform** (`resolution: "custom"` with a conforming document, which
+is re-validated) or **`resolution: "drop"`** (remove the offender). `ours` and
+`theirs` are not accepted -- keeping a known violator is the degradation the rule
+forbids. `validationLevel` (strict/moderate) is irrelevant to the merge.
 
 ```js
 var db = db.getSiblingDB("valdataconflict")
@@ -261,25 +269,66 @@ db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
 
 // Merge feature into main: the validator arrives and _id:1 violates it.
-db.getSiblingDB("valdataconflict@main").runCommand({ doltMerge: 1, merge_in: "feature" })
-// TARGET: { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
+var main = db.getSiblingDB("valdataconflict@main")
+main.runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
 ```
 
-Target conflict shape and resolution (final vocabulary pending the epic):
+Inspect the conflict -- a `type: "validation"` entry carrying the offending
+document and the validator it failed:
 
 ```js
-var main = db.getSiblingDB("valdataconflict@main")
 printjson(main.runCommand({ doltConflicts: 1 }).conflicts)
-// TARGET: one entry
+// one entry:
 //   { conflictId: "<hash>", type: "validation", name: "items", documentId: 1,
-//     document: { _id: 1, age: -5 }, validator: { age: { $gte: 0 } } }
+//     document: { _id: 1, age: -5 }, validator: { age: { $gte: 0 } },
+//     reason: { code: "documentValidationFailure", message: "document 1 in ..." } }
 ```
+
+Resolve by replacing the document with a conforming value, then complete the
+merge (a still-violating replacement is rejected):
+
+```js
+var cid = main.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid,
+                  resolution: "custom", value: { _id: 1, age: 0 } })   // conforms
+main.runCommand({ doltMerge: 1, continue: 1 })
+// { ..., ok: 1 };  items now has { _id: 1, age: 0 }
+```
+
+Or drop the offending document instead of fixing it:
+
+```js
+// main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "drop" })
+```
+
+Key checks:
+- `doltConflicts` reports one `type: "validation"` entry on `items` with
+  `documentId: 1`, the offending `document`, and the `validator`; the string
+  `__dumbo_catalog__` never appears.
+- `resolution: "custom"` with a still-violating value is rejected; a conforming
+  value or `resolution: "drop"` completes the merge.
 
 ---
 
-## Coverage note: merge cross-validation edge cases
+## Scenario 6: The full merge cross-validation matrix
 
-The cross-validation merge behavior (Scenario 5) has a large edge-case matrix
-tracked in its epic. Once implemented, each case gets a subtest in
-`tests/verify/validator_test.go` and, where practical, an entry here. The matrix
-is enumerated in the epic and its child tasks.
+Every cell below is a distinct base x ours x theirs case, keyed on the state of a
+document versus the *resulting* validator (`A` absent, `C` present & conforms,
+`X` present & violates). Each has an automated subtest in
+`tests/verify/validator_merge_xval_test.go` (`TestValidatorMergeCrossValidation`).
+
+| base | what the merge did | outcome |
+|---|---|---|
+| A | clean insert of a violating doc | **validation conflict** (fix or drop) |
+| A | clean insert of a conforming doc | clean merge |
+| C | clean modify conforming -> violating | **validation conflict** |
+| X | doc unchanged, validator arrives | grandfathered -- no conflict |
+| X | clean one-sided change, stays violating | grandfathered -- no conflict |
+| any | clean change, `validationAction: "warn"` | allowed (no conflict) |
+| any | divergent data conflict resolved to a violating value | **rejected** (unless `warn`) |
+| any | divergent data conflict resolved to a conforming value / drop | completes |
+
+A clean merge that only ever removes violations (a fix `X -> C`, or a delete)
+never conflicts. A document already in a divergent data conflict is validated
+when you resolve it, not before -- so its row depends on the value you choose.

@@ -485,32 +485,55 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: conflict %q is already resolved", params.ConflictID)
 	}
 
-	// For "ours", the resolvedAM already has our value  -- just mark resolved, no AM update needed.
-	if params.Resolution == "ours" {
-		target.resolved = true
-		return &backends.ResolveConflictResult{}, nil
-	}
-
 	var chosenVal val.Tuple
 	var deleteDoc bool
 
-	switch params.Resolution {
-	case "theirs":
-		chosenVal = target.theirsRawVal
-		deleteDoc = target.theirsRawVal == nil
-
-	case "custom":
-		if params.Value == nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
+	if target.typ == "validation" {
+		// A validation conflict has no ours/theirs divergence: the merged
+		// document violates the resulting validator. Resolve by replace-to-conform
+		// ("custom", re-validated) or "drop".
+		v, del, verr := b.resolveValidationChoice(ctx, db, ms, target, params)
+		if verr != nil {
+			return nil, verr
 		}
-		v, writeErr := writeDocToValue(ctx, db.ns, params.Value)
-		if writeErr != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: writing custom document: %w", writeErr)
+		chosenVal, deleteDoc = v, del
+	} else {
+		// Trigger 2: a data-conflict resolution must not leave a document that
+		// violates the merged validator (unless the validator action is "warn").
+		resDoc, rerr := resolutionResultDoc(ctx, db, target, params)
+		if rerr != nil {
+			return nil, rerr
 		}
-		chosenVal = v
+		if resDoc != nil {
+			if verr := b.rejectIfViolates(ctx, db, ms, params.Collection, resDoc); verr != nil {
+				return nil, verr
+			}
+		}
 
-	default:
-		return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+		// For "ours", the resolvedAM already has our value -- just mark resolved.
+		if params.Resolution == "ours" {
+			target.resolved = true
+			return &backends.ResolveConflictResult{}, nil
+		}
+
+		switch params.Resolution {
+		case "theirs":
+			chosenVal = target.theirsRawVal
+			deleteDoc = target.theirsRawVal == nil
+
+		case "custom":
+			if params.Value == nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
+			}
+			v, writeErr := writeDocToValue(ctx, db.ns, params.Value)
+			if writeErr != nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: writing custom document: %w", writeErr)
+			}
+			chosenVal = v
+
+		default:
+			return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+		}
 	}
 
 	collMap, err := collectionMapFromAM(ctx, db, ms.resolvedAM, params.Collection)
@@ -1590,6 +1613,13 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 	am, err := editor.Flush(ctx)
 	if err != nil {
 		return prolly.AddressMap{}, nil, nil, nil, err
+	}
+
+	// A merge may never introduce a document that violates the resulting
+	// validator (workspace-h0w). Diff base against the merged result and surface
+	// any newly-violating document as a validation conflict.
+	if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc); err != nil {
+		return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merge cross-validation: %w", err)
 	}
 
 	return am, allConflicts, viewConflicts, metaConflicts, nil

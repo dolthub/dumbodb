@@ -1,0 +1,354 @@
+// Copyright 2026 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package verify
+
+// Automated twin of docs/verify/validators.md Scenario 5 (merge
+// cross-validation, epic workspace-h0w). A merge may never make data quality
+// more non-conformant than it was: a document the merge cleanly inserts or
+// modifies into a state that violates the resulting validator -- and that was
+// not already violating at the base -- surfaces a type:"validation" conflict,
+// resolved by replace-to-conform ("custom") or "drop". A document already in a
+// data conflict is validated at resolution time instead (trigger 2). These
+// cases walk the base x ours x theirs matrix.
+
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+)
+
+// conflictsByType returns the doltConflicts entries whose type == typ, asserting
+// the internal catalog is never surfaced.
+func conflictsByType(t *testing.T, mainDB *mongo.Database, typ string) []bson.M {
+	t.Helper()
+	var rc bson.M
+	require.NoError(t, mainDB.RunCommand(context.Background(), bson.D{{Key: "doltConflicts", Value: 1}}).Decode(&rc))
+	all, _ := rc["conflicts"].(bson.A)
+	var out []bson.M
+	for _, c := range all {
+		e := c.(bson.M)
+		assert.NotEqual(t, "__dumbo_catalog__", e["name"], "internal catalog must never surface")
+		if e["type"] == typ {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// resolveConflict runs a single doltResolveConflict (no continue).
+func resolveConflict(t *testing.T, mainDB *mongo.Database, coll, conflictID, resolution string, value bson.D) error {
+	cmd := bson.D{
+		{Key: "doltResolveConflict", Value: 1},
+		{Key: "collection", Value: coll},
+		{Key: "conflictId", Value: conflictID},
+		{Key: "resolution", Value: resolution},
+	}
+	if value != nil {
+		cmd = append(cmd, bson.E{Key: "value", Value: value})
+	}
+	return mainDB.RunCommand(context.Background(), cmd).Err()
+}
+
+func continueMerge(t *testing.T, mainDB *mongo.Database) {
+	t.Helper()
+	require.NoError(t, mainDB.RunCommand(context.Background(),
+		bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
+}
+
+// ageOf reads the age field of a document by _id.
+func ageOf(t *testing.T, coll *mongo.Collection, id int) (int32, bool) {
+	t.Helper()
+	var got bson.M
+	err := coll.FindOne(context.Background(), bson.D{{Key: "_id", Value: id}}).Decode(&got)
+	if err != nil {
+		return 0, false
+	}
+	v, _ := got["age"].(int32)
+	return v, true
+}
+
+func TestValidatorMergeCrossValidation(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	suffix := rand.Int64N(1_000_000)
+	newDB := func(tag string) (string, *mongo.Database) {
+		name := fmt.Sprintf("xval%s%d", tag, suffix)
+		db := env.Client.Database(name)
+		require.NoError(t, db.Drop(ctx))
+		return name, db
+	}
+
+	// addValidatorOnFeature branches feature from main and adds an age>=0
+	// validator (optionally with a validationAction) there, committing both.
+	addValidatorOnFeature := func(t *testing.T, dbName string, action string) {
+		vmBranch(t, env, dbName, "feature")
+		collmod := bson.D{{Key: "collMod", Value: "items"}, {Key: "validator", Value: valNonNegAge}}
+		if action != "" {
+			collmod = append(collmod, bson.E{Key: "validationAction", Value: action})
+		}
+		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, collmod).Err())
+		dumboDBCommit(t, env, dbName+"@feature", "feature: require age>=0", "bob <bob@widgets.io>")
+	}
+
+	// base = A: main inserts a violating doc; feature adds the validator. The
+	// merge must surface a validation conflict; replace-to-conform completes it.
+	t.Run("CleanInsertViolator_Conflict_ResolveCustom", func(t *testing.T) {
+		dbName, db := newDB("insviol")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		dumboDBCommit(t, env, dbName, "create items", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "")
+
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: insert age -5", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "violating insert must conflict: %v", raw)
+
+		mainDB := env.Client.Database(dbName + "@main")
+		vals := conflictsByType(t, mainDB, "validation")
+		require.Len(t, vals, 1)
+		vc := vals[0]
+		assert.Equal(t, "items", vc["name"])
+		assert.EqualValues(t, 1, vc["documentId"])
+		require.NotNil(t, vc["validator"], "conflict carries the violated validator")
+
+		// A custom value that still violates is rejected.
+		require.Error(t, resolveConflict(t, mainDB, "items", vc["conflictId"].(string), "custom",
+			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-1)}}),
+			"a still-violating custom value must be rejected")
+
+		// A conforming replacement is accepted.
+		require.NoError(t, resolveConflict(t, mainDB, "items", vc["conflictId"].(string), "custom",
+			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}}))
+		continueMerge(t, mainDB)
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
+		assert.EqualValues(t, 5, age)
+	})
+
+	// base = A: main inserts a CONFORMING doc; feature adds the validator. Clean
+	// merge, no conflict.
+	t.Run("CleanInsertConforming_NoConflict", func(t *testing.T) {
+		dbName, db := newDB("insok")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		dumboDBCommit(t, env, dbName, "create items", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "")
+
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: insert age 5", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 1, raw["ok"], "conforming insert must merge cleanly: %v", raw)
+	})
+
+	// base = C: main modifies a conforming doc into a violating one; feature adds
+	// the validator. Validation conflict; "drop" removes the offender.
+	t.Run("ModifyConformingToViolating_Conflict_ResolveDrop", func(t *testing.T) {
+		dbName, db := newDB("mod2viol")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create items with age 5", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "")
+
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-5)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: age -> -5", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "modify-to-violating must conflict: %v", raw)
+
+		mainDB := env.Client.Database(dbName + "@main")
+		vals := conflictsByType(t, mainDB, "validation")
+		require.Len(t, vals, 1)
+		require.NoError(t, resolveConflict(t, mainDB, "items", vals[0]["conflictId"].(string), "drop", nil))
+		continueMerge(t, mainDB)
+		_, ok := ageOf(t, mainDB.Collection("items"), 1)
+		assert.False(t, ok, "dropped document is gone")
+	})
+
+	// base = X: a doc already violating at the base, untouched by both branches,
+	// is grandfathered when the validator arrives -- no conflict.
+	t.Run("GrandfatherBaseViolator_CleanCarryForward_NoConflict", func(t *testing.T) {
+		dbName, db := newDB("grand")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create items with grandfathered age -5", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "")
+
+		// main advances without touching _id:1 (insert a fresh conforming doc).
+		_, err = db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(9)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: add conforming doc", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 1, raw["ok"], "grandfathered base violator must not conflict: %v", raw)
+		mainDB := env.Client.Database(dbName + "@main")
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok, "grandfathered doc survives the merge")
+		assert.EqualValues(t, -5, age)
+	})
+
+	// base = X: a one-sided clean change that stays violating is grandfathered
+	// (the violation set, by identity, did not grow) -- no conflict.
+	t.Run("BaseViolator_OneSidedChange_StillViolating_Grandfathered", func(t *testing.T) {
+		dbName, db := newDB("x1side")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create items with age -5", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "")
+
+		// main changes _id:1 to another still-violating value (no validator yet).
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-9)}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: age -> -9", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 1, raw["ok"], "one-sided still-violating change is grandfathered: %v", raw)
+		mainDB := env.Client.Database(dbName + "@main")
+		age, _ := ageOf(t, mainDB.Collection("items"), 1)
+		assert.EqualValues(t, -9, age)
+	})
+
+	// validationAction "warn" suppresses the merge conflict: the violating insert
+	// is allowed through.
+	t.Run("WarnAction_SuppressesConflict", func(t *testing.T) {
+		dbName, db := newDB("warn")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		dumboDBCommit(t, env, dbName, "create items", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "warn")
+
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: insert age -5", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 1, raw["ok"], "warn action must let the merge through: %v", raw)
+		mainDB := env.Client.Database(dbName + "@main")
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
+		assert.EqualValues(t, -5, age, "violating doc kept under warn")
+	})
+
+	// A divergent DATA conflict whose resolution would leave a violating value is
+	// rejected (trigger 2); a conforming side/replacement completes the merge.
+	t.Run("Trigger2_DataConflictResolvedToViolating_Rejected", func(t *testing.T) {
+		dbName, db := newDB("t2")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create items age 5", "alice <alice@acme.com>")
+
+		// feature: add validator AND modify _id:1 to a conforming value.
+		vmBranch(t, env, dbName, "feature")
+		featDB := env.Client.Database(dbName + "@feature")
+		require.NoError(t, featDB.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: valNonNegAge},
+		}).Err())
+		_, err = featDB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(7)}, {Key: "tag", Value: "f"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName+"@feature", "feature: validator + age 7", "bob <bob@widgets.io>")
+
+		// main: modify _id:1 to a violating value (no validator active here yet).
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-5)}, {Key: "tag", Value: "m"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: age -5", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent modify is a data conflict: %v", raw)
+
+		mainDB := env.Client.Database(dbName + "@main")
+		docs := conflictsByType(t, mainDB, "document")
+		require.Len(t, docs, 1, "expected a document conflict on _id:1")
+		cid := docs[0]["conflictId"].(string)
+
+		// Resolving to ours (age -5) would leave a violating document -> rejected.
+		require.Error(t, resolveConflict(t, mainDB, "items", cid, "ours", nil),
+			"resolving a data conflict to a violating value must be rejected")
+
+		// Resolving to theirs (age 7, conforming) is accepted.
+		require.NoError(t, resolveConflict(t, mainDB, "items", cid, "theirs", nil))
+		continueMerge(t, mainDB)
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
+		assert.EqualValues(t, 7, age)
+	})
+
+	// base = X data conflict: even though the base already violated, resolving the
+	// conflict to a still-violating value is rejected (authoring must conform);
+	// a conforming replacement completes it.
+	t.Run("Trigger2_BaseViolator_DataConflict_ResolvedToViolating_Rejected", func(t *testing.T) {
+		dbName, db := newDB("t2x")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create items age -5", "alice <alice@acme.com>")
+
+		// feature: modify _id:1 (still violating) BEFORE adding the validator, then
+		// add the validator (grandfathers the local doc).
+		vmBranch(t, env, dbName, "feature")
+		featDB := env.Client.Database(dbName + "@feature")
+		_, err = featDB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-3)}, {Key: "tag", Value: "f"}}}})
+		require.NoError(t, err)
+		require.NoError(t, featDB.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: valNonNegAge},
+		}).Err())
+		dumboDBCommit(t, env, dbName+"@feature", "feature: age -3 + validator", "bob <bob@widgets.io>")
+
+		// main: modify _id:1 to another violating value.
+		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-7)}, {Key: "tag", Value: "m"}}}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: age -7", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent modify is a data conflict: %v", raw)
+
+		mainDB := env.Client.Database(dbName + "@main")
+		docs := conflictsByType(t, mainDB, "document")
+		require.Len(t, docs, 1)
+		cid := docs[0]["conflictId"].(string)
+
+		// Both sides violate; ours and theirs are both rejected.
+		require.Error(t, resolveConflict(t, mainDB, "items", cid, "ours", nil))
+		require.Error(t, resolveConflict(t, mainDB, "items", cid, "theirs", nil))
+
+		// Only a conforming replacement completes it.
+		require.NoError(t, resolveConflict(t, mainDB, "items", cid, "custom",
+			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(2)}}))
+		continueMerge(t, mainDB)
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
+		assert.EqualValues(t, 2, age)
+	})
+
+	_ = options.CreateCollection
+}
