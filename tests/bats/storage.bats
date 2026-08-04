@@ -80,9 +80,12 @@ teardown() {
     # The table itself should be new.
     [[ "$output" =~ 'CREATE TABLE `col1`' ]] || false
 
-    # Each inserted document should appear as an INSERT with a hex _id.
+    # Each inserted document should appear as an INSERT with a hex _id. Count
+    # col1 rows specifically: creating a collection also writes one row to the
+    # internal __dumbo_catalog__ table (a durable per-collection UUID), which is
+    # a separate INSERT in the raw dolt diff.
     local added_rows
-    added_rows="$(echo "$output" | grep -c '^INSERT INTO')"
+    added_rows="$(echo "$output" | grep -c '^INSERT INTO `col1`')"
     [ "$added_rows" -eq 2 ]
 
     # dolt diff renders the doc column (BSON in longblob) as a SQL-escaped
