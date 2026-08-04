@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -630,4 +631,54 @@ func countCollectionMapDiffs(
 		return 0, 0, 0, err
 	}
 	return added, modified, deleted, nil
+}
+
+// metadataViewOf projects a collection's durable metadata to the user-facing
+// validator/options, or nil when the collection has no validator. Level/action
+// without a validator are not surfaced (they are meaningless on their own).
+func metadataViewOf(m *collMeta) *backends.CollectionMetadata {
+	if m == nil || m.Validator == nil {
+		return nil
+	}
+	return collMetaToMetadata(m)
+}
+
+// collectionMetadataDiff reads the validator/options for name from each side's
+// catalog and returns the two user-facing views when they differ (from, to),
+// or (nil, nil, false) when the metadata is unchanged. Either returned side is
+// nil when that side had no validator (e.g. an added or newly-validated
+// collection).
+func collectionMetadataDiff(ctx context.Context, state *dbState, aCat, bCat prolly.Map, name string) (from, to *backends.CollectionMetadata, changed bool, err error) {
+	aMeta, err := readCollMetaFromCatalog(ctx, state, aCat, name)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	bMeta, err := readCollMetaFromCatalog(ctx, state, bCat, name)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	aView := metadataViewOf(aMeta)
+	bView := metadataViewOf(bMeta)
+
+	switch {
+	case aView == nil && bView == nil:
+		return nil, nil, false, nil
+	case aView == nil || bView == nil:
+		return aView, bView, true, nil
+	}
+	if aView.ValidationLevel != bView.ValidationLevel || aView.ValidationAction != bView.ValidationAction {
+		return aView, bView, true, nil
+	}
+	aBytes, err := docToBSON(aView.Validator)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	bBytes, err := docToBSON(bView.Validator)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !bytes.Equal(aBytes, bBytes) {
+		return aView, bView, true, nil
+	}
+	return nil, nil, false, nil
 }

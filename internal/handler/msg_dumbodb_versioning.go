@@ -281,14 +281,37 @@ func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
 		"removed", must.NotFail(inner.Get("removedIndexes")),
 		"modified", must.NotFail(inner.Get("modifiedIndexes")),
 	))
+	// metadata carries a validator/options change as {from, to}; empty when the
+	// collection's validator/options did not change. Either side is null when
+	// that side had no validator (e.g. a newly-validated or added collection).
+	metadata := must.NotFail(types.NewDocument())
+	if cd.MetadataFrom != nil || cd.MetadataTo != nil {
+		metadata.Set("from", collectionMetadataSide(cd.MetadataFrom))
+		metadata.Set("to", collectionMetadataSide(cd.MetadataTo))
+	}
 	return must.NotFail(types.NewDocument(
 		"type", "collection",
 		"name", cd.Name,
 		"status", cd.Status,
 		"documents", documents,
 		"indexes", indexes,
-		"metadata", must.NotFail(types.NewDocument()),
+		"metadata", metadata,
 	))
+}
+
+// collectionMetadataSide renders one side of a validator/options diff, or null
+// when that side had no validator.
+func collectionMetadataSide(m *backends.CollectionMetadata) any {
+	if m == nil {
+		return types.Null
+	}
+	side := must.NotFail(types.NewDocument())
+	if m.Validator != nil {
+		side.Set("validator", m.Validator)
+	}
+	side.Set("validationLevel", m.ValidationLevel)
+	side.Set("validationAction", m.ValidationAction)
+	return side
 }
 
 // stringArray renders a []string as a wire-array, returning an empty

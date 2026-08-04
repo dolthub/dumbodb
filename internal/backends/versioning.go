@@ -381,6 +381,13 @@ type CollectionDiff struct {
 	AddedIndexes    []IndexInfo       // full definitions of indexes added in "b"
 	ModifiedIndexes []IndexChange     // pre/post definitions for indexes whose spec changed
 	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
+
+	// Validator/options change. Both nil when the collection's metadata did not
+	// change; otherwise MetadataFrom/MetadataTo carry the "a"/"b" side (either
+	// nil when that side had no validator, e.g. an added or newly-validated
+	// collection).
+	MetadataFrom *CollectionMetadata
+	MetadataTo   *CollectionMetadata
 }
 
 // ViewDefinition is a view's stored definition, carried in diffs.

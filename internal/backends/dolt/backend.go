@@ -2967,6 +2967,15 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		return nil, fmt.Errorf("DumboDBDiff: collecting collection names for db %q: %w", params.DBName, err)
 	}
 
+	aCat, err := catalogMapFromAM(ctx, state, aAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBDiff: reading a-side catalog for db %q: %w", params.DBName, err)
+	}
+	bCat, err := catalogMapFromAM(ctx, state, bAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBDiff: reading b-side catalog for db %q: %w", params.DBName, err)
+	}
+
 	var diffs []backends.CollectionDiff
 
 	for _, name := range names {
@@ -3013,12 +3022,17 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 			return nil, fmt.Errorf("DumboDBDiff: index diffs for %q in db %q: %w", name, params.DBName, idxErr)
 		}
 
-		// A "modified" collection with no document-level changes AND no
-		// index-level changes is no diff at all. "added" and "deleted"
-		// collections always surface, even when empty, so the caller can
-		// see the lifecycle event.
+		metaFrom, metaTo, metaChanged, metaErr := collectionMetadataDiff(ctx, state, aCat, bCat, name)
+		if metaErr != nil {
+			return nil, fmt.Errorf("DumboDBDiff: metadata diff for %q in db %q: %w", name, params.DBName, metaErr)
+		}
+
+		// A "modified" collection with no document-level, index-level, OR
+		// metadata (validator/options) changes is no diff at all. "added" and
+		// "deleted" collections always surface, even when empty, so the caller
+		// can see the lifecycle event.
 		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 &&
-			len(idxAdded) == 0 && len(idxModified) == 0 && len(idxRemoved) == 0 {
+			len(idxAdded) == 0 && len(idxModified) == 0 && len(idxRemoved) == 0 && !metaChanged {
 			continue
 		}
 
@@ -3031,6 +3045,8 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 			AddedIndexes:    idxAdded,
 			ModifiedIndexes: idxModified,
 			RemovedIndexes:  idxRemoved,
+			MetadataFrom:    metaFrom,
+			MetadataTo:      metaTo,
 		})
 	}
 
