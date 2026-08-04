@@ -319,7 +319,20 @@ Key checks:
 
 Every cell below is a distinct base x ours x theirs case, keyed on the state of a
 document versus the *resulting* validator (`A` absent, `C` present & conforms,
-`X` present & violates). Each has an automated subtest in
+`X` present & violates).
+
+**To exercise every cell by hand**, run the companion mongosh script -- it sets
+up each case (with the branch/commit/merge steps factored out), performs the
+merge, and self-checks the outcome:
+
+```
+mongosh mongodb://localhost:27017 docs/verify/validator_merge_matrix.js
+# one cell only (substring match on the cell name):
+mongosh mongodb://localhost:27017 --eval 'globalThis.ONLY="baseX"' docs/verify/validator_merge_matrix.js
+```
+
+It prints `PASS` / `FAIL` per assertion and a final tally (exit code non-zero on
+any failure). Each cell also has an automated subtest in
 `tests/verify/validator_merge_xval_test.go` (`TestValidatorMergeCrossValidation`).
 
 | base | what the merge did | outcome |
