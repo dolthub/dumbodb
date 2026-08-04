@@ -1,18 +1,23 @@
-# Document Validator Verification
+# Document Validator Verification (version-control behavior)
 
-Manual verification guide for collection document validators (`validator`,
-`validationLevel`, `validationAction`) -- their enforcement across every write
-path and, in particular, their behavior across branch and merge.
+Manual verification guide for the **version-control** behavior of collection
+document validators (`validator`, `validationLevel`, `validationAction`):
+durability across restart, carry across `doltBranch`, and behavior across
+`doltMerge`. These have no MongoDB analogue, so they cannot be checked against
+the oracle and are the scenarios worth verifying by hand.
+
+**Enforcement is not covered here.** A validator's rejection of an invalid
+insert / update / findAndModify / bulkWrite, `validationAction: "warn"`,
+`bypassDocumentValidation`, and `validationLevel` grandfathering all match
+MongoDB exactly and are pinned against the oracle in the parity harness
+(`dumbodb-parity-testing/tests/validator_enforcement_test.go`). Do not
+hand-verify enforcement -- if it regresses, the parity suite fails.
 
 Validators are durable and branch-scoped: each collection's validator is stored
 in the reserved internal catalog collection, so it survives restart, is carried
 by `doltBranch`, and participates in `doltMerge`. That internal collection is
 never shown to users -- validators appear only as a collection's `options` in
 `listCollections`.
-
-Enforcement matches MongoDB and is covered against the oracle in the parity
-harness; the scenarios here focus on the DumboDB-only version-control behavior
-(durability, branch, merge), which has no MongoDB analogue.
 
 > **Automated equivalent:** `tests/verify/validator_test.go`
 > (`TestValidatorVerify`) covers the runnable scenarios in this document as
@@ -45,95 +50,7 @@ validator behaves identically -- it runs through the same engine.)
 
 ---
 
-## Scenario 1: Enforcement on every write path
-
-A validator rejects an invalid document on insert, update, findAndModify, and
-bulkWrite -- with `DocumentValidationFailure` (code 121).
-
-```js
-var db = db.getSiblingDB("valenf")
-db.dropDatabase()
-db.createCollection("items", { validator: { age: { $gte: 0 } } })
-
-// Valid insert passes; invalid insert is rejected.
-db.items.insertOne({ _id: 1, age: 5 })                 // ok
-db.items.insertOne({ _id: 2, age: -1 })                // MongoServerError: Document failed validation (121)
-
-// Update that turns the doc invalid is rejected...
-db.items.updateOne({ _id: 1 }, { $set: { age: -5 } })  // WriteError 121
-// ...a valid update succeeds.
-db.items.updateOne({ _id: 1 }, { $set: { age: 9 } })   // ok
-
-// findAndModify to an invalid state is rejected.
-db.runCommand({ findAndModify: "items", query: { _id: 1 }, update: { $set: { age: -3 } } })
-// { ok: 0, code: 121, ... }
-```
-
-Key checks:
-- The invalid insert/update/findAndModify are all rejected with code `121`.
-- The rejected update did **not** apply (`_id:1` still has `age:9`).
-
----
-
-## Scenario 2: validationAction "warn" allows the write
-
-With `validationAction: "warn"`, an invalid write is allowed (MongoDB logs a
-warning server-side).
-
-```js
-var db = db.getSiblingDB("valwarn")
-db.dropDatabase()
-db.createCollection("items", { validator: { age: { $gte: 0 } }, validationAction: "warn" })
-
-db.items.insertOne({ _id: 1, age: 5 })
-db.items.updateOne({ _id: 1 }, { $set: { age: -5 } })  // allowed
-db.items.findOne({ _id: 1 })                            // { _id: 1, age: -5 }  (write applied)
-```
-
----
-
-## Scenario 3: bypassDocumentValidation skips the validator
-
-`bypassDocumentValidation: true` on a write skips validation for that write only.
-
-```js
-var db = db.getSiblingDB("valbypass")
-db.dropDatabase()
-db.createCollection("items", { validator: { age: { $gte: 0 } } })
-
-// Invalid insert allowed with bypass.
-db.runCommand({ insert: "items", documents: [ { _id: 1, age: -9 } ], bypassDocumentValidation: true })
-// { ok: 1, n: 1 }
-```
-
----
-
-## Scenario 4: validationLevel "moderate" grandfathers invalid documents
-
-`moderate` validates inserts and updates to documents that already satisfied the
-validator, but skips updates to documents that were already invalid (e.g. left
-behind when a validator is added to an existing collection).
-
-```js
-var db = db.getSiblingDB("valmod")
-db.dropDatabase()
-
-// Insert BEFORE the validator exists: one soon-to-be-invalid, one valid.
-db.items.insertOne({ _id: 1, age: -5 })
-db.items.insertOne({ _id: 2, age: 10 })
-
-// Add the validator at moderate level.
-db.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationLevel: "moderate", validationAction: "error" })
-
-// Updating the already-invalid doc is ALLOWED (its pre-image was already invalid).
-db.items.updateOne({ _id: 1 }, { $set: { note: "x" } })   // ok
-// Turning the valid doc invalid is REJECTED.
-db.items.updateOne({ _id: 2 }, { $set: { age: -1 } })     // WriteError 121
-```
-
----
-
-## Scenario 5: A validator survives a restart
+## Scenario 1: A validator survives a restart
 
 The validator is durable: after restarting the server, it is still reported by
 `listCollections` and still enforced.
@@ -155,7 +72,7 @@ db.getSiblingDB("valrestart").items.insertOne({ _id: 4, age: 5 })    // ok
 
 ---
 
-## Scenario 6: Branching carries the validator
+## Scenario 2: Branching carries the validator
 
 A branch inherits the validator; enforcement on the branch is independent of
 `main`'s working set.
@@ -177,7 +94,7 @@ feat.items.insertOne({ _id: 1, age: -1 })   // rejected (121) on the branch too
 
 ---
 
-## Scenario 7: Merge carries a validator added on one branch
+## Scenario 3: Merge carries a validator added on one branch
 
 A validator added (or changed) on one branch, with no competing change on the
 other, merges in cleanly.
@@ -195,9 +112,11 @@ var feat = db.getSiblingDB("valmerge@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationLevel: "strict", validationAction: "error" })
 feat.runCommand({ doltCommit: 1, message: "feature: add validator", author: "bob <bob@widgets.io>" })
 
-// Main advances independently so the merge is a real 3-way merge.
+// Main advances independently so the merge is a real 3-way merge. The doc it
+// adds CONFORMS to the incoming validator (age >= 0); the violating-doc case is
+// Scenario 5.
 db.items.insertOne({ _id: 100, age: 1 })
-db.runCommand({ doltCommit: 1, message: "main: add a doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltCommit: 1, message: "main: add a conforming doc", author: "alice <alice@acme.com>" })
 
 // Merge feature into main.
 db.runCommand({ doltMerge: 1, merge_in: "feature" })
@@ -215,7 +134,7 @@ Key checks:
 
 ---
 
-## Scenario 8: Divergent validators on both branches -- resolve the conflict
+## Scenario 4: Divergent validators on both branches -- resolve the conflict
 
 Both branches change the **same** collection's validator to different
 definitions, then merge. A divergent metadata change is **never silently
@@ -301,3 +220,66 @@ The same workflow covers every divergence shape (each has an automated subtest):
   modify/delete): the conflict's dropped side is `null`. Resolving *theirs* (the
   drop) removes the collection; resolving *ours* restores it with the chosen
   metadata and its data -- existence and metadata never disagree.
+
+---
+
+## Scenario 5: Data that violates a validator merged from the other branch
+
+> **STATUS: not yet implemented.** This scenario documents intended behavior and
+> is tracked by epic `workspace-h0w`. Today the merge silently accepts the
+> violating document (see the epic). The scenario below is the target once the
+> cross-validation merge conflict lands; do not treat a passing run as
+> verification until the epic is closed.
+
+Scenario 4 covers divergence in the validator *definition*. This scenario covers
+the orthogonal case: the validator definition does **not** conflict (only one
+branch touches it), but the **documents** the other branch wrote violate it.
+
+The governing rule mirrors write-path validation, lifted onto the merge: a
+document whose merged value differs from the merge base (an insert or a modify)
+must satisfy the merged validator, or the merge surfaces a **validation
+conflict** on that document. Documents unchanged since the base are grandfathered
+(a validator is never retroactive), exactly as when a validator is added to a
+collection of existing data. `validationLevel` and `validationAction` carry the
+same meaning they have on the write path.
+
+```js
+var db = db.getSiblingDB("valdataconflict")
+db.dropDatabase()
+db.createCollection("items")   // no validator yet
+db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+// Feature adds a validator; its own data conforms.
+var feat = db.getSiblingDB("valdataconflict@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationAction: "error" })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "bob <bob@widgets.io>" })
+
+// Main inserts a document that VIOLATES the (not-yet-visible-here) validator.
+db.items.insertOne({ _id: 1, age: -5 })
+db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
+
+// Merge feature into main: the validator arrives and _id:1 violates it.
+db.getSiblingDB("valdataconflict@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+// TARGET: { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
+```
+
+Target conflict shape and resolution (final vocabulary pending the epic):
+
+```js
+var main = db.getSiblingDB("valdataconflict@main")
+printjson(main.runCommand({ doltConflicts: 1 }).conflicts)
+// TARGET: one entry
+//   { conflictId: "<hash>", type: "validation", name: "items", documentId: 1,
+//     document: { _id: 1, age: -5 }, validator: { age: { $gte: 0 } } }
+```
+
+---
+
+## Coverage note: merge cross-validation edge cases
+
+The cross-validation merge behavior (Scenario 5) has a large edge-case matrix
+tracked in its epic. Once implemented, each case gets a subtest in
+`tests/verify/validator_test.go` and, where practical, an entry here. The matrix
+is enumerated in the epic and its child tasks.
