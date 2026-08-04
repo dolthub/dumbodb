@@ -17,8 +17,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +74,40 @@ func (s *sampler) sample() (procSample, error) {
 	return out, scanner.Err()
 }
 
+// diskSampler measures the on-disk footprint of the database by
+// summing the sizes of every regular file under the data directory.
+// A zero root (attach mode, where the soak doesn't own the data dir)
+// makes sizeKB a no-op returning 0.
+type diskSampler struct {
+	root string
+}
+
+func newDiskSampler(root string) *diskSampler {
+	return &diskSampler{root: root}
+}
+
+// sizeKB returns the total apparent size of all regular files under
+// root, in kB. Best effort: unreadable entries are skipped rather
+// than aborting the walk.
+func (d *diskSampler) sizeKB() int64 {
+	if d == nil || d.root == "" {
+		return 0
+	}
+	var total int64
+	filepath.WalkDir(d.root, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.Type().IsRegular() {
+			if info, err := entry.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total / 1024
+}
+
 func splitProcLine(line string) (key, val string, ok bool) {
 	i := strings.IndexByte(line, ':')
 	if i < 0 {
@@ -110,19 +146,19 @@ func newCSVWriter(path string) (*csvWriter, error) {
 	}
 	w := &csvWriter{f: f}
 	if newFile {
-		fmt.Fprintln(f, "timestamp,rss_kb,vmsize_kb,rss_anon_kb,threads,cycles,errors")
+		fmt.Fprintln(f, "timestamp,rss_kb,vmsize_kb,rss_anon_kb,threads,cycles,errors,disk_kb")
 	}
 	return w, nil
 }
 
-func (w *csvWriter) Write(t time.Time, s procSample, cycles, errs int64) {
+func (w *csvWriter) Write(t time.Time, s procSample, cycles, errs, diskKB int64) {
 	if w.f == nil {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	fmt.Fprintf(w.f, "%d,%d,%d,%d,%d,%d,%d\n",
-		t.Unix(), s.RssKB, s.VmSizeKB, s.RssAnonKB, s.Threads, cycles, errs)
+	fmt.Fprintf(w.f, "%d,%d,%d,%d,%d,%d,%d,%d\n",
+		t.Unix(), s.RssKB, s.VmSizeKB, s.RssAnonKB, s.Threads, cycles, errs, diskKB)
 }
 
 func (w *csvWriter) Close() error {
@@ -135,8 +171,9 @@ func (w *csvWriter) Close() error {
 // sample is the in-memory record used by the slope detector. Keep
 // numeric type narrow (kB) to keep the rolling window cheap.
 type sample struct {
-	t     time.Time
-	rssKB int64
+	t      time.Time
+	rssKB  int64
+	diskKB int64
 }
 
 // slopeDetector keeps a rolling window of samples and, at every

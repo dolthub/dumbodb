@@ -29,14 +29,31 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// chartCID is the Content-ID under which the PNG attachment is
-// referenced from the HTML body.
-const chartCID = "soak-chart@dumbodb"
+// chartCID and diskChartCID are the Content-IDs under which the two
+// PNG attachments are referenced from the HTML body.
+const (
+	chartCID     = "soak-chart@dumbodb"
+	diskChartCID = "soak-disk-chart@dumbodb"
+)
 
-// htmlReport builds the HTML body: stats table + an <img cid:> tag
-// for the chart. The caller attaches the PNG bytes separately in a
+// chartRef names an inline image the HTML body should embed. The
+// bytes are attached separately in the multipart/related MIME wrapper
+// under the matching Content-ID.
+type chartRef struct {
+	cid string
+	alt string
+}
+
+// inlineChart pairs a Content-ID with the PNG bytes attached under it.
+type inlineChart struct {
+	cid  string
+	data []byte
+}
+
+// htmlReport builds the HTML body: stats table plus one <img cid:>
+// tag per chart. The caller attaches the PNG bytes separately in a
 // multipart/related MIME wrapper.
-func htmlReport(title string, stats []string, hasChart bool) string {
+func htmlReport(title string, stats []string, charts []chartRef) string {
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;font-size:13px;color:#333;margin:16px">`)
 	fmt.Fprintf(&b, `<h2 style="margin:0 0 8px 0;font-size:15px">%s</h2>`, html.EscapeString(title))
@@ -48,16 +65,31 @@ func htmlReport(title string, stats []string, hasChart bool) string {
 			html.EscapeString(strings.TrimSpace(k)), html.EscapeString(strings.TrimSpace(v)))
 	}
 	b.WriteString(`</table>`)
-	if hasChart {
-		fmt.Fprintf(&b, `<img src="cid:%s" alt="RSS over time" style="display:block;max-width:100%%;border:1px solid #ddd"/>`, chartCID)
+	for _, c := range charts {
+		fmt.Fprintf(&b, `<img src="cid:%s" alt="%s" style="display:block;max-width:100%%;border:1px solid #ddd;margin-top:8px"/>`,
+			c.cid, html.EscapeString(c.alt))
 	}
 	b.WriteString(`</body></html>`)
 	return b.String()
 }
 
-// pngChart renders an RSS-over-time line chart to PNG. Returns nil
-// for too-few samples. Stdlib + basicfont, no external deps.
+// pngChart renders an RSS-over-time line chart to PNG.
 func pngChart(samples []sample, width, height int) []byte {
+	return pngSeriesChart(samples, func(s sample) int64 { return s.rssKB },
+		color.NRGBA{0x00, 0x66, 0xcc, 0xff}, width, height)
+}
+
+// pngDiskChart renders a data-directory-size-over-time line chart to
+// PNG.
+func pngDiskChart(samples []sample, width, height int) []byte {
+	return pngSeriesChart(samples, func(s sample) int64 { return s.diskKB },
+		color.NRGBA{0x33, 0x99, 0x33, 0xff}, width, height)
+}
+
+// pngSeriesChart renders one kB-valued series over time as a line
+// chart to PNG. Y-axis labels are in MB. Returns nil for too-few
+// samples. Stdlib + basicfont, no external deps.
+func pngSeriesChart(samples []sample, valueOf func(sample) int64, lineColor color.NRGBA, width, height int) []byte {
 	if len(samples) < 2 {
 		return nil
 	}
@@ -68,13 +100,14 @@ func pngChart(samples []sample, width, height int) []byte {
 		return nil
 	}
 
-	minY, maxY := samples[0].rssKB, samples[0].rssKB
+	minY, maxY := valueOf(samples[0]), valueOf(samples[0])
 	for _, s := range samples {
-		if s.rssKB < minY {
-			minY = s.rssKB
+		v := valueOf(s)
+		if v < minY {
+			minY = v
 		}
-		if s.rssKB > maxY {
-			maxY = s.rssKB
+		if v > maxY {
+			maxY = v
 		}
 	}
 	yRange := maxY - minY
@@ -101,7 +134,6 @@ func pngChart(samples []sample, width, height int) []byte {
 
 	gridColor := color.NRGBA{0xdd, 0xdd, 0xdd, 0xff}
 	labelColor := color.NRGBA{0x66, 0x66, 0x66, 0xff}
-	lineColor := color.NRGBA{0x00, 0x66, 0xcc, 0xff}
 
 	for _, v := range []int64{yMin, (yMin + yMax) / 2, yMax} {
 		y := topMargin + plotH - int(float64(plotH)*float64(v-yMin)/float64(yMax-yMin))
@@ -116,7 +148,7 @@ func pngChart(samples []sample, width, height int) []byte {
 	var px, py int
 	for i, s := range samples {
 		x := leftMargin + int(float64(plotW)*s.t.Sub(t0).Seconds()/durSec)
-		y := topMargin + plotH - int(float64(plotH)*float64(s.rssKB-yMin)/float64(yMax-yMin))
+		y := topMargin + plotH - int(float64(plotH)*float64(valueOf(s)-yMin)/float64(yMax-yMin))
 		if i > 0 {
 			drawLine(img, px, py, x, y, lineColor)
 			drawLine(img, px, py+1, x, y+1, lineColor)
@@ -125,7 +157,7 @@ func pngChart(samples []sample, width, height int) []byte {
 	}
 	for _, i := range []int{0, len(samples) - 1} {
 		x := leftMargin + int(float64(plotW)*samples[i].t.Sub(t0).Seconds()/durSec)
-		y := topMargin + plotH - int(float64(plotH)*float64(samples[i].rssKB-yMin)/float64(yMax-yMin))
+		y := topMargin + plotH - int(float64(plotH)*float64(valueOf(samples[i])-yMin)/float64(yMax-yMin))
 		fillDot(img, x, y, 3, lineColor)
 	}
 
@@ -207,21 +239,39 @@ func abs(x int) int {
 	return x
 }
 
-// sparkline renders an N-column Unicode-block trend chart of the
-// samples scaled to their own min/max. Drops into the plain-text body
-// so consumers of -alert-cmd still see the trend.
+// anyDisk reports whether any sample carries a non-zero data-dir
+// size, i.e. whether disk sampling was active (managed-server mode).
+func anyDisk(samples []sample) bool {
+	for _, s := range samples {
+		if s.diskKB > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// sparkline renders an N-column Unicode-block trend chart of the RSS
+// samples. Drops into the plain-text body so consumers of -alert-cmd
+// still see the trend.
 func sparkline(samples []sample, columns int) string {
+	return sparklineOf(samples, columns, func(s sample) int64 { return s.rssKB })
+}
+
+// sparklineOf renders one series scaled to its own min/max as an
+// N-column Unicode-block trend chart.
+func sparklineOf(samples []sample, columns int, valueOf func(sample) int64) string {
 	if len(samples) < 2 || columns < 2 {
 		return ""
 	}
 	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
-	var minY, maxY int64 = samples[0].rssKB, samples[0].rssKB
+	var minY, maxY int64 = valueOf(samples[0]), valueOf(samples[0])
 	for _, s := range samples {
-		if s.rssKB < minY {
-			minY = s.rssKB
+		v := valueOf(s)
+		if v < minY {
+			minY = v
 		}
-		if s.rssKB > maxY {
-			maxY = s.rssKB
+		if v > maxY {
+			maxY = v
 		}
 	}
 	if maxY == minY {
@@ -243,7 +293,7 @@ func sparkline(samples []sample, columns int) string {
 		if b < 0 {
 			b = 0
 		}
-		sums[b] += float64(s.rssKB)
+		sums[b] += float64(valueOf(s))
 		counts[b]++
 	}
 	var out strings.Builder
@@ -269,18 +319,18 @@ func sparkline(samples []sample, columns int) string {
 	return out.String()
 }
 
-// buildRawEmail composes the MIME message SES needs when we have a
-// PNG to embed. Structure: multipart/related wrapping a single
-// text/html part plus the PNG attachment. When pngBytes is nil this
-// degrades to a single-part text/html message.
-func buildRawEmail(from, to, subject, htmlBody string, pngBytes []byte) []byte {
+// buildRawEmail composes the MIME message SES needs when we have one
+// or more PNGs to embed. Structure: multipart/related wrapping a
+// single text/html part plus one attachment per chart. With no
+// charts this degrades to a single-part text/html message.
+func buildRawEmail(from, to, subject, htmlBody string, charts []inlineChart) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "From: %s\r\n", from)
 	fmt.Fprintf(&b, "To: %s\r\n", to)
 	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
 	b.WriteString("MIME-Version: 1.0\r\n")
 
-	if pngBytes == nil {
+	if len(charts) == 0 {
 		// Single-part text/html.
 		b.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
 		b.WriteString("Content-Transfer-Encoding: 8bit\r\n\r\n")
@@ -298,12 +348,14 @@ func buildRawEmail(from, to, subject, htmlBody string, pngBytes []byte) []byte {
 	b.WriteString(htmlBody)
 	b.WriteString("\r\n")
 
-	fmt.Fprintf(&b, "--%s\r\n", boundary)
-	b.WriteString("Content-Type: image/png\r\n")
-	b.WriteString("Content-Transfer-Encoding: base64\r\n")
-	fmt.Fprintf(&b, "Content-ID: <%s>\r\n", chartCID)
-	b.WriteString("Content-Disposition: inline; filename=\"chart.png\"\r\n\r\n")
-	writeBase64Wrapped(&b, pngBytes)
+	for _, c := range charts {
+		fmt.Fprintf(&b, "--%s\r\n", boundary)
+		b.WriteString("Content-Type: image/png\r\n")
+		b.WriteString("Content-Transfer-Encoding: base64\r\n")
+		fmt.Fprintf(&b, "Content-ID: <%s>\r\n", c.cid)
+		fmt.Fprintf(&b, "Content-Disposition: inline; filename=\"%s.png\"\r\n\r\n", c.cid)
+		writeBase64Wrapped(&b, c.data)
+	}
 
 	fmt.Fprintf(&b, "--%s--\r\n", boundary)
 	return b.Bytes()

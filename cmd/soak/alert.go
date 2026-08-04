@@ -37,6 +37,21 @@ type alertMessage struct {
 	TextBody string
 	HTMLBody string
 	ChartPNG []byte
+	DiskPNG  []byte
+}
+
+// inlineCharts lists the PNGs to embed, each paired with the
+// Content-ID the HTML body references it by. Empty entries are
+// dropped so buildRawEmail attaches only what exists.
+func (m alertMessage) inlineCharts() []inlineChart {
+	var out []inlineChart
+	if len(m.ChartPNG) > 0 {
+		out = append(out, inlineChart{cid: chartCID, data: m.ChartPNG})
+	}
+	if len(m.DiskPNG) > 0 {
+		out = append(out, inlineChart{cid: diskChartCID, data: m.DiskPNG})
+	}
+	return out
 }
 
 type notifier func(ctx context.Context, msg alertMessage)
@@ -83,9 +98,11 @@ func fileNotifier(dir string) notifier {
 		writeFile(seqName+".txt", []byte(msg.TextBody))
 		writeFile(seqName+".html", []byte(msg.HTMLBody))
 		writeFile(seqName+".png", msg.ChartPNG)
+		writeFile(seqName+"-disk.png", msg.DiskPNG)
 		writeFile("report-latest.txt", []byte(msg.TextBody))
 		writeFile("report-latest.html", []byte(msg.HTMLBody))
 		writeFile("report-latest.png", msg.ChartPNG)
+		writeFile("report-latest-disk.png", msg.DiskPNG)
 		log.Printf("report written: %s/%s.{txt,html,png}", dir, seqName)
 	}
 }
@@ -119,7 +136,7 @@ func sesNotifier(from, toCSV, region string) notifier {
 			log.Printf("ses config: %v", err)
 			return
 		}
-		raw := buildRawEmail(from, toHeader, msg.Subject, msg.HTMLBody, msg.ChartPNG)
+		raw := buildRawEmail(from, toHeader, msg.Subject, msg.HTMLBody, msg.inlineCharts())
 		client := sesv2.NewFromConfig(cfg)
 		_, err = client.SendEmail(ctx, &sesv2.SendEmailInput{
 			FromEmailAddress: aws.String(from),
