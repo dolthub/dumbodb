@@ -62,13 +62,13 @@ db.dropDatabase()
 db.createCollection("items", { validator: { age: { $gte: 0 } }, validationLevel: "strict" })
 db.items.insertOne({ _id: 2, age: -1 })   // rejected (121)  -- validator active
 
-// >>> Restart the DumboDB server here, then reconnect. <<<
+// >>> Restart the DumboDB server here (mongosh reconnects; db still points here). <<<
 
-db.getSiblingDB("valrestart").runCommand({ listCollections: 1, filter: { name: "items" } })
+db.runCommand({ listCollections: 1, filter: { name: "items" } })
 // firstBatch[0].options.validator is still { age: { $gte: 0 } }
 
-db.getSiblingDB("valrestart").items.insertOne({ _id: 3, age: -1 })   // still rejected (121)
-db.getSiblingDB("valrestart").items.insertOne({ _id: 4, age: 5 })    // ok
+db.items.insertOne({ _id: 3, age: -1 })   // still rejected (121)
+db.items.insertOne({ _id: 4, age: 5 })    // ok
 ```
 
 ---
@@ -162,7 +162,7 @@ db.runCommand({ collMod: "items", validator: { age: { $gte: 21 } } })
 db.runCommand({ doltCommit: 1, message: "main: age >= 21", author: "alice <alice@acme.com>" })
 
 // The merge pauses with a conflict (ok:0).
-db.getSiblingDB("valconflict@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
 ```
 
@@ -170,8 +170,7 @@ Inspect the conflict -- it is a `type: "metadata"` entry on `items`, never
 `__dumbo_catalog__`:
 
 ```js
-var main = db.getSiblingDB("valconflict@main")
-printjson(main.runCommand({ doltConflicts: 1 }).conflicts)
+printjson(db.runCommand({ doltConflicts: 1 }).conflicts)
 // Expected: one entry
 //   { conflictId: "<hash>", type: "metadata", name: "items",
 //     base:   { validator: { age: { $gte: 0  } }, validationLevel: "...", validationAction: "..." },
@@ -182,9 +181,9 @@ printjson(main.runCommand({ doltConflicts: 1 }).conflicts)
 Resolve to theirs (feature's `age >= 18`), then complete the merge:
 
 ```js
-var cid = main.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
-main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs" })
-main.runCommand({ doltMerge: 1, continue: 1 })
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs" })
+db.runCommand({ doltMerge: 1, continue: 1 })
 // { ..., ok: 1 }
 
 db.runCommand({ listCollections: 1, filter: { name: "items" } }).cursor.firstBatch[0].options.validator
@@ -195,11 +194,11 @@ For a **custom** resolution, supply a new validator instead:
 
 ```js
 // (from a fresh conflict) resolve with your own definition:
-main.runCommand({
+db.runCommand({
   doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "custom",
   value: { validator: { age: { $gte: 5 } } }
 })
-main.runCommand({ doltMerge: 1, continue: 1 })
+db.runCommand({ doltMerge: 1, continue: 1 })
 // items' validator is now { age: { $gte: 5 } }
 ```
 
@@ -275,8 +274,7 @@ db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
 
 // Merge feature into main: the validator arrives and _id:1 violates it.
-var main = db.getSiblingDB("valdataconflict@main")
-main.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
 ```
 
@@ -284,7 +282,7 @@ Inspect the conflict -- a `type: "validation"` entry carrying the offending
 document and the validator it failed:
 
 ```js
-printjson(main.runCommand({ doltConflicts: 1 }).conflicts)
+printjson(db.runCommand({ doltConflicts: 1 }).conflicts)
 // one entry:
 //   { conflictId: "<hash>", type: "validation", name: "items", documentId: 1,
 //     document: { _id: 1, age: -5 }, validator: { age: { $gte: 0 } },
@@ -295,17 +293,17 @@ Resolve by replacing the document with a conforming value, then complete the
 merge (a still-violating replacement is rejected):
 
 ```js
-var cid = main.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
-main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid,
-                  resolution: "custom", value: { _id: 1, age: 0 } })   // conforms
-main.runCommand({ doltMerge: 1, continue: 1 })
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid,
+                resolution: "custom", value: { _id: 1, age: 0 } })   // conforms
+db.runCommand({ doltMerge: 1, continue: 1 })
 // { ..., ok: 1 };  items now has { _id: 1, age: 0 }
 ```
 
 Or drop the offending document instead of fixing it:
 
 ```js
-// main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "drop" })
+// db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "drop" })
 ```
 
 Key checks:
@@ -355,20 +353,20 @@ now-pinned validator and **re-pauses** if a merged document violates it.
 // Setup: base has validator age>=0 and { _id: 1, age: 5 }. Feature tightens it to
 // age>=10; main diverges it to age>=3 and inserts { _id: 2, age: 5 }. Merge.
 
-var main = db.getSiblingDB("valtwophase@main")
+var db = db.getSiblingDB("valtwophase")
 // Phase 1 -- only the metadata conflict is visible (doc check deferred):
-main.runCommand({ doltConflicts: 1 }).conflicts   // one type: "metadata" entry on items
-var mid = main.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
-main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: mid, resolution: "theirs" })  // pin age>=10
+db.runCommand({ doltConflicts: 1 }).conflicts   // one type: "metadata" entry on items
+var mid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: mid, resolution: "theirs" })  // pin age>=10
 
 // Continue RE-PAUSES: _id:2 (age 5) now violates the pinned age>=10.
-main.runCommand({ doltMerge: 1, continue: 1 })    // { conflicts: [...], ok: 0 }
+db.runCommand({ doltMerge: 1, continue: 1 })    // { conflicts: [...], ok: 0 }
 
 // Phase 2 -- resolve the surfaced validation conflict, then finish:
-var vid = main.runCommand({ doltConflicts: 1 }).conflicts.find(c => c.type == "validation").conflictId
-main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: vid,
-                  resolution: "custom", value: { _id: 2, age: 12 } })
-main.runCommand({ doltMerge: 1, continue: 1 })    // { ..., ok: 1 }
+var vid = db.runCommand({ doltConflicts: 1 }).conflicts.find(c => c.type == "validation").conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: vid,
+                resolution: "custom", value: { _id: 2, age: 12 } })
+db.runCommand({ doltMerge: 1, continue: 1 })    // { ..., ok: 1 }
 // _id:2 -> age 12 (fixed); _id:1 -> age 5 (grandfathered, untouched)
 ```
 
