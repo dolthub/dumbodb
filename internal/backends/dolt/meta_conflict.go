@@ -196,6 +196,26 @@ func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, m
 	return nil
 }
 
+// applyResolvedAM reflects a resolved AddressMap into the shared branch working
+// set so doltDiff / doltStatus / dolt_conflicts see the resolved state. For a
+// --session-isolation commit it is a NO-OP: other sessions read the shared branch
+// state, so the resolution must stay in ms.resolvedAM (in memory) until finalize
+// commits it. Callers hold db.mu.
+func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInProgress, finalAM prolly.AddressMap) error {
+	if ms.isSessionCommit {
+		return nil
+	}
+	db.setAM(ctx, ms.intoBranch, finalAM)
+	workingRtvl := buildRootValueFlatbuffer(finalAM)
+	if _, err := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); err != nil {
+		return fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", err)
+	}
+	if err := db.persistAM(ctx, ms.intoBranch, finalAM); err != nil {
+		return fmt.Errorf("DumboDBResolveConflict: updating working set: %w", err)
+	}
+	return nil
+}
+
 // resolveMetaConflict resolves a single collection-metadata merge conflict by
 // choosing ours, theirs, or a custom definition, rewriting the collection's
 // metadata in the resolved __dumbo_catalog__. The caller holds db.mu (write
@@ -257,14 +277,8 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 	ms.resolvedAM = finalAM
 	mce.resolved = true
 
-	db.setAM(ctx, ms.intoBranch, finalAM)
-	workingRtvl := buildRootValueFlatbuffer(finalAM)
-	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", writeErr)
+	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+		return nil, err
 	}
-	if wsErr := db.persistAM(ctx, ms.intoBranch, finalAM); wsErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: updating working set: %w", wsErr)
-	}
-
 	return &backends.ResolveConflictResult{}, nil
 }

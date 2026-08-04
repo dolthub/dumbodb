@@ -66,6 +66,12 @@ type mergeInProgress struct {
 	// diverged on both branches. Surfaced on the owning collection; the internal
 	// __dumbo_catalog__ name is never exposed. Resolved ones have resolved==true.
 	metaConflicts map[string]*metaConflictEntry
+
+	// isSessionCommit marks a paused --session-isolation dumboCommit: a 3-way
+	// merge of the session's working set against the advanced branch HEAD that
+	// hit a conflict. It is finalized (committed on top of HEAD) by the next
+	// dumboCommit once resolved. intoHash tracks the HEAD the merge was against.
+	isSessionCommit bool
 	// resolvedAM is the working AddressMap being built as conflicts are resolved.
 	// It starts as the partial merged AM (keeping "ours" for conflicting docs) and
 	// is updated as each conflict is resolved.
@@ -708,22 +714,10 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	ms.resolvedAM = finalAM
 	target.resolved = true
 
-	// Update the in-memory working set AM so that doltDiff and doltStatus
-	// reflect the resolved state immediately.
-	db.setAM(ctx, ms.intoBranch, finalAM)
-
-	// Update the working set so that dolt_conflicts SQL tables immediately reflect
-	// the resolved state.
-	_, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
-	if stageErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: reading staged AM: %w", stageErr)
-	}
-	workingRtvl := buildRootValueFlatbuffer(finalAM)
-	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", writeErr)
-	}
-	if wsErr := db.persistAM(ctx, ms.intoBranch, finalAM); wsErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: updating working set: %w", wsErr)
+	// Reflect the resolved state into the shared branch working set (so doltDiff /
+	// doltStatus / dolt_conflicts see it) -- a no-op for a session-isolation commit.
+	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+		return nil, err
 	}
 
 	return &backends.ResolveConflictResult{}, nil
@@ -808,15 +802,9 @@ func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *merg
 	ms.resolvedAM = finalAM
 	vce.resolved = true
 
-	db.setAM(ctx, ms.intoBranch, finalAM)
-	workingRtvl := buildRootValueFlatbuffer(finalAM)
-	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", writeErr)
+	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+		return nil, err
 	}
-	if wsErr := db.persistAM(ctx, ms.intoBranch, finalAM); wsErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: updating working set: %w", wsErr)
-	}
-
 	return &backends.ResolveConflictResult{}, nil
 }
 
