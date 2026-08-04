@@ -144,6 +144,14 @@ func main() {
 		log.Fatalf("initial sample for pid %d: %v", pid, err)
 	}
 
+	// Disk sampling covers the data directory we own in managed mode;
+	// in attach mode we don't know where it lives, so it's a no-op.
+	var serverDataDir string
+	if srv != nil {
+		serverDataDir = srv.dataDir
+	}
+	diskSampler := newDiskSampler(serverDataDir)
+
 	writer, err := newCSVWriter(*csvPath)
 	if err != nil {
 		log.Fatalf("csv writer: %v", err)
@@ -211,11 +219,16 @@ func main() {
 		// by the same signal that's tearing us down.
 		sctx, scancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer scancel()
+		var diskPNG []byte
+		if anyDisk(allSamples) {
+			diskPNG = pngDiskChart(allSamples, 640, 240)
+		}
 		notify(sctx, alertMessage{
 			Subject:  subj,
 			TextBody: text,
 			HTMLBody: htmlBody,
 			ChartPNG: pngChart(allSamples, 640, 240),
+			DiskPNG:  diskPNG,
 		})
 	}()
 
@@ -248,15 +261,16 @@ func main() {
 				log.Printf("sample error: %v", err)
 				continue
 			}
-			writer.Write(t, s, wl.cycleCount(), wl.errCount())
-			log.Printf("sample rss=%d kB anon=%d kB vm=%d kB threads=%d cycles=%d errors=%d",
-				s.RssKB, s.RssAnonKB, s.VmSizeKB, s.Threads, wl.cycleCount(), wl.errCount())
+			diskKB := diskSampler.sizeKB()
+			writer.Write(t, s, wl.cycleCount(), wl.errCount(), diskKB)
+			log.Printf("sample rss=%d kB anon=%d kB vm=%d kB disk=%d kB threads=%d cycles=%d errors=%d",
+				s.RssKB, s.RssAnonKB, s.VmSizeKB, diskKB, s.Threads, wl.cycleCount(), wl.errCount())
 			if sampleCount == 0 {
 				firstSample = s
 			}
 			lastSample = s
 			sampleCount++
-			allSamples = append(allSamples, sample{t: t, rssKB: s.RssKB})
+			allSamples = append(allSamples, sample{t: t, rssKB: s.RssKB, diskKB: diskKB})
 
 			alert, ok := detector.observe(t, s.RssKB)
 			if !ok {
@@ -333,7 +347,11 @@ func alertReport(host, buildVer string, pid int, addr string, a alert, recent []
 			a.slopeMBPerHour, roundDuration(a.window), a.thresholdMBPerHour),
 		fmt.Sprintf("cycles: %d (errors %d) since startup", cycles, errs),
 	}
-	return textBlock(title, stats, recent), htmlReport(title, stats, len(recent) >= 2)
+	var charts []chartRef
+	if len(recent) >= 2 {
+		charts = append(charts, chartRef{cid: chartCID, alt: "RSS over time"})
+	}
+	return textBlock(title, stats, recent), htmlReport(title, stats, charts)
 }
 
 // summaryReport renders the end-of-run summary email as both plain
@@ -377,7 +395,14 @@ func summaryReport(host, buildVer string, pid int, addr string, startedAt, ended
 			stats = append(stats, "  "+line)
 		}
 	}
-	return textBlock(title, stats, allSamples), htmlReport(title, stats, len(allSamples) >= 2)
+	var charts []chartRef
+	if len(allSamples) >= 2 {
+		charts = append(charts, chartRef{cid: chartCID, alt: "RSS over time"})
+		if anyDisk(allSamples) {
+			charts = append(charts, chartRef{cid: diskChartCID, alt: "disk usage over time"})
+		}
+	}
+	return textBlock(title, stats, allSamples), htmlReport(title, stats, charts)
 }
 
 func lastN(lines []string, n int) []string {
@@ -398,7 +423,12 @@ func textBlock(title string, stats []string, samples []sample) string {
 		fmt.Fprintf(&b, "  %s\n", s)
 	}
 	if line := sparkline(samples, 60); line != "" {
-		fmt.Fprintf(&b, "  trend:  %s\n", line)
+		fmt.Fprintf(&b, "  rss:    %s\n", line)
+	}
+	if anyDisk(samples) {
+		if line := sparklineOf(samples, 60, func(s sample) int64 { return s.diskKB }); line != "" {
+			fmt.Fprintf(&b, "  disk:   %s\n", line)
+		}
 	}
 	return b.String()
 }
