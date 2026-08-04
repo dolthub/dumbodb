@@ -341,3 +341,39 @@ only if the merge never touches it. Any value the merge *authors* -- an insert, 
 modify, or a resolved data conflict -- must conform, unless the action is `warn`.
 A clean merge that only ever removes violations (a fix `X -> C`, or a delete)
 never conflicts.
+
+## Scenario 7: The validator definition and the data both conflict (two-phase)
+
+When the same merge has BOTH a validator-definition conflict (Scenario 4) and a
+document that violates the resulting validator, the merge resolves in two phases.
+The document check is **deferred** until the validator is pinned -- until then the
+resulting validator is unknown, so only the metadata conflict is shown. After you
+resolve the metadata conflict and `continue`, cross-validation runs against the
+now-pinned validator and **re-pauses** if a merged document violates it.
+
+```js
+// Setup: base has validator age>=0 and { _id: 1, age: 5 }. Feature tightens it to
+// age>=10; main diverges it to age>=3 and inserts { _id: 2, age: 5 }. Merge.
+
+var main = db.getSiblingDB("valtwophase@main")
+// Phase 1 -- only the metadata conflict is visible (doc check deferred):
+main.runCommand({ doltConflicts: 1 }).conflicts   // one type: "metadata" entry on items
+var mid = main.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: mid, resolution: "theirs" })  // pin age>=10
+
+// Continue RE-PAUSES: _id:2 (age 5) now violates the pinned age>=10.
+main.runCommand({ doltMerge: 1, continue: 1 })    // { conflicts: [...], ok: 0 }
+
+// Phase 2 -- resolve the surfaced validation conflict, then finish:
+var vid = main.runCommand({ doltConflicts: 1 }).conflicts.find(c => c.type == "validation").conflictId
+main.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: vid,
+                  resolution: "custom", value: { _id: 2, age: 12 } })
+main.runCommand({ doltMerge: 1, continue: 1 })    // { ..., ok: 1 }
+// _id:2 -> age 12 (fixed); _id:1 -> age 5 (grandfathered, untouched)
+```
+
+Key checks:
+- Before the metadata conflict is resolved, `doltConflicts` shows no
+  `type: "validation"` entry -- the document check waits for the pinned validator.
+- `continue` after resolving the metadata conflict returns `ok: 0` with the
+  deferred validation conflict, which then resolves by replace-to-conform / drop.

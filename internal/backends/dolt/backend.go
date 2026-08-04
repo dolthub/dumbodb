@@ -1645,6 +1645,20 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 		ms := db.mergeState
 
+		// h0w.5: a collection whose validator definition conflicted was deferred by
+		// the initial cross-validation pass. Now that the metaConflict is resolved
+		// and the validator is pinned, re-validate the merged documents; a new
+		// violation re-pauses the merge rather than committing a violating document.
+		if newConflicts, reErr := b.recheckCrossValidation(ctx, db, ms); reErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", reErr)
+		} else if newConflicts {
+			db.setAM(ctx, ms.intoBranch, ms.resolvedAM)
+			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
+				return nil, fmt.Errorf("DumboDBMerge: continue: persisting new validation conflicts: %w", wsErr)
+			}
+			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
+		}
+
 		intoBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: resolving branch %q: %w", ms.intoBranch, err)

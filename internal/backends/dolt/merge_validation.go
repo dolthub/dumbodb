@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/val"
@@ -39,11 +40,19 @@ import (
 //
 // Documents already in a divergent data conflict are skipped here; their
 // resolved value is validated at resolution time (trigger 2). A collection whose
-// validator definition ITSELF diverged (metaConflict) has no settled validator
-// yet, so its cross-validation is deferred to metadata resolution
-// (workspace-h0w.5); the merge already halts on that metaConflict, so nothing is
-// silently accepted.
-func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM, baseAM prolly.AddressMap, allConflicts map[string][]*conflictEntry, metaConflicts map[string]*metaConflictEntry, theirHash hash.Hash, theirsDesc string) error {
+// validator definition ITSELF diverged (an unresolved metaConflict) has no
+// settled validator yet, so its cross-validation is deferred to
+// recheckCrossValidation, run at merge-continue once the metaConflict is
+// resolved and the validator is pinned; the merge already halts on that
+// metaConflict, so nothing is silently accepted in the meantime.
+//
+// recheck=false is the initial pass (every collection; unresolved-metaConflict
+// collections skipped; data-conflict docs skipped). recheck=true is the
+// continue-time re-run: it processes ONLY collections whose metaConflict is now
+// resolved, and validates every changed document (no data-conflict skip, since a
+// data conflict may have been resolved against a not-yet-final validator).
+// Entries whose conflictID already exists are never re-added.
+func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM, baseAM prolly.AddressMap, allConflicts map[string][]*conflictEntry, metaConflicts map[string]*metaConflictEntry, theirHash hash.Hash, theirsDesc string, recheck bool) error {
 	catMap, err := catalogMapFromAM(ctx, state, mergedAM)
 	if err != nil {
 		return fmt.Errorf("reading merged catalog: %w", err)
@@ -60,8 +69,13 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 	}
 
 	for _, name := range names {
-		if _, conflicted := metaConflicts[name]; conflicted {
-			continue
+		mc, hasMeta := metaConflicts[name]
+		if recheck {
+			if !hasMeta || !mc.resolved {
+				continue // recheck touches only collections whose validator was just pinned
+			}
+		} else if hasMeta && !mc.resolved {
+			continue // initial pass defers unsettled validators to the recheck
 		}
 
 		meta, err := readCollMetaFromCatalog(ctx, state, catMap, name)
@@ -84,9 +98,16 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 			return fmt.Errorf("opening base map for %q: %w", name, err)
 		}
 
-		inDataConflict := make(map[string]struct{}, len(allConflicts[name]))
+		// Skip docs already in a data conflict on the initial pass (handled by
+		// trigger 2); on a recheck validate them too, against the final validator.
+		// existing dedupes against conflicts already recorded (any type).
+		inDataConflict := make(map[string]struct{})
+		existing := make(map[string]struct{}, len(allConflicts[name]))
 		for _, e := range allConflicts[name] {
-			inDataConflict[string(e.rawKey)] = struct{}{}
+			existing[e.id] = struct{}{}
+			if !recheck {
+				inDataConflict[string(e.rawKey)] = struct{}{}
+			}
 		}
 
 		var valEntries []*conflictEntry
@@ -108,6 +129,10 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 			if conforms {
 				return false, nil
 			}
+			entry := newValidationConflict(c, mergedDoc, meta.Validator, name, theirHash, theirsDesc)
+			if _, dup := existing[entry.id]; dup {
+				return false, nil // already recorded (e.g. resolved earlier)
+			}
 			// The merged value violates, and the action is "error" (warn was
 			// skipped above). Every document the merge inserted or modified must
 			// conform: a pre-existing violator is grandfathered only when the
@@ -115,7 +140,7 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 			// never visited here (forEachCollectionChange skips unchanged docs).
 			// A change that lands on a violating value -- even one-sided, even
 			// when the base already violated -- is a conflict.
-			valEntries = append(valEntries, newValidationConflict(c, mergedDoc, meta.Validator, name, theirHash, theirsDesc))
+			valEntries = append(valEntries, entry)
 			return false, nil
 		})
 		if diffErr != nil {
@@ -126,6 +151,72 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 		}
 	}
 	return nil
+}
+
+// recheckCrossValidation re-runs cross-validation at merge-continue for any
+// collection whose validator definition conflicted and has now been resolved
+// (workspace-h0w.5). Until resolution the collection's validator was unsettled,
+// so the initial pass deferred it; now that the metaConflict is pinned, a
+// document the merge changed into a state that violates the resolved validator
+// must be caught. Returns true if new validation conflicts were recorded.
+func (b *Backend) recheckCrossValidation(ctx context.Context, db *dbState, ms *mergeInProgress) (bool, error) {
+	resolvedMeta := false
+	for _, mc := range ms.metaConflicts {
+		if mc.resolved {
+			resolvedMeta = true
+			break
+		}
+	}
+	if !resolvedMeta {
+		return false, nil
+	}
+
+	baseAM, err := b.mergeBaseAM(ctx, db, ms)
+	if err != nil {
+		return false, err
+	}
+
+	before := unresolvedConflictCount(ms.conflicts)
+	theirsDesc := fmt.Sprintf("branch '%s' (theirs)", ms.fromBranch)
+	if err := crossValidateMergedDocuments(ctx, db, ms.resolvedAM, baseAM, ms.conflicts, ms.metaConflicts, ms.fromHash, theirsDesc, true); err != nil {
+		return false, err
+	}
+	return unresolvedConflictCount(ms.conflicts) > before, nil
+}
+
+// mergeBaseAM recomputes the merge base (common ancestor of the two branch
+// HEADs the merge was started from) and returns its collections AddressMap.
+func (b *Backend) mergeBaseAM(ctx context.Context, db *dbState, ms *mergeInProgress) (prolly.AddressMap, error) {
+	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.intoHash)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: loading into commit: %w", err)
+	}
+	fromCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.fromHash)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: loading from commit: %w", err)
+	}
+	baseHash, hasBase, err := datas.FindCommonAncestor(ctx, intoCommit, fromCommit, db.vs, db.vs, db.ns, db.ns)
+	if err != nil {
+		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: finding common ancestor: %w", err)
+	}
+	if !hasBase {
+		return prolly.AddressMap{}, fmt.Errorf("mergeBaseAM: no common ancestor")
+	}
+	return amFromCommitHash(ctx, db, baseHash.String())
+}
+
+// unresolvedConflictCount counts document/validation conflict entries not yet
+// resolved across all collections.
+func unresolvedConflictCount(conflicts map[string][]*conflictEntry) int {
+	n := 0
+	for _, entries := range conflicts {
+		for _, e := range entries {
+			if !e.resolved {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // newValidationConflict builds a typ:"validation" conflict entry for a merged

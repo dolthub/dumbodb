@@ -457,11 +457,15 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
-	if vce, ok := ms.viewConflicts[params.Collection]; ok {
+	// Route to view/metadata resolution only while that conflict is unresolved.
+	// Once resolved, fall through to the document path so a same-collection
+	// document or validation conflict (the latter surfaced after a metadata
+	// conflict is pinned, workspace-h0w.5) can still be resolved.
+	if vce, ok := ms.viewConflicts[params.Collection]; ok && !vce.resolved {
 		return b.resolveViewConflict(ctx, db, ms, vce, params)
 	}
 
-	if mce, ok := ms.metaConflicts[params.Collection]; ok {
+	if mce, ok := ms.metaConflicts[params.Collection]; ok && !mce.resolved {
 		return b.resolveMetaConflict(ctx, db, ms, mce, params)
 	}
 
@@ -1618,7 +1622,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 	// A merge may never introduce a document that violates the resulting
 	// validator (workspace-h0w). Diff base against the merged result and surface
 	// any newly-violating document as a validation conflict.
-	if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc); err != nil {
+	if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc, false); err != nil {
 		return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merge cross-validation: %w", err)
 	}
 

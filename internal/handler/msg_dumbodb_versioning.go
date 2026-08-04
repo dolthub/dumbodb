@@ -855,6 +855,26 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			Author:   author,
 		})
 		if mergeErr != nil {
+			// Continuing can re-pause: resolving a validator-definition conflict
+			// pins the validator, and cross-validation may then surface a new
+			// document-validation conflict (workspace-h0w.5). Render it as ok:0,
+			// same as the initial merge, so the resolve/continue loop repeats.
+			var conflictErr *backends.MergeConflictError
+			if errors.As(mergeErr, &conflictErr) {
+				conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+				for _, c := range conflictErr.Conflicts {
+					conflictsArr.Append(must.NotFail(types.NewDocument(
+						"collection", c.Collection,
+						"count", int32(c.Count),
+					)))
+				}
+				return documentOpMsg(must.NotFail(types.NewDocument(
+					"conflicts", conflictsArr,
+					"ok", float64(0),
+					"code", int32(handlererrors.ErrOperationFailed),
+					"errmsg", conflictErr.Error(),
+				)))
+			}
 			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
 		}
 		contDoc := must.NotFail(types.NewDocument(

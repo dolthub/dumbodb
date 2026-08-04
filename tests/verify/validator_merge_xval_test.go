@@ -380,5 +380,64 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 2, age)
 	})
 
+	// workspace-h0w.5: the validator DEFINITION conflicts AND a document violates
+	// the resolved validator. The definition conflict is resolved first (pinning
+	// the validator); continuing then re-pauses on the now-detectable document
+	// violation, which is resolved by replace-to-conform.
+	t.Run("MetaConflictThenValidationConflict_TwoPhase", func(t *testing.T) {
+		dbName, db := newDB("metathenval")
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge)))
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "create validated items + doc", "alice <alice@acme.com>")
+
+		// feature: tighten the validator to age >= 10 (its grandfathered _id:1 stays).
+		vmBranch(t, env, dbName, "feature")
+		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+		dumboDBCommit(t, env, dbName+"@feature", "feature: age >= 10", "bob <bob@widgets.io>")
+
+		// main: DIVERGENT validator (age >= 3) plus a new doc that conforms to age>=3
+		// but will violate feature's age>=10 once that side wins.
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
+		}).Err())
+		_, err = db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: age >= 3 + doc age 5", "alice <alice@acme.com>")
+
+		mainDB := env.Client.Database(dbName + "@main")
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "divergent validator must conflict: %v", raw)
+
+		// Phase 1: only the metadata conflict is visible (the doc check is deferred).
+		require.Empty(t, conflictsByType(t, mainDB, "validation"), "doc check deferred until validator pinned")
+		mc := conflictsByType(t, mainDB, "metadata")
+		require.Len(t, mc, 1)
+		require.NoError(t, resolveConflict(t, mainDB, "items", mc[0]["conflictId"].(string), "theirs", nil))
+
+		// Continue re-pauses: with age>=10 pinned, main's _id:2 (age 5) now violates.
+		cont := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}})
+		require.EqualValues(t, 0, cont["ok"], "continue must re-pause on the validation conflict: %v", cont)
+
+		vals := conflictsByType(t, mainDB, "validation")
+		require.Len(t, vals, 1, "the deferred document violation surfaces after the validator is pinned")
+		assert.EqualValues(t, 2, vals[0]["documentId"])
+
+		// Phase 2: replace-to-conform and finish.
+		require.NoError(t, resolveConflict(t, mainDB, "items", vals[0]["conflictId"].(string), "custom",
+			bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}}))
+		continueMerge(t, mainDB)
+
+		age2, ok := ageOf(t, mainDB.Collection("items"), 2)
+		require.True(t, ok)
+		assert.EqualValues(t, 12, age2, "violating doc fixed")
+		age1, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
+		assert.EqualValues(t, 5, age1, "grandfathered unchanged doc survives")
+	})
+
 	_ = options.CreateCollection
 }
