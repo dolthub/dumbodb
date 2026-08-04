@@ -566,4 +566,56 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 0, fromAge["$gte"], "from validator age>=0")
 		assert.EqualValues(t, 10, toAge["$gte"], "to validator age>=10")
 	})
+
+	// Scenario18: doltStatus surfaces a validator on an added collection under the
+	// change's `metadata` field, mirroring doltDiff.
+	t.Run("Scenario18_StatusShowsValidatorOnAddedCollection", func(t *testing.T) {
+		dbName := fmt.Sprintf("valstat18_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
+
+		status := runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
+		changes := status["changes"].(bson.A)
+		require.Len(t, changes, 1)
+		ch := changes[0].(bson.M)
+		assert.Equal(t, "items", ch["name"])
+		assert.Equal(t, "added", ch["status"])
+		meta := ch["metadata"].(bson.M)
+		assert.Nil(t, meta["from"])
+		to, ok := meta["to"].(bson.M)
+		require.True(t, ok, "metadata.to present: %v", meta)
+		age, _ := to["validator"].(bson.M)["age"].(bson.M)
+		assert.EqualValues(t, 0, age["$gte"], "status shows the validator (age>=0)")
+		assert.Equal(t, "strict", to["validationLevel"])
+	})
+
+	// Scenario19: a collMod that only changes the validator rewrites
+	// __dumbo_catalog__ (not the collection DTBL), so headHash == workingHash;
+	// status must still surface it as a modified collection with metadata.
+	t.Run("Scenario19_StatusShowsValidatorOnlyChange", func(t *testing.T) {
+		dbName := fmt.Sprintf("valstat19_%d", suffix)
+		db := env.Client.Database(dbName)
+		require.NoError(t, db.Drop(ctx))
+		require.NoError(t, db.CreateCollection(ctx, "items",
+			options.CreateCollection().SetValidator(ageGte(0))))
+		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+
+		status := runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
+		assert.Equal(t, true, status["dirty"], "a validator-only change makes the workspace dirty")
+		changes := status["changes"].(bson.A)
+		require.Len(t, changes, 1, "validator-only change must surface in status: %v", status)
+		ch := changes[0].(bson.M)
+		assert.Equal(t, "modified", ch["status"])
+		meta := ch["metadata"].(bson.M)
+		fromAge, _ := meta["from"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
+		toAge, _ := meta["to"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
+		assert.EqualValues(t, 0, fromAge["$gte"])
+		assert.EqualValues(t, 10, toAge["$gte"])
+	})
 }

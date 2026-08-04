@@ -307,6 +307,12 @@ type TableStatus struct {
 	AddedIndexes    []string
 	ModifiedIndexes []string
 	RemovedIndexes  []string
+
+	// Validator/options change, mirroring CollectionDiff. Both nil when the
+	// collection's metadata did not change; otherwise each side is the "a"/"b"
+	// validator (nil when that side had no validator).
+	MetadataFrom *CollectionMetadata
+	MetadataTo   *CollectionMetadata
 }
 
 type VersioningStatusResult struct {

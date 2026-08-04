@@ -154,8 +154,20 @@ func collectionChangeSummary(t backends.TableStatus) *types.Document {
 			"removed", stringArray(t.RemovedIndexes),
 			"modified", stringArray(t.ModifiedIndexes),
 		)),
-		"metadata", must.NotFail(types.NewDocument()),
+		"metadata", collectionMetadataDoc(t.MetadataFrom, t.MetadataTo),
 	))
+}
+
+// collectionMetadataDoc renders a validator/options change as {from, to}, or an
+// empty document when the metadata did not change. Shared by the full and
+// summary `changes` renderers.
+func collectionMetadataDoc(from, to *backends.CollectionMetadata) *types.Document {
+	metadata := must.NotFail(types.NewDocument())
+	if from != nil || to != nil {
+		metadata.Set("from", collectionMetadataSide(from))
+		metadata.Set("to", collectionMetadataSide(to))
+	}
+	return metadata
 }
 
 // viewStatusToChange renders a view status as a summary `changes` element.
@@ -284,18 +296,13 @@ func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
 	// metadata carries a validator/options change as {from, to}; empty when the
 	// collection's validator/options did not change. Either side is null when
 	// that side had no validator (e.g. a newly-validated or added collection).
-	metadata := must.NotFail(types.NewDocument())
-	if cd.MetadataFrom != nil || cd.MetadataTo != nil {
-		metadata.Set("from", collectionMetadataSide(cd.MetadataFrom))
-		metadata.Set("to", collectionMetadataSide(cd.MetadataTo))
-	}
 	return must.NotFail(types.NewDocument(
 		"type", "collection",
 		"name", cd.Name,
 		"status", cd.Status,
 		"documents", documents,
 		"indexes", indexes,
-		"metadata", metadata,
+		"metadata", collectionMetadataDoc(cd.MetadataFrom, cd.MetadataTo),
 	))
 }
 

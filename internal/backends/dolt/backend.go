@@ -2695,6 +2695,15 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("DumboDBStatus: collecting collection names for db %q: %w", params.DBName, err)
 	}
 
+	headCat, err := catalogMapFromAM(ctx, state, headAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: reading HEAD catalog for db %q: %w", params.DBName, err)
+	}
+	workingCat, err := catalogMapFromAM(ctx, state, workingAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: reading working catalog for db %q: %w", params.DBName, err)
+	}
+
 	var tables []backends.TableStatus
 
 	for _, name := range names {
@@ -2708,13 +2717,21 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 			return nil, fmt.Errorf("DumboDBStatus: reading working hash for %q: %w", name, workingErr)
 		}
 
+		// A validator-only change (collMod) rewrites __dumbo_catalog__, not the
+		// collection's own DTBL, so headHash == workingHash even though the
+		// metadata changed. Detect that so it is not skipped below.
+		metaFrom, metaTo, metaChanged, metaErr := collectionMetadataDiff(ctx, state, headCat, workingCat, name)
+		if metaErr != nil {
+			return nil, fmt.Errorf("DumboDBStatus: metadata diff for %q.%q: %w", params.DBName, name, metaErr)
+		}
+
 		var status string
 		switch {
 		case headHash.IsEmpty() && !workingHash.IsEmpty():
 			status = "added"
 		case !headHash.IsEmpty() && workingHash.IsEmpty():
 			status = "deleted"
-		case headHash != workingHash:
+		case headHash != workingHash || metaChanged:
 			status = "modified"
 		default:
 			continue
@@ -2749,6 +2766,8 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 			AddedIndexes:    indexNamesOf(idxAdded),
 			ModifiedIndexes: indexChangeNamesOf(idxModified),
 			RemovedIndexes:  indexNamesOf(idxRemoved),
+			MetadataFrom:    metaFrom,
+			MetadataTo:      metaTo,
 		}
 		tables = append(tables, ts)
 	}
