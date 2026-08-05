@@ -191,7 +191,7 @@ func TestValidatorVerify(t *testing.T) {
 	ctx := context.Background()
 	suffix := rand.Int64N(1_000_000)
 
-	t.Run("Scenario5_SurvivesRestart", func(t *testing.T) {
+	t.Run("Scenario1_SurvivesRestart", func(t *testing.T) {
 		// Own env: restarting it (and the cleanup Restart ties to this subtest)
 		// must not disturb the shared server used by the other subtests.
 		renv := startDumboDB(t)
@@ -219,7 +219,7 @@ func TestValidatorVerify(t *testing.T) {
 		require.NoError(t, err, "valid insert succeeds after restart")
 	})
 
-	t.Run("Scenario6_BranchCarriesValidator", func(t *testing.T) {
+	t.Run("Scenario2_BranchCarriesValidator", func(t *testing.T) {
 		dbName := fmt.Sprintf("valbranch%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -235,7 +235,7 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 	})
 
-	t.Run("Scenario7_MergeCarriesAddedValidator", func(t *testing.T) {
+	t.Run("Scenario3_MergeCarriesAddedValidator", func(t *testing.T) {
 		dbName := fmt.Sprintf("valmerge%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -269,11 +269,11 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 	})
 
-	// Scenario8/9: divergent validators on both branches surface as a resolvable
+	// Scenario 4: divergent validators on both branches surface as a resolvable
 	// metadata conflict ON THE OWNING COLLECTION (never __dumbo_catalog__),
 	// resolved via doltConflicts / doltResolveConflict, then doltMerge continue
 	// completes with the chosen validator.
-	t.Run("Scenario8_DivergentValidators_ResolveTheirs", func(t *testing.T) {
+	t.Run("Scenario4_DivergentValidators_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict8_%d", suffix)
 		mainDB := setupMetaConflict(t, env, dbName)
 
@@ -294,7 +294,7 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 18, age["$gte"], "theirs (age >= 18) won after resolution")
 	})
 
-	t.Run("Scenario9_DivergentValidators_ResolveCustom", func(t *testing.T) {
+	t.Run("Scenario4_DivergentValidators_ResolveCustom", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict9_%d", suffix)
 		mainDB := setupMetaConflict(t, env, dbName)
 		resolveMeta(t, mainDB, "items", "custom", bson.D{{Key: "validator", Value: ageGte(5)}})
@@ -303,9 +303,9 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 5, age["$gte"], "custom validator (age >= 5) applied after resolution")
 	})
 
-	// Scenario10: structurally-different $jsonSchema validators diverge; resolve
+	// Scenario 4: structurally-different $jsonSchema validators diverge; resolve
 	// "ours" keeps main's schema.
-	t.Run("Scenario10_JsonSchemaDivergence_ResolveOurs", func(t *testing.T) {
+	t.Run("Scenario4_JsonSchemaDivergence_ResolveOurs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict10_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -332,9 +332,9 @@ func TestValidatorVerify(t *testing.T) {
 			"resolving ours keeps main's $jsonSchema (required: age)")
 	})
 
-	// Scenario11: divergent validationAction (with validator) resolves via theirs;
+	// Scenario 4: divergent validationAction (with validator) resolves via theirs;
 	// the action follows the chosen side.
-	t.Run("Scenario11_DivergentValidationAction_ResolveTheirs", func(t *testing.T) {
+	t.Run("Scenario4_DivergentValidationAction_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict11_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -364,9 +364,9 @@ func TestValidatorVerify(t *testing.T) {
 		assert.Equal(t, "warn", validationActionOf(t, mainDB, "items"), "theirs validationAction (warn) applied")
 	})
 
-	// Scenario12: both branches CREATE the same collection with different
+	// Scenario 4: both branches CREATE the same collection with different
 	// validators (add/add). base is null; resolve theirs.
-	t.Run("Scenario12_BothBranchCreate_ResolveTheirs", func(t *testing.T) {
+	t.Run("Scenario4_BothBranchCreate_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict12_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -393,11 +393,11 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 18, age["$gte"], "theirs (age>=18) won for the concurrently-created collection")
 	})
 
-	// Scenario13: one branch drops the collection while the other modifies its
+	// Scenario 4: one branch drops the collection while the other modifies its
 	// metadata -- a modify/delete metadata conflict (theirs side null). Resolving
 	// theirs applies the deletion: the collection is gone, with no orphaned
 	// metadata left behind.
-	t.Run("Scenario13_DropVsMetadata_ResolveTheirs", func(t *testing.T) {
+	t.Run("Scenario4_DropVsMetadata_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict13_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -433,10 +433,10 @@ func TestValidatorVerify(t *testing.T) {
 		assert.Len(t, batch, 0, "resolving theirs (drop) leaves no items collection")
 	})
 
-	// Scenario14: same modify/delete conflict, but resolve OURS -- keep the
+	// Scenario 4: same modify/delete conflict, but resolve OURS -- keep the
 	// collection with main's modified validator. The dropped DTBL is restored so
 	// existence and metadata agree.
-	t.Run("Scenario14_DropVsMetadata_ResolveOurs", func(t *testing.T) {
+	t.Run("Scenario4_DropVsMetadata_ResolveOurs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict14_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -468,11 +468,11 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 1, n, "resolving ours restores the collection and its data")
 	})
 
-	// Scenario15: both branches make the SAME validator change. A divergent
+	// Scenario 4: both branches make the SAME validator change. A divergent
 	// change conflicts (Scenarios 8-14); an identical one converges and merges
 	// cleanly with no conflict -- the only case a metadata change is resolved
 	// without asking.
-	t.Run("Scenario15_ConvergentValidatorChange_NoConflict", func(t *testing.T) {
+	t.Run("Scenario4_ConvergentValidatorChange_NoConflict", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict15_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
@@ -504,7 +504,7 @@ func TestValidatorVerify(t *testing.T) {
 	// Mirrors docs/verify/validators.md Scenario 8: a validator (and validator
 	// changes) surface under the metadata field in doltDiff, doltStatus, and
 	// doltLog -- including a collMod that changes ONLY the validator.
-	t.Run("ValidatorVisibleInDiffStatusLog", func(t *testing.T) {
+	t.Run("Scenario8_ValidatorVisibleInDiffStatusLog", func(t *testing.T) {
 		dbName := fmt.Sprintf("valobserve%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
