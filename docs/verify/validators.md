@@ -20,8 +20,9 @@ never shown to users -- validators appear only as a collection's `options` in
 `listCollections`.
 
 > **Automated equivalent:** `tests/verify/validator_test.go`
-> (`TestValidatorVerify`) covers Scenarios 1-4; the merge cross-validation matrix
-> (Scenarios 5-6) is covered by `tests/verify/validator_merge_xval_test.go`
+> (`TestValidatorVerify`) covers Scenarios 1-4 and 8; the merge cross-validation
+> cases (Scenarios 5-7: the data-violation case, the 6a-6i matrix, and the
+> two-phase case) are covered by `tests/verify/validator_merge_xval_test.go`
 > (`TestValidatorMergeCrossValidation`). Run them with:
 > ```
 > go test ./tests/verify/ -run 'TestValidatorVerify|TestValidatorMergeCrossValidation' -v
@@ -655,3 +656,55 @@ Key checks:
   `type: "validation"` entry -- the document check waits for the pinned validator.
 - `continue` after resolving the metadata conflict returns `ok: 0` with the
   deferred validation conflict, which then resolves by replace-to-conform / drop.
+
+---
+
+## Scenario 8: A validator is visible in diff, status, and log
+
+A collection's validator (and any change to it) surfaces under the `metadata`
+field of the unified `changes` array in `doltDiff`, `doltStatus`, and `doltLog`
+(`--stat` / `--patch`). A `collMod` that changes **only** the validator (no
+document or index change) still surfaces -- it rewrites the internal catalog, not
+the collection's own data.
+
+```js
+var db = db.getSiblingDB("valobserve")
+db.dropDatabase()
+
+// A newly-created validated collection: before any commit, diff and status show
+// it as "added" with the validator under metadata.to (metadata.from is null).
+db.createCollection("items", { validator: { age: { $gte: 0 } }, validationLevel: "strict" })
+
+db.runCommand({ doltStatus: 1 })
+// { ..., dirty: true, changes: [ { type: "collection", name: "items", status: "added",
+//     documents: { added: 0, modified: 0, deleted: 0 }, indexes: { ... },
+//     metadata: { from: null,
+//                 to: { validator: { age: { $gte: 0 } }, validationLevel: "strict", validationAction: "error" } } } ] }
+
+db.runCommand({ doltDiff: 1 }).changes[0].metadata   // same { from: null, to: {...} }
+
+db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice <alice@acme.com>" })
+
+// A collMod that changes ONLY the validator still surfaces as a modified
+// collection with metadata { from, to }, and makes the workspace dirty.
+db.runCommand({ collMod: "items", validator: { age: { $gte: 10 } } })
+
+db.runCommand({ doltStatus: 1 })
+// { ..., dirty: true, changes: [ { ..., status: "modified",
+//     metadata: { from: { validator: { age: { $gte: 0  } }, ... },
+//                 to:   { validator: { age: { $gte: 10 } }, ... } } } ] }
+
+db.runCommand({ doltDiff: 1 }).changes[0].metadata   // same { from, to }
+
+// Commit it; doltLog --stat / --patch shows the same metadata change for the commit.
+db.runCommand({ doltCommit: 1, message: "tighten validator to age >= 10", author: "alice <alice@acme.com>" })
+db.runCommand({ doltLog: 1, limit: 1, stat: true }).commits[0].changes[0].metadata
+// { from: { validator: { age: { $gte: 0 } }, ... }, to: { validator: { age: { $gte: 10 } }, ... } }
+```
+
+Key checks:
+- A newly-added validated collection shows the validator under `metadata.to`
+  (`metadata.from` is `null`) in `doltDiff` and `doltStatus`.
+- A validator-only `collMod` surfaces as a `modified` collection carrying
+  `metadata: { from, to }` in `doltDiff`, `doltStatus`, and `doltLog`
+  (`--stat` / `--patch`), and makes `doltStatus` report `dirty: true`.

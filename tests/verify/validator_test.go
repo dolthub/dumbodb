@@ -191,20 +191,6 @@ func TestValidatorVerify(t *testing.T) {
 	ctx := context.Background()
 	suffix := rand.Int64N(1_000_000)
 
-	t.Run("Scenario1_EnforcementActive", func(t *testing.T) {
-		db := env.Client.Database(fmt.Sprintf("valenf%d", suffix))
-		require.NoError(t, db.Drop(ctx))
-		require.NoError(t, db.CreateCollection(ctx, "items",
-			options.CreateCollection().SetValidator(valNonNegAge)))
-		coll := db.Collection("items")
-
-		_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
-		require.NoError(t, err, "valid insert passes")
-		_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-1)}})
-		require.Error(t, err, "invalid insert rejected")
-		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
-	})
-
 	t.Run("Scenario5_SurvivesRestart", func(t *testing.T) {
 		// Own env: restarting it (and the cleanup Restart ties to this subtest)
 		// must not disturb the shared server used by the other subtests.
@@ -515,152 +501,70 @@ func TestValidatorVerify(t *testing.T) {
 		require.Error(t, err, "converged validator enforces (age 5 < 10 rejected)")
 	})
 
-	// Scenario16: doltDiff surfaces a validator on an added collection under the
-	// change's `metadata` field (from: null, to: the validator/options).
-	t.Run("Scenario16_DiffShowsValidatorOnAddedCollection", func(t *testing.T) {
-		dbName := fmt.Sprintf("valdiff16_%d", suffix)
+	// Mirrors docs/verify/validators.md Scenario 8: a validator (and validator
+	// changes) surface under the metadata field in doltDiff, doltStatus, and
+	// doltLog -- including a collMod that changes ONLY the validator.
+	t.Run("ValidatorVisibleInDiffStatusLog", func(t *testing.T) {
+		dbName := fmt.Sprintf("valobserve%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
-		require.NoError(t, db.CreateCollection(ctx, "items",
-			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
-		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(1)}})
-		require.NoError(t, err)
 
-		diff := runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
-		changes := diff["changes"].(bson.A)
-		require.Len(t, changes, 1)
-		ch := changes[0].(bson.M)
-		assert.Equal(t, "items", ch["name"])
-		assert.Equal(t, "added", ch["status"])
-
-		meta, ok := ch["metadata"].(bson.M)
-		require.True(t, ok, "metadata present: %v", ch["metadata"])
-		assert.Nil(t, meta["from"], "added collection has no prior metadata")
-		to, ok := meta["to"].(bson.M)
-		require.True(t, ok, "metadata.to present: %v", meta)
-		v, _ := to["validator"].(bson.M)
-		age, _ := v["age"].(bson.M)
-		assert.EqualValues(t, 0, age["$gte"], "diff shows the validator (age>=0)")
-		assert.Equal(t, "strict", to["validationLevel"])
-	})
-
-	// Scenario17: a collMod that only changes the validator (no doc/index change)
-	// surfaces as a modified collection with metadata {from, to}.
-	t.Run("Scenario17_DiffShowsValidatorChange", func(t *testing.T) {
-		dbName := fmt.Sprintf("valdiff17_%d", suffix)
-		db := env.Client.Database(dbName)
-		require.NoError(t, db.Drop(ctx))
-		require.NoError(t, db.CreateCollection(ctx, "items",
-			options.CreateCollection().SetValidator(ageGte(0))))
-		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
-
-		// collMod only -- no document or index change.
-		require.NoError(t, db.RunCommand(ctx, bson.D{
-			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
-		}).Err())
-
-		diff := runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
-		changes := diff["changes"].(bson.A)
-		require.Len(t, changes, 1, "a validator-only change must still surface: %v", diff)
-		ch := changes[0].(bson.M)
-		assert.Equal(t, "modified", ch["status"])
-		meta := ch["metadata"].(bson.M)
-		from := meta["from"].(bson.M)
-		to := meta["to"].(bson.M)
-		fromAge, _ := from["validator"].(bson.M)["age"].(bson.M)
-		toAge, _ := to["validator"].(bson.M)["age"].(bson.M)
-		assert.EqualValues(t, 0, fromAge["$gte"], "from validator age>=0")
-		assert.EqualValues(t, 10, toAge["$gte"], "to validator age>=10")
-	})
-
-	// Scenario18: doltStatus surfaces a validator on an added collection under the
-	// change's `metadata` field, mirroring doltDiff.
-	t.Run("Scenario18_StatusShowsValidatorOnAddedCollection", func(t *testing.T) {
-		dbName := fmt.Sprintf("valstat18_%d", suffix)
-		db := env.Client.Database(dbName)
-		require.NoError(t, db.Drop(ctx))
+		// A newly-created validated collection: diff/status show it "added" with
+		// the validator under metadata.to (metadata.from is null).
 		require.NoError(t, db.CreateCollection(ctx, "items",
 			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
 
-		status := runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
-		changes := status["changes"].(bson.A)
-		require.Len(t, changes, 1)
-		ch := changes[0].(bson.M)
-		assert.Equal(t, "items", ch["name"])
-		assert.Equal(t, "added", ch["status"])
-		meta := ch["metadata"].(bson.M)
-		assert.Nil(t, meta["from"])
-		to, ok := meta["to"].(bson.M)
-		require.True(t, ok, "metadata.to present: %v", meta)
-		age, _ := to["validator"].(bson.M)["age"].(bson.M)
-		assert.EqualValues(t, 0, age["$gte"], "status shows the validator (age>=0)")
-		assert.Equal(t, "strict", to["validationLevel"])
-	})
-
-	// Scenario19: a collMod that only changes the validator rewrites
-	// __dumbo_catalog__ (not the collection DTBL), so headHash == workingHash;
-	// status must still surface it as a modified collection with metadata.
-	t.Run("Scenario19_StatusShowsValidatorOnlyChange", func(t *testing.T) {
-		dbName := fmt.Sprintf("valstat19_%d", suffix)
-		db := env.Client.Database(dbName)
-		require.NoError(t, db.Drop(ctx))
-		require.NoError(t, db.CreateCollection(ctx, "items",
-			options.CreateCollection().SetValidator(ageGte(0))))
-		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
-
-		require.NoError(t, db.RunCommand(ctx, bson.D{
-			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
-		}).Err())
-
-		status := runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
-		assert.Equal(t, true, status["dirty"], "a validator-only change makes the workspace dirty")
-		changes := status["changes"].(bson.A)
-		require.Len(t, changes, 1, "validator-only change must surface in status: %v", status)
-		ch := changes[0].(bson.M)
-		assert.Equal(t, "modified", ch["status"])
-		meta := ch["metadata"].(bson.M)
-		fromAge, _ := meta["from"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
-		toAge, _ := meta["to"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
-		assert.EqualValues(t, 0, fromAge["$gte"])
-		assert.EqualValues(t, 10, toAge["$gte"])
-	})
-
-	// Scenario20: doltLog --stat/--patch surfaces a validator-only commit and its
-	// metadata change. Before, such a commit was invisible in the log (the
-	// collection DTBL hash was unchanged). Both verbosities share the diff core.
-	for _, verbosity := range []string{"stat", "patch"} {
-		verbosity := verbosity
-		t.Run("Scenario20_LogShowsValidatorChange_"+verbosity, func(t *testing.T) {
-			dbName := fmt.Sprintf("vallog20%s_%d", verbosity, suffix)
-			db := env.Client.Database(dbName)
-			require.NoError(t, db.Drop(ctx))
-			require.NoError(t, db.CreateCollection(ctx, "items",
-				options.CreateCollection().SetValidator(ageGte(0))))
-			dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
-
-			require.NoError(t, db.RunCommand(ctx, bson.D{
-				{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
-			}).Err())
-			dumboDBCommit(t, env, dbName, "tighten validator to age>=10", "alice <alice@acme.com>")
-
-			var raw bson.M
-			require.NoError(t, db.RunCommand(ctx, bson.D{
-				{Key: "doltLog", Value: 1}, {Key: "limit", Value: 1}, {Key: verbosity, Value: true},
-			}).Decode(&raw))
-			commits := raw["commits"].(bson.A)
-			require.Len(t, commits, 1)
-			head := commits[0].(bson.M)
-			changesArr, ok := head["changes"].(bson.A)
-			require.True(t, ok, "validator-only commit must surface changes (%s): %v", verbosity, head)
-			require.Len(t, changesArr, 1)
-			ch := changesArr[0].(bson.M)
+		assertAddedMeta := func(changes bson.A) {
+			require.Len(t, changes, 1)
+			ch := changes[0].(bson.M)
 			assert.Equal(t, "items", ch["name"])
+			assert.Equal(t, "added", ch["status"])
+			meta := ch["metadata"].(bson.M)
+			assert.Nil(t, meta["from"], "added collection has no prior metadata")
+			to, _ := meta["to"].(bson.M)
+			age, _ := to["validator"].(bson.M)["age"].(bson.M)
+			assert.EqualValues(t, 0, age["$gte"])
+			assert.Equal(t, "strict", to["validationLevel"])
+		}
+		status := runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
+		assert.Equal(t, true, status["dirty"])
+		assertAddedMeta(status["changes"].(bson.A))
+		diff := runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
+		assertAddedMeta(diff["changes"].(bson.A))
+
+		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
+
+		// A collMod that changes ONLY the validator still surfaces as a modified
+		// collection with metadata { from, to }, and makes the workspace dirty.
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
+		}).Err())
+
+		assertModifiedMeta := func(changes bson.A) {
+			require.Len(t, changes, 1)
+			ch := changes[0].(bson.M)
 			assert.Equal(t, "modified", ch["status"])
 			meta := ch["metadata"].(bson.M)
 			fromAge, _ := meta["from"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
 			toAge, _ := meta["to"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
 			assert.EqualValues(t, 0, fromAge["$gte"])
 			assert.EqualValues(t, 10, toAge["$gte"])
-		})
-	}
+		}
+		status = runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
+		assert.Equal(t, true, status["dirty"], "validator-only change makes the workspace dirty")
+		assertModifiedMeta(status["changes"].(bson.A))
+		diff = runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
+		assertModifiedMeta(diff["changes"].(bson.A))
+
+		// Commit it; doltLog --stat and --patch show the same metadata change.
+		dumboDBCommit(t, env, dbName, "tighten validator to age >= 10", "alice <alice@acme.com>")
+		for _, verbosity := range []string{"stat", "patch"} {
+			log := runCommandRaw(t, db, bson.D{
+				{Key: "doltLog", Value: 1}, {Key: "limit", Value: 1}, {Key: verbosity, Value: true},
+			})
+			commits := log["commits"].(bson.A)
+			require.Len(t, commits, 1)
+			assertModifiedMeta(commits[0].(bson.M)["changes"].(bson.A))
+		}
+	})
 }
