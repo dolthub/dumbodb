@@ -107,9 +107,13 @@ func docToCollMeta(doc *types.Document) *collMeta {
 }
 
 // effectiveValidation returns the collection's validationLevel and
-// validationAction with MongoDB's defaults materialized: when a validator is
+// validationAction with the effective defaults materialized: when a validator is
 // set, an unset level defaults to "strict" and an unset action to "error".
 // Without a validator both are meaningless and returned as stored (empty).
+//
+// Used only for the DumboDB-only conflict/diff/status/log surfaces. It is NOT
+// applied to listCollections, which must mirror MongoDB -- MongoDB reports only
+// the explicitly-set level/action there and omits the defaults.
 func (m *collMeta) effectiveValidation() (level, action string) {
 	level, action = m.ValidationLevel, m.ValidationAction
 	if m.Validator == nil {

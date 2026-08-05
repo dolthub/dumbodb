@@ -200,7 +200,12 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		if m := catalog[name]; m != nil {
 			ci.UUID = m.UUID
 			ci.Validator = m.Validator
-			ci.ValidationLevel, ci.ValidationAction = m.effectiveValidation()
+			// listCollections must match MongoDB, which does NOT materialize the
+			// validationLevel/validationAction defaults -- it reports only what was
+			// explicitly set. (The DumboDB-only conflict/diff/status/log outputs do
+			// surface the effective defaults; see collMeta.effectiveValidation.)
+			ci.ValidationLevel = m.ValidationLevel
+			ci.ValidationAction = m.ValidationAction
 			ci.IsTimeSeries = m.IsTimeSeries
 			ci.TimeField = m.TimeField
 			ci.MetaField = m.MetaField
