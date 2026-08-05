@@ -109,13 +109,15 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		dumboDBCommit(t, env, dbName+"@feature", "feature: require age>=0", "bob <bob@widgets.io>")
 	}
 
-	// base = A: main inserts a violating doc; feature adds the validator. The
-	// merge must surface a validation conflict; replace-to-conform completes it.
-	t.Run("CleanInsertViolator_Conflict_ResolveCustom", func(t *testing.T) {
-		dbName, db := newDB("insviol")
+	// Doc Scenario 5: base = A, main inserts a violating doc; feature adds the
+	// validator (validationAction: error). The merge surfaces a validation
+	// conflict; a still-violating replacement is rejected; resolving to a
+	// conforming value (age 0) completes.
+	t.Run("Scenario5_DataViolation_ResolveCustom", func(t *testing.T) {
+		dbName, db := newDB("s5")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
 		dumboDBCommit(t, env, dbName, "create items", "alice <alice@acme.com>")
-		addValidatorOnFeature(t, dbName, "")
+		addValidatorOnFeature(t, dbName, "error")
 
 		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
 		require.NoError(t, err)
@@ -132,13 +134,40 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 1, vc["documentId"])
 		require.NotNil(t, vc["validator"], "conflict carries the violated validator")
 
-		// A custom value that still violates is rejected.
+		// A still-violating replacement is rejected.
 		require.Error(t, resolveConflict(t, mainDB, "items", vc["conflictId"].(string), "custom",
 			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-1)}}),
 			"a still-violating custom value must be rejected")
 
-		// A conforming replacement is accepted.
+		// Resolve to a conforming value (age 0).
 		require.NoError(t, resolveConflict(t, mainDB, "items", vc["conflictId"].(string), "custom",
+			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(0)}}))
+		continueMerge(t, mainDB)
+		age, ok := ageOf(t, mainDB.Collection("items"), 1)
+		require.True(t, ok)
+		assert.EqualValues(t, 0, age)
+	})
+
+	// Doc Scenario 6, Cell 6a: base = A, insert a violating doc; resolve custom
+	// (age 5). Terse, matching the cell (the rejection path is Scenario 5).
+	t.Run("Cell6a_InsertViolator_ResolveCustom", func(t *testing.T) {
+		dbName, db := newDB("c6a")
+		require.NoError(t, db.CreateCollection(ctx, "items"))
+		dumboDBCommit(t, env, dbName, "create items", "alice <alice@acme.com>")
+		addValidatorOnFeature(t, dbName, "")
+
+		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, dbName, "main: insert age -5", "alice <alice@acme.com>")
+
+		raw := vmMerge(t, env, dbName, "feature")
+		require.EqualValues(t, 0, raw["ok"], "violating insert must conflict: %v", raw)
+
+		mainDB := env.Client.Database(dbName + "@main")
+		vals := conflictsByType(t, mainDB, "validation")
+		require.Len(t, vals, 1)
+		assert.EqualValues(t, 1, vals[0]["documentId"])
+		require.NoError(t, resolveConflict(t, mainDB, "items", vals[0]["conflictId"].(string), "custom",
 			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}}))
 		continueMerge(t, mainDB)
 		age, ok := ageOf(t, mainDB.Collection("items"), 1)

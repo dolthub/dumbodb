@@ -215,12 +215,18 @@ func TestValidatorVerify(t *testing.T) {
 		require.NoError(t, db.CreateCollection(ctx, "items",
 			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
 
+		// Doc Scenario 1: the validator is active BEFORE the restart.
+		_, err := renv.Client.Database(dbName).Collection("items").
+			InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-1)}})
+		require.Error(t, err, "validator active before restart")
+		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
+
 		renv.Restart(t)
 		db = renv.Client.Database(dbName) // client refreshed by Restart
 		coll := db.Collection("items")
 
 		assert.NotNil(t, validatorOf(t, db, "items"), "validator survives restart")
-		_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 3}, {Key: "age", Value: int32(-1)}})
+		_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 3}, {Key: "age", Value: int32(-1)}})
 		require.Error(t, err, "validator still enforces after restart")
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 		_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 4}, {Key: "age", Value: int32(5)}})
