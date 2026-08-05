@@ -1199,6 +1199,10 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 				"conflictId", mc.ConflictID,
 				"type", "metadata",
 				"name", mc.Collection,
+				"reason", must.NotFail(types.NewDocument(
+					"code", mc.Reason.Code,
+					"message", mc.Reason.Message,
+				)),
 				"base", buildMetaSide(mc.Base, ""),
 				"ours", buildMetaSide(mc.Ours, mc.OurDiffType),
 				"theirs", buildMetaSide(mc.Theirs, mc.TheirDiffType),

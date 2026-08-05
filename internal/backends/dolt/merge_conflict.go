@@ -403,6 +403,7 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 			Theirs:        collMetaToMetadata(mc.theirs),
 			OurDiffType:   mc.ourDiff,
 			TheirDiffType: mc.theirDiff,
+			Reason:        backends.ConflictReason{Code: mc.reasonCode, Message: mc.reasonMessage},
 		})
 	}
 	if metadata == nil {
@@ -1579,7 +1580,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		// so the internal name never leaks.
 		if name == reservedCatalogName {
 			if len(collConflicts) > 0 {
-				mcs, cerr := metaConflictsFromCatalog(ctx, state, collConflicts)
+				mcs, cerr := metaConflictsFromCatalog(ctx, state, collConflicts, oursDesc, theirsDesc)
 				if cerr != nil {
 					return prolly.AddressMap{}, nil, nil, nil, cerr
 				}

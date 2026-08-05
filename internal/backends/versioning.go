@@ -199,6 +199,7 @@ type MetaConflict struct {
 	Theirs        *CollectionMetadata
 	OurDiffType   string // "added", "modified", "deleted"
 	TheirDiffType string
+	Reason        ConflictReason // why the two metadata states cannot both stand
 }
 
 type ConflictsResult struct {

@@ -174,6 +174,8 @@ Inspect the conflict -- it is a `type: "metadata"` entry on `items`, never
 printjson(db.runCommand({ doltConflicts: 1 }).conflicts)
 // Expected: one entry
 //   { conflictId: "<hash>", type: "metadata", name: "items",
+//     reason: { code: "bothModified",
+//               message: "branch 'main' (ours) and branch 'feature' (theirs) both changed the validator/options of \"items\"" },
 //     base:   { validator: { age: { $gte: 0  } }, validationLevel: "...", validationAction: "..." },
 //     ours:   { validator: { age: { $gte: 21 } }, ..., diffType: "modified" },
 //     theirs: { validator: { age: { $gte: 18 } }, ..., diffType: "modified" } }
@@ -206,7 +208,8 @@ db.runCommand({ doltMerge: 1, continue: 1 })
 Key checks:
 - `doltConflicts` reports a single `type: "metadata"` entry on `items`; the
   string `__dumbo_catalog__` never appears anywhere in the output.
-- The entry carries `base` / `ours` / `theirs` validator definitions.
+- The entry carries a `reason` (`{ code, message }`) naming the divergence, and
+  the `base` / `ours` / `theirs` validator definitions.
 - After resolving and continuing, `items`' validator is the chosen one, and the
   merge completes (`ok: 1`).
 

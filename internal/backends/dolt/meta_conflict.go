@@ -60,20 +60,55 @@ func collMetaFromBSONHex(s string) (*collMeta, error) {
 // never exposed. base/ours/theirs are the per-collection metadata on each side
 // (nil where that side had no metadata for the collection).
 type metaConflictEntry struct {
-	coll      string
-	id        string
-	base      *collMeta
-	ours      *collMeta
-	theirs    *collMeta
-	ourDiff   string // "added", "modified", "deleted"
-	theirDiff string
-	resolved  bool
+	coll          string
+	id            string
+	base          *collMeta
+	ours          *collMeta
+	theirs        *collMeta
+	ourDiff       string // "added", "modified", "deleted"
+	theirDiff     string
+	reasonCode    string
+	reasonMessage string
+	resolved      bool
+}
+
+// metaReasonCode classifies a metadata conflict the way documentEditReasonCode
+// does for documents: "bothCreated" (both branches created the collection with
+// different metadata, no base), "modifyDelete" / "deleteModify" (one side
+// dropped the collection while the other changed its metadata), or the default
+// "bothModified" (both changed the same collection's validator/options).
+func metaReasonCode(base *collMeta, ourDiff, theirDiff string) string {
+	switch {
+	case ourDiff == "deleted" && theirDiff != "deleted":
+		return "deleteModify"
+	case ourDiff != "deleted" && theirDiff == "deleted":
+		return "modifyDelete"
+	case base == nil:
+		return "bothCreated"
+	default:
+		return "bothModified"
+	}
+}
+
+// metaReasonMessage renders a human-readable explanation naming each side.
+// oursDesc/theirsDesc identify the branches, e.g. "branch 'main' (ours)".
+func metaReasonMessage(code, coll, oursDesc, theirsDesc string) string {
+	switch code {
+	case "bothCreated":
+		return fmt.Sprintf("%s and %s both created %q with a different validator/options", oursDesc, theirsDesc, coll)
+	case "modifyDelete":
+		return fmt.Sprintf("%s changed the validator/options of %q; %s dropped the collection", oursDesc, coll, theirsDesc)
+	case "deleteModify":
+		return fmt.Sprintf("%s dropped %q; %s changed its validator/options", oursDesc, coll, theirsDesc)
+	default:
+		return fmt.Sprintf("%s and %s both changed the validator/options of %q", oursDesc, theirsDesc, coll)
+	}
 }
 
 // metaConflictsFromCatalog converts divergent __dumbo_catalog__ document
 // conflicts into per-owning-collection metadata conflicts. Each catalog doc's
 // _id is its collection name, so the conflict is re-keyed onto that collection.
-func metaConflictsFromCatalog(ctx context.Context, state *dbState, conflicts []*conflictEntry) (map[string]*metaConflictEntry, error) {
+func metaConflictsFromCatalog(ctx context.Context, state *dbState, conflicts []*conflictEntry, oursDesc, theirsDesc string) (map[string]*metaConflictEntry, error) {
 	decode := func(v val.Tuple) (*collMeta, string, error) {
 		if v == nil {
 			return nil, "", nil
@@ -107,14 +142,17 @@ func metaConflictsFromCatalog(ctx context.Context, state *dbState, conflicts []*
 		if coll == "" {
 			continue
 		}
+		code := metaReasonCode(baseMeta, c.ourDiffType, c.theirDiffType)
 		out[coll] = &metaConflictEntry{
-			coll:      coll,
-			id:        c.id,
-			base:      baseMeta,
-			ours:      oursMeta,
-			theirs:    theirsMeta,
-			ourDiff:   c.ourDiffType,
-			theirDiff: c.theirDiffType,
+			coll:          coll,
+			id:            c.id,
+			base:          baseMeta,
+			ours:          oursMeta,
+			theirs:        theirsMeta,
+			ourDiff:       c.ourDiffType,
+			theirDiff:     c.theirDiffType,
+			reasonCode:    code,
+			reasonMessage: metaReasonMessage(code, coll, oursDesc, theirsDesc),
 		}
 	}
 	return out, nil

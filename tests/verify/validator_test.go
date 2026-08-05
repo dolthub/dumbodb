@@ -282,6 +282,11 @@ func TestValidatorVerify(t *testing.T) {
 		assertAgeGte(t, mc["ours"], 21)
 		assertAgeGte(t, mc["theirs"], 18)
 
+		reason := mc["reason"].(bson.M)
+		assert.Equal(t, "bothModified", reason["code"], "both branches changed the validator")
+		assert.Contains(t, reason["message"], "both changed the validator/options",
+			"reason names the divergence: %v", reason["message"])
+
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: 1},
 			{Key: "collection", Value: "items"},

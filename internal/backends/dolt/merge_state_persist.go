@@ -67,14 +67,16 @@ type mergeStateDisk struct {
 // metaConflictDisk persists one collection-metadata merge conflict. Each side's
 // metadata is hex-encoded BSON (empty when that side lacked it).
 type metaConflictDisk struct {
-	Coll      string `json:"coll"`
-	ID        string `json:"id"`
-	OurDiff   string `json:"ourDiff"`
-	TheirDiff string `json:"theirDiff"`
-	Resolved  bool   `json:"resolved"`
-	BaseHex   string `json:"base,omitempty"`
-	OursHex   string `json:"ours,omitempty"`
-	TheirsHex string `json:"theirs,omitempty"`
+	Coll          string `json:"coll"`
+	ID            string `json:"id"`
+	OurDiff       string `json:"ourDiff"`
+	TheirDiff     string `json:"theirDiff"`
+	ReasonCode    string `json:"reasonCode,omitempty"`
+	ReasonMessage string `json:"reasonMessage,omitempty"`
+	Resolved      bool   `json:"resolved"`
+	BaseHex       string `json:"base,omitempty"`
+	OursHex       string `json:"ours,omitempty"`
+	TheirsHex     string `json:"theirs,omitempty"`
 }
 
 // viewConflictDisk persists one view-definition merge conflict. Each side's
@@ -158,7 +160,7 @@ func saveMergeState(ctx context.Context, state *dbState, ms *mergeInProgress) er
 	}
 
 	for _, mc := range ms.metaConflicts {
-		md := metaConflictDisk{Coll: mc.coll, ID: mc.id, OurDiff: mc.ourDiff, TheirDiff: mc.theirDiff, Resolved: mc.resolved}
+		md := metaConflictDisk{Coll: mc.coll, ID: mc.id, OurDiff: mc.ourDiff, TheirDiff: mc.theirDiff, ReasonCode: mc.reasonCode, ReasonMessage: mc.reasonMessage, Resolved: mc.resolved}
 		if mc.base != nil {
 			if md.BaseHex, err = collMetaToBSONHex(mc.coll, mc.base); err != nil {
 				return fmt.Errorf("encoding base metadata conflict %q: %w", mc.coll, err)
@@ -311,7 +313,7 @@ func loadMergeState(ctx context.Context, state *dbState) (*mergeInProgress, erro
 	if len(disk.MetaConflicts) > 0 {
 		ms.metaConflicts = make(map[string]*metaConflictEntry, len(disk.MetaConflicts))
 		for _, md := range disk.MetaConflicts {
-			mce := &metaConflictEntry{coll: md.Coll, id: md.ID, ourDiff: md.OurDiff, theirDiff: md.TheirDiff, resolved: md.Resolved}
+			mce := &metaConflictEntry{coll: md.Coll, id: md.ID, ourDiff: md.OurDiff, theirDiff: md.TheirDiff, reasonCode: md.ReasonCode, reasonMessage: md.ReasonMessage, resolved: md.Resolved}
 			if md.BaseHex != "" {
 				if mce.base, err = collMetaFromBSONHex(md.BaseHex); err != nil {
 					return nil, fmt.Errorf("decoding base metadata conflict %q: %w", md.Coll, err)
