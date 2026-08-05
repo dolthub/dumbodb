@@ -191,12 +191,17 @@ type CollModParams struct {
 	ValidationAction string
 	// CappedSize, when > 0, converts the collection to a capped collection with this size in bytes.
 	CappedSize int64
-	// SetView is true when the caller redefines a view (collMod on a view);
-	// ViewOn and ViewPipeline carry the new definition.
-	SetView      bool
-	ViewOn       string
-	ViewPipeline *types.Array
-	_            struct{} // prevent unkeyed literals
+	// SetView is true when the caller redefines a view (collMod on a view).
+	// ViewOn and ViewPipeline carry the new definition; SetViewOn and
+	// SetViewPipeline mark which of the two the caller actually supplied.
+	// MongoDB permits redefining just one -- the omitted field keeps its
+	// existing value -- so the backend merges only the supplied fields.
+	SetView         bool
+	ViewOn          string
+	SetViewOn       bool
+	ViewPipeline    *types.Array
+	SetViewPipeline bool
+	_               struct{} // prevent unkeyed literals
 }
 
 // CreateCollection creates a new collection with valid name in the database; it should not already exist.

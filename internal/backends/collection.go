@@ -31,10 +31,10 @@ import (
 // the document primary key.
 const DefaultIndexName = "_id_"
 
-// ReservedMetadataIndexName is a reserved key in a collection's secondary-index
-// AddressMap under which per-collection metadata (collation, validator) is
-// stored as a BSON blob. It is not a real index: user index creation with this
-// name is rejected, and it is filtered from listIndexes.
+// ReservedMetadataIndexName is a reserved index name kept rejected to avoid
+// collisions with DumboDB internals. Per-collection metadata now lives in the
+// ReservedCatalogName collection, not under this key; the name remains reserved
+// so user index creation with it is rejected and it is filtered from listIndexes.
 const ReservedMetadataIndexName = "__dumbo_metadata__"
 
 // ReservedCatalogName is the internal, application-managed collection that

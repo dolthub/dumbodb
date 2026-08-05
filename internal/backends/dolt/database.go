@@ -455,10 +455,17 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 			return err
 		}
 		if isView {
-			viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
-				ViewOn:   params.ViewOn,
-				Pipeline: params.ViewPipeline,
-			})
+			vm, err := readViewChunk(ctx, state.ns, entryHash)
+			if err != nil {
+				return err
+			}
+			if params.SetViewOn {
+				vm.ViewOn = params.ViewOn
+			}
+			if params.SetViewPipeline {
+				vm.Pipeline = params.ViewPipeline
+			}
+			viewHash, err := writeViewChunk(ctx, state.ns, vm)
 			if err != nil {
 				return err
 			}

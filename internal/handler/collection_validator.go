@@ -29,7 +29,7 @@ import (
 // so enforcement is uniform.
 func collectionValidator(ctx context.Context, db backends.Database, collName string) (validator *types.Document, level, action string) {
 	collRes, err := db.ListCollections(ctx, &backends.ListCollectionsParams{Name: collName})
-	if err != nil || len(collRes.Collections) != 1 {
+	if err != nil || collRes == nil || len(collRes.Collections) != 1 {
 		return nil, "", ""
 	}
 	ci := collRes.Collections[0]

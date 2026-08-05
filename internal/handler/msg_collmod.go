@@ -160,6 +160,7 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 				handlererrors.ErrBadValue, "'viewOn' option must be a string", "collMod")
 		}
 		params.SetView = true
+		params.SetViewOn = true
 		params.ViewOn = viewOn
 	}
 	if pipelineVal, _ := document.Get("pipeline"); pipelineVal != nil {
@@ -169,6 +170,7 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 				handlererrors.ErrBadValue, "'pipeline' option must be an array", "collMod")
 		}
 		params.SetView = true
+		params.SetViewPipeline = true
 		params.ViewPipeline = pipeline
 	}
 
@@ -183,8 +185,9 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 
 	// A redefinition that would introduce a cycle or exceed the nesting depth is
-	// rejected, matching create-time validation.
-	if params.SetView {
+	// rejected, matching create-time validation. Only a changed viewOn can alter
+	// the view-resolution chain; a pipeline-only redefinition leaves it intact.
+	if params.SetViewOn {
 		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
 			return nil, verr
 		}
