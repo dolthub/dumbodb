@@ -149,7 +149,7 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgDumboDBMerge, Help: "Merges a source branch into the branch encoded in the database name."}, "doltMerge", "dumboMerge")
 	h.register(&Command{Handler: h.MsgDumboDBRebase, Help: "Reapplies commits on the current branch onto the tip of another branch, rewriting history."}, "doltRebase", "dumboRebase")
 	h.register(&Command{Handler: h.MsgDumboDBReset, Help: "Resets the branch HEAD to a target commit, optionally resetting the working tree."}, "doltReset", "dumboReset")
-	h.register(&Command{Handler: h.MsgDumboDBResolveConflict, Help: "Resolves a single document conflict in the current in-progress merge."}, "doltResolveConflict", "dumboResolveConflict")
+	h.register(&Command{Handler: h.MsgDumboDBResolveConflict, Help: "Resolves a single conflict (document, view, metadata, or validation) in the current in-progress merge, cherry-pick, or rebase."}, "doltResolveConflict", "dumboResolveConflict")
 	h.register(&Command{Handler: h.MsgDumboDBRevert, Help: "Reverts the changes introduced by the named commit, creating a new inverse commit."}, "doltRevert", "dumboRevert")
 	h.register(&Command{Handler: h.MsgDumboDBStatus, Help: "Returns uncommitted changes on the branch encoded in the database name."}, "doltStatus", "dumboStatus")
 	h.register(&Command{Handler: h.MsgDumboDBTag, Help: "Creates, lists, or deletes tags. Tags share the dolt tag refspec (refs/tags/<name>)."}, "doltTag", "dumboTag")

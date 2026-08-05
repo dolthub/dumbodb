@@ -436,9 +436,9 @@ func viewMetaToDefinition(vm *viewMeta) *backends.ViewDefinition {
 
 // DumboDBResolveConflict implements backends.VersioningBackend.
 //
-// Resolves a single document conflict in the current in-progress merge.
-// After resolution the conflict entry is marked resolved and the resolvedAM is
-// updated to reflect the chosen document state.
+// Resolves a single conflict -- document, view, metadata, or validation -- in
+// the current in-progress merge. After resolution the conflict entry is marked
+// resolved and the resolvedAM is updated to reflect the chosen state.
 func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {

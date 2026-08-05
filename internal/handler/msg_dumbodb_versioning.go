@@ -1228,7 +1228,11 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 
 // MsgDumboDBResolveConflict implements the `dumboDBResolveConflict` command.
 //
-// Resolves a single document conflict in the current in-progress merge.
+// Resolves a single conflict (document, view, metadata, or validation) in the
+// current in-progress merge, cherry-pick, or rebase. The valid `resolution`
+// values depend on the conflict type: document/view/metadata take
+// ours/theirs/custom; a validation conflict takes custom (a conforming
+// replacement) or drop.
 // Usage:
 //
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
