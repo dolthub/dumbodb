@@ -97,7 +97,7 @@ func TestViewStatusAndDiff(t *testing.T) {
 
 	// --- redefine the view ---
 	if err := db.CollMod(ctx, &backends.CollModParams{
-		Name: "v1", SetView: true, ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "inactive"),
+		Name: "v1", SetView: true, SetViewOn: true, ViewOn: "col", SetViewPipeline: true, ViewPipeline: matchOnPipeline(t, "status", "inactive"),
 	}); err != nil {
 		t.Fatalf("CollMod(view): %v", err)
 	}
@@ -213,14 +213,14 @@ func setupViewConflict(t *testing.T, b *Backend, dbName string) backends.Databas
 		t.Fatalf("Database(feature): %v", err)
 	}
 	if err := featDB.CollMod(ctx, &backends.CollModParams{
-		Name: "cv", SetView: true, ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "inactive"),
+		Name: "cv", SetView: true, SetViewOn: true, ViewOn: "col", SetViewPipeline: true, ViewPipeline: matchOnPipeline(t, "status", "inactive"),
 	}); err != nil {
 		t.Fatalf("CollMod(feature): %v", err)
 	}
 	commitBranch(t, b, dbName, "feature", "redefine cv on feature")
 
 	if err := mainDB.CollMod(ctx, &backends.CollModParams{
-		Name: "cv", SetView: true, ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "pending"),
+		Name: "cv", SetView: true, SetViewOn: true, ViewOn: "col", SetViewPipeline: true, ViewPipeline: matchOnPipeline(t, "status", "pending"),
 	}); err != nil {
 		t.Fatalf("CollMod(main): %v", err)
 	}
