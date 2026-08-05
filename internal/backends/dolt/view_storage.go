@@ -30,10 +30,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// A view lives in the collections AddressMap as a BlobFileID chunk (the type
-// ns.WriteBytes produces, exactly as index-entry chunks are stored) holding a
-// self-describing metadata document. The "type" field discriminates the blob so
-// the same mechanism can carry other standalone namespace metadata later.
 const (
 	nsMetaTypeKey    = "type"
 	nsMetaTypeView   = "view"
@@ -42,9 +38,6 @@ const (
 	viewCollationKey = "collation"
 )
 
-// writeViewChunk serializes a view definition to a self-describing BSON blob and
-// writes it via the node store, returning the BlobFileID chunk address to store
-// under the view's name in the collections AddressMap.
 func writeViewChunk(ctx context.Context, ns tree.NodeStore, vm *viewMeta) (hash.Hash, error) {
 	pipeline := vm.Pipeline
 	if pipeline == nil {
@@ -74,9 +67,6 @@ func writeViewChunk(ctx context.Context, ns tree.NodeStore, vm *viewMeta) (hash.
 	return addr, nil
 }
 
-// viewMetaToBSONHex serializes a view definition to hex-encoded BSON, used to
-// persist in-progress view merge conflicts in the merge-state file (self-
-// contained, so no chunk-store GC dependency).
 func viewMetaToBSONHex(vm *viewMeta) (string, error) {
 	pipeline := vm.Pipeline
 	if pipeline == nil {
@@ -102,7 +92,6 @@ func viewMetaToBSONHex(vm *viewMeta) (string, error) {
 	return hex.EncodeToString(stored), nil
 }
 
-// viewMetaFromBSONHex is the inverse of viewMetaToBSONHex.
 func viewMetaFromBSONHex(s string) (*viewMeta, error) {
 	stored, err := hex.DecodeString(s)
 	if err != nil {
@@ -125,7 +114,6 @@ func viewMetaFromBSONHex(s string) (*viewMeta, error) {
 	return vm, nil
 }
 
-// readViewChunk decodes the view definition stored at h.
 func readViewChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*viewMeta, error) {
 	stored, err := ns.ReadBytes(ctx, h)
 	if err != nil {
@@ -148,12 +136,6 @@ func readViewChunk(ctx context.Context, ns tree.NodeStore, h hash.Hash) (*viewMe
 	return vm, nil
 }
 
-// diffViewEntries compares the view (BlobFileID) entries of two collections
-// AddressMaps and returns the lifecycle changes, sorted by name. A name that is
-// a view on both sides with differing blob hashes is "modified"; present only
-// in b is "added"; present only in a (or replaced by a collection in b) is
-// "deleted". Names that are collections on both sides are ignored here (the
-// collection diff handles them).
 func diffViewEntries(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, aAM, bAM prolly.AddressMap) ([]backends.ViewChange, error) {
 	names := map[string]struct{}{}
 	collect := func(am prolly.AddressMap) error {
@@ -239,9 +221,8 @@ func diffViewEntries(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeS
 	return out, nil
 }
 
-// isViewEntry reports whether the collections-AddressMap entry at h is a view
-// (a BlobFileID chunk) rather than a collection (a TableFileID DTBL chunk).
-// An empty hash is not a view.
+// isViewEntry reports whether the entry at h is a view (BlobFileID chunk) rather
+// than a collection (TableFileID DTBL chunk). An empty hash is not a view.
 func isViewEntry(ctx context.Context, cs *nbs.GenerationalNBS, h hash.Hash) (bool, error) {
 	if h.IsEmpty() {
 		return false, nil

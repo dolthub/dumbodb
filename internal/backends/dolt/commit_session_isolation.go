@@ -61,11 +61,6 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// commitAndReset commits am as a single-parent commit on branch's current
-	// HEAD, resets the session's working set for this branch to clean, and
-	// restores the other branches' overlays across the transaction clear (the
-	// next StartTransaction wipes all branchStates; the committed branch reloads
-	// clean from disk via persistAM).
 	commitAndReset := func(am prolly.AddressMap, msg, author string) (*backends.CommitResult, error) {
 		preservedWSs := make(map[string]*doltdb.WorkingSet)
 		for _, q := range sess.DirtyBranchRevisions() {
@@ -120,19 +115,17 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		}, nil
 	}
 
-	// Finalize an in-progress session commit once its conflicts are resolved:
-	// commit the resolved working set on top of the current HEAD.
 	if ms := db.mergeState; ms != nil && ms.isSessionCommit {
 		if ms.hasUnresolvedConflicts() {
 			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
 		}
-		_ = clearConflictArtifacts(ctx, db, ms) // best-effort
+		_ = clearConflictArtifacts(ctx, db, ms)
 		res, err := commitAndReset(ms.resolvedAM, message, params.Author)
 		if err != nil {
 			return nil, err
 		}
 		db.mergeState = nil
-		_ = clearMergeState(db) // best-effort
+		_ = clearMergeState(db)
 		return res, nil
 	}
 
@@ -140,11 +133,6 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		return nil, backends.ErrEmptyCommit
 	}
 
-	// A --session-isolation commit is a 3-way merge of the session's working set
-	// against the current branch HEAD, run through the SAME conflict machinery as
-	// doltMerge (base = the session's pinned fork-point HEAD; ours = the session
-	// working set; theirs = the advanced on-disk HEAD). This replaces dsess's
-	// CommitWorkingSet, which hard-errored on any conflict with no resolution path.
 	baseCommit, err := sess.GetHeadCommit(sqlCtx, qualified)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: resolving session base commit: %w", err)
@@ -194,13 +182,8 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 			resolvedAM:      mergedAM,
 			isSessionCommit: true,
 		}
-		// Unlike doltMerge, a session commit must NOT touch the shared branch AM
-		// or working set: other sessions read those and would see this session's
-		// in-progress merge. The conflict/resolution state lives entirely in
-		// db.mergeState (in memory) until finalize commits it.
 		return nil, &backends.MergeConflictError{Conflicts: db.mergeState.summaries()}
 	}
 
-	// Clean merge: commit the merged working set on top of HEAD.
 	return commitAndReset(mergedAM, message, params.Author)
 }

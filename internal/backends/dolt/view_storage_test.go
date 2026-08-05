@@ -24,7 +24,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// matchStagePipeline builds a one-stage {$match:{status:"active"}} pipeline.
 func matchStagePipeline(t *testing.T) *types.Array {
 	t.Helper()
 	match, err := types.NewDocument("status", "active")
@@ -52,9 +51,8 @@ func findView(t *testing.T, db backends.Database, name string) backends.Collecti
 	return res.Collections[0]
 }
 
-// TestViewDurableAcrossRestart verifies a view definition survives a backend
-// close and reopen: it is stored in the collections AddressMap as a blob, not
-// in an in-memory map (workspace-z0i.1).
+// A view definition survives close/reopen -- stored in the collections
+// AddressMap as a blob, not an in-memory map (workspace-z0i.1).
 func TestViewDurableAcrossRestart(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-view-durable-*")
 	if err != nil {
@@ -65,7 +63,6 @@ func TestViewDurableAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	// --- Phase 1: create a view ---
 	b1, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (open): %v", err)
@@ -83,7 +80,6 @@ func TestViewDurableAcrossRestart(t *testing.T) {
 	}
 	b1.Close()
 
-	// --- Phase 2: reopen and confirm the view is still there ---
 	b2, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
@@ -106,8 +102,6 @@ func TestViewDurableAcrossRestart(t *testing.T) {
 	}
 }
 
-// TestViewDropDurable verifies dropping a view removes it from the durable
-// catalog so it does not reappear after reopen.
 func TestViewDropDurable(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-view-drop-*")
 	if err != nil {
@@ -154,10 +148,8 @@ func TestViewDropDurable(t *testing.T) {
 	}
 }
 
-// TestVersionControlIgnoresViews verifies that version-control commands do not
-// break when a view shares the collections AddressMap with a collection. Views
-// are not yet surfaced in status/diff (workspace-z0i.7); the walks must skip the
-// view blob rather than try to open it as a document map.
+// Version-control walks must skip a view blob sharing the collections AddressMap
+// rather than open it as a document map (workspace-z0i.7).
 func TestVersionControlIgnoresViews(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-view-vc-*")
 	if err != nil {

@@ -77,7 +77,6 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 		return prolly.Map{}, fmt.Errorf("unexpected file ID %q for collection (want DTBL)", fileID)
 	}
 
-	// DTBL format: read primary_index inline bytes to reconstruct the prolly.Map.
 	tbl, err := serial.TryGetRootAsTable(chunk.Data(), serial.MessagePrefixSz)
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL: %w", err)

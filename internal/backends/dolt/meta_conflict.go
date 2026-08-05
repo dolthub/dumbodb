@@ -27,9 +27,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// collMetaToBSONHex / collMetaFromBSONHex persist a per-collection metadata doc
-// in the merge-state file (self-contained, no chunk-store dependency), mirroring
-// the view-conflict persistence.
 func collMetaToBSONHex(coll string, m *collMeta) (string, error) {
 	doc, err := collMetaToDoc(coll, m)
 	if err != nil {
@@ -54,29 +51,22 @@ func collMetaFromBSONHex(s string) (*collMeta, error) {
 	return docToCollMeta(doc), nil
 }
 
-// metaConflictEntry is a collection-metadata (validator/options) merge conflict:
-// the same collection's durable metadata diverged on both branches. It is
-// surfaced on the OWNING collection -- the internal __dumbo_catalog__ name is
-// never exposed. base/ours/theirs are the per-collection metadata on each side
-// (nil where that side had no metadata for the collection).
+// metaConflictEntry is a collection-metadata merge conflict, surfaced on the
+// OWNING collection -- the internal __dumbo_catalog__ name is never exposed.
+// base/ours/theirs are nil where that side had no metadata for the collection.
 type metaConflictEntry struct {
 	coll          string
 	id            string
 	base          *collMeta
 	ours          *collMeta
 	theirs        *collMeta
-	ourDiff       string // "added", "modified", "deleted"
+	ourDiff       string
 	theirDiff     string
 	reasonCode    string
 	reasonMessage string
 	resolved      bool
 }
 
-// metaReasonCode classifies a metadata conflict the way documentEditReasonCode
-// does for documents: "bothCreated" (both branches created the collection with
-// different metadata, no base), "modifyDelete" / "deleteModify" (one side
-// dropped the collection while the other changed its metadata), or the default
-// "bothModified" (both changed the same collection's validator/options).
 func metaReasonCode(base *collMeta, ourDiff, theirDiff string) string {
 	switch {
 	case ourDiff == "deleted" && theirDiff != "deleted":
@@ -90,8 +80,6 @@ func metaReasonCode(base *collMeta, ourDiff, theirDiff string) string {
 	}
 }
 
-// metaReasonMessage renders a human-readable explanation naming each side.
-// oursDesc/theirsDesc identify the branches, e.g. "branch 'main' (ours)".
 func metaReasonMessage(code, coll, oursDesc, theirsDesc string) string {
 	switch code {
 	case "bothCreated":
@@ -105,9 +93,6 @@ func metaReasonMessage(code, coll, oursDesc, theirsDesc string) string {
 	}
 }
 
-// metaConflictsFromCatalog converts divergent __dumbo_catalog__ document
-// conflicts into per-owning-collection metadata conflicts. Each catalog doc's
-// _id is its collection name, so the conflict is re-keyed onto that collection.
 func metaConflictsFromCatalog(ctx context.Context, state *dbState, conflicts []*conflictEntry, oursDesc, theirsDesc string) (map[string]*metaConflictEntry, error) {
 	decode := func(v val.Tuple) (*collMeta, string, error) {
 		if v == nil {
@@ -167,11 +152,9 @@ func firstNonEmpty(ss ...string) string {
 	return ""
 }
 
-// metaFromResolveValue builds the collMeta for a "custom" metadata resolution:
-// it starts from an existing side (to preserve the collection's UUID and any
-// timeseries fields, which the user does not restate) and overrides the
-// user-facing validator / validationLevel / validationAction from the supplied
-// value document.
+// metaFromResolveValue builds the collMeta for a "custom" metadata resolution,
+// starting from an existing side to preserve the collection UUID and timeseries
+// fields the user does not restate.
 func metaFromResolveValue(value *types.Document, mce *metaConflictEntry) *collMeta {
 	var m collMeta
 	switch {
@@ -203,9 +186,8 @@ func metaFromResolveValue(value *types.Document, mce *metaConflictEntry) *collMe
 }
 
 // reconcileMetaCollExistence makes the collection's DTBL entry in the resolved
-// AddressMap match the side chosen for the metadata resolution (ours/custom ->
-// intoHash, theirs -> theirHash). Used only for modify/delete metadata
-// conflicts, where the collection was added or dropped on one side.
+// AddressMap match the chosen side. Used only for modify/delete metadata
+// conflicts.
 func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, ms *mergeInProgress, editor prolly.AddressMapEditor, coll, resolution string) error {
 	chosenHash := ms.intoHash
 	if resolution == "theirs" {
@@ -235,10 +217,8 @@ func (b *Backend) reconcileMetaCollExistence(ctx context.Context, db *dbState, m
 }
 
 // applyResolvedAM reflects a resolved AddressMap into the shared branch working
-// set so doltDiff / doltStatus / dolt_conflicts see the resolved state. For a
-// --session-isolation commit it is a NO-OP: other sessions read the shared branch
-// state, so the resolution must stay in ms.resolvedAM (in memory) until finalize
-// commits it. Callers hold db.mu.
+// set. For a --session-isolation commit it is a NO-OP (the resolution stays in
+// ms.resolvedAM until finalize commits it). Callers hold db.mu.
 func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInProgress, finalAM prolly.AddressMap) error {
 	if ms.isSessionCommit {
 		return nil
@@ -254,20 +234,13 @@ func (b *Backend) applyResolvedAM(ctx context.Context, db *dbState, ms *mergeInP
 	return nil
 }
 
-// resolveMetaConflict resolves a single collection-metadata merge conflict by
-// choosing ours, theirs, or a custom definition, rewriting the collection's
-// metadata in the resolved __dumbo_catalog__. The caller holds db.mu (write
-// lock). Mirrors resolveViewConflict.
+// resolveMetaConflict resolves a collection-metadata merge conflict. The caller
+// holds db.mu (write lock).
 func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *mergeInProgress, mce *metaConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	if mce.resolved {
 		return nil, fmt.Errorf("DumboDBResolveConflict: metadata conflict for %q is already resolved", params.Collection)
 	}
 
-	// newMeta is the metadata to write for the chosen side (nil => that side has
-	// no metadata for the collection, i.e. deletes it). Unlike views, "ours" is
-	// not a no-op here: a modify/delete metadata conflict may need the
-	// collection's existence reconciled below, so all three resolutions flow
-	// through the same rewrite path.
 	var newMeta *collMeta
 	switch params.Resolution {
 	case "ours":
@@ -294,13 +267,6 @@ func (b *Backend) resolveMetaConflict(ctx context.Context, db *dbState, ms *merg
 		}
 	}
 
-	// When the collection was dropped on one side while its metadata changed on
-	// the other (a modify/delete), the AM merge already picked one side's
-	// existence for the collection's DTBL -- which may disagree with the side
-	// the user just chose. Reconcile the collection entry to the chosen side so
-	// existence and metadata never disagree. Gated to the delete case: a plain
-	// modify/modify metadata conflict leaves the DTBL consistent, and such a
-	// deleted collection has no document-level merge to clobber.
 	if mce.ourDiff == "deleted" || mce.theirDiff == "deleted" {
 		if err := b.reconcileMetaCollExistence(ctx, db, ms, editor, mce.coll, params.Resolution); err != nil {
 			return nil, err

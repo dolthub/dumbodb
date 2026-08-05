@@ -160,16 +160,11 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 
 	var colls []backends.CollectionInfo
 
-	// Per-collection metadata (UUID, validator, capped, timeseries) is read from
-	// the durable, branch-scoped catalog for this AM.
 	catalog, err := listCatalog(ctx, state, am)
 	if err != nil {
 		return nil, err
 	}
 
-	// Each collections-AddressMap entry is either a collection (DTBL chunk) or
-	// a view (BlobFileID metadata chunk); classify by chunk type and surface
-	// views with their definition. The internal catalog collection is hidden.
 	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
 		if name == reservedCatalogName {
 			return nil
@@ -200,10 +195,8 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		if m := catalog[name]; m != nil {
 			ci.UUID = m.UUID
 			ci.Validator = m.Validator
-			// listCollections must match MongoDB, which does NOT materialize the
-			// validationLevel/validationAction defaults -- it reports only what was
-			// explicitly set. (The DumboDB-only conflict/diff/status/log outputs do
-			// surface the effective defaults; see collMeta.effectiveValidation.)
+			// listCollections must mirror MongoDB, which does NOT materialize the
+			// validationLevel/validationAction defaults (see collMeta.effectiveValidation).
 			ci.ValidationLevel = m.ValidationLevel
 			ci.ValidationAction = m.ValidationAction
 			ci.IsTimeSeries = m.IsTimeSeries
@@ -233,8 +226,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// A view and a collection share the collections AddressMap namespace, so a
-	// single existence check below covers a name already taken by either.
 	branchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
 		return err
@@ -249,9 +240,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
 	}
 
-	// If viewOn is set, this is a view: persist a self-describing metadata blob
-	// under the view name in the collections AddressMap (no prolly map). This is
-	// what makes views durable, branch-scoped, and versioned like collections.
 	if params.ViewOn != "" {
 		viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
 			ViewOn:   params.ViewOn,
@@ -279,10 +267,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if err != nil {
 		return err
 	}
-	// The collection and its catalog metadata land in one commit: the catalog
-	// write rides along in the same AddressMap transaction as the create, so a
-	// user sees "create collection X" (never the internal catalog) and no
-	// separate catalog commit races a concurrent session's commit.
 	meta := &collMeta{
 		UUID:             collectionUUID(db.name, params.Name),
 		Validator:        params.Validator,
@@ -323,8 +307,6 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// A view lives in the collections AddressMap like a collection, so the
-	// generic existence check and AddressMap delete below drop it uniformly.
 	dropBranchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
 		return err
@@ -390,8 +372,6 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
 
-	// Read the metadata before the transaction so the rename moves it in the
-	// same commit as the collection entry (preserving the UUID).
 	meta, mErr := readCatalogDoc(ctx, state, renameBranchAM, params.OldName)
 	if mErr != nil {
 		return fmt.Errorf("reading collection metadata for %q: %w", params.OldName, mErr)
@@ -442,9 +422,6 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 			fmt.Errorf("collection %q does not exist in %q", params.Name, db.name))
 	}
 
-	// Redefining a view: rewrite its metadata blob in place. Only applies when
-	// the target is actually a view; view fields on a real collection are
-	// ignored (as they were before views became first-class).
 	if params.SetView {
 		entryHash, err := collModBranchAM.Get(ctx, params.Name)
 		if err != nil {
@@ -475,8 +452,6 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 		}
 	}
 
-	// Update the validator in the durable catalog (read-modify-write so
-	// unrelated fields such as the UUID are preserved).
 	meta, err := readCatalogDoc(ctx, state, collModBranchAM, params.Name)
 	if err != nil {
 		return fmt.Errorf("reading collection metadata for %q: %w", params.Name, err)

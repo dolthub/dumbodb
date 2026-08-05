@@ -20,8 +20,7 @@ package verify
 // modifies into a state that violates the resulting validator -- and that was
 // not already violating at the base -- surfaces a type:"validation" conflict,
 // resolved by replace-to-conform ("custom") or "drop". A document already in a
-// data conflict is validated at resolution time instead (trigger 2). These
-// cases walk the base x ours x theirs matrix.
+// data conflict is validated at resolution time instead (trigger 2).
 
 import (
 	"context"
@@ -36,8 +35,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// conflictsByType returns the doltConflicts entries whose type == typ, asserting
-// the internal catalog is never surfaced.
 func conflictsByType(t *testing.T, mainDB *mongo.Database, typ string) []bson.M {
 	t.Helper()
 	var rc bson.M
@@ -54,7 +51,6 @@ func conflictsByType(t *testing.T, mainDB *mongo.Database, typ string) []bson.M 
 	return out
 }
 
-// resolveConflict runs a single doltResolveConflict (no continue).
 func resolveConflict(t *testing.T, mainDB *mongo.Database, coll, conflictID, resolution string, value bson.D) error {
 	cmd := bson.D{
 		{Key: "doltResolveConflict", Value: 1},
@@ -74,7 +70,6 @@ func continueMerge(t *testing.T, mainDB *mongo.Database) {
 		bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
 }
 
-// ageOf reads the age field of a document by _id.
 func ageOf(t *testing.T, coll *mongo.Collection, id int) (int32, bool) {
 	t.Helper()
 	var got bson.M
@@ -97,8 +92,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		return name, db
 	}
 
-	// addValidatorOnFeature branches feature from main and adds an age>=0
-	// validator (optionally with a validationAction) there, committing both.
 	addValidatorOnFeature := func(t *testing.T, dbName string, action string) {
 		vmBranch(t, env, dbName, "feature")
 		collmod := bson.D{{Key: "collMod", Value: "items"}, {Key: "validator", Value: valNonNegAge}}
@@ -109,10 +102,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		dumboDBCommit(t, env, dbName+"@feature", "feature: require age>=0", "bob <bob@widgets.io>")
 	}
 
-	// Doc Scenario 5: base = A, main inserts a violating doc; feature adds the
-	// validator (validationAction: error). The merge surfaces a validation
-	// conflict; a still-violating replacement is rejected; resolving to a
-	// conforming value (age 0) completes.
 	t.Run("Scenario5_DataViolation_ResolveCustom", func(t *testing.T) {
 		dbName, db := newDB("s5")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -134,12 +123,10 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 1, vc["documentId"])
 		require.NotNil(t, vc["validator"], "conflict carries the violated validator")
 
-		// A still-violating replacement is rejected.
 		require.Error(t, resolveConflict(t, mainDB, "items", vc["conflictId"].(string), "custom",
 			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-1)}}),
 			"a still-violating custom value must be rejected")
 
-		// Resolve to a conforming value (age 0).
 		require.NoError(t, resolveConflict(t, mainDB, "items", vc["conflictId"].(string), "custom",
 			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(0)}}))
 		continueMerge(t, mainDB)
@@ -148,8 +135,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 0, age)
 	})
 
-	// Doc Scenario 6, Cell 6a: base = A, insert a violating doc; resolve custom
-	// (age 5). Terse, matching the cell (the rejection path is Scenario 5).
 	t.Run("Cell6a_InsertViolator_ResolveCustom", func(t *testing.T) {
 		dbName, db := newDB("c6a")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -175,8 +160,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 5, age)
 	})
 
-	// base = A: main inserts a CONFORMING doc; feature adds the validator. Clean
-	// merge, no conflict.
 	t.Run("CleanInsertConforming_NoConflict", func(t *testing.T) {
 		dbName, db := newDB("insok")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -191,8 +174,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.EqualValues(t, 1, raw["ok"], "conforming insert must merge cleanly: %v", raw)
 	})
 
-	// base = C: main modifies a conforming doc into a violating one; feature adds
-	// the validator. Validation conflict; "drop" removes the offender.
 	t.Run("ModifyConformingToViolating_Conflict_ResolveDrop", func(t *testing.T) {
 		dbName, db := newDB("mod2viol")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -218,8 +199,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.False(t, ok, "dropped document is gone")
 	})
 
-	// base = X: a doc already violating at the base, untouched by both branches,
-	// is grandfathered when the validator arrives -- no conflict.
 	t.Run("GrandfatherBaseViolator_CleanCarryForward_NoConflict", func(t *testing.T) {
 		dbName, db := newDB("grand")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -228,7 +207,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "create items with grandfathered age -5", "alice <alice@acme.com>")
 		addValidatorOnFeature(t, dbName, "")
 
-		// main advances without touching _id:1 (insert a fresh conforming doc).
 		_, err = db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(9)}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: add conforming doc", "alice <alice@acme.com>")
@@ -241,11 +219,9 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, -5, age)
 	})
 
-	// base = X: a one-sided clean change that stays violating is grandfathered
-	// only when the merge leaves the doc untouched. Re-authoring it to another
-	// violating value is a conflict under action "error" (below) and allowed
-	// under "warn" (the following case). Grandfathering under error is limited to
-	// byte-for-byte unchanged documents.
+	// Grandfathering under validationAction "error" is limited to byte-for-byte
+	// unchanged documents: re-authoring a base violator to another violating value
+	// conflicts.
 	t.Run("BaseViolator_OneSidedChange_StillViolating_Error_Conflict", func(t *testing.T) {
 		dbName, db := newDB("x1sideErr")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -254,7 +230,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "create items with age -5", "alice <alice@acme.com>")
 		addValidatorOnFeature(t, dbName, "")
 
-		// main changes _id:1 to another still-violating value (no validator yet).
 		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-9)}}}})
 		require.NoError(t, err)
@@ -271,8 +246,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.False(t, ok, "offender dropped")
 	})
 
-	// base = X: the same one-sided re-authored violating value is allowed under
-	// validationAction "warn".
 	t.Run("BaseViolator_OneSidedChange_StillViolating_Warn_Allowed", func(t *testing.T) {
 		dbName, db := newDB("x1sideWarn")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -294,8 +267,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, -9, age)
 	})
 
-	// validationAction "warn" suppresses the merge conflict: the violating insert
-	// is allowed through.
 	t.Run("WarnAction_SuppressesConflict", func(t *testing.T) {
 		dbName, db := newDB("warn")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -314,8 +285,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, -5, age, "violating doc kept under warn")
 	})
 
-	// A divergent DATA conflict whose resolution would leave a violating value is
-	// rejected (trigger 2); a conforming side/replacement completes the merge.
 	t.Run("Trigger2_DataConflictResolvedToViolating_Rejected", func(t *testing.T) {
 		dbName, db := newDB("t2")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -323,7 +292,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "create items age 5", "alice <alice@acme.com>")
 
-		// feature: add validator AND modify _id:1 to a conforming value.
 		vmBranch(t, env, dbName, "feature")
 		featDB := env.Client.Database(dbName + "@feature")
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
@@ -334,7 +302,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName+"@feature", "feature: validator + age 7", "bob <bob@widgets.io>")
 
-		// main: modify _id:1 to a violating value (no validator active here yet).
 		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-5)}, {Key: "tag", Value: "m"}}}})
 		require.NoError(t, err)
@@ -348,11 +315,9 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.Len(t, docs, 1, "expected a document conflict on _id:1")
 		cid := docs[0]["conflictId"].(string)
 
-		// Resolving to ours (age -5) would leave a violating document -> rejected.
 		require.Error(t, resolveConflict(t, mainDB, "items", cid, "ours", nil),
 			"resolving a data conflict to a violating value must be rejected")
 
-		// Resolving to theirs (age 7, conforming) is accepted.
 		require.NoError(t, resolveConflict(t, mainDB, "items", cid, "theirs", nil))
 		continueMerge(t, mainDB)
 		age, ok := ageOf(t, mainDB.Collection("items"), 1)
@@ -360,9 +325,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 7, age)
 	})
 
-	// base = X data conflict: even though the base already violated, resolving the
-	// conflict to a still-violating value is rejected (authoring must conform);
-	// a conforming replacement completes it.
 	t.Run("Trigger2_BaseViolator_DataConflict_ResolvedToViolating_Rejected", func(t *testing.T) {
 		dbName, db := newDB("t2x")
 		require.NoError(t, db.CreateCollection(ctx, "items"))
@@ -370,8 +332,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "create items age -5", "alice <alice@acme.com>")
 
-		// feature: modify _id:1 (still violating) BEFORE adding the validator, then
-		// add the validator (grandfathers the local doc).
 		vmBranch(t, env, dbName, "feature")
 		featDB := env.Client.Database(dbName + "@feature")
 		_, err = featDB.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
@@ -382,7 +342,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		}).Err())
 		dumboDBCommit(t, env, dbName+"@feature", "feature: age -3 + validator", "bob <bob@widgets.io>")
 
-		// main: modify _id:1 to another violating value.
 		_, err = db.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 			bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-7)}, {Key: "tag", Value: "m"}}}})
 		require.NoError(t, err)
@@ -396,11 +355,9 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.Len(t, docs, 1)
 		cid := docs[0]["conflictId"].(string)
 
-		// Both sides violate; ours and theirs are both rejected.
 		require.Error(t, resolveConflict(t, mainDB, "items", cid, "ours", nil))
 		require.Error(t, resolveConflict(t, mainDB, "items", cid, "theirs", nil))
 
-		// Only a conforming replacement completes it.
 		require.NoError(t, resolveConflict(t, mainDB, "items", cid, "custom",
 			bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(2)}}))
 		continueMerge(t, mainDB)
@@ -409,10 +366,9 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		assert.EqualValues(t, 2, age)
 	})
 
-	// workspace-h0w.5: the validator DEFINITION conflicts AND a document violates
-	// the resolved validator. The definition conflict is resolved first (pinning
-	// the validator); continuing then re-pauses on the now-detectable document
-	// violation, which is resolved by replace-to-conform.
+	// workspace-h0w.5: when the validator DEFINITION conflicts AND a document
+	// violates the resolved validator, the definition conflict resolves first, then
+	// continuing re-pauses on the now-detectable document violation.
 	t.Run("MetaConflictThenValidationConflict_TwoPhase", func(t *testing.T) {
 		dbName, db := newDB("metathenval")
 		require.NoError(t, db.CreateCollection(ctx, "items",
@@ -421,15 +377,12 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "create validated items + doc", "alice <alice@acme.com>")
 
-		// feature: tighten the validator to age >= 10 (its grandfathered _id:1 stays).
 		vmBranch(t, env, dbName, "feature")
 		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
 		}).Err())
 		dumboDBCommit(t, env, dbName+"@feature", "feature: age >= 10", "bob <bob@widgets.io>")
 
-		// main: DIVERGENT validator (age >= 3) plus a new doc that conforms to age>=3
-		// but will violate feature's age>=10 once that side wins.
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(3)},
 		}).Err())
@@ -441,13 +394,11 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		raw := vmMerge(t, env, dbName, "feature")
 		require.EqualValues(t, 0, raw["ok"], "divergent validator must conflict: %v", raw)
 
-		// Phase 1: only the metadata conflict is visible (the doc check is deferred).
 		require.Empty(t, conflictsByType(t, mainDB, "validation"), "doc check deferred until validator pinned")
 		mc := conflictsByType(t, mainDB, "metadata")
 		require.Len(t, mc, 1)
 		require.NoError(t, resolveConflict(t, mainDB, "items", mc[0]["conflictId"].(string), "theirs", nil))
 
-		// Continue re-pauses: with age>=10 pinned, main's _id:2 (age 5) now violates.
 		cont := runCommandRaw(t, mainDB, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}})
 		require.EqualValues(t, 0, cont["ok"], "continue must re-pause on the validation conflict: %v", cont)
 
@@ -455,7 +406,6 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		require.Len(t, vals, 1, "the deferred document violation surfaces after the validator is pinned")
 		assert.EqualValues(t, 2, vals[0]["documentId"])
 
-		// Phase 2: replace-to-conform and finish.
 		require.NoError(t, resolveConflict(t, mainDB, "items", vals[0]["conflictId"].(string), "custom",
 			bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(12)}}))
 		continueMerge(t, mainDB)

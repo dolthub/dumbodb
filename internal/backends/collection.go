@@ -31,17 +31,13 @@ import (
 // the document primary key.
 const DefaultIndexName = "_id_"
 
-// ReservedMetadataIndexName is a reserved index name kept rejected to avoid
-// collisions with DumboDB internals. Per-collection metadata now lives in the
-// ReservedCatalogName collection, not under this key; the name remains reserved
-// so user index creation with it is rejected and it is filtered from listIndexes.
+// ReservedMetadataIndexName is a reserved index name: user index creation with
+// it is rejected and it is filtered from listIndexes.
 const ReservedMetadataIndexName = "__dumbo_metadata__"
 
-// ReservedCatalogName is the internal, application-managed collection that
-// durably stores per-collection metadata (one document per user collection). It
-// is invisible in normal usage: hidden from listCollections/dbStats and the
-// version-control walks, and rejected as a user collection name (create and
-// access) by validateCollectionName.
+// ReservedCatalogName is the internal collection that durably stores
+// per-collection metadata. It is hidden from listCollections/dbStats and the
+// version-control walks, and rejected as a user collection name.
 const ReservedCatalogName = "__dumbo_catalog__"
 
 // Collection is a generic interface for all backends for accessing collection.

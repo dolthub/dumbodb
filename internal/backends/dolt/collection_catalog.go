@@ -27,29 +27,17 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// collectionUUID derives a stable, name-based (v5) UUID for a collection from
-// its database and collection name. A deterministic UUID -- rather than a random
-// one -- means two clients that concurrently create (or auto-create on first
-// write) the same collection produce byte-identical catalog metadata, so their
-// branches merge cleanly instead of conflicting on a divergent random uuid field
-// (which under --session-isolation surfaced as a hard commit serialization
-// failure). MongoDB collection UUIDs are random and change on drop+recreate;
-// DumboDB parity only requires that a UUID is present, not its value.
+// collectionUUID derives a stable, name-based (v5) UUID so two clients that
+// concurrently create the same collection produce byte-identical catalog
+// metadata that merges cleanly instead of conflicting on a random uuid field.
 func collectionUUID(dbName, collName string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(dbName+"\x00"+collName)).String()
 }
 
-// reservedCatalogName is the internal collection that durably stores
-// per-collection metadata (one document per user collection, keyed by the
-// collection name). Because it is an ordinary per-branch collection, metadata is
-// durable, branch-scoped, and participates in commit/branch/merge for free. It
-// is hidden from listCollections and the version-control diff/status walks, and
-// rejected as a user collection name (see backends.validateCollectionName).
+// reservedCatalogName is hidden from listCollections and the diff/status walks,
+// and rejected as a user collection name (see backends.validateCollectionName).
 const reservedCatalogName = backends.ReservedCatalogName
 
-// collMeta is the persisted per-collection metadata document. Capped
-// configuration is deliberately absent: capped collections are rejected at the
-// API, so no capped collection can exist.
 type collMeta struct {
 	UUID             string
 	Validator        *types.Document
@@ -106,14 +94,10 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	return m
 }
 
-// effectiveValidation returns the collection's validationLevel and
-// validationAction with the effective defaults materialized: when a validator is
-// set, an unset level defaults to "strict" and an unset action to "error".
-// Without a validator both are meaningless and returned as stored (empty).
-//
-// Used only for the DumboDB-only conflict/diff/status/log surfaces. It is NOT
-// applied to listCollections, which must mirror MongoDB -- MongoDB reports only
-// the explicitly-set level/action there and omits the defaults.
+// effectiveValidation materializes the effective defaults: with a validator set,
+// an unset level defaults to "strict" and an unset action to "error". Used only
+// for DumboDB-only surfaces, NOT listCollections, which must mirror MongoDB and
+// report only the explicitly-set level/action.
 func (m *collMeta) effectiveValidation() (level, action string) {
 	level, action = m.ValidationLevel, m.ValidationAction
 	if m.Validator == nil {
@@ -128,7 +112,6 @@ func (m *collMeta) effectiveValidation() (level, action string) {
 	return level, action
 }
 
-// catalogKey is the document-map key for a collection's metadata entry.
 func catalogKey(collName string) (val.Tuple, error) {
 	h, err := hashID(collName)
 	if err != nil {
@@ -137,8 +120,8 @@ func catalogKey(collName string) (val.Tuple, error) {
 	return buildKey(h[:])
 }
 
-// catalogMapFromAM opens the catalog collection's document map from a
-// collections AddressMap, or an empty map if the catalog does not exist yet.
+// catalogMapFromAM opens the catalog document map from am, or an empty map if
+// the catalog does not exist yet.
 func catalogMapFromAM(ctx context.Context, state *dbState, am prolly.AddressMap) (prolly.Map, error) {
 	h, err := am.Get(ctx, reservedCatalogName)
 	if err != nil {
@@ -151,11 +134,8 @@ func catalogMapFromAM(ctx context.Context, state *dbState, am prolly.AddressMap)
 }
 
 // setCatalogEntry rebuilds the catalog DTBL from m and stages it in ed under the
-// reserved catalog name (Add if the catalog does not yet exist in am, else
-// Update). It performs no commit -- the catalog write rides along in the
-// caller's AddressMap transaction, so a DDL op (create/drop/rename) and its
-// metadata change land as a single commit rather than a stray "update catalog"
-// commit racing the DDL. The caller holds state.mu (write lock).
+// reserved catalog name. It performs no commit; the catalog write folds into the
+// caller's AddressMap transaction. The caller holds state.mu (write lock).
 func (state *dbState) setCatalogEntry(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, m prolly.Map) error {
 	emptyIdx, err := emptyIndexAM(state.ns)
 	if err != nil {
@@ -175,8 +155,7 @@ func (state *dbState) setCatalogEntry(ctx context.Context, am prolly.AddressMap,
 	return ed.Add(ctx, reservedCatalogName, dtblHash)
 }
 
-// applyCatalogUpsert stages the metadata document for collName into ed, reading
-// the current catalog from am (the pre-transaction AM, same source ed edits).
+// applyCatalogUpsert stages the metadata document for collName into ed.
 // Folds into the caller's transaction; performs no commit.
 func (state *dbState) applyCatalogUpsert(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, collName string, meta *collMeta) error {
 	catMap, err := catalogMapFromAM(ctx, state, am)
@@ -233,10 +212,10 @@ func (state *dbState) applyCatalogDelete(ctx context.Context, am prolly.AddressM
 }
 
 // applyCatalogRename moves oldName's metadata document to newName in a single
-// catalog rebuild (put newName, delete oldName), staged into ed. A single
-// setCatalogEntry is required because two independent applyCatalog* calls would
-// each rebuild the whole catalog DTBL from am and the second would clobber the
-// first. Folds into the caller's transaction; performs no commit.
+// catalog rebuild staged into ed. A single setCatalogEntry is required because
+// two independent applyCatalog* calls would each rebuild the whole catalog DTBL
+// from am and the second would clobber the first. Folds into the caller's
+// transaction; performs no commit.
 func (state *dbState) applyCatalogRename(ctx context.Context, am prolly.AddressMap, ed prolly.AddressMapEditor, oldName, newName string, meta *collMeta) error {
 	catMap, err := catalogMapFromAM(ctx, state, am)
 	if err != nil {
@@ -273,10 +252,8 @@ func (state *dbState) applyCatalogRename(ctx context.Context, am prolly.AddressM
 }
 
 // upsertCatalogDocMsg writes collName's metadata as a standalone commit with the
-// given message. Used only by metadata-only ops (collMod) that have no
-// collections-AM edit of their own to fold the catalog write into. The message
-// describes the user-facing operation -- never the internal catalog. The caller
-// holds state.mu (write lock).
+// given message. Used only by metadata-only ops (collMod). The caller holds
+// state.mu (write lock).
 func (state *dbState) upsertCatalogDocMsg(ctx context.Context, rootish, collName, message string, meta *collMeta) error {
 	am, err := state.getOrInitBranchAM(ctx, rootish)
 	if err != nil {
@@ -315,7 +292,6 @@ func readCatalogDoc(ctx context.Context, state *dbState, am prolly.AddressMap, c
 	return meta, nil
 }
 
-// listCatalog returns all collection metadata in am, keyed by collection name.
 func listCatalog(ctx context.Context, state *dbState, am prolly.AddressMap) (map[string]*collMeta, error) {
 	out := map[string]*collMeta{}
 	catMap, err := catalogMapFromAM(ctx, state, am)

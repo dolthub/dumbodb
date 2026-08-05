@@ -2831,9 +2831,6 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	// The freshly auto-created collection and its catalog metadata (a durable
-	// UUID) land in one commit. The collection did not exist, so neither does a
-	// catalog entry for it -- write it unconditionally.
 	createAM, err := state.getOrInitBranchAM(ctx, c.db.rootish)
 	if err != nil {
 		return prolly.Map{}, err

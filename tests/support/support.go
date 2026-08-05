@@ -285,7 +285,6 @@ func DecodeStatusResult(t *testing.T, raw bson.M) StatusResult {
 		cm, ok := ch.(bson.M)
 		require.True(t, ok, "changes entry is not a document, got %T", ch)
 
-		// Collections only; a view change carries a different payload.
 		if cm["type"] != "collection" {
 			continue
 		}

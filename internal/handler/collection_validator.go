@@ -25,8 +25,7 @@ import (
 // read from its durable metadata. Returns (nil, "", "") when no validator
 // applies -- the collection is absent, is a view, has no validator, or has
 // validationLevel "off". Otherwise the returned action is normalized to "error"
-// when unset. Used by every write path (insert/update/findAndModify/bulkWrite)
-// so enforcement is uniform.
+// when unset.
 func collectionValidator(ctx context.Context, db backends.Database, collName string) (validator *types.Document, level, action string) {
 	collRes, err := db.ListCollections(ctx, &backends.ListCollectionsParams{Name: collName})
 	if err != nil || collRes == nil || len(collRes.Collections) != 1 {

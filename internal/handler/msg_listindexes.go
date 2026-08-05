@@ -56,7 +56,6 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
-	// listIndexes is not supported on a view (a view has no indexes of its own).
 	if info, verr := lookupCollectionInfo(connCtx, db, collection); verr == nil && info != nil && info.IsView {
 		msg := fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collection)
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, document.Command())

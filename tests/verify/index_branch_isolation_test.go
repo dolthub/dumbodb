@@ -136,7 +136,6 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 		statusIdx := indexesOf(t, statusColls[0])
 		assert.Equal(t, []string{"by_name"}, mustStringSlice(t, statusIdx["added"]),
 			"dumboStatus must surface by_name in indexes.added before the commit")
-		// modified and removed are always present as empty arrays.
 		assert.Empty(t, mustStringSlice(t, statusIdx["modified"]),
 			"indexes.modified must be an empty array when nothing modified")
 		assert.Empty(t, mustStringSlice(t, statusIdx["removed"]),
@@ -326,9 +325,6 @@ func TestIndexBranchIsolationVerify(t *testing.T) {
 			"indexes.removed must be an empty array, not absent")
 		assert.Equal(t, []string{"by_x"}, mustStringSlice(t, statusIdx["modified"]))
 
-		// dumboDiff returns one entry in indexes.modified carrying both
-		// from (age) and to (name) definitions. indexes.added and
-		// indexes.removed are always present and empty here.
 		var diffRes bson.M
 		require.NoError(t, mdb.RunCommand(ctx, bson.D{{Key: "dumboDiff", Value: int32(1)}}).Decode(&diffRes))
 		diffColls := collectionChanges(t, diffRes)
@@ -401,8 +397,6 @@ func mustStringSlice(t *testing.T, v interface{}) []string {
 	return out
 }
 
-// collectionChanges returns the collection entries (type=="collection") from the
-// `changes` array of a dumboStatus/dumboDiff response.
 func collectionChanges(t *testing.T, raw bson.M) []bson.M {
 	t.Helper()
 	var out []bson.M
@@ -414,7 +408,6 @@ func collectionChanges(t *testing.T, raw bson.M) []bson.M {
 	return out
 }
 
-// indexesOf returns the `indexes` sub-document of a collection change entry.
 func indexesOf(t *testing.T, entry bson.M) bson.M {
 	t.Helper()
 	return mustMap(t, entry["indexes"])

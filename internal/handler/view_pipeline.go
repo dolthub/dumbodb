@@ -104,10 +104,7 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 
 // resolveViewChain flattens a view -- whose source may itself be a view -- into
 // a base collection name plus the ordered stage list to run over it. viewName
-// is the name of the view being read (the seed for cycle detection); viewOn and
-// viewPipeline are its definition. It walks the source chain inward, prepending
-// each inner view's pipeline ahead of the accumulated stages, until it reaches a
-// non-view namespace, enforcing cycle detection (GraphContainsCycle) and the
+// seeds cycle detection. Enforces cycle detection (GraphContainsCycle) and the
 // maximum nesting depth (ViewDepthLimitExceeded), matching MongoDB.
 func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array) (string, []aggregations.Stage, error) {
 	viewStages, err := buildViewPipelineStages(db, viewPipeline)
@@ -117,7 +114,7 @@ func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewO
 
 	seen := map[string]struct{}{viewName: {}}
 	source := viewOn
-	depth := 1 // the view being read counts as the first level
+	depth := 1
 
 	for {
 		srcInfo, err := lookupCollectionInfo(ctx, db, source)

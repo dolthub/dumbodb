@@ -27,12 +27,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
-// vmMatchPipeline is a one-stage {$match:{status:<v>}} view pipeline.
 func vmMatchPipeline(status string) bson.A {
 	return bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "status", Value: status}}}}}
 }
 
-// vmCreateView creates a view via the create command.
 func vmCreateView(t *testing.T, db *mongo.Database, name, viewOn string, pipeline bson.A) {
 	t.Helper()
 	require.NoError(t, db.RunCommand(context.Background(), bson.D{
@@ -42,7 +40,6 @@ func vmCreateView(t *testing.T, db *mongo.Database, name, viewOn string, pipelin
 	}).Err())
 }
 
-// vmRedefineView redefines a view's pipeline via collMod.
 func vmRedefineView(t *testing.T, db *mongo.Database, name, viewOn string, pipeline bson.A) {
 	t.Helper()
 	require.NoError(t, db.RunCommand(context.Background(), bson.D{
@@ -52,7 +49,6 @@ func vmRedefineView(t *testing.T, db *mongo.Database, name, viewOn string, pipel
 	}).Err())
 }
 
-// vmViewIDs returns the sorted _ids visible through the named view.
 func vmViewIDs(t *testing.T, db *mongo.Database, view string) []int32 {
 	t.Helper()
 	cur, err := db.Collection(view).Find(context.Background(), bson.D{})
@@ -69,7 +65,6 @@ func vmViewIDs(t *testing.T, db *mongo.Database, view string) []int32 {
 	return ids
 }
 
-// vmSeedItems inserts the three status-bearing base documents.
 func vmSeedItems(t *testing.T, db *mongo.Database) {
 	t.Helper()
 	_, err := db.Collection("items").InsertMany(context.Background(), []interface{}{
@@ -96,8 +91,6 @@ func vmMerge(t *testing.T, env *dumboDBTestEnv, dbName, branch string) bson.M {
 	})
 }
 
-// vmViewConflict runs doltConflicts and returns the single view conflict entry
-// from the unified conflicts array (type == "view").
 func vmViewConflict(t *testing.T, mainDB *mongo.Database) bson.M {
 	t.Helper()
 	var rc bson.M
@@ -137,10 +130,6 @@ func vmContinue(t *testing.T, mainDB *mongo.Database) {
 	}).Err())
 }
 
-// setupRedefineConflict seeds items + view cv (active), branches feature,
-// redefines cv to inactive on feature and pending on main, then merges feature
-// into main, leaving the resulting view conflict paused. Returns the main DB
-// handle and the conflict id.
 func setupRedefineConflict(t *testing.T, env *dumboDBTestEnv, dbName string) (*mongo.Database, string) {
 	t.Helper()
 	db := env.Client.Database(dbName)
@@ -167,11 +156,7 @@ func setupRedefineConflict(t *testing.T, env *dumboDBTestEnv, dbName string) (*m
 	return mainDB, entry["conflictId"].(string)
 }
 
-// TestViewMergeVerify is the automated equivalent of docs/verify/view-merge.md:
-// it exercises clean view merge and the doltConflicts/doltResolveConflict
-// (theirs/ours/custom) workflow for divergent view definitions, plus the
-// redefine/drop conflict. Version-control commands have no MongoDB counterpart,
-// so this is verified against DumboDB alone.
+// View merge has no MongoDB counterpart, so it is verified against DumboDB alone.
 func TestViewMergeVerify(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -185,14 +170,9 @@ func TestViewMergeVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "seed items", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
-		// Feature adds the view.
 		vmCreateView(t, env.Client.Database(dbName+"@feature"), "cv", "items", vmMatchPipeline("active"))
 		dumboDBCommit(t, env, dbName+"@feature", "feature: add view cv", "bob <bob@widgets.io>")
 
-		// Main advances independently so the merge is a real 3-way merge, not a
-		// fast-forward. Without this both branches share a linear history and
-		// doltMerge just advances the main pointer -- the view-add is never
-		// actually merged.
 		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 4}, {Key: "status", Value: "active"}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: add item 4", "alice <alice@acme.com>")
@@ -201,8 +181,6 @@ func TestViewMergeVerify(t *testing.T) {
 		assert.EqualValues(t, 1, raw["ok"], "adding a view on one branch must merge cleanly: %v", raw)
 		assert.NotEqual(t, "fast-forward", raw["message"], "diverged branches must produce a real merge commit, not a fast-forward: %v", raw)
 
-		// The view merged in from feature resolves both active docs, and main's
-		// independent commit survived the merge.
 		assert.Equal(t, []int32{1, 4}, vmViewIDs(t, db, "cv"), "merged view resolves the active docs from both sides")
 	})
 
@@ -246,7 +224,6 @@ func TestViewMergeVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "seed items + view cv", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
-		// Feature drops the view; main redefines it.
 		require.NoError(t, env.Client.Database(dbName+"@feature").Collection("cv").Drop(ctx))
 		dumboDBCommit(t, env, dbName+"@feature", "feature: drop cv", "bob <bob@widgets.io>")
 		vmRedefineView(t, db, "cv", "items", vmMatchPipeline("pending"))
@@ -257,12 +234,9 @@ func TestViewMergeVerify(t *testing.T) {
 
 		mainDB := env.Client.Database(dbName + "@main")
 		entry := vmViewConflict(t, mainDB)
-		// Ours (main) redefined the view; theirs (feature) deleted it, so the
-		// theirs side serializes as null (as a deleted side does for documents).
 		assert.Equal(t, "modified", entry["ours"].(bson.M)["diffType"])
 		assert.Nil(t, entry["theirs"], "theirs deleted the view")
 
-		// Resolving theirs applies the deletion.
 		vmResolve(t, mainDB, "cv", entry["conflictId"].(string), "theirs", nil)
 		vmContinue(t, mainDB)
 

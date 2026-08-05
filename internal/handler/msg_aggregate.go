@@ -465,9 +465,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
-		// If the target is a view, resolve it (through any nested views) to a
-		// base collection and prepend the resolved view pipeline to the
-		// user-supplied stages.
 		if cInfo.IsView {
 			view := cList.Collections[0]
 			baseCollection, viewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline)
@@ -475,8 +472,6 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
 			}
-			// Reload collection info for the resolved base collection (capped
-			// pushdown and similar read from it).
 			srcInfo, srcErr := lookupCollectionInfo(ctx, db, baseCollection)
 			if srcErr != nil {
 				closer.Close()

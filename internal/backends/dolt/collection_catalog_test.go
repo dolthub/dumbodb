@@ -36,9 +36,8 @@ func collInfo(t *testing.T, db backends.Database, name string) backends.Collecti
 	return res.Collections[0]
 }
 
-// TestCollMetaDurableAcrossRestart verifies a collection's UUID and validator
-// survive a backend close and reopen -- they now live in the durable
-// __dumbo_catalog__ collection, not an in-memory map (workspace-alp.16).
+// A collection's UUID and validator survive close/reopen -- they live in the
+// durable __dumbo_catalog__ collection, not an in-memory map (workspace-alp.16).
 func TestCollMetaDurableAcrossRestart(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-collmeta-*")
 	if err != nil {
@@ -51,7 +50,6 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 
 	validator := catMustDoc(types.NewDocument("x", catMustDoc(types.NewDocument("$exists", true))))
 
-	// --- Phase 1: create a collection with a validator ---
 	b1, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend: %v", err)
@@ -71,7 +69,6 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 	}
 	b1.Close()
 
-	// --- Phase 2: reopen and confirm UUID + validator survived ---
 	b2, err := NewBackend(dir, logger, false, false, 0, 0)
 	if err != nil {
 		t.Fatalf("NewBackend (reopen): %v", err)
@@ -94,8 +91,6 @@ func TestCollMetaDurableAcrossRestart(t *testing.T) {
 	}
 }
 
-// TestCatalogHiddenFromListCollections verifies the internal catalog collection
-// is never surfaced by ListCollections.
 func TestCatalogHiddenFromListCollections(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-catalog-hidden-*")
 	if err != nil {
@@ -135,9 +130,8 @@ func catMustDoc[T any](v T, err error) T {
 	return v
 }
 
-// TestCatalogMergeCarriesMetadata verifies that a collection created (with a
-// validator) on a branch brings its metadata along when merged into a branch
-// that never had it (workspace-alp.16, merge correctness).
+// A collection created with a validator on a branch brings its metadata along
+// when merged into a branch that never had it (workspace-alp.16).
 func TestCatalogMergeCarriesMetadata(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -146,7 +140,7 @@ func TestCatalogMergeCarriesMetadata(t *testing.T) {
 	if _, err := b.getOrOpenDB(ctx, "mmdb", true); err != nil {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
-	insertDocForTest(t, ctx, b, "mmdb", 1) // base collection "col"
+	insertDocForTest(t, ctx, b, "mmdb", 1)
 	commitBranch(t, b, "mmdb", "main", "seed")
 	branchFrom(t, b, "mmdb", "main", "feature")
 
@@ -178,10 +172,8 @@ func TestCatalogMergeCarriesMetadata(t *testing.T) {
 	}
 }
 
-// TestCatalogMergeConflictResolvable verifies that a metadata change diverging
-// on both branches surfaces as a resolvable conflict ON THE OWNING COLLECTION
-// (never exposing __dumbo_catalog__), is resolved via DumboDBResolveConflict, and
-// the merge completes with the chosen metadata (workspace-alp.16.2).
+// Divergent metadata surfaces as a resolvable conflict on the owning collection,
+// never exposing __dumbo_catalog__ (workspace-alp.16.2).
 func TestCatalogMergeConflictResolvable(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -216,15 +208,12 @@ func TestCatalogMergeConflictResolvable(t *testing.T) {
 	}
 	commitBranch(t, b, "mcdb", "main", "orders -> strict")
 
-	// The divergent metadata surfaces as a conflict (merge pauses).
 	if _, err = b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName: "mcdb", Into: "main", From: "feature", Message: "merge", Author: "t <t@e>",
 	}); err == nil {
 		t.Fatal("divergent metadata merge must surface a conflict, not silently complete")
 	}
 
-	// doltConflicts reports it as a METADATA conflict on the owning collection,
-	// never surfacing __dumbo_catalog__.
 	confl, err := b.DumboDBConflicts(ctx, &backends.ConflictsParams{DBName: "mcdb", Branch: "main"})
 	if err != nil {
 		t.Fatalf("DumboDBConflicts: %v", err)
@@ -242,7 +231,6 @@ func TestCatalogMergeConflictResolvable(t *testing.T) {
 		}
 	}
 
-	// Resolve to theirs (moderate), then complete the merge.
 	if _, err = b.DumboDBResolveConflict(ctx, &backends.ResolveConflictParams{
 		DBName: "mcdb", Branch: "main", Collection: "orders", ConflictID: mc.ConflictID, Resolution: "theirs",
 	}); err != nil {
@@ -260,10 +248,8 @@ func TestCatalogMergeConflictResolvable(t *testing.T) {
 	_ = featDB
 }
 
-// TestCatalogNameRejected verifies the internal catalog collection cannot be
-// created or accessed by name through the public API (workspace-alp.16 (1)),
-// while DumboDB's own low-level catalog writes (exercised by the durability
-// tests) still succeed.
+// The internal catalog collection cannot be created or accessed by name through
+// the public API (workspace-alp.16).
 func TestCatalogNameRejected(t *testing.T) {
 	dir, err := os.MkdirTemp("", "dolt-catalog-reject-*")
 	if err != nil {

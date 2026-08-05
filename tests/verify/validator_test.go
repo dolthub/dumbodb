@@ -35,10 +35,8 @@ import (
 
 const valDocValidationFailure = 121
 
-// valNonNegAge is the validator used throughout: age >= 0.
 var valNonNegAge = bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(0)}}}}
 
-// valErrCode extracts a code from a CommandError or WriteException.
 func valErrCode(err error) int32 {
 	var ce mongo.CommandError
 	if errors.As(err, &ce) {
@@ -53,8 +51,6 @@ func valErrCode(err error) int32 {
 	return 0
 }
 
-// validatorOf returns the validator document reported by listCollections for
-// coll, or nil when none is set.
 func validatorOf(t *testing.T, db *mongo.Database, coll string) bson.M {
 	t.Helper()
 	var lc bson.M
@@ -69,12 +65,10 @@ func validatorOf(t *testing.T, db *mongo.Database, coll string) bson.M {
 	return v
 }
 
-// ageGte builds an { age: { $gte: n } } validator.
 func ageGte(n int32) bson.D {
 	return bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: n}}}}
 }
 
-// jsonSchemaRequiring builds a { $jsonSchema: { required: [field] } } validator.
 func jsonSchemaRequiring(field string) bson.D {
 	return bson.D{{Key: "$jsonSchema", Value: bson.D{
 		{Key: "bsonType", Value: "object"},
@@ -83,7 +77,6 @@ func jsonSchemaRequiring(field string) bson.D {
 	}}}
 }
 
-// requiredField returns the single required field of a $jsonSchema validator.
 func requiredField(t *testing.T, v bson.M) string {
 	t.Helper()
 	js, ok := v["$jsonSchema"].(bson.M)
@@ -93,7 +86,6 @@ func requiredField(t *testing.T, v bson.M) string {
 	return req[0].(string)
 }
 
-// validationActionOf returns the validationAction reported by listCollections.
 func validationActionOf(t *testing.T, db *mongo.Database, coll string) string {
 	t.Helper()
 	var lc bson.M
@@ -108,8 +100,6 @@ func validationActionOf(t *testing.T, db *mongo.Database, coll string) string {
 	return s
 }
 
-// resolveMeta resolves the single metadata conflict on coll with the given
-// resolution (and optional custom value), then completes the merge.
 func resolveMeta(t *testing.T, mainDB *mongo.Database, coll, resolution string, value bson.D) {
 	t.Helper()
 	ctx := context.Background()
@@ -128,9 +118,6 @@ func resolveMeta(t *testing.T, mainDB *mongo.Database, coll, resolution string, 
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{{Key: "doltMerge", Value: 1}, {Key: "continue", Value: 1}}).Err())
 }
 
-// setupMetaConflict creates a validated "items", diverges its validator on main
-// (age>=21) and feature (age>=18), and merges feature into main -- leaving a
-// paused metadata conflict. Returns the @main database.
 func setupMetaConflict(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.Database {
 	t.Helper()
 	ctx := context.Background()
@@ -155,8 +142,6 @@ func setupMetaConflict(t *testing.T, env *dumboDBTestEnv, dbName string) *mongo.
 	return env.Client.Database(dbName + "@main")
 }
 
-// readMetaConflict returns the single metadata conflict from doltConflicts,
-// asserting it is attributed to a collection and never exposes the catalog.
 func readMetaConflict(t *testing.T, mainDB *mongo.Database) bson.M {
 	t.Helper()
 	var rc bson.M
@@ -175,7 +160,6 @@ func readMetaConflict(t *testing.T, mainDB *mongo.Database) bson.M {
 	return meta[0]
 }
 
-// assertAgeGte checks a conflict side carries an { age: { $gte: n } } validator.
 func assertAgeGte(t *testing.T, side interface{}, n int32) {
 	t.Helper()
 	m, ok := side.(bson.M)
@@ -192,8 +176,6 @@ func TestValidatorVerify(t *testing.T) {
 	suffix := rand.Int64N(1_000_000)
 
 	t.Run("Scenario1_SurvivesRestart", func(t *testing.T) {
-		// Own env: restarting it (and the cleanup Restart ties to this subtest)
-		// must not disturb the shared server used by the other subtests.
 		renv := startDumboDB(t)
 		dbName := fmt.Sprintf("valrestart%d", suffix)
 		db := renv.Client.Database(dbName)
@@ -201,14 +183,13 @@ func TestValidatorVerify(t *testing.T) {
 		require.NoError(t, db.CreateCollection(ctx, "items",
 			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
 
-		// Doc Scenario 1: the validator is active BEFORE the restart.
 		_, err := renv.Client.Database(dbName).Collection("items").
 			InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-1)}})
 		require.Error(t, err, "validator active before restart")
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 
 		renv.Restart(t)
-		db = renv.Client.Database(dbName) // client refreshed by Restart
+		db = renv.Client.Database(dbName)
 		coll := db.Collection("items")
 
 		assert.NotNil(t, validatorOf(t, db, "items"), "validator survives restart")
@@ -243,7 +224,6 @@ func TestValidatorVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "create items", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
-		// Feature adds the validator.
 		featDB := env.Client.Database(dbName + "@feature")
 		require.NoError(t, featDB.RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"},
@@ -253,7 +233,6 @@ func TestValidatorVerify(t *testing.T) {
 		}).Err())
 		dumboDBCommit(t, env, dbName+"@feature", "feature: add validator", "bob <bob@widgets.io>")
 
-		// Main advances independently -> a real 3-way merge.
 		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 100}, {Key: "age", Value: int32(1)}})
 		require.NoError(t, err)
 		dumboDBCommit(t, env, dbName, "main: add a doc", "alice <alice@acme.com>")
@@ -269,10 +248,8 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, valDocValidationFailure, valErrCode(err))
 	})
 
-	// Scenario 4: divergent validators on both branches surface as a resolvable
-	// metadata conflict ON THE OWNING COLLECTION (never __dumbo_catalog__),
-	// resolved via doltConflicts / doltResolveConflict, then doltMerge continue
-	// completes with the chosen validator.
+	// Divergent validators on both branches surface as a resolvable metadata
+	// conflict on the owning collection, never __dumbo_catalog__.
 	t.Run("Scenario4_DivergentValidators_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict8_%d", suffix)
 		mainDB := setupMetaConflict(t, env, dbName)
@@ -287,9 +264,6 @@ func TestValidatorVerify(t *testing.T) {
 		assert.Contains(t, reason["message"], "both changed the validator/options",
 			"reason names the divergence: %v", reason["message"])
 
-		// The collection was created with only a validator; each side surfaces the
-		// effective defaults (validationLevel "strict", validationAction "error"),
-		// not empty strings.
 		ours := mc["ours"].(bson.M)
 		assert.Equal(t, "strict", ours["validationLevel"], "effective default level")
 		assert.Equal(t, "error", ours["validationAction"], "effective default action")
@@ -315,8 +289,6 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 5, age["$gte"], "custom validator (age >= 5) applied after resolution")
 	})
 
-	// Scenario 4: structurally-different $jsonSchema validators diverge; resolve
-	// "ours" keeps main's schema.
 	t.Run("Scenario4_JsonSchemaDivergence_ResolveOurs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict10_%d", suffix)
 		db := env.Client.Database(dbName)
@@ -344,8 +316,6 @@ func TestValidatorVerify(t *testing.T) {
 			"resolving ours keeps main's $jsonSchema (required: age)")
 	})
 
-	// Scenario 4: divergent validationAction (with validator) resolves via theirs;
-	// the action follows the chosen side.
 	t.Run("Scenario4_DivergentValidationAction_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict11_%d", suffix)
 		db := env.Client.Database(dbName)
@@ -355,12 +325,10 @@ func TestValidatorVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
-		// Feature: validator age>=1, action warn.
 		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(1)}, {Key: "validationAction", Value: "warn"},
 		}).Err())
 		dumboDBCommit(t, env, dbName+"@feature", "feature: age>=1 warn", "bob <bob@widgets.io>")
-		// Main: validator age>=2, action error.
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(2)}, {Key: "validationAction", Value: "error"},
 		}).Err())
@@ -376,13 +344,12 @@ func TestValidatorVerify(t *testing.T) {
 		assert.Equal(t, "warn", validationActionOf(t, mainDB, "items"), "theirs validationAction (warn) applied")
 	})
 
-	// Scenario 4: both branches CREATE the same collection with different
-	// validators (add/add). base is null; resolve theirs.
+	// Both branches create the collection (add/add): the conflict's base is null.
 	t.Run("Scenario4_BothBranchCreate_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict12_%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
-		require.NoError(t, db.CreateCollection(ctx, "seed")) // base collection so the catalog exists
+		require.NoError(t, db.CreateCollection(ctx, "seed"))
 		dumboDBCommit(t, env, dbName, "seed", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
@@ -405,10 +372,8 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 18, age["$gte"], "theirs (age>=18) won for the concurrently-created collection")
 	})
 
-	// Scenario 4: one branch drops the collection while the other modifies its
-	// metadata -- a modify/delete metadata conflict (theirs side null). Resolving
-	// theirs applies the deletion: the collection is gone, with no orphaned
-	// metadata left behind.
+	// Modify/delete metadata conflict (theirs side null): resolving theirs deletes
+	// the collection, leaving no orphaned metadata.
 	t.Run("Scenario4_DropVsMetadata_ResolveTheirs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict13_%d", suffix)
 		db := env.Client.Database(dbName)
@@ -418,7 +383,6 @@ func TestValidatorVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
-		// Feature drops items; main changes its validator.
 		require.NoError(t, env.Client.Database(dbName+"@feature").Collection("items").Drop(ctx))
 		dumboDBCommit(t, env, dbName+"@feature", "feature: drop items", "bob <bob@widgets.io>")
 		require.NoError(t, db.RunCommand(ctx, bson.D{
@@ -435,7 +399,6 @@ func TestValidatorVerify(t *testing.T) {
 
 		resolveMeta(t, mainDB, "items", "theirs", nil)
 
-		// items is gone, and it does not reappear (no orphaned metadata).
 		var lc bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "listCollections", Value: 1},
@@ -445,8 +408,7 @@ func TestValidatorVerify(t *testing.T) {
 		assert.Len(t, batch, 0, "resolving theirs (drop) leaves no items collection")
 	})
 
-	// Scenario 4: same modify/delete conflict, but resolve OURS -- keep the
-	// collection with main's modified validator. The dropped DTBL is restored so
+	// Same modify/delete conflict resolved OURS: the dropped table is restored so
 	// existence and metadata agree.
 	t.Run("Scenario4_DropVsMetadata_ResolveOurs", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict14_%d", suffix)
@@ -472,7 +434,6 @@ func TestValidatorVerify(t *testing.T) {
 
 		resolveMeta(t, mainDB, "items", "ours", nil)
 
-		// The collection is restored with main's validator and its document.
 		age, _ := validatorOf(t, mainDB, "items")["age"].(bson.M)
 		assert.EqualValues(t, 21, age["$gte"], "ours validator (age>=21) kept")
 		n, err := mainDB.Collection("items").CountDocuments(ctx, bson.D{})
@@ -480,10 +441,8 @@ func TestValidatorVerify(t *testing.T) {
 		assert.EqualValues(t, 1, n, "resolving ours restores the collection and its data")
 	})
 
-	// Scenario 4: both branches make the SAME validator change. A divergent
-	// change conflicts (Scenarios 8-14); an identical one converges and merges
-	// cleanly with no conflict -- the only case a metadata change is resolved
-	// without asking.
+	// Both branches make the IDENTICAL validator change: it converges and merges
+	// cleanly -- the only case a metadata change resolves without asking.
 	t.Run("Scenario4_ConvergentValidatorChange_NoConflict", func(t *testing.T) {
 		dbName := fmt.Sprintf("valconflict15_%d", suffix)
 		db := env.Client.Database(dbName)
@@ -493,7 +452,6 @@ func TestValidatorVerify(t *testing.T) {
 		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
 		vmBranch(t, env, dbName, "feature")
 
-		// Both sides tighten the validator to the IDENTICAL definition age >= 10.
 		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
 		}).Err())
@@ -513,16 +471,13 @@ func TestValidatorVerify(t *testing.T) {
 		require.Error(t, err, "converged validator enforces (age 5 < 10 rejected)")
 	})
 
-	// Mirrors docs/verify/validators.md Scenario 8: a validator (and validator
-	// changes) surface under the metadata field in doltDiff, doltStatus, and
-	// doltLog -- including a collMod that changes ONLY the validator.
+	// A collMod that changes ONLY the validator still surfaces under the metadata
+	// field in doltDiff, doltStatus, and doltLog.
 	t.Run("Scenario8_ValidatorVisibleInDiffStatusLog", func(t *testing.T) {
 		dbName := fmt.Sprintf("valobserve%d", suffix)
 		db := env.Client.Database(dbName)
 		require.NoError(t, db.Drop(ctx))
 
-		// A newly-created validated collection: diff/status show it "added" with
-		// the validator under metadata.to (metadata.from is null).
 		require.NoError(t, db.CreateCollection(ctx, "items",
 			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
 
@@ -546,8 +501,6 @@ func TestValidatorVerify(t *testing.T) {
 
 		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
 
-		// A collMod that changes ONLY the validator still surfaces as a modified
-		// collection with metadata { from, to }, and makes the workspace dirty.
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
 		}).Err())
@@ -568,7 +521,6 @@ func TestValidatorVerify(t *testing.T) {
 		diff = runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
 		assertModifiedMeta(diff["changes"].(bson.A))
 
-		// Commit it; doltLog --stat and --patch show the same metadata change.
 		dumboDBCommit(t, env, dbName, "tighten validator to age >= 10", "alice <alice@acme.com>")
 		for _, verbosity := range []string{"stat", "patch"} {
 			log := runCommandRaw(t, db, bson.D{

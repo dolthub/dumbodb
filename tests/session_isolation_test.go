@@ -117,11 +117,9 @@ func TestSessionIsolation_ImplicitForkVisibility(t *testing.T) {
 	assert.EqualValues(t, 1, cnt, "B should see A's write after doltCommit")
 }
 
-// Two concurrent sessions modifying the same _id: the second committer's
-// doltCommit surfaces a RESOLVABLE conflict (not a hard error), routed through
-// the same doltConflicts / doltResolveConflict workflow as doltMerge. The second
-// committer resolves it -- keeping its own value, which is never silently
-// dropped -- and a re-commit finalizes the merge (workspace-edj).
+// A second concurrent commit on the same _id surfaces a RESOLVABLE conflict (not
+// a hard error); the loser resolves it, keeping its own value, and re-commits
+// (workspace-edj).
 func TestSessionIsolation_ConflictSecondCommitResolvable(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
@@ -141,12 +139,10 @@ func TestSessionIsolation_ConflictSecondCommitResolvable(t *testing.T) {
 
 	require.NoError(t, collA.Database().RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "A"}}).Err())
 
-	// B's commit surfaces a conflict instead of a hard "data conflict" error.
 	err = collB.Database().RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B"}}).Err()
 	require.Error(t, err, "second commit surfaces a conflict")
 	assert.Contains(t, err.Error(), "conflict")
 
-	// B inspects and resolves the document conflict, keeping its own value.
 	var rc bson.M
 	require.NoError(t, collB.Database().RunCommand(ctx, bson.D{{Key: "doltConflicts", Value: 1}}).Decode(&rc))
 	conflicts, ok := rc["conflicts"].(bson.A)
@@ -160,7 +156,6 @@ func TestSessionIsolation_ConflictSecondCommitResolvable(t *testing.T) {
 		{Key: "resolution", Value: "ours"},
 	}).Err())
 
-	// Re-committing finalizes B's resolved working set.
 	require.NoError(t, collB.Database().RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B resolved"}}).Err())
 
 	var final bson.M
@@ -842,9 +837,8 @@ func bsonDLookup(d bson.D, key string) interface{} {
 	return nil
 }
 
-// Branch variant of D6 on a non-main branch: the second commit surfaces a
-// conflict, and while it stays unresolved the branch keeps the first committer's
-// value -- the in-progress merge is not leaked into other sessions' reads.
+// Branch variant on a non-main branch: while the second commit's conflict stays
+// unresolved, its in-progress merge is not leaked into other sessions' reads.
 func TestSessionIsolation_ConflictSecondCommitIsolated_OnFeatureBranch(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
@@ -884,15 +878,11 @@ func TestSessionIsolation_ConflictSecondCommitIsolated_OnFeatureBranch(t *testin
 	require.Error(t, err, "second commit on feature branch surfaces a conflict")
 	assert.Contains(t, err.Error(), "conflict")
 
-	// B's in-progress (unresolved) merge must not leak into A's reads: A still
-	// sees its own committed value.
 	var final bson.M
 	require.NoError(t, collA.FindOne(ctx, bson.D{{Key: "_id", Value: "p"}}).Decode(&final))
 	assert.Equal(t, "A", final["x"], "feature branch reflects A's committed value; B's conflict is unresolved")
 }
 
-// docField reads a field from a BSON document decoded as either bson.M or bson.D
-// (mongo-driver may hand back either for array elements).
 func docField(v interface{}, key string) interface{} {
 	switch d := v.(type) {
 	case bson.M:
@@ -907,10 +897,9 @@ func docField(v interface{}, key string) interface{} {
 	return nil
 }
 
-// A collection-metadata (validator) conflict under --session-isolation now
-// surfaces as a resolvable metadata conflict on the owning collection (via the
-// shared workflow edj enables), never as a raw dsess error and never exposing
-// __dumbo_catalog__.
+// A metadata (validator) conflict under --session-isolation surfaces as a
+// resolvable metadata conflict on the owning collection, never a raw dsess error
+// and never exposing __dumbo_catalog__ (workspace-edj).
 func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	env := startDumboDB(t, "--session-isolation")
 	ctx := context.Background()
@@ -934,7 +923,6 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	require.NoError(t, collMod(dbB, 18))
 	require.NoError(t, dbA.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "A: age>=21"}}).Err())
 
-	// B's commit surfaces a metadata conflict (not a raw dsess error).
 	require.Error(t, dbB.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B: age>=18"}}).Err())
 
 	var rc bson.M
@@ -944,7 +932,6 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	assert.Equal(t, "metadata", docField(conflicts[0], "type"))
 	assert.Equal(t, "items", docField(conflicts[0], "name"))
 
-	// Resolve to ours (B's age>=18) and finalize.
 	require.NoError(t, dbB.RunCommand(ctx, bson.D{
 		{Key: "doltResolveConflict", Value: 1},
 		{Key: "collection", Value: "items"},
@@ -954,7 +941,6 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	require.NoError(t, dbB.RunCommand(ctx, bson.D{{Key: "doltCommit", Value: 1}, {Key: "message", Value: "B resolved"}}).Err(),
 		"re-commit finalizes the resolved metadata merge")
 
-	// The catalog is never surfaced anywhere in the conflict output.
 	for _, c := range conflicts {
 		assert.NotEqual(t, "__dumbo_catalog__", docField(c, "name"))
 	}

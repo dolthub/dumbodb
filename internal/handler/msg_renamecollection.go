@@ -130,7 +130,6 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
-	// MongoDB does not support renaming a view.
 	if info, verr := lookupCollectionInfo(connCtx, db, oldCName); verr == nil && info != nil && info.IsView {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrCommandNotSupportedOnView,

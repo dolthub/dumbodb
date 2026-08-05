@@ -57,20 +57,15 @@ type mergeInProgress struct {
 	intoHash   hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
 	// conflicts: collection name -> ordered list of conflict entries.
 	// Entries are never removed; resolved ones have resolved==true.
-	conflicts map[string][]*conflictEntry
-	// viewConflicts: view name -> the view-definition conflict for that name.
-	// A view diverged on both branches; resolved ones have resolved==true.
+	conflicts     map[string][]*conflictEntry
 	viewConflicts map[string]*viewConflictEntry
-	// metaConflicts: collection name -> the collection-metadata (validator/
-	// options) conflict for that name. The same collection's durable metadata
-	// diverged on both branches. Surfaced on the owning collection; the internal
-	// __dumbo_catalog__ name is never exposed. Resolved ones have resolved==true.
+	// metaConflicts is keyed by the owning collection; the internal
+	// __dumbo_catalog__ name is never exposed.
 	metaConflicts map[string]*metaConflictEntry
 
-	// isSessionCommit marks a paused --session-isolation dumboCommit: a 3-way
-	// merge of the session's working set against the advanced branch HEAD that
-	// hit a conflict. It is finalized (committed on top of HEAD) by the next
-	// dumboCommit once resolved. intoHash tracks the HEAD the merge was against.
+	// isSessionCommit marks a paused --session-isolation dumboCommit finalized by
+	// the next dumboCommit once resolved. intoHash tracks the HEAD the merge was
+	// against.
 	isSessionCommit bool
 	// resolvedAM is the working AddressMap being built as conflicts are resolved.
 	// It starts as the partial merged AM (keeping "ours" for conflicting docs) and
@@ -160,21 +155,19 @@ func (m *mergeInProgress) summaries() []backends.ConflictSummary {
 	return out
 }
 
-// viewConflictEntry is a view-definition conflict captured during a merge: the
-// same view diverged on both branches. base/ours/theirs are the definitions on
-// each side (nil where the view was absent or deleted).
+// viewConflictEntry captures a view-definition conflict; base/ours/theirs are
+// nil where that side lacked or deleted the view.
 type viewConflictEntry struct {
 	name      string
-	id        string    // conflictID hash of the view name + theirs commit hash
-	base      *viewMeta // nil if the view was absent in the common ancestor
-	ours      *viewMeta // nil if our branch deleted the view
-	theirs    *viewMeta // nil if their branch deleted the view
-	ourDiff   string    // "added", "modified", "deleted"
+	id        string
+	base      *viewMeta
+	ours      *viewMeta
+	theirs    *viewMeta
+	ourDiff   string
 	theirDiff string
 	resolved  bool
 }
 
-// viewSideDiff classifies one side of a view conflict relative to the base.
 func viewSideDiff(baseIsView, sideIsView bool) string {
 	switch {
 	case !baseIsView && sideIsView:
@@ -413,8 +406,8 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 	return &backends.ConflictsResult{Collections: collections, Views: views, Metadata: metadata}, nil
 }
 
-// collMetaToMetadata projects the internal catalog metadata to the user-facing
-// subset surfaced in a metadata conflict; nil in, nil out.
+// collMetaToMetadata projects catalog metadata to the user-facing subset; nil
+// in, nil out.
 func collMetaToMetadata(m *collMeta) *backends.CollectionMetadata {
 	if m == nil {
 		return nil
@@ -427,8 +420,8 @@ func collMetaToMetadata(m *collMeta) *backends.CollectionMetadata {
 	}
 }
 
-// viewMetaToDefinition converts a stored view definition to the backends type
-// used in conflict/diff results; nil in, nil out.
+// viewMetaToDefinition converts a stored view definition to the backends type;
+// nil in, nil out.
 func viewMetaToDefinition(vm *viewMeta) *backends.ViewDefinition {
 	if vm == nil {
 		return nil
@@ -437,10 +430,6 @@ func viewMetaToDefinition(vm *viewMeta) *backends.ViewDefinition {
 }
 
 // DumboDBResolveConflict implements backends.VersioningBackend.
-//
-// Resolves a single conflict -- document, view, metadata, or validation -- in
-// the current in-progress merge. After resolution the conflict entry is marked
-// resolved and the resolvedAM is updated to reflect the chosen state.
 func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -459,10 +448,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
-	// Route to view/metadata resolution only while that conflict is unresolved.
-	// Once resolved, fall through to the document path so a same-collection
-	// document or validation conflict (the latter surfaced after a metadata
-	// conflict is pinned, workspace-h0w.5) can still be resolved.
 	if vce, ok := ms.viewConflicts[params.Collection]; ok && !vce.resolved {
 		return b.resolveViewConflict(ctx, db, ms, vce, params)
 	}
@@ -495,17 +480,12 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	var deleteDoc bool
 
 	if target.typ == "validation" {
-		// A validation conflict has no ours/theirs divergence: the merged
-		// document violates the resulting validator. Resolve by replace-to-conform
-		// ("custom", re-validated) or "drop".
 		v, del, verr := b.resolveValidationChoice(ctx, db, ms, target, params)
 		if verr != nil {
 			return nil, verr
 		}
 		chosenVal, deleteDoc = v, del
 	} else {
-		// Trigger 2: a data-conflict resolution must not leave a document that
-		// violates the merged validator (unless the validator action is "warn").
 		resDoc, rerr := resolutionResultDoc(ctx, db, target, params)
 		if rerr != nil {
 			return nil, rerr
@@ -516,7 +496,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 			}
 		}
 
-		// For "ours", the resolvedAM already has our value -- just mark resolved.
 		if params.Resolution == "ours" {
 			target.resolved = true
 			return &backends.ResolveConflictResult{}, nil
@@ -743,8 +722,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	ms.resolvedAM = finalAM
 	target.resolved = true
 
-	// Reflect the resolved state into the shared branch working set (so doltDiff /
-	// doltStatus / dolt_conflicts see it) -- a no-op for a session-isolation commit.
 	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
 		return nil, err
 	}
@@ -752,8 +729,6 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	return &backends.ResolveConflictResult{}, nil
 }
 
-// viewMetaFromDoc builds a view definition from a custom-resolution document
-// carrying {viewOn, pipeline, collation}.
 func viewMetaFromDoc(doc *types.Document) *viewMeta {
 	vm := &viewMeta{}
 	if v, err := doc.Get("viewOn"); err == nil {
@@ -768,22 +743,19 @@ func viewMetaFromDoc(doc *types.Document) *viewMeta {
 	return vm
 }
 
-// resolveViewConflict resolves a single view-definition merge conflict by
-// choosing ours, theirs, or a custom definition, updating the resolved
-// AddressMap accordingly. The caller holds db.mu (write lock).
+// resolveViewConflict resolves a view-definition merge conflict. The caller
+// holds db.mu (write lock).
 func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *mergeInProgress, vce *viewConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	if vce.resolved {
 		return nil, fmt.Errorf("DumboDBResolveConflict: view conflict %q is already resolved", params.ConflictID)
 	}
 
-	// "ours" is already reflected in resolvedAM (kept during capture); just mark
-	// resolved. The other resolutions rewrite the view entry.
 	if params.Resolution == "ours" {
 		vce.resolved = true
 		return &backends.ResolveConflictResult{}, nil
 	}
 
-	var newDef *viewMeta // nil => the resolution deletes the view
+	var newDef *viewMeta
 	switch params.Resolution {
 	case "theirs":
 		newDef = vce.theirs
@@ -802,7 +774,6 @@ func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *merg
 		return nil, fmt.Errorf("DumboDBResolveConflict: probing resolved AM for view %q: %w", params.Collection, err)
 	}
 	if newDef == nil {
-		// Resolution deletes the view.
 		if has {
 			if derr := editor.Delete(ctx, params.Collection); derr != nil {
 				return nil, fmt.Errorf("DumboDBResolveConflict: deleting view %q: %w", params.Collection, derr)
@@ -1394,10 +1365,6 @@ func captureConflictsForCollection(
 func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, error) {
 	viewConflicts := map[string]*viewConflictEntry{}
 	metaConflicts := map[string]*metaConflictEntry{}
-	// Includes both collections and views: the AddressMap-level lifecycle logic
-	// below (add/update/delete of an entry hash) is identical for either. Only
-	// the both-sides-modified branch differs, where a view is diffed as a
-	// definition rather than a document map (see the isViewEntry check there).
 	allNames := make(map[string]struct{})
 	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
 		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
@@ -1456,11 +1423,6 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			continue
 		}
 
-		// A view (or a collection-vs-view name clash) cannot be document-merged.
-		// When a view is involved on any side and both sides diverged, capture a
-		// view-definition conflict: keep ours in the resolved AM (the editor
-		// already holds it) and record base/ours/theirs for interactive
-		// resolution via doltConflicts/doltResolveConflict.
 		intoIsView, err := isViewEntry(ctx, state.cs, intoH)
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, err
@@ -1500,7 +1462,6 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		}
 
 		if fromH.IsEmpty() || intoH.IsEmpty() {
-			// One side deleted, the other modified -- unresolvable here.
 			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("conflict in %q: deleted on one branch and modified on the other", name)
 		}
 
@@ -1569,16 +1530,6 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}
 
-		// The internal metadata catalog must never surface as a raw conflict
-		// (users must never see reservedCatalogName). Non-conflicting per-
-		// collection metadata docs merge cleanly. A DIVERGENT metadata doc --
-		// the same collection's validator/options changed on both branches -- is
-		// re-attributed to a metadata conflict ON THE OWNING COLLECTION, resolved
-		// through the same doltConflicts / doltResolveConflict workflow. The
-		// merged map keeps ours for the catalog doc (as for any document
-		// conflict); resolution rewrites it. We drop the raw catalog conflicts
-		// (no artifacts, no __dumbo_catalog__ entry in the document conflict map)
-		// so the internal name never leaks.
 		if name == reservedCatalogName {
 			if len(collConflicts) > 0 {
 				mcs, cerr := metaConflictsFromCatalog(ctx, state, collConflicts, oursDesc, theirsDesc)
@@ -1621,9 +1572,6 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		return prolly.AddressMap{}, nil, nil, nil, err
 	}
 
-	// A merge may never introduce a document that violates the resulting
-	// validator (workspace-h0w). Diff base against the merged result and surface
-	// any newly-violating document as a validation conflict.
 	if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc, false); err != nil {
 		return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merge cross-validation: %w", err)
 	}

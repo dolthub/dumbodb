@@ -83,7 +83,6 @@ func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 		cm, ok := c.(bson.M)
 		require.True(t, ok, "changes entry is not a document, got %T", c)
 
-		// Only collection changes are decoded here; views carry a different payload.
 		if cm["type"] != "collection" {
 			continue
 		}

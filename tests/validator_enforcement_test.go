@@ -36,8 +36,6 @@ import (
 
 const docValidationFailure = 121
 
-// writeErrCode extracts an error code from a CommandError, WriteException, or
-// BulkWriteException (BulkWrite surfaces its own exception type).
 func writeErrCode(err error) int32 {
 	if c := mongoCommandCode(err); c != 0 {
 		return c
@@ -54,7 +52,6 @@ func writeErrCode(err error) int32 {
 	return 0
 }
 
-// nonNegAge is a query-expression validator requiring age >= 0.
 var nonNegAge = bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(0)}}}}
 
 func newValidatedColl(t *testing.T, env *dumboDBTestEnv, level, action string) *mongo.Collection {
@@ -81,13 +78,11 @@ func TestValidator_Update_RejectsInvalidResult(t *testing.T) {
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
 	require.NoError(t, err, "valid insert must succeed")
 
-	// update that drives the doc invalid -> WriteError 121.
 	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-5)}}}})
 	require.Error(t, err, "update to an invalid document must be rejected")
 	assert.EqualValues(t, docValidationFailure, mongoCommandCode(err))
 
-	// A valid update still succeeds, and the invalid one did not apply.
 	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(9)}}}})
 	require.NoError(t, err)
@@ -134,7 +129,6 @@ func TestValidator_BulkWrite_RejectsInvalid(t *testing.T) {
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
 	require.NoError(t, err)
 
-	// bulkWrite update op producing an invalid doc.
 	_, err = coll.BulkWrite(ctx, []mongo.WriteModel{
 		mongo.NewUpdateOneModel().
 			SetFilter(bson.D{{Key: "_id", Value: 1}}).
@@ -143,7 +137,6 @@ func TestValidator_BulkWrite_RejectsInvalid(t *testing.T) {
 	require.Error(t, err, "bulkWrite update to invalid must be rejected")
 	assert.EqualValues(t, docValidationFailure, writeErrCode(err))
 
-	// bulkWrite insert op of an invalid doc.
 	_, err = coll.BulkWrite(ctx, []mongo.WriteModel{
 		mongo.NewInsertOneModel().SetDocument(bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-9)}}),
 	})
@@ -159,7 +152,6 @@ func TestValidator_Warn_AllowsInvalidWrite(t *testing.T) {
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(5)}})
 	require.NoError(t, err)
 
-	// warn: the invalid update is allowed and applies.
 	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-5)}}}})
 	require.NoError(t, err, "validationAction:warn must allow the write")
@@ -169,9 +161,8 @@ func TestValidator_Warn_AllowsInvalidWrite(t *testing.T) {
 	assert.EqualValues(t, -5, got["age"], "warn write must have applied")
 }
 
-// TestValidator_SurvivesRestart asserts a validator is durable AND still
-// enforces after a server restart -- covering both the metadata persistence and
-// that enforcement re-hydrates from the durable catalog (workspace-pui.3).
+// A validator is durable AND still enforces after restart -- enforcement
+// re-hydrates from the durable catalog (workspace-pui.3).
 func TestValidator_SurvivesRestart(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -181,16 +172,14 @@ func TestValidator_SurvivesRestart(t *testing.T) {
 		SetValidationLevel("strict").SetValidationAction("error")
 	require.NoError(t, db.CreateCollection(ctx, "items", opts))
 
-	// Enforced before restart.
 	_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-1)}})
 	require.Error(t, err)
 	assert.EqualValues(t, docValidationFailure, mongoCommandCode(err))
 
 	env.Restart(t)
-	db = env.Client.Database(dbName) // client is refreshed by Restart
+	db = env.Client.Database(dbName)
 	coll := db.Collection("items")
 
-	// Metadata survived: listCollections still reports the validator.
 	var lc bson.M
 	require.NoError(t, db.RunCommand(ctx, bson.D{
 		{Key: "listCollections", Value: 1},
@@ -201,7 +190,6 @@ func TestValidator_SurvivesRestart(t *testing.T) {
 	collOpts, _ := batch[0].(bson.M)["options"].(bson.M)
 	assert.NotNil(t, collOpts["validator"], "validator must survive restart")
 
-	// Enforcement still works: invalid rejected, valid accepted.
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-5)}})
 	require.Error(t, err, "validator must still reject after restart")
 	assert.EqualValues(t, docValidationFailure, mongoCommandCode(err))
@@ -215,12 +203,10 @@ func TestValidator_Bypass_AllowsInvalid(t *testing.T) {
 	ctx := context.Background()
 	coll := newValidatedColl(t, env, "strict", "error")
 
-	// insert with bypass: invalid doc allowed.
 	_, err := coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(-9)}},
 		options.InsertOne().SetBypassDocumentValidation(true))
 	require.NoError(t, err, "bypassDocumentValidation must allow an invalid insert")
 
-	// update with bypass: turn a valid doc invalid, allowed.
 	_, err = coll.InsertOne(ctx, bson.D{{Key: "_id", Value: 3}, {Key: "age", Value: int32(5)}})
 	require.NoError(t, err)
 	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 3}},
@@ -233,24 +219,20 @@ func TestValidator_Bypass_AllowsInvalid(t *testing.T) {
 	assert.EqualValues(t, -1, got["age"], "bypassed update must have applied")
 }
 
-// TestValidator_Moderate_GrandfathersInvalidPreImage verifies the moderate
-// distinction: an update to a document that was ALREADY invalid is allowed,
-// while an update that turns a valid document invalid is rejected.
+// moderate distinction: updating an already-invalid document is allowed, but
+// turning a valid document invalid is rejected.
 func TestValidator_Moderate_GrandfathersInvalidPreImage(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	db := env.Client.Database(fmt.Sprintf("valmod%d", rand.Int64N(1_000_000)))
 	coll := db.Collection("items")
 
-	// Insert docs BEFORE the validator exists: one that will be grandfathered
-	// invalid (_id:1), one valid (_id:2).
 	_, err := coll.InsertMany(ctx, []interface{}{
 		bson.D{{Key: "_id", Value: 1}, {Key: "age", Value: int32(-5)}},
 		bson.D{{Key: "_id", Value: 2}, {Key: "age", Value: int32(10)}},
 	})
 	require.NoError(t, err)
 
-	// Add the validator at moderate level.
 	require.NoError(t, db.RunCommand(ctx, bson.D{
 		{Key: "collMod", Value: "items"},
 		{Key: "validator", Value: nonNegAge},
@@ -258,12 +240,10 @@ func TestValidator_Moderate_GrandfathersInvalidPreImage(t *testing.T) {
 		{Key: "validationAction", Value: "error"},
 	}).Err())
 
-	// Update the grandfathered-invalid doc: allowed (pre-image already invalid).
 	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 1}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "note", Value: "x"}}}})
 	require.NoError(t, err, "moderate must allow updates to an already-invalid document")
 
-	// Update the valid doc into an invalid state: rejected.
 	_, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: 2}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "age", Value: int32(-1)}}}})
 	require.Error(t, err, "moderate must reject turning a valid document invalid")

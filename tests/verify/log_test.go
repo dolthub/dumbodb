@@ -466,7 +466,6 @@ func TestLogVerify(t *testing.T) {
 		assert.Equal(t, "events", s["name"], "changed collection must be 'events'")
 		assert.Equal(t, "modified", s["status"], "collection status must be 'modified'")
 
-		// stat verbosity: documents carries counts, not document arrays.
 		docs := s["documents"].(bson.M)
 		assert.EqualValues(t, 1, docs["added"], "one document added")
 		assert.EqualValues(t, 0, docs["modified"], "no documents modified")
@@ -503,7 +502,6 @@ func TestLogVerify(t *testing.T) {
 		assert.Equal(t, "events", cd["name"], "changed collection must be 'events'")
 		assert.Equal(t, "modified", cd["status"], "collection status must be 'modified'")
 
-		// patch verbosity: documents carries full document arrays.
 		docs := cd["documents"].(bson.M)
 		addedDocs, ok := docs["added"].(bson.A)
 		require.True(t, ok, "documents.added must be an array at patch verbosity")
@@ -583,9 +581,6 @@ func TestLogVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, idbName, "add by_age", "alice <alice@acme.com>")
 
-		// Stat verbosity: the index-only nature shows as zero document counts
-		// plus indexes.added carrying by_age by name; indexes.modified and
-		// indexes.removed are always present as empty arrays.
 		var statRaw bson.M
 		require.NoError(t, idb.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)}, {Key: "stat", Value: true},
@@ -603,9 +598,6 @@ func TestLogVerify(t *testing.T) {
 		assert.Empty(t, sidx["modified"].(bson.A))
 		assert.Empty(t, sidx["removed"].(bson.A))
 
-		// Patch verbosity: the index-only commit still appears (before the fix
-		// it was silently dropped because the doc-diff was empty), with the full
-		// index definition.
 		var patchRaw bson.M
 		require.NoError(t, idb.RunCommand(ctx, bson.D{
 			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)}, {Key: "patch", Value: true},

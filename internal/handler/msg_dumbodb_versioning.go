@@ -105,11 +105,9 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 	)
 }
 
-// changesArray renders a set of collection and view changes into the unified
-// `changes` wire array, sorted by name. Full-verbosity inputs (collDiffs /
-// viewDiffs) render full detail; summary inputs (collStats / viewStats) render
-// counts and names. Exactly one of collDiffs/collStats (and viewDiffs/viewStats)
-// is non-nil for a given call.
+// changesArray renders collection and view changes into the unified `changes`
+// wire array. Exactly one of collDiffs/collStats (and viewDiffs/viewStats) is
+// non-nil for a given call.
 func changesArray(collDiffs []backends.CollectionDiff, viewDiffs []backends.ViewChange, collStats []backends.TableStatus, viewStats []backends.ViewStatus) *types.Array {
 	type namedDoc struct {
 		name string
@@ -137,8 +135,6 @@ func changesArray(collDiffs []backends.CollectionDiff, viewDiffs []backends.View
 	return out
 }
 
-// collectionChangeSummary renders a collection status as a unified `changes`
-// element at summary verbosity: documents/index counts and index names.
 func collectionChangeSummary(t backends.TableStatus) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"type", "collection",
@@ -159,8 +155,7 @@ func collectionChangeSummary(t backends.TableStatus) *types.Document {
 }
 
 // collectionMetadataDoc renders a validator/options change as {from, to}, or an
-// empty document when the metadata did not change. Shared by the full and
-// summary `changes` renderers.
+// empty document when the metadata did not change.
 func collectionMetadataDoc(from, to *backends.CollectionMetadata) *types.Document {
 	metadata := must.NotFail(types.NewDocument())
 	if from != nil || to != nil {
@@ -170,7 +165,6 @@ func collectionMetadataDoc(from, to *backends.CollectionMetadata) *types.Documen
 	return metadata
 }
 
-// viewStatusToChange renders a view status as a summary `changes` element.
 func viewStatusToChange(v backends.ViewStatus) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"type", "view",
@@ -179,7 +173,6 @@ func viewStatusToChange(v backends.ViewStatus) *types.Document {
 	))
 }
 
-// viewDefWireDoc renders a view definition (or null) for the diff wire output.
 func viewDefWireDoc(def *backends.ViewDefinition) any {
 	if def == nil {
 		return types.Null
@@ -194,10 +187,8 @@ func viewDefWireDoc(def *backends.ViewDefinition) any {
 	))
 }
 
-// viewChangeToDoc renders one view change as a status-tagged wire document,
-// mirroring the collections diff shape: a single list where each entry carries
-// its status and from/to definitions (from is null for an added view, to is null
-// for a removed one).
+// viewChangeToDoc renders one view change: from is null for an added view, to
+// is null for a removed one.
 func viewChangeToDoc(vc backends.ViewChange) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"type", "view",
@@ -277,10 +268,6 @@ func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
 	))
 }
 
-// collectionChangeFull renders a collection diff as a unified `changes` element
-// at full verbosity: {type, name, status, documents, indexes, metadata}. Reuses
-// collectionDiffToDoc's per-kind arrays, regrouped under documents/indexes.
-// metadata is reserved (populated by a later change) and emitted empty for now.
 func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
 	inner := collectionDiffToDoc(cd)
 	documents := must.NotFail(types.NewDocument(
@@ -293,9 +280,6 @@ func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
 		"removed", must.NotFail(inner.Get("removedIndexes")),
 		"modified", must.NotFail(inner.Get("modifiedIndexes")),
 	))
-	// metadata carries a validator/options change as {from, to}; empty when the
-	// collection's validator/options did not change. Either side is null when
-	// that side had no validator (e.g. a newly-validated or added collection).
 	return must.NotFail(types.NewDocument(
 		"type", "collection",
 		"name", cd.Name,
@@ -885,10 +869,6 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			Author:   author,
 		})
 		if mergeErr != nil {
-			// Continuing can re-pause: resolving a validator-definition conflict
-			// pins the validator, and cross-validation may then surface a new
-			// document-validation conflict (workspace-h0w.5). Render it as ok:0,
-			// same as the initial merge, so the resolve/continue loop repeats.
 			var conflictErr *backends.MergeConflictError
 			if errors.As(mergeErr, &conflictErr) {
 				conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
@@ -1048,11 +1028,6 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	// All conflicts -- document-level and view-definition -- go into a single
-	// status-tagged array, one entry per conflict, each carrying a `type`
-	// discriminator ("document" or "view") and the owning namespace `name`.
-	// The document sub-type (documentEdit vs uniqueKeyCollision) is carried by
-	// reason.code. Entries are ordered by name then conflictId for stability.
 	type conflictOut struct {
 		name string
 		id   string
@@ -1062,10 +1037,6 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 
 	for _, cc := range res.Collections {
 		for _, cf := range cc.Conflicts {
-			// A validation conflict has no ours/theirs divergence: the merged
-			// document violates the resulting validator. Surface the offending
-			// document and the validator it failed; it resolves with custom
-			// (replace-to-conform) or drop, not ours/theirs.
 			if cf.Type == "validation" {
 				var docID any = types.Null
 				if cf.Ours != nil {
@@ -1585,9 +1556,6 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 		entry := must.NotFail(types.NewDocument(pairs...))
 
-		// One `changes` array per commit, mirroring dumboDiff/dumboStatus.
-		// Verbosity: full detail when patch was requested (c.Diff/c.ViewDiff
-		// populated), otherwise the summary from stat.
 		if len(c.Diff) > 0 || len(c.ViewDiff) > 0 {
 			entry.Set("changes", changesArray(c.Diff, c.ViewDiff, nil, nil))
 		} else if len(c.Stat) > 0 || len(c.ViewStat) > 0 {

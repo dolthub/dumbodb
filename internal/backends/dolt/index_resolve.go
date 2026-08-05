@@ -493,8 +493,8 @@ func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInf
 //   - added    when only the b side has it,
 //   - removed  when only the a side has it,
 //   - modified when both sides carry the same name but different
-//              IndexEntry chunk hashes (drop+recreate with a different
-//              spec).
+//     IndexEntry chunk hashes (drop+recreate with a different
+//     spec).
 //
 // Either hash may be the zero hash (collection absent on that side); in
 // that case the corresponding side's index list is empty.

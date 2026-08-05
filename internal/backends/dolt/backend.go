@@ -103,13 +103,10 @@ const (
 	dbBranchSep = "@"
 )
 
-// viewMeta holds a view definition. It is persisted as a self-describing blob
-// entry in the collections AddressMap (see view_storage.go), so views survive
-// restart and participate in commit/branch/merge like collections.
 type viewMeta struct {
 	ViewOn    string
 	Pipeline  *types.Array
-	Collation *types.Document // reserved for view default collation; nil today
+	Collation *types.Document
 }
 
 // dbState holds the open Dolt store for a single MongoDB database.
@@ -1645,10 +1642,6 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 		ms := db.mergeState
 
-		// h0w.5: a collection whose validator definition conflicted was deferred by
-		// the initial cross-validation pass. Now that the metaConflict is resolved
-		// and the validator is pinned, re-validate the merged documents; a new
-		// violation re-pauses the merge rather than committing a violating document.
 		if newConflicts, reErr := b.recheckCrossValidation(ctx, db, ms); reErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", reErr)
 		} else if newConflicts {
@@ -2413,10 +2406,6 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				}
 			}
 
-			// Filtered path: scope stat/patch to the matched documents in the
-			// filtered collections only. Collections not named in the filter,
-			// non-matching document changes, index changes, and metadata changes
-			// are all omitted (none is a document match).
 			if len(idFilters) > 0 {
 				names, nameErr := unionCollectionNames(ctx, db.cs, parentAM, commitAM)
 				if nameErr != nil {
@@ -2456,9 +2445,6 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					}
 				}
 			} else if cErr := eachCollectionChange(ctx, db, parentAM, commitAM, func(c collectionChange) error {
-				// Unfiltered: the shared skeleton (status, indexes, metadata) plus
-				// this commit's document changes. When both stat and patch are
-				// requested the document diff is computed once and counts derived.
 				if params.Patch {
 					addedDocs, removedDocs, modifiedDocs, dErr := diffCollectionMaps(ctx, db.ns, c.AMap, c.BMap)
 					if dErr != nil {
@@ -2486,10 +2472,6 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				return nil, fmt.Errorf("DumboDBLog: diffing commit %q: %w", ci.Hash.String(), cErr)
 			}
 
-			// View lifecycle for this commit, mirroring the collection stat/diff
-			// above. Skipped in the document-id-filtered path (a view definition
-			// change is not a document match), matching how index changes are
-			// dropped there.
 			if len(idFilters) == 0 {
 				viewChanges, vErr := diffViewEntries(ctx, db.cs, db.ns, parentAM, commitAM)
 				if vErr != nil {
@@ -2887,8 +2869,6 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		if diffErr != nil {
 			return fmt.Errorf("diffing collection %q: %w", c.Name, diffErr)
 		}
-		// A "modified" collection with no document, index, or metadata change is
-		// no diff at all. Added/deleted collections always surface.
 		if len(added) == 0 && len(removed) == 0 && len(modified) == 0 && !c.surfacesWithoutDocChange() {
 			return nil
 		}
@@ -3568,8 +3548,8 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 			metaConflicts: metaConflicts,
 			resolvedAM:    mergedAM,
 			isRevert:      true,
-			pickHash:      revertHash, // the commit being reverted
-			fromHash:      parentHash, // parent hash  -- used as "their" hash in artifacts
+			pickHash:      revertHash,
+			fromHash:      parentHash,
 			originalMsg:   originalMsg,
 		}
 

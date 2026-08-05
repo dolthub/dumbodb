@@ -27,32 +27,15 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// crossValidateMergedDocuments enforces the merge cross-validation invariant
-// (workspace-h0w): a merge may never make data quality more non-conformant than
-// it was. For every user collection with a settled validator whose action is
-// "error", it diffs the base against the merged document map and emits a
-// typ:"validation" conflict for every document the merge cleanly inserted or
-// modified into a violating state. A pre-existing violator is grandfathered only
-// when the merge leaves it byte-for-byte unchanged (never visited by the diff);
-// a re-authored violating value is a conflict even when the base already
-// violated. Under action "warn" no conflict is raised (violations allowed,
-// matching the write path); instead one server-side summary is logged per
-// collection with the count of documents allowed.
+// crossValidateMergedDocuments emits a typ:"validation" conflict for every
+// document a merge changed into a validator-violating state (action "error"),
+// or logs one per-collection summary under action "warn".
 //
-// Documents already in a divergent data conflict are skipped here; their
-// resolved value is validated at resolution time (trigger 2). A collection whose
-// validator definition ITSELF diverged (an unresolved metaConflict) has no
-// settled validator yet, so its cross-validation is deferred to
-// recheckCrossValidation, run at merge-continue once the metaConflict is
-// resolved and the validator is pinned; the merge already halts on that
-// metaConflict, so nothing is silently accepted in the meantime.
-//
-// recheck=false is the initial pass (every collection; unresolved-metaConflict
-// collections skipped; data-conflict docs skipped). recheck=true is the
-// continue-time re-run: it processes ONLY collections whose metaConflict is now
-// resolved, and validates every changed document (no data-conflict skip, since a
-// data conflict may have been resolved against a not-yet-final validator).
-// Entries whose conflictID already exists are never re-added.
+// recheck=false is the initial pass: unresolved-metaConflict collections and
+// data-conflict docs are skipped. recheck=true re-runs ONLY collections whose
+// metaConflict is now resolved and validates every changed document (no
+// data-conflict skip). Entries whose conflictID already exists are never
+// re-added.
 func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM, baseAM prolly.AddressMap, allConflicts map[string][]*conflictEntry, metaConflicts map[string]*metaConflictEntry, theirHash hash.Hash, theirsDesc string, recheck bool) error {
 	catMap, err := catalogMapFromAM(ctx, state, mergedAM)
 	if err != nil {
@@ -73,10 +56,10 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 		mc, hasMeta := metaConflicts[name]
 		if recheck {
 			if !hasMeta || !mc.resolved {
-				continue // recheck touches only collections whose validator was just pinned
+				continue
 			}
 		} else if hasMeta && !mc.resolved {
-			continue // initial pass defers unsettled validators to the recheck
+			continue
 		}
 
 		meta, err := readCollMetaFromCatalog(ctx, state, catMap, name)
@@ -86,8 +69,6 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 		if meta == nil || meta.Validator == nil || meta.ValidationLevel == "off" {
 			continue
 		}
-		// Under "warn" the merge allows violating documents; instead of surfacing
-		// conflicts, count them and log one server-side summary per collection.
 		warn := meta.ValidationAction == "warn"
 
 		mergedMap, err := collectionMapFromAM(ctx, state, mergedAM, name)
@@ -99,9 +80,6 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 			return fmt.Errorf("opening base map for %q: %w", name, err)
 		}
 
-		// Skip docs already in a data conflict on the initial pass (handled by
-		// trigger 2); on a recheck validate them too, against the final validator.
-		// existing dedupes against conflicts already recorded (any type).
 		inDataConflict := make(map[string]struct{})
 		existing := make(map[string]struct{}, len(allConflicts[name]))
 		for _, e := range allConflicts[name] {
@@ -115,10 +93,10 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 		var warnCount int32
 		diffErr := forEachCollectionChange(ctx, baseMap, mergedMap, func(c collChange) (bool, error) {
 			if c.kind == collRemoved {
-				return false, nil // merged value absent -- nothing to validate
+				return false, nil
 			}
 			if _, dup := inDataConflict[string(c.key)]; dup {
-				return false, nil // handled at resolution time (trigger 2)
+				return false, nil
 			}
 			mergedDoc, derr := readDocFromValue(ctx, state.ns, c.to)
 			if derr != nil {
@@ -132,21 +110,13 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 				return false, nil
 			}
 			if warn {
-				// Allowed under "warn"; count for the server-side summary.
 				warnCount++
 				return false, nil
 			}
 			entry := newValidationConflict(c, mergedDoc, meta.Validator, name, theirHash, theirsDesc)
 			if _, dup := existing[entry.id]; dup {
-				return false, nil // already recorded (e.g. resolved earlier)
+				return false, nil
 			}
-			// The merged value violates and the action is "error". Every document
-			// the merge inserted or modified must conform: a pre-existing violator
-			// is grandfathered only when the merge leaves it byte-for-byte
-			// unchanged, and such a document is never visited here
-			// (forEachCollectionChange skips unchanged docs). A change that lands
-			// on a violating value -- even one-sided, even when the base already
-			// violated -- is a conflict.
 			valEntries = append(valEntries, entry)
 			return false, nil
 		})
@@ -168,11 +138,8 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 }
 
 // recheckCrossValidation re-runs cross-validation at merge-continue for any
-// collection whose validator definition conflicted and has now been resolved
-// (workspace-h0w.5). Until resolution the collection's validator was unsettled,
-// so the initial pass deferred it; now that the metaConflict is pinned, a
-// document the merge changed into a state that violates the resolved validator
-// must be caught. Returns true if new validation conflicts were recorded.
+// collection whose validator conflict has now been resolved. Returns true if
+// new validation conflicts were recorded.
 func (b *Backend) recheckCrossValidation(ctx context.Context, db *dbState, ms *mergeInProgress) (bool, error) {
 	resolvedMeta := false
 	for _, mc := range ms.metaConflicts {
@@ -198,8 +165,6 @@ func (b *Backend) recheckCrossValidation(ctx context.Context, db *dbState, ms *m
 	return unresolvedConflictCount(ms.conflicts) > before, nil
 }
 
-// mergeBaseAM recomputes the merge base (common ancestor of the two branch
-// HEADs the merge was started from) and returns its collections AddressMap.
 func (b *Backend) mergeBaseAM(ctx context.Context, db *dbState, ms *mergeInProgress) (prolly.AddressMap, error) {
 	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, ms.intoHash)
 	if err != nil {
@@ -219,8 +184,6 @@ func (b *Backend) mergeBaseAM(ctx context.Context, db *dbState, ms *mergeInProgr
 	return amFromCommitHash(ctx, db, baseHash.String())
 }
 
-// unresolvedConflictCount counts document/validation conflict entries not yet
-// resolved across all collections.
 func unresolvedConflictCount(conflicts map[string][]*conflictEntry) int {
 	n := 0
 	for _, entries := range conflicts {
@@ -233,11 +196,9 @@ func unresolvedConflictCount(conflicts map[string][]*conflictEntry) int {
 	return n
 }
 
-// newValidationConflict builds a typ:"validation" conflict entry for a merged
-// document that violates the collection validator. The offending merged document
-// is carried in oursRawVal (surfaced as the current document) and the violated
-// validator in reasonKey; there is no ours/theirs divergence -- resolution is
-// replace-to-conform, not ours/theirs.
+// newValidationConflict builds a typ:"validation" conflict entry. There is no
+// ours/theirs divergence: the offending merged document is carried in oursRawVal
+// and the violated validator in reasonKey.
 func newValidationConflict(c collChange, mergedDoc, validator *types.Document, coll string, theirHash hash.Hash, theirsDesc string) *conflictEntry {
 	rawKey := append(val.Tuple(nil), c.key...)
 	var idVal any = types.Null
@@ -265,9 +226,6 @@ func validationConflictMessage(id any, coll, theirsDesc string) string {
 		types.FormatAnyValue(id), coll, theirsDesc)
 }
 
-// mergedCollValidator reads a collection's validator metadata from the resolved
-// AddressMap of an in-progress merge (the validator that will be in effect once
-// the merge completes).
 func (b *Backend) mergedCollValidator(ctx context.Context, db *dbState, ms *mergeInProgress, coll string) (*collMeta, error) {
 	catMap, err := catalogMapFromAM(ctx, db, ms.resolvedAM)
 	if err != nil {
@@ -277,11 +235,7 @@ func (b *Backend) mergedCollValidator(ctx context.Context, db *dbState, ms *merg
 }
 
 // resolveValidationChoice computes the chosen value for a typ:"validation"
-// conflict. Such a conflict has no ours/theirs divergence: the merged document
-// violates the resulting validator, and the only way out is to replace it with a
-// conforming value ("custom", re-validated here) or to drop it ("drop"). ours
-// and theirs are rejected -- keeping a known violator is exactly the degradation
-// the merge invariant forbids.
+// conflict: "custom" (re-validated here) or "drop". ours and theirs are rejected.
 func (b *Backend) resolveValidationChoice(ctx context.Context, db *dbState, ms *mergeInProgress, target *conflictEntry, params *backends.ResolveConflictParams) (chosenVal val.Tuple, deleteDoc bool, err error) {
 	switch params.Resolution {
 	case "drop":
@@ -314,8 +268,8 @@ func (b *Backend) resolveValidationChoice(ctx context.Context, db *dbState, ms *
 }
 
 // resolutionResultDoc returns the document that would remain after resolving a
-// data conflict with params.Resolution, or nil when the resolution deletes the
-// document (or supplies no value). Used for the trigger-2 check.
+// data conflict, or nil when the resolution deletes the document or supplies no
+// value.
 func resolutionResultDoc(ctx context.Context, db *dbState, target *conflictEntry, params *backends.ResolveConflictParams) (*types.Document, error) {
 	switch params.Resolution {
 	case "ours":
@@ -335,9 +289,8 @@ func resolutionResultDoc(ctx context.Context, db *dbState, target *conflictEntry
 }
 
 // rejectIfViolates fails a data-conflict resolution whose resulting document
-// violates the collection's merged validator (trigger 2), unless the validator
-// action is "warn". Resolving a conflict is an authoring act, so the authored
-// value must conform regardless of the base state.
+// violates the collection's merged validator, unless the validator action is
+// "warn".
 func (b *Backend) rejectIfViolates(ctx context.Context, db *dbState, ms *mergeInProgress, coll string, doc *types.Document) error {
 	meta, err := b.mergedCollValidator(ctx, db, ms, coll)
 	if err != nil {
@@ -356,8 +309,8 @@ func (b *Backend) rejectIfViolates(ctx context.Context, db *dbState, ms *mergeIn
 	return nil
 }
 
-// readCollMetaFromCatalog reads a single collection's metadata from an already
-// opened catalog map, or nil when the collection has no catalog entry.
+// readCollMetaFromCatalog reads a collection's metadata from an already-opened
+// catalog map; nil when the collection has no catalog entry.
 func readCollMetaFromCatalog(ctx context.Context, state *dbState, catMap prolly.Map, collName string) (*collMeta, error) {
 	key, err := catalogKey(collName)
 	if err != nil {

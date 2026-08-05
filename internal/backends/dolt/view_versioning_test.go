@@ -39,10 +39,8 @@ func matchOnPipeline(t *testing.T, field, value string) *types.Array {
 	return pipe
 }
 
-// TestViewStatusAndDiff verifies that view lifecycle (add, redefine, drop)
-// surfaces in DumboDBStatus (name lists) and DumboDBDiff (full definitions),
-// alongside collection changes (workspace-z0i.7). No MongoDB oracle exists for
-// version-control commands, so this is a dumbodb-repo test.
+// View lifecycle (add, redefine, drop) surfaces in DumboDBStatus and DumboDBDiff
+// alongside collection changes; no MongoDB oracle exists (workspace-z0i.7).
 func TestViewStatusAndDiff(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -52,7 +50,7 @@ func TestViewStatusAndDiff(t *testing.T) {
 	if _, err := b.getOrOpenDB(ctx, "vdb", true); err != nil {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
-	insertDocForTest(t, ctx, b, "vdb", 1) // base collection "col"
+	insertDocForTest(t, ctx, b, "vdb", 1)
 
 	db, err := b.Database("vdb")
 	if err != nil {
@@ -81,7 +79,6 @@ func TestViewStatusAndDiff(t *testing.T) {
 
 	commit("seed base collection")
 
-	// --- add a view ---
 	if err := db.CreateCollection(ctx, &backends.CreateCollectionParams{
 		Name: "v1", ViewOn: "col", ViewPipeline: matchOnPipeline(t, "status", "active"),
 	}); err != nil {
@@ -95,7 +92,6 @@ func TestViewStatusAndDiff(t *testing.T) {
 	}
 	commit("add view v1")
 
-	// --- redefine the view ---
 	if err := db.CollMod(ctx, &backends.CollModParams{
 		Name: "v1", SetView: true, SetViewOn: true, ViewOn: "col", SetViewPipeline: true, ViewPipeline: matchOnPipeline(t, "status", "inactive"),
 	}); err != nil {
@@ -109,7 +105,6 @@ func TestViewStatusAndDiff(t *testing.T) {
 	}
 	commit("redefine view v1")
 
-	// --- drop the view ---
 	if err := db.DropCollection(ctx, &backends.DropCollectionParams{Name: "v1"}); err != nil {
 		t.Fatalf("DropCollection(view): %v", err)
 	}
@@ -121,8 +116,8 @@ func TestViewStatusAndDiff(t *testing.T) {
 	}
 }
 
-// TestViewMergeClean verifies a view created on a branch merges cleanly into a
-// branch that did not touch it (workspace-z0i.6, non-conflicting case).
+// A view created on a branch merges cleanly into a branch that did not touch it
+// (workspace-z0i.6).
 func TestViewMergeClean(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -167,8 +162,6 @@ func TestViewMergeClean(t *testing.T) {
 	}
 }
 
-// viewMatchValue returns the {$match:{status:<v>}} value of the named view's
-// single-stage pipeline, for asserting which definition a merge resolved to.
 func viewMatchValue(t *testing.T, db backends.Database, name string) string {
 	t.Helper()
 	res, err := db.ListCollections(context.Background(), &backends.ListCollectionsParams{Name: name})
@@ -185,9 +178,6 @@ func viewMatchValue(t *testing.T, db backends.Database, name string) string {
 	return s
 }
 
-// setupViewConflict builds a db where view "cv" is redefined divergently on
-// main (status=pending) and feature (status=inactive), then merges feature into
-// main and returns the resulting conflict (the merge is left paused).
 func setupViewConflict(t *testing.T, b *Backend, dbName string) backends.Database {
 	t.Helper()
 	ctx := context.Background()
@@ -234,9 +224,8 @@ func setupViewConflict(t *testing.T, b *Backend, dbName string) backends.Databas
 	return mainDB
 }
 
-// TestViewMergeConflictResolveTheirs verifies the doltConflicts /
-// doltResolveConflict("theirs") / continue flow for a view-definition conflict
-// (workspace-z0i.6).
+// doltConflicts / doltResolveConflict("theirs") / continue flow for a
+// view-definition conflict (workspace-z0i.6).
 func TestViewMergeConflictResolveTheirs(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -271,8 +260,6 @@ func TestViewMergeConflictResolveTheirs(t *testing.T) {
 	}
 }
 
-// TestViewMergeConflictResolveCustom verifies a custom resolution replaces the
-// view definition with a supplied one.
 func TestViewMergeConflictResolveCustom(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -309,8 +296,6 @@ func TestViewMergeConflictResolveCustom(t *testing.T) {
 	}
 }
 
-// viewHasStatus reports whether views contains an entry for name with the given
-// status.
 func viewHasStatus(views []backends.ViewStatus, name, status string) bool {
 	for _, v := range views {
 		if v.Name == name && v.Status == status {
@@ -320,9 +305,8 @@ func viewHasStatus(views []backends.ViewStatus, name, status string) bool {
 	return false
 }
 
-// TestViewLogStatAndPatch verifies dumboLog surfaces view changes: stat as a
-// {name, status} summary (ViewStat) and patch as a full definition diff
-// (ViewDiff), parallel to the collection stat/diff (workspace-z0i.7).
+// dumboLog surfaces view changes: stat as a {name,status} summary, patch as a
+// full definition diff (workspace-z0i.7).
 func TestViewLogStatAndPatch(t *testing.T) {
 	b, dir := newBackendForTest(t)
 	defer os.RemoveAll(dir)
@@ -331,7 +315,7 @@ func TestViewLogStatAndPatch(t *testing.T) {
 	if _, err := b.getOrOpenDB(ctx, "vldb", true); err != nil {
 		t.Fatalf("getOrOpenDB: %v", err)
 	}
-	insertDocForTest(t, ctx, b, "vldb", 1) // base collection "col"
+	insertDocForTest(t, ctx, b, "vldb", 1)
 	commitBranch(t, b, "vldb", "main", "seed")
 
 	db, err := b.Database("vldb")

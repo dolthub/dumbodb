@@ -165,9 +165,8 @@ type CollectionConflicts struct {
 // ConflictsResult represents the result of VersioningBackend.DumboDBConflicts method.
 // Returns all conflict details for all collections.
 // ViewConflict describes a view definition that diverged on both branches of a
-// merge (a DumboDB-only conflict; MongoDB has no versioning analogue). Base is
-// the common-ancestor definition (nil if the view did not exist there); Ours and
-// Theirs are the two sides (nil if that side deleted the view).
+// merge. Base is the common-ancestor definition (nil if the view did not exist
+// there); Ours and Theirs are the two sides (nil if that side deleted the view).
 type ViewConflict struct {
 	Name          string
 	ConflictID    string
@@ -178,8 +177,8 @@ type ViewConflict struct {
 	TheirDiffType string // "added", "modified", "deleted"
 }
 
-// CollectionMetadata is the user-facing per-collection metadata surfaced in a
-// metadata merge conflict -- never the internal catalog representation.
+// CollectionMetadata is the user-facing per-collection metadata, never the
+// internal catalog representation.
 type CollectionMetadata struct {
 	Validator        *types.Document
 	ValidationLevel  string
@@ -187,10 +186,9 @@ type CollectionMetadata struct {
 }
 
 // MetaConflict describes a collection whose durable metadata (validator/options)
-// diverged on both branches of a merge. It is surfaced on the owning collection;
-// the internal metadata catalog is never named. Base is the common-ancestor
-// metadata (nil if absent there); Ours and Theirs are the two sides (nil if that
-// side deleted the collection).
+// diverged on both branches of a merge. Base is the common-ancestor metadata
+// (nil if absent there); Ours and Theirs are the two sides (nil if that side
+// deleted the collection).
 type MetaConflict struct {
 	Collection    string
 	ConflictID    string
@@ -199,7 +197,7 @@ type MetaConflict struct {
 	Theirs        *CollectionMetadata
 	OurDiffType   string // "added", "modified", "deleted"
 	TheirDiffType string
-	Reason        ConflictReason // why the two metadata states cannot both stand
+	Reason        ConflictReason
 }
 
 type ConflictsResult struct {
@@ -309,9 +307,8 @@ type TableStatus struct {
 	ModifiedIndexes []string
 	RemovedIndexes  []string
 
-	// Validator/options change, mirroring CollectionDiff. Both nil when the
-	// collection's metadata did not change; otherwise each side is the "a"/"b"
-	// validator (nil when that side had no validator).
+	// Both nil when the collection's metadata did not change; otherwise each
+	// side is the "a"/"b" validator (nil when that side had no validator).
 	MetadataFrom *CollectionMetadata
 	MetadataTo   *CollectionMetadata
 }
@@ -322,12 +319,9 @@ type VersioningStatusResult struct {
 	Tables    []TableStatus
 	MergeOp   string            // "merge", "cherry-pick", "rebase", or "revert"; empty when no operation in progress
 	Conflicts []ConflictSummary // per-collection conflict counts; empty when no conflicts
-	// Views is the view lifecycle in the working set versus HEAD, one entry per
-	// changed view with its status. Mirrors Tables (a single status-tagged list).
-	Views []ViewStatus
+	Views     []ViewStatus
 }
 
-// ViewStatus is a changed view in a versioning status result.
 type ViewStatus struct {
 	Name   string
 	Status string // "added", "modified", or "deleted"
@@ -389,15 +383,13 @@ type CollectionDiff struct {
 	ModifiedIndexes []IndexChange     // pre/post definitions for indexes whose spec changed
 	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
 
-	// Validator/options change. Both nil when the collection's metadata did not
-	// change; otherwise MetadataFrom/MetadataTo carry the "a"/"b" side (either
-	// nil when that side had no validator, e.g. an added or newly-validated
-	// collection).
+	// Both nil when the collection's metadata did not change; otherwise
+	// MetadataFrom/MetadataTo carry the "a"/"b" side (nil when that side had no
+	// validator, e.g. an added or newly-validated collection).
 	MetadataFrom *CollectionMetadata
 	MetadataTo   *CollectionMetadata
 }
 
-// ViewDefinition is a view's stored definition, carried in diffs.
 type ViewDefinition struct {
 	ViewOn   string
 	Pipeline *types.Array
@@ -405,7 +397,7 @@ type ViewDefinition struct {
 
 // ViewChange represents a view added, removed, or redefined between two
 // revisions. From is nil for an added view; To is nil for a removed view; both
-// are set (with differing definitions) for a redefine.
+// are set for a redefine.
 type ViewChange struct {
 	Name   string
 	Status string // "added", "deleted", or "modified"

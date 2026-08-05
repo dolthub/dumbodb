@@ -57,15 +57,11 @@ type mergeStateDisk struct {
 	// Collections that have conflict artifacts in the working set.
 	ConflictCollections []string `json:"conflictCols"`
 
-	// View-definition conflicts (no ArtifactMap; persisted inline).
 	ViewConflicts []viewConflictDisk `json:"viewConflicts,omitempty"`
 
-	// Collection-metadata conflicts (no ArtifactMap; persisted inline).
 	MetaConflicts []metaConflictDisk `json:"metaConflicts,omitempty"`
 }
 
-// metaConflictDisk persists one collection-metadata merge conflict. Each side's
-// metadata is hex-encoded BSON (empty when that side lacked it).
 type metaConflictDisk struct {
 	Coll          string `json:"coll"`
 	ID            string `json:"id"`
@@ -79,8 +75,6 @@ type metaConflictDisk struct {
 	TheirsHex     string `json:"theirs,omitempty"`
 }
 
-// viewConflictDisk persists one view-definition merge conflict. Each side's
-// definition is hex-encoded BSON (empty when that side deleted or lacked it).
 type viewConflictDisk struct {
 	Name      string `json:"name"`
 	ID        string `json:"id"`

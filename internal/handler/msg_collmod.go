@@ -184,9 +184,8 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
-	// A redefinition that would introduce a cycle or exceed the nesting depth is
-	// rejected, matching create-time validation. Only a changed viewOn can alter
-	// the view-resolution chain; a pipeline-only redefinition leaves it intact.
+	// Only a changed viewOn can alter the view-resolution chain; a pipeline-only
+	// redefinition leaves it intact.
 	if params.SetViewOn {
 		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
 			return nil, verr

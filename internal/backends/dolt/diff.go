@@ -333,10 +333,6 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 func unionCollectionNames(ctx context.Context, cs *nbs.GenerationalNBS, aAM, bAM prolly.AddressMap) ([]string, error) {
 	seen := make(map[string]struct{})
 
-	// View entries are metadata blobs, not document maps; they are not yet
-	// surfaced in version-control diff/status (workspace-z0i.7). The internal
-	// __dumbo_catalog__ collection is also hidden from diff/status. Skip both so
-	// the collection walk never opens a view blob and never leaks the catalog.
 	collect := func(am prolly.AddressMap) error {
 		return am.IterAll(ctx, func(name string, h hash.Hash) error {
 			if name == reservedCatalogName {
@@ -633,13 +629,9 @@ func countCollectionMapDiffs(
 	return added, modified, deleted, nil
 }
 
-// collectionChange is one changed collection's shared skeleton, produced by
-// eachCollectionChange: lifecycle status, the two document maps, index changes,
-// and metadata (validator/options) change. Callers layer document-level detail
-// (full docs for diff/patch, or counts for status/stat) on top.
 type collectionChange struct {
 	Name        string
-	Status      string // "added", "deleted", "modified"
+	Status      string
 	AMap, BMap  prolly.Map
 	IdxAdded    []backends.IndexInfo
 	IdxModified []backends.IndexChange
@@ -649,10 +641,6 @@ type collectionChange struct {
 	MetaChanged bool
 }
 
-// surfacesWithoutDocChange reports whether the change must appear in a diff even
-// when no documents changed: an added/deleted lifecycle event, an index change,
-// or a validator/options change. Callers OR this with their own document-change
-// check to decide whether a "modified" collection is a real diff.
 func (c collectionChange) surfacesWithoutDocChange() bool {
 	return c.Status != "modified" ||
 		len(c.IdxAdded) > 0 || len(c.IdxModified) > 0 || len(c.IdxRemoved) > 0 ||
@@ -670,26 +658,12 @@ func statusOf(aHash, bHash hash.Hash) string {
 	}
 }
 
-// eachCollectionChange walks the union of collections in aAM and bAM and invokes
-// fn once per collection that changed (lifecycle, documents, indexes, or
-// metadata), with the shared skeleton computed. It is the single source of truth
-// for what a collection-level diff comprises: DumboDBDiff, DumboDBStatus, and
-// DumboDBLog --stat/--patch all build on it, so a new change dimension added
-// here is picked up by every caller.
-//
-// Collections unchanged on both sides (same DTBL hash and no metadata change)
-// are skipped without opening maps or computing index diffs. A metadata-only
-// change (collMod rewrites __dumbo_catalog__, not the collection DTBL, so the
-// hashes match) surfaces as "modified" with empty document/index skeletons.
 func eachCollectionChange(ctx context.Context, state *dbState, aAM, bAM prolly.AddressMap, fn func(collectionChange) error) error {
 	names, err := unionCollectionNames(ctx, state.cs, aAM, bAM)
 	if err != nil {
 		return err
 	}
 
-	// Validator/options live in __dumbo_catalog__; if its hash is unchanged, no
-	// collection's metadata changed and the per-collection catalog reads are
-	// skipped entirely (the common pure-document case).
 	aCatHash, err := aAM.Get(ctx, reservedCatalogName)
 	if err != nil {
 		return err
@@ -727,8 +701,6 @@ func eachCollectionChange(ctx context.Context, state *dbState, aAM, bAM prolly.A
 			}
 		}
 
-		// DTBL unchanged: documents and indexes are unchanged (both live in the
-		// DTBL); only a metadata-only change can surface.
 		if aHash == bHash {
 			if !metaChanged {
 				continue
@@ -769,8 +741,6 @@ func eachCollectionChange(ctx context.Context, state *dbState, aAM, bAM prolly.A
 	return nil
 }
 
-// tableStatusFrom builds a summary TableStatus (counts + index names +
-// metadata) from a change skeleton and the caller's document counts.
 func tableStatusFrom(c collectionChange, added, modified, deleted int) backends.TableStatus {
 	return backends.TableStatus{
 		Name:            c.Name,
@@ -786,8 +756,6 @@ func tableStatusFrom(c collectionChange, added, modified, deleted int) backends.
 	}
 }
 
-// collectionDiffFrom builds a full CollectionDiff (documents + index defs +
-// metadata) from a change skeleton and the caller's document lists.
 func collectionDiffFrom(c collectionChange, added, removed []*types.Document, modified []backends.ModifiedDoc) backends.CollectionDiff {
 	return backends.CollectionDiff{
 		Name:            c.Name,
@@ -803,9 +771,7 @@ func collectionDiffFrom(c collectionChange, added, removed []*types.Document, mo
 	}
 }
 
-// metadataViewOf projects a collection's durable metadata to the user-facing
-// validator/options, or nil when the collection has no validator. Level/action
-// without a validator are not surfaced (they are meaningless on their own).
+// metadataViewOf returns nil when the collection has no validator.
 func metadataViewOf(m *collMeta) *backends.CollectionMetadata {
 	if m == nil || m.Validator == nil {
 		return nil
@@ -813,11 +779,9 @@ func metadataViewOf(m *collMeta) *backends.CollectionMetadata {
 	return collMetaToMetadata(m)
 }
 
-// collectionMetadataDiff reads the validator/options for name from each side's
-// catalog and returns the two user-facing views when they differ (from, to),
-// or (nil, nil, false) when the metadata is unchanged. Either returned side is
-// nil when that side had no validator (e.g. an added or newly-validated
-// collection).
+// collectionMetadataDiff returns the two user-facing views when they differ
+// (from, to), or (nil, nil, false) when the metadata is unchanged. Either
+// returned side is nil when that side had no validator.
 func collectionMetadataDiff(ctx context.Context, state *dbState, aCat, bCat prolly.Map, name string) (from, to *backends.CollectionMetadata, changed bool, err error) {
 	aMeta, err := readCollMetaFromCatalog(ctx, state, aCat, name)
 	if err != nil {
