@@ -606,16 +606,37 @@ resolve the metadata conflict and `continue`, cross-validation runs against the
 now-pinned validator and **re-pauses** if a merged document violates it.
 
 ```js
-// Setup: base has validator age>=0 and { _id: 1, age: 5 }. Feature tightens it to
-// age>=10; main diverges it to age>=3 and inserts { _id: 2, age: 5 }. Merge.
-
 var db = db.getSiblingDB("valtwophase")
-// Phase 1 -- only the metadata conflict is visible (doc check deferred):
+db.dropDatabase()
+
+// Base: validated items (age >= 0) with one conforming doc.
+db.createCollection("items", { validator: { age: { $gte: 0 } } })
+db.items.insertOne({ _id: 1, age: 5 })
+db.runCommand({ doltCommit: 1, message: "create validated items + doc", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+// Feature tightens the validator to age >= 10.
+var feat = db.getSiblingDB("valtwophase@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 10 } } })
+feat.runCommand({ doltCommit: 1, message: "feature: age >= 10", author: "bob <bob@widgets.io>" })
+
+// Main diverges the validator to age >= 3 AND inserts a doc that conforms to
+// age >= 3 but will violate feature's age >= 10 once that side wins.
+db.runCommand({ collMod: "items", validator: { age: { $gte: 3 } } })
+db.items.insertOne({ _id: 2, age: 5 })
+db.runCommand({ doltCommit: 1, message: "main: age >= 3 + doc age 5", author: "alice <alice@acme.com>" })
+
+// Merge feature into main: the validator DEFINITION conflicts (age >= 3 vs age >= 10).
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
+
+// Phase 1 -- only the metadata conflict is visible (the document check is deferred):
 db.runCommand({ doltConflicts: 1 }).conflicts   // one type: "metadata" entry on items
 var mid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
-db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: mid, resolution: "theirs" })  // pin age>=10
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: mid, resolution: "theirs" })  // pin age >= 10
 
-// Continue RE-PAUSES: _id:2 (age 5) now violates the pinned age>=10.
+// Continue RE-PAUSES: _id:2 (age 5) now violates the pinned age >= 10.
 db.runCommand({ doltMerge: 1, continue: 1 })    // { conflicts: [...], ok: 0 }
 
 // Phase 2 -- resolve the surfaced validation conflict, then finish:
@@ -623,7 +644,10 @@ var vid = db.runCommand({ doltConflicts: 1 }).conflicts.find(c => c.type == "val
 db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: vid,
                 resolution: "custom", value: { _id: 2, age: 12 } })
 db.runCommand({ doltMerge: 1, continue: 1 })    // { ..., ok: 1 }
-// _id:2 -> age 12 (fixed); _id:1 -> age 5 (grandfathered, untouched)
+
+db.items.find().sort({ _id: 1 })
+// { _id: 1, age: 5 }   (grandfathered -- untouched by the merge, so not re-checked)
+// { _id: 2, age: 12 }  (fixed to satisfy age >= 10)
 ```
 
 Key checks:
