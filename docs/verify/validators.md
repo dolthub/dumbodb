@@ -317,41 +317,274 @@ Key checks:
 
 ## Scenario 6: The full merge cross-validation matrix
 
-Every cell below is a distinct base x ours x theirs case, keyed on the state of a
+Each cell below is a distinct base x ours x theirs case, keyed on the state of a
 document versus the *resulting* validator (`A` absent, `C` present & conforms,
-`X` present & violates).
+`X` present & violates). This table is the at-a-glance summary; each row is then
+written out as a full, copy-paste walkthrough (6a-6i). Every cell also has an
+automated subtest in `tests/verify/validator_merge_xval_test.go`
+(`TestValidatorMergeCrossValidation`).
 
-**To exercise every cell by hand**, run the companion mongosh script -- it sets
-up each case (with the branch/commit/merge steps factored out), performs the
-merge, and self-checks the outcome:
+| cell | base | what the merge did | outcome |
+|---|---|---|---|
+| 6a | A | insert a violating doc | **validation conflict** (fix or drop) |
+| 6b | A | insert a conforming doc | clean merge |
+| 6c | C | modify conforming -> violating | **validation conflict** |
+| 6d | X | doc left untouched | grandfathered -- no conflict |
+| 6e | X | one-sided change, stays violating, action `error` | **validation conflict** |
+| 6f | X | one-sided change, stays violating, action `warn` | allowed |
+| 6g | A | insert a violating doc, action `warn` | allowed |
+| 6h | C | divergent data conflict, resolve to violating vs conforming | **rejected** / completes |
+| 6i | X | divergent data conflict, both sides violating | fix required to complete |
 
+Guiding rule: grandfathering under action `error` is narrow -- a pre-existing
+violator survives only if the merge never touches it. Any value the merge
+*authors* (an insert, a modify, or a resolved data conflict) must conform, unless
+the action is `warn`. A clean merge that only ever removes violations (a fix
+`X -> C`, or a delete) never conflicts.
+
+Every cell uses its own database, so you can run any one in isolation. The
+validator is always `{ age: { $gte: 0 } }`.
+
+### Cell 6a -- base absent: insert a violating document (validation conflict)
+
+```js
+var db = db.getSiblingDB("mx6a")
+db.dropDatabase()
+db.createCollection("items")                                                        // base: no validator, no docs
+db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6a@feature")                                          // feature: add the validator
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "bob <bob@widgets.io>" })
+
+db.items.insertOne({ _id: 1, age: -5 })                                             // main: insert a violator (no validator here yet)
+db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
 ```
-mongosh mongodb://localhost:27017 docs/verify/validator_merge_matrix.js
-# one cell only (substring match on the cell name):
-mongosh mongodb://localhost:27017 --eval 'globalThis.ONLY="baseX"' docs/verify/validator_merge_matrix.js
+
+Resolve by replacing the offending document with a conforming value:
+
+```js
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId               // type: "validation", documentId: 1
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "custom", value: { _id: 1, age: 5 } })
+db.runCommand({ doltMerge: 1, continue: 1 })                                        // { ok: 1 }
+db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: 5 }
 ```
 
-It prints `PASS` / `FAIL` per assertion and a final tally (exit code non-zero on
-any failure). Each cell also has an automated subtest in
-`tests/verify/validator_merge_xval_test.go` (`TestValidatorMergeCrossValidation`).
+### Cell 6b -- base absent: insert a conforming document (clean merge)
 
-| base | what the merge did | outcome |
-|---|---|---|
-| A | clean insert of a violating doc | **validation conflict** (fix or drop) |
-| A | clean insert of a conforming doc | clean merge |
-| C | clean modify conforming -> violating | **validation conflict** |
-| X | doc left byte-for-byte unchanged | grandfathered -- no conflict (any action) |
-| X | one-sided change, stays violating, action `error` | **validation conflict** |
-| X | one-sided change, stays violating, action `warn` | allowed |
-| any | clean change to a violating value, action `warn` | allowed |
-| any | divergent data conflict resolved to a violating value | **rejected** (unless `warn`) |
-| any | divergent data conflict resolved to a conforming value / drop | completes |
+Same as 6a, but the document main inserts conforms, so the merge is clean.
 
-Grandfathering under action `error` is narrow: a pre-existing violator survives
-only if the merge never touches it. Any value the merge *authors* -- an insert, a
-modify, or a resolved data conflict -- must conform, unless the action is `warn`.
-A clean merge that only ever removes violations (a fix `X -> C`, or a delete)
-never conflicts.
+```js
+var db = db.getSiblingDB("mx6b")
+db.dropDatabase()
+db.createCollection("items")
+db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6b@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "bob <bob@widgets.io>" })
+
+db.items.insertOne({ _id: 1, age: 5 })                                              // conforming
+db.runCommand({ doltCommit: 1, message: "main: insert age 5", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (no conflict)
+```
+
+### Cell 6c -- base conforming: modify it to violating (validation conflict, drop)
+
+```js
+var db = db.getSiblingDB("mx6c")
+db.dropDatabase()
+db.createCollection("items")
+db.items.insertOne({ _id: 1, age: 5 })                                             // base: conforming doc
+db.runCommand({ doltCommit: 1, message: "create + doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6c@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "bob <bob@widgets.io>" })
+
+db.items.updateOne({ _id: 1 }, { $set: { age: -5 } })                              // main: turn it violating
+db.runCommand({ doltCommit: 1, message: "main: age -> -5", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
+```
+
+This time drop the offender instead of fixing it:
+
+```js
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "drop" })
+db.runCommand({ doltMerge: 1, continue: 1 })                                        // { ok: 1 }
+db.items.findOne({ _id: 1 })                                                        // null (removed)
+```
+
+### Cell 6d -- base violating & untouched: grandfathered (clean merge)
+
+A document that already violated the incoming validator at the base, and that the
+merge never touches, is grandfathered -- no conflict.
+
+```js
+var db = db.getSiblingDB("mx6d")
+db.dropDatabase()
+db.createCollection("items")
+db.items.insertOne({ _id: 1, age: -5 })                                            // base: already violating
+db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6d@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "bob <bob@widgets.io>" })
+
+db.items.insertOne({ _id: 2, age: 9 })                                             // main advances but does NOT touch _id:1
+db.runCommand({ doltCommit: 1, message: "main: add conforming doc", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (no conflict)
+db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: -5 }  (grandfathered, survives)
+```
+
+### Cell 6e -- base violating: one-sided re-author, action error (validation conflict)
+
+Once the merge *authors* a change to that document, the grandfathering no longer
+applies under `error`, even though the value was already violating.
+
+```js
+var db = db.getSiblingDB("mx6e")
+db.dropDatabase()
+db.createCollection("items")
+db.items.insertOne({ _id: 1, age: -5 })
+db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6e@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })             // action defaults to "error"
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "bob <bob@widgets.io>" })
+
+db.items.updateOne({ _id: 1 }, { $set: { age: -9 } })                              // main: re-author to another violating value
+db.runCommand({ doltCommit: 1, message: "main: age -> -9", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
+
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "drop" })
+db.runCommand({ doltMerge: 1, continue: 1 })                                        // { ok: 1 }
+```
+
+### Cell 6f -- base violating: one-sided re-author, action warn (allowed)
+
+Identical to 6e, but the validator's action is `warn`, so the re-authored
+violating value is allowed and the merge is clean.
+
+```js
+var db = db.getSiblingDB("mx6f")
+db.dropDatabase()
+db.createCollection("items")
+db.items.insertOne({ _id: 1, age: -5 })
+db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6f@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationAction: "warn" })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0 (warn)", author: "bob <bob@widgets.io>" })
+
+db.items.updateOne({ _id: 1 }, { $set: { age: -9 } })
+db.runCommand({ doltCommit: 1, message: "main: age -> -9", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (warn allows it)
+db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: -9 }
+```
+
+### Cell 6g -- action warn suppresses a violating insert (allowed)
+
+```js
+var db = db.getSiblingDB("mx6g")
+db.dropDatabase()
+db.createCollection("items")
+db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6g@feature")
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationAction: "warn" })
+feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0 (warn)", author: "bob <bob@widgets.io>" })
+
+db.items.insertOne({ _id: 1, age: -5 })                                             // violating insert
+db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (warn allows it)
+db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: -5 }
+```
+
+### Cell 6h -- data conflict: a violating resolution is rejected
+
+Here both branches modify the same document divergently (a real data conflict).
+The value you resolve *to* is validated: resolving to the violating side is
+rejected; resolving to the conforming side completes.
+
+```js
+var db = db.getSiblingDB("mx6h")
+db.dropDatabase()
+db.createCollection("items")
+db.items.insertOne({ _id: 1, age: 5 })
+db.runCommand({ doltCommit: 1, message: "create + doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6h@feature")                                          // feature: add validator AND edit _id:1 conformingly
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
+feat.items.updateOne({ _id: 1 }, { $set: { age: 7, tag: "f" } })
+feat.runCommand({ doltCommit: 1, message: "feature: validator + age 7", author: "bob <bob@widgets.io>" })
+
+db.items.updateOne({ _id: 1 }, { $set: { age: -5, tag: "m" } })                    // main: edit _id:1 to a violating value
+db.runCommand({ doltCommit: 1, message: "main: age -5", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })
+// { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }   -- a type "document" conflict on _id:1
+
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })
+// { ok: 0, errmsg: "... resolved document ... violates the collection validator ..." }   -- REJECTED
+
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs" })   // conforming side
+db.runCommand({ doltMerge: 1, continue: 1 })                                        // { ok: 1 }
+db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: 7, tag: "f" }
+```
+
+### Cell 6i -- data conflict, base violating: both sides violate (fix required)
+
+Both sides of the conflict are violating values, so neither `ours` nor `theirs`
+is acceptable -- only a conforming replacement (or a drop) completes the merge.
+
+```js
+var db = db.getSiblingDB("mx6i")
+db.dropDatabase()
+db.createCollection("items")
+db.items.insertOne({ _id: 1, age: -5 })                                            // base: already violating
+db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
+db.runCommand({ doltBranch: 1, branch: "feature" })
+
+var feat = db.getSiblingDB("mx6i@feature")                                          // feature: edit (still violating) BEFORE adding validator
+feat.items.updateOne({ _id: 1 }, { $set: { age: -3, tag: "f" } })
+feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
+feat.runCommand({ doltCommit: 1, message: "feature: age -3 + validator", author: "bob <bob@widgets.io>" })
+
+db.items.updateOne({ _id: 1 }, { $set: { age: -7, tag: "m" } })                    // main: another violating edit
+db.runCommand({ doltCommit: 1, message: "main: age -7", author: "alice <alice@acme.com>" })
+
+db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // ok: 0, a "document" conflict on _id:1
+
+var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })     // REJECTED (age -7 violates)
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs" })   // REJECTED (age -3 violates)
+db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "custom", value: { _id: 1, age: 2 } })
+db.runCommand({ doltMerge: 1, continue: 1 })                                        // { ok: 1 }
+db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: 2 }
+```
 
 ## Scenario 7: The validator definition and the data both conflict (two-phase)
 
