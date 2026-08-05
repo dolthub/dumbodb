@@ -35,8 +35,9 @@ import (
 // modified into a violating state. A pre-existing violator is grandfathered only
 // when the merge leaves it byte-for-byte unchanged (never visited by the diff);
 // a re-authored violating value is a conflict even when the base already
-// violated. Under action "warn" the collection is skipped entirely (violations
-// allowed, matching the write path).
+// violated. Under action "warn" no conflict is raised (violations allowed,
+// matching the write path); instead one server-side summary is logged per
+// collection with the count of documents allowed.
 //
 // Documents already in a divergent data conflict are skipped here; their
 // resolved value is validated at resolution time (trigger 2). A collection whose
@@ -85,9 +86,9 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 		if meta == nil || meta.Validator == nil || meta.ValidationLevel == "off" {
 			continue
 		}
-		if action := meta.ValidationAction; action == "warn" {
-			continue
-		}
+		// Under "warn" the merge allows violating documents; instead of surfacing
+		// conflicts, count them and log one server-side summary per collection.
+		warn := meta.ValidationAction == "warn"
 
 		mergedMap, err := collectionMapFromAM(ctx, state, mergedAM, name)
 		if err != nil {
@@ -111,6 +112,7 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 		}
 
 		var valEntries []*conflictEntry
+		var warnCount int32
 		diffErr := forEachCollectionChange(ctx, baseMap, mergedMap, func(c collChange) (bool, error) {
 			if c.kind == collRemoved {
 				return false, nil // merged value absent -- nothing to validate
@@ -129,22 +131,34 @@ func crossValidateMergedDocuments(ctx context.Context, state *dbState, mergedAM,
 			if conforms {
 				return false, nil
 			}
+			if warn {
+				// Allowed under "warn"; count for the server-side summary.
+				warnCount++
+				return false, nil
+			}
 			entry := newValidationConflict(c, mergedDoc, meta.Validator, name, theirHash, theirsDesc)
 			if _, dup := existing[entry.id]; dup {
 				return false, nil // already recorded (e.g. resolved earlier)
 			}
-			// The merged value violates, and the action is "error" (warn was
-			// skipped above). Every document the merge inserted or modified must
-			// conform: a pre-existing violator is grandfathered only when the
-			// merge leaves it byte-for-byte unchanged, and such a document is
-			// never visited here (forEachCollectionChange skips unchanged docs).
-			// A change that lands on a violating value -- even one-sided, even
-			// when the base already violated -- is a conflict.
+			// The merged value violates and the action is "error". Every document
+			// the merge inserted or modified must conform: a pre-existing violator
+			// is grandfathered only when the merge leaves it byte-for-byte
+			// unchanged, and such a document is never visited here
+			// (forEachCollectionChange skips unchanged docs). A change that lands
+			// on a violating value -- even one-sided, even when the base already
+			// violated -- is a conflict.
 			valEntries = append(valEntries, entry)
 			return false, nil
 		})
 		if diffErr != nil {
 			return fmt.Errorf("cross-validating %q: %w", name, diffErr)
+		}
+		if warn {
+			if warnCount > 0 && state.backend != nil && state.backend.l != nil {
+				state.backend.l.Warn("documents allowed despite failing validation during merge (validationAction:warn)",
+					"collection", name, "count", warnCount)
+			}
+			continue
 		}
 		if len(valEntries) > 0 {
 			allConflicts[name] = append(allConflicts[name], valEntries...)

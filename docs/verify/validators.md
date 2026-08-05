@@ -342,6 +342,16 @@ violator survives only if the merge never touches it. Any value the merge
 the action is `warn`. A clean merge that only ever removes violations (a fix
 `X -> C`, or a delete) never conflicts.
 
+**Observing `warn` (cells 6f, 6g):** matching MongoDB, `validationAction: "warn"`
+is **server-log-only** -- the write/merge succeeds and the client response
+carries no warning of any kind, so there is nothing to observe in the result
+(that is why 6f/6g just show the value landing). DumboDB logs one WARN-level
+summary line per collection to the **server log**, e.g.
+`documents allowed despite failing validation during merge (validationAction:warn) collection=items count=1`
+(and the analogous `... (validationAction:warn) collection=... count=...` on
+insert/update/findAndModify/bulkWrite). To see it, watch the dumbodb server log;
+do not expect anything in the command response.
+
 Every cell uses its own database, so you can run any one in isolation. The
 validator is always `{ age: { $gte: 0 } }`.
 

@@ -102,6 +102,11 @@ type UpdateResult struct {
 		Doc   *types.Document
 		Count int32
 	}
+
+	// WarnAllowed counts documents written despite failing the collection
+	// validator because validationAction is "warn". The handler logs a
+	// server-side summary; nothing is surfaced to the client.
+	WarnAllowed int32
 }
 
 func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, error) {

@@ -182,6 +182,11 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		matched += result.Matched.Count
 		modified += result.Modified.Count
 
+		if result.WarnAllowed > 0 {
+			h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
+				"collection", params.Collection, "count", result.WarnAllowed)
+		}
+
 		if result.Upserted.Doc != nil {
 			doc := result.Upserted.Doc
 			upserted.Append(must.NotFail(types.NewDocument(

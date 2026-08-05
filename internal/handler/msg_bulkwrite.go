@@ -220,13 +220,14 @@ type bulkWriteNS struct {
 
 // bulkWriteOpResult is the per-op tally returned by execBulkWriteOp.
 type bulkWriteOpResult struct {
-	kind       string // "insert" | "update" | "delete"
-	inserted   int32
-	matched    int32
-	modified   int32
-	upserted   int32
-	deleted    int32
-	upsertedID any
+	kind        string // "insert" | "update" | "delete"
+	inserted    int32
+	matched     int32
+	modified    int32
+	upserted    int32
+	deleted     int32
+	upsertedID  any
+	warnAllowed int32 // docs written despite failing validation (validationAction:warn)
 }
 
 // execBulkWriteOp dispatches a single op document to the matching backend
@@ -303,21 +304,28 @@ func (h *Handler) execBulkWriteOp(ctx context.Context, op *types.Document, names
 		return bulkWriteOpResult{}, lazyerrors.Error(err)
 	}
 
+	var res bulkWriteOpResult
 	switch kind {
 	case "insert":
-		return execBulkWriteInsert(ctx, db, c, ns, op, skipDurableSync, bypass)
+		res, err = execBulkWriteInsert(ctx, db, c, ns, op, skipDurableSync, bypass)
 	case "update":
-		return execBulkWriteUpdate(ctx, db, c, ns, op, skipDurableSync, bypass, h.DisablePushdown)
+		res, err = execBulkWriteUpdate(ctx, db, c, ns, op, skipDurableSync, bypass, h.DisablePushdown)
 	case "delete":
-		return execBulkWriteDelete(ctx, c, op, skipDurableSync, h.DisablePushdown)
+		res, err = execBulkWriteDelete(ctx, c, op, skipDurableSync, h.DisablePushdown)
+	default:
+		// Unreachable  -- kind is known to be one of the three.
+		return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrFailedToParse,
+			fmt.Sprintf("unknown op kind %q", kind),
+			"bulkWrite",
+		)
 	}
 
-	// Unreachable  -- kind is known to be one of the three.
-	return bulkWriteOpResult{}, handlererrors.NewCommandErrorMsgWithArgument(
-		handlererrors.ErrFailedToParse,
-		fmt.Sprintf("unknown op kind %q", kind),
-		"bulkWrite",
-	)
+	if err == nil && res.warnAllowed > 0 {
+		h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
+			"collection", ns.coll, "count", res.warnAllowed)
+	}
+	return res, err
 }
 
 func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, bypass bool) (bulkWriteOpResult, error) {
@@ -350,14 +358,18 @@ func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.C
 		return bulkWriteOpResult{}, lazyerrors.Error(err)
 	}
 
+	var warnAllowed int32
 	if validator, _, action := collectionValidator(ctx, db, ns.coll); validator != nil && !bypass {
 		ok, verr := common.FilterDocument(doc, validator)
 		if verr != nil {
 			return bulkWriteOpResult{}, lazyerrors.Error(verr)
 		}
-		if !ok && action != "warn" {
-			return bulkWriteOpResult{kind: "insert"}, common.NewUpdateError(
-				handlererrors.ErrDocumentValidationFailure, "Document failed validation", "bulkWrite")
+		if !ok {
+			if action != "warn" {
+				return bulkWriteOpResult{kind: "insert"}, common.NewUpdateError(
+					handlererrors.ErrDocumentValidationFailure, "Document failed validation", "bulkWrite")
+			}
+			warnAllowed = 1
 		}
 	}
 
@@ -375,7 +387,7 @@ func execBulkWriteInsert(ctx context.Context, db backends.Database, c backends.C
 		return bulkWriteOpResult{}, lazyerrors.Error(err)
 	}
 
-	return bulkWriteOpResult{kind: "insert", inserted: 1}, nil
+	return bulkWriteOpResult{kind: "insert", inserted: 1, warnAllowed: warnAllowed}, nil
 }
 
 func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.Collection, ns bulkWriteNS, op *types.Document, skipDurableSync, bypass, disablePushdown bool) (bulkWriteOpResult, error) {
@@ -497,9 +509,10 @@ func execBulkWriteUpdate(ctx context.Context, db backends.Database, c backends.C
 	}
 
 	out := bulkWriteOpResult{
-		kind:     "update",
-		matched:  updRes.Matched.Count,
-		modified: updRes.Modified.Count,
+		kind:        "update",
+		matched:     updRes.Matched.Count,
+		modified:    updRes.Modified.Count,
+		warnAllowed: updRes.WarnAllowed,
 	}
 
 	if updRes.Upserted.Doc != nil {

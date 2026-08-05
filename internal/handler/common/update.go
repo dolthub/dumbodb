@@ -173,14 +173,20 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 				if verr != nil {
 					return nil, lazyerrors.Error(verr)
 				}
-				if !ok && param.ValidationAction != "warn" {
-					// Persist the already-validated batch before rejecting this
-					// document, matching MongoDB's partial application when a
-					// multi-update hits an invalid result mid-stream.
-					if err := flushPending(); err != nil {
-						return nil, err
+				if !ok {
+					if param.ValidationAction == "warn" {
+						// Allowed under "warn"; the handler logs a server-side
+						// summary. Nothing is surfaced to the client.
+						result.WarnAllowed++
+					} else {
+						// Persist the already-validated batch before rejecting this
+						// document, matching MongoDB's partial application when a
+						// multi-update hits an invalid result mid-stream.
+						if err := flushPending(); err != nil {
+							return nil, err
+						}
+						return nil, NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd)
 					}
-					return nil, NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd)
 				}
 			}
 		}

@@ -219,6 +219,11 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		return nil, lazyerrors.Error(err)
 	}
 
+	if updateRes.WarnAllowed > 0 {
+		h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
+			"collection", params.Collection, "count", updateRes.WarnAllowed)
+	}
+
 	result.updateExisting = false
 
 	if updateRes.Upserted.Doc != nil {
