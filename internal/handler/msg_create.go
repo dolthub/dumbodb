@@ -278,6 +278,12 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	if params.ViewOn != "" {
+		if verr := validateViewChainAcyclic(connCtx, db, collectionName, params.ViewOn); verr != nil {
+			return nil, verr
+		}
+	}
+
 	err = db.CreateCollection(connCtx, &params)
 
 	switch {
@@ -293,14 +299,28 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "create")
 
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionAlreadyExists):
-		// MongoDB 8.0: idempotent OK for no-options create outside a txn,
-		// NamespaceExists (48) inside a txn or with explicit options.
+		// MongoDB 8.0: idempotent OK for a no-options plain-collection create
+		// over an existing plain collection outside a txn; NamespaceExists (48)
+		// inside a txn, with explicit options, or when a view is involved on
+		// either side (creating a collection over a view, or vice versa).
 		ci := conninfo.Get(connCtx)
-		if hasExplicitOptions || ci.InTransaction() {
+		existingIsView := false
+		existingUUID := ""
+		if info, verr := lookupCollectionInfo(connCtx, db, collectionName); verr == nil && info != nil {
+			existingIsView = info.IsView
+			existingUUID = info.UUID
+		}
+		if hasExplicitOptions || ci.InTransaction() || existingIsView {
 			if ci.InTransaction() {
 				h.AbortPendingTransaction(connCtx)
 			}
+			// Creating a view over an existing collection reports the existing
+			// collection's UUID, matching MongoDB's message (only the UUID value
+			// differs). Other collisions keep the plain message.
 			msg := fmt.Sprintf("Collection %s.%s already exists.", dbName, collectionName)
+			if params.ViewOn != "" && !existingIsView && existingUUID != "" {
+				msg = fmt.Sprintf("namespace %s.%s already exists, but with different options: { uuid: UUID(\"%s\") }", dbName, collectionName, existingUUID)
+			}
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrNamespaceExists, msg, "create")
 		}
 
@@ -331,4 +351,3 @@ func invalidDatabaseNameMsg(dbName, collectionName string) string {
 
 	return fmt.Sprintf("Invalid namespace specified '%s.%s'", dbName, collectionName)
 }
-

@@ -258,10 +258,10 @@ func TestLogPaginationVerify(t *testing.T) {
 			{Key: "from", Value: c4}, {Key: "limit", Value: int32(1)},
 			{Key: "patch", Value: true}, {Key: "filters", Value: bson.A{bson.D{{Key: "orders", Value: int32(1)}}}},
 		})
-		diff := raw["commits"].(bson.A)[0].(bson.M)["diff"].(bson.A)
-		require.Len(t, diff, 1, "scoped to orders only")
-		assert.Equal(t, "orders", diff[0].(bson.M)["name"])
-		mods := diff[0].(bson.M)["modified"].(bson.A)
+		changes := raw["commits"].(bson.A)[0].(bson.M)["changes"].(bson.A)
+		require.Len(t, changes, 1, "scoped to orders only")
+		assert.Equal(t, "orders", changes[0].(bson.M)["name"])
+		mods := changes[0].(bson.M)["documents"].(bson.M)["modified"].(bson.A)
 		require.Len(t, mods, 1, "only order 1, not order 2")
 		assert.EqualValues(t, 1, mods[0].(bson.M)["_id"])
 	})

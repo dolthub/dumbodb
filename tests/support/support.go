@@ -271,26 +271,31 @@ func DecodeStatusResult(t *testing.T, raw bson.M) StatusResult {
 	branch, _ := raw["branch"].(string)
 	commitID, _ := raw["commitId"].(string)
 
-	rawTables, ok := raw["collections"]
-	require.True(t, ok, "doltStatus result missing 'collections' field")
+	rawChanges, ok := raw["changes"]
+	require.True(t, ok, "doltStatus result missing 'changes' field")
 
-	tablesArr, ok := rawTables.(bson.A)
-	require.True(t, ok, "doltStatus 'collections' is not an array, got %T", rawTables)
+	changesArr, ok := rawChanges.(bson.A)
+	require.True(t, ok, "doltStatus 'changes' is not an array, got %T", rawChanges)
 
 	var out StatusResult
 	out.Branch = branch
 	out.CommitID = commitID
 
-	for _, tbl := range tablesArr {
-		tm, ok := tbl.(bson.M)
-		require.True(t, ok, "collections entry is not a document, got %T", tbl)
+	for _, ch := range changesArr {
+		cm, ok := ch.(bson.M)
+		require.True(t, ok, "changes entry is not a document, got %T", ch)
 
+		if cm["type"] != "collection" {
+			continue
+		}
+
+		documents, _ := cm["documents"].(bson.M)
 		entry := TableStatusEntry{
-			Name:     fmt.Sprintf("%v", tm["name"]),
-			Status:   fmt.Sprintf("%v", tm["status"]),
-			Added:    ToInt(tm["added"]),
-			Modified: ToInt(tm["modified"]),
-			Deleted:  ToInt(tm["deleted"]),
+			Name:     fmt.Sprintf("%v", cm["name"]),
+			Status:   fmt.Sprintf("%v", cm["status"]),
+			Added:    ToInt(documents["added"]),
+			Modified: ToInt(documents["modified"]),
+			Deleted:  ToInt(documents["removed"]),
 		}
 		out.Tables = append(out.Tables, entry)
 	}

@@ -71,17 +71,21 @@ type fieldDiffResult struct {
 func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 	t.Helper()
 
-	rawColls, ok := raw["collections"]
-	require.True(t, ok, "doltDiff result missing 'collections' field")
+	rawChanges, ok := raw["changes"]
+	require.True(t, ok, "doltDiff result missing 'changes' field")
 
-	collsArr, ok := rawColls.(bson.A)
-	require.True(t, ok, "doltDiff 'collections' is not an array, got %T", rawColls)
+	changesArr, ok := rawChanges.(bson.A)
+	require.True(t, ok, "doltDiff 'changes' is not an array, got %T", rawChanges)
 
 	var out diffResult
 
-	for _, c := range collsArr {
+	for _, c := range changesArr {
 		cm, ok := c.(bson.M)
-		require.True(t, ok, "collections entry is not a document, got %T", c)
+		require.True(t, ok, "changes entry is not a document, got %T", c)
+
+		if cm["type"] != "collection" {
+			continue
+		}
 
 		cd := collDiffResult{
 			Name: cm["name"].(string),
@@ -91,19 +95,21 @@ func decodeDiffResult(t *testing.T, raw bson.M) diffResult {
 			cd.Status = statusRaw
 		}
 
-		if addedRaw, ok := cm["added"].(bson.A); ok {
+		documents, _ := cm["documents"].(bson.M)
+
+		if addedRaw, ok := documents["added"].(bson.A); ok {
 			for _, a := range addedRaw {
 				cd.Added = append(cd.Added, a.(bson.M))
 			}
 		}
 
-		if removedRaw, ok := cm["removed"].(bson.A); ok {
+		if removedRaw, ok := documents["removed"].(bson.A); ok {
 			for _, r := range removedRaw {
 				cd.Removed = append(cd.Removed, r.(bson.M))
 			}
 		}
 
-		if modRaw, ok := cm["modified"].(bson.A); ok {
+		if modRaw, ok := documents["modified"].(bson.A); ok {
 			for _, m := range modRaw {
 				mm, ok := m.(bson.M)
 				require.True(t, ok, "modified entry is not a document, got %T", m)

@@ -91,7 +91,7 @@ db.getSiblingDB("branchvdb@main").runCommand({
   from: "snapshot",
   to:   "main"
 })
-// Expected: { "collections": [], "ok": 1 }
+// Expected: { "changes": [], "ok": 1 }
 ```
 
 ---

@@ -90,8 +90,8 @@ func dtblHashForColl(ctx context.Context, ns tree.NodeStore, rv doltdb.RootValue
 
 // indexAMForDTBL returns the secondary_indexes AddressMap inlined in the
 // DTBL chunk at dtblHash. Returns the shared empty AM if dtblHash is the
-// zero hash, the chunk is empty, the chunk is a legacy TUPM (no secondary
-// indexes encoded), or the DTBL inlines an empty secondary_indexes field.
+// zero hash, the chunk is empty, or the DTBL inlines an empty
+// secondary_indexes field.
 func indexAMForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeStore, dtblHash hash.Hash) (prolly.AddressMap, error) {
 	if dtblHash.IsEmpty() {
 		return emptyIndexAM(ns)
@@ -105,8 +105,7 @@ func indexAMForDTBL(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 		return emptyIndexAM(ns)
 	}
 	if serial.GetFileID(data) != serial.TableFileID {
-		// Legacy TUPM has no secondary indexes encoded.
-		return emptyIndexAM(ns)
+		return prolly.AddressMap{}, fmt.Errorf("indexAMForDTBL: unexpected file ID %q (want DTBL)", serial.GetFileID(data))
 	}
 	tbl, err := serial.TryGetRootAsTable(data, serial.MessagePrefixSz)
 	if err != nil {
@@ -494,8 +493,8 @@ func buildIndexAM(ctx context.Context, state *dbState, infos []backends.IndexInf
 //   - added    when only the b side has it,
 //   - removed  when only the a side has it,
 //   - modified when both sides carry the same name but different
-//              IndexEntry chunk hashes (drop+recreate with a different
-//              spec).
+//     IndexEntry chunk hashes (drop+recreate with a different
+//     spec).
 //
 // Either hash may be the zero hash (collection absent on that side); in
 // that case the corresponding side's index list is empty.

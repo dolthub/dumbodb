@@ -49,7 +49,7 @@ type FindAndModifyParams struct {
 
 	Hint                     string          `dumbo:"hint,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
-	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	LSID                     any             `dumbo:"lsid,ignored"`
 	TxnNumber                int64           `dumbo:"txnNumber,ignored"`

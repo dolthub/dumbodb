@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly"
-	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
@@ -161,57 +160,54 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 
 	var colls []backends.CollectionInfo
 
-	// Include regular collections from the address map.
-	if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
+	catalog, err := listCatalog(ctx, state, am)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := am.IterAll(ctx, func(name string, h hash.Hash) error {
+		if name == reservedCatalogName {
+			return nil
+		}
 		if params != nil && params.Name != "" && name != params.Name {
 			return nil
 		}
 
-		collUUID := state.uuids[name]
-		ci := backends.CollectionInfo{Name: name, UUID: collUUID}
-		if v, ok := state.validators[name]; ok {
-			ci.Validator = v.Validator
-			ci.ValidationLevel = v.ValidationLevel
-			ci.ValidationAction = v.ValidationAction
+		isView, err := isViewEntry(ctx, state.cs, h)
+		if err != nil {
+			return err
 		}
-		if c, ok := state.capped[name]; ok {
-			ci.CappedSize = c.CappedSize
-			ci.CappedDocuments = c.CappedDocuments
+		if isView {
+			vm, err := readViewChunk(ctx, state.ns, h)
+			if err != nil {
+				return err
+			}
+			colls = append(colls, backends.CollectionInfo{
+				Name:         name,
+				IsView:       true,
+				ViewOn:       vm.ViewOn,
+				ViewPipeline: vm.Pipeline,
+			})
+			return nil
+		}
+
+		ci := backends.CollectionInfo{Name: name}
+		if m := catalog[name]; m != nil {
+			ci.UUID = m.UUID
+			ci.Validator = m.Validator
+			// listCollections must mirror MongoDB, which does NOT materialize the
+			// validationLevel/validationAction defaults (see collMeta.effectiveValidation).
+			ci.ValidationLevel = m.ValidationLevel
+			ci.ValidationAction = m.ValidationAction
+			ci.IsTimeSeries = m.IsTimeSeries
+			ci.TimeField = m.TimeField
+			ci.MetaField = m.MetaField
+			ci.Granularity = m.Granularity
 		}
 		colls = append(colls, ci)
 		return nil
 	}); err != nil {
 		return nil, err
-	}
-
-	// Include views.
-	for name, v := range state.views {
-		if params != nil && params.Name != "" && name != params.Name {
-			continue
-		}
-		collUUID := state.uuids[name]
-		ci := backends.CollectionInfo{
-			Name:         name,
-			UUID:         collUUID,
-			IsView:       true,
-			ViewOn:       v.ViewOn,
-			ViewPipeline: v.Pipeline,
-		}
-		colls = append(colls, ci)
-	}
-
-	// Include time series collections (already in the address map, but add TS metadata).
-	for name, ts := range state.timeSeries {
-		// Find and update the existing entry in colls (it's already there from the address map iteration).
-		for i, c := range colls {
-			if c.Name == name {
-				colls[i].IsTimeSeries = true
-				colls[i].TimeField = ts.TimeField
-				colls[i].MetaField = ts.MetaField
-				colls[i].Granularity = ts.Granularity
-				break
-			}
-		}
 	}
 
 	slices.SortFunc(colls, func(a, b backends.CollectionInfo) int {
@@ -230,13 +226,6 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// Check if already exists as a view.
-	if _, isView := state.views[params.Name]; isView {
-		return backends.NewError(backends.ErrorCodeCollectionAlreadyExists,
-			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
-	}
-
-	// Check if already exists as a regular collection.
 	branchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
 		return err
@@ -251,16 +240,17 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 			fmt.Errorf("collection %q already exists in %q", params.Name, db.name))
 	}
 
-	// If viewOn is set, this is a view  -- store metadata only, no prolly map.
 	if params.ViewOn != "" {
-		state.views[params.Name] = &viewMeta{
+		viewHash, err := writeViewChunk(ctx, state.ns, &viewMeta{
 			ViewOn:   params.ViewOn,
 			Pipeline: params.ViewPipeline,
+		})
+		if err != nil {
+			return err
 		}
-		// Generate a UUID for the view.
-		collUUID := uuid.New()
-		state.uuids[params.Name] = collUUID.String()
-		return nil
+		return state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create view %s", params.Name), func(ed prolly.AddressMapEditor) error {
+			return ed.Add(ctx, params.Name, viewHash)
+		})
 	}
 
 	// Create an empty prolly map for this collection.
@@ -277,40 +267,27 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	if err != nil {
 		return err
 	}
-	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
-		return ed.Add(ctx, params.Name, dtblHash)
-	}); err != nil {
+	meta := &collMeta{
+		UUID:             collectionUUID(db.name, params.Name),
+		Validator:        params.Validator,
+		ValidationLevel:  params.ValidationLevel,
+		ValidationAction: params.ValidationAction,
+		IsTimeSeries:     params.IsTimeSeries,
+		TimeField:        params.TimeField,
+		MetaField:        params.MetaField,
+		Granularity:      params.Granularity,
+	}
+	createAM, err := state.getOrInitBranchAM(ctx, db.rootish)
+	if err != nil {
 		return err
 	}
-
-	// Generate and store a UUID for this collection.
-	collUUID := uuid.New()
-	state.uuids[params.Name] = collUUID.String()
-
-	// Store capped configuration if provided.
-	if params.CappedSize > 0 {
-		state.capped[params.Name] = &cappedCollectionMeta{
-			CappedSize:      params.CappedSize,
-			CappedDocuments: params.CappedDocuments,
+	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: create collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
+		if err := ed.Add(ctx, params.Name, dtblHash); err != nil {
+			return err
 		}
-	}
-
-	// Store validator if provided.
-	if params.Validator != nil || params.ValidationLevel != "" || params.ValidationAction != "" {
-		state.validators[params.Name] = &collectionValidator{
-			Validator:        params.Validator,
-			ValidationLevel:  params.ValidationLevel,
-			ValidationAction: params.ValidationAction,
-		}
-	}
-
-	// Store time series metadata if provided.
-	if params.IsTimeSeries {
-		state.timeSeries[params.Name] = &timeSeriesMeta{
-			TimeField:   params.TimeField,
-			MetaField:   params.MetaField,
-			Granularity: params.Granularity,
-		}
+		return state.applyCatalogUpsert(ctx, createAM, ed, params.Name, meta)
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -330,13 +307,6 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// Check if it's a view.
-	if _, isView := state.views[params.Name]; isView {
-		delete(state.views, params.Name)
-		delete(state.uuids, params.Name)
-		return nil
-	}
-
 	dropBranchAM, err := state.getOrInitBranchAM(ctx, db.rootish)
 	if err != nil {
 		return err
@@ -352,16 +322,13 @@ func (db *database) DropCollection(ctx context.Context, params *backends.DropCol
 	}
 
 	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: drop collection %s", params.Name), func(ed prolly.AddressMapEditor) error {
-		return ed.Delete(ctx, params.Name)
+		if err := ed.Delete(ctx, params.Name); err != nil {
+			return err
+		}
+		return state.applyCatalogDelete(ctx, dropBranchAM, ed, params.Name)
 	}); err != nil {
 		return err
 	}
-
-	delete(state.uuids, params.Name)
-	delete(state.validators, params.Name)
-	delete(state.capped, params.Name)
-	delete(state.insertionOrder, params.Name)
-	delete(state.timeSeries, params.Name)
 
 	return nil
 }
@@ -405,38 +372,23 @@ func (db *database) RenameCollection(ctx context.Context, params *backends.Renam
 			fmt.Errorf("collection %q already exists in %q", params.NewName, db.name))
 	}
 
+	meta, mErr := readCatalogDoc(ctx, state, renameBranchAM, params.OldName)
+	if mErr != nil {
+		return fmt.Errorf("reading collection metadata for %q: %w", params.OldName, mErr)
+	}
 	if err := state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: rename collection %s to %s", params.OldName, params.NewName), func(ed prolly.AddressMapEditor) error {
 		if err := ed.Delete(ctx, params.OldName); err != nil {
 			return err
 		}
-
-		return ed.Add(ctx, params.NewName, oldAddr)
+		if err := ed.Add(ctx, params.NewName, oldAddr); err != nil {
+			return err
+		}
+		if meta != nil {
+			return state.applyCatalogRename(ctx, renameBranchAM, ed, params.OldName, params.NewName, meta)
+		}
+		return nil
 	}); err != nil {
 		return err
-	}
-
-	// Transfer UUID from old name to new name.
-	if collUUID, ok := state.uuids[params.OldName]; ok {
-		state.uuids[params.NewName] = collUUID
-		delete(state.uuids, params.OldName)
-	}
-
-	// Transfer validator from old name to new name.
-	if v, ok := state.validators[params.OldName]; ok {
-		state.validators[params.NewName] = v
-		delete(state.validators, params.OldName)
-	}
-
-	// Transfer capped metadata from old name to new name.
-	if c, ok := state.capped[params.OldName]; ok {
-		state.capped[params.NewName] = c
-		delete(state.capped, params.OldName)
-	}
-
-	// Transfer insertion order from old name to new name.
-	if ord, ok := state.insertionOrder[params.OldName]; ok {
-		state.insertionOrder[params.NewName] = ord
-		delete(state.insertionOrder, params.OldName)
 	}
 
 	return nil
@@ -470,34 +422,55 @@ func (db *database) CollMod(ctx context.Context, params *backends.CollModParams)
 			fmt.Errorf("collection %q does not exist in %q", params.Name, db.name))
 	}
 
-	// Get or create validator entry.
-	v, ok := state.validators[params.Name]
-	if !ok {
-		v = &collectionValidator{}
+	if params.SetView {
+		entryHash, err := collModBranchAM.Get(ctx, params.Name)
+		if err != nil {
+			return err
+		}
+		isView, err := isViewEntry(ctx, state.cs, entryHash)
+		if err != nil {
+			return err
+		}
+		if isView {
+			vm, err := readViewChunk(ctx, state.ns, entryHash)
+			if err != nil {
+				return err
+			}
+			if params.SetViewOn {
+				vm.ViewOn = params.ViewOn
+			}
+			if params.SetViewPipeline {
+				vm.Pipeline = params.ViewPipeline
+			}
+			viewHash, err := writeViewChunk(ctx, state.ns, vm)
+			if err != nil {
+				return err
+			}
+			return state.updateAddressMap(ctx, db.rootish, fmt.Sprintf("auto: collMod view %s", params.Name), func(ed prolly.AddressMapEditor) error {
+				return ed.Update(ctx, params.Name, viewHash)
+			})
+		}
 	}
 
+	meta, err := readCatalogDoc(ctx, state, collModBranchAM, params.Name)
+	if err != nil {
+		return fmt.Errorf("reading collection metadata for %q: %w", params.Name, err)
+	}
+	if meta == nil {
+		meta = &collMeta{}
+	}
 	if params.SetValidator {
-		v.Validator = params.Validator
+		meta.Validator = params.Validator
 	}
 	if params.ValidationLevel != "" {
-		v.ValidationLevel = params.ValidationLevel
+		meta.ValidationLevel = params.ValidationLevel
 	}
 	if params.ValidationAction != "" {
-		v.ValidationAction = params.ValidationAction
+		meta.ValidationAction = params.ValidationAction
 	}
-
-	// Store (or clear if all fields are empty).
-	if v.Validator == nil && v.ValidationLevel == "" && v.ValidationAction == "" {
-		delete(state.validators, params.Name)
-	} else {
-		state.validators[params.Name] = v
-	}
-
-	// Update capped metadata if CappedSize is specified.
-	if params.CappedSize > 0 {
-		state.capped[params.Name] = &cappedCollectionMeta{
-			CappedSize: params.CappedSize,
-		}
+	if err := state.upsertCatalogDocMsg(ctx, db.rootish, params.Name,
+		fmt.Sprintf("auto: modify collection %s", params.Name), meta); err != nil {
+		return fmt.Errorf("persisting collection metadata for %q: %w", params.Name, err)
 	}
 
 	return nil
@@ -528,8 +501,16 @@ func (db *database) Stats(ctx context.Context, params *backends.DatabaseStatsPar
 
 	var totalDocs, totalSizeCollection, totalSizeIndexes int64
 
-	if err := am.IterAll(ctx, func(_ string, collHash hash.Hash) error {
-		if collHash.IsEmpty() {
+	if err := am.IterAll(ctx, func(name string, collHash hash.Hash) error {
+		if collHash.IsEmpty() || name == reservedCatalogName {
+			return nil
+		}
+
+		isView, err := isViewEntry(ctx, state.cs, collHash)
+		if err != nil {
+			return err
+		}
+		if isView {
 			return nil
 		}
 

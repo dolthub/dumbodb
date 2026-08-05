@@ -103,30 +103,10 @@ const (
 	dbBranchSep = "@"
 )
 
-// collectionValidator holds schema validation options for a single collection (in-memory only).
-type collectionValidator struct {
-	Validator        *types.Document
-	ValidationLevel  string
-	ValidationAction string
-}
-
-// cappedCollectionMeta holds capped collection configuration (in-memory only).
-type cappedCollectionMeta struct {
-	CappedSize      int64
-	CappedDocuments int64
-}
-
-// viewMeta holds collection view definition (in-memory only).
 type viewMeta struct {
-	ViewOn   string
-	Pipeline *types.Array
-}
-
-// timeSeriesMeta holds time series collection configuration (in-memory only).
-type timeSeriesMeta struct {
-	TimeField   string
-	MetaField   string
-	Granularity string
+	ViewOn    string
+	Pipeline  *types.Array
+	Collation *types.Document
 }
 
 // dbState holds the open Dolt store for a single MongoDB database.
@@ -152,13 +132,6 @@ type dbState struct {
 	// ws and wsHash fields. See branch_ws.go.
 	branchWSMu sync.RWMutex
 	branchWS   map[string]*branchWS
-
-	uuids          map[string]string
-	validators     map[string]*collectionValidator
-	capped         map[string]*cappedCollectionMeta
-	insertionOrder map[string][]any
-	views          map[string]*viewMeta
-	timeSeries     map[string]*timeSeriesMeta
 
 	collSchemaHash hash.Hash
 	mergeState     *mergeInProgress
@@ -1008,21 +981,15 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 	}
 
 	db = &dbState{
-		backend:        b,
-		name:           dbName,
-		dbDir:          dbDir,
-		cs:             cs,
-		ns:             ns,
-		vs:             vs,
-		doltDB:         doltDB,
-		datasDB:        datasDB,
-		branchWS:       make(map[string]*branchWS),
-		uuids:          make(map[string]string),
-		validators:     make(map[string]*collectionValidator),
-		capped:         make(map[string]*cappedCollectionMeta),
-		insertionOrder: make(map[string][]any),
-		views:          make(map[string]*viewMeta),
-		timeSeries:     make(map[string]*timeSeriesMeta),
+		backend:  b,
+		name:     dbName,
+		dbDir:    dbDir,
+		cs:       cs,
+		ns:       ns,
+		vs:       vs,
+		doltDB:   doltDB,
+		datasDB:  datasDB,
+		branchWS: make(map[string]*branchWS),
 	}
 
 	// Write the shared DSCH chunk once; the empty secondary-index AM is
@@ -1675,6 +1642,16 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 		ms := db.mergeState
 
+		if newConflicts, reErr := b.recheckCrossValidation(ctx, db, ms); reErr != nil {
+			return nil, fmt.Errorf("DumboDBMerge: continue: %w", reErr)
+		} else if newConflicts {
+			db.setAM(ctx, ms.intoBranch, ms.resolvedAM)
+			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
+				return nil, fmt.Errorf("DumboDBMerge: continue: persisting new validation conflicts: %w", wsErr)
+			}
+			return nil, &backends.MergeConflictError{Conflicts: ms.summaries()}
+		}
+
 		intoBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+ms.intoBranch)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: resolving branch %q: %w", ms.intoBranch, err)
@@ -1802,13 +1779,13 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: loading base AM: %w", err)
 	}
 
-	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
 		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("branch '%s' (theirs)", params.From))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}
 
-	if len(conflicts) > 0 {
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		// Capture the pre-merge working set AM for abort support.
 		preMergeAM, err := db.getOrInitBranchAM(ctx, params.Into)
 		if err != nil {
@@ -1816,13 +1793,15 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		}
 
 		db.mergeState = &mergeInProgress{
-			fromBranch: params.From,
-			intoBranch: params.Into,
-			premergeAM: preMergeAM,
-			fromHash:   fromHash,
-			intoHash:   intoHash,
-			conflicts:  conflicts,
-			resolvedAM: mergedAM,
+			fromBranch:    params.From,
+			intoBranch:    params.Into,
+			premergeAM:    preMergeAM,
+			fromHash:      fromHash,
+			intoHash:      intoHash,
+			conflicts:     conflicts,
+			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
+			resolvedAM:    mergedAM,
 		}
 
 		// Update the in-memory branch AM so reads during conflict resolution
@@ -2087,13 +2066,13 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 	}
 
 	// Perform the 3-way merge: apply cherry-pick diff (base->from) onto current HEAD (into).
-	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, pickHash, pickBaseHash,
 		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", pickHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCherryPick: %w", err)
 	}
 
-	if len(conflicts) > 0 {
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		// Capture the pre-pick AM for abort support.
 		prePickAM, err := db.getOrInitBranchAM(ctx, branch)
 		if err != nil {
@@ -2101,14 +2080,16 @@ func (b *Backend) DumboDBCherryPick(ctx context.Context, params *backends.Cherry
 		}
 
 		db.mergeState = &mergeInProgress{
-			intoBranch:   branch,
-			premergeAM:   prePickAM,
-			intoHash:     intoHash,
-			conflicts:    conflicts,
-			resolvedAM:   mergedAM,
-			isCherryPick: true,
-			pickHash:     pickHash,
-			originalMsg:  originalMsg,
+			intoBranch:    branch,
+			premergeAM:    prePickAM,
+			intoHash:      intoHash,
+			conflicts:     conflicts,
+			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
+			resolvedAM:    mergedAM,
+			isCherryPick:  true,
+			pickHash:      pickHash,
+			originalMsg:   originalMsg,
 		}
 
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {
@@ -2425,36 +2406,19 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 				}
 			}
 
-			names, nameErr := unionCollectionNames(ctx, parentAM, commitAM)
-			if nameErr != nil {
-				return nil, fmt.Errorf("DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
-			}
-
-			for _, name := range names {
-				aHash, _ := parentAM.Get(ctx, name)
-				bHash, _ := commitAM.Get(ctx, name)
-
-				if aHash == bHash {
-					continue
+			if len(idFilters) > 0 {
+				names, nameErr := unionCollectionNames(ctx, db.cs, parentAM, commitAM)
+				if nameErr != nil {
+					return nil, fmt.Errorf("DumboDBLog: collecting names for commit %q: %w", ci.Hash.String(), nameErr)
 				}
-
-				var status string
-				switch {
-				case aHash.IsEmpty():
-					status = "added"
-				case bHash.IsEmpty():
-					status = "deleted"
-				default:
-					status = "modified"
-				}
-
-				// Filtered path: scope stat/patch to the matched documents in
-				// the filtered collections only. Collections not named in the
-				// filter, and non-matching document changes, are omitted; index
-				// changes are not document matches and are dropped here.
-				if len(idFilters) > 0 {
+				for _, name := range names {
 					filter, ok := idFilters[name]
 					if !ok {
+						continue
+					}
+					aHash, _ := parentAM.Get(ctx, name)
+					bHash, _ := commitAM.Get(ctx, name)
+					if aHash == bHash {
 						continue
 					}
 					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
@@ -2466,70 +2430,59 @@ func (b *Backend) DumboDBLog(ctx context.Context, params *backends.LogParams) (*
 					if len(addedDocs)+len(removedDocs)+len(modifiedDocs) == 0 {
 						continue
 					}
+					status := statusOf(aHash, bHash)
 					if params.Stat {
 						info.Stat = append(info.Stat, backends.TableStatus{
-							Name:     name,
-							Status:   status,
-							Added:    len(addedDocs),
-							Modified: len(modifiedDocs),
-							Deleted:  len(removedDocs),
+							Name: name, Status: status,
+							Added: len(addedDocs), Modified: len(modifiedDocs), Deleted: len(removedDocs),
 						})
 					}
 					if params.Patch {
 						info.Diff = append(info.Diff, backends.CollectionDiff{
-							Name:     name,
-							Status:   status,
-							Added:    addedDocs,
-							Removed:  removedDocs,
-							Modified: modifiedDocs,
+							Name: name, Status: status,
+							Added: addedDocs, Removed: removedDocs, Modified: modifiedDocs,
 						})
 					}
-					continue
 				}
-
-				// Index lifecycle is content-addressed; the same helper that
-				// powers DumboDBStatus / DumboDBDiff reduces the two DTBLs
-				// to per-kind added/modified/removed lists.
-				idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, db, aHash, bHash)
-				if idxErr != nil {
-					return nil, fmt.Errorf("DumboDBLog: index diffs for %q in commit %q: %w", name, ci.Hash.String(), idxErr)
-				}
-
-				if params.Stat {
-					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
-					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
-					added, modified, deleted, _ := countCollectionMapDiffs(ctx, aMap, bMap)
-					info.Stat = append(info.Stat, backends.TableStatus{
-						Name:            name,
-						Status:          status,
-						Added:           added,
-						Modified:        modified,
-						Deleted:         deleted,
-						AddedIndexes:    indexNamesOf(idxAdded),
-						ModifiedIndexes: indexChangeNamesOf(idxModified),
-						RemovedIndexes:  indexNamesOf(idxRemoved),
-					})
-				}
-
+			} else if cErr := eachCollectionChange(ctx, db, parentAM, commitAM, func(c collectionChange) error {
 				if params.Patch {
-					aMap, _ := collectionMapFromAM(ctx, db, parentAM, name)
-					bMap, _ := collectionMapFromAM(ctx, db, commitAM, name)
-					addedDocs, removedDocs, modifiedDocs, _ := diffCollectionMaps(ctx, db.ns, aMap, bMap)
-					// Include the collection's diff entry if any document
-					// OR any index changed. An index-only commit was
-					// silently dropped before this check.
-					if len(addedDocs) > 0 || len(removedDocs) > 0 || len(modifiedDocs) > 0 ||
-						len(idxAdded) > 0 || len(idxModified) > 0 || len(idxRemoved) > 0 {
-						info.Diff = append(info.Diff, backends.CollectionDiff{
-							Name:            name,
-							Status:          status,
-							Added:           addedDocs,
-							Removed:         removedDocs,
-							Modified:        modifiedDocs,
-							AddedIndexes:    idxAdded,
-							ModifiedIndexes: idxModified,
-							RemovedIndexes:  idxRemoved,
-						})
+					addedDocs, removedDocs, modifiedDocs, dErr := diffCollectionMaps(ctx, db.ns, c.AMap, c.BMap)
+					if dErr != nil {
+						return dErr
+					}
+					if len(addedDocs) == 0 && len(removedDocs) == 0 && len(modifiedDocs) == 0 && !c.surfacesWithoutDocChange() {
+						return nil
+					}
+					if params.Stat {
+						info.Stat = append(info.Stat, tableStatusFrom(c, len(addedDocs), len(modifiedDocs), len(removedDocs)))
+					}
+					info.Diff = append(info.Diff, collectionDiffFrom(c, addedDocs, removedDocs, modifiedDocs))
+					return nil
+				}
+				added, modified, deleted, cntErr := countCollectionMapDiffs(ctx, c.AMap, c.BMap)
+				if cntErr != nil {
+					return cntErr
+				}
+				if added == 0 && modified == 0 && deleted == 0 && !c.surfacesWithoutDocChange() {
+					return nil
+				}
+				info.Stat = append(info.Stat, tableStatusFrom(c, added, modified, deleted))
+				return nil
+			}); cErr != nil {
+				return nil, fmt.Errorf("DumboDBLog: diffing commit %q: %w", ci.Hash.String(), cErr)
+			}
+
+			if len(idFilters) == 0 {
+				viewChanges, vErr := diffViewEntries(ctx, db.cs, db.ns, parentAM, commitAM)
+				if vErr != nil {
+					return nil, fmt.Errorf("DumboDBLog: view diffs for commit %q: %w", ci.Hash.String(), vErr)
+				}
+				for _, vc := range viewChanges {
+					if params.Stat {
+						info.ViewStat = append(info.ViewStat, backends.ViewStatus{Name: vc.Name, Status: vc.Status})
+					}
+					if params.Patch {
+						info.ViewDiff = append(info.ViewDiff, vc)
 					}
 				}
 			}
@@ -2683,67 +2636,21 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 		return nil, fmt.Errorf("DumboDBStatus: reading working AM for branch %q: %w", branch, err)
 	}
 
-	names, err := unionCollectionNames(ctx, headAM, workingAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBStatus: collecting collection names for db %q: %w", params.DBName, err)
-	}
-
 	var tables []backends.TableStatus
 
-	for _, name := range names {
-		headHash, headErr := headAM.Get(ctx, name)
-		if headErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: reading HEAD hash for %q: %w", name, headErr)
-		}
-
-		workingHash, workingErr := workingAM.Get(ctx, name)
-		if workingErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: reading working hash for %q: %w", name, workingErr)
-		}
-
-		var status string
-		switch {
-		case headHash.IsEmpty() && !workingHash.IsEmpty():
-			status = "added"
-		case !headHash.IsEmpty() && workingHash.IsEmpty():
-			status = "deleted"
-		case headHash != workingHash:
-			status = "modified"
-		default:
-			continue
-		}
-
-		aMap, mapErr := collectionMapFromAM(ctx, state, headAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: opening HEAD map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		bMap, mapErr := collectionMapFromAM(ctx, state, workingAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: opening working map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		addedCount, modifiedCount, deletedCount, countErr := countCollectionMapDiffs(ctx, aMap, bMap)
+	err = eachCollectionChange(ctx, state, headAM, workingAM, func(c collectionChange) error {
+		addedCount, modifiedCount, deletedCount, countErr := countCollectionMapDiffs(ctx, c.AMap, c.BMap)
 		if countErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: counting diffs for %q.%q: %w", params.DBName, name, countErr)
+			return fmt.Errorf("counting diffs for %q: %w", c.Name, countErr)
 		}
-
-		idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, state, headHash, workingHash)
-		if idxErr != nil {
-			return nil, fmt.Errorf("DumboDBStatus: computing index diffs for %q.%q: %w", params.DBName, name, idxErr)
+		if addedCount == 0 && modifiedCount == 0 && deletedCount == 0 && !c.surfacesWithoutDocChange() {
+			return nil
 		}
-
-		ts := backends.TableStatus{
-			Name:            name,
-			Status:          status,
-			Added:           addedCount,
-			Modified:        modifiedCount,
-			Deleted:         deletedCount,
-			AddedIndexes:    indexNamesOf(idxAdded),
-			ModifiedIndexes: indexChangeNamesOf(idxModified),
-			RemovedIndexes:  indexNamesOf(idxRemoved),
-		}
-		tables = append(tables, ts)
+		tables = append(tables, tableStatusFrom(c, addedCount, modifiedCount, deletedCount))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: %w", err)
 	}
 
 	if tables == nil {
@@ -2751,6 +2658,14 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	}
 
 	result := &backends.VersioningStatusResult{Branch: params.Branch, Tables: tables}
+
+	viewChanges, err := diffViewEntries(ctx, state.cs, state.ns, headAM, workingAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBStatus: diffing views for db %q: %w", params.DBName, err)
+	}
+	for _, vc := range viewChanges {
+		result.Views = append(result.Views, backends.ViewStatus{Name: vc.Name, Status: vc.Status})
+	}
 
 	if ms := state.mergeState; ms != nil {
 		switch {
@@ -2770,8 +2685,9 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	}
 
 	// commitId is only set when the working tree is identical to the checked-out
-	// commit: no uncommitted changes AND no merge/cherry-pick/rebase/revert in progress.
-	if len(tables) == 0 && result.MergeOp == "" {
+	// commit: no uncommitted changes (collections or views) AND no
+	// merge/cherry-pick/rebase/revert in progress.
+	if len(tables) == 0 && len(result.Views) == 0 && result.MergeOp == "" {
 		if h, hErr := resolveRootishToCommitHash(ctx, state, branch); hErr == nil {
 			result.CommitID = h.String()
 		}
@@ -2946,83 +2862,33 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		}
 	}
 
-	names, err := unionCollectionNames(ctx, aAM, bAM)
-	if err != nil {
-		return nil, fmt.Errorf("DumboDBDiff: collecting collection names for db %q: %w", params.DBName, err)
-	}
-
 	var diffs []backends.CollectionDiff
 
-	for _, name := range names {
-		aHash, hashErr := aAM.Get(ctx, name)
-		if hashErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: probing a-side AM for %q.%q: %w", params.DBName, name, hashErr)
-		}
-
-		bHash, hashErr := bAM.Get(ctx, name)
-		if hashErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: probing b-side AM for %q.%q: %w", params.DBName, name, hashErr)
-		}
-
-		inA := !aHash.IsEmpty()
-		inB := !bHash.IsEmpty()
-
-		var status string
-		switch {
-		case !inA && inB:
-			status = "added"
-		case inA && !inB:
-			status = "deleted"
-		default:
-			status = "modified"
-		}
-
-		aMap, mapErr := collectionMapFromAM(ctx, state, aAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: opening a-side map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		bMap, mapErr := collectionMapFromAM(ctx, state, bAM, name)
-		if mapErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: opening b-side map for %q.%q: %w", params.DBName, name, mapErr)
-		}
-
-		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, aMap, bMap)
+	err = eachCollectionChange(ctx, state, aAM, bAM, func(c collectionChange) error {
+		added, removed, modified, diffErr := diffCollectionMaps(ctx, state.ns, c.AMap, c.BMap)
 		if diffErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: diffing collection %q in db %q: %w", name, params.DBName, diffErr)
+			return fmt.Errorf("diffing collection %q: %w", c.Name, diffErr)
 		}
-
-		idxAdded, idxModified, idxRemoved, idxErr := computeIndexChanges(ctx, state, aHash, bHash)
-		if idxErr != nil {
-			return nil, fmt.Errorf("DumboDBDiff: index diffs for %q in db %q: %w", name, params.DBName, idxErr)
+		if len(added) == 0 && len(removed) == 0 && len(modified) == 0 && !c.surfacesWithoutDocChange() {
+			return nil
 		}
-
-		// A "modified" collection with no document-level changes AND no
-		// index-level changes is no diff at all. "added" and "deleted"
-		// collections always surface, even when empty, so the caller can
-		// see the lifecycle event.
-		if status == "modified" && len(added) == 0 && len(removed) == 0 && len(modified) == 0 &&
-			len(idxAdded) == 0 && len(idxModified) == 0 && len(idxRemoved) == 0 {
-			continue
-		}
-
-		diffs = append(diffs, backends.CollectionDiff{
-			Name:            name,
-			Status:          status,
-			Added:           added,
-			Removed:         removed,
-			Modified:        modified,
-			AddedIndexes:    idxAdded,
-			ModifiedIndexes: idxModified,
-			RemovedIndexes:  idxRemoved,
-		})
+		diffs = append(diffs, collectionDiffFrom(c, added, removed, modified))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBDiff: %w", err)
 	}
 
 	if diffs == nil {
 		diffs = []backends.CollectionDiff{}
 	}
 
-	return &backends.DiffResult{Collections: diffs}, nil
+	viewChanges, err := diffViewEntries(ctx, state.cs, state.ns, aAM, bAM)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBDiff: diffing views for db %q: %w", params.DBName, err)
+	}
+
+	return &backends.DiffResult{Collections: diffs, Views: viewChanges}, nil
 }
 
 // collectionMapFromAM opens the prolly.Map for a collection from an AddressMap.
@@ -3352,15 +3218,17 @@ func (b *Backend) replayRemainingCommits(ctx context.Context, db *dbState, ms *m
 		// 3-way merge: apply pick's diff (base->from) onto the current rebased tip (into).
 		// Sides are swapped so the replayed commit presents as "ours" and the
 		// onto/tip as "theirs" (a rebase moves the user's commits onto a base).
-		mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
+		mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, fromAM, intoAM, baseAM, pickHash, pickBaseHash,
 			fmt.Sprintf("commit '%s' (ours)", pickHash.String()), fmt.Sprintf("branch '%s' (theirs)", ms.ontoBranch))
 		if err != nil {
 			return nil, fmt.Errorf("replayRemainingCommits: merging commit %q: %w", pickHash, err)
 		}
 
-		if len(conflicts) > 0 {
+		if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 			ms.rebaseCurrentPick = pickHash
 			ms.conflicts = conflicts
+			ms.viewConflicts = viewConflicts
+			ms.metaConflicts = metaConflicts
 			ms.resolvedAM = mergedAM
 			if wsErr := persistConflictState(ctx, db, ms); wsErr != nil {
 				return nil, fmt.Errorf("replayRemainingCommits: persisting conflict state: %w", wsErr)
@@ -3658,13 +3526,13 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 	//   into = intoAM    (current branch HEAD  -- "ours")
 	// theirHash = parentHash (the "from" side commit hash)
 	// baseHash  = revertHash (the "base" side commit hash)
-	mergedAM, conflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
+	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, parentAM, revertAM, parentHash, revertHash,
 		fmt.Sprintf("branch '%s' (ours)", branch), fmt.Sprintf("commit '%s' (theirs)", revertHash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBRevert: %w", err)
 	}
 
-	if len(conflicts) > 0 {
+	if len(conflicts) > 0 || len(viewConflicts) > 0 || len(metaConflicts) > 0 {
 		// Capture the pre-revert AM for abort support.
 		preRevertAM, err := db.getOrInitBranchAM(ctx, branch)
 		if err != nil {
@@ -3672,15 +3540,17 @@ func (b *Backend) DumboDBRevert(ctx context.Context, params *backends.RevertPara
 		}
 
 		db.mergeState = &mergeInProgress{
-			intoBranch:  branch,
-			premergeAM:  preRevertAM,
-			intoHash:    intoHash,
-			conflicts:   conflicts,
-			resolvedAM:  mergedAM,
-			isRevert:    true,
-			pickHash:    revertHash, // the commit being reverted
-			fromHash:    parentHash, // parent hash  -- used as "their" hash in artifacts
-			originalMsg: originalMsg,
+			intoBranch:    branch,
+			premergeAM:    preRevertAM,
+			intoHash:      intoHash,
+			conflicts:     conflicts,
+			viewConflicts: viewConflicts,
+			metaConflicts: metaConflicts,
+			resolvedAM:    mergedAM,
+			isRevert:      true,
+			pickHash:      revertHash,
+			fromHash:      parentHash,
+			originalMsg:   originalMsg,
 		}
 
 		if wsErr := persistConflictState(ctx, db, db.mergeState); wsErr != nil {

@@ -91,11 +91,11 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflicts | length] | add // 0')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     local wire_id
-    wire_id="$(echo "$output" | jq -r '.collections[0].conflicts[0].conflictId')"
+    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.name == "items")][0].conflictId')"
     [ -n "$wire_id" ]
     [ "$wire_id" != "null" ]
 
@@ -168,11 +168,11 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflicts | length] | add // 0')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     local wire_id
-    wire_id="$(echo "$output" | jq -r '.collections[0].conflicts[0].conflictId')"
+    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.name == "items")][0].conflictId')"
     [ -n "$wire_id" ]
     [ "$wire_id" != "null" ]
 
@@ -243,11 +243,11 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflicts | length] | add // 0')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     local wire_id
-    wire_id="$(echo "$output" | jq -r '.collections[0].conflicts[0].conflictId')"
+    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.name == "items")][0].conflictId')"
     [ -n "$wire_id" ]
     [ "$wire_id" != "null" ]
 
@@ -318,7 +318,7 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.collections[] | select(.collection == "items") | .conflicts | length] | add // 0')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------

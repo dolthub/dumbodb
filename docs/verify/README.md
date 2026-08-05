@@ -30,6 +30,7 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 | index-branch-isolation.md | index_branch_isolation_test.go | TestIndexBranchIsolationVerify |
 | index-maintenance.md | index_maintenance_test.go | TestIndexMaintenanceVerify |
 | index-merge.md | index_merge_test.go | TestIndexMergeVerify |
+| view-merge.md | view_merge_test.go | TestViewMergeVerify |
 
 Run all verify tests:
 

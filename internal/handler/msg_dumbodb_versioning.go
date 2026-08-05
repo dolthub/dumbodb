@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,35 +95,107 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	collections := types.MakeArray(len(res.Collections))
-
-	for _, cd := range res.Collections {
-		collections.Append(collectionDiffToDoc(cd))
-	}
+	changes := changesArray(res.Collections, res.Views, nil, nil)
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"collections", collections,
+			"changes", changes,
 			"ok", float64(1),
 		)),
 	)
 }
 
-// tableStatusToDoc renders a backends.TableStatus as a wire document.
-// Shared by MsgDumboDBStatus and the Stat block of MsgDumboDBLog. The
-// three index name lists are ALWAYS emitted, as empty arrays when
-// nothing of that kind changed, so consumers do not have to branch on
-// field presence.
-func tableStatusToDoc(t backends.TableStatus) *types.Document {
+// changesArray renders collection and view changes into the unified `changes`
+// wire array. Exactly one of collDiffs/collStats (and viewDiffs/viewStats) is
+// non-nil for a given call.
+func changesArray(collDiffs []backends.CollectionDiff, viewDiffs []backends.ViewChange, collStats []backends.TableStatus, viewStats []backends.ViewStatus) *types.Array {
+	type namedDoc struct {
+		name string
+		doc  *types.Document
+	}
+	var items []namedDoc
+	for _, cd := range collDiffs {
+		items = append(items, namedDoc{cd.Name, collectionChangeFull(cd)})
+	}
+	for _, ts := range collStats {
+		items = append(items, namedDoc{ts.Name, collectionChangeSummary(ts)})
+	}
+	for _, vc := range viewDiffs {
+		items = append(items, namedDoc{vc.Name, viewChangeToDoc(vc)})
+	}
+	for _, vs := range viewStats {
+		items = append(items, namedDoc{vs.Name, viewStatusToChange(vs)})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
+
+	out := types.MakeArray(len(items))
+	for _, it := range items {
+		out.Append(it.doc)
+	}
+	return out
+}
+
+func collectionChangeSummary(t backends.TableStatus) *types.Document {
 	return must.NotFail(types.NewDocument(
+		"type", "collection",
 		"name", t.Name,
 		"status", t.Status,
-		"added", int32(t.Added),
-		"modified", int32(t.Modified),
-		"deleted", int32(t.Deleted),
-		"addedIndexes", stringArray(t.AddedIndexes),
-		"modifiedIndexes", stringArray(t.ModifiedIndexes),
-		"removedIndexes", stringArray(t.RemovedIndexes),
+		"documents", must.NotFail(types.NewDocument(
+			"added", int32(t.Added),
+			"removed", int32(t.Deleted),
+			"modified", int32(t.Modified),
+		)),
+		"indexes", must.NotFail(types.NewDocument(
+			"added", stringArray(t.AddedIndexes),
+			"removed", stringArray(t.RemovedIndexes),
+			"modified", stringArray(t.ModifiedIndexes),
+		)),
+		"metadata", collectionMetadataDoc(t.MetadataFrom, t.MetadataTo),
+	))
+}
+
+// collectionMetadataDoc renders a validator/options change as {from, to}, or an
+// empty document when the metadata did not change.
+func collectionMetadataDoc(from, to *backends.CollectionMetadata) *types.Document {
+	metadata := must.NotFail(types.NewDocument())
+	if from != nil || to != nil {
+		metadata.Set("from", collectionMetadataSide(from))
+		metadata.Set("to", collectionMetadataSide(to))
+	}
+	return metadata
+}
+
+func viewStatusToChange(v backends.ViewStatus) *types.Document {
+	return must.NotFail(types.NewDocument(
+		"type", "view",
+		"name", v.Name,
+		"status", v.Status,
+	))
+}
+
+func viewDefWireDoc(def *backends.ViewDefinition) any {
+	if def == nil {
+		return types.Null
+	}
+	pipeline := def.Pipeline
+	if pipeline == nil {
+		pipeline = types.MakeArray(0)
+	}
+	return must.NotFail(types.NewDocument(
+		"viewOn", def.ViewOn,
+		"pipeline", pipeline,
+	))
+}
+
+// viewChangeToDoc renders one view change: from is null for an added view, to
+// is null for a removed one.
+func viewChangeToDoc(vc backends.ViewChange) *types.Document {
+	return must.NotFail(types.NewDocument(
+		"type", "view",
+		"name", vc.Name,
+		"status", vc.Status,
+		"from", viewDefWireDoc(vc.From),
+		"to", viewDefWireDoc(vc.To),
 	))
 }
 
@@ -193,6 +266,43 @@ func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
 		"modifiedIndexes", modifiedIdx,
 		"removedIndexes", removedIdx,
 	))
+}
+
+func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
+	inner := collectionDiffToDoc(cd)
+	documents := must.NotFail(types.NewDocument(
+		"added", must.NotFail(inner.Get("added")),
+		"removed", must.NotFail(inner.Get("removed")),
+		"modified", must.NotFail(inner.Get("modified")),
+	))
+	indexes := must.NotFail(types.NewDocument(
+		"added", must.NotFail(inner.Get("addedIndexes")),
+		"removed", must.NotFail(inner.Get("removedIndexes")),
+		"modified", must.NotFail(inner.Get("modifiedIndexes")),
+	))
+	return must.NotFail(types.NewDocument(
+		"type", "collection",
+		"name", cd.Name,
+		"status", cd.Status,
+		"documents", documents,
+		"indexes", indexes,
+		"metadata", collectionMetadataDoc(cd.MetadataFrom, cd.MetadataTo),
+	))
+}
+
+// collectionMetadataSide renders one side of a validator/options diff, or null
+// when that side had no validator.
+func collectionMetadataSide(m *backends.CollectionMetadata) any {
+	if m == nil {
+		return types.Null
+	}
+	side := must.NotFail(types.NewDocument())
+	if m.Validator != nil {
+		side.Set("validator", m.Validator)
+	}
+	side.Set("validationLevel", m.ValidationLevel)
+	side.Set("validationAction", m.ValidationAction)
+	return side
 }
 
 // stringArray renders a []string as a wire-array, returning an empty
@@ -759,6 +869,22 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			Author:   author,
 		})
 		if mergeErr != nil {
+			var conflictErr *backends.MergeConflictError
+			if errors.As(mergeErr, &conflictErr) {
+				conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
+				for _, c := range conflictErr.Conflicts {
+					conflictsArr.Append(must.NotFail(types.NewDocument(
+						"collection", c.Collection,
+						"count", int32(c.Count),
+					)))
+				}
+				return documentOpMsg(must.NotFail(types.NewDocument(
+					"conflicts", conflictsArr,
+					"ok", float64(0),
+					"code", int32(handlererrors.ErrOperationFailed),
+					"errmsg", conflictErr.Error(),
+				)))
+			}
 			return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, mergeErr.Error())
 		}
 		contDoc := must.NotFail(types.NewDocument(
@@ -902,10 +1028,45 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	collectionsArr := types.MakeArray(len(res.Collections))
+	type conflictOut struct {
+		name string
+		id   string
+		doc  *types.Document
+	}
+	var entries []conflictOut
+
 	for _, cc := range res.Collections {
-		conflictsArr := types.MakeArray(len(cc.Conflicts))
 		for _, cf := range cc.Conflicts {
+			if cf.Type == "validation" {
+				var docID any = types.Null
+				if cf.Ours != nil {
+					if v, getErr := cf.Ours.Get("_id"); getErr == nil {
+						docID = v
+					}
+				}
+				vreason := must.NotFail(types.NewDocument(
+					"code", cf.Reason.Code,
+					"message", cf.Reason.Message,
+				))
+				vdoc := must.NotFail(types.NewDocument(
+					"conflictId", cf.ConflictID,
+					"type", "validation",
+					"name", cc.Collection,
+					"documentId", docID,
+					"reason", vreason,
+				))
+				if cf.Ours != nil {
+					vdoc.Set("document", cf.Ours)
+				} else {
+					vdoc.Set("document", types.Null)
+				}
+				if cf.Reason.Key != nil {
+					vdoc.Set("validator", cf.Reason.Key)
+				}
+				entries = append(entries, conflictOut{name: cc.Collection, id: cf.ConflictID, doc: vdoc})
+				continue
+			}
+
 			// Each side carries its own _id: a uniqueKeyCollision has
 			// distinct identities for ours and theirs. base carries no
 			// diffType.
@@ -935,25 +1096,106 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 				reason.Set("key", cf.Reason.Key)
 			}
 
-			conflictsArr.Append(must.NotFail(types.NewDocument(
-				"conflictId", cf.ConflictID,
-				"type", cf.Type,
-				"reason", reason,
-				"base", buildSide(cf.Base, ""),
-				"ours", buildSide(cf.Ours, cf.OurDiffType),
-				"theirs", buildSide(cf.Theirs, cf.TheirDiffType),
-			)))
+			entries = append(entries, conflictOut{
+				name: cc.Collection,
+				id:   cf.ConflictID,
+				doc: must.NotFail(types.NewDocument(
+					"conflictId", cf.ConflictID,
+					"type", "document",
+					"name", cc.Collection,
+					"reason", reason,
+					"base", buildSide(cf.Base, ""),
+					"ours", buildSide(cf.Ours, cf.OurDiffType),
+					"theirs", buildSide(cf.Theirs, cf.TheirDiffType),
+				)),
+			})
 		}
+	}
 
-		collectionsArr.Append(must.NotFail(types.NewDocument(
-			"collection", cc.Collection,
-			"conflicts", conflictsArr,
-		)))
+	for _, vc := range res.Views {
+		buildViewSide := func(def *backends.ViewDefinition, diffType string) any {
+			if def == nil {
+				return types.Null
+			}
+			pipeline := def.Pipeline
+			if pipeline == nil {
+				pipeline = types.MakeArray(0)
+			}
+			side := must.NotFail(types.NewDocument(
+				"viewOn", def.ViewOn,
+				"pipeline", pipeline,
+			))
+			if diffType != "" {
+				side.Set("diffType", diffType)
+			}
+			return side
+		}
+		entries = append(entries, conflictOut{
+			name: vc.Name,
+			id:   vc.ConflictID,
+			doc: must.NotFail(types.NewDocument(
+				"conflictId", vc.ConflictID,
+				"type", "view",
+				"name", vc.Name,
+				"base", buildViewSide(vc.Base, ""),
+				"ours", buildViewSide(vc.Ours, vc.OurDiffType),
+				"theirs", buildViewSide(vc.Theirs, vc.TheirDiffType),
+			)),
+		})
+	}
+
+	for _, mc := range res.Metadata {
+		buildMetaSide := func(m *backends.CollectionMetadata, diffType string) any {
+			if m == nil {
+				return types.Null
+			}
+			var validator any = types.Null
+			if m.Validator != nil {
+				validator = m.Validator
+			}
+			side := must.NotFail(types.NewDocument(
+				"validator", validator,
+				"validationLevel", m.ValidationLevel,
+				"validationAction", m.ValidationAction,
+			))
+			if diffType != "" {
+				side.Set("diffType", diffType)
+			}
+			return side
+		}
+		entries = append(entries, conflictOut{
+			name: mc.Collection,
+			id:   mc.ConflictID,
+			doc: must.NotFail(types.NewDocument(
+				"conflictId", mc.ConflictID,
+				"type", "metadata",
+				"name", mc.Collection,
+				"reason", must.NotFail(types.NewDocument(
+					"code", mc.Reason.Code,
+					"message", mc.Reason.Message,
+				)),
+				"base", buildMetaSide(mc.Base, ""),
+				"ours", buildMetaSide(mc.Ours, mc.OurDiffType),
+				"theirs", buildMetaSide(mc.Theirs, mc.TheirDiffType),
+			)),
+		})
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].name != entries[j].name {
+			return entries[i].name < entries[j].name
+		}
+		return entries[i].id < entries[j].id
+	})
+
+	conflictsArr := types.MakeArray(len(entries))
+	for _, e := range entries {
+		conflictsArr.Append(e.doc)
 	}
 
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
-			"collections", collectionsArr,
+			"conflicts", conflictsArr,
 			"ok", float64(1),
 		)),
 	)
@@ -961,7 +1203,11 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 
 // MsgDumboDBResolveConflict implements the `dumboDBResolveConflict` command.
 //
-// Resolves a single document conflict in the current in-progress merge.
+// Resolves a single conflict (document, view, metadata, or validation) in the
+// current in-progress merge, cherry-pick, or rebase. The valid `resolution`
+// values depend on the conflict type: document/view/metadata take
+// ours/theirs/custom; a validation conflict takes custom (a conforming
+// replacement) or drop.
 // Usage:
 //
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
@@ -1310,20 +1556,10 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 		)
 		entry := must.NotFail(types.NewDocument(pairs...))
 
-		if len(c.Stat) > 0 {
-			statArr := types.MakeArray(len(c.Stat))
-			for _, s := range c.Stat {
-				statArr.Append(tableStatusToDoc(s))
-			}
-			entry.Set("stat", statArr)
-		}
-
-		if len(c.Diff) > 0 {
-			diffArr := types.MakeArray(len(c.Diff))
-			for _, cd := range c.Diff {
-				diffArr.Append(collectionDiffToDoc(cd))
-			}
-			entry.Set("diff", diffArr)
+		if len(c.Diff) > 0 || len(c.ViewDiff) > 0 {
+			entry.Set("changes", changesArray(c.Diff, c.ViewDiff, nil, nil))
+		} else if len(c.Stat) > 0 || len(c.ViewStat) > 0 {
+			entry.Set("changes", changesArray(nil, nil, c.Stat, c.ViewStat))
 		}
 
 		commits.Append(entry)
@@ -1625,13 +1861,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	dirty := len(res.Tables) > 0 || res.MergeOp != ""
-
-	collections := types.MakeArray(len(res.Tables))
-
-	for _, t := range res.Tables {
-		collections.Append(tableStatusToDoc(t))
-	}
+	dirty := len(res.Tables) > 0 || res.MergeOp != "" || len(res.Views) > 0
 
 	statusDoc := must.NotFail(types.NewDocument(
 		"branch", res.Branch,
@@ -1641,7 +1871,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	if res.CommitID != "" {
 		statusDoc.Set("commitId", res.CommitID)
 	}
-	statusDoc.Set("collections", collections)
+	statusDoc.Set("changes", changesArray(nil, nil, res.Tables, res.Views))
 
 	if res.MergeOp != "" {
 		statusDoc.Set("mergeState", res.MergeOp)

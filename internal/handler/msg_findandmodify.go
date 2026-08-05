@@ -198,17 +198,30 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 		return result, nil
 	}
 
+	var validator *types.Document
+	var valLevel, valAction string
+	if !params.BypassDocumentValidation {
+		validator, valLevel, valAction = collectionValidator(ctx, db, params.Collection)
+	}
 	update := &common.Update{
 		Filter:             params.Query,
 		Update:             params.Update,
 		Upsert:             params.Upsert,
 		HasUpdateOperators: params.HasUpdateOperators,
 		ArrayFilters:       params.ArrayFilters,
+		Validator:          validator,
+		ValidationLevel:    valLevel,
+		ValidationAction:   valAction,
 	}
 
 	updateRes, err := common.UpdateDocument(ctx, c, "findAndModify", iter, update, params.SkipDurableSync)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if updateRes.WarnAllowed > 0 {
+		h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
+			"collection", params.Collection, "count", updateRes.WarnAllowed)
 	}
 
 	result.updateExisting = false

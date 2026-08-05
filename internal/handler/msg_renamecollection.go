@@ -130,6 +130,14 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
+	if info, verr := lookupCollectionInfo(connCtx, db, oldCName); verr == nil && info != nil && info.IsView {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrCommandNotSupportedOnView,
+			fmt.Sprintf("cannot rename view: %s", oldName),
+			command,
+		)
+	}
+
 	// When dropTarget is true and the target already exists, drop it first.
 	if dropTarget {
 		if err = db.DropCollection(connCtx, &backends.DropCollectionParams{Name: newCName}); err != nil {

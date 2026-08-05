@@ -56,6 +56,11 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
+	if info, verr := lookupCollectionInfo(connCtx, db, collection); verr == nil && info != nil && info.IsView {
+		msg := fmt.Sprintf("Namespace %s.%s is a view, not a collection", dbName, collection)
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, document.Command())
+	}
+
 	c, err := db.Collection(collection)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {

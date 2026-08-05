@@ -171,7 +171,7 @@ printjson(rStatus)
 //   branch: "main",
 //   dirty: true,
 //   readonly: false,
-//   collections: [...],
+//   changes: [...],
 //   mergeState: "cherry-pick",
 //   conflicts: [ { collection: "items", count: 1 } ],
 //   ok: 1
@@ -197,30 +197,26 @@ Continuing from Scenario 3 (cherry-pick with conflicts in progress).
 > `doltMerge continue:1`).
 
 ```js
-// Step 1: Inspect conflicts  -- returns all conflicts grouped by collection.
+// Step 1: Inspect conflicts  -- returns all conflicts in a single array.
 const rConflicts = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
 // Expected:
 // {
-//   collections: [
-//     {
-//       collection: "items",
-//       conflicts: [
-//         { conflictId: "<base64-id>",
-//           type: "documentEdit",
-//           reason: { code: "bothModified",
-//                     message: "branch 'main' (ours) and commit '<hash>' (theirs) both modified document 1" },
-//           base:   { _id: 1, doc: {...} },
-//           ours:   { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" },
-//           theirs: { _id: 1, doc: { _id: 1, v: 99 },  diffType: "modified" } }
-//       ]
-//     }
+//   conflicts: [
+//     { conflictId: "<base64-id>",
+//       type: "document",
+//       name: "items",
+//       reason: { code: "bothModified",
+//                 message: "branch 'main' (ours) and commit '<hash>' (theirs) both modified document 1" },
+//       base:   { _id: 1, doc: {...} },
+//       ours:   { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" },
+//       theirs: { _id: 1, doc: { _id: 1, v: 99 },  diffType: "modified" } }
 //   ],
 //   ok: 1
 // }
 // _id lives on each side; ours = main's version (v:100), theirs = cherry-picked version (v:99)
 
-const conflictId = rConflicts.collections[0].conflicts[0].conflictId
+const conflictId = rConflicts.conflicts[0].conflictId
 
 // Step 2: Resolve  -- accept "theirs" (the cherry-picked value v:99).
 const rResolve = db.getSiblingDB("pickdb@main").runCommand({
@@ -232,10 +228,10 @@ const rResolve = db.getSiblingDB("pickdb@main").runCommand({
 printjson(rResolve)
 // Expected: { ok: 1 }
 
-// Step 3: After resolution, doltConflicts returns an empty collections array.
+// Step 3: After resolution, doltConflicts returns an empty conflicts array.
 const rAfter = db.getSiblingDB("pickdb@main").runCommand({ doltConflicts: 1 })
 printjson(rAfter)
-// Expected: { collections: [], ok: 1 }
+// Expected: { conflicts: [], ok: 1 }
 
 // Step 4: Continue the cherry-pick (equivalent to doltMerge continue:1 for merges).
 const rContinue = db.getSiblingDB("pickdb@main").runCommand({ doltCherryPick: 1, continue: 1 })
@@ -244,10 +240,10 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` returns `collections` array with per-document `conflicts` grouped by collection
-- Each conflict entry has `conflictId`, a `type` (`"documentEdit"`), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides
+- `doltConflicts` returns a single flat `conflicts` array, each entry tagged with a `type` (`"document"` or `"view"`) and the owning namespace `name`
+- Each conflict entry has `conflictId` (a content hash), a `type` (`"document"`), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides
 - Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (no top-level `_id`), `doc` is the full document, and `base` carries no `diffType`
-- After `doltResolveConflict`, `doltConflicts` returns an empty `collections` array
+- After `doltResolveConflict`, `doltConflicts` returns an empty `conflicts` array
 - After `doltCherryPick continue:1`, `ok` equals `1` and `commitId` is present
 - main HEAD reflects the resolved document state
 

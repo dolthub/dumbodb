@@ -567,6 +567,11 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
 		}
 
+		if newIdx.Name == backends.ReservedMetadataIndexName {
+			msg := fmt.Sprintf("The index name %q is reserved by DumboDB", backends.ReservedMetadataIndexName)
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, msg, command)
+		}
+
 		// Compare against earlier entries in the same request.
 		for j := i - 1; j >= 0; j-- {
 			otherKey := formatIndexKey(toCreate[j].Key)

@@ -70,5 +70,9 @@ func validateCollectionName(name string) error {
 		return NewError(ErrorCodeCollectionNameIsInvalid, nil)
 	}
 
+	if name == ReservedCatalogName {
+		return NewError(ErrorCodeCollectionNameIsInvalid, nil)
+	}
+
 	return nil
 }

@@ -161,13 +161,14 @@ func TestBranchDiff_ShowsChanges(t *testing.T) {
 		{Key: "doltDiff", Value: int32(1)},
 	}).Decode(&diffRaw))
 
-	colls, _ := diffRaw["collections"].(bson.A)
-	require.Len(t, colls, 1, "one collection with changes")
-	coll := colls[0].(bson.M)
+	changes, _ := diffRaw["changes"].(bson.A)
+	require.Len(t, changes, 1, "one collection with changes")
+	coll := changes[0].(bson.M)
 	assert.Equal(t, "items", coll["name"])
 
-	modified, _ := coll["modified"].(bson.A)
-	removed, _ := coll["removed"].(bson.A)
+	docs := coll["documents"].(bson.M)
+	modified, _ := docs["modified"].(bson.A)
+	removed, _ := docs["removed"].(bson.A)
 	assert.Len(t, modified, 1, "one modified document")
 	assert.Len(t, removed, 1, "one removed document")
 
@@ -177,8 +178,8 @@ func TestBranchDiff_ShowsChanges(t *testing.T) {
 		{Key: "doltDiff", Value: int32(1)},
 	}).Decode(&mainDiffRaw))
 
-	mainColls, _ := mainDiffRaw["collections"].(bson.A)
-	assert.Len(t, mainColls, 0, "main must have no diff -- changes are on work branch")
+	mainChanges, _ := mainDiffRaw["changes"].(bson.A)
+	assert.Len(t, mainChanges, 0, "main must have no diff -- changes are on work branch")
 }
 
 // TestBranchDiff_EmptyAfterCommit verifies that committing on a non-main
@@ -215,7 +216,7 @@ func TestBranchDiff_EmptyAfterCommit(t *testing.T) {
 	require.NoError(t, brDB.RunCommand(ctx, bson.D{
 		{Key: "doltDiff", Value: int32(1)},
 	}).Decode(&diffBefore))
-	require.Len(t, diffBefore["collections"].(bson.A), 1, "diff must show changes before commit")
+	require.Len(t, diffBefore["changes"].(bson.A), 1, "diff must show changes before commit")
 
 	// Commit.
 	dumboDBCommit(t, env, dbName+"@br", "br commit", "bob")
@@ -225,5 +226,5 @@ func TestBranchDiff_EmptyAfterCommit(t *testing.T) {
 	require.NoError(t, brDB.RunCommand(ctx, bson.D{
 		{Key: "doltDiff", Value: int32(1)},
 	}).Decode(&diffAfter))
-	assert.Len(t, diffAfter["collections"].(bson.A), 0, "diff must be empty after commit")
+	assert.Len(t, diffAfter["changes"].(bson.A), 0, "diff must be empty after commit")
 }

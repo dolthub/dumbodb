@@ -60,6 +60,32 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	viewInfo, err := lookupCollectionInfo(connCtx, db, params.Collection)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+	if viewInfo != nil && viewInfo.IsView {
+		closer := iterator.NewMultiCloser()
+		defer closer.Close()
+
+		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, closer)
+		if verr != nil {
+			return nil, verr
+		}
+		iter = common.FilterIterator(iter, closer, params.Filter)
+
+		distinct, derr := common.FilterDistinctValues(iter, params.Key)
+		if derr != nil {
+			return nil, lazyerrors.Error(derr)
+		}
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"values", distinct,
+				"ok", float64(1),
+			)),
+		)
+	}
+
 	c, err := db.Collection(params.Collection)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {

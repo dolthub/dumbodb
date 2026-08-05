@@ -118,6 +118,11 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			}
 		}
 
+		var preImage *types.Document
+		if !upsert && param.Validator != nil && param.ValidationLevel == "moderate" {
+			preImage = doc.DeepCopy()
+		}
+
 		// Snapshot simple $set/$unset mutations before applying the operator:
 		// processUpdateOperator mutates doc in place, so after it runs we can
 		// no longer see the "old" state needed to derive a partial update.
@@ -142,6 +147,33 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 
 		if err = doc.ValidateData(); err != nil {
 			return nil, lazyerrors.Error(err)
+		}
+
+		if param.Validator != nil {
+			mustValidate := true
+			if !upsert && param.ValidationLevel == "moderate" {
+				preOK, verr := FilterDocument(preImage, param.Validator)
+				if verr != nil {
+					return nil, lazyerrors.Error(verr)
+				}
+				mustValidate = preOK
+			}
+			if mustValidate {
+				ok, verr := FilterDocument(doc, param.Validator)
+				if verr != nil {
+					return nil, lazyerrors.Error(verr)
+				}
+				if !ok {
+					if param.ValidationAction == "warn" {
+						result.WarnAllowed++
+					} else {
+						if err := flushPending(); err != nil {
+							return nil, err
+						}
+						return nil, NewUpdateError(handlererrors.ErrDocumentValidationFailure, "Document failed validation", cmd)
+					}
+				}
+			}
 		}
 
 		if upsert {

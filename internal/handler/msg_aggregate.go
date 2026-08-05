@@ -465,35 +465,28 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			}
 		}
 
-		// If the target is a view, redirect to the source collection and prepend
-		// the view's pipeline to the user-supplied stages.
 		if cInfo.IsView {
-			viewSourceName := cInfo.ViewOn
-			// Reload collection info for the source.
-			srcParam := backends.ListCollectionsParams{Name: viewSourceName}
-			var srcList *backends.ListCollectionsResult
-			if srcList, err = db.ListCollections(ctx, &srcParam); err != nil {
+			view := cList.Collections[0]
+			baseCollection, viewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline)
+			if vErr != nil {
 				closer.Close()
-				return nil, handleMaxTimeMSError(err, maxTimeMS, "aggregate")
+				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")
+			}
+			srcInfo, srcErr := lookupCollectionInfo(ctx, db, baseCollection)
+			if srcErr != nil {
+				closer.Close()
+				return nil, handleMaxTimeMSError(srcErr, maxTimeMS, "aggregate")
 			}
 			cInfo = backends.CollectionInfo{}
-			if len(srcList.Collections) > 0 {
-				cInfo = srcList.Collections[0]
+			if srcInfo != nil {
+				cInfo = *srcInfo
 			}
-			c, err = db.Collection(viewSourceName)
+			c, err = db.Collection(baseCollection)
 			if err != nil {
 				closer.Close()
 				return nil, lazyerrors.Error(err)
 			}
-			// Prepend view pipeline stages (if any) ahead of the user stages.
-			if viewPipeline := cList.Collections[0].ViewPipeline; viewPipeline != nil && viewPipeline.Len() > 0 {
-				viewStages, vErr := buildViewPipelineStages(db, viewPipeline)
-				if vErr != nil {
-					closer.Close()
-					return nil, vErr
-				}
-				stagesDocuments = append(viewStages, stagesDocuments...)
-			}
+			stagesDocuments = append(viewStages, stagesDocuments...)
 		}
 
 		switch {

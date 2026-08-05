@@ -50,14 +50,23 @@ import (
 // originalMsg holds the original commit message of the cherry-picked commit for
 // the default annotation.
 type mergeInProgress struct {
-	fromBranch  string
-	intoBranch  string
-	premergeAM  prolly.AddressMap // ours branch AM before the operation started (used to abort)
-	fromHash    hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)
-	intoHash    hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
+	fromBranch string
+	intoBranch string
+	premergeAM prolly.AddressMap // ours branch AM before the operation started (used to abort)
+	fromHash   hash.Hash         // fromBranch HEAD hash at merge time (merge commit parent 2)
+	intoHash   hash.Hash         // intoBranch HEAD hash at merge/cherry-pick time (commit parent 1)
 	// conflicts: collection name -> ordered list of conflict entries.
 	// Entries are never removed; resolved ones have resolved==true.
-	conflicts map[string][]*conflictEntry
+	conflicts     map[string][]*conflictEntry
+	viewConflicts map[string]*viewConflictEntry
+	// metaConflicts is keyed by the owning collection; the internal
+	// __dumbo_catalog__ name is never exposed.
+	metaConflicts map[string]*metaConflictEntry
+
+	// isSessionCommit marks a paused --session-isolation dumboCommit finalized by
+	// the next dumboCommit once resolved. intoHash tracks the HEAD the merge was
+	// against.
+	isSessionCommit bool
 	// resolvedAM is the working AddressMap being built as conflicts are resolved.
 	// It starts as the partial merged AM (keeping "ours" for conflicting docs) and
 	// is updated as each conflict is resolved.
@@ -92,6 +101,16 @@ func (m *mergeInProgress) hasUnresolvedConflicts() bool {
 			}
 		}
 	}
+	for _, v := range m.viewConflicts {
+		if !v.resolved {
+			return true
+		}
+	}
+	for _, mc := range m.metaConflicts {
+		if !mc.resolved {
+			return true
+		}
+	}
 	return false
 }
 
@@ -123,14 +142,48 @@ func (m *mergeInProgress) summaries() []backends.ConflictSummary {
 			out = append(out, backends.ConflictSummary{Collection: name, Count: count})
 		}
 	}
+	for name, v := range m.viewConflicts {
+		if !v.resolved {
+			out = append(out, backends.ConflictSummary{Collection: name, Count: 1})
+		}
+	}
+	for name, mc := range m.metaConflicts {
+		if !mc.resolved {
+			out = append(out, backends.ConflictSummary{Collection: name, Count: 1})
+		}
+	}
 	return out
+}
+
+// viewConflictEntry captures a view-definition conflict; base/ours/theirs are
+// nil where that side lacked or deleted the view.
+type viewConflictEntry struct {
+	name      string
+	id        string
+	base      *viewMeta
+	ours      *viewMeta
+	theirs    *viewMeta
+	ourDiff   string
+	theirDiff string
+	resolved  bool
+}
+
+func viewSideDiff(baseIsView, sideIsView bool) string {
+	switch {
+	case !baseIsView && sideIsView:
+		return "added"
+	case baseIsView && !sideIsView:
+		return "deleted"
+	default:
+		return "modified"
+	}
 }
 
 // conflictEntry represents a single document-level conflict captured during a merge.
 // The raw key and value tuples are stored as byte slices so they can be decoded lazily on demand.
 type conflictEntry struct {
 	id     string
-	typ    string // "documentEdit" (default) or "uniqueKeyCollision"
+	typ    string    // "documentEdit" (default) or "uniqueKeyCollision"
 	rawKey val.Tuple // encoded _id key bytes (the document identity for a documentEdit)
 
 	// Per-side key overrides. For a documentEdit all three coincide with
@@ -311,14 +364,72 @@ func (b *Backend) DumboDBConflicts(ctx context.Context, params *backends.Conflic
 		collections = []backends.CollectionConflicts{}
 	}
 
-	return &backends.ConflictsResult{Collections: collections}, nil
+	var views []backends.ViewConflict
+	for _, v := range ms.viewConflicts {
+		if v.resolved {
+			continue
+		}
+		views = append(views, backends.ViewConflict{
+			Name:          v.name,
+			ConflictID:    v.id,
+			Base:          viewMetaToDefinition(v.base),
+			Ours:          viewMetaToDefinition(v.ours),
+			Theirs:        viewMetaToDefinition(v.theirs),
+			OurDiffType:   v.ourDiff,
+			TheirDiffType: v.theirDiff,
+		})
+	}
+	if views == nil {
+		views = []backends.ViewConflict{}
+	}
+
+	var metadata []backends.MetaConflict
+	for _, mc := range ms.metaConflicts {
+		if mc.resolved {
+			continue
+		}
+		metadata = append(metadata, backends.MetaConflict{
+			Collection:    mc.coll,
+			ConflictID:    mc.id,
+			Base:          collMetaToMetadata(mc.base),
+			Ours:          collMetaToMetadata(mc.ours),
+			Theirs:        collMetaToMetadata(mc.theirs),
+			OurDiffType:   mc.ourDiff,
+			TheirDiffType: mc.theirDiff,
+			Reason:        backends.ConflictReason{Code: mc.reasonCode, Message: mc.reasonMessage},
+		})
+	}
+	if metadata == nil {
+		metadata = []backends.MetaConflict{}
+	}
+
+	return &backends.ConflictsResult{Collections: collections, Views: views, Metadata: metadata}, nil
+}
+
+// collMetaToMetadata projects catalog metadata to the user-facing subset; nil
+// in, nil out.
+func collMetaToMetadata(m *collMeta) *backends.CollectionMetadata {
+	if m == nil {
+		return nil
+	}
+	level, action := m.effectiveValidation()
+	return &backends.CollectionMetadata{
+		Validator:        m.Validator,
+		ValidationLevel:  level,
+		ValidationAction: action,
+	}
+}
+
+// viewMetaToDefinition converts a stored view definition to the backends type;
+// nil in, nil out.
+func viewMetaToDefinition(vm *viewMeta) *backends.ViewDefinition {
+	if vm == nil {
+		return nil
+	}
+	return &backends.ViewDefinition{ViewOn: vm.ViewOn, Pipeline: vm.Pipeline}
 }
 
 // DumboDBResolveConflict implements backends.VersioningBackend.
-//
-// Resolves a single document conflict in the current in-progress merge.
-// After resolution the conflict entry is marked resolved and the resolvedAM is
-// updated to reflect the chosen document state.
 func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
 	db, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
@@ -335,6 +446,14 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	ms := db.mergeState
 	if ms == nil {
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
+	}
+
+	if vce, ok := ms.viewConflicts[params.Collection]; ok && !vce.resolved {
+		return b.resolveViewConflict(ctx, db, ms, vce, params)
+	}
+
+	if mce, ok := ms.metaConflicts[params.Collection]; ok && !mce.resolved {
+		return b.resolveMetaConflict(ctx, db, ms, mce, params)
 	}
 
 	entries, ok := ms.conflicts[params.Collection]
@@ -357,32 +476,49 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: conflict %q is already resolved", params.ConflictID)
 	}
 
-	// For "ours", the resolvedAM already has our value  -- just mark resolved, no AM update needed.
-	if params.Resolution == "ours" {
-		target.resolved = true
-		return &backends.ResolveConflictResult{}, nil
-	}
-
 	var chosenVal val.Tuple
 	var deleteDoc bool
 
-	switch params.Resolution {
-	case "theirs":
-		chosenVal = target.theirsRawVal
-		deleteDoc = target.theirsRawVal == nil
-
-	case "custom":
-		if params.Value == nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
+	if target.typ == "validation" {
+		v, del, verr := b.resolveValidationChoice(ctx, db, ms, target, params)
+		if verr != nil {
+			return nil, verr
 		}
-		v, writeErr := writeDocToValue(ctx, db.ns, params.Value)
-		if writeErr != nil {
-			return nil, fmt.Errorf("DumboDBResolveConflict: writing custom document: %w", writeErr)
+		chosenVal, deleteDoc = v, del
+	} else {
+		resDoc, rerr := resolutionResultDoc(ctx, db, target, params)
+		if rerr != nil {
+			return nil, rerr
 		}
-		chosenVal = v
+		if resDoc != nil {
+			if verr := b.rejectIfViolates(ctx, db, ms, params.Collection, resDoc); verr != nil {
+				return nil, verr
+			}
+		}
 
-	default:
-		return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+		if params.Resolution == "ours" {
+			target.resolved = true
+			return &backends.ResolveConflictResult{}, nil
+		}
+
+		switch params.Resolution {
+		case "theirs":
+			chosenVal = target.theirsRawVal
+			deleteDoc = target.theirsRawVal == nil
+
+		case "custom":
+			if params.Value == nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
+			}
+			v, writeErr := writeDocToValue(ctx, db.ns, params.Value)
+			if writeErr != nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: writing custom document: %w", writeErr)
+			}
+			chosenVal = v
+
+		default:
+			return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+		}
 	}
 
 	collMap, err := collectionMapFromAM(ctx, db, ms.resolvedAM, params.Collection)
@@ -586,24 +722,89 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 	ms.resolvedAM = finalAM
 	target.resolved = true
 
-	// Update the in-memory working set AM so that doltDiff and doltStatus
-	// reflect the resolved state immediately.
-	db.setAM(ctx, ms.intoBranch, finalAM)
-
-	// Update the working set so that dolt_conflicts SQL tables immediately reflect
-	// the resolved state.
-	_, stageErr := headRootAMForBranch(ctx, db, ms.intoBranch)
-	if stageErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: reading staged AM: %w", stageErr)
-	}
-	workingRtvl := buildRootValueFlatbuffer(finalAM)
-	if _, writeErr := db.vs.WriteValue(ctx, dolttypes.SerialMessage(workingRtvl)); writeErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: writing working RTVL: %w", writeErr)
-	}
-	if wsErr := db.persistAM(ctx, ms.intoBranch, finalAM); wsErr != nil {
-		return nil, fmt.Errorf("DumboDBResolveConflict: updating working set: %w", wsErr)
+	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+		return nil, err
 	}
 
+	return &backends.ResolveConflictResult{}, nil
+}
+
+func viewMetaFromDoc(doc *types.Document) *viewMeta {
+	vm := &viewMeta{}
+	if v, err := doc.Get("viewOn"); err == nil {
+		vm.ViewOn, _ = v.(string)
+	}
+	if p, err := doc.Get("pipeline"); err == nil {
+		vm.Pipeline, _ = p.(*types.Array)
+	}
+	if c, err := doc.Get("collation"); err == nil {
+		vm.Collation, _ = c.(*types.Document)
+	}
+	return vm
+}
+
+// resolveViewConflict resolves a view-definition merge conflict. The caller
+// holds db.mu (write lock).
+func (b *Backend) resolveViewConflict(ctx context.Context, db *dbState, ms *mergeInProgress, vce *viewConflictEntry, params *backends.ResolveConflictParams) (*backends.ResolveConflictResult, error) {
+	if vce.resolved {
+		return nil, fmt.Errorf("DumboDBResolveConflict: view conflict %q is already resolved", params.ConflictID)
+	}
+
+	if params.Resolution == "ours" {
+		vce.resolved = true
+		return &backends.ResolveConflictResult{}, nil
+	}
+
+	var newDef *viewMeta
+	switch params.Resolution {
+	case "theirs":
+		newDef = vce.theirs
+	case "custom":
+		if params.Value == nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: resolution %q requires a value document", params.Resolution)
+		}
+		newDef = viewMetaFromDoc(params.Value)
+	default:
+		return nil, fmt.Errorf("DumboDBResolveConflict: unknown resolution %q (must be 'ours', 'theirs', or 'custom')", params.Resolution)
+	}
+
+	editor := ms.resolvedAM.Editor()
+	has, err := ms.resolvedAM.Has(ctx, params.Collection)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: probing resolved AM for view %q: %w", params.Collection, err)
+	}
+	if newDef == nil {
+		if has {
+			if derr := editor.Delete(ctx, params.Collection); derr != nil {
+				return nil, fmt.Errorf("DumboDBResolveConflict: deleting view %q: %w", params.Collection, derr)
+			}
+		}
+	} else {
+		viewHash, werr := writeViewChunk(ctx, db.ns, newDef)
+		if werr != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: writing resolved view %q: %w", params.Collection, werr)
+		}
+		if has {
+			err = editor.Update(ctx, params.Collection, viewHash)
+		} else {
+			err = editor.Add(ctx, params.Collection, viewHash)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("DumboDBResolveConflict: updating view %q in AM: %w", params.Collection, err)
+		}
+	}
+
+	finalAM, err := editor.Flush(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBResolveConflict: flushing AM editor: %w", err)
+	}
+
+	ms.resolvedAM = finalAM
+	vce.resolved = true
+
+	if err := b.applyResolvedAM(ctx, db, ms, finalAM); err != nil {
+		return nil, err
+	}
 	return &backends.ResolveConflictResult{}, nil
 }
 
@@ -1161,14 +1362,16 @@ func captureConflictsForCollection(
 //
 // Returns the partial merged AM (with "ours" values for conflicting documents) and a
 // per-collection map of captured conflict entries. The conflicts map is non-nil but may be empty.
-func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, error) {
+func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, fromAM, baseAM prolly.AddressMap, theirHash, baseHash hash.Hash, oursDesc, theirsDesc string) (prolly.AddressMap, map[string][]*conflictEntry, map[string]*viewConflictEntry, map[string]*metaConflictEntry, error) {
+	viewConflicts := map[string]*viewConflictEntry{}
+	metaConflicts := map[string]*metaConflictEntry{}
 	allNames := make(map[string]struct{})
 	for _, am := range []prolly.AddressMap{intoAM, fromAM, baseAM} {
 		if err := am.IterAll(ctx, func(name string, _ hash.Hash) error {
 			allNames[name] = struct{}{}
 			return nil
 		}); err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("iterating collections AM: %w", err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("iterating collections AM: %w", err)
 		}
 	}
 
@@ -1178,15 +1381,15 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 	for name := range allNames {
 		intoH, err := intoAM.Get(ctx, name)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading into AM for %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("reading into AM for %q: %w", name, err)
 		}
 		fromH, err := fromAM.Get(ctx, name)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading from AM for %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("reading from AM for %q: %w", name, err)
 		}
 		baseH, err := baseAM.Get(ctx, name)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading base AM for %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("reading base AM for %q: %w", name, err)
 		}
 
 		intoChanged := intoH != baseH
@@ -1202,15 +1405,15 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			switch {
 			case fromH.IsEmpty():
 				if err := editor.Delete(ctx, name); err != nil {
-					return prolly.AddressMap{}, nil, fmt.Errorf("deleting collection %q: %w", name, err)
+					return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("deleting collection %q: %w", name, err)
 				}
 			case intoH.IsEmpty():
 				if err := editor.Add(ctx, name, fromH); err != nil {
-					return prolly.AddressMap{}, nil, fmt.Errorf("adding collection %q: %w", name, err)
+					return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("adding collection %q: %w", name, err)
 				}
 			default:
 				if err := editor.Update(ctx, name, fromH); err != nil {
-					return prolly.AddressMap{}, nil, fmt.Errorf("updating collection %q: %w", name, err)
+					return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("updating collection %q: %w", name, err)
 				}
 			}
 			continue
@@ -1219,19 +1422,57 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		if fromH.IsEmpty() && intoH.IsEmpty() {
 			continue
 		}
+
+		intoIsView, err := isViewEntry(ctx, state.cs, intoH)
+		if err != nil {
+			return prolly.AddressMap{}, nil, nil, nil, err
+		}
+		fromIsView, err := isViewEntry(ctx, state.cs, fromH)
+		if err != nil {
+			return prolly.AddressMap{}, nil, nil, nil, err
+		}
+		baseIsView, err := isViewEntry(ctx, state.cs, baseH)
+		if err != nil {
+			return prolly.AddressMap{}, nil, nil, nil, err
+		}
+		if intoIsView || fromIsView || baseIsView {
+			vce := &viewConflictEntry{
+				name:      name,
+				id:        conflictID(val.Tuple(name), theirHash),
+				ourDiff:   viewSideDiff(baseIsView, intoIsView),
+				theirDiff: viewSideDiff(baseIsView, fromIsView),
+			}
+			if intoIsView {
+				if vm, rerr := readViewChunk(ctx, state.ns, intoH); rerr == nil {
+					vce.ours = vm
+				}
+			}
+			if fromIsView {
+				if vm, rerr := readViewChunk(ctx, state.ns, fromH); rerr == nil {
+					vce.theirs = vm
+				}
+			}
+			if baseIsView {
+				if vm, rerr := readViewChunk(ctx, state.ns, baseH); rerr == nil {
+					vce.base = vm
+				}
+			}
+			viewConflicts[name] = vce
+			continue
+		}
+
 		if fromH.IsEmpty() || intoH.IsEmpty() {
-			// Collection-level conflict: one side deleted, the other modified  -- unresolvable here.
-			return prolly.AddressMap{}, nil, fmt.Errorf("conflict in collection %q: deleted on one branch and modified on the other", name)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("conflict in %q: deleted on one branch and modified on the other", name)
 		}
 
 		// Both sides modified the collection  -- merge at document level, capturing conflicts.
 		intoMap, err := openCollection(ctx, state.cs, state.ns, intoH)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("opening into collection %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("opening into collection %q: %w", name, err)
 		}
 		fromMap, err := openCollection(ctx, state.cs, state.ns, fromH)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("opening from collection %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("opening from collection %q: %w", name, err)
 		}
 		var baseMap prolly.Map
 		if baseH.IsEmpty() {
@@ -1240,18 +1481,18 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			baseMap, err = openCollection(ctx, state.cs, state.ns, baseH)
 		}
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("opening base collection %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("opening base collection %q: %w", name, err)
 		}
 
 		// Reconcile index definitions (B5) and seed survivors; the
 		// differ below drives the other side's edits through them.
 		intoIdxAM, idxErr := indexAMForDTBL(ctx, state.cs, state.ns, intoH)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading into index AM for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("reading into index AM for %q: %w", name, idxErr)
 		}
 		fromIdxAM, idxErr := indexAMForDTBL(ctx, state.cs, state.ns, fromH)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading from index AM for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("reading from index AM for %q: %w", name, idxErr)
 		}
 		var baseIdxAM prolly.AddressMap
 		if baseH.IsEmpty() {
@@ -1260,33 +1501,46 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			baseIdxAM, idxErr = indexAMForDTBL(ctx, state.cs, state.ns, baseH)
 		}
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("reading base index AM for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("reading base index AM for %q: %w", name, idxErr)
 		}
 		intoSet, idxErr := indexSetFromAM(ctx, state, intoIdxAM)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("resolving into indexes for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("resolving into indexes for %q: %w", name, idxErr)
 		}
 		fromSet, idxErr := indexSetFromAM(ctx, state, fromIdxAM)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("resolving from indexes for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("resolving from indexes for %q: %w", name, idxErr)
 		}
 		baseSet, idxErr := indexSetFromAM(ctx, state, baseIdxAM)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("resolving base indexes for %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("resolving base indexes for %q: %w", name, idxErr)
 		}
 		_, seeds, idxErr := reconcileIndexSets(intoSet, fromSet, baseSet)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("merging indexes of %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merging indexes of %q: %w", name, idxErr)
 		}
 		survivors, idxErr := openSurvivors(ctx, state, seeds)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("opening merged indexes of %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("opening merged indexes of %q: %w", name, idxErr)
 		}
 		applier := &indexMergeApplier{state: state, survivors: survivors}
 
 		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("merging collection %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
+		}
+
+		if name == reservedCatalogName {
+			if len(collConflicts) > 0 {
+				mcs, cerr := metaConflictsFromCatalog(ctx, state, collConflicts, oursDesc, theirsDesc)
+				if cerr != nil {
+					return prolly.AddressMap{}, nil, nil, nil, cerr
+				}
+				for coll, mce := range mcs {
+					metaConflicts[coll] = mce
+				}
+			}
+			collConflicts = nil
 		}
 
 		var artHash hash.Hash // zero = no artifacts
@@ -1296,27 +1550,31 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 			// Build and write ArtifactMap so dolt_conflicts SQL tables can read conflicts.
 			artHash, err = buildConflictArtifactHash(ctx, state, collConflicts, theirHash, baseHash)
 			if err != nil {
-				return prolly.AddressMap{}, nil, fmt.Errorf("building conflict artifacts for %q: %w", name, err)
+				return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("building conflict artifacts for %q: %w", name, err)
 			}
 		}
 
 		mergedIdxAM, idxErr := applier.finalize(ctx)
 		if idxErr != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("finalizing merged indexes of %q: %w", name, idxErr)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("finalizing merged indexes of %q: %w", name, idxErr)
 		}
 		mergedH, err := state.dtblHashForCollection(ctx, name, mergedMap, mergedIdxAM, artHash)
 		if err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("writing merged collection %q: %w", name, err)
 		}
 		if err := editor.Update(ctx, name, mergedH); err != nil {
-			return prolly.AddressMap{}, nil, fmt.Errorf("updating merged collection %q in AM: %w", name, err)
+			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("updating merged collection %q in AM: %w", name, err)
 		}
 	}
 
 	am, err := editor.Flush(ctx)
 	if err != nil {
-		return prolly.AddressMap{}, nil, err
+		return prolly.AddressMap{}, nil, nil, nil, err
 	}
 
-	return am, allConflicts, nil
+	if err := crossValidateMergedDocuments(ctx, state, am, baseAM, allConflicts, metaConflicts, theirHash, theirsDesc, false); err != nil {
+		return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merge cross-validation: %w", err)
+	}
+
+	return am, allConflicts, viewConflicts, metaConflicts, nil
 }

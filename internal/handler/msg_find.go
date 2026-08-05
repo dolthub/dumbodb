@@ -93,12 +93,14 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 	// own filter/sort/skip/limit/projection are layered on top below.
 	var (
 		isView       bool
+		viewName     string
 		viewOn       string
 		viewPipeline *types.Array
 	)
 
 	if cInfo.IsView {
 		isView = true
+		viewName = cInfo.Name
 		viewOn = cInfo.ViewOn
 		viewPipeline = cInfo.ViewPipeline
 
@@ -170,7 +172,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	var srcIter types.DocumentsIterator
 	if isView {
-		srcIter, err = viewSourceIterator(ctx, db, viewOn, viewPipeline, closer)
+		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, closer)
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {

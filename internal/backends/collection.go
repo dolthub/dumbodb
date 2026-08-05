@@ -31,6 +31,15 @@ import (
 // the document primary key.
 const DefaultIndexName = "_id_"
 
+// ReservedMetadataIndexName is a reserved index name: user index creation with
+// it is rejected and it is filtered from listIndexes.
+const ReservedMetadataIndexName = "__dumbo_metadata__"
+
+// ReservedCatalogName is the internal collection that durably stores
+// per-collection metadata. It is hidden from listCollections/dbStats and the
+// version-control walks, and rejected as a user collection name.
+const ReservedCatalogName = "__dumbo_catalog__"
+
 // Collection is a generic interface for all backends for accessing collection.
 //
 // Collection object should be stateless and temporary;
@@ -472,10 +481,10 @@ type ListIndexesResult struct {
 }
 
 type IndexInfo struct {
-	Name                  string
-	Key                   []IndexKeyPair
-	Unique                bool
-	Sparse                bool // true if the index only covers documents with the indexed field(s)
+	Name                    string
+	Key                     []IndexKeyPair
+	Unique                  bool
+	Sparse                  bool            // true if the index only covers documents with the indexed field(s)
 	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
 
 	// Lossy: the index stored a value the KeyString encoding cannot

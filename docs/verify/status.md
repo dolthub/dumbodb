@@ -39,7 +39,7 @@ After setup, the working set matches HEAD  -- no uncommitted changes.
 
 ---
 
-## Scenario 1: Status on clean repo  -- empty collections
+## Scenario 1: Status on clean repo  -- empty changes
 
 After committing, the working set matches HEAD. `doltStatus` reports no changed
 collections.
@@ -51,14 +51,14 @@ db.runCommand({ doltStatus: 1 })
 Expected:
 
 ```json
-{ "branch": "main", "dirty": false, "readonly": false, "commitId": "<hashBase>", "collections": [], "ok": 1 }
+{ "branch": "main", "dirty": false, "readonly": false, "commitId": "<hashBase>", "changes": [], "ok": 1 }
 ```
 
 Key checks:
 - `dirty` is `false` (no uncommitted changes)
 - `readonly` is `false` (connected to a branch, not a snapshot)
 - `commitId` is present and equals the HEAD commit hash (only shown when not dirty)
-- `collections` is an empty array
+- `changes` is an empty array
 
 ---
 
@@ -78,15 +78,15 @@ Expected:
 ```json
 {
   "branch": "main",
-  "collections": [
-    { "name": "newcoll", "status": "added", "added": 1, "modified": 0, "deleted": 0 }
+  "changes": [
+    { "type": "collection", "name": "newcoll", "status": "added", "documents": { "added": 1, "removed": 0, "modified": 0 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} }
   ],
   "ok": 1
 }
 ```
 
 Key checks:
-- `newcoll` appears with status `"added"` and `added: 1`
+- `newcoll` appears with `type: "collection"`, status `"added"` and `documents.added: 1`
 - `items` does **not** appear (it was not changed)
 
 ---
@@ -111,15 +111,15 @@ Expected:
 ```json
 {
   "branch": "main",
-  "collections": [
-    { "name": "items", "status": "modified", "added": 0, "modified": 1, "deleted": 0 }
+  "changes": [
+    { "type": "collection", "name": "items", "status": "modified", "documents": { "added": 0, "removed": 0, "modified": 1 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} }
   ],
   "ok": 1
 }
 ```
 
 Key checks:
-- `items` appears with status `"modified"` and `modified: 1`
+- `items` appears with status `"modified"` and `documents.modified: 1`
 - `newcoll` does **not** appear (it was committed and unchanged)
 
 ---
@@ -128,7 +128,7 @@ Key checks:
 
 Deleting all documents from a collection (effectively removing it from the
 working set) marks it as `"deleted"`. The count of removed documents is
-reported under `deleted`.
+reported under `documents.removed`.
 
 ```js
 // Commit the items modification first.
@@ -145,15 +145,15 @@ Expected:
 ```json
 {
   "branch": "main",
-  "collections": [
-    { "name": "items", "status": "deleted", "added": 0, "modified": 0, "deleted": 1 }
+  "changes": [
+    { "type": "collection", "name": "items", "status": "deleted", "documents": { "added": 0, "removed": 1, "modified": 0 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} }
   ],
   "ok": 1
 }
 ```
 
 Key checks:
-- `items` appears with status `"deleted"` and `deleted: 1` (the one baseline doc)
+- `items` appears with status `"deleted"` and `documents.removed: 1` (the one baseline doc)
 - `newcoll` does **not** appear (unchanged)
 
 ---
@@ -172,11 +172,11 @@ db.runCommand({ doltStatus: 1 })
 Expected:
 
 ```json
-{ "branch": "main", "collections": [], "ok": 1 }
+{ "branch": "main", "changes": [], "ok": 1 }
 ```
 
 Key checks:
-- `collections` is empty  -- all collections are in sync with HEAD
+- `changes` is empty  -- all namespaces are in sync with HEAD
 
 ---
 
@@ -223,20 +223,20 @@ Expected (entry order may vary):
 ```json
 {
   "branch": "main",
-  "collections": [
-    { "name": "orders",  "status": "modified", "added": 3, "modified": 1, "deleted": 2 },
-    { "name": "users",   "status": "added",    "added": 5, "modified": 0, "deleted": 0 },
-    { "name": "archive", "status": "deleted",  "added": 0, "modified": 0, "deleted": 1 }
+  "changes": [
+    { "type": "collection", "name": "archive", "status": "deleted", "documents": { "added": 0, "removed": 1, "modified": 0 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} },
+    { "type": "collection", "name": "orders", "status": "modified", "documents": { "added": 3, "removed": 2, "modified": 1 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} },
+    { "type": "collection", "name": "users", "status": "added", "documents": { "added": 5, "removed": 0, "modified": 0 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} }
   ],
   "ok": 1
 }
 ```
 
 Key checks:
-- All three collections appear in a single `collections` array
-- Counts are independent per collection
+- All three collections appear in a single `changes` array (sorted by name)
+- Document counts are independent per collection, under `documents`
 - `added` entries report every doc in the working-set collection; `deleted` entries
-  report every doc that was at HEAD
+  report every doc that was at HEAD, under `documents`
 
 ---
 
@@ -264,16 +264,16 @@ Expected:
 ```json
 {
   "branch": "main",
-  "collections": [
-    { "name": "users", "status": "modified", "added": 0, "modified": 1, "deleted": 0 }
+  "changes": [
+    { "type": "collection", "name": "users", "status": "modified", "documents": { "added": 0, "removed": 0, "modified": 1 }, "indexes": { "added": [], "removed": [], "modified": [] }, "metadata": {} }
   ],
   "ok": 1
 }
 ```
 
 Key checks:
-- `modified: 1`, regardless of how many fields changed in the doc
-- `added` stays 0  -- a new field on an existing doc is not a new doc
+- `documents.modified: 1`, regardless of how many fields changed in the doc
+- `documents.added` stays 0  -- a new field on an existing doc is not a new doc
 
 > **Why fields don't show up here:** `doltStatus` answers "which documents changed?"
 > A document with a new field, a renamed field, and a removed field is still the same
@@ -324,17 +324,23 @@ Key checks:
 | Collection exists in both but content differs | `"modified"` |
 | Collection is identical in both | *(not reported)* |
 
-### Per-collection doc counts
+### Change-set shape
 
-| Count field | Meaning |
+`changes` is a single array, one entry per changed namespace, each tagged with a
+`type` (`collection` or `view`) and a `status` (`added`/`modified`/`deleted`).
+A collection entry groups its detail under `documents`, `indexes`, and
+`metadata`. At status verbosity `documents` carries counts:
+
+| `documents` field | Meaning |
 |---|---|
 | `added` | Docs in the working-set copy but not in the HEAD copy |
 | `modified` | Docs present in both copies with different content (any number of field changes counts as 1) |
-| `deleted` | Docs in the HEAD copy but not in the working-set copy |
+| `removed` | Docs in the HEAD copy but not in the working-set copy |
 
-- Only collections with changes appear in `collections`.
+- Only changed namespaces appear in `changes` (sorted by name).
 - The `branch` field reflects the connection's active branch.
-- `collections` is always an array (empty when there are no changes).
+- `changes` is always an array (empty when there are no changes).
+- `indexes` carries index-name lists at status verbosity; `metadata` is reserved.
 - Counts are **document-level**, not field-level. Use `doltDiff` for field-level detail.
 
 ### Rootish compatibility

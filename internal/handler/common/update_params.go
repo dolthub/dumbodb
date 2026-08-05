@@ -37,7 +37,7 @@ type UpdateParams struct {
 	Let *types.Document `dumbo:"let,unimplemented"`
 
 	Ordered                  bool            `dumbo:"ordered,ignored"`
-	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
 	LSID                     any             `dumbo:"lsid,ignored"`
@@ -70,6 +70,13 @@ type Update struct {
 	HasUpdateOperators bool            `dumbo:"-"`
 	IsPipeline         bool            `dumbo:"-"`
 
+	// Validator is nil when no active validator applies (absent, or
+	// validationLevel "off"). ValidationLevel is "strict" or "moderate";
+	// ValidationAction is "error" or "warn".
+	Validator        *types.Document `dumbo:"-"`
+	ValidationLevel  string          `dumbo:"-"`
+	ValidationAction string          `dumbo:"-"`
+
 	C            *types.Document `dumbo:"c,unimplemented"`
 	Collation    *types.Document `dumbo:"collation,unimplemented"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
@@ -94,6 +101,10 @@ type UpdateResult struct {
 		Doc   *types.Document
 		Count int32
 	}
+
+	// WarnAllowed counts documents written despite failing the collection
+	// validator because validationAction is "warn".
+	WarnAllowed int32
 }
 
 func GetUpdateParams(document *types.Document, l *slog.Logger) (*UpdateParams, error) {

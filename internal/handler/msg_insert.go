@@ -95,7 +95,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			if cInfo.IsTimeSeries {
 				tsTimeField = cInfo.TimeField
 			}
-			if cInfo.Validator != nil && cInfo.ValidationLevel != "off" {
+			if cInfo.Validator != nil && cInfo.ValidationLevel != "off" && !params.BypassDocumentValidation {
 				collValidator = cInfo.Validator
 				validationAction = cInfo.ValidationAction
 				if validationAction == "" {

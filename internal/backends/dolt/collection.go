@@ -30,7 +30,6 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
-	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
@@ -1419,8 +1418,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	mut := m.Mutate()
 
-	// batchIDs tracks docIDs inserted in this batch for capped-collection ordering.
-	batchIDs := make([]any, 0, len(params.Docs))
 	// batchHashSet detects in-batch duplicate _id hashes in O(1).
 	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
 	// In-batch claims per unique index (probes only see pre-batch state).
@@ -1539,15 +1536,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		}
 
 		batchHashSet[h] = struct{}{}
-		batchIDs = append(batchIDs, docID)
-	}
-
-	if _, isCapped := state.capped[c.name]; isCapped {
-		state.insertionOrder[c.name] = append(state.insertionOrder[c.name], batchIDs...)
-
-		if err := c.evictCappedDocs(ctx, state, mut); err != nil {
-			return nil, err
-		}
 	}
 
 	newMap, err := mut.Map(ctx)
@@ -1587,67 +1575,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 	}
 
 	return &backends.InsertAllResult{}, nil
-}
-
-// evictCappedDocs removes oldest documents from a capped collection to enforce size and count limits.
-// Must be called with state.mu held for writing.
-// cappedAvgDocSize is a rough estimate in bytes per document for size-based eviction.
-// Kept in sync with avgDocSize in (*collection).Stats so that the eviction
-// trigger point matches the collection size reported via collStats.
-const cappedAvgDocSize = 64
-
-func (c *collection) evictCappedDocs(ctx context.Context, state *dbState, mut *prolly.MutableMap) error {
-	cappedMeta, ok := state.capped[c.name]
-	if !ok {
-		return nil
-	}
-
-	insertionOrder := state.insertionOrder[c.name]
-	currentCount := int64(len(insertionOrder))
-
-	var toEvict int64
-
-	if cappedMeta.CappedDocuments > 0 && currentCount > cappedMeta.CappedDocuments {
-		toEvict = currentCount - cappedMeta.CappedDocuments
-	}
-
-	if cappedMeta.CappedSize > 0 {
-		estimatedSize := currentCount * cappedAvgDocSize
-		if estimatedSize > cappedMeta.CappedSize {
-			sizeEvict := (estimatedSize-cappedMeta.CappedSize)/cappedAvgDocSize + 1
-			if sizeEvict > toEvict {
-				toEvict = sizeEvict
-			}
-		}
-	}
-
-	if toEvict <= 0 {
-		return nil
-	}
-
-	if toEvict > currentCount {
-		toEvict = currentCount
-	}
-
-	for i := int64(0); i < toEvict; i++ {
-		oldID := insertionOrder[i]
-		h, err := hashID(oldID)
-		if err != nil {
-			return fmt.Errorf("capped evict hashing _id: %w", err)
-		}
-
-		key, err := buildKey(h[:])
-		if err != nil {
-			return fmt.Errorf("capped evict building key: %w", err)
-		}
-
-		if err := mut.Delete(ctx, key); err != nil {
-			return fmt.Errorf("capped evict delete: %w", err)
-		}
-	}
-
-	state.insertionOrder[c.name] = insertionOrder[toEvict:]
-	return nil
 }
 
 func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
@@ -2904,14 +2831,18 @@ func (c *collection) loadOrCreateMap(ctx context.Context, state *dbState) (proll
 	if err != nil {
 		return prolly.Map{}, err
 	}
-	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: create collection %s", c.name), func(ed prolly.AddressMapEditor) error {
-		return ed.Add(ctx, c.name, dtblHash)
-	}); err != nil {
+	createAM, err := state.getOrInitBranchAM(ctx, c.db.rootish)
+	if err != nil {
 		return prolly.Map{}, err
 	}
-
-	if _, exists := state.uuids[c.name]; !exists {
-		state.uuids[c.name] = uuid.New().String()
+	meta := &collMeta{UUID: collectionUUID(c.db.name, c.name)}
+	if err := state.updateAddressMap(ctx, c.db.rootish, fmt.Sprintf("auto: create collection %s", c.name), func(ed prolly.AddressMapEditor) error {
+		if err := ed.Add(ctx, c.name, dtblHash); err != nil {
+			return err
+		}
+		return state.applyCatalogUpsert(ctx, createAM, ed, c.name, meta)
+	}); err != nil {
+		return prolly.Map{}, err
 	}
 
 	return emptyMap, nil

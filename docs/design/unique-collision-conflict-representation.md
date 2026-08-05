@@ -61,10 +61,19 @@ One envelope for all conflict types, made self-describing by a `type`
 discriminator and a `reason` (the explanation). The single structural
 change: **`_id` moves off the top level and into each side.**
 
+> **Update (conflicts-array unification).** `doltConflicts` now returns a
+> single flat `conflicts` array whose top-level `type` is the *entity kind*
+> (`"document"` or `"view"`), with the owning namespace in `name`. The
+> document-vs-collision distinction below moved to `reason.code`
+> (`bothModified` / `modifyDelete` / `deleteModify` / `uniqueKeyCollision`).
+> Internally the backend still tracks the `documentEdit` / `uniqueKeyCollision`
+> conflict type (`conflictEntry.typ`) to drive resolution, as described next.
+
 ```js
 {
-  conflictId: "...",
-  type: "documentEdit" | "uniqueKeyCollision",
+  conflictId: "...",         // content hash (matches dolt_conflict_id)
+  type: "document",          // entity kind: "document" or "view"
+  name: "items",             // owning collection (or view) name
   reason: {
     code:    "bothModified" | "modifyDelete" | "uniqueKeyCollision" | ...,
     message: "unique index \"by_sku\": branch 'main' (ours) and branch 'feature' (theirs) both have sku = \"S-1\"",
@@ -156,16 +165,16 @@ any consumers update with it.
 All DumboDB-only (no MongoDB analogue for merge):
 
 - **Collision is self-describing.** Scenario 4 conflict carries
-  `type: "uniqueKeyCollision"`, `reason.index: "by_sku"`,
-  `reason.key: {sku:"S-1"}`, and both contending docs with their `_id`s
-  -- not a null `ours` with `ourDiffType: "deleted"`.
+  `type: "document"`, `reason.code: "uniqueKeyCollision"`,
+  `reason.index: "by_sku"`, `reason.key: {sku:"S-1"}`, and both contending
+  docs with their `_id`s -- not a null `ours` with `ourDiffType: "deleted"`.
 - **Two indexes, two conflicts.** With two unique indexes and two
   independent colliding pairs (one pair on each index): exactly two
   conflict entries, one per index, each with its own `conflictId` and
   `reason.index`, resolvable independently (Scenario 4b).
 - **Document edit still fits.** A same-`_id` divergent edit produces
-  `type: "documentEdit"` with `base`/`ours`/`theirs` sharing the `_id`
-  and a `reason.code` describing the edit clash.
+  `type: "document"` with `base`/`ours`/`theirs` sharing the `_id`
+  and a `reason.code` (e.g. `bothModified`) describing the edit clash.
 - **Manual resolution clears it.** Removing the collision on the working
   branch and marking resolved completes the merge.
 

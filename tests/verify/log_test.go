@@ -457,19 +457,21 @@ func TestLogVerify(t *testing.T) {
 		head := commits[0].(bson.M)
 		assert.Equal(t, hash3, head["commitId"], "must be the 'third' commit")
 
-		statArr, ok := head["stat"].(bson.A)
-		require.True(t, ok, "stat must be present when stat:true")
-		require.Len(t, statArr, 1, "exactly one collection changed in this commit")
+		changesArr, ok := head["changes"].(bson.A)
+		require.True(t, ok, "changes must be present when stat:true")
+		require.Len(t, changesArr, 1, "exactly one namespace changed in this commit")
 
-		s := statArr[0].(bson.M)
+		s := changesArr[0].(bson.M)
+		assert.Equal(t, "collection", s["type"])
 		assert.Equal(t, "events", s["name"], "changed collection must be 'events'")
 		assert.Equal(t, "modified", s["status"], "collection status must be 'modified'")
-		assert.EqualValues(t, 1, s["added"], "one document added")
-		assert.EqualValues(t, 0, s["modified"], "no documents modified")
-		assert.EqualValues(t, 0, s["deleted"], "no documents deleted")
 
-		// diff must NOT be present when only stat is requested.
-		assert.Nil(t, head["diff"], "diff must be absent when only stat is requested")
+		docs := s["documents"].(bson.M)
+		assert.EqualValues(t, 1, docs["added"], "one document added")
+		assert.EqualValues(t, 0, docs["modified"], "no documents modified")
+		assert.EqualValues(t, 0, docs["removed"], "no documents removed")
+		_, isArr := docs["added"].(bson.A)
+		assert.False(t, isArr, "stat verbosity carries counts, not document arrays")
 	})
 
 	// -------------------------------------------------------------------------
@@ -491,29 +493,26 @@ func TestLogVerify(t *testing.T) {
 		head := commits[0].(bson.M)
 		assert.Equal(t, hash3, head["commitId"], "must be the 'third' commit")
 
-		diffArr, ok := head["diff"].(bson.A)
-		require.True(t, ok, "diff must be present when patch:true")
-		require.Len(t, diffArr, 1, "exactly one collection changed in this commit")
+		changesArr, ok := head["changes"].(bson.A)
+		require.True(t, ok, "changes must be present when patch:true")
+		require.Len(t, changesArr, 1, "exactly one namespace changed in this commit")
 
-		cd := diffArr[0].(bson.M)
+		cd := changesArr[0].(bson.M)
+		assert.Equal(t, "collection", cd["type"])
 		assert.Equal(t, "events", cd["name"], "changed collection must be 'events'")
 		assert.Equal(t, "modified", cd["status"], "collection status must be 'modified'")
 
-		addedDocs, ok := cd["added"].(bson.A)
-		require.True(t, ok, "added must be an array")
+		docs := cd["documents"].(bson.M)
+		addedDocs, ok := docs["added"].(bson.A)
+		require.True(t, ok, "documents.added must be an array at patch verbosity")
 		require.Len(t, addedDocs, 1, "one document added in this commit")
 
 		addedDoc := addedDocs[0].(bson.M)
 		assert.EqualValues(t, 3, addedDoc["_id"], "added doc _id must be 3")
 		assert.Equal(t, "gamma", addedDoc["label"], "added doc label must be 'gamma'")
 
-		removedDocs := cd["removed"].(bson.A)
-		assert.Empty(t, removedDocs, "no documents removed")
-		modifiedDocs := cd["modified"].(bson.A)
-		assert.Empty(t, modifiedDocs, "no documents modified")
-
-		// stat must NOT be present when only patch is requested.
-		assert.Nil(t, head["stat"], "stat must be absent when only patch is requested")
+		assert.Empty(t, docs["removed"].(bson.A), "no documents removed")
+		assert.Empty(t, docs["modified"].(bson.A), "no documents modified")
 	})
 
 	// -------------------------------------------------------------------------
@@ -534,12 +533,12 @@ func TestLogVerify(t *testing.T) {
 
 		for i, c := range commits {
 			cm := c.(bson.M)
-			statArr, ok := cm["stat"].(bson.A)
-			require.True(t, ok, "commit %d must have stat", i)
-			require.NotEmpty(t, statArr, "commit %d: at least one collection changed", i)
-			s := statArr[0].(bson.M)
+			changesArr, ok := cm["changes"].(bson.A)
+			require.True(t, ok, "commit %d must have changes", i)
+			require.NotEmpty(t, changesArr, "commit %d: at least one namespace changed", i)
+			s := changesArr[0].(bson.M)
 			assert.Equal(t, "events", s["name"], "commit %d: collection must be 'events'", i)
-			added, _ := s["added"].(int32)
+			added, _ := s["documents"].(bson.M)["added"].(int32)
 			assert.Greater(t, added, int32(0), "commit %d: at least one document added", i)
 		}
 	})
@@ -556,8 +555,7 @@ func TestLogVerify(t *testing.T) {
 
 		commits := raw["commits"].(bson.A)
 		head := commits[0].(bson.M)
-		assert.Nil(t, head["stat"], "stat must be absent when stat flag is not set")
-		assert.Nil(t, head["diff"], "diff must be absent when patch flag is not set")
+		assert.Nil(t, head["changes"], "changes must be absent when neither stat nor patch is requested")
 	})
 
 	// -------------------------------------------------------------------------
@@ -583,47 +581,31 @@ func TestLogVerify(t *testing.T) {
 		require.NoError(t, err)
 		dumboDBCommit(t, env, idbName, "add by_age", "alice <alice@acme.com>")
 
-		var raw bson.M
+		var statRaw bson.M
 		require.NoError(t, idb.RunCommand(ctx, bson.D{
-			{Key: "doltLog", Value: int32(1)},
-			{Key: "limit", Value: int32(1)},
-			{Key: "stat", Value: true},
-			{Key: "patch", Value: true},
-		}).Decode(&raw))
-
-		head := raw["commits"].(bson.A)[0].(bson.M)
-
-		// Stat must reflect the index-only nature: zero doc counts plus
-		// addedIndexes containing by_age. modifiedIndexes and
-		// removedIndexes are always present as empty arrays.
-		statArr, ok := head["stat"].(bson.A)
-		require.True(t, ok, "stat must be present")
-		require.Len(t, statArr, 1)
-		s := statArr[0].(bson.M)
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)}, {Key: "stat", Value: true},
+		}).Decode(&statRaw))
+		s := statRaw["commits"].(bson.A)[0].(bson.M)["changes"].(bson.A)[0].(bson.M)
 		assert.Equal(t, "items", s["name"])
-		assert.EqualValues(t, 0, s["added"])
-		assert.EqualValues(t, 0, s["modified"])
-		assert.EqualValues(t, 0, s["deleted"])
-		addedIdx, ok := s["addedIndexes"].(bson.A)
-		require.True(t, ok, "addedIndexes must surface in stat")
+		sdocs := s["documents"].(bson.M)
+		assert.EqualValues(t, 0, sdocs["added"])
+		assert.EqualValues(t, 0, sdocs["modified"])
+		assert.EqualValues(t, 0, sdocs["removed"])
+		sidx := s["indexes"].(bson.M)
+		addedIdx := sidx["added"].(bson.A)
 		require.Len(t, addedIdx, 1)
 		assert.Equal(t, "by_age", addedIdx[0])
-		modIdx, ok := s["modifiedIndexes"].(bson.A)
-		require.True(t, ok, "modifiedIndexes must be present as empty array")
-		assert.Empty(t, modIdx)
-		remIdx, ok := s["removedIndexes"].(bson.A)
-		require.True(t, ok, "removedIndexes must be present as empty array")
-		assert.Empty(t, remIdx)
+		assert.Empty(t, sidx["modified"].(bson.A))
+		assert.Empty(t, sidx["removed"].(bson.A))
 
-		// Patch must include the commit; before the fix it was silently
-		// dropped because the doc-diff was empty.
-		diffArr, ok := head["diff"].(bson.A)
-		require.True(t, ok, "diff must be present")
-		require.Len(t, diffArr, 1, "index-only commit must appear in patch")
-		cd := diffArr[0].(bson.M)
-		diffAdded, ok := cd["addedIndexes"].(bson.A)
-		require.True(t, ok, "diff[0].addedIndexes must be present")
-		require.Len(t, diffAdded, 1)
+		var patchRaw bson.M
+		require.NoError(t, idb.RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)}, {Key: "limit", Value: int32(1)}, {Key: "patch", Value: true},
+		}).Decode(&patchRaw))
+		cd := patchRaw["commits"].(bson.A)[0].(bson.M)["changes"].(bson.A)[0].(bson.M)
+		cdIdx := cd["indexes"].(bson.M)
+		diffAdded := cdIdx["added"].(bson.A)
+		require.Len(t, diffAdded, 1, "index-only commit must appear in patch")
 		addedEntry := diffAdded[0].(bson.M)
 		assert.Equal(t, "by_age", addedEntry["name"])
 		addedKeys := addedEntry["keys"].(bson.A)
@@ -631,7 +613,7 @@ func TestLogVerify(t *testing.T) {
 		k := addedKeys[0].(bson.M)
 		assert.Equal(t, "age", k["field"])
 		assert.EqualValues(t, 1, k["direction"])
-		assert.Empty(t, cd["modifiedIndexes"].(bson.A))
-		assert.Empty(t, cd["removedIndexes"].(bson.A))
+		assert.Empty(t, cdIdx["modified"].(bson.A))
+		assert.Empty(t, cdIdx["removed"].(bson.A))
 	})
 }

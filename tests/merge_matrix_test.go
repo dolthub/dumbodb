@@ -74,26 +74,23 @@ func resolveAllConflicts(t *testing.T, db *mongo.Database, resolution string) {
 		{Key: "doltConflicts", Value: int32(1)},
 	}).Decode(&conflictsRaw))
 
-	colls, ok := conflictsRaw["collections"].(bson.A)
-	if !ok || len(colls) == 0 {
+	conflicts, ok := conflictsRaw["conflicts"].(bson.A)
+	if !ok || len(conflicts) == 0 {
 		return
 	}
 
-	for _, c := range colls {
-		entry := c.(bson.M)
-		collName := entry["collection"].(string)
-		conflicts := entry["conflicts"].(bson.A)
-		for _, cf := range conflicts {
-			cid := cf.(bson.M)["conflictId"].(string)
-			var raw bson.M
-			require.NoError(t, db.RunCommand(ctx, bson.D{
-				{Key: "doltResolveConflict", Value: int32(1)},
-				{Key: "collection", Value: collName},
-				{Key: "conflictId", Value: cid},
-				{Key: "resolution", Value: resolution},
-			}).Decode(&raw))
-			assert.EqualValues(t, 1, raw["ok"])
-		}
+	for _, c := range conflicts {
+		cf := c.(bson.M)
+		collName := cf["name"].(string)
+		cid := cf["conflictId"].(string)
+		var raw bson.M
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)},
+			{Key: "collection", Value: collName},
+			{Key: "conflictId", Value: cid},
+			{Key: "resolution", Value: resolution},
+		}).Decode(&raw))
+		assert.EqualValues(t, 1, raw["ok"])
 	}
 }
 
@@ -119,17 +116,14 @@ func getConflictsByCollection(t *testing.T, db *mongo.Database) map[string][]bso
 	}).Decode(&raw))
 
 	result := make(map[string][]bson.M)
-	colls, ok := raw["collections"].(bson.A)
+	conflicts, ok := raw["conflicts"].(bson.A)
 	if !ok {
 		return result
 	}
-	for _, c := range colls {
-		entry := c.(bson.M)
-		name := entry["collection"].(string)
-		conflicts := entry["conflicts"].(bson.A)
-		for _, cf := range conflicts {
-			result[name] = append(result[name], cf.(bson.M))
-		}
+	for _, c := range conflicts {
+		cf := c.(bson.M)
+		name := cf["name"].(string)
+		result[name] = append(result[name], cf)
 	}
 	return result
 }
@@ -256,7 +250,7 @@ func TestMergeMatrix_DeleteModifyConflict(t *testing.T) {
 	conflicts := getConflictsByCollection(t, mainDB)
 	require.Len(t, conflicts["items"], 1)
 	cf := conflicts["items"][0]
-	assert.Equal(t, "documentEdit", cf["type"])
+	assert.Equal(t, "document", cf["type"])
 	assert.Equal(t, "deleteModify", cf["reason"].(bson.M)["code"])
 	assert.Nil(t, cf["ours"], "ours deleted the doc")
 	assert.Equal(t, "modified", cf["theirs"].(bson.M)["diffType"])
@@ -303,7 +297,7 @@ func TestMergeMatrix_ModifyDeleteConflict(t *testing.T) {
 	conflicts := getConflictsByCollection(t, mainDB)
 	require.Len(t, conflicts["items"], 1)
 	cf := conflicts["items"][0]
-	assert.Equal(t, "documentEdit", cf["type"])
+	assert.Equal(t, "document", cf["type"])
 	assert.Equal(t, "modifyDelete", cf["reason"].(bson.M)["code"])
 	assert.Equal(t, "modified", cf["ours"].(bson.M)["diffType"])
 	assert.Nil(t, cf["theirs"], "theirs deleted the doc")

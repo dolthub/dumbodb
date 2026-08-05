@@ -496,8 +496,8 @@ timestamp first.
 | `from` | string or array of strings | no | HEAD | Seed commit(s) for the traversal frontier. A single hash starts there (and still walks both parents of merges); an array seeds the walk with every listed commit. Pass back a prior response's `next` to page. |
 | `all` | bool | no | `false` | Seed the walk with the HEAD of every branch, so it spans all branches (`git log --all`; tags excluded). Mutually exclusive with `from`. |
 | `filters` | array | no | unset | Entries are a collection-name string (whole collection) or a `{collection: spec}` document; returns only commits that touched matching documents (see Filtering). `spec` is a single `_id`, an array of `_id`s, or a `{$match: <query>}` predicate. |
-| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
-| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
+| `stat` | bool | no | `false` | When true, include each commit's `changes` array at summary verbosity (per-collection change counts + index names; analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
+| `patch` | bool | no | `false` | When true, include each commit's `changes` array at full verbosity (full document and index diffs; analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
 
 ### Response fields
 
@@ -520,8 +520,7 @@ timestamp first.
 | `author` | string | Commit author |
 | `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
 | `committerTimestamp` | Date | Timestamp of when the commit was applied |
-| `stat` | array | **Only when `stat: true`.** Per-collection change counts: `[{name, status, added, modified, deleted}, ...]` |
-| `diff` | array | **Only when `patch: true`.** Full document diffs per collection (same shape as `dumboDiff` collections). |
+| `changes` | array | **Only when `stat: true` or `patch: true`.** What this commit changed versus its first parent, as the unified `changes` array (same shape as `dumboDiff`). `stat` renders it at summary verbosity (document counts, index names); `patch` renders it at full verbosity (full documents, index definitions). Both carry the `metadata` validator/options change. |
 
 ### Example
 
@@ -735,28 +734,36 @@ None (beyond the implicit `$db` connection).
 | `dirty` | bool | `true` when there are uncommitted changes; `false` otherwise |
 | `readonly` | bool | `true` when the connection is a read-only rootish (commit hash, ancestor, tag); `false` on branches |
 | `commitId` | string | HEAD commit hash. Only present when `dirty` is `false` and `readonly` is `false`. |
-| `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]`. Only present on writable connections. |
+| `changes` | array | Uncommitted changes as the unified `changes` array (same shape as `dumboDiff`), at **summary** verbosity. Only present on writable connections; empty when clean. |
 | `mergeState` | string | **Only present during an in-progress operation.** One of `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`. |
 | `conflicts` | array | **Only present during an in-progress operation.** Per-collection conflict counts: `[{collection, count}, ...]`. |
 | `ok` | number | `1` |
 
-### Collection entry
+### Change entry (summary verbosity)
+
+Each entry has the same `{ type, name, status, documents, indexes, metadata }`
+shape as a `dumboDiff` change, but at summary verbosity: `documents` carries
+counts (`{ added, modified, deleted }`) rather than full documents, and
+`indexes` carries index names rather than full definitions. `metadata` is the
+validator/options change `{ from, to }` (or `{}` when unchanged), same as diff.
+View changes appear as `{ type: "view", name, status }`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Collection name |
-| `status` | string | `"added"`, `"modified"`, or `"deleted"` (see table below) |
-| `added` | int | Docs in the working-set copy but not in the HEAD copy |
-| `modified` | int | Docs present in both with different content (counted per doc, not per field) |
-| `deleted` | int | Docs in the HEAD copy but not in the working-set copy |
+| `type` | string | `"collection"` or `"view"` |
+| `name` | string | Namespace name |
+| `status` | string | `"added"`, `"modified"`, or `"deleted"` |
+| `documents` | document | `{ added, modified, deleted }` counts (collections only) |
+| `indexes` | document | `{ added, removed, modified }` lists of index names (collections only) |
+| `metadata` | document | `{ from, to }` validator/options change, or `{}` (collections only) |
 
 ### Status values
 
 | Value | Meaning |
 |-------|---------|
-| `"added"` | Collection exists in working set but not in HEAD |
-| `"modified"` | Collection exists in both but content differs |
-| `"deleted"` | Collection exists in HEAD but not in working set |
+| `"added"` | Namespace exists in working set but not in HEAD |
+| `"modified"` | Namespace exists in both but content, indexes, or validator/options differ |
+| `"deleted"` | Namespace exists in HEAD but not in working set |
 
 ### Example
 
@@ -768,8 +775,12 @@ db.orders.insertOne({ _id: 99, amount: 500 })
 db.runCommand({ dumboStatus: 1 })
 // {
 //   branch: "main",
-//   collections: [
-//     { name: "orders", status: "modified", added: 1, modified: 0, deleted: 0 }
+//   dirty:  true,
+//   changes: [
+//     { type: "collection", name: "orders", status: "modified",
+//       documents: { added: 1, modified: 0, deleted: 0 },
+//       indexes:   { added: [], removed: [], modified: [] },
+//       metadata:  {} }
 //   ],
 //   ok: 1
 // }
@@ -777,7 +788,7 @@ db.runCommand({ dumboStatus: 1 })
 // After committing  -- clean state
 db.runCommand({ dumboCommit: 1, message: "add order 99", author: "alice <alice@acme.com>" })
 db.runCommand({ dumboStatus: 1 })
-// { branch: "main", collections: [], ok: 1 }
+// { branch: "main", dirty: false, changes: [], commitId: "...", ok: 1 }
 
 // During a merge conflict  -- mergeState and conflicts appear
 db.runCommand({ dumboMerge: 1, merge_in: "feature" })
@@ -786,8 +797,10 @@ db.runCommand({ dumboMerge: 1, merge_in: "feature" })
 db.runCommand({ dumboStatus: 1 })
 // {
 //   branch: "main",
-//   collections: [
-//     { name: "orders", status: "modified", added: 0, modified: 1, deleted: 0 }
+//   changes: [
+//     { type: "collection", name: "orders", status: "modified",
+//       documents: { added: 0, modified: 1, deleted: 0 },
+//       indexes: { added: [], removed: [], modified: [] }, metadata: {} }
 //   ],
 //   mergeState: "merge",
 //   conflicts: [ { collection: "orders", count: 1 } ],
@@ -797,9 +810,9 @@ db.runCommand({ dumboStatus: 1 })
 
 ### Notes
 
-- Only collections with uncommitted changes appear; unchanged collections are omitted.
-- `collections` is always an array (empty when clean).
-- Counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
+- Only namespaces with uncommitted changes appear; unchanged ones are omitted. A `collMod` that changed only the validator/options still appears (with empty `documents`/`indexes` and a populated `metadata`).
+- `changes` is always an array (empty when clean).
+- Document counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
 
 ---
 
@@ -820,19 +833,30 @@ Returns a document-level diff between two states for the branch encoded in the d
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `collections` | array | Changed collections (see below) |
+| `changes` | array | One entry per changed namespace (collection or view), each tagged with a `type` and its owning `name`, sorted by `name`. This is the same unified `changes` array `dumboStatus` and `dumboLog --stat/--patch` emit. |
 | `ok` | number | `1` |
 
-### Collection diff object
+### Change entry -- `type: "collection"`
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `type` | string | `"collection"` |
 | `name` | string | Collection name |
-| `added` | array | Full documents added in `to` |
-| `removed` | array | Full documents present in `from` but absent in `to` |
-| `modified` | array | Modified document diff entries (see below) |
+| `status` | string | `"added"`, `"deleted"`, or `"modified"` |
+| `documents` | document | `{ added, removed, modified }`. In `dumboDiff` (full verbosity) each is a list -- `added`/`removed` are full documents and `modified` is a list of `{ _id, diff }` entries. At summary verbosity (`dumboStatus`, `dumboLog --stat`) each is a count instead. |
+| `indexes` | document | `{ added, removed, modified }`. Full verbosity: `added`/`removed` are full `IndexInfo` definitions, `modified` is a list of `{ from, to }`. Summary verbosity: each is a list of index names. |
+| `metadata` | document | Validator/options change as `{ from, to }`, or `{}` when unchanged. Each side is `{ validator?, validationLevel, validationAction }` or null (null when that side had no validator, e.g. an added or newly-validated collection). |
 
-### Modified document entry
+### Change entry -- `type: "view"`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `"view"` |
+| `name` | string | View name |
+| `status` | string | `"added"`, `"deleted"`, or `"modified"` |
+| `from` / `to` | document or null | `{ viewOn, pipeline }`; null on the side where the view was absent |
+
+### Modified document entry (full verbosity)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -864,14 +888,20 @@ db.orders.updateOne({ _id: 1 }, { $set: { amount: 150 } })
 // Diff HEAD vs working set
 db.runCommand({ dumboDiff: 1 })
 // {
-//   collections: [
+//   changes: [
 //     {
+//       type:    "collection",
 //       name:    "orders",
-//       added:   [],
-//       removed: [],
-//       modified: [
-//         { _id: 1, diff: [ { type: "modified", path: "$.amount", from: 100, to: 150 } ] }
-//       ]
+//       status:  "modified",
+//       documents: {
+//         added:   [],
+//         removed: [],
+//         modified: [
+//           { _id: 1, diff: [ { type: "modified", path: "$.amount", from: 100, to: 150 } ] }
+//         ]
+//       },
+//       indexes:  { added: [], removed: [], modified: [] },
+//       metadata: {}
 //     }
 //   ],
 //   ok: 1
@@ -890,7 +920,7 @@ db.runCommand({ dumboDiff: 1, from: hashBase, to: "HEAD" })
 ### Notes
 
 - Omit both `from` and `to` to get working-set changes vs HEAD.
-- Only collections with at least one change appear in `collections`.
+- Only namespaces with at least one change appear in `changes`. A collection whose only change is its validator/options (a `collMod`) still appears, with empty `documents`/`indexes` and a populated `metadata`.
 - Unchanged fields do not appear in `modified[].diff`.
 - `HEAD` resolves to the connection's own branch tip (not necessarily `main`).
 - Reversing `from` and `to` inverts the diff: `added` and `removed` swap roles.
@@ -1051,39 +1081,47 @@ None (beyond the implicit `$db` connection).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `collections` | array | Per-collection conflict groups (see below) |
+| `conflicts` | array | One entry per conflict, each tagged with a `type` and its owning `name`, sorted by `name` then `conflictId` |
 | `ok` | number | `1` |
 
-### Collection conflict group
+### Conflict entry
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `collection` | string | Collection name |
-| `conflicts` | array | Per-document conflict entries (see below) |
-
-### Conflict entry fields
+Every entry carries these three fields; the rest depend on `type`:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `conflictId` | string | Unique identifier for this conflict (used with `dumboResolveConflict`) |
-| `type` | string | `"documentEdit"` (one identity edited on both sides) or `"uniqueKeyCollision"` (two identities contending for one unique-index key) |
-| `reason` | document | Why the two states cannot both stand (see below) |
-| `base` | document or null | The common-ancestor side as `{ _id, doc }`; null if absent in the ancestor. No `diffType`. |
-| `ours` | document or null | Our side as `{ _id, doc, diffType }`; null if our branch deleted the document |
-| `theirs` | document or null | Their side as `{ _id, doc, diffType }`; null if their branch deleted the document |
+| `type` | string | `"document"`, `"view"`, `"metadata"`, or `"validation"` |
+| `name` | string | The owning collection or view |
 
-Each non-null side carries its own `_id` (a `uniqueKeyCollision` has different
-`_id`s for `ours` and `theirs`), the full `doc`, and -- for `ours`/`theirs` -- a
-`diffType` of `"added"`, `"modified"`, or `"deleted"`.
-
-#### `reason` fields
+**`type: "document"`** -- one document edited on both sides, or two documents contending for a unique-index key:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `code` | string | `"bothModified"`, `"modifyDelete"`, `"deleteModify"` (document edits), or `"uniqueKeyCollision"` |
-| `message` | string | Human-readable explanation |
-| `index` | string | Unique index name; present only for `uniqueKeyCollision` |
-| `key` | document | The colliding key value; present only for `uniqueKeyCollision` |
+| `reason` | document | `{ code, message, index?, key? }`. `code` is `"bothModified"`, `"modifyDelete"`, `"deleteModify"`, or `"uniqueKeyCollision"`; `index`/`key` are present only for a collision |
+| `base` | document or null | `{ _id, doc }` (common ancestor); null if absent. No `diffType`. |
+| `ours` / `theirs` | document or null | `{ _id, doc, diffType }` with `diffType` `"added"`/`"modified"`/`"deleted"`; null if that side deleted it. A `uniqueKeyCollision` carries different `_id`s for `ours` and `theirs`. |
+
+**`type: "view"`** -- both branches changed the same view definition:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `base` / `ours` / `theirs` | document or null | `{ viewOn, pipeline, diffType? }`; null if the view was absent/deleted on that side |
+
+**`type: "metadata"`** -- both branches changed the same collection's validator/options:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `base` / `ours` / `theirs` | document or null | `{ validator, validationLevel, validationAction, diffType? }`; null if the collection was absent/deleted on that side |
+
+**`type: "validation"`** -- a document the merge produced violates the resulting validator (there is no ours/theirs divergence -- only the document's conformance):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `documentId` | any | The `_id` of the offending document |
+| `document` | document | The offending merged document |
+| `validator` | document | The validator it failed |
+| `reason` | document | `{ code: "documentValidationFailure", message }` |
 
 ### Example
 
@@ -1093,29 +1131,24 @@ var main = db.getSiblingDB("orders@main")
 // After a merge conflict (both branches modified _id:1):
 main.runCommand({ dumboConflicts: 1 })
 // {
-//   collections: [
+//   conflicts: [
 //     {
-//       collection: "orders",
-//       conflicts: [
-//         {
-//           conflictId: "2onhBAqtYZDVqr4WfXh8pA",
-//           type:   "documentEdit",
-//           reason: { code: "bothModified",
-//                     message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
-//           base:   { _id: 1, doc: { _id: 1, amount: 100 } },
-//           ours:   { _id: 1, doc: { _id: 1, amount: 150 }, diffType: "modified" },
-//           theirs: { _id: 1, doc: { _id: 1, amount: 200 }, diffType: "modified" }
-//         }
-//       ]
+//       conflictId: "2onhBAqtYZDVqr4WfXh8pA",
+//       type:   "document",
+//       name:   "orders",
+//       reason: { code: "bothModified",
+//                 message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
+//       base:   { _id: 1, doc: { _id: 1, amount: 100 } },
+//       ours:   { _id: 1, doc: { _id: 1, amount: 150 }, diffType: "modified" },
+//       theirs: { _id: 1, doc: { _id: 1, amount: 200 }, diffType: "modified" }
 //     }
 //   ],
 //   ok: 1
 // }
 
-// A uniqueKeyCollision (each branch added a different doc on the same unique key):
+// A uniqueKeyCollision is still type "document"; the sub-type is in reason.code:
 // {
-//   conflictId: "...",
-//   type:   "uniqueKeyCollision",
+//   conflictId: "...", type: "document", name: "orders",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
@@ -1123,13 +1156,25 @@ main.runCommand({ dumboConflicts: 1 })
 //   ours:   { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" },
 //   theirs: { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" }
 // }
+
+// A validation conflict (a merged document violates the resulting validator):
+// {
+//   conflictId: "aFq9k2mXp...", type: "validation", name: "orders",
+//   documentId: 1,
+//   document:  { _id: 1, amount: -5 },
+//   validator: { amount: { $gte: 0 } },
+//   reason: { code: "documentValidationFailure", message: "document 1 in \"orders\" violates the collection validator ..." }
+// }
 ```
 
 ---
 
 ## dumboResolveConflict
 
-Resolves a single document conflict in the current in-progress merge, cherry-pick, or rebase.
+Resolves a single conflict -- a **document**, **view**, collection-**metadata**,
+or **validation** conflict -- in the current in-progress merge, cherry-pick, or
+rebase. The conflict's `type` (reported by `dumboConflicts`) determines which
+`resolution` values are valid.
 
 **Alias:** `doltResolveConflict`
 
@@ -1137,18 +1182,56 @@ Resolves a single document conflict in the current in-progress merge, cherry-pic
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `collection` | string | **yes** |  -- | Collection containing the conflict |
+| `collection` | string | **yes** |  -- | Namespace (collection or view) containing the conflict |
 | `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts` |
-| `resolution` | string | **yes** |  -- | `"ours"`, `"theirs"`, or `"custom"` |
-| `value` | document | conditional |  -- | Required when `resolution` is `"custom"`; the document to use |
+| `resolution` | string | **yes** |  -- | One of `"ours"`, `"theirs"`, `"custom"`, `"drop"`; the valid set depends on the conflict `type` (see Resolution options) |
+| `value` | document | conditional |  -- | Required when `resolution` is `"custom"`. Shaped for the conflict type: a document (`document`, `validation`); a view definition `{ viewOn, pipeline }` (`view`); or `{ validator, validationLevel?, validationAction? }` (`metadata`) |
 
 ### Resolution options
+
+The valid resolutions depend on the conflict's `type`. `"drop"` applies only to
+`validation` conflicts; `"ours"` / `"theirs"` do **not** apply to `validation`
+conflicts.
+
+**`document`** -- both branches changed the same document (`reason.code:
+"documentEdit"`), or two documents collided on a unique index (`reason.code:
+"uniqueKeyCollision"`):
 
 | Value | `documentEdit` | `uniqueKeyCollision` |
 |-------|----------------|----------------------|
 | `"ours"` | Keep the local (into-branch) version | Keep ours's document on the key; discard theirs's contender |
 | `"theirs"` | Use the incoming (from-branch) version | Key-ownership swap: evict ours's document and install theirs's contender under the key |
 | `"custom"` | Use the document provided in `value` | Use the document provided in `value` (rejected if it collides with a different document on a unique index) |
+
+If a validator is active on the collection after the merge (with
+`validationAction` other than `"warn"`), the resolved document must satisfy it:
+resolving to a side whose value violates the validator is **rejected** -- supply
+a conforming `"custom"` document instead.
+
+**`view`** -- both branches changed the same view definition:
+
+| Value | Effect |
+|-------|--------|
+| `"ours"` | Keep our view definition |
+| `"theirs"` | Use their view definition |
+| `"custom"` | Use the view definition in `value` (`{ viewOn, pipeline }`) |
+
+**`metadata`** -- both branches changed the same collection's validator/options:
+
+| Value | Effect |
+|-------|--------|
+| `"ours"` | Keep our validator/options |
+| `"theirs"` | Use their validator/options |
+| `"custom"` | Use the validator/options in `value` (`{ validator, validationLevel?, validationAction? }`) |
+
+**`validation`** -- a document the merge produced violates the resulting
+validator. The document itself is not in dispute (only its conformance), so
+ours/theirs do not apply:
+
+| Value | Effect |
+|-------|--------|
+| `"custom"` | Replace the offending document with the conforming document in `value` (re-validated; rejected if it still violates) |
+| `"drop"` | Remove the offending document |
 
 ### Response fields
 
@@ -1189,6 +1272,26 @@ main.runCommand({
 })
 // { ok: 1 }
 
+// Resolve a VALIDATION conflict (a merged document violates the validator) by
+// replacing it with a conforming document...
+main.runCommand({
+  dumboResolveConflict: 1,
+  collection: "orders",
+  conflictId: "aFq9k2mXp...",
+  resolution: "custom",
+  value: { _id: 1, amount: 175 }   // must satisfy the collection validator
+})
+// { ok: 1 }
+
+// ...or by dropping the offending document:
+main.runCommand({
+  dumboResolveConflict: 1,
+  collection: "orders",
+  conflictId: "aFq9k2mXp...",
+  resolution: "drop"
+})
+// { ok: 1 }
+
 // After resolving all conflicts, complete the merge:
 main.runCommand({ dumboMerge: 1, continue: 1 })
 ```
@@ -1198,6 +1301,10 @@ main.runCommand({ dumboMerge: 1, continue: 1 })
 | Condition | Error |
 |-----------|-------|
 | `resolution` is `"custom"` but `value` is missing | `BadValue: dumboResolveConflict: resolution 'custom' requires a 'value' document` |
+| `resolution` is `"drop"` on a `document` / `view` / `metadata` conflict | `OperationFailed: DumboDBResolveConflict: unknown resolution "drop" (must be 'ours', 'theirs', or 'custom')` |
+| `resolution` is `"ours"` / `"theirs"` on a `validation` conflict | `OperationFailed: DumboDBResolveConflict: validation conflict on <collection> resolves with 'custom' (a conforming replacement) or 'drop'` |
+| `"custom"` value on a `validation` conflict still violates the validator | `OperationFailed: DumboDBResolveConflict: custom value still violates the collection validator for <collection>` |
+| Resolving a `document` conflict to a value that violates an active validator | `OperationFailed: DumboDBResolveConflict: resolved document for <collection> violates the collection validator; supply a conforming value ('custom') or drop it` |
 | Unknown `conflictId` | `OperationFailed: ...` |
 
 ### Notes
@@ -1218,16 +1325,17 @@ var main = db.getSiblingDB("orders@main")
 main.runCommand({ dumboMerge: 1, merge_in: "feature" })
 // { conflicts: [ { collection: "orders", count: 1 } ], ok: 0, errmsg: "..." }
 
-// Step 2: Inspect and resolve each conflict
+// Step 2: Inspect and resolve each conflict. dumboConflicts returns a single
+// `conflicts` array; each entry carries its owning `name` and its `type`.
 const detail = main.runCommand({ dumboConflicts: 1 })
-detail.collections.forEach(col => {
-  col.conflicts.forEach(c => {
-    main.runCommand({
-      dumboResolveConflict: 1,
-      collection: col.collection,
-      conflictId: c.conflictId,
-      resolution: "ours"
-    })
+detail.conflicts.forEach(c => {
+  main.runCommand({
+    dumboResolveConflict: 1,
+    collection: c.name,
+    conflictId: c.conflictId,
+    // "ours" suits document/view/metadata conflicts; a `validation` conflict
+    // must be resolved with "custom" (a conforming value) or "drop".
+    resolution: c.type === "validation" ? "drop" : "ours"
   })
 })
 

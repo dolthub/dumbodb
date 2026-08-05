@@ -33,7 +33,7 @@ type InsertParams struct {
 
 	MaxTimeMS                int64           `dumbo:"maxTimeMS,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
-	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,ignored"`
+	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`
 	BypassEmptyTsReplacement bool            `dumbo:"bypassEmptyTsReplacement,ignored"`
 	Comment                  string          `dumbo:"comment,ignored"`
 	LSID                     any             `dumbo:"lsid,ignored"`

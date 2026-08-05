@@ -15,6 +15,7 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -24,10 +25,11 @@ import (
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
-	"github.com/dolthub/dolt/go/store/val"
 	dolttypes "github.com/dolthub/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/val"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -107,7 +109,6 @@ func amFromRootish(ctx context.Context, state *dbState, rootish string) (prolly.
 	}
 	return prolly.AddressMap{}, fmt.Errorf("rootish %q: tag has no commit address", rootish)
 }
-
 
 // resolveRootishToCommitHash resolves any rootish expression to the Dolt commit hash
 // it points to. Resolution order mirrors amFromRootish:
@@ -329,20 +330,29 @@ func amFromCommitHash(ctx context.Context, state *dbState, hashStr string) (prol
 // no public diff primitive (only IterAll/Get), so a DiffMaps-style walk is not
 // available here. The document-level diffs that do scale with collection size
 // use forEachCollectionChange (collection_diff.go).
-func unionCollectionNames(ctx context.Context, aAM, bAM prolly.AddressMap) ([]string, error) {
+func unionCollectionNames(ctx context.Context, cs *nbs.GenerationalNBS, aAM, bAM prolly.AddressMap) ([]string, error) {
 	seen := make(map[string]struct{})
 
-	if err := aAM.IterAll(ctx, func(name string, _ hash.Hash) error {
-		seen[name] = struct{}{}
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("iterating a AM: %w", err)
+	collect := func(am prolly.AddressMap) error {
+		return am.IterAll(ctx, func(name string, h hash.Hash) error {
+			if name == reservedCatalogName {
+				return nil
+			}
+			isView, err := isViewEntry(ctx, cs, h)
+			if err != nil {
+				return err
+			}
+			if !isView {
+				seen[name] = struct{}{}
+			}
+			return nil
+		})
 	}
 
-	if err := bAM.IterAll(ctx, func(name string, _ hash.Hash) error {
-		seen[name] = struct{}{}
-		return nil
-	}); err != nil {
+	if err := collect(aAM); err != nil {
+		return nil, fmt.Errorf("iterating a AM: %w", err)
+	}
+	if err := collect(bAM); err != nil {
 		return nil, fmt.Errorf("iterating b AM: %w", err)
 	}
 
@@ -617,4 +627,192 @@ func countCollectionMapDiffs(
 		return 0, 0, 0, err
 	}
 	return added, modified, deleted, nil
+}
+
+type collectionChange struct {
+	Name        string
+	Status      string
+	AMap, BMap  prolly.Map
+	IdxAdded    []backends.IndexInfo
+	IdxModified []backends.IndexChange
+	IdxRemoved  []backends.IndexInfo
+	MetaFrom    *backends.CollectionMetadata
+	MetaTo      *backends.CollectionMetadata
+	MetaChanged bool
+}
+
+func (c collectionChange) surfacesWithoutDocChange() bool {
+	return c.Status != "modified" ||
+		len(c.IdxAdded) > 0 || len(c.IdxModified) > 0 || len(c.IdxRemoved) > 0 ||
+		c.MetaChanged
+}
+
+func statusOf(aHash, bHash hash.Hash) string {
+	switch {
+	case aHash.IsEmpty() && !bHash.IsEmpty():
+		return "added"
+	case !aHash.IsEmpty() && bHash.IsEmpty():
+		return "deleted"
+	default:
+		return "modified"
+	}
+}
+
+func eachCollectionChange(ctx context.Context, state *dbState, aAM, bAM prolly.AddressMap, fn func(collectionChange) error) error {
+	names, err := unionCollectionNames(ctx, state.cs, aAM, bAM)
+	if err != nil {
+		return err
+	}
+
+	aCatHash, err := aAM.Get(ctx, reservedCatalogName)
+	if err != nil {
+		return err
+	}
+	bCatHash, err := bAM.Get(ctx, reservedCatalogName)
+	if err != nil {
+		return err
+	}
+	catalogChanged := aCatHash != bCatHash
+	var aCat, bCat prolly.Map
+	if catalogChanged {
+		if aCat, err = catalogMapFromAM(ctx, state, aAM); err != nil {
+			return err
+		}
+		if bCat, err = catalogMapFromAM(ctx, state, bAM); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range names {
+		aHash, err := aAM.Get(ctx, name)
+		if err != nil {
+			return err
+		}
+		bHash, err := bAM.Get(ctx, name)
+		if err != nil {
+			return err
+		}
+
+		var metaFrom, metaTo *backends.CollectionMetadata
+		var metaChanged bool
+		if catalogChanged {
+			if metaFrom, metaTo, metaChanged, err = collectionMetadataDiff(ctx, state, aCat, bCat, name); err != nil {
+				return err
+			}
+		}
+
+		if aHash == bHash {
+			if !metaChanged {
+				continue
+			}
+			m, err := collectionMapFromAM(ctx, state, aAM, name)
+			if err != nil {
+				return err
+			}
+			if err := fn(collectionChange{
+				Name: name, Status: "modified", AMap: m, BMap: m,
+				MetaFrom: metaFrom, MetaTo: metaTo, MetaChanged: true,
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+
+		idxAdded, idxModified, idxRemoved, err := computeIndexChanges(ctx, state, aHash, bHash)
+		if err != nil {
+			return err
+		}
+		aMap, err := collectionMapFromAM(ctx, state, aAM, name)
+		if err != nil {
+			return err
+		}
+		bMap, err := collectionMapFromAM(ctx, state, bAM, name)
+		if err != nil {
+			return err
+		}
+		if err := fn(collectionChange{
+			Name: name, Status: statusOf(aHash, bHash), AMap: aMap, BMap: bMap,
+			IdxAdded: idxAdded, IdxModified: idxModified, IdxRemoved: idxRemoved,
+			MetaFrom: metaFrom, MetaTo: metaTo, MetaChanged: metaChanged,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tableStatusFrom(c collectionChange, added, modified, deleted int) backends.TableStatus {
+	return backends.TableStatus{
+		Name:            c.Name,
+		Status:          c.Status,
+		Added:           added,
+		Modified:        modified,
+		Deleted:         deleted,
+		AddedIndexes:    indexNamesOf(c.IdxAdded),
+		ModifiedIndexes: indexChangeNamesOf(c.IdxModified),
+		RemovedIndexes:  indexNamesOf(c.IdxRemoved),
+		MetadataFrom:    c.MetaFrom,
+		MetadataTo:      c.MetaTo,
+	}
+}
+
+func collectionDiffFrom(c collectionChange, added, removed []*types.Document, modified []backends.ModifiedDoc) backends.CollectionDiff {
+	return backends.CollectionDiff{
+		Name:            c.Name,
+		Status:          c.Status,
+		Added:           added,
+		Removed:         removed,
+		Modified:        modified,
+		AddedIndexes:    c.IdxAdded,
+		ModifiedIndexes: c.IdxModified,
+		RemovedIndexes:  c.IdxRemoved,
+		MetadataFrom:    c.MetaFrom,
+		MetadataTo:      c.MetaTo,
+	}
+}
+
+// metadataViewOf returns nil when the collection has no validator.
+func metadataViewOf(m *collMeta) *backends.CollectionMetadata {
+	if m == nil || m.Validator == nil {
+		return nil
+	}
+	return collMetaToMetadata(m)
+}
+
+// collectionMetadataDiff returns the two user-facing views when they differ
+// (from, to), or (nil, nil, false) when the metadata is unchanged. Either
+// returned side is nil when that side had no validator.
+func collectionMetadataDiff(ctx context.Context, state *dbState, aCat, bCat prolly.Map, name string) (from, to *backends.CollectionMetadata, changed bool, err error) {
+	aMeta, err := readCollMetaFromCatalog(ctx, state, aCat, name)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	bMeta, err := readCollMetaFromCatalog(ctx, state, bCat, name)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	aView := metadataViewOf(aMeta)
+	bView := metadataViewOf(bMeta)
+
+	switch {
+	case aView == nil && bView == nil:
+		return nil, nil, false, nil
+	case aView == nil || bView == nil:
+		return aView, bView, true, nil
+	}
+	if aView.ValidationLevel != bView.ValidationLevel || aView.ValidationAction != bView.ValidationAction {
+		return aView, bView, true, nil
+	}
+	aBytes, err := docToBSON(aView.Validator)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	bBytes, err := docToBSON(bView.Validator)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !bytes.Equal(aBytes, bBytes) {
+		return aView, bView, true, nil
+	}
+	return nil, nil, false, nil
 }

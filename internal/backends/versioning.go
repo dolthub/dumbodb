@@ -164,8 +164,46 @@ type CollectionConflicts struct {
 
 // ConflictsResult represents the result of VersioningBackend.DumboDBConflicts method.
 // Returns all conflict details for all collections.
+// ViewConflict describes a view definition that diverged on both branches of a
+// merge. Base is the common-ancestor definition (nil if the view did not exist
+// there); Ours and Theirs are the two sides (nil if that side deleted the view).
+type ViewConflict struct {
+	Name          string
+	ConflictID    string
+	Base          *ViewDefinition
+	Ours          *ViewDefinition
+	Theirs        *ViewDefinition
+	OurDiffType   string // "added", "modified", "deleted"
+	TheirDiffType string // "added", "modified", "deleted"
+}
+
+// CollectionMetadata is the user-facing per-collection metadata, never the
+// internal catalog representation.
+type CollectionMetadata struct {
+	Validator        *types.Document
+	ValidationLevel  string
+	ValidationAction string
+}
+
+// MetaConflict describes a collection whose durable metadata (validator/options)
+// diverged on both branches of a merge. Base is the common-ancestor metadata
+// (nil if absent there); Ours and Theirs are the two sides (nil if that side
+// deleted the collection).
+type MetaConflict struct {
+	Collection    string
+	ConflictID    string
+	Base          *CollectionMetadata
+	Ours          *CollectionMetadata
+	Theirs        *CollectionMetadata
+	OurDiffType   string // "added", "modified", "deleted"
+	TheirDiffType string
+	Reason        ConflictReason
+}
+
 type ConflictsResult struct {
 	Collections []CollectionConflicts
+	Views       []ViewConflict
+	Metadata    []MetaConflict
 }
 
 type ResolveConflictParams struct {
@@ -224,6 +262,8 @@ type CommitInfo struct {
 	Refs               []string         // branch/tag decorations; empty when commit is not a branch head
 	Stat               []TableStatus    // per-collection change summary (only when LogParams.Stat is true)
 	Diff               []CollectionDiff // full document diffs (only when LogParams.Patch is true)
+	ViewStat           []ViewStatus     // per-view change summary (only when LogParams.Stat is true)
+	ViewDiff           []ViewChange     // full view definition diffs (only when LogParams.Patch is true)
 }
 
 type LogResult struct {
@@ -266,6 +306,11 @@ type TableStatus struct {
 	AddedIndexes    []string
 	ModifiedIndexes []string
 	RemovedIndexes  []string
+
+	// Both nil when the collection's metadata did not change; otherwise each
+	// side is the "a"/"b" validator (nil when that side had no validator).
+	MetadataFrom *CollectionMetadata
+	MetadataTo   *CollectionMetadata
 }
 
 type VersioningStatusResult struct {
@@ -274,6 +319,12 @@ type VersioningStatusResult struct {
 	Tables    []TableStatus
 	MergeOp   string            // "merge", "cherry-pick", "rebase", or "revert"; empty when no operation in progress
 	Conflicts []ConflictSummary // per-collection conflict counts; empty when no conflicts
+	Views     []ViewStatus
+}
+
+type ViewStatus struct {
+	Name   string
+	Status string // "added", "modified", or "deleted"
 }
 
 // DiffParams represents the parameters of VersioningBackend.DumboDBDiff method.
@@ -331,12 +382,34 @@ type CollectionDiff struct {
 	AddedIndexes    []IndexInfo       // full definitions of indexes added in "b"
 	ModifiedIndexes []IndexChange     // pre/post definitions for indexes whose spec changed
 	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
+
+	// Both nil when the collection's metadata did not change; otherwise
+	// MetadataFrom/MetadataTo carry the "a"/"b" side (nil when that side had no
+	// validator, e.g. an added or newly-validated collection).
+	MetadataFrom *CollectionMetadata
+	MetadataTo   *CollectionMetadata
+}
+
+type ViewDefinition struct {
+	ViewOn   string
+	Pipeline *types.Array
+}
+
+// ViewChange represents a view added, removed, or redefined between two
+// revisions. From is nil for an added view; To is nil for a removed view; both
+// are set for a redefine.
+type ViewChange struct {
+	Name   string
+	Status string // "added", "deleted", or "modified"
+	From   *ViewDefinition
+	To     *ViewDefinition
 }
 
 // DiffResult represents the result of VersioningBackend.DumboDBDiff method.
-// Only collections with at least one change appear.
+// Only collections and views with at least one change appear.
 type DiffResult struct {
 	Collections []CollectionDiff
+	Views       []ViewChange
 }
 
 type ResetParams struct {

@@ -223,7 +223,7 @@ try { feat.runCommand({doltRebase: 1, onto: "main"}) } catch(e) { print(e) }
 
 // Resolve with ours, then continue
 const conflicts = feat.runCommand({doltConflicts: 1})
-const cid = conflicts.collections[0].conflicts[0].conflictId
+const cid = conflicts.conflicts[0].conflictId
 feat.runCommand({doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours"})
 
 const r = feat.runCommand({doltRebase: 1, continue: 1})
@@ -268,7 +268,7 @@ try { feat.runCommand({doltRebase: 1, onto: "main"}) } catch(e) { print(e) }
 
 // Resolve with theirs (accept feature's v:100)
 const conflicts = feat.runCommand({doltConflicts: 1})
-const cid = conflicts.collections[0].conflicts[0].conflictId
+const cid = conflicts.conflicts[0].conflictId
 feat.runCommand({doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "theirs"})
 
 const r = feat.runCommand({doltRebase: 1, continue: 1})
@@ -407,7 +407,7 @@ printjson(rStatus)
 //   branch: "feature",
 //   dirty: true,
 //   readonly: false,
-//   collections: [...],
+//   changes: [...],
 //   mergeState: "rebase",
 //   conflicts: [ { collection: "items", count: 1 } ],
 //   ok: 1
@@ -418,32 +418,28 @@ printjson(rStatus)
 // - mergeState equals "rebase"
 // - conflicts lists per-collection conflict counts
 
-// Inspect conflicts  -- returns all conflicts grouped by collection.
+// Inspect conflicts  -- returns all conflicts in a single array.
 const rConflicts = rdb.getSiblingDB("rebaseresolve@feature").runCommand({
     doltConflicts: 1
 })
 printjson(rConflicts)
 // Expected:
 // {
-//   collections: [
-//     {
-//       collection: "items",
-//       conflicts: [
-//         { conflictId: "<base64-id>",
-//           type: "documentEdit",
-//           reason: { code: "bothModified",
-//                     message: "commit '<hash>' (ours) and branch 'main' (theirs) both modified document 1" },
-//           base:   { _id: 1, doc: { _id: 1, v: 1 } },
-//           ours:   { _id: 1, doc: { _id: 1, v: 200 }, diffType: "modified" },
-//           theirs: { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" } }
-//       ]
-//     }
+//   conflicts: [
+//     { conflictId: "<base64-id>",
+//       type: "document",
+//       name: "items",
+//       reason: { code: "bothModified",
+//                 message: "commit '<hash>' (ours) and branch 'main' (theirs) both modified document 1" },
+//       base:   { _id: 1, doc: { _id: 1, v: 1 } },
+//       ours:   { _id: 1, doc: { _id: 1, v: 200 }, diffType: "modified" },
+//       theirs: { _id: 1, doc: { _id: 1, v: 100 }, diffType: "modified" } }
 //   ],
 //   ok: 1
 // }
 // For a rebase, "ours" is the replayed feature commit (v:200) and "theirs"
 // is the onto branch (main, v:100).
-const conflictId = rConflicts.collections[0].conflicts[0].conflictId
+const conflictId = rConflicts.conflicts[0].conflictId
 print("conflictId =", conflictId)
 
 // Resolve using "ours" (keep feature's value v:200).
@@ -462,6 +458,6 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` returns `collections` array with per-document conflicts grouped by collection, each with `conflictId`, a `type`, a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides of `{ _id, doc, diffType }` (`base` has no `diffType`; a deleted side is `null`)
+- `doltConflicts` returns a single flat `conflicts` array, each entry tagged with a `type` (`"document"` or `"view"`) and the owning namespace `name`, plus `conflictId` (a content hash), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides of `{ _id, doc, diffType }` (`base` has no `diffType`; a deleted side is `null`)
 - After `doltResolveConflict`, `ok` equals `1`
 - After `doltRebase continue:1`, `ok` equals `1`, `commitsReplayed` equals `1`, `newTip` is present
