@@ -496,8 +496,8 @@ timestamp first.
 | `from` | string or array of strings | no | HEAD | Seed commit(s) for the traversal frontier. A single hash starts there (and still walks both parents of merges); an array seeds the walk with every listed commit. Pass back a prior response's `next` to page. |
 | `all` | bool | no | `false` | Seed the walk with the HEAD of every branch, so it spans all branches (`git log --all`; tags excluded). Mutually exclusive with `from`. |
 | `filters` | array | no | unset | Entries are a collection-name string (whole collection) or a `{collection: spec}` document; returns only commits that touched matching documents (see Filtering). `spec` is a single `_id`, an array of `_id`s, or a `{$match: <query>}` predicate. |
-| `stat` | bool | no | `false` | When true, include per-collection change counts (`stat` array) for each commit (analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
-| `patch` | bool | no | `false` | When true, include full document-level diffs (`diff` array) for each commit (analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
+| `stat` | bool | no | `false` | When true, include each commit's `changes` array at summary verbosity (per-collection change counts + index names; analogous to `git log --stat`). Scoped to the matched docs when `filters` is set. |
+| `patch` | bool | no | `false` | When true, include each commit's `changes` array at full verbosity (full document and index diffs; analogous to `git log --patch`). Scoped to the matched docs when `filters` is set. |
 
 ### Response fields
 
