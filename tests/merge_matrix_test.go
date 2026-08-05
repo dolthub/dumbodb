@@ -191,7 +191,7 @@ func TestMergeMatrix_MixedChanges_SingleCollection(t *testing.T) {
 	// Merge: _id:1 conflicts, everything else auto-merges.
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"], "merge must conflict on _id:1")
 
@@ -243,7 +243,7 @@ func TestMergeMatrix_DeleteModifyConflict(t *testing.T) {
 	// Merge: conflict (delete vs modify)
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
 
@@ -290,7 +290,7 @@ func TestMergeMatrix_ModifyDeleteConflict(t *testing.T) {
 	// Merge: conflict (modify vs delete)
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
 
@@ -337,7 +337,7 @@ func TestMergeMatrix_IndependentFieldAdds_NoConflict(t *testing.T) {
 	var mergeRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	}).Decode(&mergeRaw), "merge with independent fields must not conflict")
 	assert.EqualValues(t, 1, mergeRaw["ok"])
 
@@ -375,7 +375,7 @@ func TestMergeMatrix_ConflictingAdds(t *testing.T) {
 	// Merge: same _id, same field, different values -- conflict.
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"], "conflicting adds must produce conflict")
 
@@ -417,7 +417,7 @@ func TestMergeMatrix_ConvergentModify_NoConflict(t *testing.T) {
 	var mergeRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	}).Decode(&mergeRaw), "convergent edits must not conflict")
 	assert.EqualValues(t, 1, mergeRaw["ok"])
 
@@ -475,7 +475,7 @@ func TestMergeMatrix_MultiCollection_MixedConflicts(t *testing.T) {
 	// Merge: orders._id:1 conflicts, users._id:2 conflicts
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
 
@@ -534,7 +534,7 @@ func TestMergeMatrix_MultiCollection_OneClean(t *testing.T) {
 	// Merge: alpha conflicts, beta auto-merges.
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
 
@@ -582,7 +582,7 @@ func TestMergeMatrix_MultiCollection_IndependentNewCollections(t *testing.T) {
 	var mergeRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	}).Decode(&mergeRaw), "independent new collections must merge cleanly")
 	assert.EqualValues(t, 1, mergeRaw["ok"])
 

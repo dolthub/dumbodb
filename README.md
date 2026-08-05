@@ -247,7 +247,7 @@ feature.runCommand({ dumboCommit: 1, message: "add delta on feature branch", aut
 The `dumboMerge` command will merge the changes from the `feature` branch back into whatever branch you are on. `db` is still connected to `main`, so when we run the merge command, it will merge `feature` into `main`, which in this case is a fast-forward merge, since `main` has not diverged from `feature`. The output of the merge command will show you the new commit that was created on `main` as a result of the merge.
 
 ```js
-db.runCommand({ dumboMerge: 1, merge_in: "feature"})
+db.runCommand({ dumboMerge: 1, mergeIn: "feature"})
 {
   commitId: 'gr2iofosqge0se1dcu2b1a1u42l6udd3',
   message: 'fast-forward',

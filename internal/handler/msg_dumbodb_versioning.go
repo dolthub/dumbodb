@@ -784,9 +784,9 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 // Merges a source branch into the current branch encoded in $db (format: "dbname@branch").
 // Usage:
 //
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature", noFF: true})
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature", noFF: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature", ffOnly: true})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, continue: true})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, abort: true})
 //
@@ -919,7 +919,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		)
 	}
 
-	fromBranch, err := common.GetRequiredParam[string](document, "merge_in")
+	fromBranch, err := common.GetRequiredParam[string](document, "mergeIn")
 	if err != nil {
 		return nil, err
 	}
@@ -928,7 +928,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
 			"dumboMerge: from branch name must not be empty",
-			"merge_in",
+			"mergeIn",
 		)
 	}
 

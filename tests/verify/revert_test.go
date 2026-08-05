@@ -196,7 +196,7 @@ func TestRevertVerify(t *testing.T) {
 		var mergeResult bson.M
 		err = mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "conflict-feat"},
+			{Key: "mergeIn", Value: "conflict-feat"},
 			{Key: "message", Value: "merge conflict-feat"},
 			{Key: "author", Value: "alice <alice@acme.com>"},
 		}).Decode(&mergeResult)

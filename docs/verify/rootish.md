@@ -265,7 +265,7 @@ cdb.items.insertOne({ _id: 3, v: "main-adv" })
 const rC3 = cdb.runCommand({ doltCommit: 1, message: "C3-main", author: "alice <alice@acme.com>" })
 const hashC3 = rC3.commitId
 
-const mergeR = cdb.getSiblingDB("chaindb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+const mergeR = cdb.getSiblingDB("chaindb@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 const hashM = mergeR.commitId
 ```
 

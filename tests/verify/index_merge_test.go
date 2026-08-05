@@ -39,7 +39,7 @@ func idxvMerge(t *testing.T, env *dumboDBTestEnv, dbName, branch string) bson.M 
 	t.Helper()
 	return runCommandRaw(t, env.Client.Database(dbName+"@main"), bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: branch},
+		{Key: "mergeIn", Value: branch},
 	})
 }
 

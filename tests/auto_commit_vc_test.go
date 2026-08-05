@@ -117,7 +117,7 @@ func TestAutoCommit_CleanMergeOneCommit(t *testing.T) {
 	_, err = feat.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
 	require.NoError(t, err)
 
-	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "merge_in", Value: "feature"}})
+	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
 	require.EqualValues(t, 1, raw["ok"], "non-conflicting merge must succeed")
 	assert.True(t, docExists(t, main.Collection("items"), 3), "merge must bring feature's _id:3 into main")
 }
@@ -137,7 +137,7 @@ func TestAutoCommit_MergeStateSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	_, err = main.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "main"}}}})
 	require.NoError(t, err)
-	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "merge_in", Value: "feature"}})
+	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
 	require.EqualValues(t, 0, raw["ok"], "merge must conflict")
 
 	env.Restart(t)

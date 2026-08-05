@@ -333,7 +333,7 @@ feat.items.find({ name: "november" }).explain().queryPlanner.winningPlan
 // Expected: IXSCAN with indexName "by_name"
 
 // Merge feature into main: distinct docs, same index -> a clean 3-way merge.
-db.getSiblingDB("idxmntcp@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmntcp@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected: a merge commit, ok: 1 (no conflicts)
 
 // Every document (seed + main + feature) is now in the index.
@@ -392,7 +392,7 @@ feat.items.createIndex({ city: 1 }, { name: "by_city" })
 feat.runCommand({ doltCommit: 1, message: "feature: create by_city", author: "bob <bob@widgets.io>" })
 
 // Merge feature into main: distinct docs and distinct indexes -> clean merge.
-db.getSiblingDB("idxmnt2idx@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmnt2idx@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected: a merge commit, ok: 1 (no conflicts)
 
 db.runCommand({ count: "items", query: {} })   // Expected: { n: 5, ok: 1 }

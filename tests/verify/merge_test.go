@@ -82,7 +82,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 		}).Decode(&raw))
 
 		assert.Equal(t, "already up-to-date", raw["message"],
@@ -97,7 +97,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "main"},
+			{Key: "mergeIn", Value: "main"},
 		}).Decode(&raw))
 
 		assert.Equal(t, "fast-forward", raw["message"],
@@ -115,7 +115,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "main"},
+			{Key: "mergeIn", Value: "main"},
 		}).Decode(&raw))
 
 		assert.Equal(t, "already up-to-date", raw["message"],
@@ -143,7 +143,7 @@ func TestMergeVerify(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 			{Key: "message", Value: "custom merge msg"},
 			{Key: "author", Value: "bob <bob@x>"},
 		}).Decode(&raw))
@@ -208,7 +208,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 		var raw bson.M
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 			{Key: "message", Value: "custom msg"},
 			{Key: "author", Value: "bob <bob@x>"},
 		}).Decode(&raw))
@@ -257,7 +257,7 @@ func TestMergeCustomMessageAuthor(t *testing.T) {
 
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 		})
 		require.EqualValues(t, 0, raw["ok"], "conflicting merge must return ok:0")
 
@@ -342,7 +342,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 	t.Run("Scenario5_ConflictingMerge_ReturnsConflicts", func(t *testing.T) {
 		raw := runCommandRaw(t, mainDB, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 		})
 
 		okVal, _ := raw["ok"]
@@ -426,7 +426,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 	t.Run("Scenario8_MergeInProgress_Rejected", func(t *testing.T) {
 		err := mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 		}).Err()
 		require.Error(t, err, "new dumboDBMerge while merge in progress must fail")
 	})
@@ -533,7 +533,7 @@ func TestMergeConflictAbort(t *testing.T) {
 
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	okVal, _ := raw["ok"]
 	require.EqualValues(t, 0, okVal, "conflicting merge must return ok:0")
@@ -588,7 +588,7 @@ func TestMergeConflictResolveTheirs(t *testing.T) {
 
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
 
@@ -657,7 +657,7 @@ func TestMergeConflictResolveCustom(t *testing.T) {
 
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"])
 
@@ -740,7 +740,7 @@ func TestMergePartialConflict(t *testing.T) {
 
 	raw := runCommandRaw(t, mainDB, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feature"},
+		{Key: "mergeIn", Value: "feature"},
 	})
 	require.EqualValues(t, 0, raw["ok"], "merge must return ok:0 due to conflict on _id:1")
 

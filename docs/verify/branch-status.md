@@ -186,7 +186,7 @@ starts at `main`) gives:
 ```js
 // Cut rel from main, then merge b2 into it.
 db.getSiblingDB("bsdemo@main").runCommand({ doltBranch: 1, branch: "rel" })
-db.getSiblingDB("bsdemo@rel").runCommand({ doltMerge: 1, merge_in: "b2" })
+db.getSiblingDB("bsdemo@rel").runCommand({ doltMerge: 1, mergeIn: "b2" })
 
 db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main", targets: ["rel"] })
 ```

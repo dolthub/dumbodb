@@ -227,7 +227,7 @@ func TestRootishVerify(t *testing.T) {
 
 		mergeRaw := runCommandRaw(t, env.Client.Database(chainDB+"@main"), bson.D{
 			{Key: "doltMerge", Value: int32(1)},
-			{Key: "merge_in", Value: "feature"},
+			{Key: "mergeIn", Value: "feature"},
 		})
 		require.EqualValues(t, 1, mergeRaw["ok"], "merge must succeed")
 

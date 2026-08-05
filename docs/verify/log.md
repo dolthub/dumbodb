@@ -274,7 +274,7 @@ const rC = featdb.runCommand({ doltCommit: 1, message: "add-three-feat", author:
 const hashC = rC.commitId
 
 // Merge feat into main -> hashM.
-const rM = mdb.getSiblingDB("logmerge@main").runCommand({ doltMerge: 1, merge_in: "feat" })
+const rM = mdb.getSiblingDB("logmerge@main").runCommand({ doltMerge: 1, mergeIn: "feat" })
 const hashM = rM.commitId
 
 print("hashA =", hashA, "hashB =", hashB, "hashC =", hashC, "hashM =", hashM)

@@ -298,7 +298,7 @@ func TestLogVerify(t *testing.T) {
 	var mergeRaw bson.M
 	require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "feat"},
+		{Key: "mergeIn", Value: "feat"},
 	}).Decode(&mergeRaw))
 	hashM, ok := mergeRaw["commitId"].(string)
 	require.True(t, ok, "merge commitId must be a string")
