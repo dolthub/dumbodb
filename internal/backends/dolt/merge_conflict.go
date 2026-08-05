@@ -419,10 +419,11 @@ func collMetaToMetadata(m *collMeta) *backends.CollectionMetadata {
 	if m == nil {
 		return nil
 	}
+	level, action := m.effectiveValidation()
 	return &backends.CollectionMetadata{
 		Validator:        m.Validator,
-		ValidationLevel:  m.ValidationLevel,
-		ValidationAction: m.ValidationAction,
+		ValidationLevel:  level,
+		ValidationAction: action,
 	}
 }
 

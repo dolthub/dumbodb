@@ -287,6 +287,13 @@ func TestValidatorVerify(t *testing.T) {
 		assert.Contains(t, reason["message"], "both changed the validator/options",
 			"reason names the divergence: %v", reason["message"])
 
+		// The collection was created with only a validator; each side surfaces the
+		// effective defaults (validationLevel "strict", validationAction "error"),
+		// not empty strings.
+		ours := mc["ours"].(bson.M)
+		assert.Equal(t, "strict", ours["validationLevel"], "effective default level")
+		assert.Equal(t, "error", ours["validationAction"], "effective default action")
+
 		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 			{Key: "doltResolveConflict", Value: 1},
 			{Key: "collection", Value: "items"},

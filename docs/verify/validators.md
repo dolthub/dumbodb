@@ -176,9 +176,11 @@ printjson(db.runCommand({ doltConflicts: 1 }).conflicts)
 //   { conflictId: "<hash>", type: "metadata", name: "items",
 //     reason: { code: "bothModified",
 //               message: "branch 'main' (ours) and branch 'feature' (theirs) both changed the validator/options of \"items\"" },
-//     base:   { validator: { age: { $gte: 0  } }, validationLevel: "...", validationAction: "..." },
-//     ours:   { validator: { age: { $gte: 21 } }, ..., diffType: "modified" },
-//     theirs: { validator: { age: { $gte: 18 } }, ..., diffType: "modified" } }
+//     base:   { validator: { age: { $gte: 0  } }, validationLevel: "strict", validationAction: "error" },
+//     ours:   { validator: { age: { $gte: 21 } }, validationLevel: "strict", validationAction: "error", diffType: "modified" },
+//     theirs: { validator: { age: { $gte: 18 } }, validationLevel: "strict", validationAction: "error", diffType: "modified" } }
+// (a collection created with only a validator surfaces the effective defaults --
+//  validationLevel "strict", validationAction "error" -- not empty strings)
 ```
 
 Resolve to theirs (feature's `age >= 18`), then complete the merge:

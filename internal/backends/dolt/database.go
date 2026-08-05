@@ -200,8 +200,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		if m := catalog[name]; m != nil {
 			ci.UUID = m.UUID
 			ci.Validator = m.Validator
-			ci.ValidationLevel = m.ValidationLevel
-			ci.ValidationAction = m.ValidationAction
+			ci.ValidationLevel, ci.ValidationAction = m.effectiveValidation()
 			ci.IsTimeSeries = m.IsTimeSeries
 			ci.TimeField = m.TimeField
 			ci.MetaField = m.MetaField

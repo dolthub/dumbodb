@@ -106,6 +106,24 @@ func docToCollMeta(doc *types.Document) *collMeta {
 	return m
 }
 
+// effectiveValidation returns the collection's validationLevel and
+// validationAction with MongoDB's defaults materialized: when a validator is
+// set, an unset level defaults to "strict" and an unset action to "error".
+// Without a validator both are meaningless and returned as stored (empty).
+func (m *collMeta) effectiveValidation() (level, action string) {
+	level, action = m.ValidationLevel, m.ValidationAction
+	if m.Validator == nil {
+		return level, action
+	}
+	if level == "" {
+		level = "strict"
+	}
+	if action == "" {
+		action = "error"
+	}
+	return level, action
+}
+
 // catalogKey is the document-map key for a collection's metadata entry.
 func catalogKey(collName string) (val.Tuple, error) {
 	h, err := hashID(collName)
