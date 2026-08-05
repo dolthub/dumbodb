@@ -520,8 +520,7 @@ timestamp first.
 | `author` | string | Commit author |
 | `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
 | `committerTimestamp` | Date | Timestamp of when the commit was applied |
-| `stat` | array | **Only when `stat: true`.** Per-collection change counts: `[{name, status, added, modified, deleted}, ...]` |
-| `diff` | array | **Only when `patch: true`.** Full document diffs per collection (same shape as `dumboDiff` collections). |
+| `changes` | array | **Only when `stat: true` or `patch: true`.** What this commit changed versus its first parent, as the unified `changes` array (same shape as `dumboDiff`). `stat` renders it at summary verbosity (document counts, index names); `patch` renders it at full verbosity (full documents, index definitions). Both carry the `metadata` validator/options change. |
 
 ### Example
 
@@ -735,28 +734,36 @@ None (beyond the implicit `$db` connection).
 | `dirty` | bool | `true` when there are uncommitted changes; `false` otherwise |
 | `readonly` | bool | `true` when the connection is a read-only rootish (commit hash, ancestor, tag); `false` on branches |
 | `commitId` | string | HEAD commit hash. Only present when `dirty` is `false` and `readonly` is `false`. |
-| `collections` | array | Changed collections: `[{name, status, added, modified, deleted}, ...]`. Only present on writable connections. |
+| `changes` | array | Uncommitted changes as the unified `changes` array (same shape as `dumboDiff`), at **summary** verbosity. Only present on writable connections; empty when clean. |
 | `mergeState` | string | **Only present during an in-progress operation.** One of `"merge"`, `"cherry-pick"`, `"rebase"`, or `"revert"`. |
 | `conflicts` | array | **Only present during an in-progress operation.** Per-collection conflict counts: `[{collection, count}, ...]`. |
 | `ok` | number | `1` |
 
-### Collection entry
+### Change entry (summary verbosity)
+
+Each entry has the same `{ type, name, status, documents, indexes, metadata }`
+shape as a `dumboDiff` change, but at summary verbosity: `documents` carries
+counts (`{ added, modified, deleted }`) rather than full documents, and
+`indexes` carries index names rather than full definitions. `metadata` is the
+validator/options change `{ from, to }` (or `{}` when unchanged), same as diff.
+View changes appear as `{ type: "view", name, status }`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Collection name |
-| `status` | string | `"added"`, `"modified"`, or `"deleted"` (see table below) |
-| `added` | int | Docs in the working-set copy but not in the HEAD copy |
-| `modified` | int | Docs present in both with different content (counted per doc, not per field) |
-| `deleted` | int | Docs in the HEAD copy but not in the working-set copy |
+| `type` | string | `"collection"` or `"view"` |
+| `name` | string | Namespace name |
+| `status` | string | `"added"`, `"modified"`, or `"deleted"` |
+| `documents` | document | `{ added, modified, deleted }` counts (collections only) |
+| `indexes` | document | `{ added, removed, modified }` lists of index names (collections only) |
+| `metadata` | document | `{ from, to }` validator/options change, or `{}` (collections only) |
 
 ### Status values
 
 | Value | Meaning |
 |-------|---------|
-| `"added"` | Collection exists in working set but not in HEAD |
-| `"modified"` | Collection exists in both but content differs |
-| `"deleted"` | Collection exists in HEAD but not in working set |
+| `"added"` | Namespace exists in working set but not in HEAD |
+| `"modified"` | Namespace exists in both but content, indexes, or validator/options differ |
+| `"deleted"` | Namespace exists in HEAD but not in working set |
 
 ### Example
 
@@ -768,8 +775,12 @@ db.orders.insertOne({ _id: 99, amount: 500 })
 db.runCommand({ dumboStatus: 1 })
 // {
 //   branch: "main",
-//   collections: [
-//     { name: "orders", status: "modified", added: 1, modified: 0, deleted: 0 }
+//   dirty:  true,
+//   changes: [
+//     { type: "collection", name: "orders", status: "modified",
+//       documents: { added: 1, modified: 0, deleted: 0 },
+//       indexes:   { added: [], removed: [], modified: [] },
+//       metadata:  {} }
 //   ],
 //   ok: 1
 // }
@@ -777,7 +788,7 @@ db.runCommand({ dumboStatus: 1 })
 // After committing  -- clean state
 db.runCommand({ dumboCommit: 1, message: "add order 99", author: "alice <alice@acme.com>" })
 db.runCommand({ dumboStatus: 1 })
-// { branch: "main", collections: [], ok: 1 }
+// { branch: "main", dirty: false, changes: [], commitId: "...", ok: 1 }
 
 // During a merge conflict  -- mergeState and conflicts appear
 db.runCommand({ dumboMerge: 1, merge_in: "feature" })
@@ -786,8 +797,10 @@ db.runCommand({ dumboMerge: 1, merge_in: "feature" })
 db.runCommand({ dumboStatus: 1 })
 // {
 //   branch: "main",
-//   collections: [
-//     { name: "orders", status: "modified", added: 0, modified: 1, deleted: 0 }
+//   changes: [
+//     { type: "collection", name: "orders", status: "modified",
+//       documents: { added: 0, modified: 1, deleted: 0 },
+//       indexes: { added: [], removed: [], modified: [] }, metadata: {} }
 //   ],
 //   mergeState: "merge",
 //   conflicts: [ { collection: "orders", count: 1 } ],
@@ -797,9 +810,9 @@ db.runCommand({ dumboStatus: 1 })
 
 ### Notes
 
-- Only collections with uncommitted changes appear; unchanged collections are omitted.
-- `collections` is always an array (empty when clean).
-- Counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
+- Only namespaces with uncommitted changes appear; unchanged ones are omitted. A `collMod` that changed only the validator/options still appears (with empty `documents`/`indexes` and a populated `metadata`).
+- `changes` is always an array (empty when clean).
+- Document counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
 
 ---
 
@@ -820,19 +833,30 @@ Returns a document-level diff between two states for the branch encoded in the d
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `collections` | array | Changed collections (see below) |
+| `changes` | array | One entry per changed namespace (collection or view), each tagged with a `type` and its owning `name`, sorted by `name`. This is the same unified `changes` array `dumboStatus` and `dumboLog --stat/--patch` emit. |
 | `ok` | number | `1` |
 
-### Collection diff object
+### Change entry -- `type: "collection"`
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `type` | string | `"collection"` |
 | `name` | string | Collection name |
-| `added` | array | Full documents added in `to` |
-| `removed` | array | Full documents present in `from` but absent in `to` |
-| `modified` | array | Modified document diff entries (see below) |
+| `status` | string | `"added"`, `"deleted"`, or `"modified"` |
+| `documents` | document | `{ added, removed, modified }`. In `dumboDiff` (full verbosity) each is a list -- `added`/`removed` are full documents and `modified` is a list of `{ _id, diff }` entries. At summary verbosity (`dumboStatus`, `dumboLog --stat`) each is a count instead. |
+| `indexes` | document | `{ added, removed, modified }`. Full verbosity: `added`/`removed` are full `IndexInfo` definitions, `modified` is a list of `{ from, to }`. Summary verbosity: each is a list of index names. |
+| `metadata` | document | Validator/options change as `{ from, to }`, or `{}` when unchanged. Each side is `{ validator?, validationLevel, validationAction }` or null (null when that side had no validator, e.g. an added or newly-validated collection). |
 
-### Modified document entry
+### Change entry -- `type: "view"`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `"view"` |
+| `name` | string | View name |
+| `status` | string | `"added"`, `"deleted"`, or `"modified"` |
+| `from` / `to` | document or null | `{ viewOn, pipeline }`; null on the side where the view was absent |
+
+### Modified document entry (full verbosity)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -864,14 +888,20 @@ db.orders.updateOne({ _id: 1 }, { $set: { amount: 150 } })
 // Diff HEAD vs working set
 db.runCommand({ dumboDiff: 1 })
 // {
-//   collections: [
+//   changes: [
 //     {
+//       type:    "collection",
 //       name:    "orders",
-//       added:   [],
-//       removed: [],
-//       modified: [
-//         { _id: 1, diff: [ { type: "modified", path: "$.amount", from: 100, to: 150 } ] }
-//       ]
+//       status:  "modified",
+//       documents: {
+//         added:   [],
+//         removed: [],
+//         modified: [
+//           { _id: 1, diff: [ { type: "modified", path: "$.amount", from: 100, to: 150 } ] }
+//         ]
+//       },
+//       indexes:  { added: [], removed: [], modified: [] },
+//       metadata: {}
 //     }
 //   ],
 //   ok: 1
@@ -890,7 +920,7 @@ db.runCommand({ dumboDiff: 1, from: hashBase, to: "HEAD" })
 ### Notes
 
 - Omit both `from` and `to` to get working-set changes vs HEAD.
-- Only collections with at least one change appear in `collections`.
+- Only namespaces with at least one change appear in `changes`. A collection whose only change is its validator/options (a `collMod`) still appears, with empty `documents`/`indexes` and a populated `metadata`.
 - Unchanged fields do not appear in `modified[].diff`.
 - `HEAD` resolves to the connection's own branch tip (not necessarily `main`).
 - Reversing `from` and `to` inverts the diff: `added` and `removed` swap roles.

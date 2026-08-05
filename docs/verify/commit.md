@@ -225,7 +225,8 @@ const hashAfter = db.runCommand({ doltCommit: 1, message: "post-change", author:
 db.runCommand({ doltDiff: 1, from: hashBefore, to: hashAfter })
 ```
 
-Expected: `added` contains exactly `_id:99`; `collections` is non-empty.
+Expected: `changes` is non-empty; the `orders` entry's `documents.added` contains
+exactly `_id:99`.
 
 ---
 
