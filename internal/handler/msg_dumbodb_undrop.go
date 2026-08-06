@@ -54,6 +54,10 @@ func (h *Handler) MsgDumboDBUndrop(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "name", "toDatabase", "dropId", "purgeMatching"); err != nil {
+		return nil, err
+	}
+
 	if err = requireAdminDB(document, "dumboUndrop"); err != nil {
 		return nil, err
 	}
