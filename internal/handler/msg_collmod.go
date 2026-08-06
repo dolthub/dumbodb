@@ -48,34 +48,12 @@ func (h *Handler) MsgCollMod(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
-	// Detect unknown fields. Protocol fields ($db, lsid, $readPreference, etc.) are always allowed.
-	// Known fields are the command key plus the ones we handle or ignore.
-	knownFields := map[string]bool{
-		"$db":              true,
-		"lsid":             true,
-		"txnNumber":        true,
-		"$readPreference":  true,
-		"$clusterTime":     true,
-		"collMod":          true,
-		"validator":        true,
-		"validationLevel":  true,
-		"validationAction": true,
-		"viewOn":           true,
-		"pipeline":         true,
+	allowed := append([]string{"validator", "validationLevel", "validationAction", "viewOn", "pipeline"}, ignoredFields...)
+	if err = common.RejectUnknownFields(document, allowed...); err != nil {
+		return nil, err
 	}
-	for _, ig := range ignoredFields {
-		knownFields[ig] = true
-	}
+
 	command := document.Command()
-	for _, key := range document.Keys() {
-		if !knownFields[key] {
-			return nil, handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrIDLUnknownField,
-				fmt.Sprintf("BSON field '%s.%s' is an unknown field.", command, key),
-				command,
-			)
-		}
-	}
 
 	dbName, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {

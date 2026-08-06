@@ -37,6 +37,10 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	common.Ignored(document, h.L, "writeConcern", "comment")
 
 	command := document.Command()

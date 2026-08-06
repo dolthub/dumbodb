@@ -34,6 +34,10 @@ func (h *Handler) MsgCreateRole(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "privileges", "roles", "authenticationRestrictions"); err != nil {
+		return nil, err
+	}
+
 	dbName, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err

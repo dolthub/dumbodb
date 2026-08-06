@@ -49,7 +49,7 @@ func TestMerge_CollectionAddedOnBothBranches(t *testing.T) {
 	var res bson.M
 	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "featureA"},
+		{Key: "mergeIn", Value: "featureA"},
 		{Key: "message", Value: "merge featureA into main"},
 		{Key: "author", Value: "alice <a@x.io>"},
 	}).Decode(&res)
@@ -87,7 +87,7 @@ func TestMerge_CollectionAddedOnBothBranches_Conflict(t *testing.T) {
 	branch := env.Client.Database(dbName + "@main")
 	raw := runCommandRaw(t, branch, bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: "featureA"},
+		{Key: "mergeIn", Value: "featureA"},
 		{Key: "message", Value: "merge featureA into main"},
 		{Key: "author", Value: "alice <a@x.io>"},
 	})

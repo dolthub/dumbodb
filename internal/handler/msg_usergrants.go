@@ -131,6 +131,10 @@ func (h *Handler) MsgGrantRolesToUser(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "roles"); err != nil {
+		return nil, err
+	}
+
 	dbName, username, err := roleCommandTarget(document)
 	if err != nil {
 		return nil, err
@@ -169,6 +173,10 @@ func (h *Handler) MsgRevokeRolesFromUser(connCtx context.Context, msg *wire.OpMs
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document, "roles"); err != nil {
+		return nil, err
 	}
 
 	dbName, username, err := roleCommandTarget(document)

@@ -39,6 +39,14 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document,
+		"indexes",
+		"commitQuorum",
+		"ignoreUnknownIndexOptions",
+	); err != nil {
+		return nil, err
+	}
+
 	command := document.Command()
 
 	dbName, err := common.GetRequiredParam[string](document, "$db")

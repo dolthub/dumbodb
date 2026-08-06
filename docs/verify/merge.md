@@ -50,7 +50,7 @@ After setup:
 
 ---
 
-## Scenario 1: Already up-to-date  -- merge_in branch is behind into branch
+## Scenario 1: Already up-to-date  -- mergeIn branch is behind into branch
 
 Advance `main` past the feature branch point, then try to merge the now-behind
 `feature` branch into `main`. Since `feature` is an ancestor of `main`, there is
@@ -63,7 +63,7 @@ const r2 = db.runCommand({ doltCommit: 1, message: "add-two", author: "bob <bob@
 const hashC2 = r2.commitId
 
 // Merge feature (at C1) into main (at C2).
-const rMerge1 = db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+const rMerge1 = db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 printjson(rMerge1)
 // Expected: { commitId: "<hashC2>", message: "already up-to-date", ok: 1 }
 ```
@@ -83,7 +83,7 @@ merge commit  -- a fast-forward.
 
 ```js
 // Merge main (at C2) into feature (at C1)  -- feature fast-forwards.
-const rMerge2 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, merge_in: "main" })
+const rMerge2 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, mergeIn: "main" })
 printjson(rMerge2)
 // Expected: { commitId: "<hashC2>", message: "fast-forward", ok: 1 }
 ```
@@ -108,7 +108,7 @@ Merging either direction produces "already up-to-date".
 
 ```js
 // feature and main are now both at C2.
-const rMerge3 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, merge_in: "main" })
+const rMerge3 = db.getSiblingDB("mergedb@feature").runCommand({ doltMerge: 1, mergeIn: "main" })
 printjson(rMerge3)
 // Expected: { commitId: "<hashC2>", message: "already up-to-date", ok: 1 }
 ```
@@ -141,7 +141,7 @@ const hashC4 = r4.commitId
 // Merge feature (at C4) into main (at C3)  -- true three-way merge with custom message/author.
 const rMerge4 = db.getSiblingDB("mergedb@main").runCommand({
     doltMerge: 1,
-    merge_in: "feature",
+    mergeIn: "feature",
     message: "custom merge msg",
     author: "bob <bob@x>"
 })
@@ -196,7 +196,7 @@ db.getSiblingDB("mergedb@feature").runCommand({ doltCommit: 1, message: "feature
 
 // The server returns {ok: 0, conflicts: [...], ...}. Mongosh throws this as a MongoServerError.
 try {
-  db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+  db.getSiblingDB("mergedb@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 } catch (e) {
   print(e)
   // MongoServerError: doltMerge: unresolved conflicts in 1 collection(s)
@@ -425,7 +425,7 @@ feat13.getSiblingDB("mergedb13@feature").runCommand({
 
 // Merge feature into main -- _id:1 conflicts, _id:2 merges cleanly.
 try {
-  db13.getSiblingDB("mergedb13@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+  db13.getSiblingDB("mergedb13@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 } catch (e) { print(e) }
 
 // Only _id:1 should appear in conflicts.
@@ -479,18 +479,18 @@ Key checks:
 
 | Situation | `message` in response |
 |---|---|
-| `merge_in` branch is at or behind `into` branch | `"already up-to-date"` |
-| `into` branch is strictly behind `merge_in` branch | `"fast-forward"` |
-| Both branches have diverged, no conflicts | `"Merge branch '<merge_in>' into '<into>'"` |
+| `mergeIn` branch is at or behind `into` branch | `"already up-to-date"` |
+| `into` branch is strictly behind `mergeIn` branch | `"fast-forward"` |
+| Both branches have diverged, no conflicts | `"Merge branch '<mergeIn>' into '<into>'"` |
 | Both branches have diverged, conflicts exist | `ok: 0` with `conflicts` array |
 
 - `doltMerge` always operates on named branches, not raw commit hashes.
 - The target branch (`into`) is encoded in the database name: `dbname@branch`.
-- The `merge_in` parameter names the source branch to merge from.
+- The `mergeIn` parameter names the source branch to merge from.
 - Returns `{ commitId: "<result_commitId>", message: "<description>", ok: 1 }` for clean merges.
 - For conflicting merges: `{ conflicts: [...], ok: 0, code: 96, errmsg: "..." }`.
 - A fast-forward does not create a new commit; the `commitId` in the response is the
-  `merge_in` branch's existing HEAD.
+  `mergeIn` branch's existing HEAD.
 - Use `{ doltMerge: 1, noFF: true }` to force a merge commit even when fast-forward is possible.
 - Use `{ doltMerge: 1, ffOnly: true }` to fail if fast-forward is not possible.
 - `noFF` and `ffOnly` are mutually exclusive.

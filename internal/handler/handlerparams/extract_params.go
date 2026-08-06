@@ -47,7 +47,7 @@ import (
 //     returned if `collection` tag is not set.
 //
 // It returns command errors with the following codes:
-//   - `ErrFailedToParse` when provided field is not present in passed structure;
+//   - `ErrIDLUnknownField` when provided field is not present in passed structure;
 //   - `ErrFailedToParse` when provided field must be 0 or 1, but it is not;
 //   - `ErrNotImplemented` when support for provided field is not implemented yet;
 //   - `ErrNotImplemented`when support for non-default field value is not implemented yet;
@@ -98,8 +98,8 @@ func ExtractParams(doc *types.Document, command string, value any, l *slog.Logge
 
 		if fieldIndex == nil {
 			return handlererrors.NewCommandErrorMsgWithArgument(
-				handlererrors.ErrFailedToParse,
-				fmt.Sprintf("%s: unknown field %q", command, key),
+				handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf("BSON field '%s.%s' is an unknown field.", command, key),
 				command,
 			)
 		}
@@ -151,8 +151,8 @@ func ExtractParams(doc *types.Document, command string, value any, l *slog.Logge
 
 // tagOptions contains options for the structure field tag.
 type tagOptions struct {
-	optional            bool
-	nonDefault          bool
+	optional               bool
+	nonDefault             bool
 	unimplemented          bool
 	ignored                bool
 	positiveNumber         bool

@@ -81,7 +81,7 @@ func TestLogPaginationVerify(t *testing.T) {
 
 	var mergeRaw bson.M
 	require.NoError(t, main.RunCommand(ctx, bson.D{
-		{Key: "doltMerge", Value: int32(1)}, {Key: "merge_in", Value: "feat"},
+		{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feat"},
 	}).Decode(&mergeRaw))
 	label[mergeRaw["commitId"].(string)] = "M"
 

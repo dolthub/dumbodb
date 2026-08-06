@@ -337,7 +337,7 @@ func (w *workload) runVCSWorker(ctx context.Context, uri, collName string, worke
 		// the branch-off and the merge; those count as errors.
 		if err := runCmd(ctx, mainDB, 60*time.Second, bson.D{
 			{"dumboMerge", 1},
-			{"merge_in", branch},
+			{"mergeIn", branch},
 			{"message", fmt.Sprintf("soak merge of %s", branch)},
 			{"author", "soak <soak@dumbodb>"},
 		}); err != nil {

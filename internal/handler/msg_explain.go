@@ -23,7 +23,6 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -31,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/version"
 )
 
 // countExplainExecution runs a best-effort counting pass for executionStats
@@ -159,6 +159,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "verbosity"); err != nil {
+		return nil, err
+	}
+
 	params, err := common.GetExplainParams(document, h.L)
 	if err != nil {
 		return nil, err
@@ -198,6 +202,25 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		}
 
 		return nil, lazyerrors.Error(err)
+	}
+
+	// If the explain target is a view, resolve it to its base collection and
+	// derive the pushdown from the view's resolved pipeline (the same leading
+	// $match viewSourceIterator pushes), so the plan reflects a base-collection
+	// index used through the view instead of scanning the view namespace.
+	if info, ierr := lookupCollectionInfo(connCtx, db, params.Collection); ierr == nil && info != nil && info.IsView {
+		baseName, _, rawStages, rerr := resolveViewChain(connCtx, db, info.Name, info.ViewOn, info.ViewPipeline)
+		if rerr != nil {
+			return nil, rerr
+		}
+
+		if coll, err = db.Collection(baseName); err != nil {
+			return nil, lazyerrors.Error(err)
+		}
+
+		params.Filter, _ = aggregations.GetPushdownQuery(rawStages)
+		params.Aggregate = false
+		params.StagesDocs = nil
 	}
 
 	// A hint naming an index that does not exist is an error, matching MongoDB.

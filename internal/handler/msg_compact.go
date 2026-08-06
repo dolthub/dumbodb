@@ -38,6 +38,14 @@ func (h *Handler) MsgCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document,
+		"force",
+		"dryRun",
+		"freeSpaceTargetMB",
+	); err != nil {
+		return nil, err
+	}
+
 	common.Ignored(document, h.L, "comment")
 
 	command := document.Command()

@@ -134,55 +134,24 @@ func TestCompact_NonExistentCollection(t *testing.T) {
 	assert.EqualValues(t, 26, cmdErr.Code, "expected NamespaceNotFound (26), got code %d: %s", cmdErr.Code, cmdErr.Message)
 }
 
-// TestAutoCompact_Enable_Disable_FreeSpaceTargetMB verifies that the autoCompact
-// command accepts enable/disable and freeSpaceTargetMB parameters when run
-// against the admin database.
-func TestAutoCompact_Enable_Disable_FreeSpaceTargetMB(t *testing.T) {
+// TestAutoCompact_NotSupported verifies autoCompact reports itself as
+// unsupported (NotImplemented) rather than returning a misleading success.
+// DumboDB has no background auto-compaction, so a silent no-op would make
+// callers believe compaction ran.
+func TestAutoCompact_NotSupported(t *testing.T) {
 	t.Parallel()
 
 	env := startDumboDB(t)
 	ctx := context.Background()
 	admin := env.Client.Database("admin")
 
-	subtests := []struct {
-		name    string
-		command bson.D
-	}{
-		{
-			name: "Enable",
-			command: bson.D{
-				{Key: "autoCompact", Value: 1},
-				{Key: "enable", Value: true},
-			},
-		},
-		{
-			name: "Disable",
-			command: bson.D{
-				{Key: "autoCompact", Value: 1},
-				{Key: "enable", Value: false},
-			},
-		},
-		{
-			name: "FreeSpaceTargetMB",
-			command: bson.D{
-				{Key: "autoCompact", Value: 1},
-				{Key: "enable", Value: true},
-				{Key: "freeSpaceTargetMB", Value: int32(500)},
-			},
-		},
-	}
+	err := admin.RunCommand(ctx, bson.D{{Key: "autoCompact", Value: true}}).Err()
+	require.Error(t, err, "autoCompact must not silently succeed")
 
-	for _, tc := range subtests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			var res bson.D
-			err := admin.RunCommand(ctx, tc.command).Decode(&res)
-			require.NoError(t, err, "autoCompact %s against admin must succeed", tc.name)
-
-			assert.Equal(t, bson.D{{Key: "ok", Value: float64(1)}}, res)
-		})
-	}
+	cmdErr, ok := err.(mongo.CommandError)
+	require.True(t, ok, "expected mongo.CommandError, got %T: %v", err, err)
+	assert.EqualValues(t, 238, cmdErr.Code, "expected NotImplemented (238), got %d: %s", cmdErr.Code, cmdErr.Message)
+	assert.Contains(t, cmdErr.Message, "not supported by DumboDB")
 }
 
 // assertValidateResponse checks the structural correctness of a validate command response,

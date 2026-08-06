@@ -71,7 +71,7 @@ pg.coll.insertOne({ _id: 5 })
 const m5 = pg.runCommand({ doltCommit: 1, message: "m5", author: "a <a@x.io>" }).commitId
 
 // merge feat into main -> M
-const M = pg.getSiblingDB("logpage@main").runCommand({ doltMerge: 1, merge_in: "feat" }).commitId
+const M = pg.getSiblingDB("logpage@main").runCommand({ doltMerge: 1, mergeIn: "feat" }).commitId
 
 print("m1..m5 =", m1, m2, m3, m4, m5)
 print("f1,f2  =", f1, f2)

@@ -25,6 +25,7 @@ import (
 	"github.com/FerretDB/wire/wirebson"
 
 	"github.com/dolthub/dumbodb/internal/bson"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -41,6 +42,10 @@ func (h *Handler) MsgGetLog(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
 	}
 
 	command := document.Command()

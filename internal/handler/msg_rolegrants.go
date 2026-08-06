@@ -65,6 +65,10 @@ func (h *Handler) MsgGrantPrivilegesToRole(connCtx context.Context, msg *wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "privileges"); err != nil {
+		return nil, err
+	}
+
 	dbName, roleName, err := roleCommandTarget(document)
 	if err != nil {
 		return nil, err
@@ -101,6 +105,10 @@ func (h *Handler) MsgRevokePrivilegesFromRole(connCtx context.Context, msg *wire
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "privileges"); err != nil {
+		return nil, err
+	}
+
 	dbName, roleName, err := roleCommandTarget(document)
 	if err != nil {
 		return nil, err
@@ -130,6 +138,10 @@ func (h *Handler) MsgGrantRolesToRole(connCtx context.Context, msg *wire.OpMsg) 
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document, "roles"); err != nil {
+		return nil, err
 	}
 
 	dbName, roleName, err := roleCommandTarget(document)
@@ -176,6 +188,10 @@ func (h *Handler) MsgRevokeRolesFromRole(connCtx context.Context, msg *wire.OpMs
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document, "roles"); err != nil {
+		return nil, err
 	}
 
 	dbName, roleName, err := roleCommandTarget(document)

@@ -53,7 +53,7 @@ func TestAutoCommit_ConflictWindow_Merge(t *testing.T) {
 	_, err = main.Collection("items").UpdateOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "main"}}}})
 	require.NoError(t, err)
 
-	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "merge_in", Value: "feature"}})
+	raw := runCommandRaw(t, main, bson.D{{Key: "doltMerge", Value: int32(1)}, {Key: "mergeIn", Value: "feature"}})
 	require.EqualValues(t, 0, raw["ok"], "merge must conflict on _id:1")
 
 	paused := acCommitCount(t, main)

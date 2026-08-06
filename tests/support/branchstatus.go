@@ -59,7 +59,7 @@ func BsMerge(t *testing.T, env *Env, dbName, target, source string) {
 	var res bson.M
 	require.NoError(t, env.Client.Database(dbName+"@"+target).RunCommand(context.Background(), bson.D{
 		{Key: "doltMerge", Value: int32(1)},
-		{Key: "merge_in", Value: source},
+		{Key: "mergeIn", Value: source},
 	}).Decode(&res), "doltMerge %q into %q", source, target)
 }
 

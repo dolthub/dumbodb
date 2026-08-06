@@ -34,6 +34,10 @@ func (h *Handler) MsgDropAllRolesFromDatabase(connCtx context.Context, msg *wire
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	common.Ignored(document, h.L, "writeConcern", "comment")
 
 	dbName, err := common.GetRequiredParam[string](document, "$db")

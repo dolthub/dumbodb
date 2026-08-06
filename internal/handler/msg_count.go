@@ -84,7 +84,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, closer)
+		iter, verr := viewSourceIterator(connCtx, db, view.Name, view.ViewOn, view.ViewPipeline, closer, h.DisablePushdown, h.EnableNestedPushdown)
 		if verr != nil {
 			return nil, verr
 		}

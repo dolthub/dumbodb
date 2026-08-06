@@ -52,6 +52,13 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document,
+		"pipeline", "cursor", "allowDiskUse", "bypassDocumentValidation",
+		"collation", "hint", "let", "explain",
+	); err != nil {
+		return nil, err
+	}
+
 	common.Ignored(document, h.L, "lsid")
 
 	if err = common.Unimplemented(document, "explain", "collation", "let"); err != nil {
@@ -467,7 +474,7 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		if cInfo.IsView {
 			view := cList.Collections[0]
-			baseCollection, viewStages, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline)
+			baseCollection, viewStages, _, vErr := resolveViewChain(ctx, db, view.Name, view.ViewOn, view.ViewPipeline)
 			if vErr != nil {
 				closer.Close()
 				return nil, handleMaxTimeMSError(vErr, maxTimeMS, "aggregate")

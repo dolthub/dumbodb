@@ -68,7 +68,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		closer := iterator.NewMultiCloser()
 		defer closer.Close()
 
-		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, closer)
+		iter, verr := viewSourceIterator(connCtx, db, viewInfo.Name, viewInfo.ViewOn, viewInfo.ViewPipeline, closer, h.DisablePushdown, h.EnableNestedPushdown)
 		if verr != nil {
 			return nil, verr
 		}

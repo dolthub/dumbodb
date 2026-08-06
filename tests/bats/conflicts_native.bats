@@ -80,7 +80,7 @@ mongosh_eval() {
 
     # ---- Trigger conflict: merge feature into main ----------------------------
     run mongosh_eval "$main_db" '
-        try { JSON.stringify(db.runCommand({doltMerge: 1, merge_in: "feature", message: "merge", author: "alice <a@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
+        try { JSON.stringify(db.runCommand({doltMerge: 1, mergeIn: "feature", message: "merge", author: "alice <a@t>"})) } catch(e) { JSON.stringify(e.errorResponse) }
     '
     # ok:0 is expected; doltMerge exits non-zero on conflict  -- status allowed.
     echo "$output" | jq -e '.ok == 0 and (.conflicts | length) > 0'

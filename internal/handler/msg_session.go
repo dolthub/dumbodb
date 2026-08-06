@@ -25,6 +25,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -58,6 +59,15 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // MsgCommitTransaction implements the `commitTransaction` command.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	ci := conninfo.Get(connCtx)
 	if ci.TxnAborted() {
 		// dispatch's EnsureTxn opens a fresh dsess txn before this handler
@@ -87,6 +97,15 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 
 // MsgAbortTransaction implements the `abortTransaction` command.
 func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	ci := conninfo.Get(connCtx)
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		sab.OnTransactionAbort(ci.Owner())
@@ -105,6 +124,15 @@ func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) 
 // driver checks out several implicit sessions per connection and only
 // one of them is the connection's owner.
 func (h *Handler) MsgEndSessions(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	ci := conninfo.Get(connCtx)
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		sab.OnSessionEnd(ci.Owner())

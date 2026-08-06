@@ -37,6 +37,10 @@ func (h *Handler) MsgPing(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	dbName, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err

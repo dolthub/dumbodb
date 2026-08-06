@@ -46,6 +46,10 @@ func (h *Handler) MsgGetMore(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "batchSize", "collection"); err != nil {
+		return nil, err
+	}
+
 	db, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err

@@ -57,6 +57,10 @@ func (h *Handler) MsgDumboDBDiff(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "from", "to"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -616,6 +620,10 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "message", "author", "timestamp", "allowEmpty"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -697,6 +705,10 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document, "branch", "delete", "forceDelete"); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -784,9 +796,9 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 // Merges a source branch into the current branch encoded in $db (format: "dbname@branch").
 // Usage:
 //
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature"})
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature", noFF: true})
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, merge_in: "feature", ffOnly: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature", noFF: true})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature", ffOnly: true})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, continue: true})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, abort: true})
 //
@@ -805,6 +817,10 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document, "mergeIn", "noFF", "ffOnly", "message", "author", "continue", "abort"); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -919,7 +935,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		)
 	}
 
-	fromBranch, err := common.GetRequiredParam[string](document, "merge_in")
+	fromBranch, err := common.GetRequiredParam[string](document, "mergeIn")
 	if err != nil {
 		return nil, err
 	}
@@ -928,7 +944,7 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
 			"dumboMerge: from branch name must not be empty",
-			"merge_in",
+			"mergeIn",
 		)
 	}
 
@@ -1000,6 +1016,10 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1219,6 +1239,10 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "collection", "conflictId", "resolution", "value"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -1308,6 +1332,10 @@ func (h *Handler) MsgDumboDBLog(connCtx context.Context, msg *wire.OpMsg) (*wire
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document, "limit", "stat", "patch", "all", "from", "filters"); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1602,6 +1630,10 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "base", "targets"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -1738,6 +1770,10 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "to", "hard"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -1814,6 +1850,10 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -1911,6 +1951,10 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document, "commit", "message", "author", "committer", "continue", "abort"); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -2090,6 +2134,10 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "onto", "author", "committer", "continue", "abort"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -2256,6 +2304,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document, "commit", "message", "author", "continue", "abort"); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
@@ -2425,6 +2477,10 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = common.RejectUnknownFields(document, "name", "delete", "hash", "message", "author"); err != nil {
+		return nil, err
+	}
+
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err
@@ -2571,6 +2627,10 @@ func (h *Handler) MsgDumboDBGC(connCtx context.Context, msg *wire.OpMsg) (*wire.
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if err = common.RejectUnknownFields(document, "mode"); err != nil {
+		return nil, err
 	}
 
 	encodedDB, err := common.GetRequiredParam[string](document, "$db")

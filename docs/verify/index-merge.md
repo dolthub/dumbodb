@@ -72,7 +72,7 @@ feat.items.insertMany([
 feat.runCommand({ doltCommit: 1, message: "feature: n-side", author: "bob <bob@widgets.io>" })
 
 // Merge feature into main.
-db.getSiblingDB("idxmrg1@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg1@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected: { commitId: "...", message: "...", ok: 1 }
 
 // Both sides' docs are found through the index on the merged branch.
@@ -118,7 +118,7 @@ var feat = db.getSiblingDB("idxmrg2@feature")
 feat.items.insertOne({ _id: 20, city: "november" })
 feat.runCommand({ doltCommit: 1, message: "feature: november", author: "bob <bob@widgets.io>" })
 
-db.getSiblingDB("idxmrg2@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg2@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 
 db.runCommand({ count: "items", query: { city: "november" } })
 // Expected: { n: 1, ok: 1 }
@@ -157,7 +157,7 @@ feat.items.deleteOne({ _id: 2 })
 feat.runCommand({ doltCommit: 1, message: "feature: delete doc 2", author: "bob <bob@widgets.io>" })
 
 // Real 3-way merge: applies feature's delete onto main's indexed state.
-db.getSiblingDB("idxmrg2b@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg2b@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 
 db.runCommand({ count: "items", query: { city: "paris" } })
 // Expected: { n: 0, ok: 1 }   (paris dropped from the index)
@@ -203,7 +203,7 @@ feat.items.updateOne({ _id: 2 }, { $set: { city: "london" } })
 feat.runCommand({ doltCommit: 1, message: "feature: doc 2 -> london", author: "bob <bob@widgets.io>" })
 
 // Real 3-way merge: applies feature's update onto main's indexed state.
-db.getSiblingDB("idxmrg2c@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg2c@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 
 db.items.find({ city: "london" }).toArray()
 // Expected: [ { _id: 2, city: "london" } ]   (new value indexed)
@@ -242,7 +242,7 @@ var feat = db.getSiblingDB("idxmrg3@feature")
 feat.items.insertOne({ _id: 20, name: "november" })
 feat.runCommand({ doltCommit: 1, message: "feature: november", author: "bob <bob@widgets.io>" })
 
-db.getSiblingDB("idxmrg3@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg3@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 
 db.items.getIndexes().map(i => i.name)
 // Expected: [ "_id_" ]   (by_name stays dropped)
@@ -280,7 +280,7 @@ feat.items.insertOne({ _id: 20, sku: "S-1" })
 feat.runCommand({ doltCommit: 1, message: "feature: doc 20 sku S-1", author: "bob <bob@widgets.io>" })
 
 // The merge surfaces a conflict (mongosh throws MongoServerError).
-db.getSiblingDB("idxmrg4@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg4@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected throw:
 //   MongoServerError: doltMerge: unresolved conflicts in 1 collection(s)
 
@@ -359,7 +359,7 @@ feat.items.insertOne({ _id: 20, sku: "S-1", code: "K-20" })
 feat.items.insertOne({ _id: 21, sku: "S-21", code: "C-1" })
 feat.runCommand({ doltCommit: 1, message: "feature: docs 20,21", author: "bob <bob@widgets.io>" })
 
-db.getSiblingDB("idxmrg4b@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg4b@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected throw: unresolved conflicts in 1 collection(s)
 
 const r = db.getSiblingDB("idxmrg4b@main").runCommand({ doltConflicts: 1 })
@@ -418,7 +418,7 @@ feat.items.updateOne({ _id: 1 }, { $set: { name: "theirs-1" } })
 feat.items.updateOne({ _id: 2 }, { $set: { name: "theirs-2" } })
 feat.runCommand({ doltCommit: 1, message: "feature: theirs", author: "bob <bob@widgets.io>" })
 
-db.getSiblingDB("idxmrg5@main").runCommand({ doltMerge: 1, merge_in: "feature" })
+db.getSiblingDB("idxmrg5@main").runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected throw: unresolved conflicts in 1 collection(s)
 
 const rc = db.getSiblingDB("idxmrg5@main").runCommand({ doltConflicts: 1 })

@@ -76,7 +76,7 @@ db.items.insertOne({ _id: 4, status: "active" })
 db.runCommand({ doltCommit: 1, message: "main: add item 4", author: "alice <alice@acme.com>" })
 
 // Merge feature into main.
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected: { commitId: "<hash>", message: "<merge message>", ok: 1 }
 // The message is NOT "fast-forward" -- a merge commit was created.
 
@@ -115,7 +115,7 @@ db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: 
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
 // Merge surfaces a conflict (mongosh throws / ok:0).
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // Expected: unresolved conflicts
 
 // The conflict is self-describing: it names the view and carries ours/theirs.
@@ -166,7 +166,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: cv -> inactive", author: "bo
 db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "pending" } } ] })
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
 db.runCommand({ doltResolveConflict: 1, collection: "cv", conflictId: cid, resolution: "ours" })
 db.runCommand({ doltMerge: 1, continue: 1 })
@@ -199,7 +199,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: cv -> inactive", author: "bo
 db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "pending" } } ] })
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
 db.runCommand({
   doltResolveConflict: 1, collection: "cv", conflictId: cid, resolution: "custom",
@@ -238,7 +238,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: drop cv", author: "bob <bob@
 db.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "pending" } } ] })
 db.runCommand({ doltCommit: 1, message: "main: cv -> pending", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 
 var rc = db.runCommand({ doltConflicts: 1 })
 printjson(rc.conflicts)

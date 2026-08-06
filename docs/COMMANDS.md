@@ -250,7 +250,7 @@ Merges a source branch into the branch encoded in the database name.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `merge_in` | string | **yes** |  -- | Name of the branch to merge in |
+| `mergeIn` | string | **yes** |  -- | Name of the branch to merge in |
 | `message` | string | no | auto | Merge commit message (ignored on fast-forward / already-up-to-date) |
 | `author` | string | no | `""` | `"Name <email>"` for the merge commit author |
 | `noFF` | bool | no | `false` | Force a merge commit even when fast-forward is possible |
@@ -289,7 +289,7 @@ For `continue`, `message` and `author` are optional overrides.
 var main = db.getSiblingDB("orders@main")
 
 // Standard merge
-main.runCommand({ dumboMerge: 1, merge_in: "feature" })
+main.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // { commitId: "abc123...", message: "Merge branch 'feature' into 'main'", ok: 1 }
 
 // Fast-forward merge result
@@ -315,7 +315,7 @@ main.runCommand({ dumboMerge: 1, abort: 1 })
 
 | Condition | Error |
 |-----------|-------|
-| `merge_in` missing or empty | `BadValue: dumboMerge: from branch name must not be empty` |
+| `mergeIn` missing or empty | `BadValue: dumboMerge: from branch name must not be empty` |
 | `noFF` and `ffOnly` both set | `BadValue: dumboMerge: noFF and ffOnly are mutually exclusive` |
 | Merge produces conflicts | `ok: 0` response with `conflicts` array |
 
@@ -791,7 +791,7 @@ db.runCommand({ dumboStatus: 1 })
 // { branch: "main", dirty: false, changes: [], commitId: "...", ok: 1 }
 
 // During a merge conflict  -- mergeState and conflicts appear
-db.runCommand({ dumboMerge: 1, merge_in: "feature" })
+db.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // (merge returns ok:0 with conflicts)
 
 db.runCommand({ dumboStatus: 1 })
@@ -1322,7 +1322,7 @@ The same three-step pattern applies to `dumboMerge`, `dumboCherryPick`, and `dum
 var main = db.getSiblingDB("orders@main")
 
 // Step 1: Operation returns ok: 0 with conflict summary
-main.runCommand({ dumboMerge: 1, merge_in: "feature" })
+main.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "orders", count: 1 } ], ok: 0, errmsg: "..." }
 
 // Step 2: Inspect and resolve each conflict. dumboConflicts returns a single

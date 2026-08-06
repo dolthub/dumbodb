@@ -121,7 +121,7 @@ db.items.insertOne({ _id: 100, age: 1 })
 db.runCommand({ doltCommit: 1, message: "main: add a conforming doc", author: "alice <alice@acme.com>" })
 
 // Merge feature into main.
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { ..., ok: 1 }
 
 // The validator is now active on main and enforces.
@@ -163,7 +163,7 @@ db.runCommand({ collMod: "items", validator: { age: { $gte: 21 } } })
 db.runCommand({ doltCommit: 1, message: "main: age >= 21", author: "alice <alice@acme.com>" })
 
 // The merge pauses with a conflict (ok:0).
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
 ```
 
@@ -280,7 +280,7 @@ db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
 
 // Merge feature into main: the validator arrives and _id:1 violates it.
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0, ... }
 ```
 
@@ -377,7 +377,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "
 db.items.insertOne({ _id: 1, age: -5 })                                             // main: insert a violator (no validator here yet)
 db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
 ```
 
@@ -408,7 +408,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "
 db.items.insertOne({ _id: 1, age: 5 })                                              // conforming
 db.runCommand({ doltCommit: 1, message: "main: insert age 5", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (no conflict)
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })                                // { ..., ok: 1 }  (no conflict)
 ```
 
 ### Cell 6c -- base conforming: modify it to violating (validation conflict, drop)
@@ -428,7 +428,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "
 db.items.updateOne({ _id: 1 }, { $set: { age: -5 } })                              // main: turn it violating
 db.runCommand({ doltCommit: 1, message: "main: age -> -5", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
 ```
 
@@ -461,7 +461,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "
 db.items.insertOne({ _id: 2, age: 9 })                                             // main advances but does NOT touch _id:1
 db.runCommand({ doltCommit: 1, message: "main: add conforming doc", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (no conflict)
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })                                // { ..., ok: 1 }  (no conflict)
 db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: -5 }  (grandfathered, survives)
 ```
 
@@ -485,7 +485,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0", author: "
 db.items.updateOne({ _id: 1 }, { $set: { age: -9 } })                              // main: re-author to another violating value
 db.runCommand({ doltCommit: 1, message: "main: age -> -9", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }
 
 var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
@@ -513,7 +513,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0 (warn)", au
 db.items.updateOne({ _id: 1 }, { $set: { age: -9 } })
 db.runCommand({ doltCommit: 1, message: "main: age -> -9", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (warn allows it)
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })                                // { ..., ok: 1 }  (warn allows it)
 db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: -9 }
 ```
 
@@ -533,7 +533,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: require age >= 0 (warn)", au
 db.items.insertOne({ _id: 1, age: -5 })                                             // violating insert
 db.runCommand({ doltCommit: 1, message: "main: insert age -5", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // { ..., ok: 1 }  (warn allows it)
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })                                // { ..., ok: 1 }  (warn allows it)
 db.items.findOne({ _id: 1 })                                                        // { _id: 1, age: -5 }
 ```
 
@@ -559,7 +559,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: validator + age 7", author: 
 db.items.updateOne({ _id: 1 }, { $set: { age: -5, tag: "m" } })                    // main: edit _id:1 to a violating value
 db.runCommand({ doltCommit: 1, message: "main: age -5", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "items", count: 1 } ], ok: 0 }   -- a type "document" conflict on _id:1
 
 var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
@@ -592,7 +592,7 @@ feat.runCommand({ doltCommit: 1, message: "feature: age -3 + validator", author:
 db.items.updateOne({ _id: 1 }, { $set: { age: -7, tag: "m" } })                    // main: another violating edit
 db.runCommand({ doltCommit: 1, message: "main: age -7", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltMerge: 1, merge_in: "feature" })                                // ok: 0, a "document" conflict on _id:1
+db.runCommand({ doltMerge: 1, mergeIn: "feature" })                                // ok: 0, a "document" conflict on _id:1
 
 var cid = db.runCommand({ doltConflicts: 1 }).conflicts[0].conflictId
 db.runCommand({ doltResolveConflict: 1, collection: "items", conflictId: cid, resolution: "ours" })     // REJECTED (age -7 violates)

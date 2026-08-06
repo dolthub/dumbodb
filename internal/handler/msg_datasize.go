@@ -40,6 +40,10 @@ func (h *Handler) MsgDataSize(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "keyPattern", "min", "max", "estimate"); err != nil {
+		return nil, err
+	}
+
 	common.Ignored(document, h.L, "estimate")
 
 	var namespaceParam any
