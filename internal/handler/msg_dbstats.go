@@ -40,6 +40,10 @@ func (h *Handler) MsgDBStats(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "scale", "freeStorage"); err != nil {
+		return nil, err
+	}
+
 	command := document.Command()
 
 	dbName, err := common.GetRequiredParam[string](document, "$db")
