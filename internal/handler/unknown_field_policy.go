@@ -34,9 +34,9 @@ const (
 	legacyAccepts
 
 	// strictPending: MongoDB rejects unknown fields on this command, but DumboDB
-	// does not yet (the command is unimplemented, an unsupported stub, or its
-	// MongoDB field set has not been enumerated). Tracked in beads (ei1.9/.10/.11).
-	// A command must be promoted to strictRejects once its handler wires
+	// does not -- because the command is unsupported and returns NotImplemented
+	// for any input, so top-level unknown-field rejection is moot. If such a
+	// command is ever implemented, promote it to strictRejects and wire
 	// common.RejectUnknownFields with a validated allow-list.
 	strictPending
 )
@@ -121,15 +121,11 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	"setFreeMonitoring": legacyAccepts, "startSession": legacyAccepts,
 	"convertToCapped": legacyAccepts, "validate": legacyAccepts,
 
-	// autoCompact: DumboDB's handler uses a non-MongoDB "enable" field (MongoDB
-	// encodes enable/disable in the command's boolean value), so a Mongo-matching
-	// strict allow-list would reject DumboDB's own API. Reconcile the API before
-	// making it strict.
-	"autoCompact": strictPending,
-
-	// --- unsupported stubs: MongoDB is strict, but DumboDB returns "not
-	// supported" for the whole command, so unknown-field rejection is moot until
-	// search indexes are implemented. Kept strictPending deliberately.
+	// --- unsupported commands: DumboDB returns NotImplemented for the whole
+	// command, so top-level unknown-field rejection is moot. autoCompact has no
+	// background-compaction equivalent on Dolt-backed storage; search indexes are
+	// unimplemented. Kept strictPending deliberately.
+	"autoCompact":         strictPending,
 	"createSearchIndexes": strictPending, "listSearchIndexes": strictPending,
 	"dropSearchIndex": strictPending, "updateSearchIndex": strictPending,
 }

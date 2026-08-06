@@ -20,36 +20,22 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
-	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
-	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
 // MsgAutoCompact implements the `autoCompact` command (MongoDB 8.0+).
 //
-// autoCompact must be run against the admin database. When run against any other
-// database, MongoDB returns Unauthorized (code 13). DumboDB mirrors this behavior.
-//
-// The passed context is canceled when the client connection is closed.
+// autoCompact enables background auto-compaction in MongoDB. DumboDB's Dolt-backed
+// storage has no such background process, so rather than return a misleading
+// success for a call that does nothing, it reports the command as unsupported.
 func (h *Handler) MsgAutoCompact(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
-	document, err := opMsgDocument(msg)
-	if err != nil {
+	if _, err := opMsgDocument(msg); err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 
-	dbName, _ := document.Get("$db")
-	if db, ok := dbName.(string); !ok || db != "admin" {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrUnauthorized,
-			"autoCompact may only be run against the admin database.",
-			"autoCompact",
-		)
-	}
-
-	// When run against admin, return success (background compaction is a no-op in DumboDB).
-	return documentOpMsg(
-		must.NotFail(types.NewDocument(
-			"ok", float64(1),
-		)),
+	return nil, handlererrors.NewCommandErrorMsgWithArgument(
+		handlererrors.ErrNotImplemented,
+		"autoCompact is not supported by DumboDB: background auto-compaction does not apply to its Dolt-backed storage",
+		"autoCompact",
 	)
 }
