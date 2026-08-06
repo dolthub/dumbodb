@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -32,12 +33,13 @@ import (
 // resolves through more than this many views errors with ViewDepthLimitExceeded.
 const maxViewDepth = 20
 
-// buildViewPipelineStages converts the stage documents of a view's defining
-// pipeline into executable stages. $lookup/$graphLookup need a collection
-// fetcher; the rest go through stages.NewStage.
-func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([]aggregations.Stage, error) {
+// buildViewPipelineStages compiles a view's pipeline into executable stages
+// ($lookup/$graphLookup get a collection fetcher; the rest go through
+// stages.NewStage) and also returns the raw stage documents, which the pushdown
+// analysis needs in their original form.
+func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([]aggregations.Stage, []any, error) {
 	if viewPipeline == nil || viewPipeline.Len() == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	stageDocs := must.NotFail(iterator.ConsumeValues(viewPipeline.Iterator()))
@@ -46,7 +48,7 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 	for _, v := range stageDocs {
 		vd, ok := v.(*types.Document)
 		if !ok {
-			return nil, lazyerrors.Errorf("view pipeline stage is not a document: %T", v)
+			return nil, nil, lazyerrors.Errorf("view pipeline stage is not a document: %T", v)
 		}
 
 		var vs aggregations.Stage
@@ -80,13 +82,13 @@ func buildViewPipelineStages(db backends.Database, viewPipeline *types.Array) ([
 		}
 
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		result = append(result, vs)
 	}
 
-	return result, nil
+	return result, stageDocs, nil
 }
 
 // lookupCollectionInfo returns the CollectionInfo for name, or nil if no such
@@ -103,13 +105,14 @@ func lookupCollectionInfo(ctx context.Context, db backends.Database, name string
 }
 
 // resolveViewChain flattens a view -- whose source may itself be a view -- into
-// a base collection name plus the ordered stage list to run over it. viewName
-// seeds cycle detection. Enforces cycle detection (GraphContainsCycle) and the
-// maximum nesting depth (ViewDepthLimitExceeded), matching MongoDB.
-func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array) (string, []aggregations.Stage, error) {
-	viewStages, err := buildViewPipelineStages(db, viewPipeline)
+// its base collection plus the resolved pipeline, returned as both compiled
+// stages and raw stage documents in resolved order (inner views prepended).
+// viewName seeds cycle detection; enforces GraphContainsCycle and the maximum
+// nesting depth (ViewDepthLimitExceeded), matching MongoDB.
+func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array) (string, []aggregations.Stage, []any, error) {
+	viewStages, rawStages, err := buildViewPipelineStages(db, viewPipeline)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	seen := map[string]struct{}{viewName: {}}
@@ -119,14 +122,14 @@ func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewO
 	for {
 		srcInfo, err := lookupCollectionInfo(ctx, db, source)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		if srcInfo == nil || !srcInfo.IsView {
-			return source, viewStages, nil
+			return source, viewStages, rawStages, nil
 		}
 
 		if _, cycle := seen[source]; cycle {
-			return "", nil, handlererrors.NewCommandErrorMsgWithArgument(
+			return "", nil, nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrGraphContainsCycle,
 				fmt.Sprintf("View cycle detected: %s", source),
 				"pipeline",
@@ -134,7 +137,7 @@ func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewO
 		}
 		depth++
 		if depth > maxViewDepth {
-			return "", nil, handlererrors.NewCommandErrorMsgWithArgument(
+			return "", nil, nil, handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrViewDepthLimitExceeded,
 				fmt.Sprintf("View depth limit exceeded; maximum depth is %d", maxViewDepth),
 				"pipeline",
@@ -142,11 +145,12 @@ func resolveViewChain(ctx context.Context, db backends.Database, viewName, viewO
 		}
 		seen[source] = struct{}{}
 
-		innerStages, err := buildViewPipelineStages(db, srcInfo.ViewPipeline)
+		innerStages, innerRaw, err := buildViewPipelineStages(db, srcInfo.ViewPipeline)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		viewStages = append(innerStages, viewStages...)
+		rawStages = append(innerRaw, rawStages...)
 		source = srcInfo.ViewOn
 	}
 }
@@ -196,8 +200,8 @@ func validateViewChainAcyclic(ctx context.Context, db backends.Database, viewNam
 // Callers layer their own filter, sort, projection, skip and limit on top of
 // the returned iterator, matching how MongoDB resolves a read against a view to
 // an aggregation over its source.
-func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	baseCollection, viewStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline)
+func viewSourceIterator(ctx context.Context, db backends.Database, viewName, viewOn string, viewPipeline *types.Array, closer *iterator.MultiCloser, disablePushdown, enableNestedPushdown bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	baseCollection, viewStages, rawStages, err := resolveViewChain(ctx, db, viewName, viewOn, viewPipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -207,5 +211,31 @@ func viewSourceIterator(ctx context.Context, db backends.Database, viewName, vie
 		return nil, lazyerrors.Error(err)
 	}
 
-	return processStagesDocuments(ctx, closer, &stagesDocumentsParams{srcColl, new(backends.QueryParams), viewStages})
+	// Push the resolved view pipeline's leading $match to the base collection so
+	// a base-collection index can be used (IXSCAN) instead of scanning every
+	// document and replaying the $match in memory. GetPushdownQuery only pushes a
+	// genuine leading $match/$sort against base fields; the flags mirror the
+	// direct-aggregate path exactly. The user's own find filter is layered on the
+	// returned iterator by the caller and is NOT pushed here (view stages may
+	// rename or compute fields, making that unsound).
+	qp := new(backends.QueryParams)
+	filter, _ := aggregations.GetPushdownQuery(rawStages)
+
+	if !disablePushdown {
+		qp.Filter = filter
+	}
+
+	if !enableNestedPushdown && filter != nil {
+		qp.Filter = filter.DeepCopy()
+
+		for _, k := range qp.Filter.Keys() {
+			if !strings.ContainsRune(k, '.') {
+				continue
+			}
+
+			qp.Filter.Remove(k)
+		}
+	}
+
+	return processStagesDocuments(ctx, closer, &stagesDocumentsParams{srcColl, qp, viewStages})
 }

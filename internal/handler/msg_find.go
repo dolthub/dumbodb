@@ -172,7 +172,7 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 
 	var srcIter types.DocumentsIterator
 	if isView {
-		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, closer)
+		srcIter, err = viewSourceIterator(ctx, db, viewName, viewOn, viewPipeline, closer, h.DisablePushdown, h.EnableNestedPushdown)
 	} else {
 		var queryRes *backends.QueryResult
 		if queryRes, err = coll.Query(ctx, qp); err != nil {
