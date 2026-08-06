@@ -36,6 +36,10 @@ func (h *Handler) MsgListDatabases(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "filter", "nameOnly", "authorizedDatabases"); err != nil {
+		return nil, err
+	}
+
 	var filter *types.Document
 	if filter, err = common.GetOptionalParam(document, "filter", filter); err != nil {
 		return nil, err

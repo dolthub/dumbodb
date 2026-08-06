@@ -38,6 +38,10 @@ func (h *Handler) MsgConnectionStatus(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "showPrivileges"); err != nil {
+		return nil, err
+	}
+
 	showPrivileges, err := common.GetOptionalParam(document, "showPrivileges", false)
 	if err != nil {
 		return nil, lazyerrors.Error(err)

@@ -20,8 +20,10 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -29,6 +31,15 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgLogout(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	ci := conninfo.Get(connCtx)
 
 	if user, _, _, _ := ci.Auth(); h.EnableNewAuth && user == "" && !ci.SCRAMAuthenticated() {

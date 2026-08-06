@@ -19,7 +19,9 @@ import (
 
 	"github.com/FerretDB/wire"
 
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/types"
+	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
@@ -27,6 +29,15 @@ import (
 //
 // The passed context is canceled when the client connection is closed.
 func (h *Handler) MsgGetCmdLineOpts(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	return documentOpMsg(
 		must.NotFail(types.NewDocument(
 			"argv", must.NotFail(types.NewArray("dumbodb")),
