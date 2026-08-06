@@ -23,7 +23,6 @@ import (
 
 	"github.com/FerretDB/wire"
 
-	"github.com/dolthub/dumbodb/internal/version"
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
@@ -31,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
+	"github.com/dolthub/dumbodb/internal/version"
 )
 
 // countExplainExecution runs a best-effort counting pass for executionStats
@@ -157,6 +157,10 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	document, err := opMsgDocument(msg)
 	if err != nil {
 		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document, "verbosity"); err != nil {
+		return nil, err
 	}
 
 	params, err := common.GetExplainParams(document, h.L)
