@@ -40,6 +40,10 @@ func (h *Handler) MsgRenameCollection(connCtx context.Context, msg *wire.OpMsg) 
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "to", "dropTarget"); err != nil {
+		return nil, err
+	}
+
 	var dropTarget bool
 	if dt, dtErr := document.Get("dropTarget"); dtErr == nil && dt != nil {
 		if dropTarget, err = handlerparams.GetBoolOptionalParam("dropTarget", dt); err != nil {

@@ -40,6 +40,10 @@ func (h *Handler) MsgDropIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "index"); err != nil {
+		return nil, err
+	}
+
 	command := document.Command()
 
 	dbName, err := common.GetRequiredParam[string](document, "$db")
