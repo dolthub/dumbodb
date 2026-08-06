@@ -46,6 +46,10 @@ func (h *Handler) MsgSASLStart(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document, "mechanism", "payload", "autoAuthorize", "options"); err != nil {
+		return nil, err
+	}
+
 	dbName, err := common.GetRequiredParam[string](document, "$db")
 	if err != nil {
 		return nil, err

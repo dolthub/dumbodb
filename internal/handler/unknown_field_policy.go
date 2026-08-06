@@ -104,6 +104,9 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	// --- aggregation / write ---
 	"aggregate": strictRejects, "explain": strictRejects, "bulkWrite": strictRejects,
 
+	// --- auth handshake ---
+	"saslStart": strictRejects, "saslContinue": strictRejects,
+
 	// --- DDL / introspection with larger MongoDB field sets (validated allow-lists) ---
 	"create": strictRejects, "createIndexes": strictRejects,
 	"listCollections": strictRejects, "listIndexes": strictRejects,
@@ -118,8 +121,15 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	"setFreeMonitoring": legacyAccepts, "startSession": legacyAccepts,
 	"convertToCapped": legacyAccepts, "validate": legacyAccepts,
 
-	// --- strict in MongoDB, not yet wired in DumboDB (see ei1.11) ---
-	"saslStart": strictPending, "saslContinue": strictPending, "autoCompact": strictPending,
+	// autoCompact: DumboDB's handler uses a non-MongoDB "enable" field (MongoDB
+	// encodes enable/disable in the command's boolean value), so a Mongo-matching
+	// strict allow-list would reject DumboDB's own API. Reconcile the API before
+	// making it strict.
+	"autoCompact": strictPending,
+
+	// --- unsupported stubs: MongoDB is strict, but DumboDB returns "not
+	// supported" for the whole command, so unknown-field rejection is moot until
+	// search indexes are implemented. Kept strictPending deliberately.
 	"createSearchIndexes": strictPending, "listSearchIndexes": strictPending,
 	"dropSearchIndex": strictPending, "updateSearchIndex": strictPending,
 }

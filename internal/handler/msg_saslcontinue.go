@@ -38,6 +38,10 @@ func (h *Handler) MsgSASLContinue(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(doc, "conversationId", "payload"); err != nil {
+		return nil, err
+	}
+
 	res, err := h.saslContinue(connCtx, doc)
 	if err != nil {
 		return nil, err
