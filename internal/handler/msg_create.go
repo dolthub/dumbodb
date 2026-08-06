@@ -37,6 +37,32 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document,
+		"capped",
+		"size",
+		"max",
+		"storageEngine",
+		"validator",
+		"validationLevel",
+		"validationAction",
+		"indexOptionDefaults",
+		"viewOn",
+		"pipeline",
+		"collation",
+		"expireAfterSeconds",
+		"timeseries",
+		"clusteredIndex",
+		"changeStreamPreAndPostImages",
+		"autoIndexId",
+		"temp",
+		"flags",
+		"idIndex",
+		"encryptedFields",
+		"recordIdsReplicated",
+	); err != nil {
+		return nil, err
+	}
+
 	ignoredFields := []string{
 		"autoIndexId",
 		"storageEngine",

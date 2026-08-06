@@ -104,6 +104,11 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	// --- aggregation / write ---
 	"aggregate": strictRejects, "explain": strictRejects, "bulkWrite": strictRejects,
 
+	// --- DDL / introspection with larger MongoDB field sets (validated allow-lists) ---
+	"create": strictRejects, "createIndexes": strictRejects,
+	"listCollections": strictRejects, "listIndexes": strictRejects,
+	"compact": strictRejects,
+
 	// --- legacy: MongoDB accepts unknown fields (verified) -> must NOT reject ---
 	"top": legacyAccepts, "hello": legacyAccepts, "isMaster": legacyAccepts,
 	"ismaster": legacyAccepts, "buildInfo": legacyAccepts, "buildinfo": legacyAccepts,
@@ -111,12 +116,9 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	"currentOp": legacyAccepts, "getParameter": legacyAccepts, "setParameter": legacyAccepts,
 	"debugError": legacyAccepts, "getFreeMonitoringStatus": legacyAccepts,
 	"setFreeMonitoring": legacyAccepts, "startSession": legacyAccepts,
-	"convertToCapped": legacyAccepts,
+	"convertToCapped": legacyAccepts, "validate": legacyAccepts,
 
-	// --- strict in MongoDB, not yet wired in DumboDB (see ei1.9/.10/.11) ---
-	"create": strictPending, "createIndexes": strictPending,
-	"listCollections": strictPending, "listIndexes": strictPending,
-	"validate": strictPending, "compact": strictPending,
+	// --- strict in MongoDB, not yet wired in DumboDB (see ei1.11) ---
 	"saslStart": strictPending, "saslContinue": strictPending, "autoCompact": strictPending,
 	"createSearchIndexes": strictPending, "listSearchIndexes": strictPending,
 	"dropSearchIndex": strictPending, "updateSearchIndex": strictPending,
