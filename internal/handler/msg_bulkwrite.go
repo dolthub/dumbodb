@@ -45,6 +45,12 @@ func (h *Handler) MsgBulkWrite(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		return nil, lazyerrors.Error(err)
 	}
 
+	if err = common.RejectUnknownFields(document,
+		"ops", "nsInfo", "ordered", "bypassDocumentValidation", "errorsOnly", "let", "cursor",
+	); err != nil {
+		return nil, err
+	}
+
 	// bulkWrite may only run against the admin database.
 	dbName, _ := document.Get("$db")
 	if s, _ := dbName.(string); s != "admin" {

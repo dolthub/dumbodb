@@ -59,6 +59,15 @@ func (h *Handler) MsgStartSession(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 // MsgCommitTransaction implements the `commitTransaction` command.
 func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	ci := conninfo.Get(connCtx)
 	if ci.TxnAborted() {
 		// dispatch's EnsureTxn opens a fresh dsess txn before this handler
@@ -88,6 +97,15 @@ func (h *Handler) MsgCommitTransaction(connCtx context.Context, msg *wire.OpMsg)
 
 // MsgAbortTransaction implements the `abortTransaction` command.
 func (h *Handler) MsgAbortTransaction(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
+	document, err := opMsgDocument(msg)
+	if err != nil {
+		return nil, lazyerrors.Error(err)
+	}
+
+	if err = common.RejectUnknownFields(document); err != nil {
+		return nil, err
+	}
+
 	ci := conninfo.Get(connCtx)
 	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
 		sab.OnTransactionAbort(ci.Owner())
