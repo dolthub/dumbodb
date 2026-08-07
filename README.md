@@ -56,9 +56,10 @@ Parity is verified against a specific MongoDB release: **MongoDB 8.0.28**. This 
 - Aggregation Framework: Implementation of multi-stage pipelines including $match, $group, $unwind, and $lookup.
 - Indexing: Support for secondary indexes on top-level and nested fields to ensure query performance.
 - Transactions: Multi-document transactions (`startTransaction` / `commitTransaction` / `abortTransaction`) are supported in the default operating mode.
+- Validation: Document validators (`$jsonSchema` and query-expression validators) are enforced on all write paths, honor `bypassDocumentValidation`, and are carried through branch merges.
+- Authentication & Access Control: SCRAM authentication with role-based access control (RBAC), including built-in and custom roles, privilege grant/revoke, and role inheritance. As in MongoDB, access control is enabled with `--auth`; the first user is bootstrapped via the localhost exception (create a user with the `root` role from a local connection), after which all connections must authenticate.
 
 ### Limitations & Scope
-- No Authentication. DumboDB does not implement any authentication. It is intended for use in trusted environments or local development. Do not expose DumboDB instances to untrusted networks. Coming soon in v0.4.
 - Single Node: Replication (Replica Sets) and Sharding are out of scope. Support not planned.
 - Ecosystem Features: Proprietary features specific to [MongoDB Atlas](https://www.mongodb.com/lp/cloud/atlas/try3) (e.g., Search Indexes, Serverless Triggers) are not supported. Support not planned.
 - Capped Collections: Fixed-size collections (`capped: true`) and their oldest-first eviction are not supported; creating one is rejected with an error. Not clear if there is any place for this feature in a version-controlled database. Support not planned.
@@ -279,7 +280,6 @@ DumboDB is built on two open-source projects:
 
 ## Roadmap
 
-- **v0.4**: Add Authentication and Authorization support, with role-based access control (RBAC) at parity with MongoDB's behavior.
 - **v0.5**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
 - **v0.6**: Add support for Replication (as a secondary backup to your existing MongoDB instance).
 - **v0.8**: Visualization and operations via a custom Workbench UI.

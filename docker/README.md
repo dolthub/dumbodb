@@ -11,9 +11,11 @@ Connect to DumboDB with any MongoDB driver or `mongosh`:
 mongosh mongodb://localhost:27017
 ```
 
-> **DumboDB v0.1 is alpha.** It has no authentication, no transactions, and is
-> intended for trusted environments and local development. Do not expose it to
-> untrusted networks.
+> **DumboDB is pre-1.0 software and not yet ready for production use.**
+>
+> As in MongoDB, access control is off unless you start the server with `--auth`.
+> Without it, every connection has full access, so run unauthenticated instances
+> only in trusted environments and do not expose them to untrusted networks.
 
 ## How to use this image
 
