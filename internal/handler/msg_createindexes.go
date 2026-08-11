@@ -410,10 +410,24 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 				command,
 			)
 
-		case "hidden", "storageEngine",
-			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
+		case "collation":
+			// Stored and echoed by listIndexes. Not yet used for index
+			// identity or runtime enforcement; that is deferred to the
+			// collation engine work, which resolves the spec first.
+			if coll, ok := must.NotFail(indexDoc.Get("collation")).(*types.Document); ok {
+				index.Collation = coll
+			}
+
+		case "hidden":
+			// Tracked and echoed by listIndexes; planner-level hiding is not
+			// yet applied.
+			if hidden, ok := must.NotFail(indexDoc.Get("hidden")).(bool); ok {
+				index.Hidden = hidden
+			}
+
+		case "storageEngine",
+			"bits", "min", "max", "bucketSize", "wildcardProjection":
 			// Accepted but not enforced  -- stored index behaves as a regular index.
-			// collation enforcement, etc. are not yet implemented.
 
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(

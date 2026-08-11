@@ -487,6 +487,16 @@ type IndexInfo struct {
 	Sparse                  bool            // true if the index only covers documents with the indexed field(s)
 	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
 
+	// Collation is the index's collation spec, nil for the binary default.
+	// MongoDB distinguishes indexes on the same key by collation, so two
+	// indexes may share a key pattern when their collations differ.
+	Collation *types.Document
+
+	// Hidden marks the index invisible to the query planner while still
+	// maintained. Tracked and echoed by listIndexes; planner-level hiding
+	// is not yet applied.
+	Hidden bool
+
 	// Lossy: the index stored a value the KeyString encoding cannot
 	// represent faithfully (Decimal128); the planner never consults a
 	// lossy index. Sticky until rebuild.
