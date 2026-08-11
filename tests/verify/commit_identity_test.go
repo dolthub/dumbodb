@@ -275,6 +275,86 @@ func TestCommitIdentityAutoCommit(t *testing.T) {
 	})
 }
 
+func TestCommitIdentityMergeAndRebase(t *testing.T) {
+	env := startDumboDB(t, "--auth")
+	ctx := context.Background()
+	port := env.Port
+
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "admin"}, {Key: "pwd", Value: "admin-pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+	}).Err())
+	admin := authClient(t, port, "admin", "admin-pw", "admin")
+	rootRole := bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}
+	adminRun(t, admin, "admin", bson.D{
+		{Key: "createUser", Value: "aa"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rootRole},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Alice Dev"}, {Key: "email", Value: "alice@corp.io"}}},
+	})
+	adminRun(t, admin, "admin", bson.D{
+		{Key: "createUser", Value: "bb"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rootRole},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Bob Ops"}, {Key: "email", Value: "bob@corp.io"}}},
+	})
+	aa := authClient(t, port, "aa", "pw", "admin")
+	bb := authClient(t, port, "bb", "pw", "admin")
+
+	commit := func(t *testing.T, c *mongo.Client, db, coll string, id int32, msg string) identityResult {
+		t.Helper()
+		require.NoError(t, c.Database(db).RunCommand(ctx, bson.D{
+			{Key: "insert", Value: coll}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: id}}}},
+		}).Err())
+		var res identityResult
+		require.NoError(t, c.Database(db).RunCommand(ctx, bson.D{
+			{Key: "dumboCommit", Value: 1}, {Key: "message", Value: msg},
+		}).Decode(&res))
+		return res
+	}
+	branch := func(t *testing.T, c *mongo.Client, db, name string) {
+		t.Helper()
+		require.NoError(t, c.Database(db+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: 1}, {Key: "branch", Value: name},
+		}).Err())
+	}
+
+	t.Run("merge commit is authored and committed by the actor", func(t *testing.T) {
+		commit(t, aa, "mrg", "items", 1, "base")
+		branch(t, aa, "mrg", "feature")
+		commit(t, aa, "mrg", "items", 2, "main-2")         // diverge main
+		commit(t, aa, "mrg@feature", "items", 3, "feat-3") // diverge feature
+
+		var res identityResult
+		require.NoError(t, bb.Database("mrg@main").RunCommand(ctx, bson.D{
+			{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "feature"}, {Key: "noFF", Value: true},
+		}).Decode(&res))
+		require.Equal(t, "Bob Ops <bob@corp.io>", res.Author)
+		require.Equal(t, "Bob Ops <bob@corp.io>", res.Committer)
+	})
+
+	t.Run("rebase preserves replayed author, actor is committer", func(t *testing.T) {
+		commit(t, aa, "rbs", "items", 1, "base")
+		branch(t, aa, "rbs", "feature")
+		commit(t, aa, "rbs", "items", 2, "main-2")         // diverge main
+		commit(t, aa, "rbs@feature", "items", 3, "feat-3") // aa authors on feature
+
+		require.NoError(t, bb.Database("rbs@feature").RunCommand(ctx, bson.D{
+			{Key: "dumboRebase", Value: 1}, {Key: "onto", Value: "main"},
+		}).Err())
+
+		// The rebased HEAD keeps aa's authorship but records bb as committer.
+		var logRes struct {
+			Commits []struct {
+				Author    string `bson:"author"`
+				Committer string `bson:"committer"`
+			} `bson:"commits"`
+		}
+		require.NoError(t, bb.Database("rbs@feature").RunCommand(ctx, bson.D{
+			{Key: "dumboLog", Value: 1}, {Key: "limit", Value: 1},
+		}).Decode(&logRes))
+		require.NotEmpty(t, logRes.Commits)
+		require.Equal(t, "Alice Dev <alice@corp.io>", logRes.Commits[0].Author, "author preserved")
+		require.Equal(t, "Bob Ops <bob@corp.io>", logRes.Commits[0].Committer, "committer is the actor")
+	})
+}
+
 func TestCommitIdentityUsersInfo(t *testing.T) {
 	env := startDumboDB(t, "--auth")
 	ctx := context.Background()
