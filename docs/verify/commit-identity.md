@@ -109,12 +109,31 @@ shop.runCommand({ dumboCommit: 1, message: "change" })
 
 ## Scenario 3: revert stamps the acting user (a new commit)
 
-As `bob`, revert one of alice's commits:
+Revert creates a **new** commit, so its author and committer are the acting user,
+not the reverted commit's author.
+
+First, as `alice`, make a fresh commit that adds to the **existing** `items`
+collection (so it can be reverted cleanly), and capture its id:
 
 ```js
-shop.runCommand({ dumboRevert: 1, commit: "<hashOfAlicesCommit>" })
+const shop = db.getSiblingDB("shop")
+shop.items.insertOne({ _id: 3 })
+const r = shop.runCommand({ dumboCommit: 1, message: "add id 3" })
+```
+
+Then, as `bob`, revert that commit -- it is the current HEAD:
+
+```js
+const shop = db.getSiblingDB("shop")
+shop.runCommand({ dumboRevert: 1, commit: r.commitId })   // r.commitId from the step above
 // author == committer == "bob <bob@shop>"  (not alice's)
 ```
+
+> **Revert conflicts are inherent, not identity-related.** `dumboRevert` is a
+> 3-way merge. Reverting a *collection-creating* commit while a later commit
+> modified that collection conflicts (`deleted on one branch and modified on the
+> other`). Revert the latest commit (as above), or a commit whose changes no
+> later commit touched.
 
 ## Scenario 4: rebase / cherry-pick preserve the original author
 
@@ -163,18 +182,32 @@ by the actor.
 
 ## Scenario 5: tag tagger
 
+As `alice`, tag the current HEAD of `main` (`dumboTag` is not privilege-gated, so
+a shop-scoped user may tag `shop@main`):
+
 ```js
 db.getSiblingDB("shop@main").runCommand({ dumboTag: 1, name: "v1", message: "release" })
-// author (tagger) == the acting user's identity
+// response.author (the tagger) == "Alice Dev <alice@corp.io>"
 ```
 
-## Scenario 6: auto-commit (server started with `--auth --auto-commit`)
+## Scenario 6: auto-commit
 
-Each write auto-commits, stamped with the acting identity:
+Auto-commit stamps the acting identity too. This needs a **separate server
+instance** started with `--auth --auto-commit`. Bootstrap an admin (as in
+Prerequisites) and create a user with an identity on the `auto` database:
 
 ```js
-shop.items.insertOne({ _id: 3 })     // as alice, auto-commits
-shop.runCommand({ dumboLog: 1, limit: 1 })
+db.getSiblingDB("auto").runCommand({ createUser: "alice", pwd: "pw",
+  roles: [ { role: "readWrite", db: "auto" } ],
+  commitIdentity: { name: "Alice Dev", email: "alice@corp.io" } })
+```
+
+Then connect as `alice` (`authSource=auto`); each write auto-commits:
+
+```js
+const auto = db.getSiblingDB("auto")
+auto.items.insertOne({ _id: 1 })              // auto-commits immediately
+auto.runCommand({ dumboLog: 1, limit: 1 })
 // commits[0].author == commits[0].committer == "Alice Dev <alice@corp.io>"
 ```
 
@@ -193,10 +226,12 @@ and `dumboTag`, and for a `committer` field on any of them.
 
 ## Scenario 8: `--auth` off honors the author parameter
 
-On a server started **without** `--auth`, the legacy behavior is unchanged:
+On a **separate server started without `--auth`** (no login, no identity system),
+the legacy `author` parameter still works and is stamped verbatim:
 
 ```js
-shop.items.insertOne({ _id: 9 })
+const shop = db.getSiblingDB("shop")
+shop.items.insertOne({ _id: 1 })
 shop.runCommand({ dumboCommit: 1, message: "m", author: "Ext Author <ext@x.io>" })
 // author == committer == "Ext Author <ext@x.io>"
 ```
