@@ -4,8 +4,10 @@
 **Date:** 2026-08-07, revised 2026-08-11
 **Status:** Plan / Draft -- **measurement only, no dumbodb code changes**
 **Settled:** the engine -- ICU, not x/text (section 1a)
-**Open:** which ICU version to pin (section 1b). The harness itself (phases 1-5)
-is still unbuilt; only Phase 0 has been run.
+**Recommended, awaiting sign-off:** pin ICU 57.1 (section 1b). This is *not*
+deferrable: it becomes permanent, and unrepairable by migration, as soon as
+collation-ordered indexes persist sort keys.
+**Still open:** the harness itself (phases 1-5) is unbuilt; only Phase 0 has run.
 
 ## 1. Goal
 
@@ -72,7 +74,7 @@ the residual question -- how far is that ICU from Mongo's pinned 57.1? Section 1
 covers why the version is now a free choice rather than a host-constrained one,
 and what criterion decides it.
 
-## 1b. Open (2026-08-11): which ICU version to pin
+## 1b. The version pin (2026-08-11): recommend 57.1, and decide before keys land
 
 **The earlier A-vs-B framing is superseded.** A prior draft posed this as "A. ship
 the already-linked system ICU (72.1)" vs "B. pin 57.1 exactly," with B the heavy
@@ -123,12 +125,60 @@ it -- it is a product judgment about what DumboDB is for. The harness's job is t
 size the rest of the matrix, where the two goals do not conflict, so that this
 judgment applies to as small a region as possible.
 
-**This does not block the binding.** Per `icu-collation-binding.md` section 9,
-DumboDB persists no ICU sort keys today (`Comparator.Key()` is dead code; indexes
-store raw values plus the collation spec), so an ICU version swap corrupts
-nothing at rest. The choice stays reversible until collation-ordered indexes land
-and turn it into an on-disk contract. So the binding can be written against
-either version, and the pin decided on measured evidence rather than up front.
+**This cannot be deferred.** An earlier revision of this section claimed the
+choice stayed reversible because DumboDB persists no ICU sort keys today. That
+was wrong -- it mistook the current unoptimized state for a stable one. Removing
+the full-scan on collated reads (`workspace-alp.15`) *is* the goal, and the fix is
+collation-ordered indexes, which persist ICU sort keys by design. At that point
+the version becomes part of the storage format, and in a version-controlled store
+it spans all of history: chunk dedup and structural sharing assume key encoding is
+identical across branches and across time, and immutable history means no
+migration can repair index trees inside existing commits. See
+`icu-collation-binding.md` section 9. The pin must therefore be chosen before
+collation-ordered indexes ship, which makes it a decision for now, not later.
+
+**Recommendation: pin 57.1.** The reasoning, in order of weight:
+
+1. **Asymmetry under permanence.** 57.1 has divergence zero by construction; any
+   other version has a permanent, currently unmeasured divergence set D. When a
+   decision cannot be revised, a guaranteed zero beats an unmeasured risk.
+2. **The criterion above, applied honestly, points here.** Pinning 57.1 inherits
+   Mongo's Unicode 8.0 blind spot and any CLDR 29 tailoring bug that later CLDR
+   releases fixed. But Mongo 8.0 carries those same defects, so *no workload that
+   works on MongoDB is lost by reproducing them*. The staleness costs nothing in
+   compatibility terms; it costs only the ability to be better than Mongo, which
+   is a different goal than the one this criterion states.
+3. **A permanent divergence would corrode the parity suite.** Choosing a modern
+   ICU gives the harness a set of known-failing collation cells that no fix can
+   ever close. That suite is the project's primary quality signal, and permanent
+   expected-failures erode it.
+4. **It converts this measurement into a conformance test.** Under a 57.1 pin,
+   candidate and oracle run the *same* ICU, so the expected result is exact
+   agreement and any disagreement is a bug in our spec-to-attribute mapping
+   (`icu-collation-binding.md` section 5). Pass/fail and actionable, rather than
+   an open-ended "how far apart are we" number.
+5. **The cost of old code is mitigated by the packaging decision already taken.**
+   Vendored source (binding doc section 11a) can be patched, so security fixes can
+   be backported into the vendored tree; a system library or prebuilt archive
+   could not be. This makes "2016 C++" an audit-and-patch obligation rather than
+   an unpatchable exposure -- but the obligation is real and must be explicit: a
+   CVE review of the vendored subset (`ucol_*`, the collation data loader, and
+   their dependencies) before shipping, with a named owner for backports.
+
+**What would overturn this.** Stated so the decision is falsifiable rather than
+inherited:
+
+- If DumboDB's goal is to be a *better* document database rather than a
+  MongoDB-compatible one, correctness-first wins and a modern ICU is right. That
+  is a product-strategy call and should be made explicitly, not by default.
+- If MongoDB itself un-pins 57.1, the parity target moves; revisit before keys
+  land.
+- If the CVE review finds exposure in 57.1's collation subset that cannot
+  reasonably be backported.
+
+**Prerequisites before collation-ordered indexes ship,** whichever version wins:
+the ICU version stamped into index metadata and enforced at merge (binding doc
+section 9), and the conformance harness green.
 
 ## 2. Facts already established (do not re-derive)
 

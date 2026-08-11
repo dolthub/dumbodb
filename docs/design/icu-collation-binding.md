@@ -5,8 +5,10 @@
 **Status:** Design / Draft -- **design only, no code changes yet**
 **Depends on:** the engine decision in
 `docs/design/collation-divergence-measurement.md` (adopt ICU, not x/text)
-**Open:** the pinned ICU version (see section 1b of the divergence doc). This
-binding is version-agnostic by design, so it can be written before that lands.
+**Blocking decision:** which ICU version to pin (divergence doc section 1b
+recommends 57.1). The binding's *code* is version-agnostic, but the version must
+be settled before collation-ordered indexes persist sort keys -- after that it is
+part of the storage format and spans all history (section 9).
 **Settled here:** bundle ICU from vendored source, not prebuilt archives
 (section 11a).
 
@@ -175,9 +177,13 @@ per spec.
 
 ## 9. Sort keys, index persistence, and version pinning
 
-**Assessed (2026-08-07): DumboDB persists no ICU sort keys today, so version
-pinning is a behavioral-stability nice-to-have, not an at-rest durability
-requirement.** Evidence, traced through the recovered collated-index code:
+**Assessed 2026-08-07, conclusion corrected 2026-08-11.** DumboDB persists no ICU
+sort keys *today* -- but that is a consequence of collated reads being unoptimized,
+which is a known defect we intend to fix, not a property to design around. The
+earlier reading of this section ("pinning is cheap insurance, the version stays
+reversible") was wrong: it mistook the current unoptimized state for a stable one.
+
+Evidence for the current state, traced through the collated-index code:
 
 - `Comparator.Key()` (the ICU sort-key generator) is **dead code** -- called
   nowhere in the repo.
@@ -194,29 +200,54 @@ requirement.** Evidence, traced through the recovered collated-index code:
   gates the secondary-index lookup, the `_id` point lookup, and the byte
   prefilter, so collated reads full-scan and filter live through the collator.
 
-Consequence: an ICU version swap corrupts nothing at rest -- there are no stored
-keys to mismatch, and the prolly-tree sort invariant is binary and thus
-version-independent. What a version change *does* alter is forward behavior:
-query ordering shifts on tailored locales, and unique-enforcement decisions can
-change (post-upgrade an index may hold rows the new ICU treats as duplicates,
-legitimately inserted under the old rules). That is a consistency wrinkle, not
-corruption; it argues for pinning as cheap insurance, not as a blocker.
+That describes only today's state, and today's state is not the target. The
+current arrangement bought version-flexibility at a price nobody intends to keep
+paying: collated unique is an O(N) scan per insert and every collated query
+full-scans. Fixing that is the *goal* (`workspace-alp.15`), and the fix is
+collation-ordered indexes -- storing entries in ICU sort-key order for O(log N)
+collated range and unique lookups, as MongoDB does. That makes
+`Comparator.Key()` live by design. So the honest reading is not "pinning is
+optional"; it is **pinning is mandatory, and the deadline is whenever
+collation-ordered indexes land.**
 
-**Trigger condition that flips this to a hard requirement.** The current design
-bought version-flexibility at a performance cost: collated unique = O(N) scan
-per insert, collated query = full scan. If DumboDB later adds
-**collation-ordered indexes** (store entries in ICU sort-key order for O(log N)
-collated range/unique, as MongoDB does), then `Comparator.Key()` becomes live,
-the ICU version becomes a hard on-disk contract (72.1 keys do not byte-match
-57.1 keys; the tree invariant breaks on upgrade), and an ICU upgrade would
-require rebuilding every collated index. So: pin now as cheap insurance; treat
-persisting sort keys as the event that makes pinning mandatory and adds an
-index-rebuild-on-upgrade obligation. If we ever persist a key, it must record
-the ICU version that produced it.
+**Why this binds harder in DumboDB than in MongoDB.** For MongoDB an ICU change
+is a rebuild: drop the index, rebuild it under the new collator, move on. DumboDB
+cannot do that, because its index storage model assumes key encoding is
+*deterministic across branches and across time*:
 
-Corollary for sequencing: because the choice is reversible while no keys are
-stored, the ICU *version* need not be settled before this binding is written. See
-section 1b of the divergence doc for the version question and its criterion.
+- `secondary-index-structural-sharing.md` B1 ("same doc, same bytes") has two
+  branches inserting the same doc produce **byte-identical leaf chunks** so the
+  chunk store deduplicates them. Its stated reason is that "key encoding is
+  branch-independent." ICU sort keys are branch-independent only while every
+  writer shares one ICU version.
+- P2 ("small writes share storage with the previous version") and B3 ("merged
+  indexes share storage with both parents") likewise depend on chunk addresses
+  matching across time and across merge parents.
+
+So an ICU version change does not merely invalidate the live index. It makes
+chunks written before the change un-shareable with chunks written after
+(every collated index rewrites in full, permanently, since history is retained),
+and it makes two branches whose writes straddle the change **incomparable**: a
+merge would be combining two trees under different sort orders. Worse, history is
+immutable -- rebuilding the tip does not and cannot repair the index trees inside
+existing commits, so old commits keep old-ordered trees forever. There is no
+migration that fixes this after the fact. The ICU version is therefore part of
+the storage format, spanning all of history, not a per-index rebuildable detail.
+
+**Design obligations that follow.** Once keys are persisted:
+
+1. The ICU version must be recorded in index metadata alongside the existing
+   `CollationBSONHex`, so a mismatch is *detected* rather than silently
+   producing wrong answers.
+2. A version mismatch between merge parents must fail loudly, not merge.
+3. An ICU version change must be treated as a storage-format break -- a new
+   index identity, not an in-place upgrade.
+
+**Sequencing consequence: the version must be chosen before this ships, not
+after.** Because the choice is permanent once keys land, and because it cannot be
+corrected by any later migration, it cannot be deferred to an implementation
+detail. See section 1b of the divergence doc, which now carries a recommendation
+rather than an open question.
 
 ## 10. The version-echo tension
 
@@ -226,8 +257,14 @@ if the linked ICU is 72.1 -- the string is a MongoDB-reported constant, not
 something ICU emits. That is honest about the *protocol* (we match Mongo's
 echo) while the *behavior* tracks the linked ICU. The behavioral gap between the
 echoed label and the linked engine is precisely what the divergence measurement
-quantifies; this binding must not pretend the label implies 57.1 behavior. If we
-later pin 57.1, label and behavior reconverge.
+quantifies; this binding must not pretend the label implies 57.1 behavior.
+
+Under the recommended 57.1 pin this tension dissolves: label and behavior
+converge, and the echo stops being a compatibility fiction. The tension only
+needs managing if a modern ICU is chosen instead -- in which case the honest
+options are to keep echoing "57.1" as a protocol constant while documenting that
+behavior differs, or to echo the real version and accept a parity failure on the
+field. That choice belongs with the version decision, not here.
 
 ## 11. Build and platform
 
@@ -363,6 +400,12 @@ statically against a host carrying 72.1, with no symbol conflict.
 Each step builds and passes the affected module's tests before commit, per repo
 rules.
 
+Step 0, before any of the above: the ICU version is settled explicitly (divergence
+doc section 1b). Steps 1-6 do not depend on which version wins, but shipping
+collation-ordered indexes afterwards does, and by then it is unrepairable
+(section 9). Do not let the vendored module's initial checkout be the thing that
+decides it.
+
 ## 13. Testing
 
 - **Unit witnesses:** the Phase 0 minimal-pair witnesses (cafe/cafe-acute/CAFE for
@@ -381,13 +424,15 @@ rules.
 1. **Concurrency safety of shared const collators** -- believed safe on 57.1/72.1;
    must be confirmed, with the `sync.Pool` fallback ready.
 2. **Exact MongoDB locale acceptance list** vs. ICU's recognized set (section 7).
-3. **Sort-key persistence** and its coupling to the ICU version -- assessed in
-   section 9, not open: nothing is persisted today, so pinning is currently
-   reversible insurance. It becomes a hard on-disk contract the moment
-   collation-ordered indexes land, so re-read section 9 before adding one.
-4. **Which ICU version to pin** -- open; criterion and tradeoffs in section 1b of
-   the divergence doc. This binding is version-agnostic, so the risk is one of
-   sequencing (do not let an implementation detail silently pick the version).
+3. **Sort-key persistence** and its coupling to the ICU version -- the highest
+   consequence item here, and not deferrable (section 9). Collation-ordered
+   indexes are the goal, they persist ICU sort keys, and in a version-controlled
+   store that makes the ICU version part of the storage format across all
+   history, unrepairable by migration.
+4. **Which ICU version to pin** -- recommended 57.1 (divergence doc section 1b),
+   awaiting sign-off. The risk is one of sequencing: this must be an explicit
+   decision made before keys land, never something an implementation detail
+   settles by default.
 5. **Collation-only data trimming.** With the source packaging path (section 11a),
    generating a trimmed ICU data blob is the main one-time task and the main place
    to get it wrong: dropping a locale's tailoring silently degrades it to root
@@ -401,8 +446,11 @@ rules.
 
 ## 15. Non-goals
 
-- Deciding which ICU version to pin. That is the divergence measurement's job
-  (section 1b there); this binding works with any version.
+- Deciding which ICU version to pin -- owned by the divergence doc (section 1b),
+  which recommends 57.1. Not a non-goal in the sense of "someone else's problem
+  later": it is a prerequisite for collation-ordered indexes, and section 9
+  explains why it cannot be corrected afterwards. This binding's code compiles
+  against any version.
 - A pure-Go fallback. `go-icu-regex` has a pure-Go regex fallback; collation has
   no comparable pure-Go equal (that was the whole x/text finding), so a
   cgo-only collation path with no fallback is accepted here.
