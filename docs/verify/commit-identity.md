@@ -118,16 +118,48 @@ shop.runCommand({ dumboRevert: 1, commit: "<hashOfAlicesCommit>" })
 
 ## Scenario 4: rebase / cherry-pick preserve the original author
 
-Cherry-pick a commit **authored by alice** while connected as **bob**:
+> **Branch privileges.** These steps write to a **branch-qualified** database
+> (`repo@feature`). A `readWrite`-on-`repo` grant does **not** currently cover
+> `repo@feature` -- authorization matches the raw `db@branch` string, so
+> `"repo" != "repo@feature"` and a scoped user is denied. This scenario therefore
+> uses two `root` users, matching the automated test
+> (`TestCommitIdentityReplayStamping`). (`alice`/`bob` on `shop` above suffice for
+> the non-branch scenarios; `dumboTag` in Scenario 5 works for them because tag is
+> not privilege-gated.)
+
+Create two root users with distinct identities:
 
 ```js
-db.getSiblingDB("shop@main").runCommand({ dumboCherryPick: 1, commit: "<aliceCommitHash>" })
-// author    == "Alice Dev <alice@corp.io>"   (preserved from the picked commit)
-// committer == "bob <bob@shop>"               (the acting user)
+const admin = db.getSiblingDB("admin")
+admin.runCommand({ createUser: "aa", pwd: "pw", roles: [ { role: "root", db: "admin" } ],
+  commitIdentity: { name: "Alice Dev", email: "alice@corp.io" } })
+admin.runCommand({ createUser: "bb", pwd: "pw", roles: [ { role: "root", db: "admin" } ],
+  commitIdentity: { name: "Bob Ops", email: "bob@corp.io" } })
 ```
 
-`dumboRebase` behaves the same: replayed commits keep their author; the committer
-becomes the acting user.
+Connect as `aa` (`authSource=admin`), author a commit on a feature branch:
+
+```js
+const repo = db.getSiblingDB("repo")
+repo.items.insertOne({ _id: 1 }); repo.runCommand({ dumboCommit: 1, message: "base" })
+db.getSiblingDB("repo@main").runCommand({ dumboBranch: 1, branch: "feature" })
+db.getSiblingDB("repo@feature").items.insertOne({ _id: 2 })
+const c2 = db.getSiblingDB("repo@feature").runCommand({ dumboCommit: 1, message: "add-two" })
+// c2.author == "Alice Dev <alice@corp.io>"
+```
+
+Connect as `bb` (`authSource=admin`) and cherry-pick alice's commit:
+
+```js
+db.getSiblingDB("repo@main").runCommand({ dumboCherryPick: 1, commit: c2.commitId })
+// author    == "Alice Dev <alice@corp.io>"   (preserved from the picked commit)
+// committer == "Bob Ops <bob@corp.io>"        (the acting user)
+```
+
+`dumboRebase` and `dumboMerge` behave the same
+(`TestCommitIdentityMergeAndRebase`): the acting user is always the committer;
+rebase/cherry-pick preserve the original author, while a merge commit is authored
+by the actor.
 
 ## Scenario 5: tag tagger
 
