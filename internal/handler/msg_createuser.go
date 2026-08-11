@@ -43,7 +43,7 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	if err = common.RejectUnknownFields(document, "pwd", "customData", "roles", "digestPassword", "authenticationRestrictions", "mechanisms"); err != nil {
+	if err = common.RejectUnknownFields(document, "pwd", "customData", "commitIdentity", "roles", "digestPassword", "authenticationRestrictions", "mechanisms"); err != nil {
 		return nil, err
 	}
 
@@ -79,6 +79,11 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 	}
 
 	customData, err := parseCustomData(document)
+	if err != nil {
+		return nil, err
+	}
+
+	commitIdentity, err := parseCommitIdentity(document)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +196,7 @@ func (h *Handler) MsgCreateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			Roles:                      roles,
 			AuthenticationRestrictions: restrictions,
 			CustomData:                 customData,
+			CommitIdentity:             commitIdentity,
 		})
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeInsertDuplicateID) {
