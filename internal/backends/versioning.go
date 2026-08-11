@@ -32,6 +32,7 @@ type CommitParams struct {
 	Branch     string
 	Message    string
 	Author     string    // required: name of the commit author
+	Committer  string    // optional: 'Name <email>' committer identity; empty means the committer equals Author
 	Timestamp  time.Time // optional: commit timestamp; zero value means use current time
 	AllowEmpty bool      // if true, create a commit even when the working set has no changes vs HEAD
 }
@@ -59,15 +60,16 @@ type BranchResult struct {
 }
 
 type MergeParams struct {
-	DBName   string
-	Into     string // target branch (the current branch)
-	From     string // source branch to merge from
-	Abort    bool   // if true, abort the in-progress merge and restore the pre-merge state
-	Continue bool   // if true, resume after conflict resolution and create the merge commit
-	Message  string // optional: custom merge commit message (ignored on fast-forward and already-up-to-date)
-	Author   string // optional: 'Name <email>' for the merge commit author
-	NoFF     bool   // if true, force a merge commit even when fast-forward is possible
-	FFOnly   bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
+	DBName    string
+	Into      string // target branch (the current branch)
+	From      string // source branch to merge from
+	Abort     bool   // if true, abort the in-progress merge and restore the pre-merge state
+	Continue  bool   // if true, resume after conflict resolution and create the merge commit
+	Message   string // optional: custom merge commit message (ignored on fast-forward and already-up-to-date)
+	Author    string // optional: 'Name <email>' for the merge commit author
+	Committer string // optional: 'Name <email>' committer identity; empty means the committer equals Author
+	NoFF      bool   // if true, force a merge commit even when fast-forward is possible
+	FFOnly    bool   // if true, fail with ErrOperationFailed if a fast-forward is not possible
 }
 
 type MergeResult struct {
