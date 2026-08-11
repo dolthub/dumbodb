@@ -92,6 +92,47 @@ func TestCommitIdentityUsersInfo(t *testing.T) {
 		requireCode(t, err, codeBadValue)
 	})
 
+	t.Run("updateUser sets, replaces, and clears identity", func(t *testing.T) {
+		adminRun(t, admin, "appid", bson.D{
+			{Key: "createUser", Value: "mut"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rwRole},
+		})
+		require.Nil(t, readIdentity("appid", "mut"))
+
+		// set
+		adminRun(t, admin, "appid", bson.D{
+			{Key: "updateUser", Value: "mut"},
+			{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Carol"}, {Key: "email", Value: "carol@acme.com"}}},
+		})
+		id := readIdentity("appid", "mut")
+		require.NotNil(t, id)
+		require.Equal(t, "carol@acme.com", id.Email)
+
+		// replace (wholesale)
+		adminRun(t, admin, "appid", bson.D{
+			{Key: "updateUser", Value: "mut"},
+			{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Dave"}, {Key: "email", Value: "dave@acme.com"}}},
+		})
+		id = readIdentity("appid", "mut")
+		require.NotNil(t, id)
+		require.Equal(t, "Dave", id.Name)
+		require.Equal(t, "dave@acme.com", id.Email)
+
+		// clear (explicit null)
+		adminRun(t, admin, "appid", bson.D{
+			{Key: "updateUser", Value: "mut"},
+			{Key: "commitIdentity", Value: nil},
+		})
+		require.Nil(t, readIdentity("appid", "mut"))
+	})
+
+	t.Run("updateUser rejects malformed identity", func(t *testing.T) {
+		err := admin.Database("appid").RunCommand(ctx, bson.D{
+			{Key: "updateUser", Value: "full"},
+			{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "X<y"}, {Key: "email", Value: "x@y.z"}}},
+		}).Err()
+		requireCode(t, err, codeBadValue)
+	})
+
 	t.Run("commitIdentity survives showCustomData:false", func(t *testing.T) {
 		var res struct {
 			Users []struct {
