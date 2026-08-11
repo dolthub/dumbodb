@@ -93,6 +93,14 @@ func TestCommitIdentityStamping(t *testing.T) {
 		require.Equal(t, "bob <bob@shop>", res.Author)
 		require.Equal(t, "bob <bob@shop>", res.Committer)
 	})
+
+	t.Run("tag stamps the acting identity as tagger", func(t *testing.T) {
+		var res identityResult
+		require.NoError(t, alice.Database("shop@main").RunCommand(ctx, bson.D{
+			{Key: "dumboTag", Value: 1}, {Key: "name", Value: "v1"}, {Key: "message", Value: "release"},
+		}).Decode(&res))
+		require.Equal(t, "Alice Dev <alice@corp.io>", res.Author)
+	})
 }
 
 func TestCommitIdentityReplayStamping(t *testing.T) {

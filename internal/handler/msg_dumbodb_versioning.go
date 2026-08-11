@@ -2556,6 +2556,11 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, err
 	}
 
+	author, _, err = h.commitAuthorCommitter(connCtx, author)
+	if err != nil {
+		return nil, err
+	}
+
 	if name == "" && deleteTag {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
 			handlererrors.ErrBadValue,
