@@ -228,3 +228,22 @@ func (h *Handler) commitIdentityString(ctx context.Context) (string, bool, error
 
 	return name + " <" + email + ">", true, nil
 }
+
+// commitAuthorCommitter resolves the (author, committer) identity to stamp on a
+// version-control commit. Under --auth the server-resolved identity overrides both
+// -- a client cannot assert its own identity. Otherwise the wire author is used and
+// committer is left empty (the backend defaults committer to author), preserving
+// the pre-auth behavior.
+func (h *Handler) commitAuthorCommitter(ctx context.Context, wireAuthor string) (author, committer string, err error) {
+	if h.EnableNewAuth {
+		id, ok, idErr := h.commitIdentityString(ctx)
+		if idErr != nil {
+			return "", "", idErr
+		}
+		if ok {
+			return id, id, nil
+		}
+	}
+
+	return wireAuthor, "", nil
+}

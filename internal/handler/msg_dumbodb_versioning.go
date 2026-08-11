@@ -665,11 +665,17 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	author, committer, err := h.commitAuthorCommitter(connCtx, author)
+	if err != nil {
+		return nil, err
+	}
+
 	res, err := vb.DumboDBCommit(connCtx, &backends.CommitParams{
 		DBName:     dbName,
 		Branch:     branch,
 		Message:    message,
 		Author:     author,
+		Committer:  committer,
 		Timestamp:  ts,
 		AllowEmpty: allowEmpty,
 	})
@@ -877,12 +883,17 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		if err != nil {
 			return nil, err
 		}
+		author, committer, err := h.commitAuthorCommitter(connCtx, author)
+		if err != nil {
+			return nil, err
+		}
 		res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
-			DBName:   dbName,
-			Into:     intoBranch,
-			Continue: true,
-			Message:  message,
-			Author:   author,
+			DBName:    dbName,
+			Into:      intoBranch,
+			Continue:  true,
+			Message:   message,
+			Author:    author,
+			Committer: committer,
 		})
 		if mergeErr != nil {
 			var conflictErr *backends.MergeConflictError
@@ -958,14 +969,20 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
+	author, committer, err := h.commitAuthorCommitter(connCtx, author)
+	if err != nil {
+		return nil, err
+	}
+
 	res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
-		DBName:  dbName,
-		Into:    intoBranch,
-		From:    fromBranch,
-		Message: message,
-		Author:  author,
-		NoFF:    noFF,
-		FFOnly:  ffOnly,
+		DBName:    dbName,
+		Into:      intoBranch,
+		From:      fromBranch,
+		Message:   message,
+		Author:    author,
+		Committer: committer,
+		NoFF:      noFF,
+		FFOnly:    ffOnly,
 	})
 
 	if mergeErr != nil {
@@ -2364,6 +2381,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		if err != nil {
 			return nil, err
 		}
+		author, _, err = h.commitAuthorCommitter(connCtx, author)
+		if err != nil {
+			return nil, err
+		}
 		res, revertErr := vb.DumboDBRevert(connCtx, &backends.RevertParams{
 			DBName:   dbName,
 			Branch:   branch,
@@ -2406,6 +2427,11 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, _, err = h.commitAuthorCommitter(connCtx, author)
 	if err != nil {
 		return nil, err
 	}

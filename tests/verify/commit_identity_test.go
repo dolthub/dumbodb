@@ -20,12 +20,79 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
+
+// identityResult captures the author/committer echoed by VC command responses.
+type identityResult struct {
+	CommitID  string `bson:"commitId"`
+	Author    string `bson:"author"`
+	Committer string `bson:"committer"`
+}
 
 // commitIdentityDoc is the {name,email} shape stored per user and echoed by usersInfo.
 type commitIdentityDoc struct {
 	Name  string `bson:"name"`
 	Email string `bson:"email"`
+}
+
+func TestCommitIdentityStamping(t *testing.T) {
+	env := startDumboDB(t, "--auth")
+	ctx := context.Background()
+	port := env.Port
+
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "admin"}, {Key: "pwd", Value: "admin-pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+	}).Err())
+	admin := authClient(t, port, "admin", "admin-pw", "admin")
+
+	rw := bson.A{bson.D{{Key: "role", Value: "readWrite"}, {Key: "db", Value: "shop"}}}
+	adminRun(t, admin, "shop", bson.D{
+		{Key: "createUser", Value: "alice"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rw},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Alice Dev"}, {Key: "email", Value: "alice@corp.io"}}},
+	})
+	adminRun(t, admin, "shop", bson.D{
+		{Key: "createUser", Value: "bob"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rw},
+	})
+
+	alice := authClient(t, port, "alice", "pw", "shop")
+	bob := authClient(t, port, "bob", "pw", "shop")
+
+	insertAndCommit := func(t *testing.T, c *mongo.Client, id int) identityResult {
+		t.Helper()
+		require.NoError(t, c.Database("shop").RunCommand(ctx, bson.D{
+			{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: id}}}},
+		}).Err())
+		var res identityResult
+		require.NoError(t, c.Database("shop").RunCommand(ctx, bson.D{
+			{Key: "dumboCommit", Value: 1}, {Key: "message", Value: "change"},
+		}).Decode(&res))
+		return res
+	}
+
+	t.Run("commit stamps the stored identity", func(t *testing.T) {
+		res := insertAndCommit(t, alice, 1)
+		require.Equal(t, "Alice Dev <alice@corp.io>", res.Author)
+		require.Equal(t, "Alice Dev <alice@corp.io>", res.Committer)
+	})
+
+	t.Run("commit falls back to username@authDb", func(t *testing.T) {
+		res := insertAndCommit(t, bob, 2)
+		require.Equal(t, "bob <bob@shop>", res.Author)
+		require.Equal(t, "bob <bob@shop>", res.Committer)
+	})
+
+	t.Run("revert stamps the acting identity, not the reverted commit's", func(t *testing.T) {
+		// alice commits, bob reverts it: committer and author are bob (a new commit).
+		target := insertAndCommit(t, alice, 3)
+		var res identityResult
+		require.NoError(t, bob.Database("shop").RunCommand(ctx, bson.D{
+			{Key: "dumboRevert", Value: 1}, {Key: "commit", Value: target.CommitID},
+		}).Decode(&res))
+		require.Equal(t, "bob <bob@shop>", res.Author)
+		require.Equal(t, "bob <bob@shop>", res.Committer)
+	})
 }
 
 func TestCommitIdentityUsersInfo(t *testing.T) {
