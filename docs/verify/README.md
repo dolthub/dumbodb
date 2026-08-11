@@ -27,6 +27,7 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 | tag.md | tag_test.go | TestTagVerify |
 | undrop.md | undrop_test.go | TestUndropVerify |
 | auth-rbac.md | auth_rbac_test.go | TestAuthRBACVerify |
+| commit-identity.md | commit_identity_test.go | TestCommitIdentity* |
 | index-branch-isolation.md | index_branch_isolation_test.go | TestIndexBranchIsolationVerify |
 | index-maintenance.md | index_maintenance_test.go | TestIndexMaintenanceVerify |
 | index-merge.md | index_merge_test.go | TestIndexMergeVerify |
