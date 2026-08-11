@@ -15,9 +15,11 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -147,4 +149,82 @@ func parseCommitIdentity(document *types.Document) (*types.Document, error) {
 	}
 
 	return out, nil
+}
+
+// resolveCommitIdentity returns the commit identity (name, email) for the
+// authenticated connection, reading the user's stored commitIdentity and filling
+// any missing piece from the auth identity (name <- username, email <-
+// username@authDb). ok is false when the connection is unauthenticated, in which
+// case callers fall back to the legacy author/default behavior. The result is
+// cached on the connection and invalidated by the auth generation counter.
+func (h *Handler) resolveCommitIdentity(ctx context.Context) (name, email string, ok bool, err error) {
+	ci := conninfo.Get(ctx)
+
+	user, _, _, userDB := ci.Auth()
+	if user == "" {
+		return "", "", false, nil
+	}
+
+	gen := h.authGen.Load()
+	if n, e, cgen, cok := ci.CommitIdentityCache(); cok && cgen == gen {
+		return n, e, true, nil
+	}
+
+	storedName, storedEmail, err := h.loadUserCommitIdentity(ctx, userDB, user)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	name, email = commitIdentityWithFallback(storedName, storedEmail, user, userDB)
+
+	ci.SetCommitIdentityCache(gen, name, email)
+
+	return name, email, true, nil
+}
+
+// commitIdentityWithFallback fills any missing identity piece from the auth
+// identity: an empty name becomes user, an empty email becomes user@db.
+func commitIdentityWithFallback(name, email, user, db string) (string, string) {
+	if name == "" {
+		name = user
+	}
+	if email == "" {
+		email = user + "@" + db
+	}
+	return name, email
+}
+
+// loadUserCommitIdentity reads the stored commitIdentity {name,email} for a user.
+// Missing fields come back as empty strings; the caller applies the fallback.
+func (h *Handler) loadUserCommitIdentity(ctx context.Context, db, user string) (name, email string, err error) {
+	doc, err := h.loadUserDoc(ctx, db, user)
+	if err != nil || doc == nil {
+		return "", "", err
+	}
+
+	idVal, _ := doc.Get("commitIdentity")
+	id, ok := idVal.(*types.Document)
+	if !ok {
+		return "", "", nil
+	}
+
+	if nv, _ := id.Get("name"); nv != nil {
+		name, _ = nv.(string)
+	}
+	if ev, _ := id.Get("email"); ev != nil {
+		email, _ = ev.(string)
+	}
+
+	return name, email, nil
+}
+
+// commitIdentityString returns the resolved identity as a "Name <email>" string
+// for the authenticated connection, or ok=false when unauthenticated.
+func (h *Handler) commitIdentityString(ctx context.Context) (string, bool, error) {
+	name, email, ok, err := h.resolveCommitIdentity(ctx)
+	if err != nil || !ok {
+		return "", ok, err
+	}
+
+	return name + " <" + email + ">", true, nil
 }

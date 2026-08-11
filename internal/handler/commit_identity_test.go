@@ -68,6 +68,31 @@ func TestValidateCommitIdentity(t *testing.T) {
 	}
 }
 
+func TestCommitIdentityWithFallback(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                string
+		inName, inEmail     string
+		user, db            string
+		wantName, wantEmail string
+	}{
+		{"full identity kept", "Alice", "alice@acme.com", "alice", "appid", "Alice", "alice@acme.com"},
+		{"unset falls back fully", "", "", "bob", "store", "bob", "bob@store"},
+		{"name only fills email", "Bob B", "", "bob", "store", "Bob B", "bob@store"},
+		{"email only fills name", "", "b@x.io", "bob", "store", "bob", "b@x.io"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotName, gotEmail := commitIdentityWithFallback(tc.inName, tc.inEmail, tc.user, tc.db)
+			require.Equal(t, tc.wantName, gotName)
+			require.Equal(t, tc.wantEmail, gotEmail)
+		})
+	}
+}
+
 func TestParseCommitIdentity(t *testing.T) {
 	t.Parallel()
 

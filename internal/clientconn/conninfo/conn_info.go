@@ -71,6 +71,11 @@ type ConnInfo struct {
 	cachedPrivGen uint64             // protected by rw
 	cachedPrivsOK bool               // protected by rw
 
+	cachedCommitName  string // protected by rw
+	cachedCommitEmail string // protected by rw
+	cachedCommitGen   uint64 // protected by rw
+	cachedCommitOK    bool   // protected by rw
+
 	pendingAutoCommit map[string]AutoCommitTarget // protected by rw; keyed by db+"\x00"+branch, last writer wins
 	autoCommitMsg     string                      // protected by rw; overrides drained targets' messages when set
 }
@@ -174,6 +179,26 @@ func (connInfo *ConnInfo) SetPrivilegeCache(gen uint64, privs authz.PrivilegeSet
 	connInfo.cachedPrivGen = gen
 	connInfo.cachedPrivs = privs
 	connInfo.cachedPrivsOK = true
+}
+
+// CommitIdentityCache returns the cached resolved commit identity (name, email),
+// the auth generation it was resolved at, and whether a value is cached.
+func (connInfo *ConnInfo) CommitIdentityCache() (name, email string, gen uint64, ok bool) {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+
+	return connInfo.cachedCommitName, connInfo.cachedCommitEmail, connInfo.cachedCommitGen, connInfo.cachedCommitOK
+}
+
+// SetCommitIdentityCache caches the resolved commit identity at the given auth generation.
+func (connInfo *ConnInfo) SetCommitIdentityCache(gen uint64, name, email string) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+
+	connInfo.cachedCommitGen = gen
+	connInfo.cachedCommitName = name
+	connInfo.cachedCommitEmail = email
+	connInfo.cachedCommitOK = true
 }
 
 // SetBypassBackendAuth marks the connection as not requiring backend authentication.
