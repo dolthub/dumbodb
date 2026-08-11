@@ -265,3 +265,15 @@ func (h *Handler) commitCommitter(ctx context.Context, wireCommitter string) (st
 
 	return wireCommitter, nil
 }
+
+// vcIdentityFields returns the client-supplied identity field names a
+// version-control command may accept. Under --auth none are allowed -- a client
+// cannot assert its own commit identity -- so they fall through to
+// RejectUnknownFields and are rejected with 40415. With --auth off the given
+// fields are allowed, preserving the pre-auth behavior.
+func (h *Handler) vcIdentityFields(fields ...string) []string {
+	if h.EnableNewAuth {
+		return nil
+	}
+	return fields
+}

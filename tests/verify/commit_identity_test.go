@@ -30,6 +30,68 @@ type identityResult struct {
 	Committer string `bson:"committer"`
 }
 
+// codeUnknownField is MongoDB's IDLUnknownField (RejectUnknownFields outcome).
+const codeUnknownField = 40415
+
+func TestCommitIdentityRejectsClientIdentity(t *testing.T) {
+	env := startDumboDB(t, "--auth")
+	ctx := context.Background()
+	port := env.Port
+
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "admin"}, {Key: "pwd", Value: "admin-pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+	}).Err())
+	admin := authClient(t, port, "admin", "admin-pw", "admin")
+	adminRun(t, admin, "admin", bson.D{
+		{Key: "createUser", Value: "dev"}, {Key: "pwd", Value: "pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Dev"}, {Key: "email", Value: "dev@corp.io"}}},
+	})
+	dev := authClient(t, port, "dev", "pw", "admin")
+
+	id := "x <x@y.z>"
+	cases := []struct {
+		name  string
+		cmd   bson.D
+		field string
+	}{
+		{"commit author", bson.D{{Key: "dumboCommit", Value: 1}, {Key: "author", Value: id}}, "author"},
+		{"commit committer", bson.D{{Key: "dumboCommit", Value: 1}, {Key: "committer", Value: id}}, "committer"},
+		{"merge author", bson.D{{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "x"}, {Key: "author", Value: id}}, "author"},
+		{"merge committer", bson.D{{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "x"}, {Key: "committer", Value: id}}, "committer"},
+		{"revert author", bson.D{{Key: "dumboRevert", Value: 1}, {Key: "commit", Value: "abc"}, {Key: "author", Value: id}}, "author"},
+		{"rebase author", bson.D{{Key: "dumboRebase", Value: 1}, {Key: "onto", Value: "main"}, {Key: "author", Value: id}}, "author"},
+		{"rebase committer", bson.D{{Key: "dumboRebase", Value: 1}, {Key: "onto", Value: "main"}, {Key: "committer", Value: id}}, "committer"},
+		{"cherryPick author", bson.D{{Key: "dumboCherryPick", Value: 1}, {Key: "commit", Value: "abc"}, {Key: "author", Value: id}}, "author"},
+		{"cherryPick committer", bson.D{{Key: "dumboCherryPick", Value: 1}, {Key: "commit", Value: "abc"}, {Key: "committer", Value: id}}, "committer"},
+		{"tag author", bson.D{{Key: "dumboTag", Value: 1}, {Key: "name", Value: "v1"}, {Key: "author", Value: id}}, "author"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := dev.Database("repo@main").RunCommand(ctx, tc.cmd).Err()
+			requireCode(t, err, codeUnknownField)
+		})
+	}
+}
+
+// TestCommitIdentityAuthOffHonorsAuthor confirms the author param still works with --auth off.
+func TestCommitIdentityAuthOffHonorsAuthor(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, env.Client.Database("repo").RunCommand(ctx, bson.D{
+		{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: 1}}}},
+	}).Err())
+	var res identityResult
+	require.NoError(t, env.Client.Database("repo").RunCommand(ctx, bson.D{
+		{Key: "dumboCommit", Value: 1}, {Key: "message", Value: "m"}, {Key: "author", Value: "Ext Author <ext@x.io>"},
+	}).Decode(&res))
+	require.Equal(t, "Ext Author <ext@x.io>", res.Author)
+	require.Equal(t, "Ext Author <ext@x.io>", res.Committer)
+}
+
 // commitIdentityDoc is the {name,email} shape stored per user and echoed by usersInfo.
 type commitIdentityDoc struct {
 	Name  string `bson:"name"`
