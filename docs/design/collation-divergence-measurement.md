@@ -4,9 +4,12 @@
 **Date:** 2026-08-07, revised 2026-08-11
 **Status:** Plan / Draft -- **measurement only, no dumbodb code changes**
 **Settled:** the engine -- ICU, not x/text (section 1a)
-**Recommended, awaiting sign-off:** pin ICU 57.1 (section 1b). This is *not*
-deferrable: it becomes permanent, and unrepairable by migration, as soon as
-collation-ordered indexes persist sort keys.
+**Decided (2026-08-11):** pin the *latest* ICU (78.3 / Unicode 17.0 as of now),
+correctness-first, held for the foreseeable future (section 1b). Not 57.1: DumboDB
+aims to be better than Mongo on modern text, not bound to its 2015 freeze. An
+index's collation keys are fixed under the ICU that built them, so the ICU version
+is recorded in each index's metadata to let multiple ICU versions coexist later
+(icu-collation-binding.md section 9).
 **Still open:** the harness itself (phases 1-5) is unbuilt; only Phase 0 has run.
 
 ## 1. Goal
@@ -74,7 +77,7 @@ the residual question -- how far is that ICU from Mongo's pinned 57.1? Section 1
 covers why the version is now a free choice rather than a host-constrained one,
 and what criterion decides it.
 
-## 1b. The version pin (2026-08-11): recommend 57.1, and decide before keys land
+## 1b. The version pin (2026-08-11): decided -- latest ICU, correctness-first
 
 **The earlier A-vs-B framing is superseded.** A prior draft posed this as "A. ship
 the already-linked system ICU (72.1)" vs "B. pin 57.1 exactly," with B the heavy
@@ -137,48 +140,48 @@ migration can repair index trees inside existing commits. See
 `icu-collation-binding.md` section 9. The pin must therefore be chosen before
 collation-ordered indexes ship, which makes it a decision for now, not later.
 
-**Recommendation: pin 57.1.** The reasoning, in order of weight:
+**Decision (2026-08-11): pin the latest ICU, correctness-first.** The product call
+was made explicitly: DumboDB is meant to be a *better* document database than
+MongoDB on modern text, not one bound to Mongo's 2015 freeze. That resolves the
+tension above in favor of correctness over parity. The reasoning:
 
-1. **Asymmetry under permanence.** 57.1 has divergence zero by construction; any
-   other version has a permanent, currently unmeasured divergence set D. When a
-   decision cannot be revised, a guaranteed zero beats an unmeasured risk.
-2. **The criterion above, applied honestly, points here.** Pinning 57.1 inherits
-   Mongo's Unicode 8.0 blind spot and any CLDR 29 tailoring bug that later CLDR
-   releases fixed. But Mongo 8.0 carries those same defects, so *no workload that
-   works on MongoDB is lost by reproducing them*. The staleness costs nothing in
-   compatibility terms; it costs only the ability to be better than Mongo, which
-   is a different goal than the one this criterion states.
-3. **A permanent divergence would corrode the parity suite.** Choosing a modern
-   ICU gives the harness a set of known-failing collation cells that no fix can
-   ever close. That suite is the project's primary quality signal, and permanent
-   expected-failures erode it.
-4. **It converts this measurement into a conformance test.** Under a 57.1 pin,
-   candidate and oracle run the *same* ICU, so the expected result is exact
-   agreement and any disagreement is a bug in our spec-to-attribute mapping
-   (`icu-collation-binding.md` section 5). Pass/fail and actionable, rather than
-   an open-ended "how far apart are we" number.
-5. **The cost of old code is mitigated by the packaging decision already taken.**
-   Vendored source (binding doc section 11a) can be patched, so security fixes can
-   be backported into the vendored tree; a system library or prebuilt archive
-   could not be. This makes "2016 C++" an audit-and-patch obligation rather than
-   an unpatchable exposure -- but the obligation is real and must be explicit: a
-   CVE review of the vendored subset (`ucol_*`, the collation data loader, and
-   their dependencies) before shipping, with a named owner for backports.
+1. **The product goal is "better than," not "compatible with."** The criterion in
+   this section -- matching Mongo only where results would observably differ --
+   was written assuming compatibility is the goal. It is not. Where a modern ICU
+   collates a post-2015 character correctly and Mongo's 57.1 falls back to
+   code-point order, DumboDB should prefer the correct answer, and the divergence
+   from Mongo there is intended, not a defect.
+2. **The staleness of 57.1 is a permanent liability, not a feature.** Pinning 57.1
+   would freeze DumboDB on Unicode 8.0 forever: every character assigned in
+   Unicode 9.0..17.0 gets no tailored weight, and every CLDR tailoring fix after
+   2016 is absent. A database shipping in this era should not be born a decade
+   stale in its text handling.
+3. **A maintained ICU removes the security burden 57.1 would have created.** The
+   2016-C++ CVE-audit-and-backport obligation that a 57.1 pin required (a named
+   owner backporting a decade of fixes into vendored source) disappears: the
+   latest ICU is upstream-maintained.
+4. **The divergence set D is accepted, and sized rather than gated.** Choosing a
+   modern ICU means a permanent divergence from Mongo on tailored/modern text.
+   The harness (section 5+) reframes accordingly: it is no longer a conformance
+   test (candidate and oracle no longer share an ICU) but a *measurement* that
+   documents where DumboDB is intentionally different, so those parity cells are
+   recorded as intended divergence rather than read as bugs.
 
-**What would overturn this.** Stated so the decision is falsifiable rather than
-inherited:
+**The cost accepted, stated plainly.** Parity cells on tailored/modern text will
+diverge from Mongo permanently; the parity suite must mark them as intended, not
+failing. And the pin is still permanent per storage epoch once keys land -- the
+"latest, foreseeable future" stance means adopting the latest ICU at module
+creation and holding it, not chasing every release.
 
-- If DumboDB's goal is to be a *better* document database rather than a
-  MongoDB-compatible one, correctness-first wins and a modern ICU is right. That
-  is a product-strategy call and should be made explicitly, not by default.
-- If MongoDB itself un-pins 57.1, the parity target moves; revisit before keys
-  land.
-- If the CVE review finds exposure in 57.1's collation subset that cannot
-  reasonably be backported.
+**What this makes mandatory (was optional under a compatibility goal).** Because
+the intent is to adopt a newer ICU *someday* without breaking existing databases,
+each index records the ICU version that built its keys, so old and new versions can
+coexist at runtime later -- see binding doc section 9. The recorded identity is a
+single version tag fixed at build time.
 
-**Prerequisites before collation-ordered indexes ship,** whichever version wins:
-the ICU version stamped into index metadata and enforced at merge (binding doc
-section 9), and the conformance harness green.
+**Prerequisites before collation-ordered indexes ship:** the engine identity
+recorded in index metadata (binding doc section 9), and the divergence harness run
+once so parity expectations are set honestly.
 
 ## 2. Facts already established (do not re-derive)
 
@@ -408,10 +411,10 @@ and how badly. That is the direct answer to "how likely is the divergence."
 3. The corpus and the locale x spec matrix as data.
 4. A checked-in divergence report (matrix of verdicts + flipped-pair details +
    engine version stamps).
-5. A one-paragraph recommendation grounded in 1-4. The engine half is already
-   answered (ICU -- section 1a), so what the report must deliver is the version
-   pin: the measured divergence set for a modern candidate ICU against the Mongo
-   57.1 oracle, and whether it falls outside the region real workloads touch
+5. A one-paragraph summary grounded in 1-4. Both halves are now decided (ICU --
+   section 1a; latest version -- section 1b), so what the report delivers is the
+   measured divergence set D: where DumboDB's latest-ICU engine differs from the
+   Mongo 57.1 oracle, so those parity cells are documented as intended divergence
    (section 1b).
 
 ## 11. Non-goals

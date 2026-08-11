@@ -5,10 +5,11 @@
 **Status:** Design / Draft -- **design only, no code changes yet**
 **Depends on:** the engine decision in
 `docs/design/collation-divergence-measurement.md` (adopt ICU, not x/text)
-**Blocking decision:** which ICU version to pin (divergence doc section 1b
-recommends 57.1). The binding's *code* is version-agnostic, but the version must
-be settled before collation-ordered indexes persist sort keys -- after that it is
-part of the storage format and spans all history (section 9).
+**Version decided (2026-08-11):** pin the *latest* ICU (78.3 / Unicode 17.0 as of
+now), correctness-first (divergence doc section 1b). The binding's *code* is
+version-agnostic; an index's collation keys are fixed under the ICU that built
+them, so the version is recorded in each index's metadata to let multiple ICU
+versions coexist later (section 9).
 **Settled here:** bundle ICU from vendored source, not prebuilt archives
 (section 11a).
 
@@ -210,61 +211,48 @@ collated range and unique lookups, as MongoDB does. That makes
 optional"; it is **pinning is mandatory, and the deadline is whenever
 collation-ordered indexes land.**
 
-**Why this binds harder in DumboDB than in MongoDB.** For MongoDB an ICU change
-is a rebuild: drop the index, rebuild it under the new collator, move on. DumboDB
-cannot do that, because its index storage model assumes key encoding is
-*deterministic across branches and across time*:
+**Why this matters more here than in MongoDB.** For MongoDB, changing ICU is a
+rebuild: drop the index, rebuild it under the new collator, move on. DumboDB's
+collated indexes store sort keys, and re-sorting an existing index in place is not
+practical -- its shared, content-addressed storage assumes a stable key encoding,
+so a re-sort rewrites the index wholesale. So an index's collation keys are
+effectively fixed under the ICU that built them.
 
-- `secondary-index-structural-sharing.md` B1 ("same doc, same bytes") has two
-  branches inserting the same doc produce **byte-identical leaf chunks** so the
-  chunk store deduplicates them. Its stated reason is that "key encoding is
-  branch-independent." ICU sort keys are branch-independent only while every
-  writer shares one ICU version.
-- P2 ("small writes share storage with the previous version") and B3 ("merged
-  indexes share storage with both parents") likewise depend on chunk addresses
-  matching across time and across merge parents.
+**The plan: record the engine, and support versions side by side
+(workspace-17w).** Rather than migrate existing indexes, record which engine built
+each index and let old and new coexist:
 
-So an ICU version change does not merely invalidate the live index. It makes
-chunks written before the change un-shareable with chunks written after
-(every collated index rewrites in full, permanently, since history is retained),
-and it makes two branches whose writes straddle the change **incomparable**: a
-merge would be combining two trees under different sort orders. Worse, history is
-immutable -- rebuilding the tip does not and cannot repair the index trees inside
-existing commits, so old commits keep old-ordered trees forever. There is no
-migration that fixes this after the fact. The ICU version is therefore part of
-the storage format, spanning all of history, not a per-index rebuildable detail.
+1. **Record the ICU version** (a single version tag, e.g. `"78.3"`, fixed when the
+   index is built) in the collated-index metadata, beside the existing
+   `CollationBSONHex`, so each index is self-describing about which engine produced
+   its stored keys. This is the same value `listIndexes` echoes (section 10).
+2. **Support multiple ICU versions at runtime (future work).** With the per-index
+   label, an engine that links more than one ICU version picks the right collator
+   per index: indexes built under the old ICU keep being served correctly, new
+   indexes use the new ICU. No existing index is rewritten. This is how DumboDB
+   adopts a newer ICU without breaking databases built on an older one.
 
-**Design obligations that follow.** Once keys are persisted:
-
-1. The ICU version must be recorded in index metadata alongside the existing
-   `CollationBSONHex`, so a mismatch is *detected* rather than silently
-   producing wrong answers.
-2. A version mismatch between merge parents must fail loudly, not merge.
-3. An ICU version change must be treated as a storage-format break -- a new
-   index identity, not an in-place upgrade.
-
-**Sequencing consequence: the version must be chosen before this ships, not
-after.** Because the choice is permanent once keys land, and because it cannot be
-corrected by any later migration, it cannot be deferred to an implementation
-detail. See section 1b of the divergence doc, which now carries a recommendation
-rather than an open question.
+ICU makes the coexistence concretely feasible: it version-suffixes its symbols
+(`ucol_open_78` vs `ucol_open_82`), so two ICU builds link into one process without
+conflict -- the packaging spike (section 11a) already ran 57.1 and 72.1 together
+this way. The only piece needed now is the recording; the multi-version runtime is
+future work, kept possible by having recorded the version from the start.
 
 ## 10. The version-echo tension
 
-`listIndexes` echoes `version: "57.1"` and a parity test pins it against the
-mongod under test. We keep echoing MongoDB's compatibility label ("57.1") even
-if the linked ICU is 72.1 -- the string is a MongoDB-reported constant, not
-something ICU emits. That is honest about the *protocol* (we match Mongo's
-echo) while the *behavior* tracks the linked ICU. The behavioral gap between the
-echoed label and the linked engine is precisely what the divergence measurement
-quantifies; this binding must not pretend the label implies 57.1 behavior.
+`listIndexes` echoes a collation `version` and a parity test currently pins it to
+Mongo's "57.1". Because DumboDB runs the latest ICU, echoing "57.1" would be a
+compatibility fiction -- the label would imply behavior the engine does not have.
+The behavioral gap between Mongo's 57.1 and DumboDB's engine is precisely what the
+divergence measurement quantifies; this binding must report DumboDB's real engine,
+not a borrowed constant.
 
-Under the recommended 57.1 pin this tension dissolves: label and behavior
-converge, and the echo stops being a compatibility fiction. The tension only
-needs managing if a modern ICU is chosen instead -- in which case the honest
-options are to keep echoing "57.1" as a protocol constant while documenting that
-behavior differs, or to echo the real version and accept a parity failure on the
-field. That choice belongs with the version decision, not here.
+Under the decided latest-ICU pin this tension is live, not dissolved. Echoing
+Mongo's "57.1" constant would claim behavior DumboDB does not have. Consistent
+with the correctness-first decision, DumboDB echoes its *real* ICU version
+(the same value recorded in section 9), and the parity
+test that currently pins "57.1" is updated to expect DumboDB's version and treat
+the difference as intended divergence, not a failure (tracked in workspace-fpr).
 
 ## 11. Build and platform
 
@@ -300,8 +288,11 @@ dedicated module (proposed `dolthub/go-icu-collate`, mirroring the `gozstd` /
 `go-icu-regex` house style).
 
 Bundling *decouples* the version choice from the host; it does not make that
-choice. Which version to pin is open and tracked in section 1b of the divergence
-doc. Everything below is about packaging mechanism and holds for any version.
+choice. Which version to pin is decided in section 1b of the divergence doc:
+latest ICU (78.3 as of now). Everything below is about packaging mechanism and
+holds for any version -- note the spike figures were measured against 57.1 and are
+indicative only; re-measure against 78.3, the version the module will actually
+vendor.
 
 Two non-WASM packaging options were spiked against real ICU 57.1 on this box
 (GCC 12.2, 16 cores). WASM/wazero is excluded (known wazero deadlock history).
@@ -429,10 +420,10 @@ decides it.
    indexes are the goal, they persist ICU sort keys, and in a version-controlled
    store that makes the ICU version part of the storage format across all
    history, unrepairable by migration.
-4. **Which ICU version to pin** -- recommended 57.1 (divergence doc section 1b),
-   awaiting sign-off. The risk is one of sequencing: this must be an explicit
-   decision made before keys land, never something an implementation detail
-   settles by default.
+4. **ICU version pin -- DECIDED: latest ICU** (divergence doc section 1b),
+   correctness-first. The residual work is recording the engine identity per index
+   (section 9) so a future multi-version runtime can adopt a newer ICU without
+   breaking indexes built under the current one.
 5. **Collation-only data trimming.** With the source packaging path (section 11a),
    generating a trimmed ICU data blob is the main one-time task and the main place
    to get it wrong: dropping a locale's tailoring silently degrades it to root
@@ -446,11 +437,10 @@ decides it.
 
 ## 15. Non-goals
 
-- Deciding which ICU version to pin -- owned by the divergence doc (section 1b),
-  which recommends 57.1. Not a non-goal in the sense of "someone else's problem
-  later": it is a prerequisite for collation-ordered indexes, and section 9
-  explains why it cannot be corrected afterwards. This binding's code compiles
-  against any version.
+- Deciding which ICU version to pin -- decided (divergence doc section 1b): latest
+  ICU. Retained here only because the binding's code compiles against any version;
+  the version's *consequences* (per-index stamp, forward migration) are section 9,
+  not a non-goal.
 - A pure-Go fallback. `go-icu-regex` has a pure-Go regex fallback; collation has
   no comparable pure-Go equal (that was the whole x/text finding), so a
   cgo-only collation path with no fallback is accepted here.
