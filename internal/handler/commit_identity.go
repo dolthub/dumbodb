@@ -247,3 +247,21 @@ func (h *Handler) commitAuthorCommitter(ctx context.Context, wireAuthor string) 
 
 	return wireAuthor, "", nil
 }
+
+// commitCommitter returns the committer identity to stamp on a replay command
+// (rebase/cherry-pick), where the author is preserved from the replayed commit.
+// Under --auth the server-resolved identity overrides the wire committer; otherwise
+// the wire committer is used, preserving the pre-auth behavior.
+func (h *Handler) commitCommitter(ctx context.Context, wireCommitter string) (string, error) {
+	if h.EnableNewAuth {
+		id, ok, err := h.commitIdentityString(ctx)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return id, nil
+		}
+	}
+
+	return wireCommitter, nil
+}

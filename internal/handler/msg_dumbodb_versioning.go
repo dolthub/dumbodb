@@ -2035,6 +2035,10 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		if err != nil {
 			return nil, err
 		}
+		committerParam, err = h.commitCommitter(connCtx, committerParam)
+		if err != nil {
+			return nil, err
+		}
 		res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
 			DBName:    dbName,
 			Branch:    branch,
@@ -2085,6 +2089,11 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	}
 
 	committerParam, err := common.GetOptionalParam[string](document, "committer", "")
+	if err != nil {
+		return nil, err
+	}
+
+	committerParam, err = h.commitCommitter(connCtx, committerParam)
 	if err != nil {
 		return nil, err
 	}
@@ -2184,6 +2193,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	rebaseCommitterEarly, err := common.GetOptionalParam[string](document, "committer", "")
+	if err != nil {
+		return nil, err
+	}
+
+	rebaseCommitterEarly, err = h.commitCommitter(connCtx, rebaseCommitterEarly)
 	if err != nil {
 		return nil, err
 	}

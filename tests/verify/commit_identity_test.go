@@ -95,6 +95,60 @@ func TestCommitIdentityStamping(t *testing.T) {
 	})
 }
 
+func TestCommitIdentityReplayStamping(t *testing.T) {
+	env := startDumboDB(t, "--auth")
+	ctx := context.Background()
+	port := env.Port
+
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "admin"}, {Key: "pwd", Value: "admin-pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+	}).Err())
+	admin := authClient(t, port, "admin", "admin-pw", "admin")
+
+	// Two root users (root covers branch-qualified DBs) with distinct identities.
+	rootRole := bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}
+	adminRun(t, admin, "admin", bson.D{
+		{Key: "createUser", Value: "aa"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rootRole},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Alice Dev"}, {Key: "email", Value: "alice@corp.io"}}},
+	})
+	adminRun(t, admin, "admin", bson.D{
+		{Key: "createUser", Value: "bb"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rootRole},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Bob Ops"}, {Key: "email", Value: "bob@corp.io"}}},
+	})
+	aa := authClient(t, port, "aa", "pw", "admin")
+	bb := authClient(t, port, "bb", "pw", "admin")
+
+	commit := func(t *testing.T, c *mongo.Client, db, coll string, id int32, msg string) identityResult {
+		t.Helper()
+		require.NoError(t, c.Database(db).RunCommand(ctx, bson.D{
+			{Key: "insert", Value: coll}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: id}}}},
+		}).Err())
+		var res identityResult
+		require.NoError(t, c.Database(db).RunCommand(ctx, bson.D{
+			{Key: "dumboCommit", Value: 1}, {Key: "message", Value: msg},
+		}).Decode(&res))
+		return res
+	}
+
+	// aa authors a base commit on main, branches "feature", and authors C2 on feature.
+	commit(t, aa, "repo", "items", 1, "base")
+	require.NoError(t, aa.Database("repo@main").RunCommand(ctx, bson.D{
+		{Key: "dumboBranch", Value: 1}, {Key: "branch", Value: "feature"},
+	}).Err())
+	c2 := commit(t, aa, "repo@feature", "items", 2, "add-two")
+	require.Equal(t, "Alice Dev <alice@corp.io>", c2.Author)
+
+	t.Run("cherry-pick preserves author, stamps actor as committer", func(t *testing.T) {
+		var pick identityResult
+		require.NoError(t, bb.Database("repo@main").RunCommand(ctx, bson.D{
+			{Key: "dumboCherryPick", Value: 1}, {Key: "commit", Value: c2.CommitID},
+		}).Decode(&pick))
+		require.Equal(t, "Alice Dev <alice@corp.io>", pick.Author, "author preserved from the picked commit")
+		require.Equal(t, "Bob Ops <bob@corp.io>", pick.Committer, "committer is the acting user")
+	})
+}
+
 func TestCommitIdentityUsersInfo(t *testing.T) {
 	env := startDumboDB(t, "--auth")
 	ctx := context.Background()
