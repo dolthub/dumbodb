@@ -83,7 +83,7 @@ func TestUserStore_CreateUserPersistsAndCommits(t *testing.T) {
 	committed := false
 	for _, tgt := range targets {
 		require.Equal(t, "admin", tgt.DB, "only admin should auto-commit here")
-		ok, err := b.AutoCommit(ctx, tgt.DB, tgt.Branch, tgt.Message)
+		ok, err := b.AutoCommit(ctx, tgt.DB, tgt.Branch, tgt.Message, "")
 		require.NoError(t, err)
 		committed = committed || ok
 	}

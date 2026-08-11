@@ -31,5 +31,5 @@ type SessionAwareBackend interface {
 // AutoCommitBackend commits a branch's working root at the command boundary
 // under --auto-commit, reporting whether a commit was created.
 type AutoCommitBackend interface {
-	AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error)
+	AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error)
 }

@@ -1096,7 +1096,7 @@ func commitCollectionsAM(ctx context.Context, datasDB datas.Database, ds datas.D
 	return newDS, am, nil
 }
 
-func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error) {
+func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error) {
 	state, err := b.getOrOpenDB(ctx, dbName, false)
 	if err != nil {
 		return false, fmt.Errorf("AutoCommit: opening db %q: %w", dbName, err)
@@ -1110,7 +1110,7 @@ func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string
 	if state.mergeState != nil && state.mergeState.intoBranch == branch {
 		return false, nil
 	}
-	return state.commitBranchWS(ctx, branch, message)
+	return state.commitBranchWS(ctx, branch, message, author)
 }
 
 // commitCollectionsAMAs creates a new dolt commit with the given collections

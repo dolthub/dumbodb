@@ -157,6 +157,62 @@ func TestCommitIdentityReplayStamping(t *testing.T) {
 	})
 }
 
+func TestCommitIdentityAutoCommit(t *testing.T) {
+	env := startDumboDB(t, "--auth", "--auto-commit")
+	ctx := context.Background()
+	port := env.Port
+
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "admin"}, {Key: "pwd", Value: "admin-pw"},
+		{Key: "roles", Value: bson.A{bson.D{{Key: "role", Value: "root"}, {Key: "db", Value: "admin"}}}},
+	}).Err())
+	admin := authClient(t, port, "admin", "admin-pw", "admin")
+
+	rw := bson.A{bson.D{{Key: "role", Value: "readWrite"}, {Key: "db", Value: "auto"}}}
+	adminRun(t, admin, "auto", bson.D{
+		{Key: "createUser", Value: "alice"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rw},
+		{Key: "commitIdentity", Value: bson.D{{Key: "name", Value: "Alice Dev"}, {Key: "email", Value: "alice@corp.io"}}},
+	})
+	adminRun(t, admin, "auto", bson.D{
+		{Key: "createUser", Value: "bob"}, {Key: "pwd", Value: "pw"}, {Key: "roles", Value: rw},
+	})
+	alice := authClient(t, port, "alice", "pw", "auto")
+	bob := authClient(t, port, "bob", "pw", "auto")
+
+	headIdentity := func(t *testing.T, c *mongo.Client) (author, committer string) {
+		t.Helper()
+		var res struct {
+			Commits []struct {
+				Author    string `bson:"author"`
+				Committer string `bson:"committer"`
+			} `bson:"commits"`
+		}
+		require.NoError(t, c.Database("auto").RunCommand(ctx, bson.D{
+			{Key: "dumboLog", Value: 1}, {Key: "limit", Value: 1},
+		}).Decode(&res))
+		require.NotEmpty(t, res.Commits)
+		return res.Commits[0].Author, res.Commits[0].Committer
+	}
+
+	t.Run("auto-commit stamps the acting identity", func(t *testing.T) {
+		require.NoError(t, alice.Database("auto").RunCommand(ctx, bson.D{
+			{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: 1}}}},
+		}).Err())
+		author, committer := headIdentity(t, alice)
+		require.Equal(t, "Alice Dev <alice@corp.io>", author)
+		require.Equal(t, "Alice Dev <alice@corp.io>", committer)
+	})
+
+	t.Run("auto-commit falls back to username@authDb", func(t *testing.T) {
+		require.NoError(t, bob.Database("auto").RunCommand(ctx, bson.D{
+			{Key: "insert", Value: "items"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: 2}}}},
+		}).Err())
+		author, committer := headIdentity(t, bob)
+		require.Equal(t, "bob <bob@auto>", author)
+		require.Equal(t, "bob <bob@auto>", committer)
+	})
+}
+
 func TestCommitIdentityUsersInfo(t *testing.T) {
 	env := startDumboDB(t, "--auth")
 	ctx := context.Background()
