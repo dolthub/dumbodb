@@ -46,32 +46,37 @@ mongosh "mongodb://admin:admin-pw@localhost:27017/?authSource=admin"
 
 ## Setup: users with and without a commit identity
 
+Create the users **on the `shop` database** (as the authenticated `admin`), so
+their auth database is `shop` and they log in with `authSource=shop`. `createUser`
+always creates the user on the database the command runs against -- running it
+against `admin` would instead create `alice@admin`.
+
 ```js
-const admin = db.getSiblingDB("admin")
+const shop = db.getSiblingDB("shop")
 
 // alice has an explicit commit identity; bob has none.
-admin.runCommand({
+shop.runCommand({
   createUser: "alice", pwd: "pw",
   roles: [ { role: "readWrite", db: "shop" } ],
   commitIdentity: { name: "Alice Dev", email: "alice@corp.io" }
 })
-admin.runCommand({
+shop.runCommand({
   createUser: "bob", pwd: "pw",
   roles: [ { role: "readWrite", db: "shop" } ]
 })
 ```
 
-`usersInfo` echoes the stored identity (a dumbo extension field):
+`usersInfo` (run against `shop`) echoes the stored identity (a dumbo extension field):
 
 ```js
-admin.getSiblingDB("shop").runCommand({ usersInfo: "alice" })
+shop.runCommand({ usersInfo: "alice" })
 // users[0].commitIdentity == { name: "Alice Dev", email: "alice@corp.io" }
 ```
 
 Validation: a malformed email is rejected with `BadValue` (2):
 
 ```js
-admin.runCommand({
+shop.runCommand({
   createUser: "bad", pwd: "pw", roles: [],
   commitIdentity: { name: "Bad", email: "not-an-email" }
 })
@@ -167,12 +172,13 @@ shop.runCommand({ dumboCommit: 1, message: "m", author: "Ext Author <ext@x.io>" 
 ## Scenario 9: updateUser sets, replaces, and clears the identity
 
 ```js
-const admin = db.getSiblingDB("admin")
-admin.getSiblingDB("shop").runCommand({ updateUser: "bob",
+// Run against shop (bob's auth database), as the authenticated admin.
+const shop = db.getSiblingDB("shop")
+shop.runCommand({ updateUser: "bob",
   commitIdentity: { name: "Bob B", email: "bob@corp.io" } })   // set
-admin.getSiblingDB("shop").runCommand({ updateUser: "bob",
+shop.runCommand({ updateUser: "bob",
   commitIdentity: { name: "Bob C", email: "bobc@corp.io" } })  // replace (wholesale)
-admin.getSiblingDB("shop").runCommand({ updateUser: "bob", commitIdentity: null }) // clear -> fallback
+shop.runCommand({ updateUser: "bob", commitIdentity: null })   // clear -> fallback
 ```
 
 After the clear, bob's commits fall back to `bob <bob@shop>` again.
