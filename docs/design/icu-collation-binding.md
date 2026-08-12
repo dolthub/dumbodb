@@ -106,7 +106,7 @@ status warning (`U_USING_DEFAULT_WARNING` for a full root fallback). A non-empty
 non-"simple" locale that ICU resolves only to root is treated as invalid and
 returns `BadValue`, matching MongoDB.
 
-The compatibility floor is MongoDB's accepted collation-locale set -- the 117 ICU
+The compatibility floor is MongoDB's accepted collation-locale set -- the 109 ICU
 locale IDs MongoDB 8.0 supports, captured as validation data and asserted by
 parity tests (each must be accepted and collate as tailored, not degraded to
 root):
@@ -170,7 +170,7 @@ The nine fields and the values the grid enumerates:
 
 | Field | Values | Count |
 |---|---|---|
-| `locale` | the 117 accepted IDs (section 5), plus invalid probes | 117 (+n) |
+| `locale` | the 109 accepted IDs (section 5), plus invalid probes | 109 (+n) |
 | `strength` | 1, 2, 3, 4, 5 | 5 |
 | `caseLevel` | false, true | 2 |
 | `caseFirst` | off, upper, lower | 3 |
@@ -180,8 +180,8 @@ The nine fields and the values the grid enumerates:
 | `normalization` | false, true | 2 |
 | `backwards` | false, true | 2 |
 
-The per-locale product is 5*2*3*2*2*2*2*2 = 960 specs; across 117 locales,
-~112,000 cells. "Every permutation" is defined against this grid: the generator
+The per-locale product is 5*2*3*2*2*2*2*2 = 960 specs; across 109 locales,
+~105,000 cells. "Every permutation" is defined against this grid: the generator
 emits it in full, minus the provable-no-op prunes of 8.3, and every emitted cell
 runs on every change.
 
@@ -254,7 +254,7 @@ bar.
 
 ### 8.5 Locale coverage
 
-All 117 accepted locales run the tailoring corpus at strengths 1-3: each must be
+All 109 accepted locales run the tailoring corpus at strengths 1-3: each must be
 accepted and yield its tailored order, not root. Invalid-locale probes assert
 `BadValue`. The heavily-tailored locales (`tr`, `cs`, `es`, `sv`, `de` phonebook,
 `zh`, ...) are where CLDR tailoring is stressed hardest and divergence from
