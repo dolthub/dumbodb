@@ -90,6 +90,18 @@ func Parse(doc *types.Document) *Collation {
 	return c
 }
 
+// Effective returns the collation document that governs an operation: the
+// operation's own collation if it specified one, else the collection's default
+// (nil meaning simple/binary). This is MongoDB's precedence: an explicit
+// operation collation wins -- including opting down to {locale:"simple"} -- and
+// only an absent operation collation falls through to the collection default.
+func Effective(opCollation, defaultCollation *types.Document) *types.Document {
+	if opCollation != nil {
+		return opCollation
+	}
+	return defaultCollation
+}
+
 // IsSimple reports whether the collation is the binary default, for which no
 // locale-aware comparison is needed.
 func (c *Collation) IsSimple() bool {
@@ -120,6 +132,18 @@ func (c *Collation) Resolve() *types.Document {
 		"backwards", c.Backwards,
 		"version", Version,
 	))
+}
+
+// Identity returns a canonical string identifying this collation for equality
+// comparison: two collations are equal iff their normalized specs match on every
+// semantic field (version, which is engine metadata, is excluded). A
+// simple/absent collation returns "" -- the binary default. Used to decide
+// whether two indexes on the same key are the same index.
+func (c *Collation) Identity() string {
+	if c.IsSimple() {
+		return ""
+	}
+	return c.cacheKey()
 }
 
 // Comparator compares strings under a resolved collation via a shared,

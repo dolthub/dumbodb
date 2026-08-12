@@ -145,6 +145,8 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
 	defer closer.Close()
 
+	params.Collation = h.effectiveCollation(ctx, db, params.Collection, params.Collation)
+
 	cmp := collation.Parse(params.Collation).Comparator()
 
 	var qp backends.QueryParams

@@ -124,6 +124,8 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	closer := iterator.NewMultiCloser()
 	defer closer.Close()
 
+	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
+
 	cmp := collation.Parse(params.Collation).Comparator()
 
 	var qp backends.QueryParams

@@ -131,6 +131,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 	}
 
 	for _, u := range params.Updates {
+		u.Collation = h.effectiveCollation(ctx, db, params.Collection, u.Collation)
 		c, err := db.Collection(params.Collection)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {

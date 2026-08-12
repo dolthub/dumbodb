@@ -121,6 +121,10 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
+	// Resolve the effective collation: a find with no collation of its own
+	// inherits the collection's default.
+	params.Collation = collation.Effective(params.Collation, cInfo.Collation)
+
 	capped := cInfo.Capped()
 	if params.Tailable {
 		if !capped {

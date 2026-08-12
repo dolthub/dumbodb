@@ -82,6 +82,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	writeErrors := types.MakeArray(0)
 
 	for i, p := range params.Deletes {
+		p.Collation = h.effectiveCollation(connCtx, db, params.Collection, p.Collation)
 		var d int32
 		d, err = h.execDelete(connCtx, c, &p, params.SkipDurableSync)
 

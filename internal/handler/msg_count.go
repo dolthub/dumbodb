@@ -73,6 +73,8 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	// the view's source with the view's defining pipeline applied, then the
 	// filter/skip/limit. This bypasses the backend fast paths below, which would
 	// count the (empty) view collection and return 0.
+	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
+
 	cmp := collation.Parse(params.Collation).Comparator()
 
 	collParam := backends.ListCollectionsParams{Name: params.Collection}
