@@ -266,14 +266,29 @@ func (h *Handler) commitCommitter(ctx context.Context, wireCommitter string) (st
 	return wireCommitter, nil
 }
 
-// vcIdentityFields returns the client-supplied identity field names a
-// version-control command may accept. Under --auth none are allowed -- a client
-// cannot assert its own commit identity -- so they fall through to
-// RejectUnknownFields and are rejected with 40415. With --auth off the given
-// fields are allowed, preserving the pre-auth behavior.
-func (h *Handler) vcIdentityFields(fields ...string) []string {
-	if h.EnableNewAuth {
+// rejectClientIdentityFields rejects a client-supplied author or committer field
+// when --auth is on: the server records the authenticated user's identity, so the
+// field is not accepted (rather than silently ignored). With --auth off it is a
+// no-op and the field is honored, preserving the pre-auth behavior. The 40415
+// (IDLUnknownField) code matches the RejectUnknownFields path; the message
+// explains that it is access control, not an unknown field, that disallows it.
+func (h *Handler) rejectClientIdentityFields(document *types.Document) error {
+	if !h.EnableNewAuth {
 		return nil
 	}
-	return fields
+
+	for _, field := range []string{"author", "committer"} {
+		if document.Has(field) {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrIDLUnknownField,
+				fmt.Sprintf(
+					"BSON field '%s.%s' is not accepted: with access control enabled, the commit author and committer are set from the authenticated user",
+					document.Command(), field,
+				),
+				document.Command(),
+			)
+		}
+	}
+
+	return nil
 }

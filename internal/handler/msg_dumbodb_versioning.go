@@ -620,7 +620,11 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, append([]string{"message", "timestamp", "allowEmpty"}, h.vcIdentityFields("author")...)...); err != nil {
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
+	if err = common.RejectUnknownFields(document, "message", "author", "timestamp", "allowEmpty"); err != nil {
 		return nil, err
 	}
 
@@ -825,7 +829,11 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, append([]string{"mergeIn", "noFF", "ffOnly", "message", "continue", "abort"}, h.vcIdentityFields("author")...)...); err != nil {
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
+	if err = common.RejectUnknownFields(document, "mergeIn", "noFF", "ffOnly", "message", "author", "continue", "abort"); err != nil {
 		return nil, err
 	}
 
@@ -1970,7 +1978,11 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, append([]string{"commit", "message", "continue", "abort"}, h.vcIdentityFields("author", "committer")...)...); err != nil {
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
+	if err = common.RejectUnknownFields(document, "commit", "message", "author", "committer", "continue", "abort"); err != nil {
 		return nil, err
 	}
 
@@ -2160,7 +2172,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, append([]string{"onto", "continue", "abort"}, h.vcIdentityFields("author", "committer")...)...); err != nil {
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
+	if err = common.RejectUnknownFields(document, "onto", "author", "committer", "continue", "abort"); err != nil {
 		return nil, err
 	}
 
@@ -2337,7 +2353,11 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, append([]string{"commit", "message", "continue", "abort"}, h.vcIdentityFields("author")...)...); err != nil {
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
+	if err = common.RejectUnknownFields(document, "commit", "message", "author", "continue", "abort"); err != nil {
 		return nil, err
 	}
 
@@ -2517,7 +2537,11 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, append([]string{"name", "delete", "hash", "message"}, h.vcIdentityFields("author")...)...); err != nil {
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
+	if err = common.RejectUnknownFields(document, "name", "delete", "hash", "message", "author"); err != nil {
 		return nil, err
 	}
 

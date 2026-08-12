@@ -116,11 +116,14 @@ The resolved identity flows from `ConnInfo` into the commit boundary:
 
 ## Rejection matrix -- client-supplied identity params
 
-The rejection applies **only under `--auth`**. Removing `author`/`committer` from
-a command's allowlist is done conditionally: with `--auth` on, the field is
-absent from the allowlist and hits `RejectUnknownFields`, yielding
-`ErrIDLUnknownField` (**40415**, "BSON field '<cmd>.<field>' is an unknown
-field"); with `--auth` off, the field stays allowed and behaves as today.
+The rejection applies **only under `--auth`**. With `--auth` on, an explicit check
+rejects any `author`/`committer` field with `ErrIDLUnknownField` (**40415**) and
+the message "BSON field '<cmd>.<field>' is not accepted: with access control
+enabled, the commit author and committer are set from the authenticated user".
+The code matches the `RejectUnknownFields` path, but the message explains that
+access control -- not an unknown field -- disallows it. With `--auth` off the
+fields behave as today (`author` honored where valid; `committer` unknown except
+on cherry-pick/rebase).
 
 All rows below are `--auth` **on** unless noted.
 

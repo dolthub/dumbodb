@@ -72,6 +72,8 @@ func TestCommitIdentityRejectsClientIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := dev.Database("repo@main").RunCommand(ctx, tc.cmd).Err()
 			requireCode(t, err, codeUnknownField)
+			require.Contains(t, err.Error(), "set from the authenticated user",
+				"error should explain the field is disallowed by --auth, not merely unknown")
 		})
 	}
 }
