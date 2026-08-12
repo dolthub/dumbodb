@@ -27,6 +27,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -267,9 +268,9 @@ type findCursorData struct {
 
 func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindParams, cInfo *backends.CollectionInfo) (*backends.QueryParams, error) { //nolint:lll // for readability
 	qp := &backends.QueryParams{
-		Comment:         params.Comment,
-		CaseInsensitive: params.ParsedCollation.CaseInsensitive(),
-		Hint:            params.Hint,
+		Comment:  params.Comment,
+		Collated: !collation.Parse(params.Collation).IsSimple(),
+		Hint:     params.Hint,
 	}
 
 	var err error
@@ -343,16 +344,12 @@ func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindPa
 func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.MultiCloser, params *common.FindParams) (types.DocumentsIterator, error) {
 	closer.Add(iter)
 
-	// When a case-insensitive collation is active, transform string equality
-	// filters into case-insensitive regex matches before applying the filter.
+	// A non-simple collation compares strings locale-aware in both the filter
+	// and the sort.
 	filterDoc := params.Filter
-	caseInsensitive := params.ParsedCollation.CaseInsensitive()
+	cmp := collation.Parse(params.Collation).Comparator()
 
-	if caseInsensitive {
-		filterDoc = common.TransformFilterForCollation(params.Filter, params.ParsedCollation)
-	}
-
-	iter = common.FilterIterator(iter, closer, filterDoc)
+	iter = common.FilterIteratorColl(iter, closer, filterDoc, cmp)
 
 	if params.Min != nil || params.Max != nil {
 		hintDoc, _ := params.Hint.(*types.Document)
@@ -365,7 +362,7 @@ func (h *Handler) makeFindIter(iter types.DocumentsIterator, closer *iterator.Mu
 	if geoSort := common.FindGeoSortKey(filterDoc); geoSort != nil {
 		iter, sortErr = common.GeoDistanceSortIterator(iter, closer, geoSort)
 	} else {
-		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, caseInsensitive)
+		iter, sortErr = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	}
 
 	if sortErr != nil {

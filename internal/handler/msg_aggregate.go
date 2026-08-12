@@ -32,6 +32,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/stages"
@@ -61,8 +62,15 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 	common.Ignored(document, h.L, "lsid")
 
-	if err = common.Unimplemented(document, "explain", "collation", "let"); err != nil {
+	if err = common.Unimplemented(document, "explain", "let"); err != nil {
 		return nil, err
+	}
+
+	var collCmp *collation.Comparator
+	if cv, _ := document.Get("collation"); cv != nil {
+		if cd, ok := cv.(*types.Document); ok {
+			collCmp = collation.Parse(cd).Comparator()
+		}
 	}
 
 	common.Ignored(
@@ -278,10 +286,19 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 			// $indexStats requires collection access to retrieve index metadata.
 			s, err = stages.NewIndexStatsStage(d, connCtx, c, h.TCPHost)
 
+		case "$match":
+			// A stage doc with more than one field is invalid; defer to NewStage
+			// for that error rather than the single-field NewMatchStage.
+			if d.Len() == 1 {
+				s, err = stages.NewMatchStage(d, collCmp)
+			} else {
+				s, err = stages.NewStage(d)
+			}
+
 		case "$sort":
 			// Coalesce a following $limit (or $skip + $limit) into a top-K bound
 			// so $sort holds only the needed documents instead of the whole input.
-			s, err = stages.NewSortStage(d, sortLimitBound(aggregationStages, i))
+			s, err = stages.NewSortStage(d, sortLimitBound(aggregationStages, i), collCmp)
 
 		default:
 			s, err = stages.NewStage(d)
@@ -367,6 +384,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 
 		// only documents stages or no stages - fetch documents from the DB and apply stages to them
 		qp := new(backends.QueryParams)
+
+		// Under a collation the backend must return a superset: its byte-exact
+		// narrowing would drop string matches that only the collator equates,
+		// before the $match stage re-checks them.
+		qp.Collated = collCmp != nil
 
 		if !h.DisablePushdown {
 			qp.Filter = filter

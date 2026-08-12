@@ -43,7 +43,7 @@ type DistinctParams struct {
 
 	Query any `dumbo:"query,opt"`
 
-	Collation *types.Document `dumbo:"collation,unimplemented"`
+	Collation *types.Document `dumbo:"collation,opt"`
 
 	ReadConcern    *types.Document `dumbo:"readConcern,ignored"`
 	LSID           any             `dumbo:"lsid,ignored"`
@@ -337,9 +337,9 @@ func DedupDistinctValues(values []any) (*types.Array, error) {
 // against a smaller "complex" slice. The fast path turns the previous O(n^2)
 // distinct accumulator into O(n) for the common case of scalar fields.
 type distinctSet struct {
-	seen     map[string]struct{}
-	complex  []any
-	values   []any
+	seen    map[string]struct{}
+	complex []any
+	values  []any
 }
 
 func newDistinctSet() *distinctSet {

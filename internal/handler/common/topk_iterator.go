@@ -17,6 +17,7 @@ package common
 import (
 	"errors"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -33,8 +34,14 @@ const maxTopKBuffer = 1 << 20
 // retained documents are always re-sorted ahead of later arrivals. k <= 0 (or a
 // k too large to bound usefully) falls back to a full sort.
 func TopKIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, sortDoc *types.Document, k int64) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	return TopKIteratorColl(iter, closer, sortDoc, k, nil)
+}
+
+// TopKIteratorColl is TopKIterator with an optional collation comparator
+// applied to string ordering.
+func TopKIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser, sortDoc *types.Document, k int64, cmp *collation.Comparator) (types.DocumentsIterator, error) { //nolint:lll // for readability
 	if k <= 0 || k > maxTopKBuffer || sortDoc.Len() == 0 {
-		return SortIterator(iter, closer, sortDoc)
+		return SortIteratorWithCollation(iter, closer, sortDoc, cmp)
 	}
 
 	defer iter.Close()
@@ -61,7 +68,7 @@ func TopKIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, so
 		buf = append(buf, doc)
 
 		if int64(len(buf)) >= trimAt {
-			if err := SortDocuments(buf, sortDoc); err != nil {
+			if err := SortDocumentsWithCollation(buf, sortDoc, cmp); err != nil {
 				return nil, lazyerrors.Error(err)
 			}
 
@@ -69,7 +76,7 @@ func TopKIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, so
 		}
 	}
 
-	if err := SortDocuments(buf, sortDoc); err != nil {
+	if err := SortDocumentsWithCollation(buf, sortDoc, cmp); err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 

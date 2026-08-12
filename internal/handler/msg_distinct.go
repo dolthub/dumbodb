@@ -21,6 +21,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -123,7 +124,10 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 	closer := iterator.NewMultiCloser()
 	defer closer.Close()
 
+	cmp := collation.Parse(params.Collation).Comparator()
+
 	var qp backends.QueryParams
+	qp.Collated = cmp != nil
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter
 	}
@@ -135,7 +139,7 @@ func (h *Handler) MsgDistinct(connCtx context.Context, msg *wire.OpMsg) (*wire.O
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIterator(queryRes.Iter, closer, params.Filter)
+	iter := common.FilterIteratorColl(queryRes.Iter, closer, params.Filter, cmp)
 
 	distinct, err := common.FilterDistinctValues(iter, params.Key)
 	if err != nil {

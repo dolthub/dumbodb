@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -31,15 +32,17 @@ import (
 type sort struct {
 	fields *types.Document
 	limit  int64
+	cmp    *collation.Comparator
 }
 
 func newSort(stage *types.Document) (aggregations.Stage, error) {
-	return NewSortStage(stage, 0)
+	return NewSortStage(stage, 0, nil)
 }
 
 // NewSortStage builds a $sort stage that keeps only the first limit documents
 // (in sort order) when limit > 0, bounding memory for a following $limit.
-func NewSortStage(stage *types.Document, limit int64) (aggregations.Stage, error) {
+// String ordering honors cmp when non-nil.
+func NewSortStage(stage *types.Document, limit int64, cmp *collation.Comparator) (aggregations.Stage, error) {
 	fields, err := common.GetRequiredParam[*types.Document](stage, "$sort")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -60,6 +63,7 @@ func NewSortStage(stage *types.Document, limit int64) (aggregations.Stage, error
 	return &sort{
 		fields: fields,
 		limit:  limit,
+		cmp:    cmp,
 	}, nil
 }
 
@@ -67,7 +71,7 @@ func NewSortStage(stage *types.Document, limit int64) (aggregations.Stage, error
 //
 // If sort path is invalid, it returns a possibly wrapped types.PathError.
 func (s *sort) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	iter, err := common.TopKIterator(iter, closer, s.fields, s.limit)
+	iter, err := common.TopKIteratorColl(iter, closer, s.fields, s.limit, s.cmp)
 	if err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {

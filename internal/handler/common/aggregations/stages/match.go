@@ -17,6 +17,7 @@ package stages
 import (
 	"context"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
@@ -28,9 +29,16 @@ import (
 // match represents $match stage.
 type match struct {
 	filter *types.Document
+	cmp    *collation.Comparator
 }
 
 func newMatch(stage *types.Document) (aggregations.Stage, error) {
+	return NewMatchStage(stage, nil)
+}
+
+// NewMatchStage builds a $match stage whose string comparisons honor cmp when
+// non-nil.
+func NewMatchStage(stage *types.Document, cmp *collation.Comparator) (aggregations.Stage, error) {
 	filter, err := common.GetRequiredParam[*types.Document](stage, "$match")
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -46,11 +54,12 @@ func newMatch(stage *types.Document) (aggregations.Stage, error) {
 
 	return &match{
 		filter: filter,
+		cmp:    cmp,
 	}, nil
 }
 
 func (m *match) Process(ctx context.Context, iter types.DocumentsIterator, closer *iterator.MultiCloser) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	return common.FilterIterator(iter, closer, m.filter), nil
+	return common.FilterIteratorColl(iter, closer, m.filter, m.cmp), nil
 }
 
 // geoNearNotAllowedMsg is MongoDB's verbatim Location5626500 message

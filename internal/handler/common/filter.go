@@ -29,6 +29,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations/operators"
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -43,6 +44,12 @@ import (
 //
 // Passed arguments must not be modified.
 func FilterDocument(doc, filter *types.Document) (bool, error) {
+	return FilterDocumentColl(doc, filter, nil)
+}
+
+// FilterDocumentColl is FilterDocument with an optional collation comparator.
+// When cmp is nil, string comparison is binary (identical to FilterDocument).
+func FilterDocumentColl(doc, filter *types.Document, cmp *collation.Comparator) (bool, error) {
 	iter := filter.Iterator()
 	defer iter.Close()
 
@@ -57,7 +64,7 @@ func FilterDocument(doc, filter *types.Document) (bool, error) {
 		}
 
 		// top-level filters are ANDed together
-		matches, err := filterDocumentPair(doc, filterKey, filterValue)
+		matches, err := filterDocumentPair(doc, filterKey, filterValue, cmp)
 		if err != nil {
 			return false, lazyerrors.Error(err)
 		}
@@ -68,7 +75,7 @@ func FilterDocument(doc, filter *types.Document) (bool, error) {
 }
 
 // filterDocumentPair handles a single filter element key/value pair {filterKey: filterValue}.
-func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) (bool, error) {
+func filterDocumentPair(doc *types.Document, filterKey string, filterValue any, cmp *collation.Comparator) (bool, error) {
 	var vals []any
 	filterSuffix := filterKey
 
@@ -96,7 +103,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) 
 
 	if strings.HasPrefix(filterKey, "$") {
 		// {$operator: filterValue}
-		return filterOperator(doc, filterKey, filterValue)
+		return filterOperator(doc, filterKey, filterValue, cmp)
 	}
 
 	switch filterValue := filterValue.(type) {
@@ -113,7 +120,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) 
 
 		for _, doc := range docs {
 			// {field: {expr}} or {field: {document}}
-			ok, err := filterFieldExpr(doc, filterKey, filterSuffix, filterValue)
+			ok, err := filterFieldExpr(doc, filterKey, filterSuffix, filterValue, cmp)
 			if err != nil {
 				return false, err
 			}
@@ -129,7 +136,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) 
 		}
 
 		for _, val := range vals {
-			if result := types.Compare(val, filterValue); result == types.Equal {
+			if result := collCompare(val, filterValue, cmp); result == types.Equal {
 				return true, nil
 			}
 		}
@@ -146,7 +153,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) 
 		}
 	default:
 		for _, val := range vals {
-			if result := types.Compare(val, filterValue); result == types.Equal {
+			if result := collCompare(val, filterValue, cmp); result == types.Equal {
 				return true, nil
 			}
 		}
@@ -157,7 +164,7 @@ func filterDocumentPair(doc *types.Document, filterKey string, filterValue any) 
 }
 
 // filterOperator handles a top-level operator filter {$operator: filterValue}.
-func filterOperator(doc *types.Document, operator string, filterValue any) (bool, error) {
+func filterOperator(doc *types.Document, operator string, filterValue any, cmp *collation.Comparator) (bool, error) {
 	switch operator {
 	case "$and":
 		// {$and: [{expr1}, {expr2}, ...]}
@@ -192,7 +199,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 		for i := 0; i < exprs.Len(); i++ {
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
-			matches, err := FilterDocument(doc, expr)
+			matches, err := FilterDocumentColl(doc, expr, cmp)
 			if err != nil {
 				return false, err
 			}
@@ -236,7 +243,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 		for i := 0; i < exprs.Len(); i++ {
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
-			matches, err := FilterDocument(doc, expr)
+			matches, err := FilterDocumentColl(doc, expr, cmp)
 			if err != nil {
 				return false, err
 			}
@@ -280,7 +287,7 @@ func filterOperator(doc *types.Document, operator string, filterValue any) (bool
 		for i := 0; i < exprs.Len(); i++ {
 			expr := must.NotFail(exprs.Get(i)).(*types.Document)
 
-			matches, err := FilterDocument(doc, expr)
+			matches, err := FilterDocumentColl(doc, expr, cmp)
 			if err != nil {
 				return false, err
 			}
@@ -366,7 +373,7 @@ func filterExprOperator(doc, filter *types.Document) (bool, error) {
 }
 
 // filterFieldExpr handles {field: {expr}} or {field: {document}} filter.
-func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document) (bool, error) {
+func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *types.Document, cmp *collation.Comparator) (bool, error) {
 	if expr.Len() == 0 {
 		fieldValue, err := doc.Get(filterSuffix)
 		if err != nil {
@@ -422,7 +429,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 				}
 				return false, nil
 			default:
-				result := types.Compare(fieldValue, exprValue)
+				result := collCompare(fieldValue, exprValue, cmp)
 				if result != types.Equal {
 					return false, nil
 				}
@@ -445,7 +452,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 					exprKey,
 				)
 			default:
-				result := types.Compare(fieldValue, exprValue)
+				result := collCompare(fieldValue, exprValue, cmp)
 				if result == types.Equal {
 					return false, nil
 				}
@@ -471,7 +478,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $gt comparison.
 
-			result := types.CompareOrderForOperator(fieldValue, exprValue, types.Descending)
+			result := collCompareOrderOp(fieldValue, exprValue, types.Descending, cmp)
 			if result != types.Greater {
 				return false, nil
 			}
@@ -495,7 +502,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// Above compares the maximum number of array 41.5 to the filter 42,
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $gte comparison.
-			result := types.CompareOrderForOperator(fieldValue, exprValue, types.Descending)
+			result := collCompareOrderOp(fieldValue, exprValue, types.Descending, cmp)
 			if result != types.Equal && result != types.Greater {
 				return false, nil
 			}
@@ -520,7 +527,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $lt comparison.
 
-			result := types.CompareOrderForOperator(fieldValue, exprValue, types.Ascending)
+			result := collCompareOrderOp(fieldValue, exprValue, types.Ascending, cmp)
 			if result != types.Less {
 				return false, nil
 			}
@@ -545,7 +552,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// and results in Less. Other values "foo" and nil which are
 			// not number type are not considered for $lt comparison.
 
-			result := types.CompareOrderForOperator(fieldValue, exprValue, types.Ascending)
+			result := collCompareOrderOp(fieldValue, exprValue, types.Ascending, cmp)
 			if result != types.Equal && result != types.Less {
 				return false, nil
 			}
@@ -593,7 +600,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 						found = true
 					}
 				default:
-					result := types.Compare(fieldValue, arrValue)
+					result := collCompare(fieldValue, arrValue, cmp)
 					if result == types.Equal {
 						found = true
 					}
@@ -647,7 +654,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 						found = true
 					}
 				default:
-					result := types.Compare(fieldValue, arrValue)
+					result := collCompare(fieldValue, arrValue, cmp)
 					if result == types.Equal {
 						found = true
 					}
@@ -662,7 +669,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 			// {field: {$not: {expr}}}
 			switch exprValue := exprValue.(type) {
 			case *types.Document:
-				res, err := filterFieldExpr(doc, filterKey, filterSuffix, exprValue)
+				res, err := filterFieldExpr(doc, filterKey, filterSuffix, exprValue, cmp)
 				if res || err != nil {
 					return false, err
 				}
@@ -690,7 +697,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 		case "$elemMatch":
 			// {field: {$elemMatch: value}}
-			res, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, exprValue)
+			res, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, exprValue, cmp)
 			if !res || err != nil {
 				return false, err
 			}
@@ -704,7 +711,7 @@ func filterFieldExpr(doc *types.Document, filterKey, filterSuffix string, expr *
 
 		case "$all":
 			// {field: {$all: [value, another_value, ...]}}
-			res, err := filterFieldExprAll(doc, filterKey, filterSuffix, fieldValue, exprValue)
+			res, err := filterFieldExprAll(doc, filterKey, filterSuffix, fieldValue, exprValue, cmp)
 			if !res || err != nil {
 				return false, err
 			}
@@ -1046,7 +1053,7 @@ func filterFieldExprSize(fieldValue any, sizeValue any) (bool, error) {
 //
 // Special case: if any query element is {$elemMatch: expr}, it is treated as an $elemMatch
 // condition applied to the field array (MongoDB extension: $all + $elemMatch).
-func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fieldValue any, allValue any) (bool, error) {
+func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fieldValue any, allValue any, cmp *collation.Comparator) (bool, error) {
 	query, ok := allValue.(*types.Array)
 	if !ok {
 		return false, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "$all needs an array", "$all")
@@ -1085,7 +1092,7 @@ func filterFieldExprAll(doc *types.Document, filterKey, filterSuffix string, fie
 			if err != nil {
 				return false, nil
 			}
-			matched, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, elemMatchValue)
+			matched, err := filterFieldExprElemMatch(doc, filterKey, filterSuffix, elemMatchValue, cmp)
 			if err != nil {
 				return false, err
 			}
@@ -1736,7 +1743,7 @@ func filterFieldValueByTypeCode(fieldValue any, code handlerparams.TypeCode) (bo
 //     FilterDocument on each embedded document element.
 //   - Field conditions (at least one key without "$", e.g. {a: 1, b: 2} or {score: {$gt: 5}}):
 //     iterates array elements and calls FilterDocument on each embedded document element.
-func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix string, exprValue any) (bool, error) {
+func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix string, exprValue any, cmp *collation.Comparator) (bool, error) {
 	expr, ok := exprValue.(*types.Document)
 	if !ok {
 		return false, handlererrors.NewCommandErrorMsgWithArgument(
@@ -1799,7 +1806,7 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			// correctly requires ALL conditions to be satisfied by the SAME element,
 			// rather than allowing different elements to satisfy different conditions.
 			tempDoc := must.NotFail(types.NewDocument(filterSuffix, elem))
-			matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr)
+			matches, err = filterFieldExpr(tempDoc, filterKey, filterSuffix, expr, cmp)
 		} else {
 			// Logical operators ($and/$or/$nor) or field conditions: the element must be
 			// a document and satisfy the expression as a document filter.
@@ -1807,7 +1814,7 @@ func filterFieldExprElemMatch(doc *types.Document, filterKey, filterSuffix strin
 			if !ok {
 				continue
 			}
-			matches, err = FilterDocument(elemDoc, expr)
+			matches, err = FilterDocumentColl(elemDoc, expr, cmp)
 		}
 
 		if err != nil {

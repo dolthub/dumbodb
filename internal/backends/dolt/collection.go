@@ -102,7 +102,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 {
+	if !naturalHint && params != nil && !params.Collated && params.Filter != nil && params.Sort.Len() == 0 {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint); used {
 			if err != nil {
 				return nil, err
@@ -129,7 +129,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// Fast path: if the filter pins _id to a concrete scalar value, use the
 	// primary-key point lookup instead of a full collection scan. The handler's
 	// downstream FilterIterator applies any remaining predicates.
-	if !naturalHint && params != nil && params.Filter != nil {
+	if !naturalHint && params != nil && !params.Collated && params.Filter != nil {
 		if idVal, ok := simpleIDEquality(params.Filter); ok {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
@@ -147,11 +147,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// it can be proven that a document whose JSON does NOT contain the
 	// pattern cannot possibly match the filter.
 	//
-	// Under case-insensitive collation the handler will re-check matches
+	// Under a non-simple collation the handler re-checks matches through the
 	// against a regex substitution of the filter, so byte-level equality is
 	// not a sound lower bound  -- skip the prefilter.
 	var pf func([]byte) bool
-	if params != nil && !onlyRecordIDs && !params.CaseInsensitive {
+	if params != nil && !onlyRecordIDs && !params.Collated {
 		pf = buildScanPrefilter(params.Filter)
 	}
 

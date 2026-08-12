@@ -21,6 +21,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -131,11 +132,15 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 			indexDoc.Set("partialFilterExpression", index.PartialFilterExpression)
 		}
 
-		// The stored collation spec is echoed as requested. MongoDB reports the
-		// resolved spec (defaults plus an ICU version); reproducing that
-		// requires collation resolution (workspace-dxn).
+		// Echo the resolved collation: MongoDB's server defaults filled in plus
+		// the ICU version. The version is DumboDB's real linked ICU, not Mongo's
+		// 57.1 (an intended divergence, see the ICU binding design).
 		if index.Collation != nil {
-			indexDoc.Set("collation", index.Collation)
+			if resolved := collation.Parse(index.Collation).Resolve(); resolved != nil {
+				indexDoc.Set("collation", resolved)
+			} else {
+				indexDoc.Set("collation", index.Collation)
+			}
 		}
 
 		if index.Hidden {

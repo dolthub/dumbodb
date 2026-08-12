@@ -15,6 +15,7 @@
 package common
 
 import (
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -49,8 +50,8 @@ func SortIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, so
 // SortIteratorWithCollation returns an iterator of sorted documents using
 // collation-aware comparison when caseInsensitive is true.
 // It will be added to the given closer.
-func SortIteratorWithCollation(iter types.DocumentsIterator, closer *iterator.MultiCloser, sort *types.Document, caseInsensitive bool) (types.DocumentsIterator, error) { //nolint:lll // for readability
-	if !caseInsensitive {
+func SortIteratorWithCollation(iter types.DocumentsIterator, closer *iterator.MultiCloser, sort *types.Document, cmp *collation.Comparator) (types.DocumentsIterator, error) { //nolint:lll // for readability
+	if cmp == nil {
 		return SortIterator(iter, closer, sort)
 	}
 
@@ -63,7 +64,7 @@ func SortIteratorWithCollation(iter types.DocumentsIterator, closer *iterator.Mu
 		return nil, lazyerrors.Error(err)
 	}
 
-	if err = SortDocumentsWithCollation(docs, sort, true); err != nil {
+	if err = SortDocumentsWithCollation(docs, sort, cmp); err != nil {
 		return nil, lazyerrors.Error(err)
 	}
 

@@ -29,7 +29,7 @@ type CountParams struct {
 	Skip  int64 `dumbo:"skip,opt,positiveNumber"`
 	Limit int64 `dumbo:"limit,opt,positiveNumber"`
 
-	Collation *types.Document `dumbo:"collation,unimplemented"`
+	Collation *types.Document `dumbo:"collation,opt"`
 
 	Fields any `dumbo:"fields,ignored"` // legacy MongoDB shell adds it, but it is never actually used
 
