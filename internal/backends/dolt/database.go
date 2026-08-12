@@ -195,6 +195,7 @@ func (db *database) ListCollections(ctx context.Context, params *backends.ListCo
 		if m := catalog[name]; m != nil {
 			ci.UUID = m.UUID
 			ci.Validator = m.Validator
+			ci.Collation = m.Collation
 			// listCollections must mirror MongoDB, which does NOT materialize the
 			// validationLevel/validationAction defaults (see collMeta.effectiveValidation).
 			ci.ValidationLevel = m.ValidationLevel
@@ -270,6 +271,7 @@ func (db *database) CreateCollection(ctx context.Context, params *backends.Creat
 	meta := &collMeta{
 		UUID:             collectionUUID(db.name, params.Name),
 		Validator:        params.Validator,
+		Collation:        params.Collation,
 		ValidationLevel:  params.ValidationLevel,
 		ValidationAction: params.ValidationAction,
 		IsTimeSeries:     params.IsTimeSeries,

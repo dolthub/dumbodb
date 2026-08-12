@@ -23,6 +23,7 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -69,7 +70,6 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		"indexOptionDefaults",
 		"writeConcern",
 		"comment",
-		"collation",
 	}
 	common.Ignored(document, h.L, ignoredFields...)
 
@@ -228,6 +228,26 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			)
 		}
 		params.Validator = validatorDoc
+	}
+
+	if collationVal, _ := document.Get("collation"); collationVal != nil {
+		hasExplicitOptions = true
+		collationDoc, ok := collationVal.(*types.Document)
+		if !ok {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"'collation' must be a document",
+				"create",
+			)
+		}
+		if loc := collation.Parse(collationDoc).Locale; !collation.LocaleAccepted(loc) {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				fmt.Sprintf("Field 'locale' is invalid in: { locale: %q }", loc),
+				"create",
+			)
+		}
+		params.Collation = collationDoc
 	}
 
 	if validationLevelVal, _ := document.Get("validationLevel"); validationLevelVal != nil {
