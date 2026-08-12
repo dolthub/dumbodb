@@ -41,8 +41,9 @@ import (
 // automatically completed due to document-level conflicts. It persists in dbState
 // until the user resolves all conflicts.
 //
-// When isCherryPick is false: fromBranch and fromHash identify the source branch;
-// the final commit has two parents (intoHash and fromHash).
+// When isCherryPick is false: fromBranch is the source refspec as the caller
+// wrote it (branch, tag, hash, or traversal expression) and fromHash is the
+// commit it resolved to; the final commit has two parents (intoHash and fromHash).
 //
 // When isCherryPick is true: pickHash is the cherry-picked commit; intoHash is
 // the current branch HEAD; the final commit has one parent (intoHash).

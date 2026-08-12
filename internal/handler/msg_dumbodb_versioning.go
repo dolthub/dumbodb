@@ -414,11 +414,31 @@ func branchFromDBName(encoded string) (dbName, rootish string, readOnly bool, er
 	return encoded, defaultBranch, false, nil
 }
 
+// isHEADRootish reports whether a refspec is anchored at HEAD: the bare word or
+// HEAD followed by a traversal operator. Names that merely begin with those four
+// letters (a branch called "HEADroom") are not HEAD-anchored.
+func isHEADRootish(rootish string) bool {
+	return rootish == "HEAD" || strings.HasPrefix(rootish, "HEAD~") || strings.HasPrefix(rootish, "HEAD^")
+}
+
+// resolveHEADRootish rewrites a HEAD-anchored refspec against the connection's
+// branch: "HEAD" -> "<branch>", "HEAD~2" -> "<branch>~2", "HEAD^2~1" -> "<branch>^2~1".
+//
+// DumboDB connections are stateless, so HEAD can only mean the tip of the branch
+// encoded in $db. Rewriting here keeps the backend resolver working on concrete
+// refs. Non-HEAD refspecs are returned unchanged.
+func resolveHEADRootish(rootish, branch string) string {
+	if !isHEADRootish(rootish) {
+		return rootish
+	}
+	return branch + rootish[len("HEAD"):]
+}
+
 // rejectHEAD returns an error if the rootish is HEAD or starts with HEAD~ / HEAD^.
 // DumboDB connections are stateless -- there is no per-session "current branch",
 // so HEAD has no meaning in the connection string. Use a branch name instead.
 func rejectHEAD(rootish string) error {
-	if rootish == "HEAD" || strings.HasPrefix(rootish, "HEAD~") || strings.HasPrefix(rootish, "HEAD^") {
+	if isHEADRootish(rootish) {
 		return handlererrors.NewCommandErrorMsg(
 			handlererrors.ErrOperationFailed,
 			fmt.Sprintf("rootish %q: HEAD is not supported in connection strings; use a branch name instead", rootish),
@@ -540,8 +560,9 @@ func enforceWritableRootish(encodedDB string) error {
 //   - Bare commit hash (full 32-char lowercase base32, i.e. 0-9a-v)
 //   - Relative ancestor expression (<branch>~<N>)
 //
-// Rejected by rejectHEAD (called separately after parseRootish):
-//   - HEAD, HEAD~N, HEAD^N (no per-session current branch in DumboDB)
+// HEAD-anchored forms (HEAD, HEAD~N, HEAD^N) pass validation here. Command
+// parameters resolve them against the connection's branch via resolveHEADRootish;
+// connection strings reject them via rejectHEAD.
 //
 // Rejected forms (returned as ErrOperationFailed):
 //   - Any '@' (reserved as the database/branch delimiter; covers reflog <ref>@{...} too)
@@ -803,7 +824,11 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 
 // MsgDumboDBMerge implements the `dumboDBMerge` command.
 //
-// Merges a source branch into the current branch encoded in $db (format: "dbname@branch").
+// Merges a source commit-ish into the current branch encoded in $db (format:
+// "dbname@branch"). mergeIn is usually a branch name, but any hash, tag,
+// traversal expression, or HEAD-anchored form is accepted; HEAD resolves against
+// the branch encoded in $db.
+//
 // Usage:
 //
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBMerge: 1, mergeIn: "feature"})
@@ -966,6 +991,15 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 			"mergeIn",
 		)
 	}
+
+	if err := parseRootish(fromBranch); err != nil {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboMerge: "+err.Error(),
+			"mergeIn",
+		)
+	}
+	fromBranch = resolveHEADRootish(fromBranch, intoBranch)
 
 	message, err := common.GetOptionalParam[string](document, "message", "")
 	if err != nil {
@@ -1712,13 +1746,7 @@ func (h *Handler) MsgDumboDBBranchStatus(connCtx context.Context, msg *wire.OpMs
 			return "", handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrBadValue, "dumboBranchStatus: "+perr.Error(), argName)
 		}
-		if s == "HEAD" {
-			return branch, nil
-		}
-		if strings.HasPrefix(s, "HEAD~") {
-			return branch + s[len("HEAD"):], nil
-		}
-		return s, nil
+		return resolveHEADRootish(s, branch), nil
 	}
 
 	resolvedBase, err := rewriteHead(base, "base")
@@ -1826,14 +1854,7 @@ func (h *Handler) MsgDumboDBReset(connCtx context.Context, msg *wire.OpMsg) (*wi
 				"to",
 			)
 		}
-		// HEAD / HEAD~N target the connection's branch, not the literal default.
-		// Rewrite to <branch> / <branch>~N so the backend's rootish resolver sees
-		// a concrete branch reference.
-		if to == "HEAD" {
-			to = branch
-		} else if strings.HasPrefix(to, "HEAD~") {
-			to = branch + to[len("HEAD"):]
-		}
+		to = resolveHEADRootish(to, branch)
 	}
 
 	hard, err := common.GetOptionalParam[bool](document, "hard", false)
@@ -1963,9 +1984,13 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 // committed; use dumboDBConflicts / dumboDBResolveConflict to inspect and resolve
 // conflicts, then dumboCherryPick continue:true to complete.
 //
+// commit is any commit-ish: a hash, branch, tag, traversal expression, or a
+// HEAD-anchored form resolved against the branch encoded in $db.
+//
 // Usage:
 //
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, commit: "feature~1"})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, abort: 1})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBCherryPick: 1, continue: 1})
 //
@@ -2086,6 +2111,7 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 			"commit",
 		)
 	}
+	commit = resolveHEADRootish(commit, branch)
 
 	message, err := common.GetOptionalParam[string](document, "message", "")
 	if err != nil {
@@ -2160,6 +2186,9 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 // onto the tip of Onto, rewriting branch history. On conflict, the rebase is paused;
 // use doltConflicts / doltResolveConflict to inspect and resolve conflicts, then
 // doltRebase continue:true to proceed.
+//
+// onto is any commit-ish: a hash, branch, tag, traversal expression, or a
+// HEAD-anchored form resolved against the branch encoded in $db.
 //
 // Usage:
 //
@@ -2294,6 +2323,7 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 			"onto",
 		)
 	}
+	onto = resolveHEADRootish(onto, branch)
 
 	res, rebaseErr := vb.DumboDBRebase(connCtx, &backends.RebaseParams{
 		DBName:    dbName,
@@ -2342,9 +2372,13 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 // but not committed; use doltConflicts / doltResolveConflict to inspect and resolve
 // conflicts, then doltRevert continue:true to complete. Use abort:true to abandon.
 //
+// commit is any commit-ish: a hash, branch, tag, traversal expression, or a
+// HEAD-anchored form resolved against the branch encoded in $db.
+//
 // Usage:
 //
 //	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, commit: "<hash>"})
+//	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, commit: "HEAD"})
 //	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, abort: 1})
 //	db.getSiblingDB("mydb@main").runCommand({doltRevert: 1, continue: 1})
 func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
@@ -2454,6 +2488,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 			"commit",
 		)
 	}
+	commit = resolveHEADRootish(commit, branch)
 
 	message, err := common.GetOptionalParam[string](document, "message", "")
 	if err != nil {
@@ -2523,7 +2558,7 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 // Usage:
 //
 //	db.runCommand({dumboTag: 1})                                       // list all tags
-//	db.runCommand({dumboTag: 1, name: "v1.0", hash: "<rootish>"})      // create tag at rootish
+//	db.runCommand({dumboTag: 1, name: "v1.0", hash: "<rootish>"})      // create tag at rootish (HEAD forms allowed)
 //	db.runCommand({dumboTag: 1, name: "v1.0"})                         // create tag at current branch HEAD
 //	db.runCommand({dumboTag: 1, name: "v1.0", delete: true})           // delete tag
 //
@@ -2569,6 +2604,7 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 	if err != nil {
 		return nil, err
 	}
+	tagHash = resolveHEADRootish(tagHash, branch)
 
 	message, err := common.GetOptionalParam[string](document, "message", "")
 	if err != nil {

@@ -158,7 +158,7 @@ func (b *Backend) recheckCrossValidation(ctx context.Context, db *dbState, ms *m
 	}
 
 	before := unresolvedConflictCount(ms.conflicts)
-	theirsDesc := fmt.Sprintf("branch '%s' (theirs)", ms.fromBranch)
+	theirsDesc := fmt.Sprintf("%s (theirs)", refLabel(ctx, db, ms.fromBranch))
 	if err := crossValidateMergedDocuments(ctx, db, ms.resolvedAM, baseAM, ms.conflicts, ms.metaConflicts, ms.fromHash, theirsDesc, true); err != nil {
 		return false, err
 	}

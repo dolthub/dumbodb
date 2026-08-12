@@ -1611,15 +1611,29 @@ func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.Bran
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
+// refLabel describes a refspec the way git describes merge sources in commit
+// subjects and conflict descriptions: "branch 'feature'", "tag 'v1.0'", or
+// "commit '<refspec>'" for hashes and traversal expressions.
+func refLabel(ctx context.Context, db *dbState, ref string) string {
+	if ds, err := db.datasDB.GetDataset(ctx, "refs/heads/"+ref); err == nil && ds.HasHead() {
+		return fmt.Sprintf("branch '%s'", ref)
+	}
+	if ds, err := db.datasDB.GetDataset(ctx, tagRefPrefix+ref); err == nil && ds.HasHead() {
+		return fmt.Sprintf("tag '%s'", ref)
+	}
+	return fmt.Sprintf("commit '%s'", ref)
+}
+
 // DumboDBMerge implements backends.VersioningBackend.
 //
-// It merges the From branch into the Into branch of the specified database.
+// It merges From into the Into branch of the specified database. From is any
+// commit-ish: a branch name, tag, commit hash, or traversal expression.
 // Four cases are handled:
 //
 //   - Abort (Abort=true): discard the in-progress merge and restore the pre-merge state.
-//   - Already up-to-date: From's HEAD is an ancestor of (or equal to) Into's HEAD.
-//   - Fast-forward: Into's HEAD is an ancestor of From's HEAD; the Into pointer is
-//     simply advanced to From's HEAD without creating a new commit.
+//   - Already up-to-date: From is an ancestor of (or equal to) Into's HEAD.
+//   - Fast-forward: Into's HEAD is an ancestor of From; the Into pointer is
+//     simply advanced to From without creating a new commit.
 //   - True 3-way merge: a merge commit is created on the Into branch with both
 //     branch HEADs as parents. When document-level conflicts exist, the merge is staged
 //     but not committed; a *backends.MergeConflictError is returned and the caller must
@@ -1725,16 +1739,9 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		return nil, fmt.Errorf("DumboDBMerge: into branch %q has no head address", params.Into)
 	}
 
-	fromBranchDS, err := db.datasDB.GetDataset(ctx, "refs/heads/"+params.From)
+	fromHash, err := resolveRootishToCommitHash(ctx, db, params.From)
 	if err != nil {
-		return nil, fmt.Errorf("DumboDBMerge: resolving from branch %q: %w", params.From, err)
-	}
-	if !fromBranchDS.HasHead() {
-		return nil, fmt.Errorf("DumboDBMerge: from branch %q has no commits", params.From)
-	}
-	fromHash, ok := fromBranchDS.MaybeHeadAddr()
-	if !ok {
-		return nil, fmt.Errorf("DumboDBMerge: from branch %q has no head address", params.From)
+		return nil, fmt.Errorf("DumboDBMerge: resolving merge source %q: %w", params.From, err)
 	}
 
 	intoCommit, err := datas.LoadCommitAddr(ctx, db.vs, intoHash)
@@ -1803,7 +1810,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	}
 
 	mergedAM, conflicts, viewConflicts, metaConflicts, err := mergeAddressMapsWithConflicts(ctx, db, intoAM, fromAM, baseAM, fromHash, baseHash,
-		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("branch '%s' (theirs)", params.From))
+		fmt.Sprintf("branch '%s' (ours)", params.Into), fmt.Sprintf("%s (theirs)", refLabel(ctx, db, params.From)))
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBMerge: %w", err)
 	}
@@ -1868,7 +1875,7 @@ func (b *Backend) commitMerge(
 ) (*backends.MergeResult, error) {
 	mergeMessage := message
 	if mergeMessage == "" {
-		mergeMessage = fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
+		mergeMessage = fmt.Sprintf("Merge %s into '%s'", refLabel(ctx, db, fromBranch), intoBranch)
 	}
 
 	if author == "" {
