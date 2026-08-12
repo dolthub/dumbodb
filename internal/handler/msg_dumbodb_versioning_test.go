@@ -264,3 +264,44 @@ func TestEnforceWritableRootish(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveHEADRootish(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		rootish string
+		branch  string
+		want    string
+	}{
+		// HEAD-anchored forms resolve against the connection branch.
+		{"HEAD", "main", "main"},
+		{"HEAD", "feature", "feature"},
+		{"HEAD~1", "main", "main~1"},
+		{"HEAD~0", "feature", "feature~0"},
+		{"HEAD~10", "release/v2", "release/v2~10"},
+		{"HEAD^", "main", "main^"},
+		{"HEAD^2", "main", "main^2"},
+		{"HEAD^2~3", "feature", "feature^2~3"},
+		{"HEAD~1^2", "main", "main~1^2"},
+
+		// Names that merely start with "HEAD" are left alone.
+		{"HEADroom", "main", "HEADroom"},
+		{"HEADS", "main", "HEADS"},
+		{"head", "main", "head"},
+
+		// Other refspecs pass through untouched.
+		{"main", "feature", "main"},
+		{"v1.0", "main", "v1.0"},
+		{"main~2", "feature", "main~2"},
+		{"na7kfra98h45fr2u5qtr30o2ggm7vh61", "main", "na7kfra98h45fr2u5qtr30o2ggm7vh61"},
+		{"", "main", ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.rootish, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, resolveHEADRootish(tt.rootish, tt.branch))
+		})
+	}
+}

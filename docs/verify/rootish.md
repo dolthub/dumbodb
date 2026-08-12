@@ -205,9 +205,12 @@ db.getSiblingDB("verifydb@HEAD^").items.find({}).toArray()
 Key checks:
 - `HEAD`, `HEAD~N`, and `HEAD^` all return code 96
 
-> **Note:** `HEAD` is still accepted in command parameters like `dumboDiff`'s
-> `from` and `to` fields, where it resolves relative to the connection's branch.
-> It is only rejected in the connection string itself (`mydb@HEAD`).
+> **Note:** `HEAD` is still accepted in every command parameter that names a
+> commit (`dumboDiff` `from`/`to`, `dumboRevert`/`dumboCherryPick` `commit`,
+> `dumboRebase` `onto`, `dumboMerge` `mergeIn`, `dumboReset` `to`, `dumboTag`
+> `hash`, `dumboBranchStatus` `base`/`targets`), where it resolves relative to
+> the connection's branch. It is only rejected in the connection string itself
+> (`mydb@HEAD`).
 
 ---
 
@@ -393,6 +396,65 @@ db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 
 ---
 
+## Scenario 10: HEAD in command parameters
+
+Rejected in the connection string (Scenario 5), HEAD is accepted in every command
+parameter that names a commit, where it means the tip of the branch encoded in the
+database name. Automated analog: `tests/verify/head_rootish_test.go`.
+
+```js
+var main = db.getSiblingDB("verifydb@main")
+
+// Undo the most recent commit on this branch
+main.runCommand({ dumboRevert: 1, commit: "HEAD" })
+// { commitId: "<new-hash>", message: "Revert ... This reverts commit <old-tip>.", ok: 1 }
+
+// Traversal anchored at the branch tip
+main.runCommand({ dumboRevert: 1, commit: "HEAD~2" })
+main.runCommand({ dumboCherryPick: 1, commit: "HEAD~1" })
+main.runCommand({ dumboRebase: 1, onto: "HEAD~1" })
+// { commitsReplayed: 0, newTip: "<unchanged-tip>", ok: 1 }  -- onto is an ancestor
+
+// Tag the current tip and its parent
+main.runCommand({ dumboTag: 1, name: "at-head", hash: "HEAD" })
+main.runCommand({ dumboTag: 1, name: "at-head-1", hash: "HEAD~1" })
+
+// Merging your own branch changes nothing
+main.runCommand({ dumboMerge: 1, mergeIn: "HEAD" })
+// { commitId: "<tip>", message: "already up-to-date", ok: 1 }
+```
+
+On a different branch, HEAD follows the connection:
+
+```js
+db.getSiblingDB("verifydb@feature").runCommand({ dumboTag: 1, name: "feat-tip", hash: "HEAD" })
+// Tags feature's tip, not main's
+```
+
+`mergeIn` also accepts non-branch sources, which the merge message names the way
+git does:
+
+```js
+db.getSiblingDB("verifydb@feature").runCommand({ dumboMerge: 1, mergeIn: hash2 })
+// { commitId: "...", message: "Merge commit '<hash2>' into 'feature'", ok: 1 }
+
+db.getSiblingDB("verifydb@feature").runCommand({ dumboMerge: 1, mergeIn: "release-1" })
+// { commitId: "...", message: "Merge tag 'release-1' into 'feature'", ok: 1 }
+
+// Merge partway into another branch's history: two commits below feature's tip
+main.runCommand({ dumboMerge: 1, mergeIn: "feature~2" })
+// { commitId: "...", message: "Merge commit 'feature~2' into 'main'", ok: 1 }
+// main picks up feature's work only up to that commit; feature is untouched
+```
+
+Key checks:
+- `HEAD` resolves to the connection branch's tip, never to main's tip
+- `HEAD~N` and `HEAD^N` walk from that tip, and chain (`HEAD^2~3`)
+- `mergeIn` resolves branches, tags, hashes, and traversal expressions alike
+- `mergeIn: "<branch>~N"` merges the state at that ancestor, not the branch tip
+
+---
+
 ## Quick Reference
 
 | Rootish form | Example | Read | Write[1] | Branch creation[2] | Notes |
@@ -402,8 +464,8 @@ db.getSiblingDB("verifydb@main%2E%2E%2Efeature").items.find({}).toArray()
 | Tag name | `mydb@release-1` | yes | no | yes | Read-only; resolves to tagged commit |
 | Commit hash (32 chars) | `mydb@<hash>` | yes | no | yes | Read-only snapshot |
 | Ancestor expression | `mydb@main~1` | yes | no | yes | Read-only; walks first-parent chain |
-| HEAD | `mydb@HEAD` | no | no | no | Not supported in connection strings (code 96) |
-| HEAD-relative | `mydb@HEAD~N`, `mydb@HEAD^` | no | no | no | Not supported in connection strings (code 96) |
+| HEAD | `mydb@HEAD` | no | no | no | Not supported in connection strings (code 96); valid in command parameters (Scenario 10) |
+| HEAD-relative | `mydb@HEAD~N`, `mydb@HEAD^` | no | no | no | Not supported in connection strings (code 96); valid in command parameters (Scenario 10) |
 | Caret parent | `mydb@main^2` | yes | no | yes | Selects Nth parent (merge commits) |
 | Chained | `mydb@main^1~2`, `mydb@main^^` | yes | no | yes | Operators compose left to right |
 | Percent-encoded | `mydb@v1%2E0` (encodes `v1.0`) | yes | yes | yes | Decoded server-side |

@@ -62,7 +62,7 @@ type BranchResult struct {
 type MergeParams struct {
 	DBName    string
 	Into      string // target branch (the current branch)
-	From      string // source branch to merge from
+	From      string // source commit-ish to merge from: branch, tag, commit hash, or traversal expression
 	Abort     bool   // if true, abort the in-progress merge and restore the pre-merge state
 	Continue  bool   // if true, resume after conflict resolution and create the merge commit
 	Message   string // optional: custom merge commit message (ignored on fast-forward and already-up-to-date)

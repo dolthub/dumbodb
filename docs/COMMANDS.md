@@ -19,6 +19,23 @@ All versioning commands target a specific branch by encoding the branch name in 
 
 Use `db.getSiblingDB("mydb@feature")` in mongosh to connect to a branch.
 
+## Refspecs
+
+Command parameters that name a commit (`commit`, `onto`, `mergeIn`, `to`, `hash`, `base`, `targets`, `from`) accept any of these forms:
+
+| Form | Example | Meaning |
+|------|---------|---------|
+| Branch name | `feature` | That branch's tip commit |
+| Tag name | `v1.0` | The tagged commit |
+| Commit hash (32-char base32) | `na7kfra98...` | That commit |
+| Ancestor expression | `main~2` | Two first-parents above `main`'s tip |
+| Parent selection | `main^2` | Second parent (merge commits only); `^`/`^1` is the first parent, `^0` the commit itself |
+| Chained traversal | `main~1^2` | Applied left to right, as in git |
+| `HEAD` | `HEAD` | Tip of the branch encoded in the database name |
+| `HEAD` traversal | `HEAD~1`, `HEAD^2~3` | Traversal anchored at that branch tip |
+
+`HEAD` resolves against the connection's branch, not the default branch: on `mydb@feature`, `HEAD~1` means `feature~1`. Because DumboDB connections are stateless, `HEAD` is only valid in command parameters -- it is rejected in the connection string itself (`mydb@HEAD`), where a branch name must be used instead.
+
 ## Available Commands
 
 Every `dumbo*` command has an identical `dolt*` alias:
@@ -180,9 +197,7 @@ the reverse. Read-only.
 | `base` | string | **yes** |  -- | Base refspec to compare each target against |
 | `targets` | array of strings, or string | **yes** |  -- | Target refspecs; a single string is treated as a one-element array. Must name at least one target |
 
-A refspec is a commit hash, branch name, tag name, ancestor expression (`main~2`,
-`b2^1`), `HEAD`, or `HEAD~N`. `HEAD`/`HEAD~N` resolve against the branch encoded in
-the database name.
+See [Refspecs](#refspecs) for the accepted forms.
 
 ### Response fields
 
@@ -242,7 +257,7 @@ db.getSiblingDB("orders@main").runCommand({
 
 ## dumboMerge
 
-Merges a source branch into the branch encoded in the database name.
+Merges a source commit into the branch encoded in the database name. The source is usually a branch, but any [refspec](#refspecs) works.
 
 **Alias:** `doltMerge`
 
@@ -250,7 +265,7 @@ Merges a source branch into the branch encoded in the database name.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `mergeIn` | string | **yes** |  -- | Name of the branch to merge in |
+| `mergeIn` | string | **yes** |  -- | [Refspec](#refspecs) to merge in: branch, tag, commit hash, ancestor expression, or `HEAD` form |
 | `message` | string | no | auto | Merge commit message (ignored on fast-forward / already-up-to-date) |
 | `author` | string | no | `""` | `"Name <email>"` for the merge commit author |
 | `noFF` | bool | no | `false` | Force a merge commit even when fast-forward is possible |
@@ -316,6 +331,7 @@ main.runCommand({ dumboMerge: 1, abort: 1 })
 | Condition | Error |
 |-----------|-------|
 | `mergeIn` missing or empty | `BadValue: dumboMerge: from branch name must not be empty` |
+| `mergeIn` cannot be resolved | `OperationFailed: DumboDBMerge: resolving merge source ...` |
 | `noFF` and `ffOnly` both set | `BadValue: dumboMerge: noFF and ffOnly are mutually exclusive` |
 | Merge produces conflicts | `ok: 0` response with `conflicts` array |
 
@@ -324,6 +340,8 @@ main.runCommand({ dumboMerge: 1, abort: 1 })
 - When conflicts occur, the branch HEAD is unchanged; the staged working set reflects partial merge with "ours" values for conflicting documents.
 - Use `dumboConflicts` to inspect and `dumboResolveConflict` to resolve each conflict, then call `dumboMerge continue:1`.
 - `abort: 1` restores the branch to its pre-merge state.
+- The auto-generated message names the source the way git does: `Merge branch 'feature'`, `Merge tag 'v1.0'`, or `Merge commit '<refspec>'` for hashes and traversal expressions.
+- `mergeIn: "HEAD"` merges the connection's own branch, which is always `already up-to-date`.
 
 ---
 
@@ -337,7 +355,7 @@ Applies the diff introduced by a named commit onto the current branch, creating 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `commit` | string | **yes** |  -- | Commit hash to cherry-pick |
+| `commit` | string | **yes** |  -- | [Refspec](#refspecs) of the commit to cherry-pick |
 | `message` | string | no | auto | Custom commit message (default: original message + annotation) |
 | `committer` | string | no |  -- | `"Name <email>"` committer identity. When omitted, committer equals the original commit's author. |
 
@@ -399,7 +417,7 @@ main.runCommand({ dumboCherryPick: 1, commit: "na7kfra98h45fr2u5qtr30o2ggm7vh61"
 
 | Condition | Error |
 |-----------|-------|
-| `commit` is an unsupported rootish form (HEAD, reflog, range, caret) | `BadValue: dumboCherryPick: ...` |
+| `commit` is an unsupported rootish form (reflog, range, `^{type}`) | `BadValue: dumboCherryPick: ...` |
 | Cherry-pick produces conflicts | `ok: 0` response with `conflicts` array |
 
 ---
@@ -414,7 +432,7 @@ Reapplies all commits on the current branch not reachable from `onto` onto the t
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `onto` | string | **yes** |  -- | Branch name or rootish to rebase onto |
+| `onto` | string | **yes** |  -- | [Refspec](#refspecs) to rebase onto |
 | `committer` | string | no |  -- | `"Name <email>"` committer identity for replayed commits. When omitted, committer equals the original commit's author. |
 
 ### Parameters (continue / abort)
@@ -826,8 +844,8 @@ Returns a document-level diff between two states for the branch encoded in the d
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `from` | string | no | HEAD | Starting rootish (commit hash, branch name, ancestor expression, or `"HEAD"`) |
-| `to` | string | no | working set | Ending rootish (same forms; omit to compare to current working set) |
+| `from` | string | no | HEAD | Starting [refspec](#refspecs) |
+| `to` | string | no | working set | Ending [refspec](#refspecs); omit to compare to the current working set |
 
 ### Response fields
 
@@ -937,7 +955,7 @@ Moves the branch HEAD to the specified commit. Supports soft (default) and hard 
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `to` | string | no | HEAD | Target commit hash |
+| `to` | string | no | HEAD | Target [refspec](#refspecs) |
 | `hard` | bool | no | `false` | Hard reset: also resets the working tree to the target commit |
 
 ### Response fields
@@ -994,7 +1012,7 @@ Applies the inverse diff of a named commit onto the current branch, creating a n
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `commit` | string | **yes** |  -- | Commit hash to revert |
+| `commit` | string | **yes** |  -- | [Refspec](#refspecs) of the commit to revert |
 | `message` | string | no | auto | Custom commit message |
 | `author` | string | no | `""` | `"Name <email>"` for the commit author |
 
@@ -1043,6 +1061,9 @@ const badCommitHash = log.commits[0].commitId
 
 // Revert it
 main.runCommand({ dumboRevert: 1, commit: badCommitHash })
+
+// Undo the most recent commit on this branch (same thing, by refspec)
+main.runCommand({ dumboRevert: 1, commit: "HEAD" })
 // {
 //   commitId:           "new-revert-hash...",
 //   message:            "Revert \"add order #1\"\n\nThis reverts commit <badCommitHash>.",
@@ -1358,7 +1379,7 @@ Create, list, or delete tags at specific commits. Tags are stored using Dolt's `
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `name` | string | no |  -- | Tag name. Required for create/delete. Must not contain `@` or whitespace. Omit to list all tags. |
-| `hash` | string | no | current branch HEAD | Rootish (commit hash, branch, tag, or ancestor expression) to tag |
+| `hash` | string | no | current branch HEAD | [Refspec](#refspecs) to tag |
 | `delete` | bool | no | `false` | Set to `true` to delete the named tag |
 | `message` | string | no | `""` | Tag description |
 | `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | Tagger identity "Name <email>" |
