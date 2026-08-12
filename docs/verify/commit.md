@@ -15,9 +15,14 @@ scenario top to bottom. Each section builds on the previous setup.
 | Parameter    | Type     | Required | Default      | Description                                                                  |
 |--------------|----------|----------|--------------|------------------------------------------------------------------------------|
 | `message`    | string   | no       | `""`         | Commit message                                                               |
-| `author`     | string   | **yes**  |  --            | Name of the commit author                                                    |
+| `author`     | string   | see note |  --            | `Name <email>` of the commit author. **Only accepted with `--auth` off.**     |
 | `timestamp`  | datetime | no       | current time | Commit timestamp (BSON Date)                                                 |
 | `allowEmpty` | bool     | no       | `false`      | When true, create a commit even if the working set has no changes vs HEAD    |
+
+> **Authentication note.** Under `--auth`, `doltCommit` **rejects** a client-supplied
+> `author`/`committer` with `IDLUnknownField` (40415): the server stamps the
+> authenticated user's identity (see `docs/design/commit-identity.md`). The `author`
+> column above and the scenarios below assume `--auth` is off.
 
 ## Prerequisites
 

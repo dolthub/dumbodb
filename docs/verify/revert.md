@@ -10,6 +10,10 @@ scenario top to bottom. Each section builds on the previous setup.
 > go test ./tests/... -run TestRevertVerify -v
 > ```
 
+> **Authentication note.** Under `--auth`, `doltRevert` **rejects** a client-supplied
+> `author` with `IDLUnknownField` (40415); identity comes from the authenticated
+> user (see `docs/design/commit-identity.md`). This guide assumes `--auth` is off.
+
 ## Prerequisites
 
 A running DumboDB instance and `mongosh` installed. Connect to your instance:

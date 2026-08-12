@@ -42,7 +42,7 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, lazyerrors.Error(err)
 	}
 
-	if err = common.RejectUnknownFields(document, "pwd", "customData", "roles", "digestPassword", "authenticationRestrictions", "mechanisms"); err != nil {
+	if err = common.RejectUnknownFields(document, "pwd", "customData", "commitIdentity", "roles", "digestPassword", "authenticationRestrictions", "mechanisms"); err != nil {
 		return nil, err
 	}
 
@@ -206,6 +206,21 @@ func (h *Handler) MsgUpdateUser(connCtx context.Context, msg *wire.OpMsg) (*wire
 			saved.Set("customData", customData)
 		} else {
 			saved.Remove("customData")
+		}
+
+		changes = true
+	}
+
+	if document.Has("commitIdentity") {
+		commitIdentity, err := parseCommitIdentity(document)
+		if err != nil {
+			return nil, err
+		}
+
+		if commitIdentity != nil {
+			saved.Set("commitIdentity", commitIdentity)
+		} else {
+			saved.Remove("commitIdentity")
 		}
 
 		changes = true

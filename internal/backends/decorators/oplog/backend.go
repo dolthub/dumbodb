@@ -104,9 +104,9 @@ func (b *backend) SessionRegistry() *sqlctx.SessionRegistry {
 	return nil
 }
 
-func (b *backend) AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error) {
+func (b *backend) AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error) {
 	if ac, ok := b.origB.(backends.AutoCommitBackend); ok {
-		return ac.AutoCommit(ctx, dbName, branch, message)
+		return ac.AutoCommit(ctx, dbName, branch, message, author)
 	}
 	return false, nil
 }

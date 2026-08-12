@@ -306,8 +306,22 @@ func (h *Handler) AutoCommitBoundary(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
+
+	// Under --auth, stamp auto-commits with the acting user's resolved identity;
+	// with --auth off, author stays empty and the backend uses its default.
+	author := ""
+	if h.EnableNewAuth {
+		id, resolved, err := h.commitIdentityString(ctx)
+		if err != nil {
+			return err
+		}
+		if resolved {
+			author = id
+		}
+	}
+
 	for _, t := range targets {
-		if _, err := ac.AutoCommit(ctx, t.DB, t.Branch, t.Message); err != nil {
+		if _, err := ac.AutoCommit(ctx, t.DB, t.Branch, t.Message, author); err != nil {
 			return err
 		}
 	}

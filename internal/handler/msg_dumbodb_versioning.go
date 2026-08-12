@@ -620,6 +620,10 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
 	if err = common.RejectUnknownFields(document, "message", "author", "timestamp", "allowEmpty"); err != nil {
 		return nil, err
 	}
@@ -665,11 +669,17 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	author, committer, err := h.commitAuthorCommitter(connCtx, author)
+	if err != nil {
+		return nil, err
+	}
+
 	res, err := vb.DumboDBCommit(connCtx, &backends.CommitParams{
 		DBName:     dbName,
 		Branch:     branch,
 		Message:    message,
 		Author:     author,
+		Committer:  committer,
 		Timestamp:  ts,
 		AllowEmpty: allowEmpty,
 	})
@@ -819,6 +829,10 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
 	if err = common.RejectUnknownFields(document, "mergeIn", "noFF", "ffOnly", "message", "author", "continue", "abort"); err != nil {
 		return nil, err
 	}
@@ -877,12 +891,17 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		if err != nil {
 			return nil, err
 		}
+		author, committer, err := h.commitAuthorCommitter(connCtx, author)
+		if err != nil {
+			return nil, err
+		}
 		res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
-			DBName:   dbName,
-			Into:     intoBranch,
-			Continue: true,
-			Message:  message,
-			Author:   author,
+			DBName:    dbName,
+			Into:      intoBranch,
+			Continue:  true,
+			Message:   message,
+			Author:    author,
+			Committer: committer,
 		})
 		if mergeErr != nil {
 			var conflictErr *backends.MergeConflictError
@@ -958,14 +977,20 @@ func (h *Handler) MsgDumboDBMerge(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
+	author, committer, err := h.commitAuthorCommitter(connCtx, author)
+	if err != nil {
+		return nil, err
+	}
+
 	res, mergeErr := vb.DumboDBMerge(connCtx, &backends.MergeParams{
-		DBName:  dbName,
-		Into:    intoBranch,
-		From:    fromBranch,
-		Message: message,
-		Author:  author,
-		NoFF:    noFF,
-		FFOnly:  ffOnly,
+		DBName:    dbName,
+		Into:      intoBranch,
+		From:      fromBranch,
+		Message:   message,
+		Author:    author,
+		Committer: committer,
+		NoFF:      noFF,
+		FFOnly:    ffOnly,
 	})
 
 	if mergeErr != nil {
@@ -1953,6 +1978,10 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
 	if err = common.RejectUnknownFields(document, "commit", "message", "author", "committer", "continue", "abort"); err != nil {
 		return nil, err
 	}
@@ -2018,6 +2047,10 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 		if err != nil {
 			return nil, err
 		}
+		committerParam, err = h.commitCommitter(connCtx, committerParam)
+		if err != nil {
+			return nil, err
+		}
 		res, pickErr := vb.DumboDBCherryPick(connCtx, &backends.CherryPickParams{
 			DBName:    dbName,
 			Branch:    branch,
@@ -2068,6 +2101,11 @@ func (h *Handler) MsgDumboDBCherryPick(connCtx context.Context, msg *wire.OpMsg)
 	}
 
 	committerParam, err := common.GetOptionalParam[string](document, "committer", "")
+	if err != nil {
+		return nil, err
+	}
+
+	committerParam, err = h.commitCommitter(connCtx, committerParam)
 	if err != nil {
 		return nil, err
 	}
@@ -2134,6 +2172,10 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
 	if err = common.RejectUnknownFields(document, "onto", "author", "committer", "continue", "abort"); err != nil {
 		return nil, err
 	}
@@ -2167,6 +2209,11 @@ func (h *Handler) MsgDumboDBRebase(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	rebaseCommitterEarly, err := common.GetOptionalParam[string](document, "committer", "")
+	if err != nil {
+		return nil, err
+	}
+
+	rebaseCommitterEarly, err = h.commitCommitter(connCtx, rebaseCommitterEarly)
 	if err != nil {
 		return nil, err
 	}
@@ -2306,6 +2353,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
 	if err = common.RejectUnknownFields(document, "commit", "message", "author", "continue", "abort"); err != nil {
 		return nil, err
 	}
@@ -2364,6 +2415,10 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 		if err != nil {
 			return nil, err
 		}
+		author, _, err = h.commitAuthorCommitter(connCtx, author)
+		if err != nil {
+			return nil, err
+		}
 		res, revertErr := vb.DumboDBRevert(connCtx, &backends.RevertParams{
 			DBName:   dbName,
 			Branch:   branch,
@@ -2406,6 +2461,11 @@ func (h *Handler) MsgDumboDBRevert(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, _, err = h.commitAuthorCommitter(connCtx, author)
 	if err != nil {
 		return nil, err
 	}
@@ -2477,6 +2537,10 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	if err = h.rejectClientIdentityFields(document); err != nil {
+		return nil, err
+	}
+
 	if err = common.RejectUnknownFields(document, "name", "delete", "hash", "message", "author"); err != nil {
 		return nil, err
 	}
@@ -2512,6 +2576,11 @@ func (h *Handler) MsgDumboDBTag(connCtx context.Context, msg *wire.OpMsg) (*wire
 	}
 
 	author, err := common.GetOptionalParam[string](document, "author", "")
+	if err != nil {
+		return nil, err
+	}
+
+	author, _, err = h.commitAuthorCommitter(connCtx, author)
 	if err != nil {
 		return nil, err
 	}

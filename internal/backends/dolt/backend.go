@@ -389,6 +389,45 @@ func parseAuthorString(author string) (name, email string) {
 	return author, author
 }
 
+// splitIdent splits a "Name <email>" string into name and email, defaulting the
+// email to "name@dumbodb" when the string carries no address. This matches the
+// historical commit-path fallback (distinct from parseAuthorString, which uses the
+// whole string as the email).
+func splitIdent(s string) (name, email string) {
+	if idx := strings.Index(s, " <"); idx >= 0 {
+		return s[:idx], strings.TrimSuffix(s[idx+2:], ">")
+	}
+	return s, s + "@dumbodb"
+}
+
+// committerOrAuthor returns committer when non-empty, else author.
+func committerOrAuthor(author, committer string) string {
+	if committer == "" {
+		return author
+	}
+	return committer
+}
+
+// commitMetaAC builds commit metadata with distinct author and committer
+// identities. When committer is empty it defaults to author (a freshly authored
+// commit). authorDate sets the author date when non-zero; the committer date is
+// captured when the commit is written.
+func commitMetaAC(author, committer, desc string, authorDate time.Time) (*datas.CommitMeta, error) {
+	an, ae := splitIdent(author)
+
+	if committer == "" {
+		committer = author
+	}
+	cn, ce := splitIdent(committer)
+
+	aid := datas.CommitIdent{Name: an, Email: ae}
+	if !authorDate.IsZero() {
+		aid.Date = datas.CommitDateAt(authorDate)
+	}
+
+	return datas.NewCommitMetaWithAuthorCommitter(aid, datas.CommitIdent{Name: cn, Email: ce}, desc)
+}
+
 // NewBackend creates a new Dolt Backend, storing data under dataDir.
 // When autoCommit is true, every document write (insert/update/delete) is
 // automatically committed to Dolt history without an explicit doltCommit call.
@@ -1057,7 +1096,7 @@ func commitCollectionsAM(ctx context.Context, datasDB datas.Database, ds datas.D
 	return newDS, am, nil
 }
 
-func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string) (bool, error) {
+func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message, author string) (bool, error) {
 	state, err := b.getOrOpenDB(ctx, dbName, false)
 	if err != nil {
 		return false, fmt.Errorf("AutoCommit: opening db %q: %w", dbName, err)
@@ -1071,13 +1110,13 @@ func (b *Backend) AutoCommit(ctx context.Context, dbName, branch, message string
 	if state.mergeState != nil && state.mergeState.intoBranch == branch {
 		return false, nil
 	}
-	return state.commitBranchWS(ctx, branch, message)
+	return state.commitBranchWS(ctx, branch, message, author)
 }
 
 // commitCollectionsAMAs creates a new dolt commit with the given collections
 // AddressMap as its root value, using the provided author name and timestamp.
 // Returns the updated dataset and the (unchanged) AM.
-func commitCollectionsAMAs(ctx context.Context, datasDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc, authorName string, ts time.Time) (datas.Dataset, prolly.AddressMap, error) {
+func commitCollectionsAMAs(ctx context.Context, datasDB datas.Database, ds datas.Dataset, am prolly.AddressMap, desc, authorName, committerName string, ts time.Time) (datas.Dataset, prolly.AddressMap, error) {
 	var err error
 	if ds.ID() == "" {
 		ds, err = datasDB.GetDataset(ctx, mainDataset)
@@ -1086,15 +1125,7 @@ func commitCollectionsAMAs(ctx context.Context, datasDB datas.Database, ds datas
 		}
 	}
 
-	var name, email string
-	if idx := strings.Index(authorName, " <"); idx >= 0 {
-		name = authorName[:idx]
-		email = strings.TrimSuffix(authorName[idx+2:], ">")
-	} else {
-		name = authorName
-		email = authorName + "@dumbodb"
-	}
-	meta, err := datas.NewCommitMetaWithAuthor(name, email, desc, ts)
+	meta, err := commitMetaAC(authorName, committerName, desc, ts)
 	if err != nil {
 		return datas.Dataset{}, am, err
 	}
@@ -1332,7 +1363,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		if amErr != nil {
 			return nil, fmt.Errorf("DumboDBCommit: reading working AM for db %q: %w", params.DBName, amErr)
 		}
-		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, workingAM, message, params.Author, ts)
+		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, workingAM, message, params.Author, params.Committer, ts)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCommit: committing db %q: %w", params.DBName, err)
 		}
@@ -1352,7 +1383,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 			Message:            message,
 			Author:             params.Author,
 			Timestamp:          ts.UnixMilli(),
-			Committer:          params.Author,
+			Committer:          committerOrAuthor(params.Author, params.Committer),
 			CommitterTimestamp: ts.UnixMilli(),
 		}, nil
 	}
@@ -1380,15 +1411,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		}
 	}
 
-	var name, email string
-	if idx := strings.Index(params.Author, " <"); idx >= 0 {
-		name = params.Author[:idx]
-		email = strings.TrimSuffix(params.Author[idx+2:], ">")
-	} else {
-		name = params.Author
-		email = params.Author + "@dumbodb"
-	}
-	meta, err := datas.NewCommitMetaWithAuthor(name, email, message, ts)
+	meta, err := commitMetaAC(params.Author, params.Committer, message, ts)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBCommit: building commit meta for branch %q: %w", branch, err)
 	}
@@ -1417,7 +1440,7 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 		Message:            message,
 		Author:             params.Author,
 		Timestamp:          ts.UnixMilli(),
-		Committer:          params.Author,
+		Committer:          committerOrAuthor(params.Author, params.Committer),
 		CommitterTimestamp: ts.UnixMilli(),
 	}, nil
 }
@@ -1666,7 +1689,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 		if amErr != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", amErr)
 		}
-		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, contAM, params.Message, params.Author)
+		mergeRes, err := b.commitMerge(ctx, db, ms.fromBranch, ms.intoBranch, intoBranchDS, ms.intoHash, ms.fromHash, contAM, params.Message, params.Author, params.Committer)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBMerge: continue: %w", err)
 		}
@@ -1818,7 +1841,7 @@ func (b *Backend) DumboDBMerge(ctx context.Context, params *backends.MergeParams
 	}
 
 	// Clean merge  -- commit immediately.
-	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM, params.Message, params.Author)
+	return b.commitMerge(ctx, db, params.From, params.Into, intoBranchDS, intoHash, fromHash, mergedAM, params.Message, params.Author, params.Committer)
 }
 
 // currentWorkingAM returns the collections AddressMap of branch's working root.
@@ -1841,26 +1864,21 @@ func (b *Backend) commitMerge(
 	intoBranchDS datas.Dataset,
 	intoHash, fromHash hash.Hash,
 	mergedAM prolly.AddressMap,
-	message, author string,
+	message, author, committer string,
 ) (*backends.MergeResult, error) {
 	mergeMessage := message
 	if mergeMessage == "" {
 		mergeMessage = fmt.Sprintf("Merge branch '%s' into '%s'", fromBranch, intoBranch)
 	}
 
-	commitName := "dumbodb"
-	commitEmail := "dumbodb@dumbodb"
-	if author != "" {
-		if idx := strings.Index(author, " <"); idx >= 0 {
-			commitName = author[:idx]
-			commitEmail = strings.TrimSuffix(author[idx+2:], ">")
-		} else {
-			commitName = author
-			commitEmail = author + "@dumbodb"
-		}
+	if author == "" {
+		author = "dumbodb <dumbodb@dumbodb>"
+	}
+	if committer == "" {
+		committer = author
 	}
 
-	meta, err := datas.NewCommitMeta(commitName, commitEmail, mergeMessage)
+	meta, err := commitMetaAC(author, committer, mergeMessage, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("commitMerge: building commit meta: %w", err)
 	}
@@ -1886,13 +1904,14 @@ func (b *Backend) commitMerge(
 		}
 	}
 
-	mergeAuthor := commitName + " <" + commitEmail + ">"
+	an, ae := splitIdent(author)
+	cn, ce := splitIdent(committer)
 	return &backends.MergeResult{
 		CommitID:           mergeHash.String(),
 		Message:            mergeMessage,
-		Author:             mergeAuthor,
+		Author:             an + " <" + ae + ">",
 		Timestamp:          time.Now().UnixMilli(),
-		Committer:          mergeAuthor,
+		Committer:          cn + " <" + ce + ">",
 		CommitterTimestamp: time.Now().UnixMilli(),
 	}, nil
 }

@@ -22,7 +22,6 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
@@ -222,7 +221,7 @@ func (s *dbState) updateBranchWS(
 // commitBranchWS commits branch's working root as one Dolt commit, or returns
 // false without committing when the root already matches HEAD. Caller must hold
 // state.mu.
-func (s *dbState) commitBranchWS(ctx context.Context, branch, message string) (committed bool, err error) {
+func (s *dbState) commitBranchWS(ctx context.Context, branch, message, author string) (committed bool, err error) {
 	e := s.branchEntry(branch)
 
 	e.mu.Lock()
@@ -263,7 +262,10 @@ func (s *dbState) commitBranchWS(ctx context.Context, branch, message string) (c
 	if err != nil {
 		return false, fmt.Errorf("commitBranchWS: head ref for %q: %w", branch, err)
 	}
-	cm, err := datas.NewCommitMetaWithAuthor("dumbodb", "dumbodb@localhost", message, time.Now())
+	if author == "" {
+		author = "dumbodb <dumbodb@localhost>"
+	}
+	cm, err := commitMetaAC(author, "", message, time.Now())
 	if err != nil {
 		return false, fmt.Errorf("commitBranchWS: commit meta for %q: %w", branch, err)
 	}

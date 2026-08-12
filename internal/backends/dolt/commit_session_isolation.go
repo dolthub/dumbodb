@@ -80,7 +80,7 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCommit: resolving branch dataset %q: %w", branch, err)
 		}
-		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, am, msg, author, ts)
+		newDS, _, err := commitCollectionsAMAs(ctx, db.datasDB, mainDS, am, msg, author, "", ts)
 		if err != nil {
 			return nil, fmt.Errorf("DumboDBCommit: persisting commit on %q: %w", branch, err)
 		}

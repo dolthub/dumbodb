@@ -41,6 +41,7 @@ type CreateUserParams struct {
 	Roles                      *types.Array
 	AuthenticationRestrictions *types.Array
 	CustomData                 *types.Document
+	CommitIdentity             *types.Document // dumbo-specific {name,email} stamped on commits; admin-set
 }
 
 // CreateUser stores a new user in the given backend.
@@ -69,6 +70,10 @@ func CreateUser(ctx context.Context, b backends.Backend, params *CreateUserParam
 
 	if params.CustomData != nil {
 		saved.Set("customData", params.CustomData)
+	}
+
+	if params.CommitIdentity != nil {
+		saved.Set("commitIdentity", params.CommitIdentity)
 	}
 
 	if r := params.AuthenticationRestrictions; r != nil && r.Len() > 0 {

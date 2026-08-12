@@ -67,7 +67,7 @@ func TestCommitBranchWS(t *testing.T) {
 	require.NoError(t, err)
 
 	state.mu.RLock()
-	committed, err := state.commitBranchWS(ctx, defaultBranch, "auto: insert 1 doc into col")
+	committed, err := state.commitBranchWS(ctx, defaultBranch, "auto: insert 1 doc into col", "")
 	state.mu.RUnlock()
 	require.NoError(t, err)
 	require.True(t, committed, "expected a commit for a dirty working set")
@@ -88,7 +88,7 @@ func TestCommitBranchWS(t *testing.T) {
 	require.Equal(t, hHash, wHash, "working root must equal HEAD after commit")
 
 	state.mu.RLock()
-	committed, err = state.commitBranchWS(ctx, defaultBranch, "should not happen")
+	committed, err = state.commitBranchWS(ctx, defaultBranch, "should not happen", "")
 	state.mu.RUnlock()
 	require.NoError(t, err)
 	require.False(t, committed, "clean tree must not produce a commit")

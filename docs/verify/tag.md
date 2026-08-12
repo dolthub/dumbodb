@@ -18,9 +18,13 @@ underlying repository, and vice versa.
 | `hash`    | string | no       | connection branch HEAD | Rootish (commit hash, branch, ancestor expression, or another tag) to tag.   |
 | `delete`  | bool   | no       | `false`                | Delete the named tag. Mutually requires `name`.                              |
 | `message` | string | no       | `""`                   | Tag description.                                                             |
-| `author`  | string | no       | `"dumbodb <dumbodb@dumbodb>"`| Tagger identity "Name <email>".                                                                 |
+| `author`  | string | no       | `"dumbodb <dumbodb@dumbodb>"`| Tagger identity "Name <email>". **Only accepted with `--auth` off** (see note).                 |
 
 \* `name` is required for create and delete; omit it to list all tags.
+
+> **Authentication note.** Under `--auth`, `doltTag` **rejects** a client-supplied
+> `author` with `IDLUnknownField` (40415); the tagger is the authenticated user's
+> identity (see `docs/design/commit-identity.md`). This guide assumes `--auth` is off.
 
 ## Prerequisites
 
