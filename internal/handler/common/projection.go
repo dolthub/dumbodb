@@ -55,7 +55,8 @@ var findProjectionAllowedOperators = map[string]bool{
 }
 
 // Distinguishes null-valued fields (project null) from missing fields
-// (omit), since EvalArgValue collapses both to types.Null.
+// (omit), since EvalArgValue collapses both to types.Null for field paths.
+// $$REMOVE is separate: it reports aggregations.ErrMissingValue.
 func findProjectionPathExists(expr string, doc *types.Document) bool {
 	if strings.HasPrefix(expr, "$$") {
 		rest := strings.TrimPrefix(expr, "$$")
@@ -506,6 +507,10 @@ func projectDocumentWithoutID(doc *types.Document, projection, filter *types.Doc
 			if strings.HasPrefix(value, "$") {
 				resolved, err := operators.EvalArgValue(value, doc)
 				if err != nil {
+					if errors.Is(err, aggregations.ErrMissingValue) {
+						continue
+					}
+
 					return nil, translateExpressionError(err)
 				}
 				if resolved == types.Null && !findProjectionPathExists(value, doc) {

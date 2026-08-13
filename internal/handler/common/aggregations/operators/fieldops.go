@@ -29,7 +29,10 @@ import (
 // ErrMissingValue is returned by an operator whose result is MongoDB's "missing"
 // value. Callers must omit the target field entirely rather than storing null;
 // $project already does the same for field paths that resolve to nothing.
-var ErrMissingValue = errors.New("operator produced a missing value")
+//
+// It aliases the expression-level sentinel so that a missing value raised by an
+// operator and one raised by $$REMOVE compare equal under errors.Is.
+var ErrMissingValue = aggregations.ErrMissingValue
 
 // removeVariable suppresses a field when used as a $setField value. It is
 // matched before evaluation because evalArgValue collapses it to null.
