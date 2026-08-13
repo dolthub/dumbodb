@@ -13,7 +13,7 @@ require (
 	github.com/dolthub/dolt/go v0.40.5-0.20260528163902-e239b95f042d
 	github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
-	github.com/dolthub/go-icu-collation v0.0.0-20260812233717-96388d7af879
+	github.com/dolthub/go-icu-collation v0.0.0-20260813204241-4b977bd17878
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260527162314-8764587064e4
 	github.com/google/uuid v1.6.0
 	github.com/mohae/uvarint v0.0.0-20160208145430-c3f9e62bf2b0

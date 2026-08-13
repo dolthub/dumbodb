@@ -19,8 +19,20 @@ import (
 
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/collation"
+	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
 )
+
+// validateOpCollation rejects an operation collation MongoDB would reject with
+// BadValue -- e.g. a locale whose tailored caseFirst/backwards conflicts with a
+// low strength. A nil or simple collation is accepted. command names the command
+// for the error argument.
+func validateOpCollation(coll *types.Document, command string) error {
+	if err := collation.Validate(coll); err != nil {
+		return handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, err.Error(), command)
+	}
+	return nil
+}
 
 // effectiveCollation applies MongoDB's operation > collection-default > simple
 // precedence: it returns opCollation when the operation specified one (including

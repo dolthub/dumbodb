@@ -121,6 +121,13 @@ func (h *Handler) MsgFind(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		}
 	}
 
+	// Validate the operation's own collation (MongoDB rejects, for example, a
+	// locale whose tailored caseFirst/backwards conflicts with a low strength)
+	// before resolving it against the collection default.
+	if err = validateOpCollation(params.Collation, "find"); err != nil {
+		return nil, err
+	}
+
 	// Resolve the effective collation: a find with no collation of its own
 	// inherits the collection's default.
 	params.Collation = collation.Effective(params.Collation, cInfo.Collation)

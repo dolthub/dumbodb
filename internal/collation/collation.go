@@ -246,6 +246,62 @@ func (c *Collation) collatorCacheKey() string {
 		s.alternate, s.maxVariable, s.normalization, s.backwards)
 }
 
+var (
+	validMu    sync.RWMutex
+	validCache = map[string]error{}
+)
+
+// Validate reports whether an operation's collation spec is one MongoDB accepts,
+// returning a BadValue-style error otherwise. It replicates MongoDB's rule that
+// the resolved caseFirst/backwards -- which a locale's tailoring can set even
+// when the caller did not (e.g. Danish caseFirst=upper, French Canadian
+// backwards=on) -- must not conflict with the strength. A nil or simple spec is
+// always valid. Results are cached per resolved collator.
+func Validate(doc *types.Document) error {
+	c := Parse(doc)
+	if c == nil || c.IsSimple() {
+		return nil
+	}
+	key := c.collatorCacheKey()
+
+	validMu.RLock()
+	e, ok := validCache[key]
+	validMu.RUnlock()
+	if ok {
+		return e
+	}
+
+	e = c.validateResolved()
+	validMu.Lock()
+	validCache[key] = e
+	validMu.Unlock()
+	return e
+}
+
+// validateResolved opens the collator and checks its resolved attributes against
+// MongoDB's strength rules. GetAttribute reflects the locale tailoring plus any
+// overrides, so a Danish collator reports caseFirst=upper here even when the
+// spec never set it. If any attribute cannot be read it does not reject.
+func (c *Collation) validateResolved() error {
+	col := c.buildCollator()
+	caseFirst, e1 := col.GetAttribute(icu4c.CaseFirst)
+	caseLevel, e2 := col.GetAttribute(icu4c.CaseLevel)
+	strength, e3 := col.GetAttribute(icu4c.Strength)
+	backwards, e4 := col.GetAttribute(icu4c.FrenchCollation)
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
+		return nil
+	}
+
+	lowStrength := strength == icu4c.Primary || strength == icu4c.Secondary
+	if caseFirst != icu4c.Off && caseLevel != icu4c.On && lowStrength {
+		return fmt.Errorf("'caseFirst' is invalid unless 'caseLevel' is on or 'strength' is greater than 2")
+	}
+	if backwards == icu4c.On && strength == icu4c.Primary {
+		return fmt.Errorf("'backwards' is invalid with 'strength' of 1")
+	}
+	return nil
+}
+
 // buildCollator opens an ICU collator for the locale and overrides only the
 // attributes the spec explicitly set (c.set); every other attribute keeps the
 // opened locale's CLDR tailoring. This matches MongoDB: a locale like Danish
