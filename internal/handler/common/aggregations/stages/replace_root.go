@@ -128,6 +128,16 @@ func evaluateReplaceExpression(expr any, doc *types.Document) (*types.Document, 
 		if operators.IsOperator(e) {
 			op, opErr := operators.NewOperator(e)
 			if opErr != nil {
+				// MongoDB reports a field-operator rejection under the operator's
+				// own code and bare message here, with no stage wrapper.
+				if code, ok := operators.FieldOpErrorCode(opErr); ok {
+					return nil, handlererrors.NewCommandErrorMsgWithArgument(
+						code,
+						opErr.Error(),
+						"$replaceRoot (stage)",
+					)
+				}
+
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(
 					handlererrors.ErrOperationFailed,
 					fmt.Sprintf("'newRoot' expression for $replaceRoot failed: %s", opErr.Error()),

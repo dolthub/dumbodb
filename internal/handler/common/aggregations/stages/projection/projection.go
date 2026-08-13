@@ -163,9 +163,19 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 				return nil, false, err
 			}
 
-			_, err = op.Process(must.NotFail(types.NewDocument("key", "value")))
-			if err = processOperatorError(err); err != nil {
-				return nil, false, err
+			// The operator runs against a placeholder document, so only errors
+			// describing its shape are meaningful here. Data-dependent outcomes
+			// (a missing field, a field name that resolves to a non-string)
+			// depend on the real document and are reported when the stage runs.
+			if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
+				var opErr operators.OperatorError
+				var exErr *aggregations.ExpressionError
+
+				if errors.As(err, &opErr) || errors.As(err, &exErr) {
+					if err = processOperatorError(err); err != nil {
+						return nil, false, err
+					}
+				}
 			}
 
 			// validate operators later
@@ -275,6 +285,10 @@ func ProjectDocument(doc, projection *types.Document, inclusion bool) (*types.Do
 
 			value, err = op.Process(doc)
 			if err != nil {
+				if errors.Is(err, operators.ErrMissingValue) {
+					break
+				}
+
 				return nil, err
 			}
 
@@ -369,6 +383,10 @@ func projectDocumentWithoutID(doc *types.Document, projection *types.Document, i
 
 			v, err = op.Process(doc)
 			if err != nil {
+				if errors.Is(err, operators.ErrMissingValue) {
+					continue
+				}
+
 				return nil, err
 			}
 
@@ -706,6 +724,16 @@ func processOperatorError(err error) error {
 		case operators.ErrInvalidNestedExpression:
 			return handlererrors.NewCommandErrorMsgWithArgument(
 				handlererrors.ErrInvalidPipelineOperator,
+				"Invalid $project :: caused by :: "+opErr.Error(),
+				"$project (stage)",
+			)
+		}
+
+		// The field operators each carry their own MongoDB error code, so they
+		// are mapped by identity rather than enumerated here.
+		if code, ok := operators.FieldOpErrorCode(err); ok {
+			return handlererrors.NewCommandErrorMsgWithArgument(
+				code,
 				"Invalid $project :: caused by :: "+opErr.Error(),
 				"$project (stage)",
 			)

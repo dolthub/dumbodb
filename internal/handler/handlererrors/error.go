@@ -382,6 +382,35 @@ const (
 	// ErrStageIndexedStringVectorDuplicate indicates that input to IndexedStringVector contained duplicate values.
 	ErrStageIndexedStringVectorDuplicate = ErrorCode(7582300) // Location7582300
 
+	// ErrGetFieldUnknownArgument indicates that $getField received an argument it does not accept.
+	ErrGetFieldUnknownArgument = ErrorCode(3041701) // Location3041701
+
+	// ErrGetFieldMissingField indicates that $getField was used without the required 'field' argument.
+	ErrGetFieldMissingField = ErrorCode(3041702) // Location3041702
+
+	// ErrGetFieldMissingInput indicates that the $getField full form omitted the required 'input' argument.
+	ErrGetFieldMissingInput = ErrorCode(3041703) // Location3041703
+
+	// ErrGetFieldFieldNotString indicates that the $getField 'field' argument did not evaluate to a string.
+	ErrGetFieldFieldNotString = ErrorCode(3041704) // Location3041704
+
+	// ErrSetFieldUnknownArgument indicates that $setField or $unsetField received an argument it does not accept.
+	ErrSetFieldUnknownArgument = ErrorCode(4161101) // Location4161101
+
+	// ErrSetFieldMissingField indicates that $setField or $unsetField was used without the required 'field' argument.
+	ErrSetFieldMissingField = ErrorCode(4161102) // Location4161102
+
+	// ErrSetFieldMissingValue indicates that $setField was used without the required 'value' argument.
+	ErrSetFieldMissingValue = ErrorCode(4161103) // Location4161103
+
+	// ErrSetFieldMissingInput indicates that $setField or $unsetField was used without the required 'input' argument.
+	ErrSetFieldMissingInput = ErrorCode(4161109) // Location4161109
+
+	// ErrSetFieldFieldNotString indicates that the $setField or $unsetField 'field'
+	// argument did not evaluate to a string. MongoDB reports $unsetField failures
+	// under the $setField name, which the parity suite pins.
+	ErrSetFieldFieldNotString = ErrorCode(4161107) // Location4161107
+
 	// ErrWindowDerivativeUnitRequiresDate indicates that $derivative with 'unit' requires a Date sort field.
 	ErrWindowDerivativeUnitRequiresDate = ErrorCode(5624900) // Location5624900
 

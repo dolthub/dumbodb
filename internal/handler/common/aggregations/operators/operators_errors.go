@@ -27,6 +27,31 @@ const (
 
 	// ErrInvalidNestedExpression indicates that operator inside the target operator does not exist.
 	ErrInvalidNestedExpression
+
+	// ErrGetFieldUnknownArgument indicates that $getField received an argument it does not accept.
+	ErrGetFieldUnknownArgument
+
+	// ErrGetFieldMissingField indicates that $getField was used without its required 'field' argument.
+	ErrGetFieldMissingField
+
+	// ErrGetFieldMissingInput indicates that the $getField full form omitted the required 'input' argument.
+	ErrGetFieldMissingInput
+
+	// ErrSetFieldUnknownArgument indicates that $setField or $unsetField received an argument it does not accept.
+	ErrSetFieldUnknownArgument
+
+	// ErrSetFieldMissingField indicates that $setField or $unsetField was used without its required 'field' argument.
+	ErrSetFieldMissingField
+
+	// ErrSetFieldMissingInput indicates that $setField or $unsetField was used without its required 'input' argument.
+	ErrSetFieldMissingInput
+
+	// ErrSetFieldMissingValue indicates that $setField was used without its required 'value' argument.
+	ErrSetFieldMissingValue
+
+	// ErrSetFieldFieldNotString indicates that a $setField or $unsetField 'field'
+	// argument was rejected while parsing for not being a string.
+	ErrSetFieldFieldNotString
 )
 
 func newOperatorError(code operatorErrorCode, name, msg string) error {
