@@ -220,6 +220,60 @@ repo.runCommand({ dumboCommit: 1, message: "m", author: "Ext Author <ext@x.io>" 
 
 ---
 
+## `--auth` off merge identity (`TestCommitIdentityAuthOffMergeAuthor`)
+
+Server: **no** `--auth`. Covers the merge cases `TestMergeVerify` leaves open; that
+suite already pins a supplied `author` reaching the merge commit.
+
+Each case needs its own database, with `main` and `feature` each holding a commit
+the other lacks so the merge is a true three-way merge rather than a fast-forward:
+
+```js
+// setup(name): run once per case below, substituting the case's database name
+const m = db.getSiblingDB(name + "@main")
+m.items.insertOne({ _id: 1 })
+m.runCommand({ dumboCommit: 1, message: "base", author: "testuser" })
+m.runCommand({ dumboBranch: 1, branch: "feature" })
+m.items.insertOne({ _id: 2 })
+m.runCommand({ dumboCommit: 1, message: "main-2", author: "testuser" })
+
+const f = db.getSiblingDB(name + "@feature")
+f.items.insertOne({ _id: 3 })
+f.runCommand({ dumboCommit: 1, message: "feat-3", author: "testuser" })
+```
+
+**A bare author name is qualified**, as it is on `dumboCommit` -- setup `mrgbare`:
+
+```js
+const b = db.getSiblingDB("mrgbare@main")
+b.runCommand({ dumboMerge: 1, mergeIn: "feature", author: "solo" })
+// author == "solo <solo@dumbodb>"
+b.runCommand({ dumboLog: 1, limit: 1 })
+// commits[0].author == "solo <solo@dumbodb>", commits[0].parent2 present (a merge commit)
+```
+
+**An absent author keeps the generated identity and message** -- setup `mrgdflt`:
+
+```js
+const d = db.getSiblingDB("mrgdflt@main")
+d.runCommand({ dumboMerge: 1, mergeIn: "feature" })
+// author  == "dumbodb <dumbodb@dumbodb>"
+// message == "Merge branch 'feature' into 'main'"
+d.runCommand({ dumboLog: 1, limit: 1 })
+// commits[0] carries the same author and message
+```
+
+**`committer` is not settable on the wire** -- setup `mrgcmtr`. `dumboMerge` accepts
+`author` but not `committer`, which is derived from it; only the replay commands
+(`dumboRebase`, `dumboCherryPick`) take a `committer`:
+
+```js
+db.getSiblingDB("mrgcmtr@main").runCommand({ dumboMerge: 1, mergeIn: "feature",
+  author: "Ext Author <ext@x.io>", committer: "Other <other@x.io>" }) // 40415
+```
+
+---
+
 ## usersInfo and updateUser (`TestCommitIdentityUsersInfo`)
 
 Server: `--auth`. As admin, run each against the `appid` database. `usersInfo`

@@ -28,6 +28,7 @@ type identityResult struct {
 	CommitID  string `bson:"commitId"`
 	Author    string `bson:"author"`
 	Committer string `bson:"committer"`
+	Message   string `bson:"message"`
 }
 
 // codeUnknownField is MongoDB's IDLUnknownField (RejectUnknownFields outcome).
@@ -92,6 +93,89 @@ func TestCommitIdentityAuthOffHonorsAuthor(t *testing.T) {
 	}).Decode(&res))
 	require.Equal(t, "Ext Author <ext@x.io>", res.Author)
 	require.Equal(t, "Ext Author <ext@x.io>", res.Committer)
+}
+
+// TestCommitIdentityAuthOffMergeAuthor covers the merge-identity cases that
+// TestMergeVerify leaves open: the default identity when author is omitted, bare
+// name qualification, and committer not being settable on the wire. The honored
+// case (author supplied, clean 3-way merge) is already pinned against dumboLog by
+// TestMergeVerify. With --auth these fields are rejected outright; see
+// TestCommitIdentityRejectsClientIdentity.
+func TestCommitIdentityAuthOffMergeAuthor(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+
+	insert := func(t *testing.T, dbName string, id int32) {
+		t.Helper()
+		require.NoError(t, env.Client.Database(dbName).RunCommand(ctx, bson.D{
+			{Key: "insert", Value: "items"},
+			{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: id}}}},
+		}).Err())
+	}
+
+	// divergeBranches leaves main and feature each holding a commit the other
+	// lacks, so merging feature into main takes the true 3-way path that creates
+	// a merge commit rather than fast-forwarding.
+	divergeBranches := func(t *testing.T, dbName string) {
+		t.Helper()
+		insert(t, dbName, 1)
+		dumboDBCommit(t, env, dbName, "base")
+		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: 1}, {Key: "branch", Value: "feature"},
+		}).Err())
+		insert(t, dbName, 2)
+		dumboDBCommit(t, env, dbName, "main-2")
+		insert(t, dbName+"@feature", 3)
+		dumboDBCommit(t, env, dbName+"@feature", "feat-3")
+	}
+
+	// mergeHead reads what the history actually recorded. The command response
+	// echo is not proof of provenance: GH#60 was reported off dumboLog.
+	mergeHead := func(t *testing.T, dbName string) commitEntry {
+		t.Helper()
+		res := decodeLogResult(t, runLog(t, env, dbName+"@main", bson.D{{Key: "limit", Value: int32(1)}}))
+		require.NotEmpty(t, res.Commits)
+		require.NotEmpty(t, res.Commits[0].Parent2, "HEAD must be a merge commit, not a fast-forward")
+		return res.Commits[0]
+	}
+
+	t.Run("bare author name is qualified, as on dumboCommit", func(t *testing.T) {
+		divergeBranches(t, "mrgbare")
+
+		var res identityResult
+		require.NoError(t, env.Client.Database("mrgbare@main").RunCommand(ctx, bson.D{
+			{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "feature"},
+			{Key: "author", Value: "solo"},
+		}).Decode(&res))
+		require.Equal(t, "solo <solo@dumbodb>", res.Author)
+		require.Equal(t, "solo <solo@dumbodb>", mergeHead(t, "mrgbare").Author)
+	})
+
+	t.Run("absent author keeps the generated identity and message", func(t *testing.T) {
+		divergeBranches(t, "mrgdflt")
+
+		var res identityResult
+		require.NoError(t, env.Client.Database("mrgdflt@main").RunCommand(ctx, bson.D{
+			{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "feature"},
+		}).Decode(&res))
+		require.Equal(t, "dumbodb <dumbodb@dumbodb>", res.Author)
+		require.Equal(t, "Merge branch 'feature' into 'main'", res.Message)
+
+		head := mergeHead(t, "mrgdflt")
+		require.Equal(t, "dumbodb <dumbodb@dumbodb>", head.Author)
+		require.Equal(t, "Merge branch 'feature' into 'main'", head.Message)
+	})
+
+	t.Run("committer is not settable on the wire", func(t *testing.T) {
+		divergeBranches(t, "mrgcmtr")
+
+		err := env.Client.Database("mrgcmtr@main").RunCommand(ctx, bson.D{
+			{Key: "dumboMerge", Value: 1}, {Key: "mergeIn", Value: "feature"},
+			{Key: "author", Value: "Ext Author <ext@x.io>"},
+			{Key: "committer", Value: "Other <other@x.io>"},
+		}).Err()
+		requireCode(t, err, codeUnknownField)
+	})
 }
 
 // commitIdentityDoc is the {name,email} shape stored per user and echoed by usersInfo.
