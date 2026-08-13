@@ -15,7 +15,7 @@ scenario top to bottom. Each section builds on the previous setup.
 | Parameter    | Type     | Required | Default      | Description                                                                  |
 |--------------|----------|----------|--------------|------------------------------------------------------------------------------|
 | `message`    | string   | no       | `""`         | Commit message                                                               |
-| `author`     | string   | see note |  --            | `Name <email>` of the commit author. **Only accepted with `--auth` off.**     |
+| `author`     | string   | no       | `"dumbodb <dumbodb@dumbodb>"` | `Name <email>` of the commit author. **Only accepted with `--auth` off.**     |
 | `timestamp`  | datetime | no       | current time | Commit timestamp (BSON Date)                                                 |
 | `allowEmpty` | bool     | no       | `false`      | When true, create a commit even if the working set has no changes vs HEAD    |
 

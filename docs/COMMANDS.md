@@ -36,6 +36,12 @@ Command parameters that name a commit (`commit`, `onto`, `mergeIn`, `to`, `hash`
 
 `HEAD` resolves against the connection's branch, not the default branch: on `mydb@feature`, `HEAD~1` means `feature~1`. Because DumboDB connections are stateless, `HEAD` is only valid in command parameters -- it is rejected in the connection string itself (`mydb@HEAD`), where a branch name must be used instead.
 
+## Commit identity
+
+Commands that create a commit (`dumboCommit`, `dumboMerge`, `dumboRevert`) or a tag (`dumboTag`) take an optional `author`. When it is omitted, the identity is `dumbodb <dumbodb@dumbodb>`. `dumboRebase` and `dumboCherryPick` take `committer` instead, because a replayed commit keeps the original author; passing `author` to either is rejected with `BadValue`.
+
+When the server runs with `--auth`, the identity comes from the authenticated user and a client cannot assert its own: passing `author` or `committer` is rejected with `IDLUnknownField (40415)`. Set a user's identity with `commitIdentity: { name, email }` on `createUser` or `updateUser`; a user without one falls back to `<user> <user@authDb>`.
+
 ## Available Commands
 
 Every `dumbo*` command has an identical `dolt*` alias:
@@ -72,7 +78,7 @@ Commits the current working set on the branch encoded in the database name.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `message` | string | no | `""` | Commit message |
-| `author` | string | **yes** |  -- | Commit author, e.g. `"alice <alice@example.com>"` |
+| `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | Commit author, e.g. `"alice <alice@example.com>"` |
 | `timestamp` | Date | no | current time | Commit timestamp (BSON Date) |
 
 ### Response fields
@@ -113,7 +119,6 @@ db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@a
 
 | Condition | Error |
 |-----------|-------|
-| `author` missing | `OperationFailed: missing required field 'author'` |
 | Connection is a read-only rootish (hash or ancestor expression) | writes are rejected before reaching commit |
 
 ### Notes
@@ -267,7 +272,7 @@ Merges a source commit into the branch encoded in the database name. The source 
 |-----------|------|----------|---------|-------------|
 | `mergeIn` | string | **yes** |  -- | [Refspec](#refspecs) to merge in: branch, tag, commit hash, ancestor expression, or `HEAD` form |
 | `message` | string | no | auto | Merge commit message (ignored on fast-forward / already-up-to-date) |
-| `author` | string | no | `""` | `"Name <email>"` for the merge commit author |
+| `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | `"Name <email>"` for the merge commit author |
 | `noFF` | bool | no | `false` | Force a merge commit even when fast-forward is possible |
 | `ffOnly` | bool | no | `false` | Fail if fast-forward is not possible |
 
@@ -1014,7 +1019,7 @@ Applies the inverse diff of a named commit onto the current branch, creating a n
 |-----------|------|----------|---------|-------------|
 | `commit` | string | **yes** |  -- | [Refspec](#refspecs) of the commit to revert |
 | `message` | string | no | auto | Custom commit message |
-| `author` | string | no | `""` | `"Name <email>"` for the commit author |
+| `author` | string | no | `"dumbodb <dumbodb@dumbodb>"` | `"Name <email>"` for the commit author |
 
 ### Parameters (continue / abort)
 
