@@ -35,7 +35,8 @@ import (
 var ErrMissingValue = aggregations.ErrMissingValue
 
 // removeVariable suppresses a field when used as a $setField value. It is
-// matched before evaluation because evalArgValue collapses it to null.
+// matched before evaluation because evalArgValue reports it as a missing
+// value, which carries no way to tell removal from a failed lookup.
 const removeVariable = "$$REMOVE"
 
 // FieldOpErrorCode maps a field-operator construction failure to the MongoDB
@@ -60,6 +61,10 @@ func FieldOpErrorCode(err error) (handlererrors.ErrorCode, bool) {
 		return handlererrors.ErrSetFieldMissingField, true
 	case ErrSetFieldMissingInput:
 		return handlererrors.ErrSetFieldMissingInput, true
+	case ErrSetFieldNonConstantField:
+		return handlererrors.ErrSetFieldNonConstantField, true
+	case ErrSetFieldFieldPathReference:
+		return handlererrors.ErrSetFieldFieldPathReference, true
 	case ErrSetFieldMissingValue:
 		return handlererrors.ErrSetFieldMissingValue, true
 	case ErrSetFieldFieldNotString:
@@ -86,6 +91,12 @@ func evalFieldExpr(arg any, doc *types.Document) (any, bool, error) {
 	if !ok || !strings.HasPrefix(s, "$") || strings.HasPrefix(s, "$$") {
 		v, err := evalArgValue(arg, doc)
 		if err != nil {
+			// A field name that resolves to nothing is reported as missing,
+			// not propagated: $$REMOVE names no field, it does not drop one.
+			if errors.Is(err, aggregations.ErrMissingValue) {
+				return nil, false, nil
+			}
+
 			return nil, false, err
 		}
 
@@ -275,14 +286,15 @@ func (op *getFieldOp) Process(doc *types.Document) (any, error) {
 	return must.NotFail(in.Get(key)), nil
 }
 
-// setFieldOp implements {$setField: {field: <expr>, input: <expr>, value: <expr>}}
-// and, with remove set, {$unsetField: {field: <expr>, input: <expr>}}.
+// setFieldOp implements {$setField: {field: <const>, input: <expr>, value: <expr>}}
+// and, with remove set, {$unsetField: {field: <const>, input: <expr>}}.
+//
+// name is resolved while parsing: unlike $getField, these operators require a
+// constant field name and cannot name a field dynamically.
 type setFieldOp struct {
-	field  any
 	input  any
 	value  any
 	name   string
-	opName string
 	remove bool
 }
 
@@ -315,39 +327,73 @@ func newFieldMutator(args []any, opName string, remove bool) (Operator, error) {
 	}
 
 	op := &setFieldOp{
-		field:  parsed.field,
 		input:  parsed.input,
 		value:  parsed.value,
-		opName: opName,
 		remove: remove,
 	}
 
-	// A constant field name is rejected while parsing, matching MongoDB.
-	if name, ok := parsed.field.(string); ok && !strings.HasPrefix(name, "$") {
-		op.name = name
-		return op, nil
+	name, err := constantFieldName(parsed.field, opName)
+	if err != nil {
+		return nil, err
 	}
 
-	if !isFieldExpression(parsed.field) {
-		return nil, newOperatorError(ErrSetFieldFieldNotString, opName,
-			fmt.Sprintf("$setField requires 'field' to evaluate to type String, but got %s",
-				handlerparams.AliasFromType(parsed.field)))
-	}
+	op.name = name
 
 	return op, nil
 }
 
-// isFieldExpression reports whether a 'field' argument can only be resolved by
-// evaluating it against a document.
-func isFieldExpression(v any) bool {
-	switch t := v.(type) {
+// constantFieldName resolves the 'field' argument of the $setField family,
+// which MongoDB requires to be a constant: unlike $getField, these operators
+// cannot name a field dynamically. A reference is rejected as a field path and
+// anything else evaluated as non-constant.
+func constantFieldName(arg any, opName string) (string, error) {
+	switch v := arg.(type) {
 	case string:
-		return strings.HasPrefix(t, "$")
+		if !strings.HasPrefix(v, "$") {
+			return v, nil
+		}
+
+		ref := normalizeFieldRef(v)
+
+		return "", newOperatorError(ErrSetFieldFieldPathReference, opName,
+			fmt.Sprintf("'%s' is a field path reference which is not allowed in this context."+
+				" Did you mean {$literal: '%s'}?", ref, ref))
+
 	case *types.Document:
-		return IsOperator(t)
+		if !IsOperator(v) || v.Command() != "$literal" {
+			// MongoDB names $setField here even for $unsetField.
+			return "", newOperatorError(ErrSetFieldNonConstantField, opName,
+				"$setField requires 'field' to evaluate to a constant, but got a non-constant argument")
+		}
+
+		lit := must.NotFail(v.Get("$literal"))
+
+		s, ok := lit.(string)
+		if !ok {
+			return "", fieldNotStringError(opName, lit)
+		}
+
+		return s, nil
+
 	default:
-		return false
+		return "", fieldNotStringError(opName, arg)
 	}
+}
+
+// normalizeFieldRef renders a reference the way MongoDB reports it: a variable
+// loses one dollar, and a bare path is routed through $CURRENT.
+func normalizeFieldRef(v string) string {
+	if strings.HasPrefix(v, "$$") {
+		return "$" + strings.TrimPrefix(v, "$$")
+	}
+
+	return "$CURRENT." + strings.TrimPrefix(v, "$")
+}
+
+func fieldNotStringError(opName string, v any) error {
+	return newOperatorError(ErrSetFieldFieldNotString, opName,
+		fmt.Sprintf("$setField requires 'field' to evaluate to type String, but got %s",
+			handlerparams.AliasFromType(v)))
 }
 
 // Process applies the mutation. A nil document means the operator is being
@@ -357,26 +403,8 @@ func (op *setFieldOp) Process(doc *types.Document) (any, error) {
 		return types.Null, nil
 	}
 
-	key := op.name
-
-	if key == "" {
-		name, present, err := evalFieldExpr(op.field, doc)
-		if err != nil {
-			return nil, err
-		}
-
-		s, ok := name.(string)
-		if !ok {
-			return nil, handlererrors.NewCommandErrorMsg(
-				handlererrors.ErrSetFieldFieldNotString,
-				fmt.Sprintf("$setField requires 'field' to evaluate to type String, but got %s",
-					aliasOrMissing(name, present)),
-			)
-		}
-
-		key = s
-	}
-
+	// name is a constant resolved while parsing; these operators cannot name a
+	// field dynamically.
 	in, ok, err := resolveInput(op.input, doc)
 	if err != nil {
 		return nil, err
@@ -389,7 +417,7 @@ func (op *setFieldOp) Process(doc *types.Document) (any, error) {
 	result := in.DeepCopy()
 
 	if op.remove || op.value == removeVariable {
-		result.Remove(key)
+		result.Remove(op.name)
 		return result, nil
 	}
 
@@ -398,7 +426,7 @@ func (op *setFieldOp) Process(doc *types.Document) (any, error) {
 		return nil, err
 	}
 
-	result.Set(key, value)
+	result.Set(op.name, value)
 
 	return result, nil
 }

@@ -46,6 +46,14 @@ const (
 	// ErrSetFieldMissingInput indicates that $setField or $unsetField was used without its required 'input' argument.
 	ErrSetFieldMissingInput
 
+	// ErrSetFieldNonConstantField indicates that a $setField or $unsetField 'field'
+	// argument was an expression rather than a constant.
+	ErrSetFieldNonConstantField
+
+	// ErrSetFieldFieldPathReference indicates that a $setField or $unsetField 'field'
+	// argument was a field path or variable reference.
+	ErrSetFieldFieldPathReference
+
 	// ErrSetFieldMissingValue indicates that $setField was used without its required 'value' argument.
 	ErrSetFieldMissingValue
 

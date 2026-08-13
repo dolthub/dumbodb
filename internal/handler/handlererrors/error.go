@@ -400,6 +400,14 @@ const (
 	// ErrSetFieldMissingField indicates that $setField or $unsetField was used without the required 'field' argument.
 	ErrSetFieldMissingField = ErrorCode(4161102) // Location4161102
 
+	// ErrSetFieldNonConstantField indicates that a $setField or $unsetField 'field'
+	// argument was an expression rather than a constant.
+	ErrSetFieldNonConstantField = ErrorCode(4161106) // Location4161106
+
+	// ErrSetFieldFieldPathReference indicates that a $setField or $unsetField 'field'
+	// argument was a field path or variable reference, which the operators reject.
+	ErrSetFieldFieldPathReference = ErrorCode(4161108) // Location4161108
+
 	// ErrSetFieldMissingValue indicates that $setField was used without the required 'value' argument.
 	ErrSetFieldMissingValue = ErrorCode(4161103) // Location4161103
 

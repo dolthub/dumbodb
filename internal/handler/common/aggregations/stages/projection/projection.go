@@ -166,7 +166,12 @@ func ValidateProjection(projection *types.Document) (*types.Document, bool, erro
 			// The operator runs against a placeholder document, so only errors
 			// describing its shape are meaningful here. Data-dependent outcomes
 			// (a missing field, a field name that resolves to a non-string)
-			// depend on the real document and are reported when the stage runs.
+			// depend on the real document, and the placeholder cannot decide
+			// them. Discarding those is deliberate rather than lossy: MongoDB
+			// reports them when the stage runs too, so $getField with a
+			// non-string 'field' must parse here and fail later. They are not
+			// swallowed, since the runtime path returns every error that is not
+			// a missing value.
 			if _, err = op.Process(must.NotFail(types.NewDocument("key", "value"))); err != nil {
 				var opErr operators.OperatorError
 				var exErr *aggregations.ExpressionError
