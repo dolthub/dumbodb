@@ -15,13 +15,28 @@
 package aggregations
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dolthub/dumbodb/internal/handler/commonpath"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
 	"github.com/dolthub/dumbodb/internal/util/must"
+)
+
+// ErrMissingValue reports MongoDB's "missing" value, which callers render by
+// omitting the field rather than storing null. $$REMOVE evaluates to it.
+var ErrMissingValue = errors.New("expression produced a missing value")
+
+// System variables resolvable without a surrounding variable scope. Names
+// introduced by $let and friends stay undefined.
+const (
+	varRoot    = "ROOT"
+	varCurrent = "CURRENT"
+	varNow     = "NOW"
+	varRemove  = "REMOVE"
 )
 
 //go:generate ../../../../bin/stringer -linecomment -type ExpressionErrorCode
@@ -70,6 +85,12 @@ func (e *ExpressionError) Name() string {
 type Expression struct {
 	opts commonpath.FindValuesOpts
 	path types.Path
+
+	// variable is the system variable name for a $$-prefixed expression, empty
+	// otherwise. When set, path holds the suffix reaching into it and may be
+	// empty, as in "$$ROOT" against "$$ROOT.a".
+	variable string
+	varPath  string
 }
 
 // NewExpression returns Expression from dollar sign $ prefixed string.
@@ -97,6 +118,16 @@ func NewExpression(expression string, opts *commonpath.FindValuesOpts) (*Express
 
 		if strings.HasPrefix(v, "$") {
 			return nil, newExpressionError(ErrInvalidExpression, v)
+		}
+
+		name, suffix := v, ""
+		if dot := strings.Index(v, "."); dot >= 0 {
+			name, suffix = v[:dot], v[dot+1:]
+		}
+
+		switch name {
+		case varRoot, varCurrent, varNow, varRemove:
+			return &Expression{opts: *opts, variable: name, varPath: suffix}, nil
 		}
 
 		return nil, newExpressionError(ErrUndefinedVariable, v)
@@ -131,6 +162,10 @@ func NewExpression(expression string, opts *commonpath.FindValuesOpts) (*Express
 // It returns error if field value was not found. With embedded array field being exception,
 // that case it returns empty array instead of error.
 func (e *Expression) Evaluate(doc *types.Document) (any, error) {
+	if e.variable != "" {
+		return e.evaluateVariable(doc)
+	}
+
 	path := e.path
 
 	if path.Len() == 1 {
@@ -180,6 +215,40 @@ func (e *Expression) Evaluate(doc *types.Document) (any, error) {
 }
 
 // GetExpressionSuffix returns field key of Expression, or for dot notation it returns suffix.
+// evaluateVariable resolves a system variable, applying varPath when the
+// expression reached into it. Callers treat an error as missing, which is how
+// $$REMOVE drops its field.
+func (e *Expression) evaluateVariable(doc *types.Document) (any, error) {
+	var base any
+
+	switch e.variable {
+	case varRoot, varCurrent:
+		base = doc.DeepCopy()
+	case varNow:
+		return time.Now().UTC(), nil
+	case varRemove:
+		return nil, ErrMissingValue
+	default:
+		return nil, newExpressionError(ErrUndefinedVariable, e.variable)
+	}
+
+	if e.varPath == "" {
+		return base, nil
+	}
+
+	path, err := types.NewPathFromString(e.varPath)
+	if err != nil {
+		return nil, ErrMissingValue
+	}
+
+	v, err := base.(*types.Document).GetByPath(path)
+	if err != nil {
+		return nil, ErrMissingValue
+	}
+
+	return v, nil
+}
+
 func (e *Expression) GetExpressionSuffix() string {
 	return e.path.Suffix()
 }

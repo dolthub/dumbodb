@@ -67,7 +67,9 @@ func evalArgValue(arg any, doc *types.Document) (any, error) {
 			case "NOW":
 				base = time.Now().UTC()
 			case "REMOVE":
-				base = types.Null
+				// Missing rather than null, so a $cond selecting $$REMOVE drops
+				// the field instead of writing an explicit null.
+				return nil, aggregations.ErrMissingValue
 			case "PRUNE", "KEEP", "DESCEND":
 				// $redact reads these as literal strings to decide its action.
 				base = v
