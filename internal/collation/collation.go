@@ -43,6 +43,26 @@ type Collation struct {
 	MaxVariable     string
 	Normalization   bool
 	Backwards       bool
+
+	// set records which fields the spec explicitly provided. A field that was
+	// not provided keeps the opened locale's ICU tailoring instead of being
+	// forced to a MongoDB spec default -- MongoDB resolves a locale's tailored
+	// caseFirst/backwards/alternate for any field the caller omitted, and only
+	// overrides fields the caller set.
+	set providedFields
+}
+
+// providedFields tracks which collation attributes a spec explicitly set, so
+// buildCollator can leave the rest at the locale's CLDR tailoring.
+type providedFields struct {
+	caseLevel       bool
+	caseFirst       bool
+	strength        bool
+	numericOrdering bool
+	alternate       bool
+	maxVariable     bool
+	normalization   bool
+	backwards       bool
 }
 
 // Parse reads a collation spec document, applying MongoDB's defaults for any
@@ -64,27 +84,35 @@ func Parse(doc *types.Document) *Collation {
 	}
 	if b, ok := getBool(doc, "caseLevel"); ok {
 		c.CaseLevel = b
+		c.set.caseLevel = true
 	}
 	if s, ok := getString(doc, "caseFirst"); ok {
 		c.CaseFirst = s
+		c.set.caseFirst = true
 	}
 	if n, ok := getInt(doc, "strength"); ok {
 		c.Strength = n
+		c.set.strength = true
 	}
 	if b, ok := getBool(doc, "numericOrdering"); ok {
 		c.NumericOrdering = b
+		c.set.numericOrdering = true
 	}
 	if s, ok := getString(doc, "alternate"); ok {
 		c.Alternate = s
+		c.set.alternate = true
 	}
 	if s, ok := getString(doc, "maxVariable"); ok {
 		c.MaxVariable = s
+		c.set.maxVariable = true
 	}
 	if b, ok := getBool(doc, "normalization"); ok {
 		c.Normalization = b
+		c.set.normalization = true
 	}
 	if b, ok := getBool(doc, "backwards"); ok {
 		c.Backwards = b
+		c.set.backwards = true
 	}
 
 	return c
@@ -181,7 +209,7 @@ func (c *Collation) Comparator() *Comparator {
 	if c.IsSimple() {
 		return nil
 	}
-	key := c.cacheKey()
+	key := c.collatorCacheKey()
 
 	cmpMu.RLock()
 	cmp := cmpCache[key]
@@ -206,8 +234,24 @@ func (c *Collation) cacheKey() string {
 		c.Alternate, c.MaxVariable, c.Normalization, c.Backwards)
 }
 
-// buildCollator opens an ICU collator and maps every collation field onto its
-// ICU attribute. The locale is validated upstream (Accepted); if an open ever
+// collatorCacheKey extends cacheKey with which fields the spec explicitly
+// provided. Two specs with identical resolved values but different provided
+// sets -- e.g. {locale:"da"} (caseFirst tailored to upper) versus
+// {locale:"da", caseFirst:"off"} (pinned off) -- build different collators and
+// must not share a cache entry.
+func (c *Collation) collatorCacheKey() string {
+	s := c.set
+	return fmt.Sprintf("%s|p%t%t%t%t%t%t%t%t", c.cacheKey(),
+		s.strength, s.caseLevel, s.caseFirst, s.numericOrdering,
+		s.alternate, s.maxVariable, s.normalization, s.backwards)
+}
+
+// buildCollator opens an ICU collator for the locale and overrides only the
+// attributes the spec explicitly set (c.set); every other attribute keeps the
+// opened locale's CLDR tailoring. This matches MongoDB: a locale like Danish
+// (caseFirst=upper), French Canadian (backwards=on), or Thai (alternate=shifted)
+// carries tailored attribute defaults that must survive when the caller does not
+// override them. The locale is validated upstream (Accepted); if an open ever
 // fails it falls back to the root collator so comparison never panics. Attribute
 // values are always valid, so setAttribute errors are ignored.
 func (c *Collation) buildCollator() *icu4c.Collator {
@@ -216,30 +260,46 @@ func (c *Collation) buildCollator() *icu4c.Collator {
 		col, _ = icu4c.Open("")
 	}
 
-	var strength icu4c.AttributeValue
-	switch c.Strength {
-	case 1:
-		strength = icu4c.Primary
-	case 2:
-		strength = icu4c.Secondary
-	case 4:
-		strength = icu4c.Quaternary
-	case 5:
-		strength = icu4c.Identical
-	default:
-		strength = icu4c.Tertiary
+	if c.set.strength {
+		var strength icu4c.AttributeValue
+		switch c.Strength {
+		case 1:
+			strength = icu4c.Primary
+		case 2:
+			strength = icu4c.Secondary
+		case 4:
+			strength = icu4c.Quaternary
+		case 5:
+			strength = icu4c.Identical
+		default:
+			strength = icu4c.Tertiary
+		}
+		_ = col.SetAttribute(icu4c.Strength, strength)
 	}
-	_ = col.SetAttribute(icu4c.Strength, strength)
-	_ = col.SetAttribute(icu4c.CaseLevel, onOff(c.CaseLevel))
-	_ = col.SetAttribute(icu4c.CaseFirst, caseFirst(c.CaseFirst))
-	_ = col.SetAttribute(icu4c.NumericCollation, onOff(c.NumericOrdering))
-	_ = col.SetAttribute(icu4c.AlternateHandling, alternate(c.Alternate))
-	_ = col.SetAttribute(icu4c.NormalizationMode, onOff(c.Normalization))
-	_ = col.SetAttribute(icu4c.FrenchCollation, onOff(c.Backwards))
-	if c.MaxVariable == "space" {
-		_ = col.SetMaxVariable(icu4c.ReorderSpace)
-	} else {
-		_ = col.SetMaxVariable(icu4c.ReorderPunctuation)
+	if c.set.caseLevel {
+		_ = col.SetAttribute(icu4c.CaseLevel, onOff(c.CaseLevel))
+	}
+	if c.set.caseFirst {
+		_ = col.SetAttribute(icu4c.CaseFirst, caseFirst(c.CaseFirst))
+	}
+	if c.set.numericOrdering {
+		_ = col.SetAttribute(icu4c.NumericCollation, onOff(c.NumericOrdering))
+	}
+	if c.set.alternate {
+		_ = col.SetAttribute(icu4c.AlternateHandling, alternate(c.Alternate))
+	}
+	if c.set.normalization {
+		_ = col.SetAttribute(icu4c.NormalizationMode, onOff(c.Normalization))
+	}
+	if c.set.backwards {
+		_ = col.SetAttribute(icu4c.FrenchCollation, onOff(c.Backwards))
+	}
+	if c.set.maxVariable {
+		if c.MaxVariable == "space" {
+			_ = col.SetMaxVariable(icu4c.ReorderSpace)
+		} else {
+			_ = col.SetMaxVariable(icu4c.ReorderPunctuation)
+		}
 	}
 	return col
 }
