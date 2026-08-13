@@ -22,6 +22,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -72,6 +73,10 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	// the view's source with the view's defining pipeline applied, then the
 	// filter/skip/limit. This bypasses the backend fast paths below, which would
 	// count the (empty) view collection and return 0.
+	params.Collation = h.effectiveCollation(connCtx, db, params.Collection, params.Collation)
+
+	cmp := collation.Parse(params.Collation).Comparator()
+
 	collParam := backends.ListCollectionsParams{Name: params.Collection}
 	cList, err := db.ListCollections(connCtx, &collParam)
 	if err != nil {
@@ -89,7 +94,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 			return nil, verr
 		}
 
-		iter = common.FilterIterator(iter, closer, params.Filter)
+		iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
 		iter = common.SkipIterator(iter, closer, params.Skip)
 		iter = common.LimitIterator(iter, closer, params.Limit)
 		iter = common.CountIterator(iter, closer, "count")
@@ -146,7 +151,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	// without fetching documents (e.g. via a covering single-field index).
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
-	if !h.DisablePushdown {
+	if !h.DisablePushdown && cmp == nil {
 		countRes, cerr := c.Count(connCtx, &backends.CountParams{Filter: params.Filter})
 		if cerr != nil {
 			return nil, lazyerrors.Error(cerr)
@@ -173,6 +178,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	}
 
 	var qp backends.QueryParams
+	qp.Collated = cmp != nil
 	if !h.DisablePushdown {
 		qp.Filter = params.Filter
 	}
@@ -187,7 +193,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	closer := iterator.NewMultiCloser(iter)
 	defer closer.Close()
 
-	iter = common.FilterIterator(iter, closer, params.Filter)
+	iter = common.FilterIteratorColl(iter, closer, params.Filter, cmp)
 
 	iter = common.SkipIterator(iter, closer, params.Skip)
 

@@ -21,6 +21,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -125,6 +126,25 @@ func (h *Handler) MsgListIndexes(connCtx context.Context, msg *wire.OpMsg) (*wir
 		// sparse is reported only when set, matching MongoDB
 		if index.Sparse && index.Name != backends.DefaultIndexName {
 			indexDoc.Set("sparse", index.Sparse)
+		}
+
+		if index.PartialFilterExpression != nil {
+			indexDoc.Set("partialFilterExpression", index.PartialFilterExpression)
+		}
+
+		// Echo the resolved collation: MongoDB's server defaults filled in plus
+		// the ICU version. The version is DumboDB's real linked ICU, not Mongo's
+		// 57.1 (an intended divergence, see the ICU binding design).
+		if index.Collation != nil {
+			if resolved := collation.Parse(index.Collation).Resolve(); resolved != nil {
+				indexDoc.Set("collation", resolved)
+			} else {
+				indexDoc.Set("collation", index.Collation)
+			}
+		}
+
+		if index.Hidden {
+			indexDoc.Set("hidden", index.Hidden)
 		}
 
 		firstBatch.Append(indexDoc)

@@ -95,6 +95,9 @@ type CollectionInfo struct {
 	CappedDocuments int64
 	// Validator is the schema validator expression (nil if none).
 	Validator *types.Document
+	// Collation is the collection's default collation (nil for the binary
+	// default), inherited by operations and indexes that specify none.
+	Collation *types.Document
 	// ValidationLevel is "strict" or "moderate" (empty defaults to "strict").
 	ValidationLevel string
 	// ValidationAction is "error" or "warn" (empty defaults to "error").
@@ -156,6 +159,9 @@ type CreateCollectionParams struct {
 	CappedDocuments int64
 	// Validator is the schema validator expression (nil if none).
 	Validator *types.Document
+	// Collation is the collection's default collation (nil for the binary
+	// default), inherited by operations and indexes that specify none.
+	Collation *types.Document
 	// ValidationLevel is "strict" or "moderate" (empty defaults to "strict").
 	ValidationLevel string
 	// ValidationAction is "error" or "warn" (empty defaults to "error").

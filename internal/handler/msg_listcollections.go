@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -135,6 +136,14 @@ func (h *Handler) MsgListCollections(connCtx context.Context, msg *wire.OpMsg) (
 
 			if collection.Validator != nil {
 				options.Set("validator", collection.Validator)
+			}
+
+			// The default collation is reported resolved (server defaults plus the
+			// ICU version), matching MongoDB.
+			if collection.Collation != nil {
+				if resolved := collation.Parse(collection.Collation).Resolve(); resolved != nil {
+					options.Set("collation", resolved)
+				}
 			}
 
 			if collection.ValidationLevel != "" {

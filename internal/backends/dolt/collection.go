@@ -34,6 +34,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/bson"
 	"github.com/dolthub/dumbodb/internal/bsonindexed"
+	"github.com/dolthub/dumbodb/internal/collation"
 	idxpkg "github.com/dolthub/dumbodb/internal/index"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
@@ -102,7 +103,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 {
+	if !naturalHint && params != nil && !params.Collated && params.Filter != nil && params.Sort.Len() == 0 {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint); used {
 			if err != nil {
 				return nil, err
@@ -129,7 +130,7 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// Fast path: if the filter pins _id to a concrete scalar value, use the
 	// primary-key point lookup instead of a full collection scan. The handler's
 	// downstream FilterIterator applies any remaining predicates.
-	if !naturalHint && params != nil && params.Filter != nil {
+	if !naturalHint && params != nil && !params.Collated && params.Filter != nil {
 		if idVal, ok := simpleIDEquality(params.Filter); ok {
 			iter, err := pointLookupByID(ctx, state.ns, m, idVal, onlyRecordIDs)
 			if err == nil {
@@ -147,11 +148,11 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// it can be proven that a document whose JSON does NOT contain the
 	// pattern cannot possibly match the filter.
 	//
-	// Under case-insensitive collation the handler will re-check matches
+	// Under a non-simple collation the handler re-checks matches through the
 	// against a regex substitution of the filter, so byte-level equality is
 	// not a sound lower bound  -- skip the prefilter.
 	var pf func([]byte) bool
-	if params != nil && !onlyRecordIDs && !params.CaseInsensitive {
+	if params != nil && !onlyRecordIDs && !params.Collated {
 		pf = buildScanPrefilter(params.Filter)
 	}
 
@@ -1380,6 +1381,67 @@ func indexKeysEqual(a, b []any) bool {
 	return true
 }
 
+// indexComparator returns the ICU comparator for an index's collation, or nil
+// for a simple/absent collation (binary comparison).
+func indexComparator(idx backends.IndexInfo) *collation.Comparator {
+	return collation.Parse(idx.Collation).Comparator()
+}
+
+// indexCollated reports whether an index carries a non-simple collation. Such an
+// index cannot use the byte-prefix probe -- "Alice" and "alice" encode to
+// distinct bytes yet collide under a strength-2 collation -- so uniqueness folds
+// through the value-level scan (scanUniqueConflict) instead.
+func indexCollated(idx backends.IndexInfo) bool {
+	return !collation.Parse(idx.Collation).IsSimple()
+}
+
+// indexKeysEqualColl compares two index keys, folding string components through
+// cmp when it is non-nil; other components (and every component when cmp is nil)
+// compare byte/type-exact.
+func indexKeysEqualColl(a, b []any, cmp *collation.Comparator) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if cmp != nil {
+			as, aok := a[i].(string)
+			bs, bok := b[i].(string)
+			if aok && bok {
+				if !cmp.EqualStrings(as, bs) {
+					return false
+				}
+				continue
+			}
+		}
+		if types.Compare(a[i], b[i]) != types.Equal {
+			return false
+		}
+	}
+	return true
+}
+
+// rowConflictKey returns the canonical map key identifying an index row for
+// build-time unique conflict detection. For a collated index, string components
+// use their ICU sort key (equal-under-collation strings share a key); other
+// components and non-collated indexes use the byte-exact probe prefix.
+func rowConflictKey(idx backends.IndexInfo, row []any, cmp *collation.Comparator) string {
+	if cmp == nil {
+		prefix, _ := idxpkg.EqualityProbeBounds(row)
+		return string(prefix)
+	}
+	var b strings.Builder
+	for _, v := range row {
+		if s, ok := v.(string); ok {
+			b.Write(cmp.Key(s))
+		} else {
+			prefix, _ := idxpkg.EqualityProbeBounds([]any{v})
+			b.WriteString(string(prefix))
+		}
+		b.WriteByte(0x00)
+	}
+	return b.String()
+}
+
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
 	if err != nil {
@@ -1416,10 +1478,24 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		}
 	}
 
+	// Collated _id uniqueness: when the collection carries a non-simple default
+	// collation, _id equality folds through it (design collation-resolution.md
+	// 3.6), so "a" and "A" collide in a strength-2 collection even though their
+	// hashes differ. String _ids fall back to an O(N) value scan; binary _ids
+	// (numbers, ObjectId) are collation-invariant and keep the hash fast path.
+	var idCmp *collation.Comparator
+	if catAM, amErr := state.getOrInitBranchAM(ctx, c.db.rootish); amErr == nil {
+		if meta, mErr := readCatalogDoc(ctx, state, catAM, c.name); mErr == nil && meta != nil {
+			idCmp = collation.Parse(meta.Collation).Comparator()
+		}
+	}
+
 	mut := m.Mutate()
 
 	// batchHashSet detects in-batch duplicate _id hashes in O(1).
 	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
+	// In-batch collated string _ids (the primary probe only sees pre-batch state).
+	var batchStrIDs []string
 	// In-batch claims per unique index (probes only see pre-batch state).
 	batchUniqueEntryKeys := make([]map[string]struct{}, len(uniqueIndexes))
 	for i := range batchUniqueEntryKeys {
@@ -1457,6 +1533,28 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			)
 		}
 
+		if idStr, ok := docID.(string); ok && idCmp != nil {
+			conflict, scanErr := c.scanCollatedIDConflict(ctx, state, m, idStr, h, idCmp)
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			if !conflict {
+				for _, prev := range batchStrIDs {
+					if idCmp.EqualStrings(prev, idStr) {
+						conflict = true
+						break
+					}
+				}
+			}
+			if conflict {
+				return nil, backends.NewError(
+					backends.ErrorCodeInsertDuplicateID,
+					fmt.Errorf("duplicate _id under collation"),
+				)
+			}
+			batchStrIDs = append(batchStrIDs, idStr)
+		}
+
 		// Unique constraints: one bounded index probe per entry row;
 		// membership and multikey expansion via indexEntriesForDoc.
 		for i, idx := range uniqueIndexes {
@@ -1465,8 +1563,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				continue
 			}
 
-			if lossy || idx.Lossy {
-				// Probes collide on collapsed bytes; compare values.
+			if lossy || idx.Lossy || indexCollated(idx) {
+				// Byte probes collide on collapsed (Decimal128) bytes and miss
+				// collation-equal strings; compare values through the collator.
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
 					return nil, scanErr
@@ -1478,8 +1577,9 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 					)
 				}
 				newKey := extractIndexKey(doc, idx)
+				batchCmp := indexComparator(idx)
 				for _, batchKey := range batchLossyKeys[i] {
-					if indexKeysEqual(newKey, batchKey) {
+					if indexKeysEqualColl(newKey, batchKey, batchCmp) {
 						return nil, backends.NewError(
 							backends.ErrorCodeInsertDuplicateID,
 							fmt.Errorf("duplicate key for unique index %s", idx.Name),
@@ -2364,6 +2464,13 @@ func (c *collection) ListIndexes(ctx context.Context, params *backends.ListIndex
 		},
 	}
 
+	// The _id index is pinned to the collection default collation: it inherits
+	// it and cannot diverge (design collation-resolution.md 3.6). Report it so
+	// listIndexes echoes _id_ with the collection collation, not simple.
+	if meta, mErr := readCatalogDoc(ctx, state, am, c.name); mErr == nil && meta != nil && meta.Collation != nil {
+		indexes[0].Collation = meta.Collation
+	}
+
 	if err := idxAM.IterAll(ctx, func(name string, entryHash hash.Hash) error {
 		if entryHash.IsEmpty() {
 			return nil
@@ -2609,9 +2716,9 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
 		return nil
 	}
+	cmp := indexComparator(idx)
 	for _, row := range rows {
-		prefix, _ := idxpkg.EqualityProbeBounds(row)
-		key := string(prefix)
+		key := rowConflictKey(idx, row, cmp)
 		owner, ok := seen[key]
 		if !ok {
 			seen[key] = append([]byte(nil), idBytes...)
@@ -2630,6 +2737,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 // scanUniqueConflict is the O(N) value-level fallback for rows with no
 // faithful byte encoding (Decimal128); the common path is the probe.
 func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m prolly.Map, idx backends.IndexInfo, doc *types.Document, selfHash [20]byte) (bool, error) {
+	cmp := indexComparator(idx)
 	newKey := extractIndexKey(doc, idx)
 	iter, err := m.IterAll(ctx)
 	if err != nil {
@@ -2664,7 +2772,45 @@ func (c *collection) scanUniqueConflict(ctx context.Context, state *dbState, m p
 		if idx.Sparse && allNull(existKey) {
 			continue
 		}
-		if indexKeysEqual(newKey, existKey) {
+		if indexKeysEqualColl(newKey, existKey, cmp) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// scanCollatedIDConflict reports whether the primary map already holds a string
+// _id equal to idStr under cmp. The primary key is a hash of the raw _id, so
+// collation-equal-but-distinct values ("a"/"A") do not collide there; this O(N)
+// value scan enforces _id uniqueness under the collection collation (design 3.6).
+func (c *collection) scanCollatedIDConflict(ctx context.Context, state *dbState, m prolly.Map, idStr string, selfHash [20]byte, cmp *collation.Comparator) (bool, error) {
+	iter, err := m.IterAll(ctx)
+	if err != nil {
+		return false, err
+	}
+	for {
+		k, v, err := iter.Next(ctx)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return false, err
+		}
+		if v == nil {
+			break
+		}
+		if idBytes, ok := keyDesc.GetBytes(0, k); ok && bytes.Equal(idBytes, selfHash[:]) {
+			continue
+		}
+		existingDoc, err := readDocFromValue(ctx, state.ns, v)
+		if err != nil {
+			continue
+		}
+		existID, err := existingDoc.Get("_id")
+		if err != nil {
+			continue
+		}
+		if existStr, ok := existID.(string); ok && cmp.EqualStrings(existStr, idStr) {
 			return true, nil
 		}
 	}
@@ -2682,7 +2828,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 		if len(rows) == 0 {
 			continue
 		}
-		if lossy || idx.Lossy {
+		if lossy || idx.Lossy || indexCollated(idx) {
 			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
 			if err != nil {
 				return err

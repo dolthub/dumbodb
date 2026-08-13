@@ -78,7 +78,7 @@ type Update struct {
 	ValidationAction string          `dumbo:"-"`
 
 	C            *types.Document `dumbo:"c,unimplemented"`
-	Collation    *types.Document `dumbo:"collation,unimplemented"`
+	Collation    *types.Document `dumbo:"collation,opt"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
 
 	Hint string `dumbo:"hint,ignored"`

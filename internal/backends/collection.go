@@ -93,12 +93,12 @@ type QueryParams struct {
 
 	OnlyRecordIDs bool
 	Comment       string
-	// CaseInsensitive is set when the query runs under a collation whose
-	// strength is <= 2 (case-insensitive). Backends that apply byte-level
-	// filter optimizations (e.g. scan prefilters) must disable them in
-	// that case, since the handler will re-check matches under a regex
-	// substitution and bytes that compare unequal may still match.
-	CaseInsensitive bool
+	// Collated is set when the query runs under a non-simple collation. The
+	// backend must then return a superset (no byte-exact narrowing: scan
+	// prefilters, secondary-index lookups, or _id point lookups), because the
+	// handler re-checks every document under the collator and strings that
+	// differ byte-wise may still compare equal.
+	Collated bool
 }
 
 type QueryResult struct {
@@ -486,6 +486,16 @@ type IndexInfo struct {
 	Unique                  bool
 	Sparse                  bool            // true if the index only covers documents with the indexed field(s)
 	PartialFilterExpression *types.Document // non-nil for partial indexes; only matching docs are indexed
+
+	// Collation is the index's collation spec, nil for the binary default.
+	// MongoDB distinguishes indexes on the same key by collation, so two
+	// indexes may share a key pattern when their collations differ.
+	Collation *types.Document
+
+	// Hidden marks the index invisible to the query planner while still
+	// maintained. Tracked and echoed by listIndexes; planner-level hiding
+	// is not yet applied.
+	Hidden bool
 
 	// Lossy: the index stored a value the KeyString encoding cannot
 	// represent faithfully (Decimal128); the planner never consults a

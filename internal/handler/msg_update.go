@@ -23,6 +23,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -130,6 +131,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 	}
 
 	for _, u := range params.Updates {
+		u.Collation = h.effectiveCollation(ctx, db, params.Collection, u.Collation)
 		c, err := db.Collection(params.Collection)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
@@ -144,7 +146,10 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		u.ValidationLevel = valLevel
 		u.ValidationAction = valAction
 
+		cmp := collation.Parse(u.Collation).Comparator()
+
 		var qp backends.QueryParams
+		qp.Collated = cmp != nil
 		if !h.DisablePushdown {
 			qp.Filter = u.Filter
 		}
@@ -159,7 +164,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		closer.Add(res.Iter)
 
-		iter := common.FilterIterator(res.Iter, closer, u.Filter)
+		iter := common.FilterIteratorColl(res.Iter, closer, u.Filter, cmp)
 
 		if !u.Multi {
 			iter = common.LimitIterator(iter, closer, 1)

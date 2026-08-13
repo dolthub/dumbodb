@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -151,8 +152,8 @@ func (s *decoratedSorter) Less(i, j int) bool {
 
 // SortDocumentsWithCollation sorts documents like SortDocuments but uses
 // case-insensitive string comparison when caseInsensitive is true.
-func SortDocumentsWithCollation(docs []*types.Document, sortDoc *types.Document, caseInsensitive bool) error {
-	if !caseInsensitive {
+func SortDocumentsWithCollation(docs []*types.Document, sortDoc *types.Document, cmp *collation.Comparator) error {
+	if cmp == nil {
 		return SortDocuments(docs, sortDoc)
 	}
 
@@ -200,7 +201,7 @@ func SortDocumentsWithCollation(docs []*types.Document, sortDoc *types.Document,
 			return err
 		}
 
-		sortFuncs[i] = lessFuncCaseInsensitive(sortPath, sortType)
+		sortFuncs[i] = lessFuncCollated(sortPath, sortType, cmp)
 	}
 
 	if len(sortFuncs) == 0 {

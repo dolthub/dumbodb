@@ -23,6 +23,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -81,6 +82,7 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	writeErrors := types.MakeArray(0)
 
 	for i, p := range params.Deletes {
+		p.Collation = h.effectiveCollation(connCtx, db, params.Collection, p.Collation)
 		var d int32
 		d, err = h.execDelete(connCtx, c, &p, params.SkipDurableSync)
 
@@ -128,7 +130,10 @@ func (h *Handler) MsgDelete(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 // It returns a number of deleted documents or error.
 // The error is either a (wrapped) *handlererrors.CommandError or something fatal.
 func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *common.Delete, skipDurableSync bool) (int32, error) {
+	cmp := collation.Parse(p.Collation).Comparator()
+
 	var qp backends.QueryParams
+	qp.Collated = cmp != nil
 	if !h.DisablePushdown {
 		qp.Filter = p.Filter
 	}
@@ -153,7 +158,7 @@ func (h *Handler) execDelete(ctx context.Context, c backends.Collection, p *comm
 
 		var matches bool
 
-		if matches, err = common.FilterDocument(doc, p.Filter); err != nil {
+		if matches, err = common.FilterDocumentColl(doc, p.Filter, cmp); err != nil {
 			q.Iter.Close()
 			return 0, lazyerrors.Error(err)
 		}

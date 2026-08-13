@@ -24,6 +24,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/handler/handlerparams"
@@ -129,6 +130,16 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 	toCreate, err := processIndexesArray(command, idxArr)
 	if err != nil {
 		return nil, err
+	}
+
+	// An index created without an explicit collation inherits the collection's
+	// default collation.
+	if cInfo, cerr := lookupCollectionInfo(connCtx, db, collection); cerr == nil && cInfo != nil && cInfo.Collation != nil {
+		for i := range toCreate {
+			if toCreate[i].Collation == nil {
+				toCreate[i].Collation = cInfo.Collation
+			}
+		}
 	}
 
 	var createCollection bool
@@ -410,10 +421,24 @@ func processIndex(command string, indexDoc *types.Document) (*backends.IndexInfo
 				command,
 			)
 
-		case "hidden", "storageEngine",
-			"bits", "min", "max", "bucketSize", "collation", "wildcardProjection":
+		case "collation":
+			// Stored and echoed by listIndexes. Not yet used for index
+			// identity or runtime enforcement; that is deferred to the
+			// collation engine work, which resolves the spec first.
+			if coll, ok := must.NotFail(indexDoc.Get("collation")).(*types.Document); ok {
+				index.Collation = coll
+			}
+
+		case "hidden":
+			// Tracked and echoed by listIndexes; planner-level hiding is not
+			// yet applied.
+			if hidden, ok := must.NotFail(indexDoc.Get("hidden")).(bool); ok {
+				index.Hidden = hidden
+			}
+
+		case "storageEngine",
+			"bits", "min", "max", "bucketSize", "wildcardProjection":
 			// Accepted but not enforced  -- stored index behaves as a regular index.
-			// collation enforcement, etc. are not yet implemented.
 
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -547,6 +572,13 @@ func formatIndexKey(key []backends.IndexKeyPair) string {
 	return strings.Join(res, ", ")
 }
 
+// sameCollation reports whether two index collation specs denote the same
+// collation, comparing normalized specs (nil and {locale:"simple"} both mean
+// the binary default).
+func sameCollation(a, b *types.Document) bool {
+	return collation.Parse(a).Identity() == collation.Parse(b).Identity()
+}
+
 // validateIndexesForCreation filters duplicates out of toCreate and returns an
 // error if any index conflicts with an existing one or has an invalid spec.
 func validateIndexesForCreation(command string, existing, toCreate []backends.IndexInfo) ([]backends.IndexInfo, error) {
@@ -603,7 +635,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
 			}
 
-			if newKey == otherKey {
+			if newKey == otherKey && sameCollation(newIdx.Collation, toCreate[j].Collation) {
 				msg := fmt.Sprintf(
 					"Index already exists with a different name: %s", otherName,
 				)
@@ -615,7 +647,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 		for _, existingIdx := range existing {
 			existingKey := formatIndexKey(existingIdx.Key)
 
-			if (newIdx.Name == existingIdx.Name && newKey == existingKey) || newKey == "_id: 1" {
+			if (newIdx.Name == existingIdx.Name && newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation)) || newKey == "_id: 1" {
 				// Fully identical indexes are ignored, no need to attempt to create them.
 				filteredToCreate = slices.Delete(filteredToCreate, i, i+1)
 				break
@@ -633,7 +665,7 @@ func validateIndexesForCreation(command string, existing, toCreate []backends.In
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexKeySpecsConflict, msg, command)
 			}
 
-			if newKey == existingKey {
+			if newKey == existingKey && sameCollation(newIdx.Collation, existingIdx.Collation) {
 				msg := fmt.Sprintf("Index already exists with a different name: %s", existingIdx.Name)
 				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrIndexOptionsConflict, msg, command)
 			}

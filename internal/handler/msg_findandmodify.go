@@ -23,6 +23,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -144,7 +145,12 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 	closer := iterator.NewMultiCloser(iterator.CloserFunc(cancel))
 	defer closer.Close()
 
+	params.Collation = h.effectiveCollation(ctx, db, params.Collection, params.Collation)
+
+	cmp := collation.Parse(params.Collation).Comparator()
+
 	var qp backends.QueryParams
+	qp.Collated = cmp != nil
 	if !h.DisablePushdown {
 		qp.Filter = params.Query
 	}
@@ -156,9 +162,9 @@ func (h *Handler) findAndModifyDocument(ctx context.Context, params *common.Find
 
 	closer.Add(queryRes.Iter)
 
-	iter := common.FilterIterator(queryRes.Iter, closer, params.Query)
+	iter := common.FilterIteratorColl(queryRes.Iter, closer, params.Query, cmp)
 
-	iter, err = common.SortIterator(iter, closer, params.Sort)
+	iter, err = common.SortIteratorWithCollation(iter, closer, params.Sort, cmp)
 	if err != nil {
 		var pathErr *types.PathError
 		if errors.As(err, &pathErr) && pathErr.Code() == types.ErrPathElementEmpty {

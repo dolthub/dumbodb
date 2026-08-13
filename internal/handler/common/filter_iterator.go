@@ -15,6 +15,7 @@
 package common
 
 import (
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/types"
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 	"github.com/dolthub/dumbodb/internal/util/lazyerrors"
@@ -27,9 +28,16 @@ import (
 //
 // Close method closes the underlying iterator.
 func FilterIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, filter *types.Document) types.DocumentsIterator {
+	return FilterIteratorColl(iter, closer, filter, nil)
+}
+
+// FilterIteratorColl is FilterIterator with an optional collation comparator
+// applied to string comparisons in the filter.
+func FilterIteratorColl(iter types.DocumentsIterator, closer *iterator.MultiCloser, filter *types.Document, cmp *collation.Comparator) types.DocumentsIterator {
 	res := &filterIterator{
 		iter:   iter,
 		filter: filter,
+		cmp:    cmp,
 	}
 	closer.Add(res)
 
@@ -39,6 +47,7 @@ func FilterIterator(iter types.DocumentsIterator, closer *iterator.MultiCloser, 
 type filterIterator struct {
 	iter   types.DocumentsIterator
 	filter *types.Document
+	cmp    *collation.Comparator
 }
 
 func (iter *filterIterator) Next() (struct{}, *types.Document, error) {
@@ -50,7 +59,7 @@ func (iter *filterIterator) Next() (struct{}, *types.Document, error) {
 			return unused, nil, lazyerrors.Error(err)
 		}
 
-		matches, err := FilterDocument(doc, iter.filter)
+		matches, err := FilterDocumentColl(doc, iter.filter, iter.cmp)
 		if err != nil {
 			return unused, nil, lazyerrors.Error(err)
 		}
