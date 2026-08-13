@@ -52,7 +52,16 @@ func mergeBSONDoc(base, left, right *types.Document) (*types.Document, bool) {
 			}
 			return nil, true
 		case bOK && lOK && !rOK:
+			// Modify against delete: the sides disagree about whether the
+			// value should exist. An unmodified survivor means a plain
+			// delete, which wins.
+			if !reflect.DeepEqual(lVal, bVal) {
+				return nil, true
+			}
 		case bOK && rOK && !lOK:
+			if !reflect.DeepEqual(rVal, bVal) {
+				return nil, true
+			}
 		case bOK && lOK && rOK:
 			leftUnchanged := reflect.DeepEqual(lVal, bVal)
 			rightUnchanged := reflect.DeepEqual(rVal, bVal)
