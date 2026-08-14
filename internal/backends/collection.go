@@ -271,9 +271,18 @@ type InsertAllParams struct {
 	// Backends that support it may acknowledge before the write is durable and
 	// rely on a periodic background flush.
 	SkipDurableSync bool
+
+	// ReturnDocHashes asks the backend to report the content hash of every
+	// stored document in InsertAllResult.DocHashes.
+	ReturnDocHashes bool
 }
 
-type InsertAllResult struct{}
+type InsertAllResult struct {
+	// DocHashes holds the content hash of each stored document, in Docs order,
+	// when ReturnDocHashes was set; nil otherwise. A backend that does not
+	// address documents by content leaves it nil.
+	DocHashes []string
+}
 
 // InsertAll inserts documents into the collection.
 //
@@ -319,6 +328,10 @@ type UpdateAllParams struct {
 	// SkipDurableSync, when true, tells the backend the client opted out of a
 	// synchronous journal fsync via MongoDB writeConcern. See InsertAllParams.
 	SkipDurableSync bool
+
+	// ReturnDocHashes asks the backend to report the content hash of every
+	// stored document in UpdateAllResult.DocHashes.
+	ReturnDocHashes bool
 }
 
 // FieldMutation describes a single field-level change applied to a document.
@@ -345,6 +358,11 @@ type FieldMutation struct {
 
 type UpdateAllResult struct {
 	Updated int32
+
+	// DocHashes has one entry per Docs entry when ReturnDocHashes was set,
+	// holding the content hash of the document as stored; nil otherwise.
+	// Entry i is empty when Docs[i] matched nothing and was not written.
+	DocHashes []string
 }
 
 // UpdateAll updates documents in collection.

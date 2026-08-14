@@ -1492,6 +1492,11 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 
 	mut := m.Mutate()
 
+	var docHashes []string
+	if params.ReturnDocHashes {
+		docHashes = make([]string, 0, len(params.Docs))
+	}
+
 	// batchHashSet detects in-batch duplicate _id hashes in O(1).
 	batchHashSet := make(map[[20]byte]struct{}, len(params.Docs))
 	// In-batch collated string _ids (the primary probe only sees pre-batch state).
@@ -1626,13 +1631,22 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, err
 		}
 
-		v, err := writeDocToValue(ctx, state.ns, doc)
+		stored, err := docToBSON(doc)
+		if err != nil {
+			return nil, err
+		}
+
+		v, err := buildValue(ctx, state.ns, stored)
 		if err != nil {
 			return nil, err
 		}
 
 		if err := mut.Put(ctx, key, v); err != nil {
 			return nil, err
+		}
+
+		if params.ReturnDocHashes {
+			docHashes = append(docHashes, docContentHash(stored).String())
 		}
 
 		batchHashSet[h] = struct{}{}
@@ -1674,7 +1688,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 		return nil, err
 	}
 
-	return &backends.InsertAllResult{}, nil
+	return &backends.InsertAllResult{DocHashes: docHashes}, nil
 }
 
 func existsID(ctx context.Context, m prolly.Map, h [20]byte) (bool, error) {
@@ -1726,6 +1740,12 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 	mut := m.Mutate()
 
 	var updated int32
+
+	// Entry i stays empty when Docs[i] matched nothing.
+	var docHashes []string
+	if params.ReturnDocHashes {
+		docHashes = make([]string, len(params.Docs))
+	}
 
 	// Resolved once per batch: backs unique probes and the entry
 	// maintenance after the loop.
@@ -1833,6 +1853,10 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 			return nil, err
 		}
 
+		if params.ReturnDocHashes {
+			docHashes[i] = docContentHash(newBytes).String()
+		}
+
 		idxOldDocs = append(idxOldDocs, oldDoc)
 		idxNewDocs = append(idxNewDocs, newDoc)
 
@@ -1868,7 +1892,7 @@ func (c *collection) UpdateAll(ctx context.Context, params *backends.UpdateAllPa
 		return nil, err
 	}
 
-	return &backends.UpdateAllResult{Updated: updated}, nil
+	return &backends.UpdateAllResult{Updated: updated, DocHashes: docHashes}, nil
 }
 
 func (c *collection) DeleteAll(ctx context.Context, params *backends.DeleteAllParams) (*backends.DeleteAllResult, error) {
