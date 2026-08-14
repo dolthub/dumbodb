@@ -34,6 +34,28 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
+// appendDocHashes records one {index, _id, hash} entry per stored document.
+// hashes runs parallel to docs, and idxs gives each document's position in the
+// client's documents array (the index writeErrors reports too).
+func appendDocHashes(out *types.Array, hashes []string, docs []*types.Document, idxs []int) {
+	for i, h := range hashes {
+		if i >= len(docs) || i >= len(idxs) {
+			break
+		}
+
+		id, err := docs[i].Get("_id")
+		if err != nil {
+			continue
+		}
+
+		out.Append(must.NotFail(types.NewDocument(
+			"index", int32(idxs[i]),
+			"_id", id,
+			"hash", h,
+		)))
+	}
+}
+
 func WriteErrorDocument(we *mongo.WriteError) *types.Document {
 	return must.NotFail(types.NewDocument(
 		"index", int32(we.Index),
@@ -110,6 +132,7 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 	var inserted int32
 	var writeErrors []*mongo.WriteError
+	docHashes := types.MakeArray(0)
 
 	var done bool
 	for !done {
@@ -227,8 +250,15 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 			docsIndexes = append(docsIndexes, i)
 		}
 
-		if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{Docs: docs, SkipDurableSync: params.SkipDurableSync}); err == nil {
+		var insertRes *backends.InsertAllResult
+
+		if insertRes, err = c.InsertAll(connCtx, &backends.InsertAllParams{
+			Docs:            docs,
+			SkipDurableSync: params.SkipDurableSync,
+			ReturnDocHashes: params.DumboDocHashes,
+		}); err == nil {
 			inserted += int32(len(docs))
+			appendDocHashes(docHashes, insertRes.DocHashes, docs, docsIndexes)
 
 			if params.Ordered && len(writeErrors) > 0 {
 				break
@@ -239,11 +269,13 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 		// insert doc one by one upon failing on batch insertion
 		for j, doc := range docs {
-			if _, err = c.InsertAll(connCtx, &backends.InsertAllParams{
+			if insertRes, err = c.InsertAll(connCtx, &backends.InsertAllParams{
 				Docs:            []*types.Document{doc},
 				SkipDurableSync: params.SkipDurableSync,
+				ReturnDocHashes: params.DumboDocHashes,
 			}); err == nil {
 				inserted++
+				appendDocHashes(docHashes, insertRes.DocHashes, []*types.Document{doc}, docsIndexes[j:j+1])
 
 				continue
 			}
@@ -306,6 +338,10 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		}
 
 		res.Set("writeErrors", array)
+	}
+
+	if params.DumboDocHashes {
+		res.Set("dumboDocHashes", docHashes)
 	}
 
 	res.Set("ok", float64(1))

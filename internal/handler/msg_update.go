@@ -59,7 +59,7 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		defer cancel()
 	}
 
-	matched, modified, upserted, err := h.updateDocument(ctx, params)
+	matched, modified, upserted, docHashes, err := h.updateDocument(ctx, params)
 	if err != nil {
 		if params.MaxTimeMS > 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(
@@ -80,6 +80,11 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	}
 
 	res.Set("nModified", modified)
+
+	if params.DumboDocHashes {
+		res.Set("dumboDocHashes", docHashes)
+	}
+
 	res.Set("ok", float64(1))
 
 	return documentOpMsg(
@@ -88,25 +93,26 @@ func (h *Handler) MsgUpdate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 }
 
 // updateDocument iterate through all documents in collection and update them.
-func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParams) (int32, int32, *types.Array, error) {
+func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParams) (int32, int32, *types.Array, *types.Array, error) { //nolint:lll // for readability
 	var matched, modified int32
 	var upserted types.Array
+	docHashes := types.MakeArray(0)
 
 	db, err := h.b.Database(params.DB)
 	if err != nil {
 		if backends.ErrorCodeIs(err, backends.ErrorCodeDatabaseNameIsInvalid) {
 			msg := fmt.Sprintf("Invalid namespace specified '%s.%s'", params.DB, params.Collection)
-			return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "update")
+			return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "update")
 		}
 
-		return 0, 0, nil, lazyerrors.Error(err)
+		return 0, 0, nil, nil, lazyerrors.Error(err)
 	}
 
 	// Check if collection is a view  -- views don't support write operations.
 	if collRes, collErr := db.ListCollections(ctx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
 		if len(collRes.Collections) == 1 && collRes.Collections[0].IsView {
 			msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
-			return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "update")
+			return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "update")
 		}
 	}
 
@@ -119,9 +125,9 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		// nothing
 	case backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid):
 		msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
-		return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
+		return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
 	default:
-		return 0, 0, nil, lazyerrors.Error(err)
+		return 0, 0, nil, nil, lazyerrors.Error(err)
 	}
 
 	var validator *types.Document
@@ -136,15 +142,16 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeCollectionNameIsInvalid) {
 				msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
-				return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
+				return 0, 0, nil, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
 			}
 
-			return 0, 0, nil, lazyerrors.Error(err)
+			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 
 		u.Validator = validator
 		u.ValidationLevel = valLevel
 		u.ValidationAction = valAction
+		u.ReturnDocHashes = params.DumboDocHashes
 
 		cmp := collation.Parse(u.Collation).Comparator()
 
@@ -156,7 +163,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 
 		res, err := c.Query(ctx, &qp)
 		if err != nil {
-			return 0, 0, nil, lazyerrors.Error(err)
+			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 
 		closer := iterator.NewMultiCloser()
@@ -173,19 +180,23 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		result, err := common.UpdateDocument(ctx, c, "update", iter, &u, params.SkipDurableSync)
 		if err != nil {
 			if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase) {
-				return 0, 0, nil, handlererrors.NewCommandErrorMsg(
+				return 0, 0, nil, nil, handlererrors.NewCommandErrorMsg(
 					handlererrors.ErrOperationFailed,
 					"cannot write to a read-only database snapshot",
 				)
 			}
 			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
-				return 0, 0, nil, common.TranslateBackendWriteError(err)
+				return 0, 0, nil, nil, common.TranslateBackendWriteError(err)
 			}
-			return 0, 0, nil, lazyerrors.Error(err)
+			return 0, 0, nil, nil, lazyerrors.Error(err)
 		}
 
 		matched += result.Matched.Count
 		modified += result.Modified.Count
+
+		for _, entry := range result.DocHashes {
+			docHashes.Append(entry)
+		}
 
 		if result.WarnAllowed > 0 {
 			h.L.Warn("documents allowed despite failing validation (validationAction:warn)",
@@ -204,5 +215,5 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		}
 	}
 
-	return matched, modified, &upserted, nil
+	return matched, modified, &upserted, docHashes, nil
 }
