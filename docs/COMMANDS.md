@@ -892,35 +892,46 @@ Returns a document-level diff between two states for the branch encoded in the d
 
 #### Metadata field diffs
 
-The three spec fields are addressed as `$.validator`, `$.validationLevel`, and
-`$.validationAction`, and appear in that order. Only the fields that changed are
-listed, so relaxing a validation level does not re-echo the untouched validator.
+The spec is rooted at `$`, giving the three fields `$.validator`,
+`$.validationLevel`, and `$.validationAction`, in that order. Only the fields
+that changed are listed, so relaxing a validation level does not re-echo the
+untouched validator.
 
-The **validator is diffed as a single leaf value**: `from`/`to` carry the whole
-query expression rather than paths into it. A validator is a query expression,
-not data, so a path such as `$.validator.age.$gte` would look like a document
-field path without being one.
+**A validator change reports the changed leaves inside the validator**, exactly
+as a modified document reports its changed fields, so paths continue past
+`$.validator` into the expression. A one-field edit to a `$jsonSchema` is one
+entry naming that field, not the whole schema on both sides. As with documents,
+a subtree that is wholly new is reported at the level where it appeared rather
+than as a leaf per field beneath it.
 
-A collection that gains a validator where it had none reports all three fields
-as `"added"` (no `from` side); one that loses its validator reports all three as
-`"removed"` (no `to` side). Between two sides that both have a validator, every
-entry is `"modified"`.
+A collection that gains a validator where it had none reports all three spec
+fields as `"added"` (no `from` side), with the entire validator as the value of
+`$.validator`; one that loses its validator reports all three as `"removed"`
+(no `to` side).
 
 ```js
 // relaxing only the level:
 metadata: { diff: [ { type: "modified", path: "$.validationLevel",
                       from: "strict", to: "moderate" } ] }
 
-// tightening the validator itself:
-metadata: { diff: [ { type: "modified", path: "$.validator",
-                      from: { age: { $gte: 0 } },
-                      to:   { age: { $gte: 21 } } } ] }
+// tightening one bound in a query-expression validator:
+metadata: { diff: [ { type: "modified", path: "$.validator.age.$gte",
+                      from: 0, to: 21 } ] }
+
+// tightening one pattern in a $jsonSchema validator:
+metadata: { diff: [ { type: "modified",
+                      path: "$.validator.$jsonSchema.properties.email.pattern",
+                      from: "^.+@.+$", to: "^.+@.+\\..+$" } ] }
 
 // a collection that had no validator until now:
 metadata: { diff: [ { type: "added", path: "$.validator",        to: { age: { $gte: 0 } } },
                     { type: "added", path: "$.validationLevel",  to: "strict" },
                     { type: "added", path: "$.validationAction", to: "error" } ] }
 ```
+
+Because the paths run through the validator's own keys, a query operator or a
+schema keyword appears as a path segment (`$.validator.age.$gte`). These name
+positions within the validator; they are not document field paths.
 
 ### Change entry -- `type: "view"`
 

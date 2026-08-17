@@ -349,8 +349,9 @@ Key checks:
   (old) and `to` (new) values; unchanged fields do not appear. `indexes` groups
   index changes the same way. `metadata` carries `{ diff: [...] }` when the
   validator or validation options changed, using the same `{type, path, from, to}`
-  field-diff entries at the paths `$.validator`, `$.validationLevel`, and
-  `$.validationAction`; it is `{}` otherwise.
+  field-diff entries rooted at `$.validator`, `$.validationLevel`, and
+  `$.validationAction`; a validator change reports the changed leaves inside the
+  validator, so its paths continue on into the expression. It is `{}` otherwise.
 - `HEAD` always resolves to the connection's own branch tip, not necessarily main.
 
 ---

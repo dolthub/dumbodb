@@ -104,9 +104,9 @@ func TestDiffMetadata_LevelOnlyChange(t *testing.T) {
 	assert.Equal(t, "moderate", entries[0]["to"])
 }
 
-// A validator change reports the validator as a single leaf value: the whole
-// query expression on each side, not a path through its operators.
-func TestDiffMetadata_ValidatorIsALeaf(t *testing.T) {
+// A validator change reports the changed leaf inside the validator, not the
+// whole expression.
+func TestDiffMetadata_ValidatorLeafPath(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
 	dbName := fmt.Sprintf("dmval%d", rand.Int64N(1_000_000))
@@ -120,17 +120,115 @@ func TestDiffMetadata_ValidatorIsALeaf(t *testing.T) {
 	collModValidator(t, db, "items", ageAtLeast21, "strict", "error")
 
 	entries := metadataDiffOf(t, db, "items")
-	require.Len(t, entries, 1, "only the validator changed")
+	require.Len(t, entries, 1, "one leaf changed")
 	assert.Equal(t, "modified", entries[0]["type"])
-	assert.Equal(t, "$.validator", entries[0]["path"])
+	assert.Equal(t, "$.validator.age.$gte", entries[0]["path"])
+	assert.EqualValues(t, 0, entries[0]["from"])
+	assert.EqualValues(t, 21, entries[0]["to"])
+}
 
-	from, ok := entries[0]["from"].(bson.M)
-	require.True(t, ok, "from must carry the whole prior validator, got %T", entries[0]["from"])
-	assert.Equal(t, bson.M{"age": bson.M{"$gte": int32(0)}}, from)
+// A one-field edit deep inside a $jsonSchema validator reports only that
+// field's path, not the surrounding schema.
+func TestDiffMetadata_JSONSchemaLeafPath(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("dmschema%d", rand.Int64N(1_000_000))
+	db := env.Client.Database(dbName)
 
-	to, ok := entries[0]["to"].(bson.M)
-	require.True(t, ok, "to must carry the whole new validator, got %T", entries[0]["to"])
-	assert.Equal(t, bson.M{"age": bson.M{"$gte": int32(21)}}, to)
+	schema := func(emailPattern string) bson.D {
+		return bson.D{{Key: "$jsonSchema", Value: bson.D{
+			{Key: "bsonType", Value: "object"},
+			{Key: "required", Value: bson.A{"name", "email"}},
+			{Key: "properties", Value: bson.D{
+				{Key: "name", Value: bson.D{
+					{Key: "bsonType", Value: "string"},
+					{Key: "minLength", Value: 1},
+					{Key: "description", Value: "must be a string and is required"},
+				}},
+				{Key: "email", Value: bson.D{
+					{Key: "bsonType", Value: "string"},
+					{Key: "pattern", Value: emailPattern},
+					{Key: "description", Value: "must be a valid email string and is required"},
+				}},
+			}},
+		}}}
+	}
+
+	_, err := db.Collection("users").InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(1)},
+		{Key: "name", Value: "alice"},
+		{Key: "email", Value: "alice@acme.com"},
+	})
+	require.NoError(t, err)
+	collModValidator(t, db, "users", schema("^.+@.+$"), "strict", "error")
+	dumboDBCommit(t, env, dbName, "baseline schema", "alice")
+
+	collModValidator(t, db, "users", schema(`^.+@.+\..+$`), "strict", "error")
+
+	entries := metadataDiffOf(t, db, "users")
+	require.Len(t, entries, 1, "only the email pattern changed: %v", entries)
+	assert.Equal(t, "modified", entries[0]["type"])
+	assert.Equal(t, "$.validator.$jsonSchema.properties.email.pattern", entries[0]["path"])
+	assert.Equal(t, "^.+@.+$", entries[0]["from"])
+	assert.Equal(t, `^.+@.+\..+$`, entries[0]["to"])
+}
+
+// A schema key literally named _id is a real key, not a document identifier,
+// so it must not be skipped the way a document's _id is.
+func TestDiffMetadata_SchemaPropertyNamedID(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("dmid%d", rand.Int64N(1_000_000))
+	db := env.Client.Database(dbName)
+
+	schema := func(idType string) bson.D {
+		return bson.D{{Key: "$jsonSchema", Value: bson.D{
+			{Key: "bsonType", Value: "object"},
+			{Key: "properties", Value: bson.D{
+				{Key: "_id", Value: bson.D{{Key: "bsonType", Value: idType}}},
+			}},
+		}}}
+	}
+
+	_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	collModValidator(t, db, "items", schema("int"), "strict", "error")
+	dumboDBCommit(t, env, dbName, "baseline", "alice")
+
+	collModValidator(t, db, "items", schema("string"), "strict", "error")
+
+	entries := metadataDiffOf(t, db, "items")
+	require.Len(t, entries, 1, "the _id property change must not be skipped: %v", entries)
+	assert.Equal(t, "$.validator.$jsonSchema.properties._id.bsonType", entries[0]["path"])
+	assert.Equal(t, "int", entries[0]["from"])
+	assert.Equal(t, "string", entries[0]["to"])
+}
+
+// Adding a field to a validator reports it as added at the level where it
+// appeared, carrying its whole subtree, with no from side.
+func TestDiffMetadata_ValidatorFieldAdded(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("dmvadd%d", rand.Int64N(1_000_000))
+	db := env.Client.Database(dbName)
+
+	_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	collModValidator(t, db, "items", ageAtLeastZero, "strict", "error")
+	dumboDBCommit(t, env, dbName, "baseline", "alice")
+
+	withName := bson.D{
+		{Key: "age", Value: bson.D{{Key: "$gte", Value: 0}}},
+		{Key: "name", Value: bson.D{{Key: "$type", Value: "string"}}},
+	}
+	collModValidator(t, db, "items", withName, "strict", "error")
+
+	entries := metadataDiffOf(t, db, "items")
+	require.Len(t, entries, 1)
+	assert.Equal(t, "added", entries[0]["type"])
+	assert.Equal(t, "$.validator.name", entries[0]["path"])
+	assert.NotContains(t, entries[0], "from", "an added field has no from side")
+	assert.Equal(t, bson.M{"$type": "string"}, entries[0]["to"])
 }
 
 // Changing the validator and its level together reports both paths, validator
@@ -150,7 +248,7 @@ func TestDiffMetadata_ValidatorAndLevelTogether(t *testing.T) {
 
 	entries := metadataDiffOf(t, db, "items")
 	require.Len(t, entries, 2)
-	assert.Equal(t, "$.validator", entries[0]["path"])
+	assert.Equal(t, "$.validator.age.$gte", entries[0]["path"])
 	assert.Equal(t, "$.validationLevel", entries[1]["path"])
 	for _, e := range entries {
 		assert.Equal(t, "modified", e["type"])

@@ -698,36 +698,48 @@ db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice
 
 // A collMod that changes ONLY the validator still surfaces as a modified
 // collection, and makes the workspace dirty. The untouched validationLevel and
-// validationAction do not appear.
+// validationAction do not appear, and the path reaches the one changed leaf
+// inside the validator rather than naming the whole expression.
 db.runCommand({ collMod: "items", validator: { age: { $gte: 10 } } })
 
 db.runCommand({ doltStatus: 1 })
 // { ..., dirty: true, changes: [ { ..., status: "modified",
-//     metadata: { diff: [ { type: "modified", path: "$.validator" } ] } } ] }
+//     metadata: { diff: [ { type: "modified", path: "$.validator.age.$gte" } ] } } ] }
 
 db.runCommand({ doltDiff: 1 }).changes[0].metadata
-// { diff: [ { type: "modified", path: "$.validator",
-//             from: { age: { $gte: 0 } }, to: { age: { $gte: 10 } } } ] }
+// { diff: [ { type: "modified", path: "$.validator.age.$gte", from: 0, to: 10 } ] }
 
 // Commit it; doltLog carries the same change at both verbosities.
 db.runCommand({ doltCommit: 1, message: "tighten validator to age >= 10", author: "alice <alice@acme.com>" })
 
 db.runCommand({ doltLog: 1, limit: 1, stat: true }).commits[0].changes[0].metadata
-// { diff: [ { type: "modified", path: "$.validator" } ] }
+// { diff: [ { type: "modified", path: "$.validator.age.$gte" } ] }
 
 db.runCommand({ doltLog: 1, limit: 1, patch: true }).commits[0].changes[0].metadata
-// { diff: [ { type: "modified", path: "$.validator",
-//             from: { age: { $gte: 0 } }, to: { age: { $gte: 10 } } } ] }
+// { diff: [ { type: "modified", path: "$.validator.age.$gte", from: 0, to: 10 } ] }
+
+// The same holds for a $jsonSchema validator: editing one keyword reports that
+// keyword's path, not the surrounding schema.
+db.runCommand({ collMod: "items", validator: { $jsonSchema: {
+  bsonType: "object",
+  properties: { email: { bsonType: "string", pattern: "^.+@.+\\..+$" } } } } })
+
+db.runCommand({ doltDiff: 1 }).changes[0].metadata
+// { diff: [ { type: "modified", path: "$.validator.$jsonSchema.properties.email.pattern",
+//             from: "^.+@.+$", to: "^.+@.+\\..+$" }, ... ] }
 ```
 
 Key checks:
 - A newly-added validated collection reports all three spec fields as `"added"`
   (no `from` side), at the paths `$.validator`, `$.validationLevel`, and
-  `$.validationAction`, in that order.
-- A validator-only `collMod` surfaces as a `modified` collection carrying a
-  single `$.validator` entry in `doltDiff`, `doltStatus`, and `doltLog`
-  (`--stat` / `--patch`), and makes `doltStatus` report `dirty: true`.
+  `$.validationAction`, in that order, with the whole validator as the value of
+  `$.validator`.
+- A validator-only `collMod` surfaces as a `modified` collection in `doltDiff`,
+  `doltStatus`, and `doltLog` (`--stat` / `--patch`), and makes `doltStatus`
+  report `dirty: true`.
+- Paths run into the validator to the changed leaf, so a one-keyword edit to a
+  large `$jsonSchema` is one entry naming that keyword, never the whole schema
+  echoed on both sides.
 - Summary verbosity (`doltStatus`, `doltLog --stat`) names the changed paths
   only; full verbosity (`doltDiff`, `doltLog --patch`) adds the `from`/`to`
-  values. The validator is one leaf value on each side, never a path into the
-  query expression.
+  values.

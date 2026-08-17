@@ -526,15 +526,14 @@ func TestValidatorVerify(t *testing.T) {
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
 		}).Err())
 
-		// Only the validator moved, so the untouched level and action drop out.
-		modifiedPaths := []string{"modified $.validator"}
+		// Only the one leaf inside the validator moved, so the untouched level
+		// and action drop out, as does the rest of the expression.
+		modifiedPaths := []string{"modified $.validator.age.$gte"}
 
 		// assertValidatorValues checks the from/to sides carried at full verbosity.
 		assertValidatorValues := func(entry bson.M) {
-			fromAge, _ := entry["from"].(bson.M)["age"].(bson.M)
-			toAge, _ := entry["to"].(bson.M)["age"].(bson.M)
-			assert.EqualValues(t, 0, fromAge["$gte"])
-			assert.EqualValues(t, 10, toAge["$gte"])
+			assert.EqualValues(t, 0, entry["from"])
+			assert.EqualValues(t, 10, entry["to"])
 		}
 
 		status = runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})

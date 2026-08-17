@@ -386,9 +386,9 @@ type CollectionDiff struct {
 	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
 
 	// Path-based field diffs of the collection's validator/options, empty when
-	// the metadata did not change. The validator is diffed as a single leaf
-	// value rather than recursed into, since it is a query expression and a
-	// path through it would not address a document field.
+	// the metadata did not change. A validator change reports the changed
+	// leaves inside the validator, so paths reach into it (e.g.
+	// "$.validator.$jsonSchema.properties.email.pattern").
 	MetadataDiff []FieldDiff
 }
 

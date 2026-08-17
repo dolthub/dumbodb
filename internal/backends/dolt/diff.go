@@ -376,10 +376,13 @@ func readDocFromEntry(ctx context.Context, ns tree.NodeStore, k, v val.Tuple) (*
 // (e.g. "$.field", "$.nested.field", "$.array[2]"), a type tag ("added",
 // "modified", "removed"), and the old and/or new values as MongoDB-typed values.
 //
-// The _id field is excluded since it is reported at the ModifiedDoc level.
+// skipID excludes every field named _id, at any depth, and is what document
+// diffs want since _id is reported at the ModifiedDoc level. Callers diffing
+// something other than a document (collection metadata) must pass false, or a
+// key legitimately named _id is dropped from the result.
+//
 // Returns nil if the documents are identical.
-func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.FieldDiff, error) {
-	// Build a map of b's non-_id fields for O(1) lookup.
+func diffDocumentPaths(prefix string, docA, docB *types.Document, skipID bool) ([]backends.FieldDiff, error) {
 	bFieldMap := make(map[string]any)
 	bIter := docB.Iterator()
 	defer bIter.Close()
@@ -394,7 +397,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 			return nil, fmt.Errorf("iterating b document: %w", err)
 		}
 
-		if k == "_id" {
+		if skipID && k == "_id" {
 			continue
 		}
 
@@ -419,7 +422,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 			return nil, fmt.Errorf("iterating a document: %w", err)
 		}
 
-		if k == "_id" {
+		if skipID && k == "_id" {
 			continue
 		}
 
@@ -432,7 +435,7 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 			diffs = append(diffs, backends.FieldDiff{Type: "removed", Path: path, From: aVal})
 		} else {
 			// Field in both  -- compare values recursively.
-			subdiffs, err := compareFieldPaths(path, aVal, bVal)
+			subdiffs, err := compareFieldPaths(path, aVal, bVal, skipID)
 			if err != nil {
 				return nil, err
 			}
@@ -454,13 +457,13 @@ func diffDocumentPaths(prefix string, docA, docB *types.Document) ([]backends.Fi
 
 // compareFieldPaths compares two field values, recursing into nested documents
 // and arrays. It returns a FieldDiff for each differing leaf.
-func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error) {
+func compareFieldPaths(path string, aVal, bVal any, skipID bool) ([]backends.FieldDiff, error) {
 	// Nested documents  -- recurse.
 	aDoc, aIsDoc := aVal.(*types.Document)
 	bDoc, bIsDoc := bVal.(*types.Document)
 
 	if aIsDoc && bIsDoc {
-		return diffDocumentPaths(path, aDoc, bDoc)
+		return diffDocumentPaths(path, aDoc, bDoc, skipID)
 	}
 
 	// Arrays  -- compare element by element.
@@ -468,7 +471,7 @@ func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error
 	bArr, bIsArr := bVal.(*types.Array)
 
 	if aIsArr && bIsArr {
-		return diffArrayPaths(path, aArr, bArr)
+		return diffArrayPaths(path, aArr, bArr, skipID)
 	}
 
 	// Scalars (or type mismatch between doc/array/scalar).
@@ -481,7 +484,7 @@ func compareFieldPaths(path string, aVal, bVal any) ([]backends.FieldDiff, error
 
 // diffArrayPaths compares two arrays element-by-element and returns path-based
 // diffs with bracket notation (e.g. "$.scores[2]").
-func diffArrayPaths(path string, arrA, arrB *types.Array) ([]backends.FieldDiff, error) {
+func diffArrayPaths(path string, arrA, arrB *types.Array, skipID bool) ([]backends.FieldDiff, error) {
 	lenA := arrA.Len()
 	lenB := arrB.Len()
 
@@ -523,7 +526,7 @@ func diffArrayPaths(path string, arrA, arrB *types.Array) ([]backends.FieldDiff,
 				return nil, fmt.Errorf("reading array b[%d]: %w", i, err)
 			}
 
-			subdiffs, err := compareFieldPaths(elemPath, aVal, bVal)
+			subdiffs, err := compareFieldPaths(elemPath, aVal, bVal, skipID)
 			if err != nil {
 				return nil, err
 			}
@@ -583,7 +586,7 @@ func diffCollectionMaps(
 			if idErr != nil {
 				return false, idErr
 			}
-			fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
+			fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB, true)
 			if diffErr != nil {
 				return false, diffErr
 			}
@@ -775,7 +778,9 @@ func metadataViewOf(m *collMeta) *backends.CollectionMetadata {
 }
 
 // Wire paths for collection metadata field diffs, rooted at the collection
-// spec the way document paths are rooted at the document.
+// spec the way document paths are rooted at the document. A validator change
+// reports the leaves beneath validatorPath, so the paths reach into the
+// validator (e.g. "$.validator.$jsonSchema.properties.email.pattern").
 const (
 	validatorPath        = "$.validator"
 	validationLevelPath  = "$.validationLevel"
@@ -814,10 +819,23 @@ func collectionMetadataDiff(ctx context.Context, state *dbState, aCat, bCat prol
 		return nil, err
 	}
 	if !equalValidators {
-		diffs = append(diffs, backends.FieldDiff{
-			Type: "modified", Path: validatorPath,
-			From: aView.Validator, To: bView.Validator,
-		})
+		// skipID is false: a validator key named _id is a real key, not a
+		// document identifier ($jsonSchema.properties._id, or a bare {_id: ...}
+		// query expression).
+		validatorDiffs, err := diffDocumentPaths(validatorPath, aView.Validator, bView.Validator, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(validatorDiffs) == 0 {
+			// Canonical BSON differs but every leaf compares equal, e.g. a
+			// numeric width change. Report the validator whole rather than
+			// drop a change the catalog did record.
+			validatorDiffs = []backends.FieldDiff{{
+				Type: "modified", Path: validatorPath,
+				From: aView.Validator, To: bView.Validator,
+			}}
+		}
+		diffs = append(diffs, validatorDiffs...)
 	}
 	if aView.ValidationLevel != bView.ValidationLevel {
 		diffs = append(diffs, backends.FieldDiff{

@@ -213,7 +213,7 @@ func scopedCollectionDiff(
 			if idErr != nil {
 				return false, idErr
 			}
-			fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB)
+			fieldDiffs, diffErr := diffDocumentPaths("$", docA, docB, true)
 			if diffErr != nil {
 				return false, diffErr
 			}
