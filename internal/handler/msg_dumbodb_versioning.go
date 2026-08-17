@@ -154,19 +154,56 @@ func collectionChangeSummary(t backends.TableStatus) *types.Document {
 			"removed", stringArray(t.RemovedIndexes),
 			"modified", stringArray(t.ModifiedIndexes),
 		)),
-		"metadata", collectionMetadataDoc(t.MetadataFrom, t.MetadataTo),
+		"metadata", collectionMetadataSummaryDoc(t.MetadataDiff),
 	))
 }
 
-// collectionMetadataDoc renders a validator/options change as {from, to}, or an
-// empty document when the metadata did not change.
-func collectionMetadataDoc(from, to *backends.CollectionMetadata) *types.Document {
+// collectionMetadataDoc renders validator/options changes as path-based field
+// diffs under `diff`, the same shape as a modified document's field diffs, or
+// an empty document when the metadata did not change.
+func collectionMetadataDoc(diffs []backends.FieldDiff) *types.Document {
 	metadata := must.NotFail(types.NewDocument())
-	if from != nil || to != nil {
-		metadata.Set("from", collectionMetadataSide(from))
-		metadata.Set("to", collectionMetadataSide(to))
+	if len(diffs) == 0 {
+		return metadata
 	}
+	arr := types.MakeArray(len(diffs))
+	for _, fd := range diffs {
+		arr.Append(fieldDiffDoc(fd))
+	}
+	metadata.Set("diff", arr)
 	return metadata
+}
+
+// collectionMetadataSummaryDoc renders the changed metadata paths without their
+// values, the summary-verbosity analog of listing index names rather than full
+// index definitions.
+func collectionMetadataSummaryDoc(diffs []backends.FieldDiff) *types.Document {
+	metadata := must.NotFail(types.NewDocument())
+	if len(diffs) == 0 {
+		return metadata
+	}
+	arr := types.MakeArray(len(diffs))
+	for _, fd := range diffs {
+		arr.Append(must.NotFail(types.NewDocument(
+			"type", fd.Type,
+			"path", fd.Path,
+		)))
+	}
+	metadata.Set("diff", arr)
+	return metadata
+}
+
+// fieldDiffDoc renders one path-based field change. from is omitted for an
+// added field, to for a removed one.
+func fieldDiffDoc(fd backends.FieldDiff) *types.Document {
+	pairs := []any{"type", fd.Type, "path", fd.Path}
+	if fd.Type != "added" {
+		pairs = append(pairs, "from", fd.From)
+	}
+	if fd.Type != "removed" {
+		pairs = append(pairs, "to", fd.To)
+	}
+	return must.NotFail(types.NewDocument(pairs...))
 }
 
 func viewStatusToChange(v backends.ViewStatus) *types.Document {
@@ -225,14 +262,7 @@ func collectionDiffToDoc(cd backends.CollectionDiff) *types.Document {
 	for _, m := range cd.Modified {
 		diffArray := types.MakeArray(len(m.Diff))
 		for _, fd := range m.Diff {
-			fdPairs := []any{"type", fd.Type, "path", fd.Path}
-			if fd.Type != "added" {
-				fdPairs = append(fdPairs, "from", fd.From)
-			}
-			if fd.Type != "removed" {
-				fdPairs = append(fdPairs, "to", fd.To)
-			}
-			diffArray.Append(must.NotFail(types.NewDocument(fdPairs...)))
+			diffArray.Append(fieldDiffDoc(fd))
 		}
 		modified.Append(must.NotFail(types.NewDocument(
 			"_id", m.ID,
@@ -290,23 +320,8 @@ func collectionChangeFull(cd backends.CollectionDiff) *types.Document {
 		"status", cd.Status,
 		"documents", documents,
 		"indexes", indexes,
-		"metadata", collectionMetadataDoc(cd.MetadataFrom, cd.MetadataTo),
+		"metadata", collectionMetadataDoc(cd.MetadataDiff),
 	))
-}
-
-// collectionMetadataSide renders one side of a validator/options diff, or null
-// when that side had no validator.
-func collectionMetadataSide(m *backends.CollectionMetadata) any {
-	if m == nil {
-		return types.Null
-	}
-	side := must.NotFail(types.NewDocument())
-	if m.Validator != nil {
-		side.Set("validator", m.Validator)
-	}
-	side.Set("validationLevel", m.ValidationLevel)
-	side.Set("validationAction", m.ValidationAction)
-	return side
 }
 
 // stringArray renders a []string as a wire-array, returning an empty

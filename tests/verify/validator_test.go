@@ -481,23 +481,44 @@ func TestValidatorVerify(t *testing.T) {
 		require.NoError(t, db.CreateCollection(ctx, "items",
 			options.CreateCollection().SetValidator(valNonNegAge).SetValidationLevel("strict")))
 
-		assertAddedMeta := func(changes bson.A) {
+		// metaEntries returns the metadata field diffs of the sole change entry.
+		metaEntries := func(changes bson.A, wantStatus string) []bson.M {
 			require.Len(t, changes, 1)
 			ch := changes[0].(bson.M)
 			assert.Equal(t, "items", ch["name"])
-			assert.Equal(t, "added", ch["status"])
-			meta := ch["metadata"].(bson.M)
-			assert.Nil(t, meta["from"], "added collection has no prior metadata")
-			to, _ := meta["to"].(bson.M)
-			age, _ := to["validator"].(bson.M)["age"].(bson.M)
-			assert.EqualValues(t, 0, age["$gte"])
-			assert.Equal(t, "strict", to["validationLevel"])
+			assert.Equal(t, wantStatus, ch["status"])
+			raw, _ := ch["metadata"].(bson.M)["diff"].(bson.A)
+			out := make([]bson.M, 0, len(raw))
+			for _, e := range raw {
+				out = append(out, e.(bson.M))
+			}
+			return out
 		}
+
+		// taggedPaths renders each entry as "<type> <path>" for comparison.
+		taggedPaths := func(entries []bson.M) []string {
+			out := make([]string, 0, len(entries))
+			for _, e := range entries {
+				out = append(out, fmt.Sprintf("%s %s", e["type"], e["path"]))
+			}
+			return out
+		}
+
+		addedPaths := []string{"added $.validator", "added $.validationLevel", "added $.validationAction"}
+
 		status := runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
 		assert.Equal(t, true, status["dirty"])
-		assertAddedMeta(status["changes"].(bson.A))
+		statusAdded := metaEntries(status["changes"].(bson.A), "added")
+		assert.Equal(t, addedPaths, taggedPaths(statusAdded))
+		assert.NotContains(t, statusAdded[0], "to", "summary verbosity names paths only")
+
 		diff := runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
-		assertAddedMeta(diff["changes"].(bson.A))
+		diffAdded := metaEntries(diff["changes"].(bson.A), "added")
+		assert.Equal(t, addedPaths, taggedPaths(diffAdded))
+		assert.NotContains(t, diffAdded[0], "from", "added collection has no prior metadata")
+		age, _ := diffAdded[0]["to"].(bson.M)["age"].(bson.M)
+		assert.EqualValues(t, 0, age["$gte"])
+		assert.Equal(t, "strict", diffAdded[1]["to"])
 
 		dumboDBCommit(t, env, dbName, "create validated items", "alice <alice@acme.com>")
 
@@ -505,21 +526,27 @@ func TestValidatorVerify(t *testing.T) {
 			{Key: "collMod", Value: "items"}, {Key: "validator", Value: ageGte(10)},
 		}).Err())
 
-		assertModifiedMeta := func(changes bson.A) {
-			require.Len(t, changes, 1)
-			ch := changes[0].(bson.M)
-			assert.Equal(t, "modified", ch["status"])
-			meta := ch["metadata"].(bson.M)
-			fromAge, _ := meta["from"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
-			toAge, _ := meta["to"].(bson.M)["validator"].(bson.M)["age"].(bson.M)
+		// Only the validator moved, so the untouched level and action drop out.
+		modifiedPaths := []string{"modified $.validator"}
+
+		// assertValidatorValues checks the from/to sides carried at full verbosity.
+		assertValidatorValues := func(entry bson.M) {
+			fromAge, _ := entry["from"].(bson.M)["age"].(bson.M)
+			toAge, _ := entry["to"].(bson.M)["age"].(bson.M)
 			assert.EqualValues(t, 0, fromAge["$gte"])
 			assert.EqualValues(t, 10, toAge["$gte"])
 		}
+
 		status = runCommandRaw(t, db, bson.D{{Key: "doltStatus", Value: 1}})
 		assert.Equal(t, true, status["dirty"], "validator-only change makes the workspace dirty")
-		assertModifiedMeta(status["changes"].(bson.A))
+		statusModified := metaEntries(status["changes"].(bson.A), "modified")
+		assert.Equal(t, modifiedPaths, taggedPaths(statusModified))
+		assert.NotContains(t, statusModified[0], "from", "summary verbosity names paths only")
+
 		diff = runCommandRaw(t, db, bson.D{{Key: "doltDiff", Value: 1}})
-		assertModifiedMeta(diff["changes"].(bson.A))
+		diffModified := metaEntries(diff["changes"].(bson.A), "modified")
+		assert.Equal(t, modifiedPaths, taggedPaths(diffModified))
+		assertValidatorValues(diffModified[0])
 
 		dumboDBCommit(t, env, dbName, "tighten validator to age >= 10", "alice <alice@acme.com>")
 		for _, verbosity := range []string{"stat", "patch"} {
@@ -528,7 +555,13 @@ func TestValidatorVerify(t *testing.T) {
 			})
 			commits := log["commits"].(bson.A)
 			require.Len(t, commits, 1)
-			assertModifiedMeta(commits[0].(bson.M)["changes"].(bson.A))
+			entries := metaEntries(commits[0].(bson.M)["changes"].(bson.A), "modified")
+			assert.Equal(t, modifiedPaths, taggedPaths(entries), verbosity)
+			if verbosity == "patch" {
+				assertValidatorValues(entries[0])
+			} else {
+				assert.NotContains(t, entries[0], "from", "stat names paths only")
+			}
 		}
 	})
 }

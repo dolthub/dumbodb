@@ -183,7 +183,7 @@ Key checks:
 ## Scenario 6: Multiple collections changed simultaneously
 
 A single working set can span several collections. Each appears as its own entry
-with its own `added`/`modified`/`deleted` counts.
+with its own `added`/`modified`/`removed` counts.
 
 ```js
 // Commit a baseline with three collections we will then mutate together.
@@ -340,7 +340,9 @@ A collection entry groups its detail under `documents`, `indexes`, and
 - Only changed namespaces appear in `changes` (sorted by name).
 - The `branch` field reflects the connection's active branch.
 - `changes` is always an array (empty when there are no changes).
-- `indexes` carries index-name lists at status verbosity; `metadata` is reserved.
+- `indexes` carries index-name lists at status verbosity, and `metadata` carries
+  the changed validator/option paths without their values (`{ diff: [{type, path}, ...] }`,
+  or `{}` when unchanged). Use `doltDiff` for the before/after values.
 - Counts are **document-level**, not field-level. Use `doltDiff` for field-level detail.
 
 ### Rootish compatibility

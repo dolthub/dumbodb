@@ -676,40 +676,58 @@ the collection's own data.
 var db = db.getSiblingDB("valobserve")
 db.dropDatabase()
 
-// A newly-created validated collection: before any commit, diff and status show
-// it as "added" with the validator under metadata.to (metadata.from is null).
+// A newly-created validated collection: the whole spec is new, so all three
+// metadata fields report as "added". doltStatus is summary verbosity, so it
+// names the paths without their values.
 db.createCollection("items", { validator: { age: { $gte: 0 } }, validationLevel: "strict" })
 
 db.runCommand({ doltStatus: 1 })
 // { ..., dirty: true, changes: [ { type: "collection", name: "items", status: "added",
-//     documents: { added: 0, modified: 0, deleted: 0 }, indexes: { ... },
-//     metadata: { from: null,
-//                 to: { validator: { age: { $gte: 0 } }, validationLevel: "strict", validationAction: "error" } } } ] }
+//     documents: { added: 0, modified: 0, removed: 0 }, indexes: { ... },
+//     metadata: { diff: [ { type: "added", path: "$.validator" },
+//                         { type: "added", path: "$.validationLevel" },
+//                         { type: "added", path: "$.validationAction" } ] } } ] }
 
-db.runCommand({ doltDiff: 1 }).changes[0].metadata   // same { from: null, to: {...} }
+// doltDiff is full verbosity: the same paths, now carrying the new values.
+db.runCommand({ doltDiff: 1 }).changes[0].metadata
+// { diff: [ { type: "added", path: "$.validator",        to: { age: { $gte: 0 } } },
+//           { type: "added", path: "$.validationLevel",  to: "strict" },
+//           { type: "added", path: "$.validationAction", to: "error" } ] }
 
 db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice <alice@acme.com>" })
 
 // A collMod that changes ONLY the validator still surfaces as a modified
-// collection with metadata { from, to }, and makes the workspace dirty.
+// collection, and makes the workspace dirty. The untouched validationLevel and
+// validationAction do not appear.
 db.runCommand({ collMod: "items", validator: { age: { $gte: 10 } } })
 
 db.runCommand({ doltStatus: 1 })
 // { ..., dirty: true, changes: [ { ..., status: "modified",
-//     metadata: { from: { validator: { age: { $gte: 0  } }, ... },
-//                 to:   { validator: { age: { $gte: 10 } }, ... } } } ] }
+//     metadata: { diff: [ { type: "modified", path: "$.validator" } ] } } ] }
 
-db.runCommand({ doltDiff: 1 }).changes[0].metadata   // same { from, to }
+db.runCommand({ doltDiff: 1 }).changes[0].metadata
+// { diff: [ { type: "modified", path: "$.validator",
+//             from: { age: { $gte: 0 } }, to: { age: { $gte: 10 } } } ] }
 
-// Commit it; doltLog --stat / --patch shows the same metadata change for the commit.
+// Commit it; doltLog carries the same change at both verbosities.
 db.runCommand({ doltCommit: 1, message: "tighten validator to age >= 10", author: "alice <alice@acme.com>" })
+
 db.runCommand({ doltLog: 1, limit: 1, stat: true }).commits[0].changes[0].metadata
-// { from: { validator: { age: { $gte: 0 } }, ... }, to: { validator: { age: { $gte: 10 } }, ... } }
+// { diff: [ { type: "modified", path: "$.validator" } ] }
+
+db.runCommand({ doltLog: 1, limit: 1, patch: true }).commits[0].changes[0].metadata
+// { diff: [ { type: "modified", path: "$.validator",
+//             from: { age: { $gte: 0 } }, to: { age: { $gte: 10 } } } ] }
 ```
 
 Key checks:
-- A newly-added validated collection shows the validator under `metadata.to`
-  (`metadata.from` is `null`) in `doltDiff` and `doltStatus`.
-- A validator-only `collMod` surfaces as a `modified` collection carrying
-  `metadata: { from, to }` in `doltDiff`, `doltStatus`, and `doltLog`
+- A newly-added validated collection reports all three spec fields as `"added"`
+  (no `from` side), at the paths `$.validator`, `$.validationLevel`, and
+  `$.validationAction`, in that order.
+- A validator-only `collMod` surfaces as a `modified` collection carrying a
+  single `$.validator` entry in `doltDiff`, `doltStatus`, and `doltLog`
   (`--stat` / `--patch`), and makes `doltStatus` report `dirty: true`.
+- Summary verbosity (`doltStatus`, `doltLog --stat`) names the changed paths
+  only; full verbosity (`doltDiff`, `doltLog --patch`) adds the `from`/`to`
+  values. The validator is one leaf value on each side, never a path into the
+  query expression.

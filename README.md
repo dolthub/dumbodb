@@ -155,19 +155,20 @@ At this point, if we run `dumboStatus`, we can see a summary of the uncommitted 
 ```js
 db.runCommand({dumboStatus: 1})
 ```
-Will output the summary of your changes. Specifically, it shows that in the 'items' collection, you have 1 added document, 1 modified document, and 1 deleted document:
+Will output the summary of your changes. Specifically, it shows that in the 'items' collection, you have 1 added document, 1 modified document, and 1 removed document:
 ```js
 {
   branch: 'main',
   dirty: true,
   readonly: false,
-  collections: [
+  changes: [
     {
+      type: 'collection',
       name: 'items',
       status: 'modified',
-      added: 1,
-      modified: 1,
-      deleted: 1
+      documents: { added: 1, modified: 1, removed: 1 },
+      indexes: { added: [], removed: [], modified: [] },
+      metadata: {}
     }
   ],
   ok: 1

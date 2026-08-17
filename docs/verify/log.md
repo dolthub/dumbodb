@@ -649,6 +649,6 @@ Key checks:
 - `parent1` is present on all non-root commits.
 - `parent2` is present only on merge commits.
 - The root commit has neither `parent1` nor `parent2`.
-- When `stat: true`, each commit includes a `changes` array (the same unified shape as `doltDiff`) at summary verbosity: each entry is `{ type, name, status, documents, indexes, metadata }` with `documents` as counts and `indexes` as names.
-- When `patch: true`, each commit includes the same `changes` array at full verbosity: `documents` carries full documents and `indexes` carries full definitions.
+- When `stat: true`, each commit includes a `changes` array (the same unified shape as `doltDiff`) at summary verbosity: each entry is `{ type, name, status, documents, indexes, metadata }` with `documents` as counts, `indexes` as names, and `metadata` as the changed validator/option paths without their values.
+- When `patch: true`, each commit includes the same `changes` array at full verbosity: `documents` carries full documents, `indexes` carries full definitions, and `metadata` carries the `from`/`to` values.
 - `changes` is only present (with `stat`/`patch`) on commits that changed something relative to their first parent; a commit that changed only a collection's validator/options still appears, with a populated `metadata`.

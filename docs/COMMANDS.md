@@ -543,7 +543,7 @@ timestamp first.
 | `author` | string | Commit author |
 | `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
 | `committerTimestamp` | Date | Timestamp of when the commit was applied |
-| `changes` | array | **Only when `stat: true` or `patch: true`.** What this commit changed versus its first parent, as the unified `changes` array (same shape as `dumboDiff`). `stat` renders it at summary verbosity (document counts, index names); `patch` renders it at full verbosity (full documents, index definitions). Both carry the `metadata` validator/options change. |
+| `changes` | array | **Only when `stat: true` or `patch: true`.** What this commit changed versus its first parent, as the unified `changes` array (same shape as `dumboDiff`). `stat` renders it at summary verbosity (document counts, index names, changed metadata paths); `patch` renders it at full verbosity (full documents, index definitions, metadata values). Both carry the `metadata` validator/options change. |
 
 ### Example
 
@@ -766,9 +766,9 @@ None (beyond the implicit `$db` connection).
 
 Each entry has the same `{ type, name, status, documents, indexes, metadata }`
 shape as a `dumboDiff` change, but at summary verbosity: `documents` carries
-counts (`{ added, modified, deleted }`) rather than full documents, and
-`indexes` carries index names rather than full definitions. `metadata` is the
-validator/options change `{ from, to }` (or `{}` when unchanged), same as diff.
+counts (`{ added, modified, removed }`) rather than full documents, `indexes`
+carries index names rather than full definitions, and `metadata` carries the
+changed validator/options **paths** rather than their values.
 View changes appear as `{ type: "view", name, status }`.
 
 | Field | Type | Description |
@@ -776,9 +776,9 @@ View changes appear as `{ type: "view", name, status }`.
 | `type` | string | `"collection"` or `"view"` |
 | `name` | string | Namespace name |
 | `status` | string | `"added"`, `"modified"`, or `"deleted"` |
-| `documents` | document | `{ added, modified, deleted }` counts (collections only) |
+| `documents` | document | `{ added, modified, removed }` counts (collections only) |
 | `indexes` | document | `{ added, removed, modified }` lists of index names (collections only) |
-| `metadata` | document | `{ from, to }` validator/options change, or `{}` (collections only) |
+| `metadata` | document | `{ diff: [{ type, path }, ...] }` naming the changed validator/options fields, or `{}` when unchanged (collections only) |
 
 ### Status values
 
@@ -801,7 +801,7 @@ db.runCommand({ dumboStatus: 1 })
 //   dirty:  true,
 //   changes: [
 //     { type: "collection", name: "orders", status: "modified",
-//       documents: { added: 1, modified: 0, deleted: 0 },
+//       documents: { added: 1, modified: 0, removed: 0 },
 //       indexes:   { added: [], removed: [], modified: [] },
 //       metadata:  {} }
 //   ],
@@ -813,6 +813,25 @@ db.runCommand({ dumboCommit: 1, message: "add order 99", author: "alice <alice@a
 db.runCommand({ dumboStatus: 1 })
 // { branch: "main", dirty: false, changes: [], commitId: "...", ok: 1 }
 
+// A collMod that only relaxes the level of an already-committed
+// { amount: { $gte: 0 } } validator. metadata names the one changed path,
+// without its values; the unchanged validator does not appear.
+db.runCommand({ collMod: "orders", validator: { amount: { $gte: 0 } },
+                validationLevel: "moderate" })
+
+db.runCommand({ dumboStatus: 1 })
+// {
+//   branch: "main",
+//   dirty:  true,
+//   changes: [
+//     { type: "collection", name: "orders", status: "modified",
+//       documents: { added: 0, modified: 0, removed: 0 },
+//       indexes:   { added: [], removed: [], modified: [] },
+//       metadata:  { diff: [ { type: "modified", path: "$.validationLevel" } ] } }
+//   ],
+//   ok: 1
+// }
+
 // During a merge conflict  -- mergeState and conflicts appear
 db.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // (merge returns ok:0 with conflicts)
@@ -822,7 +841,7 @@ db.runCommand({ dumboStatus: 1 })
 //   branch: "main",
 //   changes: [
 //     { type: "collection", name: "orders", status: "modified",
-//       documents: { added: 0, modified: 1, deleted: 0 },
+//       documents: { added: 0, modified: 1, removed: 0 },
 //       indexes: { added: [], removed: [], modified: [] }, metadata: {} }
 //   ],
 //   mergeState: "merge",
@@ -834,6 +853,7 @@ db.runCommand({ dumboStatus: 1 })
 ### Notes
 
 - Only namespaces with uncommitted changes appear; unchanged ones are omitted. A `collMod` that changed only the validator/options still appears (with empty `documents`/`indexes` and a populated `metadata`).
+- `metadata` reports paths only at this verbosity, the same way `indexes` reports names only. Use `dumboDiff` for the before/after values.
 - `changes` is always an array (empty when clean).
 - Document counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
 
@@ -868,7 +888,39 @@ Returns a document-level diff between two states for the branch encoded in the d
 | `status` | string | `"added"`, `"deleted"`, or `"modified"` |
 | `documents` | document | `{ added, removed, modified }`. In `dumboDiff` (full verbosity) each is a list -- `added`/`removed` are full documents and `modified` is a list of `{ _id, diff }` entries. At summary verbosity (`dumboStatus`, `dumboLog --stat`) each is a count instead. |
 | `indexes` | document | `{ added, removed, modified }`. Full verbosity: `added`/`removed` are full `IndexInfo` definitions, `modified` is a list of `{ from, to }`. Summary verbosity: each is a list of index names. |
-| `metadata` | document | Validator/options change as `{ from, to }`, or `{}` when unchanged. Each side is `{ validator?, validationLevel, validationAction }` or null (null when that side had no validator, e.g. an added or newly-validated collection). |
+| `metadata` | document | Validator/options change as `{ diff: [...] }`, or `{}` when unchanged. The entries are field diffs of the collection spec, the same `{type, path, from?, to?}` shape used for a modified document's fields. Full verbosity carries the values; summary verbosity carries `{type, path}` only. |
+
+#### Metadata field diffs
+
+The three spec fields are addressed as `$.validator`, `$.validationLevel`, and
+`$.validationAction`, and appear in that order. Only the fields that changed are
+listed, so relaxing a validation level does not re-echo the untouched validator.
+
+The **validator is diffed as a single leaf value**: `from`/`to` carry the whole
+query expression rather than paths into it. A validator is a query expression,
+not data, so a path such as `$.validator.age.$gte` would look like a document
+field path without being one.
+
+A collection that gains a validator where it had none reports all three fields
+as `"added"` (no `from` side); one that loses its validator reports all three as
+`"removed"` (no `to` side). Between two sides that both have a validator, every
+entry is `"modified"`.
+
+```js
+// relaxing only the level:
+metadata: { diff: [ { type: "modified", path: "$.validationLevel",
+                      from: "strict", to: "moderate" } ] }
+
+// tightening the validator itself:
+metadata: { diff: [ { type: "modified", path: "$.validator",
+                      from: { age: { $gte: 0 } },
+                      to:   { age: { $gte: 21 } } } ] }
+
+// a collection that had no validator until now:
+metadata: { diff: [ { type: "added", path: "$.validator",        to: { age: { $gte: 0 } } },
+                    { type: "added", path: "$.validationLevel",  to: "strict" },
+                    { type: "added", path: "$.validationAction", to: "error" } ] }
+```
 
 ### Change entry -- `type: "view"`
 
@@ -887,6 +939,8 @@ Returns a document-level diff between two states for the branch encoded in the d
 | `diff` | array | Per-field diffs: `{type, path, from?, to?}` |
 
 ### Field diff entry
+
+Used for both a modified document's fields and a collection's `metadata`.
 
 | Field | Type | Description |
 |-------|------|-------------|

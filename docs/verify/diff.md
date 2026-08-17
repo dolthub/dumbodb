@@ -100,8 +100,8 @@ Expected result structure:
 The change set is a single `changes` array, one entry per changed namespace,
 each tagged with its `type` (`collection` or `view`) and `status`. A collection
 entry groups its detail under `documents` / `indexes` / `metadata` (metadata is
-reserved and empty for now). A view entry instead carries `from` / `to`
-definitions.
+empty unless the collection's validator or validation options changed). A view
+entry instead carries `from` / `to` definitions.
 
 Key checks:
 - the entry has `type: "collection"` and `status: "modified"` (existed in both sides)
@@ -347,7 +347,10 @@ Key checks:
 - For a collection entry, `documents.added` / `documents.removed` contain full
   documents; `documents.modified` contains only the changed fields with `from`
   (old) and `to` (new) values; unchanged fields do not appear. `indexes` groups
-  index changes the same way; `metadata` is reserved.
+  index changes the same way. `metadata` carries `{ diff: [...] }` when the
+  validator or validation options changed, using the same `{type, path, from, to}`
+  field-diff entries at the paths `$.validator`, `$.validationLevel`, and
+  `$.validationAction`; it is `{}` otherwise.
 - `HEAD` always resolves to the connection's own branch tip, not necessarily main.
 
 ---
