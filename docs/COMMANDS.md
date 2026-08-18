@@ -1172,7 +1172,7 @@ None (beyond the implicit `$db` connection).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `conflicts` | array | One entry per conflict, each tagged with a `type` and its owning `name`, sorted by `name` then `conflictId` |
+| `conflicts` | array | One entry per conflict, each tagged with a `type` and its owning `collection`, sorted by `collection` then `conflictId` |
 | `ok` | number | `1` |
 
 ### Conflict entry
@@ -1181,9 +1181,9 @@ Every entry carries these three fields; the rest depend on `type`:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `conflictId` | string | Unique identifier for this conflict (used with `dumboResolveConflict`) |
+| `conflictId` | string | Identifies this conflict, and is all `dumboResolveConflict` needs (see its `collection` parameter for the one ambiguous case) |
 | `type` | string | `"document"`, `"view"`, `"metadata"`, or `"validation"` |
-| `name` | string | The owning collection or view |
+| `collection` | string | The owning collection, or the view name for `type: "view"` |
 
 **`type: "document"`** -- one document edited on both sides, or two documents contending for a unique-index key:
 
@@ -1225,8 +1225,8 @@ main.runCommand({ dumboConflicts: 1 })
 //   conflicts: [
 //     {
 //       conflictId: "2onhBAqtYZDVqr4WfXh8pA",
-//       type:   "document",
-//       name:   "orders",
+//       type:       "document",
+//       collection: "orders",
 //       reason: { code: "bothModified",
 //                 message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
 //       base:   { _id: 1, doc: { _id: 1, amount: 100 } },
@@ -1239,7 +1239,7 @@ main.runCommand({ dumboConflicts: 1 })
 
 // A uniqueKeyCollision is still type "document"; the sub-type is in reason.code:
 // {
-//   conflictId: "...", type: "document", name: "orders",
+//   conflictId: "...", type: "document", collection: "orders",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
@@ -1250,7 +1250,7 @@ main.runCommand({ dumboConflicts: 1 })
 
 // A validation conflict (a merged document violates the resulting validator):
 // {
-//   conflictId: "aFq9k2mXp...", type: "validation", name: "orders",
+//   conflictId: "aFq9k2mXp...", type: "validation", collection: "orders",
 //   documentId: 1,
 //   document:  { _id: 1, amount: -5 },
 //   validator: { amount: { $gte: 0 } },
@@ -1269,12 +1269,36 @@ rebase. The conflict's `type` (reported by `dumboConflicts`) determines which
 
 **Alias:** `doltResolveConflict`
 
+### Identifying the conflict
+
+`conflictId` is normally enough on its own:
+
+```js
+main.runCommand({ dumboResolveConflict: 1,
+                  conflictId: "2onhBAqtYZDVqr4WfXh8pA", resolution: "ours" })
+```
+
+A document `conflictId` hashes the document key and the incoming commit hash,
+not the owning collection (this matches Dolt's `dolt_conflict_id`). So the
+**same `_id` conflicting in two collections during one merge produces the same
+`conflictId` in both**. That case is reported rather than guessed at:
+
+```
+conflict id "2onhBAqtYZDVqr4WfXh8pA" is shared by collections alpha, beta;
+pass "collection" to choose one
+```
+
+Pass `collection` to pick one. View and metadata conflict ids are derived from
+the namespace name, so they are never ambiguous. A `conflictId` that does not
+belong to the `collection` you named is an error, not a silent resolve of
+whatever that collection has.
+
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `collection` | string | **yes** |  -- | Namespace (collection or view) containing the conflict |
-| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts` |
+| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts`. Identifies the conflict on its own; pass `collection` only in the ambiguous case below |
+| `collection` | string | no |  -- | Namespace (collection or view) containing the conflict. Needed only to disambiguate a `conflictId` shared by two collections |
 | `resolution` | string | **yes** |  -- | One of `"ours"`, `"theirs"`, `"custom"`, `"drop"`; the valid set depends on the conflict `type` (see Resolution options) |
 | `value` | document | conditional |  -- | Required when `resolution` is `"custom"`. Shaped for the conflict type: a document (`document`, `validation`); a view definition `{ viewOn, pipeline }` (`view`); or `{ validator, validationLevel?, validationAction? }` (`metadata`) |
 
@@ -1338,7 +1362,6 @@ var main = db.getSiblingDB("orders@main")
 // Resolve using our version
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "ours"
 })
@@ -1347,7 +1370,6 @@ main.runCommand({
 // Resolve using their version
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "theirs"
 })
@@ -1356,7 +1378,6 @@ main.runCommand({
 // Resolve with a custom document
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "custom",
   value: { _id: 1, amount: 175, status: "reconciled" }
@@ -1367,7 +1388,6 @@ main.runCommand({
 // replacing it with a conforming document...
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "aFq9k2mXp...",
   resolution: "custom",
   value: { _id: 1, amount: 175 }   // must satisfy the collection validator
@@ -1377,9 +1397,17 @@ main.runCommand({
 // ...or by dropping the offending document:
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "aFq9k2mXp...",
   resolution: "drop"
+})
+// { ok: 1 }
+
+// Only when one _id conflicts in two collections at once, name the collection:
+main.runCommand({
+  dumboResolveConflict: 1,
+  collection: "orders",
+  conflictId: "2onhBAqtYZDVqr4WfXh8pA",
+  resolution: "ours"
 })
 // { ok: 1 }
 
@@ -1417,7 +1445,7 @@ main.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "orders", count: 1 } ], ok: 0, errmsg: "..." }
 
 // Step 2: Inspect and resolve each conflict. dumboConflicts returns a single
-// `conflicts` array; each entry carries its owning `name` and its `type`.
+// `conflicts` array; each entry carries its owning `collection` and its `type`.
 const detail = main.runCommand({ dumboConflicts: 1 })
 detail.conflicts.forEach(c => {
   main.runCommand({

@@ -386,7 +386,7 @@ func TestMergeConflictWorkflow(t *testing.T) {
 		require.Len(t, conflicts, 1, "one conflict")
 
 		cf := conflicts[0].(bson.M)
-		assert.Equal(t, "inventory", cf["name"])
+		assert.Equal(t, "inventory", cf["collection"])
 		conflictID, ok := cf["conflictId"].(string)
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")
@@ -752,7 +752,7 @@ func TestMergePartialConflict(t *testing.T) {
 	conflicts := conflictsRaw["conflicts"].(bson.A)
 	require.Len(t, conflicts, 1, "exactly one conflict (_id:1 only)")
 	cf := conflicts[0].(bson.M)
-	assert.Equal(t, "items", cf["name"])
+	assert.Equal(t, "items", cf["collection"])
 	assert.EqualValues(t, int32(1), cf["ours"].(bson.M)["_id"], "conflicting document must be _id:1")
 	conflictID := cf["conflictId"].(string)
 

@@ -295,7 +295,7 @@ db.items.find({ sku: "S-1" })
 const rConflicts = db.getSiblingDB("idxmrg4@main").runCommand({ doltConflicts: 1 })
 printjson(rConflicts)
 // Expected: conflicts[0] has
-//   type: "document", name: "items",
+//   type: "document", collection: "items",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
@@ -489,7 +489,7 @@ db.getSiblingDB("idxmrg6@main").runCommand({ doltCherryPick: 1, commit: pick })
 const r = db.getSiblingDB("idxmrg6@main").runCommand({ doltConflicts: 1 })
 printjson(r)
 // Expected: conflicts[0] has
-//   type: "document", name: "items",
+//   type: "document", collection: "items",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and commit \'<pick>\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
@@ -545,7 +545,7 @@ db.getSiblingDB("idxmrg7@feature").runCommand({ doltRebase: 1, onto: "main" })
 const r = db.getSiblingDB("idxmrg7@feature").runCommand({ doltConflicts: 1 })
 printjson(r)
 // Expected: conflicts[0] has
-//   type: "document", name: "items",
+//   type: "document", collection: "items",
 //   reason.message: 'unique index "by_sku": commit \'<pick>\' (ours) and branch \'main\' (theirs) both have sku = "S-1"',
 //   ours:   { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" },   // the replayed commit
 //   theirs: { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" }    // onto/main
@@ -603,7 +603,7 @@ db.getSiblingDB("idxmrg8@main").runCommand({ doltRevert: 1, commit: del })
 const r = db.getSiblingDB("idxmrg8@main").runCommand({ doltConflicts: 1 })
 printjson(r)
 // Expected: conflicts[0] has
-//   type: "document", name: "items",
+//   type: "document", collection: "items",
 //   reason.message: 'unique index "by_sku": branch \'main\' (ours) and commit \'<del>\' (theirs) both have sku = "S-1"',
 //   ours:   { _id: 20, doc: { _id: 20, sku: "S-1" }, diffType: "added" },
 //   theirs: { _id: 10, doc: { _id: 10, sku: "S-1" }, diffType: "added" }    // re-added by the revert

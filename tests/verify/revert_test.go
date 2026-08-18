@@ -271,7 +271,7 @@ func TestRevertVerify(t *testing.T) {
 		require.Len(t, conflicts, 1, "must have exactly one conflict in 'records'")
 
 		cf := conflicts[0].(bson.M)
-		assert.Equal(t, "records", cf["name"])
+		assert.Equal(t, "records", cf["collection"])
 		conflictID, ok := cf["conflictId"].(string)
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")

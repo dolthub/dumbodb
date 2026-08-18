@@ -150,7 +150,7 @@ func setupRedefineConflict(t *testing.T, env *dumboDBTestEnv, dbName string) (*m
 
 	mainDB := env.Client.Database(dbName + "@main")
 	entry := vmViewConflict(t, mainDB)
-	assert.Equal(t, "cv", entry["name"])
+	assert.Equal(t, "cv", entry["collection"])
 	assert.Equal(t, "modified", entry["ours"].(bson.M)["diffType"])
 	assert.Equal(t, "modified", entry["theirs"].(bson.M)["diffType"])
 	return mainDB, entry["conflictId"].(string)

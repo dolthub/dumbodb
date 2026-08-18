@@ -1145,7 +1145,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 				vdoc := must.NotFail(types.NewDocument(
 					"conflictId", cf.ConflictID,
 					"type", "validation",
-					"name", cc.Collection,
+					"collection", cc.Collection,
 					"documentId", docID,
 					"reason", vreason,
 				))
@@ -1196,7 +1196,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 				doc: must.NotFail(types.NewDocument(
 					"conflictId", cf.ConflictID,
 					"type", "document",
-					"name", cc.Collection,
+					"collection", cc.Collection,
 					"reason", reason,
 					"base", buildSide(cf.Base, ""),
 					"ours", buildSide(cf.Ours, cf.OurDiffType),
@@ -1230,7 +1230,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 			doc: must.NotFail(types.NewDocument(
 				"conflictId", vc.ConflictID,
 				"type", "view",
-				"name", vc.Name,
+				"collection", vc.Name,
 				"base", buildViewSide(vc.Base, ""),
 				"ours", buildViewSide(vc.Ours, vc.OurDiffType),
 				"theirs", buildViewSide(vc.Theirs, vc.TheirDiffType),
@@ -1263,7 +1263,7 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 			doc: must.NotFail(types.NewDocument(
 				"conflictId", mc.ConflictID,
 				"type", "metadata",
-				"name", mc.Collection,
+				"collection", mc.Collection,
 				"reason", must.NotFail(types.NewDocument(
 					"code", mc.Reason.Code,
 					"message", mc.Reason.Message,
@@ -1304,9 +1304,12 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 // replacement) or drop.
 // Usage:
 //
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "ours"})
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "theirs"})
-//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, collection: "items", conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, conflictId: "c0", resolution: "ours"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, conflictId: "c0", resolution: "theirs"})
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
+//
+// "collection" is optional; pass it only to disambiguate a conflict id shared
+// by two collections.
 func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1327,7 +1330,10 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 		return nil, err
 	}
 
-	collection, err := common.GetRequiredParam[string](document, "collection")
+	// Optional: conflictId identifies the conflict on its own in every case but
+	// the same document _id conflicting in two collections, where the backend
+	// asks for a collection rather than guessing.
+	collection, err := common.GetOptionalParam[string](document, "collection", "")
 	if err != nil {
 		return nil, err
 	}

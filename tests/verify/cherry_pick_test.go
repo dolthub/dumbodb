@@ -230,7 +230,7 @@ func TestCherryPickVerify(t *testing.T) {
 		require.Len(t, conflicts, 1, "must have exactly one conflict in 'items'")
 
 		cf := conflicts[0].(bson.M)
-		assert.Equal(t, "items", cf["name"])
+		assert.Equal(t, "items", cf["collection"])
 		conflictID, ok := cf["conflictId"].(string)
 		require.True(t, ok, "conflictId must be a string")
 		require.NotEmpty(t, conflictID, "conflictId must not be empty")

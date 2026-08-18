@@ -104,7 +104,7 @@ func resolveMeta(t *testing.T, mainDB *mongo.Database, coll, resolution string, 
 	t.Helper()
 	ctx := context.Background()
 	mc := readMetaConflict(t, mainDB)
-	require.Equal(t, coll, mc["name"])
+	require.Equal(t, coll, mc["collection"])
 	cmd := bson.D{
 		{Key: "doltResolveConflict", Value: 1},
 		{Key: "collection", Value: coll},
@@ -151,7 +151,7 @@ func readMetaConflict(t *testing.T, mainDB *mongo.Database) bson.M {
 	var meta []bson.M
 	for _, c := range all {
 		e := c.(bson.M)
-		assert.NotEqual(t, "__dumbo_catalog__", e["name"], "internal catalog must never be surfaced")
+		assert.NotEqual(t, "__dumbo_catalog__", e["collection"], "internal catalog must never be surfaced")
 		if e["type"] == "metadata" {
 			meta = append(meta, e)
 		}
@@ -255,7 +255,7 @@ func TestValidatorVerify(t *testing.T) {
 		mainDB := setupMetaConflict(t, env, dbName)
 
 		mc := readMetaConflict(t, mainDB)
-		assert.Equal(t, "items", mc["name"], "conflict surfaced on the owning collection")
+		assert.Equal(t, "items", mc["collection"], "conflict surfaced on the owning collection")
 		assertAgeGte(t, mc["ours"], 21)
 		assertAgeGte(t, mc["theirs"], 18)
 

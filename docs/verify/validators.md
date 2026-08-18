@@ -173,7 +173,7 @@ Inspect the conflict -- it is a `type: "metadata"` entry on `items`, never
 ```js
 printjson(db.runCommand({ doltConflicts: 1 }).conflicts)
 // Expected: one entry
-//   { conflictId: "<hash>", type: "metadata", name: "items",
+//   { conflictId: "<hash>", type: "metadata", collection: "items",
 //     reason: { code: "bothModified",
 //               message: "branch 'main' (ours) and branch 'feature' (theirs) both changed the validator/options of \"items\"" },
 //     base:   { validator: { age: { $gte: 0  } }, validationLevel: "strict", validationAction: "error" },
@@ -290,7 +290,7 @@ document and the validator it failed:
 ```js
 printjson(db.runCommand({ doltConflicts: 1 }).conflicts)
 // one entry:
-//   { conflictId: "<hash>", type: "validation", name: "items", documentId: 1,
+//   { conflictId: "<hash>", type: "validation", collection: "items", documentId: 1,
 //     document: { _id: 1, age: -5 }, validator: { age: { $gte: 0 } },
 //     reason: { code: "documentValidationFailure", message: "document 1 in ..." } }
 ```

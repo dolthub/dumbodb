@@ -449,11 +449,29 @@ func (b *Backend) DumboDBResolveConflict(ctx context.Context, params *backends.R
 		return nil, fmt.Errorf("DumboDBResolveConflict: no merge or cherry-pick in progress on branch %q", params.Branch)
 	}
 
+	// Collection is optional: the conflict id alone identifies the conflict
+	// unless two collections share one.
+	if params.Collection == "" {
+		owner, ownerErr := collectionForConflictID(ms, params.ConflictID)
+		if ownerErr != nil {
+			return nil, ownerErr
+		}
+		withOwner := *params
+		withOwner.Collection = owner
+		params = &withOwner
+	}
+
 	if vce, ok := ms.viewConflicts[params.Collection]; ok && !vce.resolved {
+		if vce.id != params.ConflictID {
+			return nil, fmt.Errorf("DumboDBResolveConflict: conflict %q not found in view %q", params.ConflictID, params.Collection)
+		}
 		return b.resolveViewConflict(ctx, db, ms, vce, params)
 	}
 
 	if mce, ok := ms.metaConflicts[params.Collection]; ok && !mce.resolved {
+		if mce.id != params.ConflictID {
+			return nil, fmt.Errorf("DumboDBResolveConflict: conflict %q not found in collection %q", params.ConflictID, params.Collection)
+		}
 		return b.resolveMetaConflict(ctx, db, ms, mce, params)
 	}
 
@@ -939,6 +957,49 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 		return am, fmt.Errorf("updating AM for %q: %w", collName, err)
 	}
 	return amEdt.Flush(ctx)
+}
+
+// collectionForConflictID finds the namespace owning an unresolved conflict id,
+// so callers can resolve by id alone.
+//
+// A document conflict id hashes the document key and the "theirs" commit hash,
+// not the owning collection (see conflictID), so one _id conflicting in two
+// collections within a single merge produces the same id in both. That
+// ambiguity is reported rather than guessed at.
+func collectionForConflictID(ms *mergeInProgress, id string) (string, error) {
+	var owners []string
+
+	for name, vce := range ms.viewConflicts {
+		if vce.id == id && !vce.resolved {
+			owners = append(owners, name)
+		}
+	}
+	for name, mce := range ms.metaConflicts {
+		if mce.id == id && !mce.resolved {
+			owners = append(owners, name)
+		}
+	}
+	for name, entries := range ms.conflicts {
+		for _, e := range entries {
+			if e.id == id && !e.resolved {
+				owners = append(owners, name)
+				break
+			}
+		}
+	}
+
+	sort.Strings(owners)
+
+	switch len(owners) {
+	case 0:
+		return "", fmt.Errorf("DumboDBResolveConflict: no unresolved conflict with id %q", id)
+	case 1:
+		return owners[0], nil
+	default:
+		return "", fmt.Errorf(
+			"DumboDBResolveConflict: conflict id %q is shared by collections %s; pass \"collection\" to choose one",
+			id, strings.Join(owners, ", "))
+	}
 }
 
 // conflictID computes a conflict ID matching dolt's dolt_conflict_id column.
