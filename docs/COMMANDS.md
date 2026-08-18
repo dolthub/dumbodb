@@ -1181,7 +1181,7 @@ Every entry carries these three fields; the rest depend on `type`:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `conflictId` | string | Identifies this conflict, and is all `dumboResolveConflict` needs (see its `collection` parameter for the one ambiguous case) |
+| `conflictId` | string | Globally unique identifier for this conflict, and all `dumboResolveConflict` needs |
 | `type` | string | `"document"`, `"view"`, `"metadata"`, or `"validation"` |
 | `collection` | string | The owning collection, or the view name for `type: "view"` |
 
@@ -1271,34 +1271,32 @@ rebase. The conflict's `type` (reported by `dumboConflicts`) determines which
 
 ### Identifying the conflict
 
-`conflictId` is normally enough on its own:
+A `conflictId` is globally unique, so it is all you need:
 
 ```js
 main.runCommand({ dumboResolveConflict: 1,
                   conflictId: "2onhBAqtYZDVqr4WfXh8pA", resolution: "ours" })
 ```
 
-A document `conflictId` hashes the document key and the incoming commit hash,
-not the owning collection (this matches Dolt's `dolt_conflict_id`). So the
-**same `_id` conflicting in two collections during one merge produces the same
-`conflictId` in both**. That case is reported rather than guessed at:
+The id hashes the owning collection along with the document key and the
+incoming commit hash, so one `_id` conflicting in two collections during the
+same merge produces two different ids, and each resolves on its own.
 
-```
-conflict id "2onhBAqtYZDVqr4WfXh8pA" is shared by collections alpha, beta;
-pass "collection" to choose one
-```
+`collection` remains accepted but is redundant. Passing one that does not own
+the id is an error, not a silent resolve of whatever that collection has.
 
-Pass `collection` to pick one. View and metadata conflict ids are derived from
-the namespace name, so they are never ambiguous. A `conflictId` that does not
-belong to the `collection` you named is an error, not a silent resolve of
-whatever that collection has.
+> **Not Dolt's `dolt_conflict_id`.** Dolt hashes only the key and the commit,
+> because it always addresses a conflict through its owning table. The extra
+> collection in the hash is what makes a DumboDB conflict id resolvable alone,
+> so the wire `conflictId` and the `dolt_conflict_id` column of
+> `dolt_conflicts_<collection>` are different values for the same conflict.
 
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts`. Identifies the conflict on its own; pass `collection` only in the ambiguous case below |
-| `collection` | string | no |  -- | Namespace (collection or view) containing the conflict. Needed only to disambiguate a `conflictId` shared by two collections |
+| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts`. Globally unique, so it identifies the conflict on its own |
+| `collection` | string | no |  -- | Namespace (collection or view) containing the conflict. Redundant; when given it must own the `conflictId` |
 | `resolution` | string | **yes** |  -- | One of `"ours"`, `"theirs"`, `"custom"`, `"drop"`; the valid set depends on the conflict `type` (see Resolution options) |
 | `value` | document | conditional |  -- | Required when `resolution` is `"custom"`. Shaped for the conflict type: a document (`document`, `validation`); a view definition `{ viewOn, pipeline }` (`view`); or `{ validator, validationLevel?, validationAction? }` (`metadata`) |
 
@@ -1399,15 +1397,6 @@ main.runCommand({
   dumboResolveConflict: 1,
   conflictId: "aFq9k2mXp...",
   resolution: "drop"
-})
-// { ok: 1 }
-
-// Only when one _id conflicts in two collections at once, name the collection:
-main.runCommand({
-  dumboResolveConflict: 1,
-  collection: "orders",
-  conflictId: "2onhBAqtYZDVqr4WfXh8pA",
-  resolution: "ours"
 })
 // { ok: 1 }
 

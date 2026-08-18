@@ -17,6 +17,7 @@ package dolt
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -959,55 +960,52 @@ func removeConflictArtifact(ctx context.Context, state *dbState, am prolly.Addre
 	return amEdt.Flush(ctx)
 }
 
-// collectionForConflictID finds the namespace owning an unresolved conflict id,
-// so callers can resolve by id alone.
-//
-// A document conflict id hashes the document key and the "theirs" commit hash,
-// not the owning collection (see conflictID), so one _id conflicting in two
-// collections within a single merge produces the same id in both. That
-// ambiguity is reported rather than guessed at.
+// collectionForConflictID finds the namespace owning an unresolved conflict id.
+// A conflict id encodes its namespace (see conflictID), so at most one can
+// match and a caller never has to name the collection.
 func collectionForConflictID(ms *mergeInProgress, id string) (string, error) {
-	var owners []string
-
 	for name, vce := range ms.viewConflicts {
 		if vce.id == id && !vce.resolved {
-			owners = append(owners, name)
+			return name, nil
 		}
 	}
 	for name, mce := range ms.metaConflicts {
 		if mce.id == id && !mce.resolved {
-			owners = append(owners, name)
+			return name, nil
 		}
 	}
 	for name, entries := range ms.conflicts {
 		for _, e := range entries {
 			if e.id == id && !e.resolved {
-				owners = append(owners, name)
-				break
+				return name, nil
 			}
 		}
 	}
 
-	sort.Strings(owners)
-
-	switch len(owners) {
-	case 0:
-		return "", fmt.Errorf("DumboDBResolveConflict: no unresolved conflict with id %q", id)
-	case 1:
-		return owners[0], nil
-	default:
-		return "", fmt.Errorf(
-			"DumboDBResolveConflict: conflict id %q is shared by collections %s; pass \"collection\" to choose one",
-			id, strings.Join(owners, ", "))
-	}
+	return "", fmt.Errorf("DumboDBResolveConflict: no unresolved conflict with id %q", id)
 }
 
-// conflictID computes a conflict ID matching dolt's dolt_conflict_id column.
-// It hashes the key tuple concatenated with the theirRootIsh commit hash using
-// XXH3-128, then base64-encodes the 16-byte result (raw standard encoding, no
-// padding). This matches dolt's GetConflictId in conflicts_tables_prolly.go.
-func conflictID(rawKey val.Tuple, theirHash hash.Hash) string {
-	b := xxh3.Hash128(append([]byte(rawKey), theirHash[:]...)).Bytes()
+// conflictID computes a globally unique conflict ID: XXH3-128 over the owning
+// namespace, the key tuple, and the theirRootIsh commit hash, base64-encoded
+// (raw standard encoding, no padding).
+//
+// The namespace is included so that one _id conflicting in two collections
+// within a single merge yields two ids, which is what lets a caller resolve
+// with a conflict id alone. This is a deliberate divergence from dolt's
+// dolt_conflict_id (GetConflictId in conflicts_tables_prolly.go), which hashes
+// only key and commit: the same document key in two dolt tables collides there,
+// because dolt always addresses conflicts through the owning table.
+//
+// The namespace is length-prefixed so that ("ab", "c") and ("a", "bc") cannot
+// hash alike.
+func conflictID(namespace string, rawKey val.Tuple, theirHash hash.Hash) string {
+	buf := make([]byte, 0, 8+len(namespace)+len(rawKey)+len(theirHash))
+	buf = binary.BigEndian.AppendUint64(buf, uint64(len(namespace)))
+	buf = append(buf, namespace...)
+	buf = append(buf, rawKey...)
+	buf = append(buf, theirHash[:]...)
+
+	b := xxh3.Hash128(buf).Bytes()
 	return base64.RawStdEncoding.EncodeToString(b[:])
 }
 
@@ -1021,6 +1019,7 @@ func conflictID(rawKey val.Tuple, theirHash hash.Hash) string {
 // become ordinary document conflicts.
 func captureConflictsForCollection(
 	ctx context.Context,
+	collection string,
 	intoMap, fromMap, baseMap prolly.Map,
 	theirHash hash.Hash,
 	applier *indexMergeApplier,
@@ -1140,7 +1139,7 @@ func captureConflictsForCollection(
 					return err
 				}
 				e := &conflictEntry{
-					id:            conflictID(rawKey, theirHash),
+					id:            conflictID(collection, rawKey, theirHash),
 					typ:           "uniqueKeyCollision",
 					rawKey:        rawKey,
 					baseRawVal:    baseVal,
@@ -1208,7 +1207,7 @@ func captureConflictsForCollection(
 			// rawKey is the parked (loser) identity that resolution acts
 			// on; oursKey points at the surviving winner for display only.
 			entries = append(entries, &conflictEntry{
-				id:            conflictID(loserKey, theirHash),
+				id:            conflictID(collection, loserKey, theirHash),
 				typ:           "uniqueKeyCollision",
 				rawKey:        loserKey,
 				oursKey:       rawKey,
@@ -1292,7 +1291,7 @@ func captureConflictsForCollection(
 			// differ reuses its tuple buffers between Next calls.
 			rawKey := append(val.Tuple(nil), diff.Key...)
 			entry := &conflictEntry{
-				id:     conflictID(rawKey, theirHash),
+				id:     conflictID(collection, rawKey, theirHash),
 				typ:    "documentEdit",
 				rawKey: rawKey,
 			}
@@ -1500,7 +1499,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		if intoIsView || fromIsView || baseIsView {
 			vce := &viewConflictEntry{
 				name:      name,
-				id:        conflictID(val.Tuple(name), theirHash),
+				id:        conflictID(name, val.Tuple(name), theirHash),
 				ourDiff:   viewSideDiff(baseIsView, intoIsView),
 				theirDiff: viewSideDiff(baseIsView, fromIsView),
 			}
@@ -1587,7 +1586,7 @@ func mergeAddressMapsWithConflicts(ctx context.Context, state *dbState, intoAM, 
 		}
 		applier := &indexMergeApplier{state: state, survivors: survivors}
 
-		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc)
+		mergedMap, collConflicts, err := captureConflictsForCollection(ctx, name, intoMap, fromMap, baseMap, theirHash, applier, oursDesc, theirsDesc)
 		if err != nil {
 			return prolly.AddressMap{}, nil, nil, nil, fmt.Errorf("merging collection %q: %w", name, err)
 		}

@@ -1308,8 +1308,8 @@ func (h *Handler) MsgDumboDBConflicts(connCtx context.Context, msg *wire.OpMsg) 
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, conflictId: "c0", resolution: "theirs"})
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBResolveConflict: 1, conflictId: "c0", resolution: "custom", value: {_id:1, v:42}})
 //
-// "collection" is optional; pass it only to disambiguate a conflict id shared
-// by two collections.
+// "collection" is optional and redundant: a conflict id identifies exactly one
+// conflict. Passing one that does not own the id is an error.
 func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -1330,9 +1330,9 @@ func (h *Handler) MsgDumboDBResolveConflict(connCtx context.Context, msg *wire.O
 		return nil, err
 	}
 
-	// Optional: conflictId identifies the conflict on its own in every case but
-	// the same document _id conflicting in two collections, where the backend
-	// asks for a collection rather than guessing.
+	// Optional: a conflict id encodes its own namespace, so it identifies the
+	// conflict on its own. Accepted only as a redundant check that the id
+	// belongs where the caller thinks it does.
 	collection, err := common.GetOptionalParam[string](document, "collection", "")
 	if err != nil {
 		return nil, err

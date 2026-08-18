@@ -187,37 +187,65 @@ func TestResolveConflict_MetadataByIDAlone(t *testing.T) {
 	assert.EqualValues(t, 1, raw["ok"])
 }
 
-// The same _id conflicting in two collections yields one id in both, since the
-// id does not encode the collection. That must be reported, not guessed.
-func TestResolveConflict_AmbiguousIDRequiresCollection(t *testing.T) {
+// The same _id conflicting in two collections yields two distinct ids, because
+// the id encodes its namespace. Each resolves by id alone.
+func TestResolveConflict_IDsAreGloballyUnique(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
-	dbName := fmt.Sprintf("cfambig%d", rand.Int64N(1_000_000))
+	dbName := fmt.Sprintf("cfunique%d", rand.Int64N(1_000_000))
 	mainDB := conflictingMerge(t, env, dbName, "alpha", "beta")
 
 	entries := conflictEntries(t, mainDB)
 	require.Len(t, entries, 2)
-	require.Equal(t, entries[0]["conflictId"], entries[1]["conflictId"],
-		"same _id in one merge shares an id across collections")
+	require.NotEqual(t, entries[0]["conflictId"], entries[1]["conflictId"],
+		"one _id conflicting in two collections must not share an id")
+
+	// Each id resolves its own conflict, with no collection named.
+	for _, entry := range entries {
+		var raw bson.M
+		require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+			{Key: "doltResolveConflict", Value: int32(1)},
+			{Key: "conflictId", Value: entry["conflictId"]},
+			{Key: "resolution", Value: "theirs"},
+		}).Decode(&raw), "resolving %v by id alone", entry["collection"])
+		assert.EqualValues(t, 1, raw["ok"])
+	}
+
+	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
+		{Key: "doltMerge", Value: int32(1)}, {Key: "continue", Value: int32(1)},
+	}).Err(), "both conflicts resolved, merge completes")
+
+	for _, coll := range []string{"alpha", "beta"} {
+		var got bson.M
+		require.NoError(t, mainDB.Collection(coll).
+			FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&got))
+		assert.Equal(t, "theirs", got["v"], "%s resolved to theirs", coll)
+	}
+}
+
+// A conflict id belongs to exactly one collection, so naming a different one is
+// an error rather than a resolve of that collection's own conflict.
+func TestResolveConflict_CollectionMustOwnTheID(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	dbName := fmt.Sprintf("cfowner%d", rand.Int64N(1_000_000))
+	mainDB := conflictingMerge(t, env, dbName, "alpha", "beta")
+
+	entries := conflictEntries(t, mainDB)
+	require.Len(t, entries, 2)
+
+	byCollection := map[string]string{}
+	for _, e := range entries {
+		byCollection[e["collection"].(string)] = e["conflictId"].(string)
+	}
 
 	err := mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltResolveConflict", Value: int32(1)},
-		{Key: "conflictId", Value: entries[0]["conflictId"]},
+		{Key: "collection", Value: "beta"},
+		{Key: "conflictId", Value: byCollection["alpha"]},
 		{Key: "resolution", Value: "theirs"},
 	}).Err()
-	require.Error(t, err, "an ambiguous id must not be resolved by guessing")
-	assert.Contains(t, err.Error(), "alpha, beta", "the error names the candidates")
-	assert.Contains(t, err.Error(), "collection", "the error names the way out")
-
-	// Naming the collection resolves the intended one.
-	var raw bson.M
-	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
-		{Key: "doltResolveConflict", Value: int32(1)},
-		{Key: "collection", Value: "beta"},
-		{Key: "conflictId", Value: entries[0]["conflictId"]},
-		{Key: "resolution", Value: "theirs"},
-	}).Decode(&raw))
-	assert.EqualValues(t, 1, raw["ok"])
+	require.Error(t, err, "alpha's id must not resolve beta's conflict")
 }
 
 // An id that matches nothing is reported as such.

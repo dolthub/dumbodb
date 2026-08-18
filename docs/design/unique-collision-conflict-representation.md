@@ -71,7 +71,7 @@ change: **`_id` moves off the top level and into each side.**
 
 ```js
 {
-  conflictId: "...",         // content hash (matches dolt_conflict_id)
+  conflictId: "...",         // content hash (collection + key + commit)
   type: "document",          // entity kind: "document" or "view"
   name: "items",             // owning collection (or view) name
   reason: {

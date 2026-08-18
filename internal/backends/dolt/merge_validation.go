@@ -210,7 +210,7 @@ func newValidationConflict(c collChange, mergedDoc, validator *types.Document, c
 		diff = "modified"
 	}
 	return &conflictEntry{
-		id:            conflictID(rawKey, theirHash),
+		id:            conflictID(coll, rawKey, theirHash),
 		typ:           "validation",
 		rawKey:        rawKey,
 		oursRawVal:    append(val.Tuple(nil), c.to...),
