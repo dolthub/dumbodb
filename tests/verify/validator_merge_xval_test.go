@@ -43,7 +43,7 @@ func conflictsByType(t *testing.T, mainDB *mongo.Database, typ string) []bson.M 
 	var out []bson.M
 	for _, c := range all {
 		e := c.(bson.M)
-		assert.NotEqual(t, "__dumbo_catalog__", e["name"], "internal catalog must never surface")
+		assert.NotEqual(t, "__dumbo_catalog__", e["collection"], "internal catalog must never surface")
 		if e["type"] == typ {
 			out = append(out, e)
 		}
@@ -119,7 +119,7 @@ func TestValidatorMergeCrossValidation(t *testing.T) {
 		vals := conflictsByType(t, mainDB, "validation")
 		require.Len(t, vals, 1)
 		vc := vals[0]
-		assert.Equal(t, "items", vc["name"])
+		assert.Equal(t, "items", vc["collection"])
 		assert.EqualValues(t, 1, vc["documentId"])
 		require.NotNil(t, vc["validator"], "conflict carries the violated validator")
 

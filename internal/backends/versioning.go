@@ -309,10 +309,9 @@ type TableStatus struct {
 	ModifiedIndexes []string
 	RemovedIndexes  []string
 
-	// Both nil when the collection's metadata did not change; otherwise each
-	// side is the "a"/"b" validator (nil when that side had no validator).
-	MetadataFrom *CollectionMetadata
-	MetadataTo   *CollectionMetadata
+	// Path-based field diffs of the collection's validator/options, empty when
+	// the metadata did not change. Same shape as ModifiedDoc.Diff.
+	MetadataDiff []FieldDiff
 }
 
 type VersioningStatusResult struct {
@@ -346,7 +345,8 @@ type DiffParams struct {
 	To          string // rootish; empty means working set
 }
 
-// FieldDiff represents a single field-level change within a modified document.
+// FieldDiff represents a single field-level change, either within a modified
+// document or within a collection's metadata.
 type FieldDiff struct {
 	Type string // "added", "modified", or "removed"
 	Path string // JSON Path (e.g. "$.field", "$.nested.field", "$.array[0]")
@@ -385,11 +385,11 @@ type CollectionDiff struct {
 	ModifiedIndexes []IndexChange     // pre/post definitions for indexes whose spec changed
 	RemovedIndexes  []IndexInfo       // full definitions of indexes removed from "a"
 
-	// Both nil when the collection's metadata did not change; otherwise
-	// MetadataFrom/MetadataTo carry the "a"/"b" side (nil when that side had no
-	// validator, e.g. an added or newly-validated collection).
-	MetadataFrom *CollectionMetadata
-	MetadataTo   *CollectionMetadata
+	// Path-based field diffs of the collection's validator/options, empty when
+	// the metadata did not change. A validator change reports the changed
+	// leaves inside the validator, so paths reach into it (e.g.
+	// "$.validator.$jsonSchema.properties.email.pattern").
+	MetadataDiff []FieldDiff
 }
 
 type ViewDefinition struct {

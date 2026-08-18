@@ -241,7 +241,7 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` returns a single flat `conflicts` array, each entry tagged with a `type` (`"document"` or `"view"`) and the owning namespace `name`
+- `doltConflicts` returns a single flat `conflicts` array, each entry tagged with a `type` (`"document"` or `"view"`) and the owning namespace `collection`
 - Each conflict entry has `conflictId` (a content hash), a `type` (`"document"`), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides
 - Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (no top-level `_id`), `doc` is the full document, and `base` carries no `diffType`. A deleted side is `null`, and `reason.code` (here `"modifyDelete"`) names the clash
 - After `doltResolveConflict`, `doltConflicts` returns an empty `conflicts` array

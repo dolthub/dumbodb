@@ -258,7 +258,7 @@ const conflictId = rConflicts.conflicts[0].conflictId
 
 Key checks:
 - `conflicts` is a single flat array, one entry per conflict, each tagged with a
-  `type` (`"document"` or `"view"`) and the owning namespace `name`.
+  `type` (`"document"` or `"view"`) and the owning namespace `collection`.
 - Each entry has `conflictId` (a content hash), a `type` (`"document"` here), a
   `reason` (`code` + human `message`), and `base` / `ours` / `theirs` sides.
 - Each non-null side is `{ _id, doc, diffType }`; `_id` lives on the side (there is

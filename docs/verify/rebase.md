@@ -462,6 +462,6 @@ printjson(rContinue)
 ```
 
 Key checks:
-- `doltConflicts` returns a single flat `conflicts` array, each entry tagged with a `type` (`"document"` or `"view"`) and the owning namespace `name`, plus `conflictId` (a content hash), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides of `{ _id, doc, diffType }` (`base` has no `diffType`; a deleted side is `null`)
+- `doltConflicts` returns a single flat `conflicts` array, each entry tagged with a `type` (`"document"` or `"view"`) and the owning namespace `collection`, plus `conflictId` (a content hash), a `reason` (`code` + `message`), and `base` / `ours` / `theirs` sides of `{ _id, doc, diffType }` (`base` has no `diffType`; a deleted side is `null`)
 - After `doltResolveConflict`, `ok` equals `1`
 - After `doltRebase continue:1`, `ok` equals `1`, `commitsReplayed` equals `1`, `newTip` is present

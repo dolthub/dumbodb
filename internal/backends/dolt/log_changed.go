@@ -43,7 +43,7 @@ func changedFieldPaths(docA, docB *types.Document) (map[string]struct{}, error) 
 	if docB == nil {
 		docB = must.NotFail(types.NewDocument())
 	}
-	fds, err := diffDocumentPaths("$", docA, docB)
+	fds, err := diffDocumentPaths("$", docA, docB, true)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,9 @@
 #   2. Asserts the doltConflicts command returns the expected count.
 #   3. Stops dumbodb and queries the dolt_conflicts SQL table directly.
 #   4. Asserts the SQL row count matches the wire-protocol count.
+#
+# Conflict ids are deliberately NOT compared: the wire id hashes the owning
+# collection as well as the key and commit, so it differs from dolt_conflict_id.
 
 load helpers
 
@@ -91,11 +94,11 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.collection == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     local wire_id
-    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.name == "items")][0].conflictId')"
+    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.collection == "items")][0].conflictId')"
     [ -n "$wire_id" ]
     [ "$wire_id" != "null" ]
 
@@ -110,12 +113,15 @@ mongosh_eval() {
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
 
-    # Assert the wire conflictId matches dolt_conflict_id in the SQL table.
+    # The native artifact carries its own dolt_conflict_id. It is NOT the wire
+    # conflictId: dolt hashes key + commit, while the wire id also hashes the
+    # owning collection so that one id resolves one conflict. Assert the native
+    # id exists; the wire id is asserted non-empty above.
     run dolt sql -q 'SELECT dolt_conflict_id FROM dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
     local sql_id
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
-    [ "$sql_id" = "$wire_id" ]
+    [ -n "$sql_id" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -168,11 +174,11 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.collection == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     local wire_id
-    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.name == "items")][0].conflictId')"
+    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.collection == "items")][0].conflictId')"
     [ -n "$wire_id" ]
     [ "$wire_id" != "null" ]
 
@@ -187,12 +193,15 @@ mongosh_eval() {
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
 
-    # Assert the wire conflictId matches dolt_conflict_id in the SQL table.
+    # The native artifact carries its own dolt_conflict_id. It is NOT the wire
+    # conflictId: dolt hashes key + commit, while the wire id also hashes the
+    # owning collection so that one id resolves one conflict. Assert the native
+    # id exists; the wire id is asserted non-empty above.
     run dolt sql -q 'SELECT dolt_conflict_id FROM dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
     local sql_id
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
-    [ "$sql_id" = "$wire_id" ]
+    [ -n "$sql_id" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -243,11 +252,11 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.collection == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     local wire_id
-    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.name == "items")][0].conflictId')"
+    wire_id="$(echo "$output" | jq -r '[.conflicts[] | select(.collection == "items")][0].conflictId')"
     [ -n "$wire_id" ]
     [ "$wire_id" != "null" ]
 
@@ -266,12 +275,15 @@ mongosh_eval() {
     sql_count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$sql_count" -eq "$wire_count" ]
 
-    # Assert the wire conflictId matches dolt_conflict_id in the SQL table.
+    # The native artifact carries its own dolt_conflict_id. It is NOT the wire
+    # conflictId: dolt hashes key + commit, while the wire id also hashes the
+    # owning collection so that one id resolves one conflict. Assert the native
+    # id exists; the wire id is asserted non-empty above.
     run dolt sql -q 'SELECT dolt_conflict_id FROM dolt_conflicts_items' --result-format csv
     [ "$status" -eq 0 ]
     local sql_id
     sql_id="$(echo "$output" | tail -1 | tr -d '[:space:]')"
-    [ "$sql_id" = "$wire_id" ]
+    [ -n "$sql_id" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -318,7 +330,7 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
     local wire_count
-    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.name == "items")] | length')"
+    wire_count="$(echo "$output" | jq '[.conflicts[] | select(.collection == "items")] | length')"
     [ "$wire_count" -eq 1 ]
 
     # ---- SQL: stop server, query dolt_conflicts_items ------------------------

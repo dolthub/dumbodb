@@ -122,7 +122,7 @@ db.runCommand({ doltMerge: 1, mergeIn: "feature" })
 var rc = db.runCommand({ doltConflicts: 1 })
 printjson(rc.conflicts)
 // Expected: conflicts has length 1 with a type:"view" entry
-//   { conflictId: "<hash>", type: "view", name: "cv",
+//   { conflictId: "<hash>", type: "view", collection: "cv",
 //     base:   { viewOn: "items", pipeline: [ { $match: { status: "active"  } } ] },
 //     ours:   { viewOn: "items", pipeline: [ { $match: { status: "pending"  } } ], diffType: "modified" },
 //     theirs: { viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ], diffType: "modified" } }

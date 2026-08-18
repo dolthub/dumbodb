@@ -930,7 +930,7 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 	conflicts := rc["conflicts"].(bson.A)
 	require.Len(t, conflicts, 1)
 	assert.Equal(t, "metadata", docField(conflicts[0], "type"))
-	assert.Equal(t, "items", docField(conflicts[0], "name"))
+	assert.Equal(t, "items", docField(conflicts[0], "collection"))
 
 	require.NoError(t, dbB.RunCommand(ctx, bson.D{
 		{Key: "doltResolveConflict", Value: 1},
@@ -942,6 +942,6 @@ func TestSessionIsolation_MetadataConflictResolvable(t *testing.T) {
 		"re-commit finalizes the resolved metadata merge")
 
 	for _, c := range conflicts {
-		assert.NotEqual(t, "__dumbo_catalog__", docField(c, "name"))
+		assert.NotEqual(t, "__dumbo_catalog__", docField(c, "collection"))
 	}
 }

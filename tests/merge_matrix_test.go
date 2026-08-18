@@ -81,7 +81,7 @@ func resolveAllConflicts(t *testing.T, db *mongo.Database, resolution string) {
 
 	for _, c := range conflicts {
 		cf := c.(bson.M)
-		collName := cf["name"].(string)
+		collName := cf["collection"].(string)
 		cid := cf["conflictId"].(string)
 		var raw bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
@@ -122,7 +122,7 @@ func getConflictsByCollection(t *testing.T, db *mongo.Database) map[string][]bso
 	}
 	for _, c := range conflicts {
 		cf := c.(bson.M)
-		name := cf["name"].(string)
+		name := cf["collection"].(string)
 		result[name] = append(result[name], cf)
 	}
 	return result

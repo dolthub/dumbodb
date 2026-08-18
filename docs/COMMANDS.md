@@ -543,7 +543,7 @@ timestamp first.
 | `author` | string | Commit author |
 | `committer` | string | Committer identity. Equals `author` for regular commits/merges/reverts; differs for cherry-pick and rebase (committer is the applier, author is preserved from the original). |
 | `committerTimestamp` | Date | Timestamp of when the commit was applied |
-| `changes` | array | **Only when `stat: true` or `patch: true`.** What this commit changed versus its first parent, as the unified `changes` array (same shape as `dumboDiff`). `stat` renders it at summary verbosity (document counts, index names); `patch` renders it at full verbosity (full documents, index definitions). Both carry the `metadata` validator/options change. |
+| `changes` | array | **Only when `stat: true` or `patch: true`.** What this commit changed versus its first parent, as the unified `changes` array (same shape as `dumboDiff`). `stat` renders it at summary verbosity (document counts, index names, changed metadata paths); `patch` renders it at full verbosity (full documents, index definitions, metadata values). Both carry the `metadata` validator/options change. |
 
 ### Example
 
@@ -766,9 +766,9 @@ None (beyond the implicit `$db` connection).
 
 Each entry has the same `{ type, name, status, documents, indexes, metadata }`
 shape as a `dumboDiff` change, but at summary verbosity: `documents` carries
-counts (`{ added, modified, deleted }`) rather than full documents, and
-`indexes` carries index names rather than full definitions. `metadata` is the
-validator/options change `{ from, to }` (or `{}` when unchanged), same as diff.
+counts (`{ added, modified, removed }`) rather than full documents, `indexes`
+carries index names rather than full definitions, and `metadata` carries the
+changed validator/options **paths** rather than their values.
 View changes appear as `{ type: "view", name, status }`.
 
 | Field | Type | Description |
@@ -776,9 +776,9 @@ View changes appear as `{ type: "view", name, status }`.
 | `type` | string | `"collection"` or `"view"` |
 | `name` | string | Namespace name |
 | `status` | string | `"added"`, `"modified"`, or `"deleted"` |
-| `documents` | document | `{ added, modified, deleted }` counts (collections only) |
+| `documents` | document | `{ added, modified, removed }` counts (collections only) |
 | `indexes` | document | `{ added, removed, modified }` lists of index names (collections only) |
-| `metadata` | document | `{ from, to }` validator/options change, or `{}` (collections only) |
+| `metadata` | document | `{ diff: [{ type, path }, ...] }` naming the changed validator/options fields, or `{}` when unchanged (collections only) |
 
 ### Status values
 
@@ -801,7 +801,7 @@ db.runCommand({ dumboStatus: 1 })
 //   dirty:  true,
 //   changes: [
 //     { type: "collection", name: "orders", status: "modified",
-//       documents: { added: 1, modified: 0, deleted: 0 },
+//       documents: { added: 1, modified: 0, removed: 0 },
 //       indexes:   { added: [], removed: [], modified: [] },
 //       metadata:  {} }
 //   ],
@@ -813,6 +813,25 @@ db.runCommand({ dumboCommit: 1, message: "add order 99", author: "alice <alice@a
 db.runCommand({ dumboStatus: 1 })
 // { branch: "main", dirty: false, changes: [], commitId: "...", ok: 1 }
 
+// A collMod that only relaxes the level of an already-committed
+// { amount: { $gte: 0 } } validator. metadata names the one changed path,
+// without its values; the unchanged validator does not appear.
+db.runCommand({ collMod: "orders", validator: { amount: { $gte: 0 } },
+                validationLevel: "moderate" })
+
+db.runCommand({ dumboStatus: 1 })
+// {
+//   branch: "main",
+//   dirty:  true,
+//   changes: [
+//     { type: "collection", name: "orders", status: "modified",
+//       documents: { added: 0, modified: 0, removed: 0 },
+//       indexes:   { added: [], removed: [], modified: [] },
+//       metadata:  { diff: [ { type: "modified", path: "$.validationLevel" } ] } }
+//   ],
+//   ok: 1
+// }
+
 // During a merge conflict  -- mergeState and conflicts appear
 db.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // (merge returns ok:0 with conflicts)
@@ -822,7 +841,7 @@ db.runCommand({ dumboStatus: 1 })
 //   branch: "main",
 //   changes: [
 //     { type: "collection", name: "orders", status: "modified",
-//       documents: { added: 0, modified: 1, deleted: 0 },
+//       documents: { added: 0, modified: 1, removed: 0 },
 //       indexes: { added: [], removed: [], modified: [] }, metadata: {} }
 //   ],
 //   mergeState: "merge",
@@ -834,6 +853,7 @@ db.runCommand({ dumboStatus: 1 })
 ### Notes
 
 - Only namespaces with uncommitted changes appear; unchanged ones are omitted. A `collMod` that changed only the validator/options still appears (with empty `documents`/`indexes` and a populated `metadata`).
+- `metadata` reports paths only at this verbosity, the same way `indexes` reports names only. Use `dumboDiff` for the before/after values.
 - `changes` is always an array (empty when clean).
 - Document counts are **document-level**. A change spanning several fields in one document still counts as one modified doc; use `dumboDiff` for field-level detail.
 
@@ -868,7 +888,50 @@ Returns a document-level diff between two states for the branch encoded in the d
 | `status` | string | `"added"`, `"deleted"`, or `"modified"` |
 | `documents` | document | `{ added, removed, modified }`. In `dumboDiff` (full verbosity) each is a list -- `added`/`removed` are full documents and `modified` is a list of `{ _id, diff }` entries. At summary verbosity (`dumboStatus`, `dumboLog --stat`) each is a count instead. |
 | `indexes` | document | `{ added, removed, modified }`. Full verbosity: `added`/`removed` are full `IndexInfo` definitions, `modified` is a list of `{ from, to }`. Summary verbosity: each is a list of index names. |
-| `metadata` | document | Validator/options change as `{ from, to }`, or `{}` when unchanged. Each side is `{ validator?, validationLevel, validationAction }` or null (null when that side had no validator, e.g. an added or newly-validated collection). |
+| `metadata` | document | Validator/options change as `{ diff: [...] }`, or `{}` when unchanged. The entries are field diffs of the collection spec, the same `{type, path, from?, to?}` shape used for a modified document's fields. Full verbosity carries the values; summary verbosity carries `{type, path}` only. |
+
+#### Metadata field diffs
+
+The spec is rooted at `$`, giving the three fields `$.validator`,
+`$.validationLevel`, and `$.validationAction`, in that order. Only the fields
+that changed are listed, so relaxing a validation level does not re-echo the
+untouched validator.
+
+**A validator change reports the changed leaves inside the validator**, exactly
+as a modified document reports its changed fields, so paths continue past
+`$.validator` into the expression. A one-field edit to a `$jsonSchema` is one
+entry naming that field, not the whole schema on both sides. As with documents,
+a subtree that is wholly new is reported at the level where it appeared rather
+than as a leaf per field beneath it.
+
+A collection that gains a validator where it had none reports all three spec
+fields as `"added"` (no `from` side), with the entire validator as the value of
+`$.validator`; one that loses its validator reports all three as `"removed"`
+(no `to` side).
+
+```js
+// relaxing only the level:
+metadata: { diff: [ { type: "modified", path: "$.validationLevel",
+                      from: "strict", to: "moderate" } ] }
+
+// tightening one bound in a query-expression validator:
+metadata: { diff: [ { type: "modified", path: "$.validator.age.$gte",
+                      from: 0, to: 21 } ] }
+
+// tightening one pattern in a $jsonSchema validator:
+metadata: { diff: [ { type: "modified",
+                      path: "$.validator.$jsonSchema.properties.email.pattern",
+                      from: "^.+@.+$", to: "^.+@.+\\..+$" } ] }
+
+// a collection that had no validator until now:
+metadata: { diff: [ { type: "added", path: "$.validator",        to: { age: { $gte: 0 } } },
+                    { type: "added", path: "$.validationLevel",  to: "strict" },
+                    { type: "added", path: "$.validationAction", to: "error" } ] }
+```
+
+Because the paths run through the validator's own keys, a query operator or a
+schema keyword appears as a path segment (`$.validator.age.$gte`). These name
+positions within the validator; they are not document field paths.
 
 ### Change entry -- `type: "view"`
 
@@ -887,6 +950,8 @@ Returns a document-level diff between two states for the branch encoded in the d
 | `diff` | array | Per-field diffs: `{type, path, from?, to?}` |
 
 ### Field diff entry
+
+Used for both a modified document's fields and a collection's `metadata`.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1107,7 +1172,7 @@ None (beyond the implicit `$db` connection).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `conflicts` | array | One entry per conflict, each tagged with a `type` and its owning `name`, sorted by `name` then `conflictId` |
+| `conflicts` | array | One entry per conflict, each tagged with a `type` and its owning `collection`, sorted by `collection` then `conflictId` |
 | `ok` | number | `1` |
 
 ### Conflict entry
@@ -1116,9 +1181,9 @@ Every entry carries these three fields; the rest depend on `type`:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `conflictId` | string | Unique identifier for this conflict (used with `dumboResolveConflict`) |
+| `conflictId` | string | Globally unique identifier for this conflict, and all `dumboResolveConflict` needs |
 | `type` | string | `"document"`, `"view"`, `"metadata"`, or `"validation"` |
-| `name` | string | The owning collection or view |
+| `collection` | string | The owning collection, or the view name for `type: "view"` |
 
 **`type: "document"`** -- one document edited on both sides, or two documents contending for a unique-index key:
 
@@ -1160,8 +1225,8 @@ main.runCommand({ dumboConflicts: 1 })
 //   conflicts: [
 //     {
 //       conflictId: "2onhBAqtYZDVqr4WfXh8pA",
-//       type:   "document",
-//       name:   "orders",
+//       type:       "document",
+//       collection: "orders",
 //       reason: { code: "bothModified",
 //                 message: "branch 'main' (ours) and branch 'feature' (theirs) both modified document 1" },
 //       base:   { _id: 1, doc: { _id: 1, amount: 100 } },
@@ -1174,7 +1239,7 @@ main.runCommand({ dumboConflicts: 1 })
 
 // A uniqueKeyCollision is still type "document"; the sub-type is in reason.code:
 // {
-//   conflictId: "...", type: "document", name: "orders",
+//   conflictId: "...", type: "document", collection: "orders",
 //   reason: { code: "uniqueKeyCollision",
 //             message: 'unique index "by_sku": branch \'main\' (ours) and branch \'feature\' (theirs) both have sku = "S-1"',
 //             index: "by_sku", key: { sku: "S-1" } },
@@ -1185,7 +1250,7 @@ main.runCommand({ dumboConflicts: 1 })
 
 // A validation conflict (a merged document violates the resulting validator):
 // {
-//   conflictId: "aFq9k2mXp...", type: "validation", name: "orders",
+//   conflictId: "aFq9k2mXp...", type: "validation", collection: "orders",
 //   documentId: 1,
 //   document:  { _id: 1, amount: -5 },
 //   validator: { amount: { $gte: 0 } },
@@ -1204,12 +1269,34 @@ rebase. The conflict's `type` (reported by `dumboConflicts`) determines which
 
 **Alias:** `doltResolveConflict`
 
+### Identifying the conflict
+
+A `conflictId` is globally unique, so it is all you need:
+
+```js
+main.runCommand({ dumboResolveConflict: 1,
+                  conflictId: "2onhBAqtYZDVqr4WfXh8pA", resolution: "ours" })
+```
+
+The id hashes the owning collection along with the document key and the
+incoming commit hash, so one `_id` conflicting in two collections during the
+same merge produces two different ids, and each resolves on its own.
+
+`collection` remains accepted but is redundant. Passing one that does not own
+the id is an error, not a silent resolve of whatever that collection has.
+
+> **Not Dolt's `dolt_conflict_id`.** Dolt hashes only the key and the commit,
+> because it always addresses a conflict through its owning table. The extra
+> collection in the hash is what makes a DumboDB conflict id resolvable alone,
+> so the wire `conflictId` and the `dolt_conflict_id` column of
+> `dolt_conflicts_<collection>` are different values for the same conflict.
+
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `collection` | string | **yes** |  -- | Namespace (collection or view) containing the conflict |
-| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts` |
+| `conflictId` | string | **yes** |  -- | Conflict identifier from `dumboConflicts`. Globally unique, so it identifies the conflict on its own |
+| `collection` | string | no |  -- | Namespace (collection or view) containing the conflict. Redundant; when given it must own the `conflictId` |
 | `resolution` | string | **yes** |  -- | One of `"ours"`, `"theirs"`, `"custom"`, `"drop"`; the valid set depends on the conflict `type` (see Resolution options) |
 | `value` | document | conditional |  -- | Required when `resolution` is `"custom"`. Shaped for the conflict type: a document (`document`, `validation`); a view definition `{ viewOn, pipeline }` (`view`); or `{ validator, validationLevel?, validationAction? }` (`metadata`) |
 
@@ -1273,7 +1360,6 @@ var main = db.getSiblingDB("orders@main")
 // Resolve using our version
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "ours"
 })
@@ -1282,7 +1368,6 @@ main.runCommand({
 // Resolve using their version
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "theirs"
 })
@@ -1291,7 +1376,6 @@ main.runCommand({
 // Resolve with a custom document
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "2onhBAqtYZDVqr4WfXh8pA",
   resolution: "custom",
   value: { _id: 1, amount: 175, status: "reconciled" }
@@ -1302,7 +1386,6 @@ main.runCommand({
 // replacing it with a conforming document...
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "aFq9k2mXp...",
   resolution: "custom",
   value: { _id: 1, amount: 175 }   // must satisfy the collection validator
@@ -1312,7 +1395,6 @@ main.runCommand({
 // ...or by dropping the offending document:
 main.runCommand({
   dumboResolveConflict: 1,
-  collection: "orders",
   conflictId: "aFq9k2mXp...",
   resolution: "drop"
 })
@@ -1352,7 +1434,7 @@ main.runCommand({ dumboMerge: 1, mergeIn: "feature" })
 // { conflicts: [ { collection: "orders", count: 1 } ], ok: 0, errmsg: "..." }
 
 // Step 2: Inspect and resolve each conflict. dumboConflicts returns a single
-// `conflicts` array; each entry carries its owning `name` and its `type`.
+// `conflicts` array; each entry carries its owning `collection` and its `type`.
 const detail = main.runCommand({ dumboConflicts: 1 })
 detail.conflicts.forEach(c => {
   main.runCommand({
