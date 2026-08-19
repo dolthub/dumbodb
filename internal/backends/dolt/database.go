@@ -108,18 +108,10 @@ func txnVisibleWS(ctx context.Context, state *dbState, branch string) (*doltdb.W
 	if !dbNameDsessFriendly(state.name) || alwaysAutoCommit(state.name) {
 		return nil, false
 	}
-	qualified := qualifiedDbName(state.name, branch)
-	qualifiedLower := strings.ToLower(qualified)
-	dirty := false
-	for _, d := range sess.DirtyBranchRevisions() {
-		if strings.ToLower(d) == qualifiedLower {
-			dirty = true
-			break
-		}
-	}
-	if !dirty {
+	if !sess.IsBranchDirty(state.name, branch) {
 		return nil, false
 	}
+	qualified := qualifiedDbName(state.name, branch)
 	sqlCtx := sqlctx.Wrap(ctx, sess)
 	sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
 	if err != nil || !ok {

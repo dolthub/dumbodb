@@ -54,13 +54,9 @@ var emptyArtifactMapSentinel [hash.ByteLen]byte
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
 // valDescFor returns the descriptor for the stored document: a bsonFormatVersion
-// byte followed by raw BSON, inline up to the tuple-builder threshold and spilled
-// out-of-band above it.
-//
-// The descriptor is bound to ns rather than being a package-level singleton
-// because comparing an adaptive-encoded field dispatches through the descriptor's
-// ValueStore (val.TupleDescriptorArgs.ValueStore); one built without a store
-// nil-derefs the first time two value tuples are compared.
+// byte followed by raw BSON, inline up to the tuple-builder threshold.
+// Bound to ns, not a singleton: comparing an adaptive field dispatches through
+// the descriptor's ValueStore, and one built without a store nil-derefs.
 func valDescFor(ns tree.NodeStore) *val.TupleDesc {
 	return val.NewTupleDescriptorWithArgs(
 		val.TupleDescriptorArgs{ValueStore: ns},
@@ -593,11 +589,12 @@ func (state *dbState) commitDirtyBranchesForSession(sqlCtx *sql.Context, sess *d
 	resolver := sqlDB.GetTableResolver()
 
 	var branches []string
-	for _, qualified := range sess.DirtyBranchRevisions() {
-		base, branch := doltdb.SplitRevisionDbName(qualified)
+	for _, dirtyBranch := range sess.DirtyBranches() {
+		base, branch := dirtyBranch.DbName, dirtyBranch.Branch
 		if branch == "" {
 			branch = defaultBranch
 		}
+		qualified := qualifiedDbName(base, branch)
 		if !strings.EqualFold(base, state.name) {
 			continue
 		}

@@ -60,10 +60,8 @@ func (s *countingValueStore) WriteBytes(_ context.Context, v []byte) (hash.Hash,
 	return h, nil
 }
 
-// The compare methods are unreachable from this test: it round-trips
-// documents through the tuple builder and never orders them. They panic
-// rather than returning a zero comparison so that a future code path
-// which does compare cannot pass vacuously. Mirrors val.TestValueStore.
+// Unreachable here: this test round-trips documents and never orders them.
+// Panics rather than returning zero so a future compare cannot pass vacuously.
 func (s *countingValueStore) CompareAdaptive(_ context.Context, _, _ val.AdaptiveValue, _ val.Encoding) (int, error) {
 	panic("countingValueStore: CompareAdaptive is not supported by this fake")
 }
