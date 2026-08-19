@@ -26,7 +26,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
-	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
@@ -63,11 +63,11 @@ func newDumbodbProvider(dataDir string, dbLookup func(name string) (*dbState, bo
 	return &dumbodbProvider{
 		dataDir:      dataDir,
 		gcController: gc,
-		fs:       fs,
-		txLocks:  keymutex.NewMapped(),
-		dbLookup: dbLookup,
-		dbNames:  dbNames,
-		dbCache:  map[string]sqle.Database{},
+		fs:           fs,
+		txLocks:      keymutex.NewMapped(),
+		dbLookup:     dbLookup,
+		dbNames:      dbNames,
+		dbCache:      map[string]sqle.Database{},
 	}, nil
 }
 
@@ -113,7 +113,7 @@ func (p *dumbodbProvider) CloneDatabaseFromRemote(_ *sql.Context, _, _, _, _ str
 	return fmt.Errorf("dumbodb provider: CloneDatabaseFromRemote not supported")
 }
 
-func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.VersionedDatabase, bool, error) {
+func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.SqlDatabase, bool, error) {
 	baseName, rev := doltdb.SplitRevisionDbName(name)
 	if rev == "" {
 		rev = defaultBranch
@@ -140,7 +140,7 @@ func (p *dumbodbProvider) SessionDatabase(ctx *sql.Context, name string) (dsess.
 // BaseDatabase returns the unqualified base, NOT a WithBranchRevision'd
 // copy. dsess.AddDb keys dbStartPoints by db.Name() without splitting; the
 // base name keeps that key symmetrical with NewDoltTransaction's keying.
-func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.VersionedDatabase, bool) {
+func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.SqlDatabase, bool) {
 	baseName, _ := doltdb.SplitRevisionDbName(name)
 	db, ok, err := p.getOrBuildSqleDatabase(ctx, baseName)
 	if err != nil || !ok {
@@ -151,9 +151,9 @@ func (p *dumbodbProvider) BaseDatabase(ctx *sql.Context, name string) (dsess.Ver
 
 // DoltDatabases enumerates from the backend's open db list (not just
 // provider cache) so StartTransaction's dbStartPoints covers every db.
-func (p *dumbodbProvider) DoltDatabases() []dsess.VersionedDatabase {
+func (p *dumbodbProvider) DoltDatabases() []dsess.SqlDatabase {
 	names := p.dbNames()
-	out := make([]dsess.VersionedDatabase, 0, len(names))
+	out := make([]dsess.SqlDatabase, 0, len(names))
 	for _, name := range names {
 		db, ok, err := p.buildSqleDatabaseNoSession(name)
 		if err != nil || !ok {

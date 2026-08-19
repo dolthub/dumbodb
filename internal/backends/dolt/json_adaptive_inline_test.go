@@ -60,6 +60,20 @@ func (s *countingValueStore) WriteBytes(_ context.Context, v []byte) (hash.Hash,
 	return h, nil
 }
 
+// The compare methods are unreachable from this test: it round-trips
+// documents through the tuple builder and never orders them. They panic
+// rather than returning a zero comparison so that a future code path
+// which does compare cannot pass vacuously. Mirrors val.TestValueStore.
+func (s *countingValueStore) CompareAdaptive(_ context.Context, _, _ val.AdaptiveValue, _ val.Encoding) (int, error) {
+	panic("countingValueStore: CompareAdaptive is not supported by this fake")
+}
+
+func (s *countingValueStore) CompareAdaptiveCollatedStrings(_ context.Context, _, _ val.AdaptiveValue, _ sql.CollationID) (int, error) {
+	panic("countingValueStore: CompareAdaptiveCollatedStrings is not supported by this fake")
+}
+
+var _ val.ValueStore = (*countingValueStore)(nil)
+
 // TestJsonAdaptiveEnc_InlineRoundTrip writes ten canonical dumbo-shape
 // documents through the JsonAdaptiveEnc tuple-builder path, reads
 // each one back, and asserts (a) round-trip equality and (b) zero

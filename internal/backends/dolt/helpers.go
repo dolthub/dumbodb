@@ -32,8 +32,8 @@ import (
 
 	"github.com/dolthub/dolt/go/gen/fb/serial"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
 	doltref "github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/dolthub/dolt/go/store/pool"
@@ -53,16 +53,26 @@ var emptyArtifactMapSentinel [hash.ByteLen]byte
 // keyDesc describes the key tuple: one binary(20) field for the SHA-512[:20] encoded MongoDB _id.
 var keyDesc = val.NewTupleDescriptor(val.Type{Enc: val.ByteStringEnc, Nullable: false})
 
-// valDesc holds the stored document: a bsonFormatVersion byte followed
-// by raw BSON, inline up to the tuple-builder threshold and spilled
+// valDescFor returns the descriptor for the stored document: a bsonFormatVersion
+// byte followed by raw BSON, inline up to the tuple-builder threshold and spilled
 // out-of-band above it.
-var valDesc = val.NewTupleDescriptor(val.Type{Enc: val.BytesAdaptiveEnc, Nullable: false})
+//
+// The descriptor is bound to ns rather than being a package-level singleton
+// because comparing an adaptive-encoded field dispatches through the descriptor's
+// ValueStore (val.TupleDescriptorArgs.ValueStore); one built without a store
+// nil-derefs the first time two value tuples are compared.
+func valDescFor(ns tree.NodeStore) *val.TupleDesc {
+	return val.NewTupleDescriptorWithArgs(
+		val.TupleDescriptorArgs{ValueStore: ns},
+		val.Type{Enc: val.BytesAdaptiveEnc, Nullable: false},
+	)
+}
 
 var bufPool = pool.NewBuffPool()
 
 // newEmptyMap creates an empty prolly.Map with our schema.
 func newEmptyMap(ctx context.Context, ns tree.NodeStore) (prolly.Map, error) {
-	return prolly.NewMapFromTuples(ctx, ns, keyDesc, valDesc)
+	return prolly.NewMapFromTuples(ctx, ns, keyDesc, valDescFor(ns))
 }
 
 // openCollection opens a prolly.Map for a collection from a hash stored in the ADRM.
@@ -85,7 +95,7 @@ func openCollection(ctx context.Context, cs *nbs.GenerationalNBS, ns tree.NodeSt
 	if err != nil {
 		return prolly.Map{}, fmt.Errorf("parsing DTBL primary_index: %w", err)
 	}
-	return prolly.NewMap(node, ns, keyDesc, valDesc), nil
+	return prolly.NewMap(node, ns, keyDesc, valDescFor(ns)), nil
 }
 
 // buildCollectionTableSchema builds the DSCH flatbuffer for every
@@ -448,7 +458,7 @@ func buildKey(idBytes []byte) (val.Tuple, error) {
 }
 
 func buildValue(ctx context.Context, ns tree.NodeStore, docBytes []byte) (val.Tuple, error) {
-	tb := val.NewTupleBuilder(valDesc, ns)
+	tb := val.NewTupleBuilder(valDescFor(ns), ns)
 	if err := tb.PutAdaptiveBytesFromInline(ctx, 0, docBytes); err != nil {
 		return nil, fmt.Errorf("writing inline bytes to value tuple: %w", err)
 	}

@@ -9,7 +9,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/branch_control"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/gcctx"
-	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/libraries/utils/config"
 )
 

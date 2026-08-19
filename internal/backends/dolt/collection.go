@@ -3018,7 +3018,7 @@ func writeDocToValue(ctx context.Context, ns tree.NodeStore, doc *types.Document
 // *val.ByteArray takes the byte-level splice path so unchanged chunks
 // stay deduplicated.
 func applyFieldMutations(ctx context.Context, ns tree.NodeStore, v val.Tuple, mutations []backends.FieldMutation) ([]byte, error) {
-	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
+	result, ok, err := valDescFor(ns).GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {
 		return nil, fmt.Errorf("reading bytes value from tuple: %w", err)
 	}
