@@ -134,8 +134,8 @@ github.com/dlclark/regexp2 v1.11.5 h1:Q/sSnsKerHeCkc/jSTNq1oCm7KiVgUMZRDUoRu0JQZ
 github.com/dlclark/regexp2 v1.11.5/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
 github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 h1:IdqX7J8vi/Kn3T3Ee0VzqnLqwFmgA2hr8WZETPcQjfM=
 github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12/go.mod h1:rN7X8BHwkjPcfMQQ2QTAq/xM3leUSGLfb+1Js7Y6TVo=
-github.com/dolthub/dolt/go v0.40.5-0.20260819230348-ddd24461672a h1:qCfrfzjo+QKqa5lVemh4eMmer1WOOCpS1pDD7raHG7k=
-github.com/dolthub/dolt/go v0.40.5-0.20260819230348-ddd24461672a/go.mod h1:aHAIooe6VT1DUTODrr3BtwSieaxjgIpv+NqqFnyjlYE=
+github.com/dolthub/dolt/go v0.40.5-0.20260820171201-8382e48a684f h1:HMCkEOiGrEQyWMsDyE3XQT7xlylynRk2bBPVAi1Z2rE=
+github.com/dolthub/dolt/go v0.40.5-0.20260820171201-8382e48a684f/go.mod h1:aHAIooe6VT1DUTODrr3BtwSieaxjgIpv+NqqFnyjlYE=
 github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4 h1:0mg9QEFdkkBwJMxvz1tCjHYmfG2iIC6aShj1InDq9/M=
 github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4/go.mod h1:SSLraQS/jGLYFgff3vuZ+JbVUct6vyEeMzjLBqWqoyM=
 github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 h1:u3PMzfF8RkKd3lB9pZ2bfn0qEG+1Gms9599cr0REMww=

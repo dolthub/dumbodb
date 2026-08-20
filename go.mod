@@ -10,9 +10,7 @@ require (
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/dlclark/regexp2 v1.11.5
-	// TEMPORARY: pinned to dev branch macneale4-claude/dolt-HEAD, not dolt main.
-	// Repin to a main pseudo-version once the dsess commit merges (see workspace-1qh.5).
-	github.com/dolthub/dolt/go v0.40.5-0.20260819230348-ddd24461672a
+	github.com/dolthub/dolt/go v0.40.5-0.20260820171201-8382e48a684f
 	github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
 	github.com/dolthub/go-icu-collation v0.0.0-20260813204241-4b977bd17878
