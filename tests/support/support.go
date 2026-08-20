@@ -116,10 +116,21 @@ func StartDumboDB(tb testing.TB, extraArgs ...string) *Env {
 			buildErr = mkErr
 			return
 		}
-		build := exec.Command("go", "build", "-o", binary, "./cmd/dumbodb/")
+		// Build to a private path and rename into place. Packages tests and
+		// verify run as separate processes sharing this path, and execve
+		// fails with ETXTBSY while another builder holds the target open for
+		// write. Rename is atomic and never leaves the final path writable.
+		tmp := fmt.Sprintf("%s.tmp.%d", binary, os.Getpid())
+		build := exec.Command("go", "build", "-o", tmp, "./cmd/dumbodb/")
 		build.Dir = RepoRoot()
 		if out, err := build.CombinedOutput(); err != nil {
+			os.Remove(tmp)
 			buildErr = fmt.Errorf("failed to build dumbodb: %w\n%s", err, out)
+			return
+		}
+		if err := os.Rename(tmp, binary); err != nil {
+			os.Remove(tmp)
+			buildErr = fmt.Errorf("failed to install dumbodb binary: %w", err)
 		}
 	})
 	if buildErr != nil {
