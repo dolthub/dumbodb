@@ -273,7 +273,7 @@ func (s *dbState) commitBranchWS(ctx context.Context, branch, message, author st
 		Head:    headRoot,
 		Working: workingRoot,
 		Staged:  workingRoot,
-	}, nil, false, cm)
+	}, nil, hash.Hash{}, cm)
 	if err != nil {
 		return false, fmt.Errorf("commitBranchWS: pending commit for %q: %w", branch, err)
 	}

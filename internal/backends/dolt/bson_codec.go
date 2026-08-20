@@ -187,7 +187,7 @@ func extractValueBytes(raw []byte, name string) (byte, []byte, error) {
 
 // getBSONStoredBytes hides the inline-vs-OOB dispatch of the value tuple.
 func getBSONStoredBytes(ctx context.Context, ns tree.NodeStore, v val.Tuple) ([]byte, error) {
-	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, ns, v)
+	result, ok, err := valDescFor(ns).GetBytesAdaptiveValue(ctx, 0, ns, v)
 	if err != nil {
 		return nil, fmt.Errorf("reading bytes value from tuple: %w", err)
 	}

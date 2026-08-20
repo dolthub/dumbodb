@@ -22,7 +22,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
@@ -61,26 +61,20 @@ func clearDsessTxn(sqlCtx *sql.Context) {
 }
 
 // workingSetViaSession returns the session's branchState only when
-// DirtyBranchRevisions reports the branch as dirty; otherwise returns
+// IsBranchDirty reports the branch as dirty; otherwise returns
 // the fallback. dsess never refreshes branchState after lookup, so a
 // "clean" read from the session would hide writes from other sessions.
 func workingSetViaSession(ctx context.Context, sess *dsess.DoltSession, fallback *doltdb.WorkingSet, dbName, branch string) (*doltdb.WorkingSet, error) {
-	if sess != nil {
+	if sess != nil && sess.IsBranchDirty(dbName, branch) {
 		qualified := qualifiedDbName(dbName, branch)
-		qualifiedLower := strings.ToLower(qualified)
-		for _, d := range sess.DirtyBranchRevisions() {
-			if strings.ToLower(d) == qualifiedLower {
-				sqlCtx := sqlctx.Wrap(ctx, sess)
-				sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
-				if err != nil {
-					return nil, fmt.Errorf("workingSetViaSession: LookupDbState for %q@%q: %w", dbName, branch, err)
-				}
-				if ok {
-					if ws := sessState.WorkingSet(); ws != nil {
-						return ws, nil
-					}
-				}
-				break
+		sqlCtx := sqlctx.Wrap(ctx, sess)
+		sessState, ok, err := sess.LookupDbState(sqlCtx, qualified)
+		if err != nil {
+			return nil, fmt.Errorf("workingSetViaSession: LookupDbState for %q@%q: %w", dbName, branch, err)
+		}
+		if ok {
+			if ws := sessState.WorkingSet(); ws != nil {
+				return ws, nil
 			}
 		}
 	}

@@ -63,10 +63,11 @@ func (b *Backend) doltCommitSessionIsolation(ctx context.Context, params *backen
 
 	commitAndReset := func(am prolly.AddressMap, msg, author string) (*backends.CommitResult, error) {
 		preservedWSs := make(map[string]*doltdb.WorkingSet)
-		for _, q := range sess.DirtyBranchRevisions() {
-			if strings.EqualFold(q, qualified) {
+		for _, d := range sess.DirtyBranches() {
+			if strings.EqualFold(d.DbName, params.DBName) && strings.EqualFold(d.Branch, branch) {
 				continue
 			}
+			q := qualifiedDbName(d.DbName, d.Branch)
 			ss, ok, lerr := sess.LookupDbState(sqlCtx, q)
 			if lerr != nil || !ok {
 				continue

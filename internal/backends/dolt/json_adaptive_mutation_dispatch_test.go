@@ -130,7 +130,7 @@ func TestApplyFieldMutations_OutOfBandRoundTrip(t *testing.T) {
 	tup, err := buildValue(ctx, cns, stored)
 	require.NoError(t, err)
 
-	result, ok, err := valDesc.GetBytesAdaptiveValue(ctx, 0, cns, tup)
+	result, ok, err := valDescFor(cns).GetBytesAdaptiveValue(ctx, 0, cns, tup)
 	require.NoError(t, err)
 	require.True(t, ok)
 	_, isOutOfBand := result.(*val.ByteArray)
@@ -158,4 +158,3 @@ func makePad(n int) string {
 	}
 	return string(b)
 }
-

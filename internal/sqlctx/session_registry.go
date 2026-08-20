@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 )
 
 type SessionFactory func(lsid string) (*dsess.DoltSession, error)
@@ -185,4 +185,3 @@ func (r *SessionRegistry) Snapshot() []SessionInfo {
 	}
 	return out
 }
-
