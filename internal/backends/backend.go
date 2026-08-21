@@ -409,3 +409,11 @@ func (bc *backendContract) DumboDBFetch(ctx context.Context, params *FetchParams
 
 	return nil, newVersioningUnsupportedError("DumboDBFetch")
 }
+
+func (bc *backendContract) DumboDBClone(ctx context.Context, params *CloneParams) (*CloneResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBClone(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBClone")
+}

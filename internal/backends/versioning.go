@@ -659,6 +659,9 @@ type VersioningBackend interface {
 	// DumboDBFetch fetches a branch from a remote and updates the tracking ref.
 	DumboDBFetch(context.Context, *FetchParams) (*FetchResult, error)
 
+	// DumboDBClone creates a new database by cloning a file:// remote.
+	DumboDBClone(context.Context, *CloneParams) (*CloneResult, error)
+
 	// DumboDBGC runs garbage collection on the database's chunk store.
 	// Every branch in the database is in scope (one chunk store per
 	// logical database). Mode is "default" (sweep new-gen / unreferenced
@@ -766,4 +769,19 @@ type FetchResult struct {
 	Branch   string
 	Commit   string // fetched commit id (remote head)
 	UpToDate bool   // true when the local store already had the commit
+}
+
+// CloneParams are the arguments to DumboDBClone.
+type CloneParams struct {
+	From string // remote url (file:// only for now)
+	As   string // new database name
+}
+
+// CloneResult is returned by DumboDBClone.
+type CloneResult struct {
+	DB            string
+	URL           string
+	DefaultBranch string
+	Commit        string   // default branch head after clone
+	Branches      []string // branches cloned
 }
