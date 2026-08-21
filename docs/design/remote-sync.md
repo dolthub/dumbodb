@@ -101,9 +101,9 @@ database is implicit from the connection.
 ### 5.1 `dumboRemote`
 
 ```
-db.runCommand({ dumboRemote: "add",    name: "origin", url: "file:///..." })
-db.runCommand({ dumboRemote: "list" })
-db.runCommand({ dumboRemote: "remove", name: "origin" })
+db.runCommand({ dumboRemote: 1, action: "add",    name: "origin", url: "file:///..." })
+db.runCommand({ dumboRemote: 1, action: "list" })
+db.runCommand({ dumboRemote: 1, action: "remove", name: "origin" })
 ```
 
 CRUD over `admin.system.remotes`.

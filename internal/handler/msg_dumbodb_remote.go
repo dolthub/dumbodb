@@ -48,11 +48,11 @@ func (h *Handler) MsgDumboDBRemote(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "name", "url"); err != nil {
+	if err = common.RejectUnknownFields(document, "action", "name", "url"); err != nil {
 		return nil, err
 	}
 
-	action, err := common.GetRequiredParam[string](document, document.Command())
+	action, err := common.GetRequiredParam[string](document, "action")
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (h *Handler) MsgDumboDBRemote(connCtx context.Context, msg *wire.OpMsg) (*w
 	case "list":
 		// no required fields
 	default:
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "dumboRemote: action must be add, list, or remove", document.Command())
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue, "dumboRemote: action must be add, list, or remove", "action")
 	}
 
 	vb := h.versioningBackend()
