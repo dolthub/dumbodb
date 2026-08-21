@@ -72,6 +72,7 @@ var unknownFieldPolicies = map[string]unknownFieldPolicy{
 	"doltRebase": strictRejects, "dumboRebase": strictRejects,
 	"doltReset": strictRejects, "dumboReset": strictRejects,
 	"doltRemote": strictRejects, "dumboRemote": strictRejects,
+	"doltPush": strictRejects, "dumboPush": strictRejects,
 	"doltResolveConflict": strictRejects, "dumboResolveConflict": strictRejects,
 	"doltRevert": strictRejects, "dumboRevert": strictRejects,
 	"doltStatus": strictRejects, "dumboStatus": strictRejects,

@@ -244,3 +244,13 @@ func (b *Backend) DumboDBRemote(_ context.Context, params *backends.RemoteParams
 
 	return &backends.RemoteResult{Remotes: []backends.RemoteInfo{}}, nil
 }
+
+func (b *Backend) DumboDBPush(_ context.Context, params *backends.PushParams) (*backends.PushResult, error) {
+	b.l.Info("stub: DumboDBPush",
+		slog.String("db", params.DBName),
+		slog.String("remote", params.Remote),
+		slog.String("branch", params.Branch),
+	)
+
+	return &backends.PushResult{Remote: params.Remote, Branch: params.Branch}, nil
+}

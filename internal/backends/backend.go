@@ -393,3 +393,11 @@ func (bc *backendContract) DumboDBRemote(ctx context.Context, params *RemotePara
 
 	return nil, newVersioningUnsupportedError("DumboDBRemote")
 }
+
+func (bc *backendContract) DumboDBPush(ctx context.Context, params *PushParams) (*PushResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBPush(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBPush")
+}

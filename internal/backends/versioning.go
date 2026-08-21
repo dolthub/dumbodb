@@ -653,6 +653,9 @@ type VersioningBackend interface {
 	// DumboDBRemote adds, lists, or removes a named remote for a database.
 	DumboDBRemote(context.Context, *RemoteParams) (*RemoteResult, error)
 
+	// DumboDBPush pushes a branch's committed HEAD to a configured remote.
+	DumboDBPush(context.Context, *PushParams) (*PushResult, error)
+
 	// DumboDBGC runs garbage collection on the database's chunk store.
 	// Every branch in the database is in scope (one chunk store per
 	// logical database). Mode is "default" (sweep new-gen / unreferenced
@@ -727,4 +730,21 @@ type RemoteInfo struct {
 // the database; for add it holds the created remote; for remove it is empty.
 type RemoteResult struct {
 	Remotes []RemoteInfo
+}
+
+// PushParams are the arguments to DumboDBPush.
+type PushParams struct {
+	DBName string
+	Remote string // remote name (looked up in admin.system.remotes)
+	Branch string // local branch to push; empty means the default branch
+	Force  bool   // non-fast-forward (force) update
+}
+
+// PushResult is returned by DumboDBPush.
+type PushResult struct {
+	Remote   string
+	URL      string
+	Branch   string
+	Commit   string // pushed commit id
+	UpToDate bool   // true when the remote already had the commit
 }
