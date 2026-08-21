@@ -234,3 +234,13 @@ func (c *collection) CreateIndexes(_ context.Context, _ *backends.CreateIndexesP
 func (c *collection) DropIndexes(_ context.Context, _ *backends.DropIndexesParams) (*backends.DropIndexesResult, error) {
 	return nil, fmt.Errorf("stub: DropIndexes %q.%q not implemented", c.dbName, c.name)
 }
+
+func (b *Backend) DumboDBRemote(_ context.Context, params *backends.RemoteParams) (*backends.RemoteResult, error) {
+	b.l.Info("stub: DumboDBRemote",
+		slog.String("db", params.DBName),
+		slog.String("action", params.Action),
+		slog.String("name", params.Name),
+	)
+
+	return &backends.RemoteResult{Remotes: []backends.RemoteInfo{}}, nil
+}

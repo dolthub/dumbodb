@@ -650,6 +650,9 @@ type VersioningBackend interface {
 	// by the combination of TagParams fields; see TagParams documentation.
 	DumboDBTag(context.Context, *TagParams) (*TagResult, error)
 
+	// DumboDBRemote adds, lists, or removes a named remote for a database.
+	DumboDBRemote(context.Context, *RemoteParams) (*RemoteResult, error)
+
 	// DumboDBGC runs garbage collection on the database's chunk store.
 	// Every branch in the database is in scope (one chunk store per
 	// logical database). Mode is "default" (sweep new-gen / unreferenced
@@ -704,4 +707,24 @@ type DroppedDatabase struct {
 
 type DroppedDatabasesResult struct {
 	Databases []DroppedDatabase
+}
+
+// RemoteParams are the arguments to DumboDBRemote.
+type RemoteParams struct {
+	DBName string
+	Action string // "add", "list", or "remove"
+	Name   string // remote name (add, remove)
+	URL    string // remote url (add)
+}
+
+// RemoteInfo describes a single configured remote.
+type RemoteInfo struct {
+	Name string
+	URL  string
+}
+
+// RemoteResult is returned by DumboDBRemote. For list it holds all remotes for
+// the database; for add it holds the created remote; for remove it is empty.
+type RemoteResult struct {
+	Remotes []RemoteInfo
 }

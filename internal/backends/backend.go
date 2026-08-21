@@ -385,3 +385,11 @@ var (
 	_ Backend           = (*backendContract)(nil)
 	_ VersioningBackend = (*backendContract)(nil)
 )
+
+func (bc *backendContract) DumboDBRemote(ctx context.Context, params *RemoteParams) (*RemoteResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBRemote(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBRemote")
+}

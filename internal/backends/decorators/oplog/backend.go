@@ -251,3 +251,11 @@ var (
 	_ backends.Backend           = (*backend)(nil)
 	_ backends.VersioningBackend = (*backend)(nil)
 )
+
+func (b *backend) DumboDBRemote(ctx context.Context, params *backends.RemoteParams) (*backends.RemoteResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBRemote(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBRemote: versioning not supported by wrapped backend")
+}
