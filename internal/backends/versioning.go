@@ -656,6 +656,9 @@ type VersioningBackend interface {
 	// DumboDBPush pushes a branch's committed HEAD to a configured remote.
 	DumboDBPush(context.Context, *PushParams) (*PushResult, error)
 
+	// DumboDBFetch fetches a branch from a remote and updates the tracking ref.
+	DumboDBFetch(context.Context, *FetchParams) (*FetchResult, error)
+
 	// DumboDBGC runs garbage collection on the database's chunk store.
 	// Every branch in the database is in scope (one chunk store per
 	// logical database). Mode is "default" (sweep new-gen / unreferenced
@@ -747,4 +750,20 @@ type PushResult struct {
 	Branch   string
 	Commit   string // pushed commit id
 	UpToDate bool   // true when the remote already had the commit
+}
+
+// FetchParams are the arguments to DumboDBFetch.
+type FetchParams struct {
+	DBName string
+	Remote string // remote name (looked up in admin.system.remotes)
+	Branch string // remote branch to fetch; empty means the default branch
+}
+
+// FetchResult is returned by DumboDBFetch.
+type FetchResult struct {
+	Remote   string
+	URL      string
+	Branch   string
+	Commit   string // fetched commit id (remote head)
+	UpToDate bool   // true when the local store already had the commit
 }

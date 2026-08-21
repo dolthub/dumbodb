@@ -267,3 +267,11 @@ func (b *backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	return nil, fmt.Errorf("oplog: DumboDBPush: versioning not supported by wrapped backend")
 }
+
+func (b *backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBFetch(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBFetch: versioning not supported by wrapped backend")
+}

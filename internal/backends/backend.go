@@ -401,3 +401,11 @@ func (bc *backendContract) DumboDBPush(ctx context.Context, params *PushParams) 
 
 	return nil, newVersioningUnsupportedError("DumboDBPush")
 }
+
+func (bc *backendContract) DumboDBFetch(ctx context.Context, params *FetchParams) (*FetchResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBFetch(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBFetch")
+}
