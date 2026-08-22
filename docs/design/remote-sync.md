@@ -124,7 +124,9 @@ remapped).
 db.runCommand({ dumboFetch: 1, from: "origin" })
 ```
 
-Symmetric to push; pulls novel chunks and updates local tracking refs.
+Pulls **every** remote branch into local tracking refs
+(`refs/remotes/<remote>/*`), git-fetch style; does not move any local branch
+head. There is no per-branch argument.
 
 Exact required/optional arguments (default branch set, refspecs, force, tags)
 are TBD; see section 7.

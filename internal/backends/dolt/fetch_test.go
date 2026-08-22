@@ -18,30 +18,49 @@ import (
 	"context"
 	"testing"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// TestDumboDBFetch_FileRoundTrip pushes from server A to a file:// remote, then
-// fetches into a fresh server B and verifies B's tracking ref and that the
-// commit's chunks were pulled.
-func TestDumboDBFetch_FileRoundTrip(t *testing.T) {
+// TestDumboDBFetch_AllBranches verifies fetch pulls every remote branch into
+// tracking refs, without moving local branch heads.
+func TestDumboDBFetch_AllBranches(t *testing.T) {
 	ctx := context.Background()
 	remoteURL := "file://" + t.TempDir()
 
-	// Server A: commit + push.
+	// Server A: commit on main, push to the remote.
 	a := newTestBackend(t)
-	insertDoc(t, a, "mydb", "col", mustDoc(t, "_id", int64(1), "v", int64(1)))
+	insertDoc(t, a, "mydb", "col", mustDoc(t, "_id", int64(1), "v", "x"))
 	c1 := commitDB(t, a, "mydb", "c1")
 	if _, err := a.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "mydb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
-		t.Fatalf("A add remote: %v", err)
+		t.Fatalf("add remote: %v", err)
 	}
 	if _, err := a.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "main"}); err != nil {
-		t.Fatalf("A push: %v", err)
+		t.Fatalf("push main: %v", err)
 	}
 
-	// Server B: fresh db with its own initial commit, add same remote, fetch.
+	// Give the remote a second branch directly (as another pusher would).
+	nbf := mustDB(t, a, "mydb").doltDB.Format()
+	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, remoteURL, filesys.LocalFS, map[string]interface{}{
+		dbfactory.DisableSingletonCacheParam: "true",
+	})
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	mainCommit, err := remoteDB.ResolveCommitRef(ctx, ref.NewBranchRef("main"))
+	if err != nil {
+		t.Fatalf("resolve remote main: %v", err)
+	}
+	if err := remoteDB.SetHeadToCommit(ctx, ref.NewBranchRef("dev"), mainCommit); err != nil {
+		t.Fatalf("create remote dev branch: %v", err)
+	}
+	_ = remoteDB.Close()
+
+	// Server B: fresh db, add remote, fetch ALL branches.
 	b := newTestBackend(t)
 	insertDoc(t, b, "mydb", "col", mustDoc(t, "_id", int64(99)))
 	bInit := commitDB(t, b, "mydb", "b-init")
@@ -49,27 +68,39 @@ func TestDumboDBFetch_FileRoundTrip(t *testing.T) {
 		t.Fatalf("B add remote: %v", err)
 	}
 
-	res, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: "mydb", Remote: "origin", Branch: "main"})
+	res, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: "mydb", Remote: "origin"})
 	if err != nil {
-		t.Fatalf("B fetch: %v", err)
-	}
-	if res.Commit != c1 {
-		t.Errorf("fetched commit = %s, want c1 %s", res.Commit, c1)
+		t.Fatalf("fetch: %v", err)
 	}
 
+	got := map[string]string{}
+	for _, fr := range res.Branches {
+		got[fr.Branch] = fr.Commit
+	}
+	if got["main"] != c1 {
+		t.Errorf("fetched main = %q, want c1 %s", got["main"], c1)
+	}
+	if got["dev"] != c1 {
+		t.Errorf("fetched dev = %q, want c1 %s", got["dev"], c1)
+	}
+	if len(res.Branches) < 2 {
+		t.Errorf("fetched %d branches, want >= 2", len(res.Branches))
+	}
+
+	// Tracking refs exist for both remote branches.
 	st := mustDB(t, b, "mydb")
-
-	// Tracking ref refs/remotes/origin/main resolves to c1 (chunks pulled).
-	cm, err := st.doltDB.ResolveCommitRef(ctx, ref.NewRemoteRef("origin", "main"))
-	if err != nil {
-		t.Fatalf("resolve tracking ref: %v", err)
+	for _, brName := range []string{"main", "dev"} {
+		cm, err := st.doltDB.ResolveCommitRef(ctx, ref.NewRemoteRef("origin", brName))
+		if err != nil {
+			t.Fatalf("resolve tracking ref origin/%s: %v", brName, err)
+		}
+		h, _ := cm.HashOf()
+		if h.String() != c1 {
+			t.Errorf("refs/remotes/origin/%s = %s, want c1 %s", brName, h.String(), c1)
+		}
 	}
-	h, _ := cm.HashOf()
-	if h.String() != c1 {
-		t.Errorf("refs/remotes/origin/main = %s, want c1 %s", h.String(), c1)
-	}
 
-	// Fetch does not move the local branch head.
+	// Fetch must not move the local branch head.
 	bh, err := st.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef("main"))
 	if err != nil {
 		t.Fatalf("resolve local main: %v", err)
@@ -80,7 +111,7 @@ func TestDumboDBFetch_FileRoundTrip(t *testing.T) {
 	}
 
 	// Idempotent re-fetch.
-	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: "mydb", Remote: "origin", Branch: "main"}); err != nil {
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: "mydb", Remote: "origin"}); err != nil {
 		t.Fatalf("re-fetch: %v", err)
 	}
 }
@@ -90,7 +121,7 @@ func TestDumboDBFetch_RemoteNotFound(t *testing.T) {
 	b := newTestBackend(t)
 	insertDoc(t, b, "mydb", "col", mustDoc(t, "_id", int64(1)))
 	commitDB(t, b, "mydb", "c1")
-	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: "mydb", Remote: "ghost", Branch: "main"}); err == nil {
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: "mydb", Remote: "ghost"}); err == nil {
 		t.Error("fetch from unknown remote: want error, got nil")
 	}
 }

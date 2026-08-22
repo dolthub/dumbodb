@@ -759,16 +759,20 @@ type PushResult struct {
 type FetchParams struct {
 	DBName string
 	Remote string // remote name (looked up in admin.system.remotes)
-	Branch string // remote branch to fetch; empty means the default branch
 }
 
-// FetchResult is returned by DumboDBFetch.
+// FetchedRef is one remote branch updated by a fetch.
+type FetchedRef struct {
+	Branch string
+	Commit string
+}
+
+// FetchResult is returned by DumboDBFetch. Like git fetch, every remote branch
+// is pulled into a local tracking ref refs/remotes/<remote>/<branch>.
 type FetchResult struct {
 	Remote   string
 	URL      string
-	Branch   string
-	Commit   string // fetched commit id (remote head)
-	UpToDate bool   // true when the local store already had the commit
+	Branches []FetchedRef
 }
 
 // CloneParams are the arguments to DumboDBClone.

@@ -26,17 +26,16 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/must"
 )
 
-// MsgDumboDBFetch implements the `dumboFetch` command (alias `doltFetch`). It
-// fetches a branch from a configured remote into the local store and updates
-// the local remote-tracking ref, without touching the local branch head.
+// MsgDumboDBFetch implements the `dumboFetch` command (alias `doltFetch`). Like
+// git fetch, it pulls every branch from a configured remote into local
+// remote-tracking refs refs/remotes/<remote>/<branch>, without touching any
+// local branch head.
 //
 // Usage:
 //
 //	db.runCommand({dumboFetch: 1, from: "origin"})
-//	db.runCommand({dumboFetch: 1, from: "origin", branch: "main"})
 //
-// The target database is implicit from the connection; branch defaults to the
-// connection's branch, then to the default branch.
+// The target database is implicit from the connection.
 func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -47,7 +46,7 @@ func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "from", "branch"); err != nil {
+	if err = common.RejectUnknownFields(document, "from"); err != nil {
 		return nil, err
 	}
 
@@ -56,7 +55,7 @@ func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	dbName, connBranch, _, err := branchFromDBName(encodedDB)
+	dbName, _, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -64,14 +63,6 @@ func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wi
 	remote, err := common.GetRequiredParam[string](document, "from")
 	if err != nil {
 		return nil, err
-	}
-
-	branch, err := common.GetOptionalParam[string](document, "branch", "")
-	if err != nil {
-		return nil, err
-	}
-	if branch == "" {
-		branch = connBranch
 	}
 
 	vb := h.versioningBackend()
@@ -82,17 +73,19 @@ func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wi
 	res, err := vb.DumboDBFetch(connCtx, &backends.FetchParams{
 		DBName: dbName,
 		Remote: remote,
-		Branch: branch,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
+	branches := types.MakeArray(len(res.Branches))
+	for _, fr := range res.Branches {
+		branches.Append(must.NotFail(types.NewDocument("branch", fr.Branch, "commit", fr.Commit)))
+	}
+
 	return documentOpMsg(must.NotFail(types.NewDocument(
 		"remote", res.Remote,
-		"branch", res.Branch,
-		"commit", res.Commit,
-		"upToDate", res.UpToDate,
+		"branches", branches,
 		"ok", float64(1),
 	)))
 }

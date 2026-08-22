@@ -30,9 +30,9 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// DumboDBFetch fetches a branch from a configured remote into the local store
-// and updates the local remote-tracking ref refs/remotes/<remote>/<branch>. Like
-// git fetch, it does not touch the local branch head. Reuses Dolt's
+// DumboDBFetch fetches every branch from a configured remote into local
+// remote-tracking refs refs/remotes/<remote>/<branch> (git fetch semantics). It
+// pulls novel chunks but does not touch any local branch head. Reuses Dolt's
 // actions.FetchCommit (no DoltEnv/RepoState).
 func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
 	ru, err := b.resolveRemoteURL(ctx, params.DBName, params.Remote)
@@ -43,16 +43,10 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 		return nil, fmt.Errorf("dumboFetch: remote scheme %q is not yet supported for fetch", ru.Scheme)
 	}
 
-	branch := params.Branch
-	if branch == "" {
-		branch = defaultBranch
-	}
-
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, err
 	}
-
 	nbf := state.doltDB.Format()
 
 	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, map[string]interface{}{
@@ -63,13 +57,12 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	}
 	defer func() { _ = remoteDB.Close() }()
 
-	remoteCommit, err := remoteDB.ResolveCommitRef(ctx, ref.NewBranchRef(branch))
+	branchRefs, err := remoteDB.GetBranches(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dumboFetch: branch %q not found on remote %q: %w", branch, params.Remote, err)
+		return nil, fmt.Errorf("dumboFetch: listing remote branches: %w", err)
 	}
-	remoteHash, err := remoteCommit.HashOf()
-	if err != nil {
-		return nil, err
+	if len(branchRefs) == 0 {
+		return nil, fmt.Errorf("dumboFetch: remote %q has no branches", params.Remote)
 	}
 
 	tempDir, err := os.MkdirTemp(b.dataDir, ".fetch-*")
@@ -78,22 +71,35 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
-	err = actions.FetchCommit(ctx, tempDir, remoteDB, state.doltDB, remoteCommit, nil)
-	upToDate := errors.Is(err, pull.ErrDBUpToDate) || errors.Is(err, doltdb.ErrUpToDate)
-	if err != nil && !upToDate {
-		return nil, fmt.Errorf("dumboFetch: %w", err)
-	}
+	fetched := make([]backends.FetchedRef, 0, len(branchRefs))
+	for _, br := range branchRefs {
+		name := br.GetPath()
 
-	// Update the local remote-tracking ref to the fetched commit.
-	if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef(params.Remote, branch), remoteHash); err != nil {
-		return nil, fmt.Errorf("dumboFetch: updating tracking ref: %w", err)
+		remoteCommit, err := remoteDB.ResolveCommitRef(ctx, br)
+		if err != nil {
+			return nil, fmt.Errorf("dumboFetch: resolving remote branch %q: %w", name, err)
+		}
+		ch, err := remoteCommit.HashOf()
+		if err != nil {
+			return nil, err
+		}
+
+		err = actions.FetchCommit(ctx, tempDir, remoteDB, state.doltDB, remoteCommit, nil)
+		if err != nil && !errors.Is(err, pull.ErrDBUpToDate) && !errors.Is(err, doltdb.ErrUpToDate) {
+			return nil, fmt.Errorf("dumboFetch: fetching branch %q: %w", name, err)
+		}
+
+		// Update the local remote-tracking ref for this branch.
+		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef(params.Remote, name), ch); err != nil {
+			return nil, fmt.Errorf("dumboFetch: updating tracking ref for %q: %w", name, err)
+		}
+
+		fetched = append(fetched, backends.FetchedRef{Branch: name, Commit: ch.String()})
 	}
 
 	return &backends.FetchResult{
 		Remote:   params.Remote,
 		URL:      ru.Raw,
-		Branch:   branch,
-		Commit:   remoteHash.String(),
-		UpToDate: upToDate,
+		Branches: fetched,
 	}, nil
 }

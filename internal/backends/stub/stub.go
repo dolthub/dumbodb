@@ -259,10 +259,9 @@ func (b *Backend) DumboDBFetch(_ context.Context, params *backends.FetchParams) 
 	b.l.Info("stub: DumboDBFetch",
 		slog.String("db", params.DBName),
 		slog.String("remote", params.Remote),
-		slog.String("branch", params.Branch),
 	)
 
-	return &backends.FetchResult{Remote: params.Remote, Branch: params.Branch}, nil
+	return &backends.FetchResult{Remote: params.Remote}, nil
 }
 
 func (b *Backend) DumboDBClone(_ context.Context, params *backends.CloneParams) (*backends.CloneResult, error) {
