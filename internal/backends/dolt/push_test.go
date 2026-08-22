@@ -122,3 +122,48 @@ func TestDumboDBPush_UnsupportedScheme(t *testing.T) {
 		t.Error("push to unsupported scheme: want error, got nil")
 	}
 }
+
+// TestDumboDBPush_NewBranchAtExistingCommit covers the case where a branch's tip
+// commit is already on the remote (its chunks are present). Push must still
+// create the remote branch ref even though no chunks transfer.
+func TestDumboDBPush_NewBranchAtExistingCommit(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	remoteURL := "file://" + t.TempDir()
+
+	insertDoc(t, b, "mydb", "col", mustDoc(t, "_id", int64(1)))
+	c1 := commitDB(t, b, "mydb", "c1")
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "mydb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "main"}); err != nil {
+		t.Fatalf("push main: %v", err)
+	}
+
+	// New local branch at the same commit; its chunks are already on the remote.
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{DBName: "mydb", From: "main", Name: "dev"}); err != nil {
+		t.Fatalf("create dev: %v", err)
+	}
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "dev"}); err != nil {
+		t.Fatalf("push dev: %v", err)
+	}
+
+	// The remote must now have refs/heads/dev at c1.
+	nbf := mustDB(t, b, "mydb").doltDB.Format()
+	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, remoteURL, filesys.LocalFS, map[string]interface{}{
+		dbfactory.DisableSingletonCacheParam: "true",
+	})
+	if err != nil {
+		t.Fatalf("open remote: %v", err)
+	}
+	defer func() { _ = remoteDB.Close() }()
+
+	cm, err := remoteDB.ResolveCommitRef(ctx, ref.NewBranchRef("dev"))
+	if err != nil {
+		t.Fatalf("remote refs/heads/dev not created: %v", err)
+	}
+	h, _ := cm.HashOf()
+	if h.String() != c1 {
+		t.Errorf("remote refs/heads/dev = %s, want c1 %s", h.String(), c1)
+	}
+}

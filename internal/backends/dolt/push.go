@@ -97,6 +97,20 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		return nil, fmt.Errorf("dumboPush: %w", err)
 	}
 
+	if upToDate {
+		// actions.Push returns before updating refs when there are no chunks to
+		// transfer, so a new branch pointing at a commit already on the remote
+		// would otherwise never get its ref created. The fast-forward check
+		// already passed (or force was requested), so set the remote branch ref
+		// and the local tracking ref to the pushed commit.
+		if err := remoteDB.SetHead(ctx, branchRef, commitHash); err != nil {
+			return nil, fmt.Errorf("dumboPush: setting remote ref: %w", err)
+		}
+		if err := state.doltDB.SetHead(ctx, remoteRef, commitHash); err != nil {
+			return nil, fmt.Errorf("dumboPush: updating local tracking ref: %w", err)
+		}
+	}
+
 	return &backends.PushResult{
 		Remote:   params.Remote,
 		URL:      ru.Raw,
