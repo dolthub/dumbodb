@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/dolthub/dumbodb/internal/types"
 )
 
 //go:generate ../../bin/stringer -linecomment -type ErrorCode
@@ -49,6 +51,13 @@ type Error struct {
 	err error
 
 	code ErrorCode
+
+	// dupIndex and dupKey carry structured detail for ErrorCodeInsertDuplicateID:
+	// the index that was violated and the offending key {field: value}, so the
+	// handler can build MongoDB's "index: <name> dup key: { ... }" message.
+	// dupIndex is "" and dupKey is nil for other errors.
+	dupIndex string
+	dupKey   *types.Document
 }
 
 // NewError creates a new backend error.
@@ -65,8 +74,29 @@ func NewError(code ErrorCode, err error) *Error {
 	}
 }
 
+// NewDuplicateKeyError creates an ErrorCodeInsertDuplicateID naming the violated
+// index and the offending key, so callers can report which index collided.
+func NewDuplicateKeyError(index string, key *types.Document) *Error {
+	return &Error{
+		code:     ErrorCodeInsertDuplicateID,
+		err:      fmt.Errorf("duplicate key on index %q", index),
+		dupIndex: index,
+		dupKey:   key,
+	}
+}
+
 func (err *Error) Code() ErrorCode {
 	return err.code
+}
+
+// DupIndex returns the violated index name for a duplicate-key error, or "".
+func (err *Error) DupIndex() string {
+	return err.dupIndex
+}
+
+// DupKey returns the offending key for a duplicate-key error, or nil.
+func (err *Error) DupKey() *types.Document {
+	return err.dupKey
 }
 
 // There is intentionally no method to return the internal error.
