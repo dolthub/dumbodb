@@ -143,7 +143,11 @@ func (c *Collation) CaseInsensitive() bool {
 }
 
 // Resolve renders the full collation document MongoDB reports, filling defaults
-// and the ICU version. Returns nil for a simple/absent collation.
+// and the ICU version. The backwards field reflects the locale's resolved
+// tailoring -- fr_CA turns it on even when the spec did not -- which is what
+// MongoDB surfaces here; the other fields report the spec-with-defaults, which
+// is also what MongoDB reports (it does not surface tailored caseFirst/alternate
+// in this document). Returns nil for a simple/absent collation.
 func (c *Collation) Resolve() *types.Document {
 	if c.IsSimple() {
 		return nil
@@ -157,9 +161,38 @@ func (c *Collation) Resolve() *types.Document {
 		"alternate", c.Alternate,
 		"maxVariable", c.MaxVariable,
 		"normalization", c.Normalization,
-		"backwards", c.Backwards,
+		"backwards", c.resolvedBackwards(),
 		"version", Version,
 	))
+}
+
+var (
+	backwardsMu    sync.RWMutex
+	backwardsCache = map[string]bool{}
+)
+
+// resolvedBackwards reports the collator's effective French/backwards setting,
+// which a locale's tailoring can turn on (fr_CA) even when the spec did not.
+// MongoDB surfaces this resolved value in the reported collation, so DumboDB
+// matches it here. Cached per resolved collator.
+func (c *Collation) resolvedBackwards() bool {
+	key := c.collatorCacheKey()
+
+	backwardsMu.RLock()
+	v, ok := backwardsCache[key]
+	backwardsMu.RUnlock()
+	if ok {
+		return v
+	}
+
+	v = c.Backwards
+	if a, err := c.buildCollator().GetAttribute(icu4c.FrenchCollation); err == nil {
+		v = a == icu4c.On
+	}
+	backwardsMu.Lock()
+	backwardsCache[key] = v
+	backwardsMu.Unlock()
+	return v
 }
 
 // Identity returns a canonical string identifying this collation for equality
