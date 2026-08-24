@@ -374,6 +374,12 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
 			continue
 		}
+		if indexCollated(idx) {
+			// A collated index stores collation-ordered keys; the byte-level
+			// lookup is not collation-aware yet, so it cannot serve reads
+			// (collated seek is workspace-33x). Not eligible -- the query scans.
+			continue
+		}
 		partial := idx.PartialFilterExpression != nil
 		if partial && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
 			continue
@@ -870,6 +876,9 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 		var bestIdx backends.IndexInfo
 		for _, idx := range idxInfos {
 			if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field != k {
+				continue
+			}
+			if indexCollated(idx) {
 				continue
 			}
 			partial := idx.PartialFilterExpression != nil
@@ -1387,6 +1396,22 @@ func indexComparator(idx backends.IndexInfo) *collation.Comparator {
 	return collation.Parse(idx.Collation).Comparator()
 }
 
+// collateRowValues rewrites the string components of an index row to their ICU
+// collation sort key (idxpkg.PreEncoded), so a collated index stores and probes
+// collation-ordered keys instead of raw bytes. Non-string components are
+// unchanged. cmp must be non-nil (a collated index).
+func collateRowValues(row []any, cmp *collation.Comparator) []any {
+	out := make([]any, len(row))
+	for i, v := range row {
+		if str, ok := v.(string); ok {
+			out[i] = idxpkg.PreEncoded(cmp.Key(str))
+		} else {
+			out[i] = v
+		}
+	}
+	return out
+}
+
 // indexCollated reports whether an index carries a non-simple collation. Such an
 // index cannot use the byte-prefix probe -- "Alice" and "alice" encode to
 // distinct bytes yet collide under a strength-2 collation -- so uniqueness folds
@@ -1424,22 +1449,11 @@ func indexKeysEqualColl(a, b []any, cmp *collation.Comparator) bool {
 // build-time unique conflict detection. For a collated index, string components
 // use their ICU sort key (equal-under-collation strings share a key); other
 // components and non-collated indexes use the byte-exact probe prefix.
-func rowConflictKey(idx backends.IndexInfo, row []any, cmp *collation.Comparator) string {
-	if cmp == nil {
-		prefix, _ := idxpkg.EqualityProbeBounds(row)
-		return string(prefix)
-	}
-	var b strings.Builder
-	for _, v := range row {
-		if s, ok := v.(string); ok {
-			b.Write(cmp.Key(s))
-		} else {
-			prefix, _ := idxpkg.EqualityProbeBounds([]any{v})
-			b.WriteString(string(prefix))
-		}
-		b.WriteByte(0x00)
-	}
-	return b.String()
+func rowConflictKey(row []any) string {
+	// Rows for a collated index arrive pre-encoded as collation sort keys, so
+	// the byte-prefix probe already keys equal-under-collation values together.
+	prefix, _ := idxpkg.EqualityProbeBounds(row)
+	return string(prefix)
 }
 
 // idDupKey builds the duplicate-key detail {_id: id} for the synthetic _id index.
@@ -1573,9 +1587,10 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				continue
 			}
 
-			if lossy || idx.Lossy || indexCollated(idx) {
-				// Byte probes collide on collapsed (Decimal128) bytes and miss
-				// collation-equal strings; compare values through the collator.
+			if lossy || idx.Lossy {
+				// Decimal128 rows have no faithful byte encoding; compare values
+				// through the value-level scan. Collated rows are pre-encoded as
+				// sort keys and use the byte probe below.
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
 					return nil, scanErr
@@ -2714,9 +2729,8 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
 		return nil
 	}
-	cmp := indexComparator(idx)
 	for _, row := range rows {
-		key := rowConflictKey(idx, row, cmp)
+		key := rowConflictKey(row)
 		owner, ok := seen[key]
 		if !ok {
 			seen[key] = append([]byte(nil), idBytes...)
@@ -2823,7 +2837,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 		if len(rows) == 0 {
 			continue
 		}
-		if lossy || idx.Lossy || indexCollated(idx) {
+		if lossy || idx.Lossy {
 			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
 			if err != nil {
 				return err

@@ -83,6 +83,13 @@ const (
 	ctypeMaxKey    = byte(0xF0)
 )
 
+// PreEncoded is a string body already transformed into comparison bytes -- an
+// ICU collation sort key for a collated index. EncodeValue emits it with the
+// exact string layout ([ctypeString][bytes, escaped][0x00]), so a collated
+// index stores sort-key-ordered keys while every other layer stays unaware.
+// Two strings equal under the collation share a sort key, hence one index key.
+type PreEncoded []byte
+
 // EncodeValue encodes a single BSON value to its KeyString bytes.
 // The result is byte-comparable and preserves the sort order of the original value.
 func EncodeValue(v any) []byte {
@@ -107,6 +114,9 @@ func EncodeValue(v any) []byte {
 
 	case string:
 		return encodeString(val)
+
+	case PreEncoded:
+		return encodeStringBytes(val)
 
 	case types.ObjectID:
 		b := make([]byte, 13)
@@ -171,7 +181,7 @@ func EncodeValue(v any) []byte {
 // not lossy in this sense.
 func EncodeValueLossy(v any) bool {
 	switch v.(type) {
-	case nil, types.NullType, bool, int32, int64, float64, string,
+	case nil, types.NullType, bool, int32, int64, float64, string, PreEncoded,
 		types.ObjectID, time.Time, types.Binary, types.Timestamp,
 		types.Regex, *types.Document, *types.Array,
 		types.MaxKeyType, types.MinKeyType:
@@ -204,7 +214,7 @@ func ValueLossy(v any) bool {
 	// in [MinInt64, MaxUint64] also encode without overflow; beyond that the
 	// integer-part conversion in encodeFloat64 overflows.
 	const (
-		maxEncodable = float64(1<<63) * 2 // 2^64
+		maxEncodable = float64(1<<63) * 2  // 2^64
 		minEncodable = float64(-(1 << 63)) // math.MinInt64
 	)
 	return f == math.Trunc(f) && (f >= maxEncodable || f < minEncodable)
@@ -223,7 +233,12 @@ func appendEscaped(out []byte, s string) []byte {
 
 // encodeString format: [0x3C][bytes, 0x00->0x00 0xFF][0x00 terminator]
 func encodeString(s string) []byte {
-	raw := []byte(s)
+	return encodeStringBytes([]byte(s))
+}
+
+// encodeStringBytes encodes an already-byte-form string body (raw UTF-8, or a
+// precomputed collation sort key) with the string ctype, escaping, and terminator.
+func encodeStringBytes(raw []byte) []byte {
 	size := 2 // ctype + terminator
 	for _, b := range raw {
 		if b == 0x00 {
