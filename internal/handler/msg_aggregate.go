@@ -443,7 +443,11 @@ func (h *Handler) MsgAggregate(connCtx context.Context, msg *wire.OpMsg) (*wire.
 		// (unfiltered) and skip the full scan + group accumulator entirely.
 		// Filtered counts where the backend cannot answer from an index fall
 		// through to the regular pipeline path.
-		if !cInfo.IsView {
+		// The count shortcut answers via a byte-exact indexed/tree count that
+		// cannot honor a collation, so skip it when one is set and let the
+		// regular pipeline path re-check $match through the collator (mirrors
+		// the count command). workspace-4jf.
+		if !cInfo.IsView && collCmp == nil {
 			if info, ok := tryCountAggregateShortcut(aggregationStages); ok {
 				countRes, cerr := c.Count(ctx, &backends.CountParams{Filter: info.filter})
 				if cerr != nil {
