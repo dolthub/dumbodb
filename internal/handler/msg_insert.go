@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/FerretDB/wire"
@@ -268,13 +269,29 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 				return nil, lazyerrors.Error(err)
 			}
 
+			// Name the actual index and key that collided (the backend attaches
+			// them for a duplicate-key error); fall back to the _id index.
+			idxName := backends.DefaultIndexName
 			dupID, _ := doc.Get("_id")
+			if dupID == nil {
+				dupID = types.Null
+			}
+			keyDoc := must.NotFail(types.NewDocument("_id", dupID))
+			var be *backends.Error
+			if errors.As(err, &be) {
+				if be.DupIndex() != "" {
+					idxName = be.DupIndex()
+				}
+				if k := be.DupKey(); k != nil {
+					keyDoc = k
+				}
+			}
 			writeErrors = append(writeErrors, &mongo.WriteError{
 				Index: docsIndexes[j],
 				Code:  int(handlererrors.ErrDuplicateKeyInsert),
 				Message: fmt.Sprintf(
-					`E11000 duplicate key error collection: %s.%s index: _id_ dup key: { _id: %s }`,
-					params.DB, params.Collection, types.FormatAnyValue(dupID),
+					`E11000 duplicate key error collection: %s.%s index: %s dup key: %s`,
+					params.DB, params.Collection, idxName, formatDupKey(keyDoc),
 				),
 			})
 
@@ -313,4 +330,19 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	return documentOpMsg(
 		res,
 	)
+}
+
+// formatDupKey renders a duplicate key the way MongoDB does: { field: value, ... }.
+func formatDupKey(d *types.Document) string {
+	var b strings.Builder
+	b.WriteString("{ ")
+	for i, k := range d.Keys() {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		v, _ := d.Get(k)
+		fmt.Fprintf(&b, "%s: %s", k, types.FormatAnyValue(v))
+	}
+	b.WriteString(" }")
+	return b.String()
 }

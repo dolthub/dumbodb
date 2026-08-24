@@ -1442,6 +1442,25 @@ func rowConflictKey(idx backends.IndexInfo, row []any, cmp *collation.Comparator
 	return b.String()
 }
 
+// idDupKey builds the duplicate-key detail {_id: id} for the synthetic _id index.
+func idDupKey(id any) *types.Document {
+	return must.NotFail(types.NewDocument("_id", id))
+}
+
+// indexDupKey builds the duplicate-key detail {field: value, ...} for idx from doc,
+// so a duplicate-key error can name the offending index and key like MongoDB.
+func indexDupKey(doc *types.Document, idx backends.IndexInfo) *types.Document {
+	pairs := make([]any, 0, len(idx.Key)*2)
+	for _, kp := range idx.Key {
+		v, err := doc.Get(kp.Field)
+		if err != nil {
+			v = types.Null
+		}
+		pairs = append(pairs, kp.Field, v)
+	}
+	return must.NotFail(types.NewDocument(pairs...))
+}
+
 func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllParams) (*backends.InsertAllResult, error) {
 	state, err := c.db.backend.getOrOpenDB(ctx, c.db.name, true)
 	if err != nil {
@@ -1520,17 +1539,11 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			return nil, fmt.Errorf("checking existing _id: %w", err)
 		}
 		if exists {
-			return nil, backends.NewError(
-				backends.ErrorCodeInsertDuplicateID,
-				fmt.Errorf("duplicate _id in collection"),
-			)
+			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
 		if _, dup := batchHashSet[h]; dup {
-			return nil, backends.NewError(
-				backends.ErrorCodeInsertDuplicateID,
-				fmt.Errorf("duplicate _id in batch"),
-			)
+			return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 		}
 
 		if idStr, ok := docID.(string); ok && idCmp != nil {
@@ -1547,10 +1560,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				}
 			}
 			if conflict {
-				return nil, backends.NewError(
-					backends.ErrorCodeInsertDuplicateID,
-					fmt.Errorf("duplicate _id under collation"),
-				)
+				return nil, backends.NewDuplicateKeyError(backends.DefaultIndexName, idDupKey(docID))
 			}
 			batchStrIDs = append(batchStrIDs, idStr)
 		}
@@ -1571,19 +1581,13 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 					return nil, scanErr
 				}
 				if conflict {
-					return nil, backends.NewError(
-						backends.ErrorCodeInsertDuplicateID,
-						fmt.Errorf("duplicate key for unique index %s", idx.Name),
-					)
+					return nil, backends.NewDuplicateKeyError(idx.Name, indexDupKey(doc, idx))
 				}
 				newKey := extractIndexKey(doc, idx)
 				batchCmp := indexComparator(idx)
 				for _, batchKey := range batchLossyKeys[i] {
 					if indexKeysEqualColl(newKey, batchKey, batchCmp) {
-						return nil, backends.NewError(
-							backends.ErrorCodeInsertDuplicateID,
-							fmt.Errorf("duplicate key for unique index %s", idx.Name),
-						)
+						return nil, backends.NewDuplicateKeyError(idx.Name, indexDupKey(doc, idx))
 					}
 				}
 				batchLossyKeys[i] = append(batchLossyKeys[i], newKey)
@@ -1598,10 +1602,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			}
 			for prefix := range docPrefixes {
 				if _, claimed := batchUniqueEntryKeys[i][prefix]; claimed {
-					return nil, backends.NewError(
-						backends.ErrorCodeInsertDuplicateID,
-						fmt.Errorf("duplicate key for unique index %s", idx.Name),
-					)
+					return nil, backends.NewDuplicateKeyError(idx.Name, indexDupKey(doc, idx))
 				}
 			}
 			for _, row := range rows {
@@ -1610,10 +1611,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 					return nil, fmt.Errorf("unique probe on %s: %w", idx.Name, probeErr)
 				}
 				if conflict {
-					return nil, backends.NewError(
-						backends.ErrorCodeInsertDuplicateID,
-						fmt.Errorf("duplicate key for unique index %s", idx.Name),
-					)
+					return nil, backends.NewDuplicateKeyError(idx.Name, indexDupKey(doc, idx))
 				}
 			}
 			for prefix := range docPrefixes {
@@ -2725,10 +2723,7 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 			continue
 		}
 		if !bytes.Equal(owner, idBytes) {
-			return backends.NewError(
-				backends.ErrorCodeInsertDuplicateID,
-				fmt.Errorf("duplicate key over existing data for unique index %s", idx.Name),
-			)
+			return backends.NewDuplicateKeyError(idx.Name, indexDupKey(doc, idx))
 		}
 	}
 	return nil
@@ -2834,10 +2829,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 				return err
 			}
 			if conflict {
-				return backends.NewError(
-					backends.ErrorCodeInsertDuplicateID,
-					fmt.Errorf("duplicate key for unique index %s", idx.Name),
-				)
+				return backends.NewDuplicateKeyError(idx.Name, indexDupKey(newDoc, idx))
 			}
 			continue
 		}
@@ -2847,10 +2839,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 				return fmt.Errorf("unique probe on %s: %w", idx.Name, err)
 			}
 			if conflict {
-				return backends.NewError(
-					backends.ErrorCodeInsertDuplicateID,
-					fmt.Errorf("duplicate key for unique index %s", idx.Name),
-				)
+				return backends.NewDuplicateKeyError(idx.Name, indexDupKey(newDoc, idx))
 			}
 		}
 	}
