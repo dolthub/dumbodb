@@ -24,6 +24,7 @@ import (
 	"github.com/FerretDB/wire"
 
 	"github.com/dolthub/dumbodb/internal/backends"
+	"github.com/dolthub/dumbodb/internal/collation"
 	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/common/aggregations"
 	"github.com/dolthub/dumbodb/internal/handler/handlererrors"
@@ -44,7 +45,7 @@ func countExplainExecution(ctx context.Context, coll backends.Collection, qp *ba
 	}
 	usesIndex := planContainsIndexScan(winningPlan)
 
-	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter})
+	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated})
 	if err != nil || qres == nil || qres.Iter == nil {
 		return 0, 0, 0
 	}
@@ -243,6 +244,17 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	qp.Projection = params.Projection
 	qp.Command = params.CommandName
 	qp.DistinctKey = params.DistinctKey
+
+	// Resolve the effective collation (operation collation, else the
+	// collection default) so the explained plan reflects what the real query
+	// does: a non-simple collation forces a scan, not an index seek.
+	var opCollation *types.Document
+	if params.Command != nil {
+		if cv, _ := params.Command.Get("collation"); cv != nil {
+			opCollation, _ = cv.(*types.Document)
+		}
+	}
+	qp.Collated = !collation.Parse(h.effectiveCollation(connCtx, db, params.Collection, opCollation)).IsSimple()
 
 	if !h.EnableNestedPushdown && params.Filter != nil {
 		qp.Filter = params.Filter.DeepCopy()

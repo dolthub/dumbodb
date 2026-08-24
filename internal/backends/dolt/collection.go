@@ -996,7 +996,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			}
 		}
 	}
-	if !naturalHint && !indexPicked && params != nil {
+	if !naturalHint && !indexPicked && params != nil && !params.Collated {
 		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos)
 	}
 	if !naturalHint && !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {

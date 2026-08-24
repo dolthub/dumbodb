@@ -215,6 +215,11 @@ type ExplainParams struct {
 	// for other commands.
 	DistinctKey string
 
+	// Collated mirrors QueryParams.Collated: the query runs under a non-simple
+	// collation, so byte-exact index narrowing does not apply and the explained
+	// plan must reflect the scan the real Query path performs.
+	Collated bool
+
 	// Hint, when non-nil, requests that the backend plan the query using the
 	// specified index. It may be a document like {field: 1} naming a key
 	// pattern, or a single-string value naming an index by name (the latter
