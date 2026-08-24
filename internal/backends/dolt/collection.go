@@ -103,8 +103,12 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	if !naturalHint && params != nil && !params.Collated && params.Filter != nil && params.Sort.Len() == 0 {
-		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint); used {
+	// A collated query may use a collation-matching index; a collated query
+	// missing its collation spec falls back to a scan rather than risk a
+	// byte-ordered index serving a collated lookup.
+	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 &&
+		(!params.Collated || params.Collation != nil) {
+		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint, params.Collation); used {
 			if err != nil {
 				return nil, err
 			}
@@ -331,10 +335,14 @@ func (it *singleDocIter) Close() {}
 //
 // Returns (nil, false, nil) if no suitable index was found (caller should fall
 // back to the full scan).
-func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document, hint any) ([]*types.Document, bool, error) {
+func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document, hint any, queryCollation *types.Document) ([]*types.Document, bool, error) {
 	if filter == nil || filter.Len() == 0 {
 		return nil, false, nil
 	}
+
+	queryColl := collation.Parse(queryCollation)
+	queryIdentity := queryColl.Identity()
+	queryCmp := queryColl.Comparator()
 
 	state.mu.RLock()
 	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
@@ -374,10 +382,10 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
 			continue
 		}
-		if indexCollated(idx) {
-			// A collated index stores collation-ordered keys; the byte-level
-			// lookup is not collation-aware yet, so it cannot serve reads
-			// (collated seek is workspace-33x). Not eligible -- the query scans.
+		// An index is eligible only when its collation equals the query's: a
+		// collated index is seekable solely under its own collation, and a
+		// binary query must not use one (nor a collated query a binary index).
+		if collation.Parse(idx.Collation).Identity() != queryIdentity {
 			continue
 		}
 		partial := idx.PartialFilterExpression != nil
@@ -421,6 +429,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		v, err := filter.Get(k)
 		if err != nil {
 			continue
+		}
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
 		}
 		s, e, ok := indexBoundsForFilterValue(v)
 		if !ok {
@@ -851,7 +862,8 @@ func indexRank(compound, partial bool) int {
 	return r
 }
 
-func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
+func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document) (backends.IndexInfo, bool) {
+	queryIdentity := collation.Parse(queryCollation).Identity()
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
 	}
@@ -878,7 +890,7 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 			if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field != k {
 				continue
 			}
-			if indexCollated(idx) {
+			if collation.Parse(idx.Collation).Identity() != queryIdentity {
 				continue
 			}
 			partial := idx.PartialFilterExpression != nil
@@ -1005,8 +1017,8 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 			}
 		}
 	}
-	if !naturalHint && !indexPicked && params != nil && !params.Collated {
-		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos)
+	if !naturalHint && !indexPicked && params != nil {
+		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation)
 	}
 	if !naturalHint && !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
 		// distinct uses a covered index on its key when one exists; the
@@ -1400,6 +1412,30 @@ func indexComparator(idx backends.IndexInfo) *collation.Comparator {
 // collation sort key (idxpkg.PreEncoded), so a collated index stores and probes
 // collation-ordered keys instead of raw bytes. Non-string components are
 // unchanged. cmp must be non-nil (a collated index).
+// collateFilterValue rewrites a filter value for a collated-index lookup: a
+// string becomes its ICU sort key (idxpkg.PreEncoded), and an operator document
+// ({$gt:"x"}, ...) has its scalar string operands rewritten, so the bounds line
+// up with the sort-key-ordered stored keys.
+func collateFilterValue(v any, cmp *collation.Comparator) any {
+	switch t := v.(type) {
+	case string:
+		return idxpkg.PreEncoded(cmp.Key(t))
+	case *types.Document:
+		out := types.MakeDocument(t.Len())
+		for _, k := range t.Keys() {
+			ov, _ := t.Get(k)
+			if str, ok := ov.(string); ok {
+				out.Set(k, idxpkg.PreEncoded(cmp.Key(str)))
+			} else {
+				out.Set(k, ov)
+			}
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 func collateRowValues(row []any, cmp *collation.Comparator) []any {
 	out := make([]any, len(row))
 	for i, v := range row {

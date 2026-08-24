@@ -45,7 +45,7 @@ func countExplainExecution(ctx context.Context, coll backends.Collection, qp *ba
 	}
 	usesIndex := planContainsIndexScan(winningPlan)
 
-	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated})
+	qres, err := coll.Query(ctx, &backends.QueryParams{Filter: qp.Filter, Collated: qp.Collated, Collation: qp.Collation})
 	if err != nil || qres == nil || qres.Iter == nil {
 		return 0, 0, 0
 	}
@@ -254,7 +254,9 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 			opCollation, _ = cv.(*types.Document)
 		}
 	}
-	qp.Collated = !collation.Parse(h.effectiveCollation(connCtx, db, params.Collection, opCollation)).IsSimple()
+	effColl := h.effectiveCollation(connCtx, db, params.Collection, opCollation)
+	qp.Collation = effColl
+	qp.Collated = !collation.Parse(effColl).IsSimple()
 
 	if !h.EnableNestedPushdown && params.Filter != nil {
 		qp.Filter = params.Filter.DeepCopy()
