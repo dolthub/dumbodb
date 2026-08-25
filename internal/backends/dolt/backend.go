@@ -841,7 +841,9 @@ func (b *Backend) getOrOpenDBLocked(ctx context.Context, dbName string, create b
 
 	cs := nbs.NewGenerationalCS(oldGenSt, newGenSt, ghostGen)
 
-	ns := tree.NewNodeStore(cs)
+	// Instrumented so a context-scoped seekCounter can measure prolly-tree node
+	// fetches per operation; inert (one nil context lookup) without a counter.
+	ns := newInstrumentedNodeStore(tree.NewNodeStore(cs))
 
 	// Inspect the existing root format before creating the datas.Database,
 	// since datas.Database panics when reading an ADRM-format root.
