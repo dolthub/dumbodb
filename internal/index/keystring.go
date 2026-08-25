@@ -83,11 +83,8 @@ const (
 	ctypeMaxKey    = byte(0xF0)
 )
 
-// PreEncoded is a string body already transformed into comparison bytes -- an
-// ICU collation sort key for a collated index. EncodeValue emits it with the
-// exact string layout ([ctypeString][bytes, escaped][0x00]), so a collated
-// index stores sort-key-ordered keys while every other layer stays unaware.
-// Two strings equal under the collation share a sort key, hence one index key.
+// PreEncoded is a string body already in comparison-byte form (e.g. an ICU sort
+// key); EncodeValue emits it with the normal string layout.
 type PreEncoded []byte
 
 // EncodeValue encodes a single BSON value to its KeyString bytes.
@@ -236,8 +233,7 @@ func encodeString(s string) []byte {
 	return encodeStringBytes([]byte(s))
 }
 
-// encodeStringBytes encodes an already-byte-form string body (raw UTF-8, or a
-// precomputed collation sort key) with the string ctype, escaping, and terminator.
+// encodeStringBytes encodes a string body (raw UTF-8 or a precomputed sort key).
 func encodeStringBytes(raw []byte) []byte {
 	size := 2 // ctype + terminator
 	for _, b := range raw {

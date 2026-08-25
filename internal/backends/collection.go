@@ -93,17 +93,10 @@ type QueryParams struct {
 
 	OnlyRecordIDs bool
 	Comment       string
-	// Collated is set when the query runs under a non-simple collation. The
-	// backend must then return a superset (no byte-exact narrowing on _id point
-	// lookups or scan prefilters), because the handler re-checks every document
-	// under the collator and strings that differ byte-wise may still compare
-	// equal.
+	// Collated is set when the query runs under a non-simple collation.
 	Collated bool
 
-	// Collation is the effective operation collation (nil = simple). A
-	// secondary index is eligible for the lookup only when its collation
-	// matches this, and a collated index is seeked by encoding the query value
-	// through the same collator.
+	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
 }
 
@@ -221,13 +214,10 @@ type ExplainParams struct {
 	// for other commands.
 	DistinctKey string
 
-	// Collated mirrors QueryParams.Collated: the query runs under a non-simple
-	// collation, so byte-exact index narrowing does not apply and the explained
-	// plan must reflect the scan the real Query path performs.
+	// Collated is set when the query runs under a non-simple collation.
 	Collated bool
 
-	// Collation is the effective operation collation used for index eligibility,
-	// mirroring QueryParams.Collation.
+	// Collation is the effective operation collation, nil when simple/binary.
 	Collation *types.Document
 
 	// Hint, when non-nil, requests that the backend plan the query using the

@@ -22,31 +22,22 @@ import (
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 )
 
-// seekCounter tallies prolly-tree node fetches for a single operation. It is the
-// deterministic, timing-free measure of seek cost: a point lookup descends
-// root->leaf, so nodes read grows with tree height (~log N), not collection
-// size (N). A caller scopes one via WithSeekCounter and reads the tally after
-// the operation returns.
+// seekCounter tallies prolly-tree node fetches for one operation, scoped to a
+// context by WithSeekCounter.
 type seekCounter struct {
-	nodes atomic.Int64 // tree nodes fetched (Read: +1, ReadMany: +len(refs))
-	calls atomic.Int64 // Read/ReadMany invocations
+	nodes atomic.Int64
+	calls atomic.Int64
 }
 
-// Nodes returns the number of prolly-tree nodes fetched since the counter was
-// created.
 func (c *seekCounter) Nodes() int64 { return c.nodes.Load() }
-
-// Calls returns the number of NodeStore Read/ReadMany invocations.
 func (c *seekCounter) Calls() int64 { return c.calls.Load() }
 
 type seekCounterKeyType struct{}
 
 var seekCounterKey seekCounterKeyType
 
-// WithSeekCounter returns a child context carrying a fresh seekCounter and the
-// counter itself. Node fetches by any instrumentedNodeStore reached through the
-// returned context accrue to the counter; a context without one leaves every
-// instrumented store on its zero-cost path.
+// WithSeekCounter returns a child context carrying a fresh counter, and the
+// counter; node fetches through that context accrue to it.
 func WithSeekCounter(ctx context.Context) (context.Context, *seekCounter) {
 	c := &seekCounter{}
 	return context.WithValue(ctx, seekCounterKey, c), c
@@ -57,12 +48,8 @@ func seekCounterFrom(ctx context.Context) *seekCounter {
 	return c
 }
 
-// instrumentedNodeStore wraps a tree.NodeStore to count node fetches per
-// context-scoped operation. Embedding promotes every other NodeStore method
-// unchanged, so the wrapper stays correct if the interface grows. Counting is
-// gated on a context-carried seekCounter: with none present the overhead is a
-// single nil-returning context lookup, so it is safe to install unconditionally
-// on the production read path.
+// instrumentedNodeStore counts node fetches against a context-scoped seekCounter
+// when one is present, and is otherwise a transparent pass-through.
 type instrumentedNodeStore struct {
 	tree.NodeStore
 }

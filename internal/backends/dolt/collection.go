@@ -103,9 +103,6 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	// A collated query may use a collation-matching index; a collated query
-	// missing its collation spec falls back to a scan rather than risk a
-	// byte-ordered index serving a collated lookup.
 	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 &&
 		(!params.Collated || params.Collation != nil) {
 		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint, params.Collation); used {
@@ -382,9 +379,6 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
 			continue
 		}
-		// An index is eligible only when its collation equals the query's: a
-		// collated index is seekable solely under its own collation, and a
-		// binary query must not use one (nor a collated query a binary index).
 		if collation.Parse(idx.Collation).Identity() != queryIdentity {
 			continue
 		}
@@ -438,8 +432,6 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 			continue
 		}
 		if entry.compound {
-			// Tighten across leading-equality + trailing-range fields when the
-			// filter allows it; otherwise scan the leading-field slice.
 			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
 				s, e = cs, ce
 			} else {
@@ -665,11 +657,8 @@ func compoundLeadingBounds(start, stop []byte) ([]byte, []byte) {
 	return bracketSuffix(start), bracketSuffix(stop)
 }
 
-// bracketSuffix rewrites a bound's trailing single-field discriminator so the
-// bound brackets a whole compound-index slice across any suffix fields:
-// 0x04 -> 0x00 ("just before any following KS(...)") and 0x05 -> 0xFF ("just
-// after"). KeyString ctype prefixes span 0x10..0xF0, so 0x00/0xFF sort strictly
-// outside every suffix encoding.
+// bracketSuffix rewrites a bound's trailing discriminator (0x04/0x05) to
+// 0x00/0xFF so it brackets all suffix fields of a compound key.
 func bracketSuffix(b []byte) []byte {
 	if len(b) == 0 {
 		return b
@@ -684,10 +673,8 @@ func bracketSuffix(b []byte) []byte {
 	return out
 }
 
-// indexEqualityValue reports whether a filter clause is a plain equality -- a
-// bare scalar, or a doc whose only operator is $eq -- and returns the operand.
-// Values the byte index cannot equality-encode (null, array, regex, decimal)
-// are not treated as equalities.
+// indexEqualityValue returns the operand when v is a plain equality (a bare
+// scalar or {$eq}); ok is false otherwise.
 func indexEqualityValue(v any) (any, bool) {
 	unencodable := func(x any) bool {
 		switch x.(type) {
@@ -713,19 +700,11 @@ func indexEqualityValue(v any) (any, bool) {
 	return v, true
 }
 
-// compoundIndexBounds computes a tight [start, stop) range for a compound index
-// by consuming the filter in index-key order: a run of leading equality fields,
-// then at most one trailing range field -- the way a B-tree compound index is
-// probed. This replaces the leading-field-only compoundLeadingBounds whenever
-// the filter constrains more than the leading field, so a query like
-// {city:"NYC", n:{$gt:4}} scans only the (NYC, n>4) slice instead of every NYC
-// entry. Returns ok=false to fall back to compoundLeadingBounds.
-//
-// Every returned range is a sound superset of matches (the handler re-filters);
-// a descending key field ends tightening, since the range direction it implies
-// is not captured by the ascending KeyString order.
+// compoundIndexBounds returns a tight [start, stop) range for a compound index
+// from leading equality fields plus at most one trailing range field, or
+// ok=false to fall back to compoundLeadingBounds. Every range is a sound
+// superset (the handler re-filters).
 func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCmp *collation.Comparator) (startKey, stopKey []byte, ok bool) {
-	// bracketPrefix brackets all entries sharing the accumulated equality prefix.
 	bracketPrefix := func(prefix []byte) ([]byte, []byte) {
 		return append(append([]byte(nil), prefix...), 0x00),
 			append(append([]byte(nil), prefix...), 0xFF)
@@ -742,7 +721,6 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 		}
 		raw, err := filter.Get(kp.Field)
 		if err != nil {
-			// This field is unconstrained: bracket the equality prefix so far.
 			if i == 0 {
 				return nil, nil, false
 			}
@@ -769,7 +747,6 @@ func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCm
 		start := append(append([]byte(nil), prefix...), s...)
 		stop := append(append([]byte(nil), prefix...), e...)
 		if !isLast {
-			// More index fields follow the constrained one: bracket their slice.
 			start = bracketSuffix(start)
 			stop = bracketSuffix(stop)
 		}
@@ -1514,14 +1491,8 @@ func indexComparator(idx backends.IndexInfo) *collation.Comparator {
 	return collation.Parse(idx.Collation).Comparator()
 }
 
-// collateRowValues rewrites the string components of an index row to their ICU
-// collation sort key (idxpkg.PreEncoded), so a collated index stores and probes
-// collation-ordered keys instead of raw bytes. Non-string components are
-// unchanged. cmp must be non-nil (a collated index).
-// collateFilterValue rewrites a filter value for a collated-index lookup: a
-// string becomes its ICU sort key (idxpkg.PreEncoded), and an operator document
-// ({$gt:"x"}, ...) has its scalar string operands rewritten, so the bounds line
-// up with the sort-key-ordered stored keys.
+// collateFilterValue rewrites a filter value's string operands to ICU sort keys
+// (PreEncoded) so bounds line up with a collated index's stored keys.
 func collateFilterValue(v any, cmp *collation.Comparator) any {
 	switch t := v.(type) {
 	case string:
@@ -1542,6 +1513,8 @@ func collateFilterValue(v any, cmp *collation.Comparator) any {
 	}
 }
 
+// collateRowValues rewrites the string components of an index row to ICU sort
+// keys (PreEncoded); cmp must be non-nil.
 func collateRowValues(row []any, cmp *collation.Comparator) []any {
 	out := make([]any, len(row))
 	for i, v := range row {
@@ -1592,8 +1565,6 @@ func indexKeysEqualColl(a, b []any, cmp *collation.Comparator) bool {
 // use their ICU sort key (equal-under-collation strings share a key); other
 // components and non-collated indexes use the byte-exact probe prefix.
 func rowConflictKey(row []any) string {
-	// Rows for a collated index arrive pre-encoded as collation sort keys, so
-	// the byte-prefix probe already keys equal-under-collation values together.
 	prefix, _ := idxpkg.EqualityProbeBounds(row)
 	return string(prefix)
 }
@@ -1730,9 +1701,6 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 			}
 
 			if lossy || idx.Lossy {
-				// Decimal128 rows have no faithful byte encoding; compare values
-				// through the value-level scan. Collated rows are pre-encoded as
-				// sort keys and use the byte probe below.
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
 					return nil, scanErr

@@ -245,9 +245,6 @@ func (h *Handler) MsgExplain(connCtx context.Context, msg *wire.OpMsg) (*wire.Op
 	qp.Command = params.CommandName
 	qp.DistinctKey = params.DistinctKey
 
-	// Resolve the effective collation (operation collation, else the
-	// collection default) so the explained plan reflects what the real query
-	// does: a non-simple collation forces a scan, not an index seek.
 	var opCollation *types.Document
 	if params.Command != nil {
 		if cv, _ := params.Command.Get("collation"); cv != nil {

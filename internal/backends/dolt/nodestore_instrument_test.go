@@ -22,12 +22,6 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// TestSeekCounter_PointLookupReadsFewerNodesThanScan validates that the
-// instrumented NodeStore is live on the real read path and that an indexed
-// point lookup fetches strictly fewer prolly-tree nodes than a full scan of the
-// same data. This is the single-scale proof that a served query does sub-linear
-// storage work; the multi-scale log-N growth assertion lives with the scaling
-// test (workspace-da6.1 step 4).
 func TestSeekCounter_PointLookupReadsFewerNodesThanScan(t *testing.T) {
 	b := newTestBackend(t)
 	ctx := context.Background()
@@ -78,9 +72,6 @@ func TestSeekCounter_PointLookupReadsFewerNodesThanScan(t *testing.T) {
 	}
 }
 
-// TestSeekCounter_InertWithoutContext confirms the production path is unmetered
-// unless a caller opts in: a query run on a bare context leaves no counter to
-// accrue to, so the instrumented store simply delegates.
 func TestSeekCounter_InertWithoutContext(t *testing.T) {
 	ctx := context.Background()
 	if c := seekCounterFrom(ctx); c != nil {

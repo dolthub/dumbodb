@@ -23,8 +23,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/types"
 )
 
-// seedIndexedCollection fills a fresh collection with n docs {_id:i, k:i} and a
-// secondary index on k, returning the collection.
+// seedIndexedCollection seeds n docs {_id:i, k:i} with a secondary index on k.
 func seedIndexedCollection(t *testing.T, b *Backend, dbName string, n int) backends.Collection {
 	t.Helper()
 	db, err := b.Database(dbName)
@@ -57,8 +56,6 @@ func seedIndexedCollection(t *testing.T, b *Backend, dbName string, n int) backe
 	return coll
 }
 
-// pointLookupNodes runs an indexed equality lookup and returns the prolly-tree
-// nodes fetched to serve it.
 func pointLookupNodes(t *testing.T, coll backends.Collection, k int) int64 {
 	t.Helper()
 	ctx, ctr := WithSeekCounter(context.Background())
@@ -69,11 +66,6 @@ func pointLookupNodes(t *testing.T, coll backends.Collection, k int) int64 {
 	return ctr.Nodes()
 }
 
-// TestSeekScaling_PointLookupIsLogarithmic is the deterministic proof that an
-// indexed point lookup does sub-linear storage work: across a 100x growth in
-// collection size the node fetches per lookup rise by at most a couple of tree
-// levels, not proportionally. A scan of the largest collection is measured
-// alongside to make the log-vs-linear gap concrete.
 func TestSeekScaling_PointLookupIsLogarithmic(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds up to 100k docs; skipped under -short")
@@ -88,9 +80,6 @@ func TestSeekScaling_PointLookupIsLogarithmic(t *testing.T) {
 		t.Logf("N=%-7d point-lookup nodes=%d", n, nodes[i])
 	}
 
-	// Contrast: a full scan of the largest collection reads far more nodes,
-	// growing with N. This pins that the lookup's flat curve is the index
-	// working, not the store being tiny.
 	bigColl := seedIndexedCollection(t, b, "scale_scan", scales[len(scales)-1])
 	scanCtx, scanCtr := WithSeekCounter(context.Background())
 	all := drainQuery(t, scanCtx, bigColl, &backends.QueryParams{Filter: mustDoc(t)})
@@ -100,9 +89,6 @@ func TestSeekScaling_PointLookupIsLogarithmic(t *testing.T) {
 	scanNodes := scanCtr.Nodes()
 	t.Logf("N=%-7d full-scan nodes=%d", scales[len(scales)-1], scanNodes)
 
-	// Logarithmic growth: a 100x data increase adds at most a small constant
-	// number of node fetches (a few tree levels), and the top-scale lookup
-	// stays a tiny absolute count -- categorically unlike the O(N) scan.
 	growth := nodes[len(nodes)-1] - nodes[0]
 	const maxLevelGrowth = 4
 	if growth > maxLevelGrowth {
@@ -115,9 +101,8 @@ func TestSeekScaling_PointLookupIsLogarithmic(t *testing.T) {
 	}
 }
 
-// seedCollatedCollection fills a fresh collection with n docs {_id:i, k:"k<i>"}
-// and a secondary index on the string field k carrying a tailoring-heavy
-// collation (so the index stores ICU sort keys, not raw UTF-8).
+// seedCollatedCollection seeds n docs {_id:i, k:"k<i>"} with a secondary index
+// on k under the given collation (so it stores ICU sort keys).
 func seedCollatedCollection(t *testing.T, b *Backend, dbName string, n int, coll_ *types.Document) backends.Collection {
 	t.Helper()
 	db, err := b.Database(dbName)
@@ -158,12 +143,6 @@ func seedCollatedCollection(t *testing.T, b *Backend, dbName string, n int, coll
 	return coll
 }
 
-// TestSeekScaling_CollatedPointLookupIsLogarithmic proves the collated index --
-// whose sort keys are larger than the raw values, so its fanout differs -- still
-// seeks in log N. A collation-matching point lookup is served by the sort-key
-// index and its node fetches stay flat across a 100x growth. Uses fr_CA, whose
-// French/backwards accent ordering is real CLDR tailoring, so the sort keys
-// exercise more than a plain strength truncation.
 func TestSeekScaling_CollatedPointLookupIsLogarithmic(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds up to 100k docs; skipped under -short")
