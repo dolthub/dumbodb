@@ -116,6 +116,56 @@ func TestNonexistentBranchMutationPathsAreRejected(t *testing.T) {
 	}
 }
 
+func TestInsertOnNonexistentBranchDoesNotCreateWorkingSet(t *testing.T) {
+	ctx := context.Background()
+	backend := newTestBackend(t)
+	insertDoc(t, backend, "testdb", "nodes", mustDoc(t, "_id", "base"))
+	commitDB(t, backend, "testdb", "base")
+
+	state, err := backend.getOrOpenDB(ctx, "testdb", false)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	branchDataset, err := state.datasDB.GetDataset(ctx, "refs/heads/neverMade")
+	if err != nil {
+		t.Fatalf("GetDataset(branch before): %v", err)
+	}
+	if branchDataset.HasHead() {
+		t.Fatal("branch exists before insert")
+	}
+
+	database, err := backend.Database("testdb@neverMade")
+	if err != nil {
+		t.Fatalf("Database: %v", err)
+	}
+	collection, err := database.Collection("nodes")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	_, err = collection.InsertAll(ctx, branchWriteInsertParams(mustDoc(t, "_id", "ghost")))
+	if err == nil {
+		t.Fatal("InsertAll on nonexistent branch succeeded")
+	}
+	if !strings.Contains(err.Error(), "rootish \"neverMade\": not found") {
+		t.Fatalf("error = %q, want missing rootish", err)
+	}
+
+	branchDataset, err = state.datasDB.GetDataset(ctx, "refs/heads/neverMade")
+	if err != nil {
+		t.Fatalf("GetDataset(branch after): %v", err)
+	}
+	if branchDataset.HasHead() {
+		t.Fatal("insert created branch ref")
+	}
+	workingSetDataset, err := state.datasDB.GetDataset(ctx, workingSetForBranch("neverMade"))
+	if err != nil {
+		t.Fatalf("GetDataset(working set): %v", err)
+	}
+	if workingSetDataset.HasHead() {
+		t.Fatal("insert created working-set ref")
+	}
+}
+
 func TestFreshMainAcceptsFirstWrite(t *testing.T) {
 	ctx := context.Background()
 	backend := newTestBackend(t)
