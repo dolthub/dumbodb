@@ -246,6 +246,17 @@ func sha512Key(b []byte) [20]byte {
 	return h
 }
 
+// docContentHash addresses a stored document by its content: SHA-512/20 over
+// the canonical stored bytes (bsonFormatVersion followed by lex-sorted BSON),
+// the digest and width dolt uses for chunk addresses. Two documents share a
+// hash iff their stored bytes are identical, on any branch and any server;
+// the hash changes iff the stored bytes change. It is not the address of a
+// chunk: documents under the tuple-builder threshold are stored inline and
+// have no chunk of their own.
+func docContentHash(stored []byte) hash.Hash {
+	return hash.Hash(sha512Key(stored))
+}
+
 func wirebsonIDHash(id any) ([20]byte, error) {
 	doc := wirebson.MakeDocument(1)
 

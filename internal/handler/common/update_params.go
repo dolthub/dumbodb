@@ -34,6 +34,11 @@ type UpdateParams struct {
 	Comment   string `dumbo:"comment,opt"`
 	MaxTimeMS int64  `dumbo:"maxTimeMS,opt,wholePositiveNumber"`
 
+	// DumboDocHashes asks for the content hash of every stored document on the
+	// acknowledgment. DumboDB extension, off by default: the reply carries the
+	// MongoDB fields and nothing else unless it is set.
+	DumboDocHashes bool `dumbo:"dumboDocHashes,opt"`
+
 	Let *types.Document `dumbo:"let,unimplemented"`
 
 	Ordered                  bool            `dumbo:"ordered,ignored"`
@@ -77,6 +82,10 @@ type Update struct {
 	ValidationLevel  string          `dumbo:"-"`
 	ValidationAction string          `dumbo:"-"`
 
+	// ReturnDocHashes is copied from the command-level DumboDocHashes by the
+	// handler, alongside the validator fields.
+	ReturnDocHashes bool `dumbo:"-"`
+
 	C            *types.Document `dumbo:"c,unimplemented"`
 	Collation    *types.Document `dumbo:"collation,opt"`
 	ArrayFilters *types.Array    `dumbo:"arrayFilters,opt"`
@@ -101,6 +110,10 @@ type UpdateResult struct {
 		Doc   *types.Document
 		Count int32
 	}
+
+	// DocHashes holds one {_id, hash} document per stored document when the
+	// caller set Update.ReturnDocHashes; nil otherwise.
+	DocHashes []*types.Document
 
 	// WarnAllowed counts documents written despite failing the collection
 	// validator because validationAction is "warn".

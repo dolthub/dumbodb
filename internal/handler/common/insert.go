@@ -31,6 +31,11 @@ type InsertParams struct {
 	Collection string       `dumbo:"insert,collection"`
 	Ordered    bool         `dumbo:"ordered,opt"`
 
+	// DumboDocHashes asks for the content hash of every stored document on the
+	// acknowledgment. DumboDB extension, off by default: the reply carries the
+	// MongoDB fields and nothing else unless it is set.
+	DumboDocHashes bool `dumbo:"dumboDocHashes,opt"`
+
 	MaxTimeMS                int64           `dumbo:"maxTimeMS,ignored"`
 	WriteConcern             *types.Document `dumbo:"writeConcern,opt"`
 	BypassDocumentValidation bool            `dumbo:"bypassDocumentValidation,opt"`

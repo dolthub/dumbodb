@@ -43,6 +43,27 @@ type kvOp struct {
 	Operator string
 }
 
+// appendUpdateDocHashes records one {_id, hash} entry per stored document.
+// hashes runs parallel to docs; an empty entry means the document matched
+// nothing and was not written.
+func appendUpdateDocHashes(result *UpdateResult, hashes []string, docs []*types.Document) {
+	for i, h := range hashes {
+		if i >= len(docs) || h == "" {
+			continue
+		}
+
+		id, err := docs[i].Get("_id")
+		if err != nil {
+			continue
+		}
+
+		result.DocHashes = append(result.DocHashes, must.NotFail(types.NewDocument(
+			"_id", id,
+			"hash", h,
+		)))
+	}
+}
+
 // UpdateDocument iterates through documents from iter and processes them sequentially based on param.
 // Returns UpdateResult if all operations (update/upsert) are successful.
 //
@@ -72,14 +93,20 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 		if len(pending) == 0 {
 			return nil
 		}
-		params := &backends.UpdateAllParams{Docs: pending, SkipDurableSync: skipDurableSync}
+		params := &backends.UpdateAllParams{
+			Docs:            pending,
+			SkipDurableSync: skipDurableSync,
+			ReturnDocHashes: param.ReturnDocHashes,
+		}
 		if hasAnyMutations(pendingMutations) {
 			params.FieldMutations = pendingMutations
 		}
-		if _, err := c.UpdateAll(ctx, params); err != nil {
+		res, err := c.UpdateAll(ctx, params)
+		if err != nil {
 			return lazyerrors.Error(err)
 		}
 		result.Modified.Count += int32(len(pending))
+		appendUpdateDocHashes(result, res.DocHashes, pending)
 		pending = nil
 		pendingMutations = nil
 		return nil
@@ -183,10 +210,15 @@ func UpdateDocument(ctx context.Context, c backends.Collection, cmd string, iter
 			if err := flushPending(); err != nil {
 				return nil, err
 			}
-			_, err = c.InsertAll(ctx, &backends.InsertAllParams{Docs: []*types.Document{doc}, SkipDurableSync: skipDurableSync})
-			if err != nil {
-				return nil, lazyerrors.Error(err)
+			insertRes, insertErr := c.InsertAll(ctx, &backends.InsertAllParams{
+				Docs:            []*types.Document{doc},
+				SkipDurableSync: skipDurableSync,
+				ReturnDocHashes: param.ReturnDocHashes,
+			})
+			if insertErr != nil {
+				return nil, lazyerrors.Error(insertErr)
 			}
+			appendUpdateDocHashes(result, insertRes.DocHashes, []*types.Document{doc})
 			result.Upserted.Doc = doc
 
 			// upsert happens only once, no need to iterate further
