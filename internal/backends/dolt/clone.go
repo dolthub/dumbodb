@@ -32,10 +32,12 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// DumboDBClone creates a new server-side database by cloning a file:// remote.
-// It pulls every remote branch's commits into a fresh database, sets the local
-// branch heads to match the remote, and initializes each branch's working set so
-// the database is immediately readable and writable. Only file:// is supported.
+// DumboDBClone creates a new server-side database by cloning a remote. It pulls
+// every remote branch's commits into a fresh database, sets the local branch
+// heads to match the remote, and initializes each branch's working set so the
+// database is immediately readable and writable. file:// and the http(s) gRPC
+// transports (e.g. DoltHub) are supported; gRPC remotes use any credential
+// configured via `dolt login` in the server environment.
 func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams) (*backends.CloneResult, error) {
 	if params.As == "" {
 		return nil, fmt.Errorf("dumboClone: target database name is required")
@@ -51,14 +53,17 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: %w", err)
 	}
-	if ru.Scheme != dbfactory.FileScheme {
-		return nil, fmt.Errorf("dumboClone: only file:// remotes are supported (got %q)", ru.Scheme)
+	if ru.Scheme != dbfactory.FileScheme && !isGRPCScheme(ru.Scheme) {
+		return nil, fmt.Errorf("dumboClone: unsupported remote scheme %q (supported: file, http, https)", ru.Scheme)
+	}
+
+	remoteParams, err := remoteDBParams(ru.Scheme)
+	if err != nil {
+		return nil, fmt.Errorf("dumboClone: %w", err)
 	}
 
 	nbf := dolttypes.Format_DOLT
-	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, map[string]interface{}{
-		dbfactory.DisableSingletonCacheParam: "true",
-	})
+	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, remoteParams)
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: opening remote: %w", err)
 	}
@@ -82,6 +87,12 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: creating temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	branchNames := make([]string, 0, len(branchRefs))
+	for _, br := range branchRefs {
+		branchNames = append(branchNames, br.GetPath())
+	}
+	defaultName := pickDefaultBranch(branchNames)
 
 	branches := make([]string, 0, len(branchRefs))
 	defaultCommit := ""
@@ -128,7 +139,7 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		}
 
 		branches = append(branches, name)
-		if name == defaultBranch {
+		if name == defaultName {
 			defaultCommit = ch.String()
 		}
 	}
@@ -136,8 +147,22 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	return &backends.CloneResult{
 		DB:            params.As,
 		URL:           ru.Raw,
-		DefaultBranch: defaultBranch,
+		DefaultBranch: defaultName,
 		Commit:        defaultCommit,
 		Branches:      branches,
 	}, nil
+}
+
+// pickDefaultBranch chooses the default branch of a freshly cloned database from
+// the remote's branch set: prefer main, then master, otherwise the first branch
+// listed. names is assumed non-empty (callers reject a branchless remote).
+func pickDefaultBranch(names []string) string {
+	for _, preferred := range []string{defaultBranch, "master"} {
+		for _, n := range names {
+			if n == preferred {
+				return preferred
+			}
+		}
+	}
+	return names[0]
 }

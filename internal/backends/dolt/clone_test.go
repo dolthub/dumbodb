@@ -103,9 +103,9 @@ func TestDumboDBClone_FromFileRemote(t *testing.T) {
 		t.Error("clone into existing db: want error, got nil")
 	}
 
-	// Unsupported scheme is refused.
-	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: "https://dolthub.com/o/r", As: "c2"}); err == nil {
-		t.Error("clone https: want error, got nil")
+	// Unsupported scheme is refused (ssh is known but not implemented).
+	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: "ssh://host/o/r", As: "c2"}); err == nil {
+		t.Error("clone ssh: want error, got nil")
 	}
 
 	// Reserved db name is refused.

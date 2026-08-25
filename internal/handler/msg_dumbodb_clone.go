@@ -27,12 +27,13 @@ import (
 )
 
 // MsgDumboDBClone implements the `dumboClone` command (alias `doltClone`). It
-// creates a new server-side database by cloning a file:// remote. It must be run
-// against the admin database.
+// creates a new server-side database by cloning a remote (file:// or an http(s)
+// gRPC remote such as DoltHub). It must be run against the admin database.
 //
 // Usage:
 //
 //	admin.runCommand({dumboClone: 1, from: "file:///path/to/remote", as: "newdb"})
+//	admin.runCommand({dumboClone: 1, from: "https://doltremoteapi.dolthub.com/org/repo", as: "newdb"})
 func (h *Handler) MsgDumboDBClone(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {

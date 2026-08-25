@@ -165,3 +165,70 @@ func TestDumboDBPushFetch_HTTPRoundTrip(t *testing.T) {
 		t.Errorf("fetched main = %q, want c2 %s", mainCommit, c2)
 	}
 }
+
+// TestDumboDBClone_HTTPRemote clones a new database from an in-process remotesrv
+// over insecure http, exercising the gRPC clone path with no credentials.
+func TestDumboDBClone_HTTPRemote(t *testing.T) {
+	t.Setenv("DOLT_ROOT_PATH", t.TempDir())
+	ctx := context.Background()
+
+	remoteHost, stop := startRemotesrv(t, t.TempDir())
+	defer stop()
+	remoteURL := fmt.Sprintf("http://%s/dumbo/clonesrc", remoteHost)
+
+	// Seed a source db and push it to the remote.
+	src := newTestBackend(t)
+	insertDoc(t, src, "srcdb", "coll", mustDoc(t, "_id", int64(1), "v", "cloned-over-grpc"))
+	c1 := commitDB(t, src, "srcdb", "c1")
+	if _, err := src.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "srcdb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if _, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main"}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	// Clone from the remote into a fresh backend/database.
+	dst := newTestBackend(t)
+	res, err := dst.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"})
+	if err != nil {
+		t.Fatalf("clone over http: %v", err)
+	}
+	if res.Commit != c1 {
+		t.Errorf("clone default commit = %s, want c1 %s", res.Commit, c1)
+	}
+	if res.DefaultBranch != "main" {
+		t.Errorf("clone default branch = %q, want main", res.DefaultBranch)
+	}
+
+	// The cloned database is readable with the source document present.
+	adb, err := dst.Database("clonedb")
+	if err != nil {
+		t.Fatalf("open clonedb: %v", err)
+	}
+	coll, err := adb.Collection("coll")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	qr, err := coll.Query(ctx, nil)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer qr.Iter.Close()
+
+	found := false
+	for {
+		_, doc, err := qr.Iter.Next()
+		if err != nil {
+			break
+		}
+		if id, _ := doc.Get("_id"); id == int64(1) {
+			found = true
+			if v, _ := doc.Get("v"); v != "cloned-over-grpc" {
+				t.Errorf("cloned doc v = %v, want \"cloned-over-grpc\"", v)
+			}
+		}
+	}
+	if !found {
+		t.Error("cloned document _id:1 not found (gRPC clone did not materialize data)")
+	}
+}

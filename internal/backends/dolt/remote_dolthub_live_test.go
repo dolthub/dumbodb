@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
+
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
@@ -91,5 +93,45 @@ func TestDumboDBPushFetch_DoltHubLive(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("fetched branch %s = %q, want %s (branches: %+v)", branch, got, want, fres.Branches)
+	}
+}
+
+// TestDumboDBClone_DoltHubLive clones a real DoltHub repository into a new
+// server-side database over the https gRPC transport. Gated on
+// DUMBO_DOLTHUB_TEST_REPO; requires `dolt login`. See the push/fetch live test
+// above for the env contract.
+func TestDumboDBClone_DoltHubLive(t *testing.T) {
+	repo := os.Getenv("DUMBO_DOLTHUB_TEST_REPO")
+	if repo == "" {
+		t.Skip("DUMBO_DOLTHUB_TEST_REPO not set; skipping live DoltHub clone test")
+	}
+	host := os.Getenv("DUMBO_DOLTHUB_TEST_HOST")
+	if host == "" {
+		host = "doltremoteapi.dolthub.com"
+	}
+	remoteURL := fmt.Sprintf("https://%s/%s", host, repo)
+
+	ctx := context.Background()
+	b := newTestBackend(t)
+
+	res, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "hubclone"})
+	if err != nil {
+		t.Fatalf("clone from DoltHub %s: %v", remoteURL, err)
+	}
+	if res.DB != "hubclone" {
+		t.Errorf("clone db = %q, want hubclone", res.DB)
+	}
+	if len(res.Branches) == 0 {
+		t.Fatal("clone returned no branches")
+	}
+	if res.DefaultBranch == "" || res.Commit == "" {
+		t.Errorf("clone default branch/commit empty: branch=%q commit=%q", res.DefaultBranch, res.Commit)
+	}
+	t.Logf("cloned %s: default=%s @ %s, branches=%v", remoteURL, res.DefaultBranch, res.Commit, res.Branches)
+
+	// The cloned database opens and its default branch head resolves.
+	st := mustDB(t, b, "hubclone")
+	if _, err := st.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef(res.DefaultBranch)); err != nil {
+		t.Errorf("resolve cloned default branch %q: %v", res.DefaultBranch, err)
 	}
 }
