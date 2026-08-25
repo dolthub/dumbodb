@@ -2409,6 +2409,11 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		if idx.Lossy {
 			continue
 		}
+		// A collated index groups by sort-key prefix, which merges values an
+		// uncollated distinct must keep separate; fall back to the scan.
+		if collation.Parse(idx.Collation).Identity() != "" {
+			continue
+		}
 		kp := idx.Key[0]
 		if kp.Field != params.Key {
 			continue

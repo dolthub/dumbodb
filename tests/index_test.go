@@ -476,6 +476,30 @@ func TestIndex_Collation_CaseInsensitive(t *testing.T) {
 	require.Equal(t, int64(1), count)
 }
 
+// TestIndex_Collation_DistinctIsCaseSensitive verifies that an uncollated
+// distinct keeps case variants distinct even when a case-insensitive index is
+// present (the index must not merge them via its sort-key prefix).
+func TestIndex_Collation_DistinctIsCaseSensitive(t *testing.T) {
+	env := startDumboDB(t)
+	ctx := context.Background()
+	coll := env.Collection(t)
+
+	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "name", Value: 1}},
+		Options: options.Index().SetCollation(&options.Collation{Locale: "en", Strength: 2}),
+	})
+	require.NoError(t, err)
+
+	insertDocs(t, coll,
+		bson.D{{Key: "name", Value: "Alice"}},
+		bson.D{{Key: "name", Value: "alice"}},
+	)
+
+	var values []string
+	require.NoError(t, coll.Distinct(ctx, "name", bson.D{}).Decode(&values))
+	require.ElementsMatch(t, []string{"Alice", "alice"}, values)
+}
+
 // TestIndex_Collation_UniqueWithCollation verifies that a unique collation index can be
 // created and exact-case uniqueness is enforced (do-x0vc).
 func TestIndex_Collation_UniqueWithCollation(t *testing.T) {
