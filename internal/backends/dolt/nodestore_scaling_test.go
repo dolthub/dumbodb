@@ -116,7 +116,7 @@ func TestSeekScaling_PointLookupIsLogarithmic(t *testing.T) {
 }
 
 // seedCollatedCollection fills a fresh collection with n docs {_id:i, k:"k<i>"}
-// and a secondary index on the string field k carrying an en/strength-2
+// and a secondary index on the string field k carrying a tailoring-heavy
 // collation (so the index stores ICU sort keys, not raw UTF-8).
 func seedCollatedCollection(t *testing.T, b *Backend, dbName string, n int, coll_ *types.Document) backends.Collection {
 	t.Helper()
@@ -161,13 +161,15 @@ func seedCollatedCollection(t *testing.T, b *Backend, dbName string, n int, coll
 // TestSeekScaling_CollatedPointLookupIsLogarithmic proves the collated index --
 // whose sort keys are larger than the raw values, so its fanout differs -- still
 // seeks in log N. A collation-matching point lookup is served by the sort-key
-// index and its node fetches stay flat across a 100x growth.
+// index and its node fetches stay flat across a 100x growth. Uses fr_CA, whose
+// French/backwards accent ordering is real CLDR tailoring, so the sort keys
+// exercise more than a plain strength truncation.
 func TestSeekScaling_CollatedPointLookupIsLogarithmic(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds up to 100k docs; skipped under -short")
 	}
 	b := newTestBackend(t)
-	colDoc := mustDoc(t, "locale", "en", "strength", int32(2))
+	colDoc := mustDoc(t, "locale", "fr_CA")
 
 	scales := []int{1000, 100000}
 	nodes := make([]int64, len(scales))
