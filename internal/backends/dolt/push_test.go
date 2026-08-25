@@ -115,10 +115,10 @@ func TestDumboDBPush_UnsupportedScheme(t *testing.T) {
 	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(1)))
 	commitDB(t, b, dbName, "c1")
 
-	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: "hub", URL: "https://dolthub.com/org/repo"}); err != nil {
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: "box", URL: "ssh://host/org/repo"}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "hub", Branch: "main"}); err == nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "box", Branch: "main"}); err == nil {
 		t.Error("push to unsupported scheme: want error, got nil")
 	}
 }

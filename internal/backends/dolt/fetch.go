@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
@@ -49,9 +48,12 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	}
 	nbf := state.doltDB.Format()
 
-	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, map[string]interface{}{
-		dbfactory.DisableSingletonCacheParam: "true",
-	})
+	remoteParams, err := remoteDBParams(ru.Scheme)
+	if err != nil {
+		return nil, fmt.Errorf("dumboFetch: %w", err)
+	}
+
+	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, remoteParams)
 	if err != nil {
 		return nil, fmt.Errorf("dumboFetch: opening remote %q: %w", params.Remote, err)
 	}

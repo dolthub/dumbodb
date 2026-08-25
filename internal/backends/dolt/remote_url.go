@@ -48,8 +48,10 @@ var knownRemoteSchemes = map[string]struct{}{
 // implementedRemoteSchemes are the schemes wired into push/fetch today. mem is
 // included for hermetic tests only.
 var implementedRemoteSchemes = map[string]struct{}{
-	dbfactory.FileScheme: {},
-	dbfactory.MemScheme:  {},
+	dbfactory.FileScheme:  {},
+	dbfactory.MemScheme:   {},
+	dbfactory.HTTPScheme:  {},
+	dbfactory.HTTPSScheme: {},
 }
 
 // parseRemoteURL validates raw and returns its parsed form. It errors on empty

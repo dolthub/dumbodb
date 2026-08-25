@@ -65,13 +65,20 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	nbf := state.doltDB.Format()
 
-	if err := dbfactory.PrepareDB(ctx, nbf, ru.Raw, nil); err != nil {
-		return nil, fmt.Errorf("dumboPush: preparing remote %q: %w", params.Remote, err)
+	// gRPC remotes (http/https) do not support PrepareDB; the remote repository
+	// must already exist. Only local stores are prepared on demand.
+	if !isGRPCScheme(ru.Scheme) {
+		if err := dbfactory.PrepareDB(ctx, nbf, ru.Raw, nil); err != nil {
+			return nil, fmt.Errorf("dumboPush: preparing remote %q: %w", params.Remote, err)
+		}
 	}
 
-	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, map[string]interface{}{
-		dbfactory.DisableSingletonCacheParam: "true",
-	})
+	remoteParams, err := remoteDBParams(ru.Scheme)
+	if err != nil {
+		return nil, fmt.Errorf("dumboPush: %w", err)
+	}
+
+	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, remoteParams)
 	if err != nil {
 		return nil, fmt.Errorf("dumboPush: opening remote %q: %w", params.Remote, err)
 	}
