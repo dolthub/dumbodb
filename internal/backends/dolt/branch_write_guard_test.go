@@ -16,6 +16,8 @@ package dolt
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/dolthub/dumbodb/internal/backends"
@@ -24,6 +26,94 @@ import (
 
 func branchWriteInsertParams(doc *types.Document) *backends.InsertAllParams {
 	return &backends.InsertAllParams{Docs: []*types.Document{doc}}
+}
+
+func TestNonexistentBranchMutationPathsAreRejected(t *testing.T) {
+	ctx := context.Background()
+	backend := newTestBackend(t)
+	insertDoc(t, backend, "testdb", "nodes", mustDoc(t, "_id", "base", "value", int32(1)))
+	commitDB(t, backend, "testdb", "base")
+
+	tests := []struct {
+		name   string
+		mutate func(database backends.Database, collection backends.Collection) error
+	}{
+		{
+			name: "update",
+			mutate: func(_ backends.Database, collection backends.Collection) error {
+				_, err := collection.UpdateAll(ctx, &backends.UpdateAllParams{
+					Docs: []*types.Document{mustDoc(t, "_id", "base", "value", int32(2))},
+				})
+				return err
+			},
+		},
+		{
+			name: "delete",
+			mutate: func(_ backends.Database, collection backends.Collection) error {
+				_, err := collection.DeleteAll(ctx, &backends.DeleteAllParams{IDs: []any{"base"}})
+				return err
+			},
+		},
+		{
+			name: "create_collection",
+			mutate: func(database backends.Database, _ backends.Collection) error {
+				return database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "created"})
+			},
+		},
+		{
+			name: "create_index",
+			mutate: func(_ backends.Database, collection backends.Collection) error {
+				_, err := collection.CreateIndexes(ctx, &backends.CreateIndexesParams{
+					Indexes: []backends.IndexInfo{{
+						Name: "by_value",
+						Key:  []backends.IndexKeyPair{{Field: "value"}},
+					}},
+				})
+				return err
+			},
+		},
+	}
+
+	state, err := backend.getOrOpenDB(ctx, "testdb", false)
+	if err != nil {
+		t.Fatalf("getOrOpenDB: %v", err)
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			branch := fmt.Sprintf("neverMade%d", index)
+			database, err := backend.Database("testdb@" + branch)
+			if err != nil {
+				t.Fatalf("Database: %v", err)
+			}
+			collection, err := database.Collection("nodes")
+			if err != nil {
+				t.Fatalf("Collection: %v", err)
+			}
+
+			err = test.mutate(database, collection)
+			if err == nil {
+				t.Fatal("mutation on nonexistent branch succeeded")
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("rootish %q: not found", branch)) {
+				t.Fatalf("error = %q, want missing rootish", err)
+			}
+
+			branchDataset, err := state.datasDB.GetDataset(ctx, "refs/heads/"+branch)
+			if err != nil {
+				t.Fatalf("GetDataset(branch): %v", err)
+			}
+			if branchDataset.HasHead() {
+				t.Fatal("mutation created branch ref")
+			}
+			workingSetDataset, err := state.datasDB.GetDataset(ctx, workingSetForBranch(branch))
+			if err != nil {
+				t.Fatalf("GetDataset(working set): %v", err)
+			}
+			if workingSetDataset.HasHead() {
+				t.Fatal("mutation created working-set ref")
+			}
+		})
+	}
 }
 
 func TestFreshMainAcceptsFirstWrite(t *testing.T) {
