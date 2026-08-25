@@ -103,8 +103,9 @@ func (c *collection) Query(ctx context.Context, params *backends.QueryParams) (*
 	// index lookup and the _id point lookup below.
 	naturalHint := params != nil && backends.HintIsNatural(params.Hint)
 
-	if !naturalHint && params != nil && !params.Collated && params.Filter != nil && params.Sort.Len() == 0 {
-		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint); used {
+	if !naturalHint && params != nil && params.Filter != nil && params.Sort.Len() == 0 &&
+		(!params.Collated || params.Collation != nil) {
+		if docs, used, err := c.tryIndexLookup(ctx, state, m, params.Filter, params.Hint, params.Collation); used {
 			if err != nil {
 				return nil, err
 			}
@@ -331,10 +332,14 @@ func (it *singleDocIter) Close() {}
 //
 // Returns (nil, false, nil) if no suitable index was found (caller should fall
 // back to the full scan).
-func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document, hint any) ([]*types.Document, bool, error) {
+func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary prolly.Map, filter *types.Document, hint any, queryCollation *types.Document) ([]*types.Document, bool, error) {
 	if filter == nil || filter.Len() == 0 {
 		return nil, false, nil
 	}
+
+	queryColl := collation.Parse(queryCollation)
+	queryIdentity := queryColl.Identity()
+	queryCmp := queryColl.Comparator()
 
 	state.mu.RLock()
 	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
@@ -372,6 +377,9 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		// so every matching doc lies within it; otherwise it drops non-member
 		// matches. (Sparse is fine: no admitted operator matches a missing field.)
 		if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field == "" {
+			continue
+		}
+		if collation.Parse(idx.Collation).Identity() != queryIdentity {
 			continue
 		}
 		partial := idx.PartialFilterExpression != nil
@@ -416,12 +424,19 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 		if err != nil {
 			continue
 		}
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
+		}
 		s, e, ok := indexBoundsForFilterValue(v)
 		if !ok {
 			continue
 		}
 		if entry.compound {
-			s, e = compoundLeadingBounds(s, e)
+			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
+				s, e = cs, ce
+			} else {
+				s, e = compoundLeadingBounds(s, e)
+			}
 		}
 		chosenMapIdx = entry.mapIdx
 		startKey, stopKey = s, e
@@ -639,20 +654,105 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 // original predicate; suffix-field constraints are left to the
 // handler-level re-filter.
 func compoundLeadingBounds(start, stop []byte) ([]byte, []byte) {
-	rewrite := func(b []byte) []byte {
-		if len(b) == 0 {
-			return b
-		}
-		out := append([]byte(nil), b...)
-		switch out[len(out)-1] {
-		case 0x04:
-			out[len(out)-1] = 0x00
-		case 0x05:
-			out[len(out)-1] = 0xFF
-		}
-		return out
+	return bracketSuffix(start), bracketSuffix(stop)
+}
+
+// bracketSuffix rewrites a bound's trailing discriminator (0x04/0x05) to
+// 0x00/0xFF so it brackets all suffix fields of a compound key.
+func bracketSuffix(b []byte) []byte {
+	if len(b) == 0 {
+		return b
 	}
-	return rewrite(start), rewrite(stop)
+	out := append([]byte(nil), b...)
+	switch out[len(out)-1] {
+	case 0x04:
+		out[len(out)-1] = 0x00
+	case 0x05:
+		out[len(out)-1] = 0xFF
+	}
+	return out
+}
+
+// indexEqualityValue returns the operand when v is a plain equality (a bare
+// scalar or {$eq}); ok is false otherwise.
+func indexEqualityValue(v any) (any, bool) {
+	unencodable := func(x any) bool {
+		switch x.(type) {
+		case nil, types.NullType, *types.Array, types.Regex, types.Decimal128:
+			return true
+		}
+		return false
+	}
+	if opDoc, isOp := v.(*types.Document); isOp {
+		keys := opDoc.Keys()
+		if len(keys) != 1 || keys[0] != "$eq" {
+			return nil, false
+		}
+		ev, err := opDoc.Get("$eq")
+		if err != nil || unencodable(ev) {
+			return nil, false
+		}
+		return ev, true
+	}
+	if unencodable(v) {
+		return nil, false
+	}
+	return v, true
+}
+
+// compoundIndexBounds returns a tight [start, stop) range for a compound index
+// from leading equality fields plus at most one trailing range field, or
+// ok=false to fall back to compoundLeadingBounds. Every range is a sound
+// superset (the handler re-filters).
+func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCmp *collation.Comparator) (startKey, stopKey []byte, ok bool) {
+	bracketPrefix := func(prefix []byte) ([]byte, []byte) {
+		return append(append([]byte(nil), prefix...), 0x00),
+			append(append([]byte(nil), prefix...), 0xFF)
+	}
+
+	var prefix []byte
+	for i, kp := range idx.Key {
+		if kp.Descending {
+			if i == 0 {
+				return nil, nil, false
+			}
+			s, e := bracketPrefix(prefix)
+			return s, e, true
+		}
+		raw, err := filter.Get(kp.Field)
+		if err != nil {
+			if i == 0 {
+				return nil, nil, false
+			}
+			s, e := bracketPrefix(prefix)
+			return s, e, true
+		}
+		v := raw
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
+		}
+		isLast := i == len(idx.Key)-1
+		if eqVal, isEq := indexEqualityValue(v); isEq && !isLast {
+			prefix = append(prefix, idxpkg.EncodeValue(eqVal)...)
+			continue
+		}
+		s, e, bok := indexBoundsForFilterValue(v)
+		if !bok {
+			if i == 0 {
+				return nil, nil, false
+			}
+			bs, be := bracketPrefix(prefix)
+			return bs, be, true
+		}
+		start := append(append([]byte(nil), prefix...), s...)
+		stop := append(append([]byte(nil), prefix...), e...)
+		if !isLast {
+			start = bracketSuffix(start)
+			stop = bracketSuffix(stop)
+		}
+		return start, stop, true
+	}
+	return nil, nil, false
 }
 
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
@@ -845,7 +945,8 @@ func indexRank(compound, partial bool) int {
 	return r
 }
 
-func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (backends.IndexInfo, bool) {
+func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo, queryCollation *types.Document) (backends.IndexInfo, bool) {
+	queryIdentity := collation.Parse(queryCollation).Identity()
 	if filter == nil || filter.Len() == 0 {
 		return backends.IndexInfo{}, false
 	}
@@ -870,6 +971,9 @@ func pickIndexForFilter(filter *types.Document, idxInfos []backends.IndexInfo) (
 		var bestIdx backends.IndexInfo
 		for _, idx := range idxInfos {
 			if idx.Lossy || len(idx.Key) == 0 || idx.Key[0].Field != k {
+				continue
+			}
+			if collation.Parse(idx.Collation).Identity() != queryIdentity {
 				continue
 			}
 			partial := idx.PartialFilterExpression != nil
@@ -997,7 +1101,7 @@ func (c *collection) Explain(ctx context.Context, params *backends.ExplainParams
 		}
 	}
 	if !naturalHint && !indexPicked && params != nil {
-		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos)
+		picked, indexPicked = pickIndexForFilter(params.Filter, idxInfos, params.Collation)
 	}
 	if !naturalHint && !indexPicked && params != nil && params.Command == "distinct" && params.DistinctKey != "" {
 		// distinct uses a covered index on its key when one exists; the
@@ -1387,6 +1491,42 @@ func indexComparator(idx backends.IndexInfo) *collation.Comparator {
 	return collation.Parse(idx.Collation).Comparator()
 }
 
+// collateFilterValue rewrites a filter value's string operands to ICU sort keys
+// (PreEncoded) so bounds line up with a collated index's stored keys.
+func collateFilterValue(v any, cmp *collation.Comparator) any {
+	switch t := v.(type) {
+	case string:
+		return idxpkg.PreEncoded(cmp.Key(t))
+	case *types.Document:
+		out := types.MakeDocument(t.Len())
+		for _, k := range t.Keys() {
+			ov, _ := t.Get(k)
+			if str, ok := ov.(string); ok {
+				out.Set(k, idxpkg.PreEncoded(cmp.Key(str)))
+			} else {
+				out.Set(k, ov)
+			}
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// collateRowValues rewrites the string components of an index row to ICU sort
+// keys (PreEncoded); cmp must be non-nil.
+func collateRowValues(row []any, cmp *collation.Comparator) []any {
+	out := make([]any, len(row))
+	for i, v := range row {
+		if str, ok := v.(string); ok {
+			out[i] = idxpkg.PreEncoded(cmp.Key(str))
+		} else {
+			out[i] = v
+		}
+	}
+	return out
+}
+
 // indexCollated reports whether an index carries a non-simple collation. Such an
 // index cannot use the byte-prefix probe -- "Alice" and "alice" encode to
 // distinct bytes yet collide under a strength-2 collation -- so uniqueness folds
@@ -1424,22 +1564,9 @@ func indexKeysEqualColl(a, b []any, cmp *collation.Comparator) bool {
 // build-time unique conflict detection. For a collated index, string components
 // use their ICU sort key (equal-under-collation strings share a key); other
 // components and non-collated indexes use the byte-exact probe prefix.
-func rowConflictKey(idx backends.IndexInfo, row []any, cmp *collation.Comparator) string {
-	if cmp == nil {
-		prefix, _ := idxpkg.EqualityProbeBounds(row)
-		return string(prefix)
-	}
-	var b strings.Builder
-	for _, v := range row {
-		if s, ok := v.(string); ok {
-			b.Write(cmp.Key(s))
-		} else {
-			prefix, _ := idxpkg.EqualityProbeBounds([]any{v})
-			b.WriteString(string(prefix))
-		}
-		b.WriteByte(0x00)
-	}
-	return b.String()
+func rowConflictKey(row []any) string {
+	prefix, _ := idxpkg.EqualityProbeBounds(row)
+	return string(prefix)
 }
 
 // idDupKey builds the duplicate-key detail {_id: id} for the synthetic _id index.
@@ -1573,9 +1700,7 @@ func (c *collection) InsertAll(ctx context.Context, params *backends.InsertAllPa
 				continue
 			}
 
-			if lossy || idx.Lossy || indexCollated(idx) {
-				// Byte probes collide on collapsed (Decimal128) bytes and miss
-				// collation-equal strings; compare values through the collator.
+			if lossy || idx.Lossy {
 				conflict, scanErr := c.scanUniqueConflict(ctx, state, m, idx, doc, h)
 				if scanErr != nil {
 					return nil, scanErr
@@ -2057,7 +2182,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 	}
 
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
-		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter)
+		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -2086,7 +2211,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 //
 // Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
-func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document) (int64, bool, error) {
+func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document) (int64, bool, error) {
 	if filter == nil || filter.Len() != 1 {
 		return 0, false, nil
 	}
@@ -2095,6 +2220,10 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
 		return 0, false, nil
 	}
+
+	queryColl := collation.Parse(queryCollation)
+	queryIdentity := queryColl.Identity()
+	queryCmp := queryColl.Comparator()
 
 	state.mu.RLock()
 	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
@@ -2120,6 +2249,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
 			continue
 		}
+		if collation.Parse(idx.Collation).Identity() != queryIdentity {
+			continue
+		}
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {
 			idxMap = idxMaps[i]
 			chosen = idx
@@ -2140,6 +2272,10 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	// counts stay exact (one entry per value+docID).
 	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
 		return 0, false, nil
+	}
+
+	if queryCmp != nil {
+		v = collateFilterValue(v, queryCmp)
 	}
 
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
@@ -2271,6 +2407,11 @@ func (c *collection) DistinctScan(ctx context.Context, params *backends.Distinct
 		// Lossy indexes hold entries at wrong byte positions (and the
 		// values behind them are not what the entry bytes claim).
 		if idx.Lossy {
+			continue
+		}
+		// A collated index groups by sort-key prefix, which merges values an
+		// uncollated distinct must keep separate; fall back to the scan.
+		if collation.Parse(idx.Collation).Identity() != "" {
 			continue
 		}
 		kp := idx.Key[0]
@@ -2714,9 +2855,8 @@ func checkUniqueBuildConflict(seen map[string][]byte, idx backends.IndexInfo, do
 	if idx.Sparse && allNull(extractIndexKey(doc, idx)) {
 		return nil
 	}
-	cmp := indexComparator(idx)
 	for _, row := range rows {
-		key := rowConflictKey(idx, row, cmp)
+		key := rowConflictKey(row)
 		owner, ok := seen[key]
 		if !ok {
 			seen[key] = append([]byte(nil), idBytes...)
@@ -2823,7 +2963,7 @@ func (c *collection) validateUniqueOnUpdate(ctx context.Context, state *dbState,
 		if len(rows) == 0 {
 			continue
 		}
-		if lossy || idx.Lossy || indexCollated(idx) {
+		if lossy || idx.Lossy {
 			conflict, err := c.scanUniqueConflict(ctx, state, m, idx, newDoc, selfHash)
 			if err != nil {
 				return err

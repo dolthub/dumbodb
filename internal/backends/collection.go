@@ -93,12 +93,11 @@ type QueryParams struct {
 
 	OnlyRecordIDs bool
 	Comment       string
-	// Collated is set when the query runs under a non-simple collation. The
-	// backend must then return a superset (no byte-exact narrowing: scan
-	// prefilters, secondary-index lookups, or _id point lookups), because the
-	// handler re-checks every document under the collator and strings that
-	// differ byte-wise may still compare equal.
+	// Collated is set when the query runs under a non-simple collation.
 	Collated bool
+
+	// Collation is the effective operation collation, nil when simple/binary.
+	Collation *types.Document
 }
 
 type QueryResult struct {
@@ -155,6 +154,9 @@ type CountParams struct {
 	// the filter cannot be answered cheaply (no covering index, complex
 	// operators, etc.); the handler then falls back to a scan.
 	Filter *types.Document
+
+	// Collation is the effective operation collation, nil when simple/binary.
+	Collation *types.Document
 }
 
 type CountResult struct {
@@ -214,6 +216,12 @@ type ExplainParams struct {
 	// DistinctKey is the field name passed to the distinct command. Ignored
 	// for other commands.
 	DistinctKey string
+
+	// Collated is set when the query runs under a non-simple collation.
+	Collated bool
+
+	// Collation is the effective operation collation, nil when simple/binary.
+	Collation *types.Document
 
 	// Hint, when non-nil, requests that the backend plan the query using the
 	// specified index. It may be a document like {field: 1} naming a key

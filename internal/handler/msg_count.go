@@ -152,7 +152,7 @@ func (h *Handler) MsgCount(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMs
 	// The backend signals success via Filtered=true; otherwise we fall
 	// through to the scan path below.
 	if !h.DisablePushdown && cmp == nil {
-		countRes, cerr := c.Count(connCtx, &backends.CountParams{Filter: params.Filter})
+		countRes, cerr := c.Count(connCtx, &backends.CountParams{Filter: params.Filter, Collation: params.Collation})
 		if cerr != nil {
 			return nil, lazyerrors.Error(cerr)
 		}

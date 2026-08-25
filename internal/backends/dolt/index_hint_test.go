@@ -92,7 +92,7 @@ func TestTryIndexLookup_HonorsHint(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotDocs, used, err := c.tryIndexLookup(ctx, state, m, filter, tc.hint)
+			gotDocs, used, err := c.tryIndexLookup(ctx, state, m, filter, tc.hint, nil)
 			if err != nil {
 				t.Fatalf("tryIndexLookup: %v", err)
 			}

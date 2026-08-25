@@ -279,9 +279,10 @@ type findCursorData struct {
 
 func (h *Handler) makeFindQueryParams(ctx context.Context, params *common.FindParams, cInfo *backends.CollectionInfo) (*backends.QueryParams, error) { //nolint:lll // for readability
 	qp := &backends.QueryParams{
-		Comment:  params.Comment,
-		Collated: !collation.Parse(params.Collation).IsSimple(),
-		Hint:     params.Hint,
+		Comment:   params.Comment,
+		Collated:  !collation.Parse(params.Collation).IsSimple(),
+		Collation: params.Collation,
+		Hint:      params.Hint,
 	}
 
 	var err error

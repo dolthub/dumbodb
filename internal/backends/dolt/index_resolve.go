@@ -259,6 +259,11 @@ func indexEntriesForDoc(doc *types.Document, idx backends.IndexInfo) (rows [][]a
 		}
 	}
 	rows = expandMultiKeyValues(fieldVals)
+	if cmp := indexComparator(idx); cmp != nil {
+		for i := range rows {
+			rows[i] = collateRowValues(rows[i], cmp)
+		}
+	}
 	for _, row := range rows {
 		for _, v := range row {
 			if idxpkg.ValueLossy(v) {
