@@ -438,7 +438,13 @@ func (c *collection) tryIndexLookup(ctx context.Context, state *dbState, primary
 			continue
 		}
 		if entry.compound {
-			s, e = compoundLeadingBounds(s, e)
+			// Tighten across leading-equality + trailing-range fields when the
+			// filter allows it; otherwise scan the leading-field slice.
+			if cs, ce, cok := compoundIndexBounds(idxInfos[entry.mapIdx], filter, queryCmp); cok {
+				s, e = cs, ce
+			} else {
+				s, e = compoundLeadingBounds(s, e)
+			}
 		}
 		chosenMapIdx = entry.mapIdx
 		startKey, stopKey = s, e
@@ -656,20 +662,120 @@ func indexBoundsForFilterValue(v any) (startKey, stopKey []byte, ok bool) {
 // original predicate; suffix-field constraints are left to the
 // handler-level re-filter.
 func compoundLeadingBounds(start, stop []byte) ([]byte, []byte) {
-	rewrite := func(b []byte) []byte {
-		if len(b) == 0 {
-			return b
-		}
-		out := append([]byte(nil), b...)
-		switch out[len(out)-1] {
-		case 0x04:
-			out[len(out)-1] = 0x00
-		case 0x05:
-			out[len(out)-1] = 0xFF
-		}
-		return out
+	return bracketSuffix(start), bracketSuffix(stop)
+}
+
+// bracketSuffix rewrites a bound's trailing single-field discriminator so the
+// bound brackets a whole compound-index slice across any suffix fields:
+// 0x04 -> 0x00 ("just before any following KS(...)") and 0x05 -> 0xFF ("just
+// after"). KeyString ctype prefixes span 0x10..0xF0, so 0x00/0xFF sort strictly
+// outside every suffix encoding.
+func bracketSuffix(b []byte) []byte {
+	if len(b) == 0 {
+		return b
 	}
-	return rewrite(start), rewrite(stop)
+	out := append([]byte(nil), b...)
+	switch out[len(out)-1] {
+	case 0x04:
+		out[len(out)-1] = 0x00
+	case 0x05:
+		out[len(out)-1] = 0xFF
+	}
+	return out
+}
+
+// indexEqualityValue reports whether a filter clause is a plain equality -- a
+// bare scalar, or a doc whose only operator is $eq -- and returns the operand.
+// Values the byte index cannot equality-encode (null, array, regex, decimal)
+// are not treated as equalities.
+func indexEqualityValue(v any) (any, bool) {
+	unencodable := func(x any) bool {
+		switch x.(type) {
+		case nil, types.NullType, *types.Array, types.Regex, types.Decimal128:
+			return true
+		}
+		return false
+	}
+	if opDoc, isOp := v.(*types.Document); isOp {
+		keys := opDoc.Keys()
+		if len(keys) != 1 || keys[0] != "$eq" {
+			return nil, false
+		}
+		ev, err := opDoc.Get("$eq")
+		if err != nil || unencodable(ev) {
+			return nil, false
+		}
+		return ev, true
+	}
+	if unencodable(v) {
+		return nil, false
+	}
+	return v, true
+}
+
+// compoundIndexBounds computes a tight [start, stop) range for a compound index
+// by consuming the filter in index-key order: a run of leading equality fields,
+// then at most one trailing range field -- the way a B-tree compound index is
+// probed. This replaces the leading-field-only compoundLeadingBounds whenever
+// the filter constrains more than the leading field, so a query like
+// {city:"NYC", n:{$gt:4}} scans only the (NYC, n>4) slice instead of every NYC
+// entry. Returns ok=false to fall back to compoundLeadingBounds.
+//
+// Every returned range is a sound superset of matches (the handler re-filters);
+// a descending key field ends tightening, since the range direction it implies
+// is not captured by the ascending KeyString order.
+func compoundIndexBounds(idx backends.IndexInfo, filter *types.Document, queryCmp *collation.Comparator) (startKey, stopKey []byte, ok bool) {
+	// bracketPrefix brackets all entries sharing the accumulated equality prefix.
+	bracketPrefix := func(prefix []byte) ([]byte, []byte) {
+		return append(append([]byte(nil), prefix...), 0x00),
+			append(append([]byte(nil), prefix...), 0xFF)
+	}
+
+	var prefix []byte
+	for i, kp := range idx.Key {
+		if kp.Descending {
+			if i == 0 {
+				return nil, nil, false
+			}
+			s, e := bracketPrefix(prefix)
+			return s, e, true
+		}
+		raw, err := filter.Get(kp.Field)
+		if err != nil {
+			// This field is unconstrained: bracket the equality prefix so far.
+			if i == 0 {
+				return nil, nil, false
+			}
+			s, e := bracketPrefix(prefix)
+			return s, e, true
+		}
+		v := raw
+		if queryCmp != nil {
+			v = collateFilterValue(v, queryCmp)
+		}
+		isLast := i == len(idx.Key)-1
+		if eqVal, isEq := indexEqualityValue(v); isEq && !isLast {
+			prefix = append(prefix, idxpkg.EncodeValue(eqVal)...)
+			continue
+		}
+		s, e, bok := indexBoundsForFilterValue(v)
+		if !bok {
+			if i == 0 {
+				return nil, nil, false
+			}
+			bs, be := bracketPrefix(prefix)
+			return bs, be, true
+		}
+		start := append(append([]byte(nil), prefix...), s...)
+		stop := append(append([]byte(nil), prefix...), e...)
+		if !isLast {
+			// More index fields follow the constrained one: bracket their slice.
+			start = bracketSuffix(start)
+			stop = bracketSuffix(stop)
+		}
+		return start, stop, true
+	}
+	return nil, nil, false
 }
 
 // compareScalars returns -1 / 0 / 1 using types.Compare. Used to merge
