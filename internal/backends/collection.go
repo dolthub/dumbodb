@@ -154,6 +154,9 @@ type CountParams struct {
 	// the filter cannot be answered cheaply (no covering index, complex
 	// operators, etc.); the handler then falls back to a scan.
 	Filter *types.Document
+
+	// Collation is the effective operation collation, nil when simple/binary.
+	Collation *types.Document
 }
 
 type CountResult struct {

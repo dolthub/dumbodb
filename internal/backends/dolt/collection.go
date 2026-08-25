@@ -2182,7 +2182,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 	}
 
 	if params != nil && params.Filter != nil && params.Filter.Len() > 0 {
-		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter)
+		n, used, ferr := c.tryIndexedCount(ctx, state, params.Filter, params.Collation)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -2211,7 +2211,7 @@ func (c *collection) Count(ctx context.Context, params *backends.CountParams) (*
 //
 // Returns (0, false, nil) when the filter shape is unsupported  -- caller
 // falls back to the scan path.
-func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document) (int64, bool, error) {
+func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter *types.Document, queryCollation *types.Document) (int64, bool, error) {
 	if filter == nil || filter.Len() != 1 {
 		return 0, false, nil
 	}
@@ -2220,6 +2220,10 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	if strings.HasPrefix(field, "$") || strings.ContainsRune(field, '.') {
 		return 0, false, nil
 	}
+
+	queryColl := collation.Parse(queryCollation)
+	queryIdentity := queryColl.Identity()
+	queryCmp := queryColl.Comparator()
 
 	state.mu.RLock()
 	idxInfos, idxMaps, err := resolveIndexes(ctx, c, state)
@@ -2245,6 +2249,9 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 		if idx.PartialFilterExpression != nil && !filterImpliesPartial(filter, idx.PartialFilterExpression) {
 			continue
 		}
+		if collation.Parse(idx.Collation).Identity() != queryIdentity {
+			continue
+		}
 		if len(idx.Key) == 1 && idx.Key[0].Field == field {
 			idxMap = idxMaps[i]
 			chosen = idx
@@ -2265,6 +2272,10 @@ func (c *collection) tryIndexedCount(ctx context.Context, state *dbState, filter
 	// counts stay exact (one entry per value+docID).
 	if _, isOp := v.(*types.Document); isOp && chosen.Multikey {
 		return 0, false, nil
+	}
+
+	if queryCmp != nil {
+		v = collateFilterValue(v, queryCmp)
 	}
 
 	startKey, stopKey, ok := indexBoundsForFilterValue(v)
