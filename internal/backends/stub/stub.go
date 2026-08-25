@@ -105,6 +105,10 @@ func (b *Backend) DumboDBCommit(_ context.Context, params *backends.CommitParams
 func (b *Backend) DumboDBBranch(_ context.Context, params *backends.BranchParams) (*backends.BranchResult, error) {
 	b.l.Info("stub: DumboDBBranch", slog.String("db", params.DBName), slog.String("from", params.From), slog.String("name", params.Name))
 
+	if params.List {
+		return &backends.BranchResult{Branches: []backends.BranchInfo{}}, nil
+	}
+
 	return &backends.BranchResult{
 		Branch: params.Name,
 	}, nil

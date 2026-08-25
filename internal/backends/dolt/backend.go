@@ -83,6 +83,10 @@ const (
 	// defaultMemTableSize is the in-memory table size for NBS.
 	defaultMemTableSize = 128 * 1024 * 1024
 
+	// branchRefPrefix is the dataset-ID prefix for branches. It matches the
+	// namespace used by `dolt branch`.
+	branchRefPrefix = "refs/heads/"
+
 	// mainDataset is the dataset ID used for the "refs/heads/main" branch.
 	// Dolt expects the full ref path including "refs/" prefix.
 	mainDataset = "refs/heads/main"
@@ -1447,6 +1451,9 @@ func (b *Backend) DumboDBCommit(ctx context.Context, params *backends.CommitPara
 
 // DumboDBBranch implements backends.VersioningBackend.
 //
+// When params.List is true, it returns every branch in the database with its
+// HEAD commit, sorted by name; the other operation fields are ignored.
+//
 // When params.Delete is false (default), it creates a new Dolt branch named
 // params.Name, starting from the HEAD commit of the source branch params.From.
 //
@@ -1468,6 +1475,10 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	if params.List {
+		return dumboDBBranchList(ctx, db)
+	}
 
 	if params.Delete {
 		return dumboDBBranchDelete(ctx, db, params)
@@ -1516,6 +1527,33 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	}
 
 	return &backends.BranchResult{Branch: params.Name}, nil
+}
+
+// dumboDBBranchList returns every branch in the database with its HEAD commit,
+// sorted by name. Caller must hold db.mu.Lock().
+func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
+	dsMap, err := db.datasDB.Datasets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
+	}
+
+	branches := []backends.BranchInfo{}
+	if iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
+		if !strings.HasPrefix(id, branchRefPrefix) {
+			return nil
+		}
+		branches = append(branches, backends.BranchInfo{
+			Name:     strings.TrimPrefix(id, branchRefPrefix),
+			CommitID: headAddr.String(),
+		})
+		return nil
+	}); iterErr != nil {
+		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)
+	}
+
+	sort.Slice(branches, func(i, j int) bool { return branches[i].Name < branches[j].Name })
+
+	return &backends.BranchResult{Branches: branches}, nil
 }
 
 // dumboDBBranchDelete deletes the branch named params.Name.

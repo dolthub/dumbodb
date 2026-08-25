@@ -130,7 +130,8 @@ db.runCommand({ dumboCommit: 1, message: "add order #1", author: "alice <alice@a
 
 ## dumboBranch
 
-Creates or deletes a branch from the rootish encoded in the database name.
+Creates or deletes a branch from the rootish encoded in the database name, or
+lists every branch when `branch` is omitted.
 
 **Alias:** `doltBranch`
 
@@ -138,18 +139,35 @@ Creates or deletes a branch from the rootish encoded in the database name.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `branch` | string | **yes** |  -- | Name of the branch to create or delete |
+| `branch` | string | no |  -- | Name of the branch to create or delete. Omit to list every branch |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
 
-`delete` and `forceDelete` are mutually exclusive.
+`delete` and `forceDelete` are mutually exclusive, and both require `branch`.
 
 ### Response fields
+
+Create and delete return:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `branch` | string | Branch name (echoed) |
 | `ok` | number | `1` on success |
+
+A listing returns:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `branches` | array | One entry per branch, sorted by `name` |
+| `ok` | number | `1` on success |
+
+### Branch entry
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Branch name |
+| `commitId` | string | Branch HEAD commit hash (32-char base32) |
+| `current` | bool | `true` for the branch encoded in the database name |
 
 ### Example
 
@@ -157,6 +175,16 @@ Creates or deletes a branch from the rootish encoded in the database name.
 // Create a "feature" branch from main HEAD
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
 // { branch: "feature", ok: 1 }
+
+// List every branch
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
+// {
+//   branches: [
+//     { name: "feature", commitId: "<hash>", current: false },
+//     { name: "main",    commitId: "<hash>", current: true  }
+//   ],
+//   ok: 1
+// }
 
 // Create a branch from an ancestor commit
 db.getSiblingDB("orders@main~2").runCommand({ dumboBranch: 1, branch: "rollback-point" })
@@ -176,6 +204,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 | Condition | Error |
 |-----------|-------|
 | `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
+| `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
@@ -184,6 +213,8 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 - Branch creation works from any rootish: branch name, commit hash, or `branch~N` ancestor expression.
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
+- Omitting `branch` lists branches, mirroring `git branch`. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
+- `current` marks the branch encoded in the database name. A connection pinned to a commit hash or ancestor expression is on no branch, so every entry reports `current: false`.
 
 ---
 

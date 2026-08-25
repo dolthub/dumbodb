@@ -268,6 +268,91 @@ Key checks:
 
 ---
 
+## Scenario 10: List branches  -- no `branch` argument
+
+Omitting `branch` lists every branch in the database, as `git branch` does.
+Entries are sorted by name and the branch encoded in the connection is flagged
+with `current: true`.
+
+Use a fresh database so the listing is exact:
+
+```js
+var lb = db.getSiblingDB("branchlistdb")
+lb.dropDatabase()
+lb.products.insertOne({ _id: 1, label: "alpha" })
+lb.runCommand({ doltCommit: 1, message: "commit one" })
+
+// Created out of alphabetical order to show the listing is sorted.
+lb.runCommand({ doltBranch: 1, branch: "zeta" })
+lb.runCommand({ doltBranch: 1, branch: "alpha" })
+
+db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1 })
+```
+
+Expected:
+
+```json
+{
+  "branches": [
+    { "name": "alpha", "commitId": "<hash>", "current": false },
+    { "name": "main",  "commitId": "<hash>", "current": true  },
+    { "name": "zeta",  "commitId": "<hash>", "current": false }
+  ],
+  "ok": 1
+}
+```
+
+Key checks:
+- Every branch appears exactly once, sorted by `name`
+- `commitId` is the branch HEAD commit; `alpha` and `zeta` branched from `main`
+  HEAD, so all three match here
+- Exactly one entry has `current: true`  -- the branch encoded in the connection
+
+Listing follows the connection, not the default branch:
+
+```js
+db.getSiblingDB("branchlistdb@zeta").runCommand({ doltBranch: 1 })
+// Expected: same three entries, but "zeta" is the one with current: true
+```
+
+A connection pinned to a commit hash or an ancestor expression is not on any
+branch, so no entry is current:
+
+```js
+const h = db.getSiblingDB("branchlistdb@main").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
+db.getSiblingDB("branchlistdb@" + h).runCommand({ doltBranch: 1 })
+// Expected: the same three entries, all with current: false
+```
+
+---
+
+## Scenario 11: Listing does not swallow a malformed request
+
+Only an absent `branch` lists. An explicit empty string is still an error, so a
+client that builds the name from a variable cannot silently list every branch
+when that variable is empty.
+
+```js
+db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1, branch: "" })
+// Expected error: BadValue: dumboBranch: branch name must not be empty
+```
+
+Deleting still requires a name:
+
+```js
+db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1, delete: 1 })
+// Expected error: BadValue: dumboBranch: branch name is required for delete
+
+db.getSiblingDB("branchlistdb@main").runCommand({ doltBranch: 1, forceDelete: 1 })
+// Expected error: BadValue: dumboBranch: branch name is required for delete
+```
+
+Key checks:
+- `branch: ""` is rejected, not treated as a list request
+- `delete` / `forceDelete` without `branch` is rejected
+
+---
+
 ## Quick Reference
 
 | Command | Connection | Result |
@@ -278,6 +363,8 @@ Key checks:
 | `{ doltBranch: 1, branch: "name" }` | `@main~1` | `{ branch: "name", ok: 1 }` |
 | `{ doltBranch: 1, branch: "name", delete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
 | `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (always) |
+| `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current }, ... ], ok: 1 }` |
+| `{ doltBranch: 1 }` | `@<hash>` | same list, every entry `current: false` |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).
@@ -286,3 +373,5 @@ Key checks:
 - `delete: 1` (safe delete): fails if the branch has commits not reachable from any other branch.
 - `forceDelete: 1` (force delete): succeeds unconditionally.
 - `delete` and `forceDelete` are mutually exclusive; passing both returns an error.
+- Omitting `branch` lists every branch, sorted by name, with the connection's branch flagged `current: true`.
+- An explicit `branch: ""` is an error, not a list request; `delete`/`forceDelete` still require a name.
