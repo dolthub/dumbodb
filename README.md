@@ -281,8 +281,8 @@ DumboDB is built on two open-source projects:
 
 ## Roadmap
 
-- **v0.5**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
-- **v0.6**: Add support for Replication (as a secondary backup to your existing MongoDB instance).
-- **v0.8**: Visualization and operations via a custom Workbench UI.
+- **v0.7**: Add Clone, Push, and Pull support. This will allow you to sync your DumboDB repositories with remote servers, and collaborate with others.
+- **v0.8**: Add support for Replication (as a secondary backup to your existing MongoDB instance).
+- **v0.9**: Visualization and operations via a custom Workbench UI.
 - **v1.0**: General availability release, with a focus on stability, performance, and usability improvements.
 
