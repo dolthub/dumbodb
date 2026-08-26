@@ -121,7 +121,7 @@ func (h *Handler) updateDocument(ctx context.Context, params *common.UpdateParam
 		msg := fmt.Sprintf("Invalid collection name: %s", params.Collection)
 		return 0, 0, nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "insert")
 	default:
-		return 0, 0, nil, lazyerrors.Error(err)
+		return 0, 0, nil, common.TranslateBackendWriteError(err)
 	}
 
 	var validator *types.Document

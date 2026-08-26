@@ -377,7 +377,7 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 		)
 
 	default:
-		return nil, lazyerrors.Error(err)
+		return nil, common.TranslateBackendWriteError(err)
 	}
 }
 

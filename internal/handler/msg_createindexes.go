@@ -180,7 +180,7 @@ func (h *Handler) MsgCreateIndexes(connCtx context.Context, msg *wire.OpMsg) (*w
 				fmt.Sprintf("E11000 duplicate key error collection: %s.%s", dbName, collection),
 			)
 		}
-		return nil, lazyerrors.Error(err)
+		return nil, common.TranslateBackendWriteError(err)
 	}
 
 	resp := new(types.Document)
