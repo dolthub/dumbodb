@@ -330,4 +330,155 @@ func TestBranchVerify(t *testing.T) {
 		}).Err()
 		require.NoError(t, err, "path-like branch names must work")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: List branches  -- no "branch" argument
+	// Uses a fresh isolated database so the listing is exact.
+	// -------------------------------------------------------------------------
+	listDbName := fmt.Sprintf("branchvrfy_list%d", rand.Int64N(1_000_000))
+
+	t.Run("Scenario10_ListBranches", func(t *testing.T) {
+		branchVerifySetup(t, env, listDbName)
+
+		// Created out of alphabetical order to prove the listing is sorted.
+		for _, name := range []string{"zeta", "alpha"} {
+			require.NoError(t, env.Client.Database(listDbName+"@main").RunCommand(ctx, bson.D{
+				{Key: "doltBranch", Value: int32(1)},
+				{Key: "branch", Value: name},
+			}).Err(), "creating %q must succeed", name)
+		}
+
+		branches := listBranches(t, env, listDbName+"@main")
+
+		require.Len(t, branches, 3, "listing must return every branch")
+		assert.Equal(t, []string{"alpha", "main", "zeta"}, branchNames(branches),
+			"branches must be sorted by name")
+
+		for _, b := range branches {
+			assert.NotEmpty(t, b.CommitID, "branch %q must report its HEAD commit", b.Name)
+			assert.Equal(t, b.Name == "main", b.Current,
+				"only the connection's branch may be current (branch %q)", b.Name)
+		}
+
+		// alpha and zeta branched from main HEAD, so all three share a commit.
+		assert.Equal(t, branches[0].CommitID, branches[1].CommitID,
+			"branch created from main HEAD must share main's commit")
+		assert.Equal(t, branches[1].CommitID, branches[2].CommitID,
+			"branch created from main HEAD must share main's commit")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10 (cont.): "current" follows the connection, not the default branch
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_ListBranches_CurrentFollowsConnection", func(t *testing.T) {
+		branches := listBranches(t, env, listDbName+"@zeta")
+
+		require.Len(t, branches, 3)
+		for _, b := range branches {
+			assert.Equal(t, b.Name == "zeta", b.Current,
+				"connection is on zeta, so only zeta may be current (branch %q)", b.Name)
+		}
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10 (cont.): a hash rootish is on no branch, so nothing is current
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_ListBranches_DetachedRootishHasNoCurrent", func(t *testing.T) {
+		var logRes bson.M
+		require.NoError(t, env.Client.Database(listDbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltLog", Value: int32(1)},
+			{Key: "limit", Value: int32(1)},
+		}).Decode(&logRes))
+
+		commits, ok := logRes["commits"].(bson.A)
+		require.True(t, ok, "doltLog must return a commits array")
+		require.NotEmpty(t, commits)
+		headHash, ok := commits[0].(bson.M)["commitId"].(string)
+		require.True(t, ok, "commit entry must carry a commitId string")
+
+		branches := listBranches(t, env, listDbName+"@"+headHash)
+
+		require.Len(t, branches, 3, "a detached connection still lists every branch")
+		for _, b := range branches {
+			assert.False(t, b.Current,
+				"a hash rootish is on no branch, so %q must not be current", b.Name)
+		}
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 11: Listing does not swallow a malformed request
+	// -------------------------------------------------------------------------
+	t.Run("Scenario11_ListModeRequiresAbsentBranch", func(t *testing.T) {
+		// An explicit empty string is an error, not a list request.
+		err := env.Client.Database(listDbName+"@main").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)},
+			{Key: "branch", Value: ""},
+		}).Err()
+		require.Error(t, err, "empty branch name must be rejected, not treated as a list")
+		assert.Contains(t, err.Error(), "must not be empty")
+
+		// Deleting still requires a name.
+		for _, flag := range []string{"delete", "forceDelete"} {
+			err = env.Client.Database(listDbName+"@main").RunCommand(ctx, bson.D{
+				{Key: "doltBranch", Value: int32(1)},
+				{Key: flag, Value: int32(1)},
+			}).Err()
+			require.Error(t, err, "%s without a branch name must be rejected", flag)
+			assert.Contains(t, err.Error(), "branch name is required for delete")
+		}
+
+		// The rejections must not have deleted anything.
+		assert.Len(t, listBranches(t, env, listDbName+"@main"), 3,
+			"rejected requests must leave the branch set untouched")
+	})
+}
+
+// branchListEntry is one entry of a doltBranch listing response.
+type branchListEntry struct {
+	Name     string
+	CommitID string
+	Current  bool
+}
+
+// listBranches runs doltBranch with no branch name against connDB and decodes
+// the resulting listing.
+func listBranches(t *testing.T, env *dumboDBTestEnv, connDB string) []branchListEntry {
+	t.Helper()
+
+	var res bson.M
+	require.NoError(t, env.Client.Database(connDB).RunCommand(context.Background(), bson.D{
+		{Key: "doltBranch", Value: int32(1)},
+	}).Decode(&res), "doltBranch listing on %q", connDB)
+
+	assert.EqualValues(t, 1, res["ok"], "ok must be 1")
+	_, hasBranch := res["branch"]
+	assert.False(t, hasBranch, "a listing must not carry the single-branch 'branch' field")
+
+	raw, ok := res["branches"].(bson.A)
+	require.True(t, ok, "doltBranch listing must return a branches array, got %#v", res["branches"])
+
+	out := make([]branchListEntry, 0, len(raw))
+	for i, e := range raw {
+		doc, isDoc := e.(bson.M)
+		require.True(t, isDoc, "branches[%d] must be a document", i)
+
+		name, isStr := doc["name"].(string)
+		require.True(t, isStr, "branches[%d].name must be a string", i)
+		commitID, isStr := doc["commitId"].(string)
+		require.True(t, isStr, "branches[%d].commitId must be a string", i)
+		current, isBool := doc["current"].(bool)
+		require.True(t, isBool, "branches[%d].current must be a bool", i)
+
+		out = append(out, branchListEntry{Name: name, CommitID: commitID, Current: current})
+	}
+
+	return out
+}
+
+func branchNames(entries []branchListEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	return names
 }

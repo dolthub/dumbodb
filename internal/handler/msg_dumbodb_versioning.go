@@ -745,8 +745,14 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 
 // MsgDumboDBBranch implements the `dumboDBBranch` command.
 //
-// It creates a new branch from the current branch encoded in $db (format: "dbname@branch").
-// Usage: db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature"})
+// It creates, deletes, or lists branches for the database encoded in $db (format:
+// "dbname@branch"). Omitting "branch" lists every branch, as `git branch` does.
+//
+// Usage:
+//
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1})                                // list
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature"})             // create
+//	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature", delete: 1})  // delete
 func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg, error) {
 	document, err := opMsgDocument(msg)
 	if err != nil {
@@ -767,29 +773,35 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	newBranch, err := common.GetRequiredParam[string](document, "branch")
+	newBranch, err := common.GetOptionalParam[string](document, "branch", "")
 	if err != nil {
 		return nil, err
 	}
 
-	if newBranch == "" {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"dumboBranch: branch name must not be empty",
-			"branch",
-		)
-	}
+	// An absent "branch" lists every branch. An explicit empty string remains an
+	// error, so a client that computes the name cannot silently list instead.
+	listMode := !document.Has("branch")
 
-	if strings.Contains(newBranch, "@") {
-		return nil, handlererrors.NewCommandErrorMsgWithArgument(
-			handlererrors.ErrBadValue,
-			"dumboBranch: branch name must not contain '@' (reserved as the database/branch delimiter)",
-			"branch",
-		)
-	}
+	if !listMode {
+		if newBranch == "" {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"dumboBranch: branch name must not be empty",
+				"branch",
+			)
+		}
 
-	if err := validateRefName(newBranch, "dumboBranch"); err != nil {
-		return nil, err
+		if strings.Contains(newBranch, "@") {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(
+				handlererrors.ErrBadValue,
+				"dumboBranch: branch name must not contain '@' (reserved as the database/branch delimiter)",
+				"branch",
+			)
+		}
+
+		if err := validateRefName(newBranch, "dumboBranch"); err != nil {
+			return nil, err
+		}
 	}
 
 	safeDelete, err := common.GetOptionalBoolOrIntParam(document, "delete", false)
@@ -810,6 +822,14 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		)
 	}
 
+	if listMode && (safeDelete || forceDelete) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboBranch: branch name is required for delete",
+			"branch",
+		)
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(
@@ -824,9 +844,30 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		Name:   newBranch,
 		Delete: safeDelete || forceDelete,
 		Force:  forceDelete,
+		List:   listMode,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
+	}
+
+	if listMode {
+		branches := types.MakeArray(len(res.Branches))
+		for _, b := range res.Branches {
+			branches.Append(must.NotFail(types.NewDocument(
+				"name", b.Name,
+				"commitId", b.CommitID,
+				// fromBranch is a rootish, so a hash or ancestor connection
+				// matches nothing and no branch is marked current.
+				"current", b.Name == fromBranch,
+			)))
+		}
+
+		return documentOpMsg(
+			must.NotFail(types.NewDocument(
+				"branches", branches,
+				"ok", float64(1),
+			)),
+		)
 	}
 
 	return documentOpMsg(

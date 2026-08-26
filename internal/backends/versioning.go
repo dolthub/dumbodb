@@ -50,13 +50,21 @@ type CommitResult struct {
 type BranchParams struct {
 	DBName string
 	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
-	Name   string // name of the new branch (or branch to delete when Delete is true)
+	Name   string // name of the new branch (or branch to delete when Delete is true); empty when List is true
 	Delete bool   // if true, delete the named branch instead of creating it
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
+	List   bool   // if true, list every branch in the database; Name, Delete and Force are ignored
+}
+
+// BranchInfo describes a single branch returned when BranchParams.List is set.
+type BranchInfo struct {
+	Name     string
+	CommitID string // branch HEAD commit hash
 }
 
 type BranchResult struct {
-	Branch string
+	Branch   string       // name of the created or deleted branch; empty when listing
+	Branches []BranchInfo // populated only when BranchParams.List is set, sorted by Name
 }
 
 type MergeParams struct {
@@ -577,7 +585,8 @@ type VersioningBackend interface {
 	// DumboDBCommit commits the current working set on the given branch with the provided message.
 	DumboDBCommit(context.Context, *CommitParams) (*CommitResult, error)
 
-	// DumboDBBranch creates a new branch starting from the given source branch.
+	// DumboDBBranch creates, deletes, or lists branches; the operation is selected
+	// by the combination of BranchParams fields.
 	DumboDBBranch(context.Context, *BranchParams) (*BranchResult, error)
 
 	// DumboDBMerge merges the source branch (From) into the target branch (Into).
