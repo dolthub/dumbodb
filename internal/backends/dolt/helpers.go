@@ -42,6 +42,7 @@ import (
 	dolttypes "github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 
+	"github.com/dolthub/dumbodb/internal/backends"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -510,6 +511,13 @@ func amFromWorkingRoot(ctx context.Context, rv doltdb.RootValue, ns tree.NodeSto
 // because the session can lag side-channel writes (merge, reset).
 // Caller must hold state.mu (write lock).
 func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*doltdb.WorkingSet, error) {
+	if rootishIsSnapshot(ctx, state, branch) {
+		return nil, backends.NewError(
+			backends.ErrorCodeReadOnlyDatabase,
+			fmt.Errorf("cannot write to a read-only database snapshot"),
+		)
+	}
+
 	branchDS, err := state.datasDB.GetDataset(ctx, "refs/heads/"+branch)
 	if err != nil {
 		return nil, fmt.Errorf("resolving branch %q: %w", branch, err)
