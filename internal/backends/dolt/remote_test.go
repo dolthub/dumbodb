@@ -61,8 +61,9 @@ func TestDumboDBRemote(t *testing.T) {
 		t.Error("duplicate add: want error, got nil")
 	}
 
-	// invalid url rejected
-	if _, err = b.DumboDBRemote(ctx, rp("add", "bad", "not-a-url")); err == nil {
+	// invalid url rejected (unparseable; a bare word would be valid DoltHub
+	// shorthand, so use something url.Parse actually rejects)
+	if _, err = b.DumboDBRemote(ctx, rp("add", "bad", "://x")); err == nil {
 		t.Error("invalid url: want error, got nil")
 	}
 

@@ -17,11 +17,18 @@ package dolt
 import "testing"
 
 func TestParseRemoteURL(t *testing.T) {
+	// Pin the dolt home so scheme-less expansion always uses the default
+	// DoltHub host regardless of the host machine's dolt config.
+	t.Setenv("DOLT_ROOT_PATH", t.TempDir())
+
+	const doltHub = "https://doltremoteapi.dolthub.com/"
+
 	cases := []struct {
 		name       string
 		in         string
 		wantErr    bool
 		wantScheme string
+		wantRaw    string // if set, the expanded/normalized Raw must match
 		supported  bool
 	}{
 		{name: "file absolute", in: "file:///srv/backups/mydb", wantScheme: "file", supported: true},
@@ -33,10 +40,14 @@ func TestParseRemoteURL(t *testing.T) {
 		{name: "gs known but unsupported", in: "gs://bucket/db", wantScheme: "gs"},
 		{name: "ssh known but unsupported", in: "ssh://host/path", wantScheme: "ssh"},
 
+		// Scheme-less shorthand, matching the dolt CLI.
+		{name: "dolthub org/repo shorthand", in: "macneale/dumbodb-01", wantScheme: "https", wantRaw: doltHub + "macneale/dumbodb-01", supported: true},
+		{name: "bare word is a dolthub path", in: "origin", wantScheme: "https", wantRaw: doltHub + "origin", supported: true},
+		{name: "scheme-less host keeps host", in: "example.com/o/r", wantScheme: "https", wantRaw: "https://example.com/o/r", supported: true},
+		{name: "scheme-less host with port", in: "localhost:50051/o/r", wantScheme: "https", wantRaw: "https://localhost:50051/o/r", supported: true},
+
 		{name: "empty", in: "", wantErr: true},
 		{name: "whitespace only", in: "   ", wantErr: true},
-		{name: "no scheme relative path", in: "srv/backups/mydb", wantErr: true},
-		{name: "bare word", in: "origin", wantErr: true},
 		{name: "unknown scheme s3", in: "s3://bucket/db", wantErr: true},
 		{name: "unknown scheme ftp", in: "ftp://host/x", wantErr: true},
 		{name: "unparseable missing scheme", in: "://x", wantErr: true},
@@ -56,6 +67,9 @@ func TestParseRemoteURL(t *testing.T) {
 			}
 			if got.Scheme != tc.wantScheme {
 				t.Errorf("scheme = %q, want %q", got.Scheme, tc.wantScheme)
+			}
+			if tc.wantRaw != "" && got.Raw != tc.wantRaw {
+				t.Errorf("Raw = %q, want %q", got.Raw, tc.wantRaw)
 			}
 			if got.supported() != tc.supported {
 				t.Errorf("supported() = %v, want %v", got.supported(), tc.supported)
