@@ -155,6 +155,14 @@ func TestCommitVerify(t *testing.T) {
 		mainCount, err := env.Client.Database(dbName+"@main").Collection("orders").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), mainCount, "main must still have 3 documents (feature commit must not affect main)")
+
+		var status bson.M
+		require.NoError(t, featureDB.RunCommand(ctx, bson.D{
+			{Key: "dumboStatus", Value: int32(1)},
+		}).Decode(&status))
+		assert.Equal(t, false, status["dirty"], "feature must be clean after commit")
+		assert.Empty(t, status["changes"], "feature must have no pending changes after commit")
+		assert.Equal(t, hash, status["commitId"], "status must report the commit returned by doltCommit")
 	})
 
 	// -------------------------------------------------------------------------

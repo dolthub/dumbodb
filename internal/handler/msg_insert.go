@@ -86,22 +86,24 @@ func (h *Handler) MsgInsert(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 	var validationAction string
 	var tsTimeField string
 	var cInfo backends.CollectionInfo
-	if collRes, collErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: params.Collection}); collErr == nil {
-		if len(collRes.Collections) == 1 {
-			cInfo = collRes.Collections[0]
-			if cInfo.IsView {
-				msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "insert")
-			}
-			if cInfo.IsTimeSeries {
-				tsTimeField = cInfo.TimeField
-			}
-			if cInfo.Validator != nil && cInfo.ValidationLevel != "off" && !params.BypassDocumentValidation {
-				collValidator = cInfo.Validator
-				validationAction = cInfo.ValidationAction
-				if validationAction == "" {
-					validationAction = "error"
-				}
+	collRes, collErr := db.ListCollections(connCtx, &backends.ListCollectionsParams{Name: params.Collection})
+	if collErr != nil {
+		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, collErr.Error())
+	}
+	if len(collRes.Collections) == 1 {
+		cInfo = collRes.Collections[0]
+		if cInfo.IsView {
+			msg := fmt.Sprintf("namespace '%s.%s' is a view, not a collection", params.DB, params.Collection)
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrCommandNotSupportedOnView, msg, "insert")
+		}
+		if cInfo.IsTimeSeries {
+			tsTimeField = cInfo.TimeField
+		}
+		if cInfo.Validator != nil && cInfo.ValidationLevel != "off" && !params.BypassDocumentValidation {
+			collValidator = cInfo.Validator
+			validationAction = cInfo.ValidationAction
+			if validationAction == "" {
+				validationAction = "error"
 			}
 		}
 	}
