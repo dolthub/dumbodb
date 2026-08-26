@@ -4,6 +4,12 @@
 DUMBODB_BINARY="${DUMBODB_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/dumbodb}"
 DUMBODB_PID=""
 
+# Disable mongosh client-side telemetry for the whole suite by pointing mongosh's
+# global-config lookup at our checked-in mongosh.conf (forceDisableTelemetry:
+# true). This also sidesteps mongosh 2.10.x's "getAiAgent is not a function"
+# crash: forceDisableTelemetry short-circuits that getter before the missing call.
+export MONGOSH_GLOBAL_CONFIG_FILE_FOR_TESTING="${MONGOSH_GLOBAL_CONFIG_FILE_FOR_TESTING:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mongosh.conf}"
+
 # in_ci: true when running under CI. GitHub Actions and most CI systems set
 # CI=true; DUMBO_REQUIRE_INFRA=1 forces the same behavior anywhere.
 in_ci() {
