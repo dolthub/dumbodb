@@ -21,7 +21,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
@@ -53,8 +52,8 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: %w", err)
 	}
-	if ru.Scheme != dbfactory.FileScheme && !isGRPCScheme(ru.Scheme) {
-		return nil, fmt.Errorf("dumboClone: unsupported remote scheme %q (supported: file, http, https)", ru.Scheme)
+	if !isCloneableScheme(ru.Scheme) {
+		return nil, fmt.Errorf("dumboClone: unsupported remote scheme %q (supported: file, http, https, s3, localbs)", ru.Scheme)
 	}
 
 	remoteParams, err := remoteDBParams(ru.Scheme)

@@ -39,25 +39,29 @@ type remoteURL struct {
 // this set is rejected by parseRemoteURL. Being known does not imply push/fetch
 // support yet; see remoteURL.supported.
 var knownRemoteSchemes = map[string]struct{}{
-	dbfactory.FileScheme:  {},
-	dbfactory.HTTPScheme:  {},
-	dbfactory.HTTPSScheme: {},
-	dbfactory.AWSScheme:   {},
-	dbfactory.GSScheme:    {},
-	dbfactory.AzScheme:    {},
-	dbfactory.OCIScheme:   {},
-	dbfactory.OSSScheme:   {},
-	dbfactory.SSHScheme:   {},
-	dbfactory.MemScheme:   {}, // test-only; not advertised as a supported remote
+	dbfactory.FileScheme:    {},
+	dbfactory.HTTPScheme:    {},
+	dbfactory.HTTPSScheme:   {},
+	dbfactory.S3Scheme:      {},
+	dbfactory.AWSScheme:     {},
+	dbfactory.GSScheme:      {},
+	dbfactory.AzScheme:      {},
+	dbfactory.OCIScheme:     {},
+	dbfactory.OSSScheme:     {},
+	dbfactory.SSHScheme:     {},
+	dbfactory.LocalBSScheme: {}, // test-only local blobstore (s3:// code path)
+	dbfactory.MemScheme:     {}, // test-only; not advertised as a supported remote
 }
 
-// implementedRemoteSchemes are the schemes wired into push/fetch today. mem is
-// included for hermetic tests only.
+// implementedRemoteSchemes are the schemes wired into push/fetch today. mem and
+// localbs are included for hermetic tests only.
 var implementedRemoteSchemes = map[string]struct{}{
-	dbfactory.FileScheme:  {},
-	dbfactory.MemScheme:   {},
-	dbfactory.HTTPScheme:  {},
-	dbfactory.HTTPSScheme: {},
+	dbfactory.FileScheme:    {},
+	dbfactory.MemScheme:     {},
+	dbfactory.HTTPScheme:    {},
+	dbfactory.HTTPSScheme:   {},
+	dbfactory.S3Scheme:      {},
+	dbfactory.LocalBSScheme: {},
 }
 
 // parseRemoteURL validates raw and returns its parsed form. Scheme-less input is

@@ -36,6 +36,9 @@ func TestParseRemoteURL(t *testing.T) {
 		{name: "mem test-only", in: "mem://unit-test", wantScheme: "mem", supported: true},
 		{name: "https gRPC supported", in: "https://dolthub.com/org/repo", wantScheme: "https", supported: true},
 		{name: "http gRPC supported", in: "http://example.com/x", wantScheme: "http", supported: true},
+		{name: "s3 generic object store", in: "s3://bucket/path/to/db", wantScheme: "s3", supported: true},
+		{name: "s3 with routing query preserved", in: "s3://bucket/db?endpoint=http://localhost:9000&path-style=true", wantScheme: "s3", wantRaw: "s3://bucket/db?endpoint=http://localhost:9000&path-style=true", supported: true},
+		{name: "localbs test blobstore", in: "localbs:///srv/bs/db", wantScheme: "localbs", supported: true},
 		{name: "aws known but unsupported", in: "aws://table/bucket/db", wantScheme: "aws"},
 		{name: "gs known but unsupported", in: "gs://bucket/db", wantScheme: "gs"},
 		{name: "ssh known but unsupported", in: "ssh://host/path", wantScheme: "ssh"},
@@ -48,7 +51,6 @@ func TestParseRemoteURL(t *testing.T) {
 
 		{name: "empty", in: "", wantErr: true},
 		{name: "whitespace only", in: "   ", wantErr: true},
-		{name: "unknown scheme s3", in: "s3://bucket/db", wantErr: true},
 		{name: "unknown scheme ftp", in: "ftp://host/x", wantErr: true},
 		{name: "unparseable missing scheme", in: "://x", wantErr: true},
 	}

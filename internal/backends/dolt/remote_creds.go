@@ -101,6 +101,18 @@ func isGRPCScheme(scheme string) bool {
 	return scheme == dbfactory.HTTPScheme || scheme == dbfactory.HTTPSScheme
 }
 
+// isCloneableScheme reports whether dumboClone can materialize a new database
+// from a remote of this scheme: direct stores (file, s3, localbs) and the gRPC
+// transports. mem is excluded (in-process only, nothing to clone across).
+func isCloneableScheme(scheme string) bool {
+	switch scheme {
+	case dbfactory.FileScheme, dbfactory.S3Scheme, dbfactory.LocalBSScheme:
+		return true
+	default:
+		return isGRPCScheme(scheme)
+	}
+}
+
 // remoteDBParams returns the dbfactory params for opening a remote of the given
 // scheme. gRPC remotes get a dial provider carrying any configured credential;
 // an https remote with no credential is rejected here with a `dolt login` hint.
