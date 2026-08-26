@@ -173,6 +173,77 @@ stop_remotesrv() {
     REMOTESRV_URL=""
 }
 
+# MinIO fixture: a local S3-compatible object store for end-to-end s3:// remote
+# tests. Downloaded on demand by `make minio` (kept out of the default bats
+# target); s3 tests skip when the binary is absent. Uses fixed root credentials
+# that tests also pass to the dumbodb server as AWS_* for the SDK credential
+# chain.
+MINIO_BINARY="${MINIO_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/minio}"
+MINIO_PID=""
+MINIO_ENDPOINT=""
+MINIO_ACCESS_KEY="minioadmin"
+MINIO_SECRET_KEY="minioadmin"
+
+# start_minio <data-dir> <api-port> <console-port> <bucket>
+# Start MinIO serving from <data-dir>, pre-create <bucket> (a top-level directory
+# is a bucket in single-drive mode), wait for readiness, and set MINIO_ENDPOINT
+# to http://127.0.0.1:<api-port>.
+start_minio() {
+    local data_dir="$1"
+    local api_port="$2"
+    local console_port="$3"
+    local bucket="$4"
+    local log_file="${data_dir}.minio.log"
+
+    if [ ! -x "$MINIO_BINARY" ]; then
+        echo "ERROR: minio binary not found at $MINIO_BINARY (run 'make minio')" >&2
+        return 1
+    fi
+
+    mkdir -p "${data_dir}/${bucket}"
+
+    MINIO_ROOT_USER="$MINIO_ACCESS_KEY" MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
+        "$MINIO_BINARY" server "$data_dir" \
+        --address "127.0.0.1:${api_port}" \
+        --console-address "127.0.0.1:${console_port}" \
+        >"$log_file" 2>&1 &
+    MINIO_PID=$!
+
+    local ready=0
+    for _ in $(seq 1 30); do
+        if port_open 127.0.0.1 "$api_port"; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$MINIO_PID" 2>/dev/null; then
+            echo "ERROR: minio exited prematurely. Log:" >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        echo "ERROR: minio failed to start within 30s" >&2
+        cat "$log_file" >&2
+        kill "$MINIO_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    MINIO_ENDPOINT="http://127.0.0.1:${api_port}"
+}
+
+# stop_minio
+# Kill the MinIO process cleanly.
+stop_minio() {
+    if [ -n "$MINIO_PID" ]; then
+        kill "$MINIO_PID" 2>/dev/null || true
+        wait "$MINIO_PID" 2>/dev/null || true
+        MINIO_PID=""
+    fi
+    MINIO_ENDPOINT=""
+}
+
 # setup_dolt_hack <data-dir>
 # Given a dumbodb data dir, create the .dolt directory structure so that
 # dolt commands run from <data-dir>/.. will see the dumbodb data.
