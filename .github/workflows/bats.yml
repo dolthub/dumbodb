@@ -56,5 +56,8 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      # bats-ci builds the remote-sync fixtures (remotesrv, minio, fake-gcs) so
+      # their suites run rather than skip; require_infra turns any missing
+      # fixture into a failure in CI (CI=true) instead of a green skip.
       - name: Run bats tests
-        run: make bats
+        run: make bats-ci

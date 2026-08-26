@@ -12,7 +12,7 @@ FAKEGCS_VERSION := v1.52.2
 GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
 LDFLAGS := -X github.com/dolthub/dumbodb/internal/version.GitVersion=$(GIT_VERSION)
 
-.PHONY: help build soak remotesrv minio fakegcs test bats
+.PHONY: help build soak remotesrv minio fakegcs test bats bats-ci
 
 help:
 	@echo "DumboDB Makefile"
@@ -21,7 +21,8 @@ help:
 	@echo "  build   Build DumboDB server binary"
 	@echo "  soak    Build the soak load-test binary"
 	@echo "  test    Run Go tests (go test ./...)"
-	@echo "  bats    Run bats integration tests (tests/bats/)"
+	@echo "  bats    Run bats integration tests (tests/bats/) -- infra-gated tests skip if fixtures absent"
+	@echo "  bats-ci Build every buildable fixture, then run bats (for CI; missing infra fails)"
 
 build:
 	@mkdir -p $(dir $(DUMBODB_BINARY))
@@ -66,4 +67,11 @@ test:
 	go test ./... -count=1
 
 bats: build remotesrv
+	bats tests/bats/
+
+# CI entry point: builds/downloads every buildable remote-sync fixture so the
+# infra-gated suites run rather than skip (in CI, require_infra turns a missing
+# fixture into a failure). git+ssh's sshd is a system package the CI image must
+# provide separately (e.g. apt-get install -y openssh-server).
+bats-ci: build remotesrv minio fakegcs
 	bats tests/bats/
