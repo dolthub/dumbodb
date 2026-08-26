@@ -40,6 +40,9 @@ func TestParseRemoteURL(t *testing.T) {
 		{name: "s3 with routing query preserved", in: "s3://bucket/db?endpoint=http://localhost:9000&path-style=true", wantScheme: "s3", wantRaw: "s3://bucket/db?endpoint=http://localhost:9000&path-style=true", supported: true},
 		{name: "localbs test blobstore", in: "localbs:///srv/bs/db", wantScheme: "localbs", supported: true},
 		{name: "gs object store", in: "gs://bucket/path/to/db", wantScheme: "gs", supported: true},
+		{name: "git+file", in: "git+file:///srv/remote.git", wantScheme: "git+file", supported: true},
+		{name: "git+ssh with user and port", in: "git+ssh://git@host:22/org/repo.git", wantScheme: "git+ssh", wantRaw: "git+ssh://git@host:22/org/repo.git", supported: true},
+		{name: "git+https", in: "git+https://host/org/repo.git", wantScheme: "git+https", supported: true},
 		{name: "aws known but unsupported", in: "aws://table/bucket/db", wantScheme: "aws"},
 		{name: "ssh known but unsupported", in: "ssh://host/path", wantScheme: "ssh"},
 

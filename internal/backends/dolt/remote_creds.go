@@ -17,7 +17,9 @@ package dolt
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/creds"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
@@ -101,6 +103,20 @@ func isGRPCScheme(scheme string) bool {
 	return scheme == dbfactory.HTTPScheme || scheme == dbfactory.HTTPSScheme
 }
 
+// isGitScheme reports whether a scheme is served by dolt's GitRemoteFactory
+// (dolt stored in a git repository). These need a git_cache_root param and shell
+// out to the git CLI.
+func isGitScheme(scheme string) bool {
+	return strings.HasPrefix(scheme, "git+")
+}
+
+// gitPreparable reports whether PrepareDB is supported for a git scheme. Only
+// git+file supports it (it runs `git init --bare`); git+http/https/ssh error, so
+// their remote repository must already exist.
+func gitPreparable(scheme string) bool {
+	return scheme == dbfactory.GitFileScheme
+}
+
 // isCloneableScheme reports whether dumboClone can materialize a new database
 // from a remote of this scheme: direct stores (file, s3, localbs) and the gRPC
 // transports. mem is excluded (in-process only, nothing to clone across).
@@ -109,17 +125,30 @@ func isCloneableScheme(scheme string) bool {
 	case dbfactory.FileScheme, dbfactory.S3Scheme, dbfactory.GSScheme, dbfactory.LocalBSScheme:
 		return true
 	default:
-		return isGRPCScheme(scheme)
+		return isGRPCScheme(scheme) || isGitScheme(scheme)
 	}
 }
 
 // remoteDBParams returns the dbfactory params for opening a remote of the given
 // scheme. gRPC remotes get a dial provider carrying any configured credential;
 // an https remote with no credential is rejected here with a `dolt login` hint.
-func remoteDBParams(scheme string) (map[string]interface{}, error) {
+func (b *Backend) remoteDBParams(scheme string) (map[string]interface{}, error) {
 	params := map[string]interface{}{
 		dbfactory.DisableSingletonCacheParam: "true",
 	}
+
+	if isGitScheme(scheme) {
+		// Git remotes keep a per-remote bare-repo cache under
+		// <cacheRoot>/.dolt/git-remote-cache. Point the cache root at a
+		// server-owned directory; the factory creates the subtree on demand.
+		cacheRoot := filepath.Join(b.dataDir, gitRemoteCacheRoot)
+		if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+			return nil, fmt.Errorf("creating git remote cache root: %w", err)
+		}
+		params[dbfactory.GitCacheRootParam] = cacheRoot
+		return params, nil
+	}
+
 	if !isGRPCScheme(scheme) {
 		return params, nil
 	}
@@ -134,3 +163,8 @@ func remoteDBParams(scheme string) (map[string]interface{}, error) {
 	params[dbfactory.GRPCDialProviderParam] = grpcDialProvider{dc: dc, hasCreds: ok}
 	return params, nil
 }
+
+// gitRemoteCacheRoot is the directory under the backend data dir used as the
+// git_cache_root for git remotes. The factory creates .dolt/git-remote-cache
+// beneath it.
+const gitRemoteCacheRoot = ".git-remote-cache"

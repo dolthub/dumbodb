@@ -56,6 +56,12 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      # openssh-server provides sshd for the git+ssh remote tests. They run a
+      # user-owned sshd on a loopback port; if sshd is absent in CI the tests
+      # fail rather than skip, so it must be installed here.
+      - name: Install openssh-server
+        run: sudo apt-get install -y openssh-server
+
       # bats-ci builds the remote-sync fixtures (remotesrv, minio, fake-gcs) so
       # their suites run rather than skip; require_infra turns any missing
       # fixture into a failure in CI (CI=true) instead of a green skip.

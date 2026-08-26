@@ -48,7 +48,7 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	}
 	nbf := state.doltDB.Format()
 
-	remoteParams, err := remoteDBParams(ru.Scheme)
+	remoteParams, err := b.remoteDBParams(ru.Scheme)
 	if err != nil {
 		return nil, fmt.Errorf("dumboFetch: %w", err)
 	}

@@ -94,11 +94,11 @@ func TestLoadDoltCreds_NoLogin(t *testing.T) {
 func TestRemoteDBParams_HTTPSRequiresCreds(t *testing.T) {
 	t.Setenv("DOLT_ROOT_PATH", t.TempDir())
 
-	if _, err := remoteDBParams(dbfactory.HTTPSScheme); err == nil {
+	if _, err := newTestBackend(t).remoteDBParams(dbfactory.HTTPSScheme); err == nil {
 		t.Error("remoteDBParams(https) with no creds: want error, got nil")
 	}
 
-	params, err := remoteDBParams(dbfactory.HTTPScheme)
+	params, err := newTestBackend(t).remoteDBParams(dbfactory.HTTPScheme)
 	if err != nil {
 		t.Fatalf("remoteDBParams(http): %v", err)
 	}
@@ -112,7 +112,7 @@ func TestRemoteDBParams_HTTPSWithCreds(t *testing.T) {
 	t.Setenv("DOLT_ROOT_PATH", root)
 	writeDoltLogin(t, root)
 
-	params, err := remoteDBParams(dbfactory.HTTPSScheme)
+	params, err := newTestBackend(t).remoteDBParams(dbfactory.HTTPSScheme)
 	if err != nil {
 		t.Fatalf("remoteDBParams(https) with creds: %v", err)
 	}

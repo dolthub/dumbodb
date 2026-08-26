@@ -48,9 +48,13 @@ var knownRemoteSchemes = map[string]struct{}{
 	dbfactory.AzScheme:      {},
 	dbfactory.OCIScheme:     {},
 	dbfactory.OSSScheme:     {},
-	dbfactory.SSHScheme:     {},
-	dbfactory.LocalBSScheme: {}, // test-only local blobstore (s3:// code path)
-	dbfactory.MemScheme:     {}, // test-only; not advertised as a supported remote
+	dbfactory.SSHScheme:      {},
+	dbfactory.GitFileScheme:  {},
+	dbfactory.GitHTTPScheme:  {},
+	dbfactory.GitHTTPSScheme: {},
+	dbfactory.GitSSHScheme:   {},
+	dbfactory.LocalBSScheme:  {}, // test-only local blobstore (s3:// code path)
+	dbfactory.MemScheme:      {}, // test-only; not advertised as a supported remote
 }
 
 // implementedRemoteSchemes are the schemes wired into push/fetch today. mem and
@@ -60,9 +64,13 @@ var implementedRemoteSchemes = map[string]struct{}{
 	dbfactory.MemScheme:     {},
 	dbfactory.HTTPScheme:    {},
 	dbfactory.HTTPSScheme:   {},
-	dbfactory.S3Scheme:      {},
-	dbfactory.GSScheme:      {},
-	dbfactory.LocalBSScheme: {},
+	dbfactory.S3Scheme:       {},
+	dbfactory.GSScheme:       {},
+	dbfactory.GitFileScheme:  {},
+	dbfactory.GitHTTPScheme:  {},
+	dbfactory.GitHTTPSScheme: {},
+	dbfactory.GitSSHScheme:   {},
+	dbfactory.LocalBSScheme:  {},
 }
 
 // parseRemoteURL validates raw and returns its parsed form. Scheme-less input is

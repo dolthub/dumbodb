@@ -56,7 +56,7 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: unsupported remote scheme %q (supported: file, http, https, s3, localbs)", ru.Scheme)
 	}
 
-	remoteParams, err := remoteDBParams(ru.Scheme)
+	remoteParams, err := b.remoteDBParams(ru.Scheme)
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: %w", err)
 	}

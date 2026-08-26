@@ -353,6 +353,142 @@ stop_fakegcs() {
     FAKEGCS_ENDPOINT=""
 }
 
+# Git-over-SSH fixture for git+ssh:// remote tests. A real OpenSSH daemon on a
+# loopback port, mirroring dolt's integration-test harness. The dumbodb server
+# reaches it by exporting GIT_SSH_COMMAND (a wrapper using the test key), so git
+# -- which the GitRemoteFactory shells out to -- tunnels through it.
+GIT_SSHD_DIR=""
+GIT_SSHD_PID=""
+GIT_SSHD_PORT=""
+GIT_SSH_USER=""
+
+# have_sshd: true when an sshd binary is available to run.
+have_sshd() {
+    command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]
+}
+
+# start_git_sshd <work-dir>
+# Start a user-owned sshd on a free loopback port with a generated host key and a
+# client key authorized for the current user, and export GIT_SSH_COMMAND pointing
+# at a wrapper that uses that key with host-key checking disabled. Sets
+# GIT_SSHD_PORT and GIT_SSH_USER.
+start_git_sshd() {
+    local dir="$1"
+    local sshd_bin
+    sshd_bin="$(command -v sshd 2>/dev/null)" || sshd_bin="/usr/sbin/sshd"
+
+    GIT_SSHD_DIR="$dir"
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+
+    ssh-keygen -q -t ed25519 -f "$dir/host_key" -N ""
+    chmod 600 "$dir/host_key"
+    ssh-keygen -q -t ed25519 -f "$dir/id_client" -N ""
+    cat "$dir/id_client.pub" > "$dir/authorized_keys"
+    chmod 600 "$dir/authorized_keys"
+
+    GIT_SSHD_PORT="$(free_port)"
+    cat > "$dir/sshd_config" <<EOF
+Port ${GIT_SSHD_PORT}
+ListenAddress 127.0.0.1
+HostKey ${dir}/host_key
+AuthorizedKeysFile ${dir}/authorized_keys
+StrictModes no
+PasswordAuthentication no
+PubkeyAuthentication yes
+UsePAM no
+AllowTcpForwarding no
+X11Forwarding no
+LogLevel ERROR
+EOF
+
+    "$sshd_bin" -f "$dir/sshd_config" -D </dev/null >>"$dir/sshd.log" 2>&1 &
+    GIT_SSHD_PID=$!
+
+    local ready=0 i
+    for i in $(seq 1 50); do
+        if port_open 127.0.0.1 "$GIT_SSHD_PORT"; then ready=1; break; fi
+        if ! kill -0 "$GIT_SSHD_PID" 2>/dev/null; then
+            echo "ERROR: sshd exited prematurely. Log:" >&2; cat "$dir/sshd.log" >&2; return 1
+        fi
+        sleep 0.2
+    done
+    [ "$ready" -eq 1 ] || { echo "ERROR: sshd failed to start on $GIT_SSHD_PORT" >&2; cat "$dir/sshd.log" >&2; return 1; }
+
+    GIT_SSH_USER="$(id -un)"
+    local wrapper="$dir/ssh_wrapper.sh"
+    cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+exec ssh -i "${dir}/id_client" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes "\$@"
+EOF
+    chmod +x "$wrapper"
+    export GIT_SSH_COMMAND="$wrapper"
+}
+
+# start_git_ssh_wrapper_only
+# Local fallback for machines without sshd: a GIT_SSH_COMMAND that runs git's
+# transport command locally (no daemon). Exercises the git+ssh code path but not
+# real network ssh. Sets GIT_SSH_USER; leaves GIT_SSHD_PORT empty (URLs use no
+# port and an absolute repo path).
+start_git_ssh_wrapper_only() {
+    local dir="$1"
+    GIT_SSHD_DIR="$dir"
+    mkdir -p "$dir"
+    GIT_SSH_USER="git"
+    local wrapper="$dir/ssh_wrapper.sh"
+    printf '#!/usr/bin/env bash\neval "${@: -1}"\n' > "$wrapper"
+    chmod +x "$wrapper"
+    export GIT_SSH_COMMAND="$wrapper"
+}
+
+# git_ssh_url <abs-bare-repo>
+# Build a git+ssh:// URL for the current transport mode (real sshd carries the
+# port; wrapper mode omits it).
+git_ssh_url() {
+    local repo="$1"
+    if [ -n "$GIT_SSHD_PORT" ]; then
+        echo "git+ssh://${GIT_SSH_USER}@127.0.0.1:${GIT_SSHD_PORT}${repo}"
+    else
+        echo "git+ssh://${GIT_SSH_USER}@127.0.0.1${repo}"
+    fi
+}
+
+# stop_git_sshd
+stop_git_sshd() {
+    if [ -n "$GIT_SSHD_PID" ]; then
+        kill "$GIT_SSHD_PID" 2>/dev/null || true
+        wait "$GIT_SSHD_PID" 2>/dev/null || true
+        GIT_SSHD_PID=""
+    fi
+    unset GIT_SSH_COMMAND
+    [ -n "$GIT_SSHD_DIR" ] && rm -rf "$GIT_SSHD_DIR"
+    GIT_SSHD_DIR=""; GIT_SSHD_PORT=""; GIT_SSH_USER=""
+}
+
+# seed_git_bare_repo <abs-bare-repo> [branch]
+# Create a bare git repo seeded with one plain commit on <branch> (default main).
+# Dolt git remotes require at least one branch before the first push.
+seed_git_bare_repo() {
+    local repo="$1"
+    local branch="${2:-main}"
+    git init --bare "$repo" >/dev/null
+    local seed
+    seed="$(mktemp -d)"
+    (
+        set -euo pipefail
+        cd "$seed"
+        git init -q
+        git config user.email dumbo@test
+        git config user.name dumbo
+        echo seed > README
+        git add README
+        git commit -qm seed
+        git branch -M "$branch"
+        git push -q "$repo" "$branch"
+    )
+    rm -rf "$seed"
+}
+
 # setup_dolt_hack <data-dir>
 # Given a dumbodb data dir, create the .dolt directory structure so that
 # dolt commands run from <data-dir>/.. will see the dumbodb data.

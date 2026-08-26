@@ -65,15 +65,16 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	nbf := state.doltDB.Format()
 
-	// gRPC remotes (http/https) do not support PrepareDB; the remote repository
-	// must already exist. Only local stores are prepared on demand.
-	if !isGRPCScheme(ru.Scheme) {
+	// PrepareDB creates local stores on demand and inits a git+file bare repo,
+	// but is unsupported for gRPC (http/https) and git+http/https/ssh remotes,
+	// which must already exist. Skip it for those.
+	if !isGRPCScheme(ru.Scheme) && !(isGitScheme(ru.Scheme) && !gitPreparable(ru.Scheme)) {
 		if err := dbfactory.PrepareDB(ctx, nbf, ru.Raw, nil); err != nil {
 			return nil, fmt.Errorf("dumboPush: preparing remote %q: %w", params.Remote, err)
 		}
 	}
 
-	remoteParams, err := remoteDBParams(ru.Scheme)
+	remoteParams, err := b.remoteDBParams(ru.Scheme)
 	if err != nil {
 		return nil, fmt.Errorf("dumboPush: %w", err)
 	}
