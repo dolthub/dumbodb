@@ -325,6 +325,7 @@ type TableStatus struct {
 type VersioningStatusResult struct {
 	Branch    string
 	CommitID  string // HEAD commit hash; populated only when the workspace is clean (no changes)
+	ReadOnly  bool
 	Tables    []TableStatus
 	MergeOp   string            // "merge", "cherry-pick", "rebase", or "revert"; empty when no operation in progress
 	Conflicts []ConflictSummary // per-collection conflict counts; empty when no conflicts

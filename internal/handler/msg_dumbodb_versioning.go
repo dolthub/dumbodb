@@ -1969,7 +1969,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, err
 	}
 
-	dbName, branch, readOnly, err := branchFromDBName(encodedDB)
+	dbName, branch, _, err := branchFromDBName(encodedDB)
 	if err != nil {
 		return nil, err
 	}
@@ -1980,25 +1980,6 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 			handlererrors.ErrOperationFailed,
 			"dumboStatus: versioning is not supported by the current backend",
 		)
-	}
-
-	// Read-only connections (commit hash, ancestor, tag) have no working set.
-	if readOnly {
-		statusDoc := must.NotFail(types.NewDocument(
-			"branch", branch,
-			"dirty", false,
-			"readonly", true,
-		))
-
-		// Resolve the rootish to a commit hash via doltLog limit:1.
-		if logRes, logErr := vb.DumboDBLog(connCtx, &backends.LogParams{
-			DBName: dbName, Branch: branch, ConnBranch: branch, Limit: 1,
-		}); logErr == nil && len(logRes.Commits) > 0 {
-			statusDoc.Set("commitId", logRes.Commits[0].CommitID)
-		}
-
-		statusDoc.Set("ok", float64(1))
-		return documentOpMsg(statusDoc)
 	}
 
 	res, err := vb.DumboDBStatus(connCtx, &backends.VersioningStatusParams{
@@ -2014,7 +1995,7 @@ func (h *Handler) MsgDumboDBStatus(connCtx context.Context, msg *wire.OpMsg) (*w
 	statusDoc := must.NotFail(types.NewDocument(
 		"branch", res.Branch,
 		"dirty", dirty,
-		"readonly", false,
+		"readonly", res.ReadOnly,
 	))
 	if res.CommitID != "" {
 		statusDoc.Set("commitId", res.CommitID)

@@ -117,6 +117,6 @@ func (h *Handler) MsgDrop(connCtx context.Context, msg *wire.OpMsg) (*wire.OpMsg
 		return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrInvalidNamespace, msg, "drop")
 
 	default:
-		return nil, lazyerrors.Error(err)
+		return nil, common.TranslateBackendWriteError(err)
 	}
 }

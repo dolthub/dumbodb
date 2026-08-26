@@ -25,6 +25,12 @@ func TranslateBackendWriteError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase) {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			"cannot write to a read-only database snapshot",
+		)
+	}
 	if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
 		return handlererrors.NewCommandError(mongoWriteConflictCode, err)
 	}

@@ -72,6 +72,12 @@ func TestNonexistentBranchMutationPathsAreRejected(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name: "drop_collection",
+			mutate: func(database backends.Database, _ backends.Collection) error {
+				return database.DropCollection(ctx, &backends.DropCollectionParams{Name: "nodes"})
+			},
+		},
 	}
 
 	state, err := backend.getOrOpenDB(ctx, "testdb", false)
@@ -113,6 +119,85 @@ func TestNonexistentBranchMutationPathsAreRejected(t *testing.T) {
 				t.Fatal("mutation created working-set ref")
 			}
 		})
+	}
+}
+
+func TestReadOnlyRootishMutationPathsAreRejected(t *testing.T) {
+	ctx := context.Background()
+	backend := newTestBackend(t)
+	insertDoc(t, backend, "testdb", "nodes", mustDoc(t, "_id", "base", "value", int32(1)))
+	snapshotHash := commitDB(t, backend, "testdb", "base")
+	if _, err := backend.DumboDBTag(ctx, &backends.TagParams{
+		DBName: "testdb",
+		Branch: "main",
+		Name:   "v1",
+		Hash:   snapshotHash,
+	}); err != nil {
+		t.Fatalf("DumboDBTag: %v", err)
+	}
+
+	mutations := []struct {
+		name   string
+		mutate func(database backends.Database, collection backends.Collection) error
+	}{
+		{
+			name: "update",
+			mutate: func(_ backends.Database, collection backends.Collection) error {
+				_, err := collection.UpdateAll(ctx, &backends.UpdateAllParams{
+					Docs: []*types.Document{mustDoc(t, "_id", "base", "value", int32(2))},
+				})
+				return err
+			},
+		},
+		{
+			name: "create_collection",
+			mutate: func(database backends.Database, _ backends.Collection) error {
+				return database.CreateCollection(ctx, &backends.CreateCollectionParams{Name: "created"})
+			},
+		},
+		{
+			name: "create_index",
+			mutate: func(_ backends.Database, collection backends.Collection) error {
+				_, err := collection.CreateIndexes(ctx, &backends.CreateIndexesParams{
+					Indexes: []backends.IndexInfo{{
+						Name: "by_value",
+						Key:  []backends.IndexKeyPair{{Field: "value"}},
+					}},
+				})
+				return err
+			},
+		},
+		{
+			name: "drop_collection",
+			mutate: func(database backends.Database, _ backends.Collection) error {
+				return database.DropCollection(ctx, &backends.DropCollectionParams{Name: "nodes"})
+			},
+		},
+	}
+
+	for _, rootish := range []string{"v1", snapshotHash} {
+		for _, mutation := range mutations {
+			t.Run(rootish+"/"+mutation.name, func(t *testing.T) {
+				database, err := backend.Database("testdb@" + rootish)
+				if err != nil {
+					t.Fatalf("Database: %v", err)
+				}
+				collection, err := database.Collection("nodes")
+				if err != nil {
+					t.Fatalf("Collection: %v", err)
+				}
+
+				err = mutation.mutate(database, collection)
+				if !backends.ErrorCodeIs(err, backends.ErrorCodeReadOnlyDatabase) {
+					t.Errorf("error = %v, want read-only database error", err)
+				}
+				if err == nil || !strings.Contains(err.Error(), "cannot write to a read-only database snapshot") {
+					t.Errorf("error = %v, want read-only snapshot message", err)
+				}
+
+				assertWorkingSetDoesNotExist(t, backend, "testdb", rootish)
+			})
+		}
 	}
 }
 

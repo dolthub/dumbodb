@@ -36,8 +36,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/util/iterator"
 )
 
-// rootishIsReadOnly reports whether a rootish is read-only (commit hash or ancestor expression).
-// Branch names and tag names are writable (not read-only).
+// rootishIsReadOnly reports whether a rootish is syntactically read-only.
 //
 // Dolt commit hashes are exactly 32 lowercase base32 characters (0-9a-v). Only
 // full-length hashes are detected here; abbreviated forms are indistinguishable
@@ -58,6 +57,17 @@ func rootishIsReadOnly(rootish string) bool {
 		}
 	}
 	return true
+}
+
+func rootishIsSnapshot(ctx context.Context, state *dbState, rootish string) bool {
+	if rootishIsReadOnly(rootish) {
+		return true
+	}
+	if rootish == defaultBranch {
+		return false
+	}
+	tagDS, err := state.datasDB.GetDataset(ctx, "refs/tags/"+rootish)
+	return err == nil && tagDS.HasHead()
 }
 
 // amFromRootish resolves a rootish string to a collections AddressMap.
