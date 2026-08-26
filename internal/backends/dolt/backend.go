@@ -2678,17 +2678,40 @@ func (b *Backend) DumboDBStatus(ctx context.Context, params *backends.Versioning
 	}
 
 	if state == nil {
-		return &backends.VersioningStatusResult{Branch: params.Branch, Tables: []backends.TableStatus{}}, nil
+		return &backends.VersioningStatusResult{
+			Branch:   params.Branch,
+			ReadOnly: rootishIsReadOnly(params.Branch),
+			Tables:   []backends.TableStatus{},
+		}, nil
 	}
-
-	// Write lock: getOrInitBranchAM may initialize the branch AM on first access.
-	state.mu.Lock()
-	defer state.mu.Unlock()
 
 	branch := params.Branch
 	if branch == "" {
 		branch = defaultBranch
 	}
+	if rootishIsSnapshot(ctx, state, branch) {
+		state.mu.RLock()
+		defer state.mu.RUnlock()
+
+		if _, err = amFromRootish(ctx, state, branch); err != nil {
+			return nil, fmt.Errorf("DumboDBStatus: resolving snapshot %q: %w", branch, err)
+		}
+		commitHash, hashErr := resolveRootishToCommitHash(ctx, state, branch)
+		if hashErr != nil {
+			return nil, fmt.Errorf("DumboDBStatus: resolving commit for snapshot %q: %w", branch, hashErr)
+		}
+		return &backends.VersioningStatusResult{
+			Branch:   branch,
+			CommitID: commitHash.String(),
+			ReadOnly: true,
+			Tables:   []backends.TableStatus{},
+			Views:    []backends.ViewStatus{},
+		}, nil
+	}
+
+	// Write lock: getOrInitBranchAM may initialize the branch AM on first access.
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
 	headAM, err := headRootAMForBranch(ctx, state, branch)
 	if err != nil {
@@ -2875,7 +2898,7 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 		return &backends.DiffResult{Collections: []backends.CollectionDiff{}}, nil
 	}
 
-	// Write lock: getOrInitBranchAM may initialize the branch AM on first access.
+	// Write lock: branch diffs may initialize the branch AM on first access.
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
@@ -2885,13 +2908,18 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 	if diffBranch == "" {
 		diffBranch = defaultBranch
 	}
+	readOnlySnapshot := rootishIsSnapshot(ctx, state, diffBranch)
 
 	switch {
 	case params.From == "":
-		// Default: HEAD committed state for the connection's branch.
-		aAM, err = headRootAMForBranch(ctx, state, diffBranch)
+		if readOnlySnapshot {
+			aAM, err = amFromRootish(ctx, state, diffBranch)
+		} else {
+			// Default: HEAD committed state for the connection's branch.
+			aAM, err = headRootAMForBranch(ctx, state, diffBranch)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("DumboDBDiff: reading HEAD AM for branch %q: %w", diffBranch, err)
+			return nil, fmt.Errorf("DumboDBDiff: reading default from state for rootish %q: %w", diffBranch, err)
 		}
 	case params.From == "HEAD" || strings.HasPrefix(params.From, "HEAD~"):
 		aAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.From)
@@ -2909,10 +2937,14 @@ func (b *Backend) DumboDBDiff(ctx context.Context, params *backends.DiffParams) 
 
 	switch {
 	case params.To == "":
-		// Default: current working set for the connection's branch.
-		bAM, err = state.getOrInitBranchAM(ctx, diffBranch)
+		if readOnlySnapshot {
+			bAM, err = amFromRootish(ctx, state, diffBranch)
+		} else {
+			// Default: current working set for the connection's branch.
+			bAM, err = state.getOrInitBranchAM(ctx, diffBranch)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("DumboDBDiff: reading working AM for branch %q: %w", diffBranch, err)
+			return nil, fmt.Errorf("DumboDBDiff: reading default to state for rootish %q: %w", diffBranch, err)
 		}
 	case params.To == "HEAD" || strings.HasPrefix(params.To, "HEAD~"):
 		bAM, err = amFromHEADExpr(ctx, state, params.ConnRootish, params.To)

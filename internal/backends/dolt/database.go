@@ -38,15 +38,7 @@ type database struct {
 // isReadOnly reports whether the database's rootish resolves to a read-only
 // snapshot (commit hash, ancestor expression, caret, or tag).
 func (db *database) isReadOnly(ctx context.Context, state *dbState) bool {
-	if rootishIsReadOnly(db.rootish) {
-		return true
-	}
-	if db.rootish == defaultBranch {
-		return false
-	}
-	// Tags look like branch names syntactically but are read-only.
-	tagDS, err := state.datasDB.GetDataset(ctx, "refs/tags/"+db.rootish)
-	return err == nil && tagDS.HasHead()
+	return rootishIsSnapshot(ctx, state, db.rootish)
 }
 
 // resolveAM returns the collections AddressMap for the database's rootish.
