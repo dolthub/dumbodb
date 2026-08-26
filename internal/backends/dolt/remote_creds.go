@@ -106,7 +106,7 @@ func isGRPCScheme(scheme string) bool {
 // transports. mem is excluded (in-process only, nothing to clone across).
 func isCloneableScheme(scheme string) bool {
 	switch scheme {
-	case dbfactory.FileScheme, dbfactory.S3Scheme, dbfactory.LocalBSScheme:
+	case dbfactory.FileScheme, dbfactory.S3Scheme, dbfactory.GSScheme, dbfactory.LocalBSScheme:
 		return true
 	default:
 		return isGRPCScheme(scheme)

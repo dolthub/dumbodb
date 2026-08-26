@@ -244,6 +244,79 @@ stop_minio() {
     MINIO_ENDPOINT=""
 }
 
+# fake-gcs-server fixture: a local Google Cloud Storage emulator for end-to-end
+# gs:// remote tests. Built on demand by `make fakegcs` (kept out of the default
+# bats target); gs tests skip when the binary is absent. The GCS SDK is routed
+# at it via the STORAGE_EMULATOR_HOST environment variable, which tests export
+# into the dumbodb server's environment.
+FAKEGCS_BINARY="${FAKEGCS_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/fake-gcs-server}"
+FAKEGCS_PID=""
+FAKEGCS_ENDPOINT=""
+
+# start_fakegcs <data-dir> <port> <bucket>
+# Start fake-gcs-server on the filesystem backend, pre-create <bucket> (a
+# top-level directory under the filesystem root), wait for readiness, and set
+# FAKEGCS_ENDPOINT to http://127.0.0.1:<port>.
+start_fakegcs() {
+    local data_dir="$1"
+    local port="$2"
+    local bucket="$3"
+    local log_file="${data_dir}.fakegcs.log"
+
+    if [ ! -x "$FAKEGCS_BINARY" ]; then
+        echo "ERROR: fake-gcs-server not found at $FAKEGCS_BINARY (run 'make fakegcs')" >&2
+        return 1
+    fi
+
+    mkdir -p "${data_dir}/${bucket}"
+
+    # public-host must be the emulator's own address so upload Location headers
+    # point back here rather than at storage.googleapis.com.
+    "$FAKEGCS_BINARY" \
+        -backend filesystem \
+        -filesystem-root "$data_dir" \
+        -scheme http \
+        -host 127.0.0.1 \
+        -port "$port" \
+        -public-host "127.0.0.1:${port}" \
+        >"$log_file" 2>&1 &
+    FAKEGCS_PID=$!
+
+    local ready=0
+    for _ in $(seq 1 30); do
+        if port_open 127.0.0.1 "$port"; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$FAKEGCS_PID" 2>/dev/null; then
+            echo "ERROR: fake-gcs-server exited prematurely. Log:" >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        echo "ERROR: fake-gcs-server failed to start within 30s" >&2
+        cat "$log_file" >&2
+        kill "$FAKEGCS_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    FAKEGCS_ENDPOINT="http://127.0.0.1:${port}"
+}
+
+# stop_fakegcs
+# Kill the fake-gcs-server process cleanly.
+stop_fakegcs() {
+    if [ -n "$FAKEGCS_PID" ]; then
+        kill "$FAKEGCS_PID" 2>/dev/null || true
+        wait "$FAKEGCS_PID" 2>/dev/null || true
+        FAKEGCS_PID=""
+    fi
+    FAKEGCS_ENDPOINT=""
+}
+
 # setup_dolt_hack <data-dir>
 # Given a dumbodb data dir, create the .dolt directory structure so that
 # dolt commands run from <data-dir>/.. will see the dumbodb data.

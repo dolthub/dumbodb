@@ -61,6 +61,7 @@ var implementedRemoteSchemes = map[string]struct{}{
 	dbfactory.HTTPScheme:    {},
 	dbfactory.HTTPSScheme:   {},
 	dbfactory.S3Scheme:      {},
+	dbfactory.GSScheme:      {},
 	dbfactory.LocalBSScheme: {},
 }
 

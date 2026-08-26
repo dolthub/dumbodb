@@ -7,10 +7,12 @@ REMOTESRV_PKG := github.com/dolthub/dolt/go/utils/remotesrv
 MINIO_BINARY := $(CURDIR)/.runtime/bin/minio
 MINIO_VERSION := RELEASE.2025-09-07T16-13-09Z
 MINIO_URL := https://dl.min.io/server/minio/release/linux-amd64/archive/minio.$(MINIO_VERSION)
+FAKEGCS_BINARY := $(CURDIR)/.runtime/bin/fake-gcs-server
+FAKEGCS_VERSION := v1.52.2
 GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo unknown)
 LDFLAGS := -X github.com/dolthub/dumbodb/internal/version.GitVersion=$(GIT_VERSION)
 
-.PHONY: help build soak remotesrv minio test bats
+.PHONY: help build soak remotesrv minio fakegcs test bats
 
 help:
 	@echo "DumboDB Makefile"
@@ -48,6 +50,17 @@ minio:
 		curl -fsSL -o "$(MINIO_BINARY)" "$(MINIO_URL)" && chmod +x "$(MINIO_BINARY)"; \
 	fi
 	@echo "minio: $(MINIO_BINARY)"
+
+# Builds the fake-gcs-server emulator for the gs:// remote-sync bats tests. Like
+# `minio`, kept out of the default `bats` target; the gs test skips when it is
+# absent. In CI a Docker service container can stand in for this binary.
+fakegcs:
+	@mkdir -p $(dir $(FAKEGCS_BINARY))
+	@if [ ! -x "$(FAKEGCS_BINARY)" ]; then \
+		echo "Installing fake-gcs-server $(FAKEGCS_VERSION)..."; \
+		GOBIN=$(dir $(FAKEGCS_BINARY)) go install github.com/fsouza/fake-gcs-server@$(FAKEGCS_VERSION); \
+	fi
+	@echo "fake-gcs-server: $(FAKEGCS_BINARY)"
 
 test:
 	go test ./... -count=1

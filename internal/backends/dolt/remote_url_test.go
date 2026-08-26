@@ -39,8 +39,8 @@ func TestParseRemoteURL(t *testing.T) {
 		{name: "s3 generic object store", in: "s3://bucket/path/to/db", wantScheme: "s3", supported: true},
 		{name: "s3 with routing query preserved", in: "s3://bucket/db?endpoint=http://localhost:9000&path-style=true", wantScheme: "s3", wantRaw: "s3://bucket/db?endpoint=http://localhost:9000&path-style=true", supported: true},
 		{name: "localbs test blobstore", in: "localbs:///srv/bs/db", wantScheme: "localbs", supported: true},
+		{name: "gs object store", in: "gs://bucket/path/to/db", wantScheme: "gs", supported: true},
 		{name: "aws known but unsupported", in: "aws://table/bucket/db", wantScheme: "aws"},
-		{name: "gs known but unsupported", in: "gs://bucket/db", wantScheme: "gs"},
 		{name: "ssh known but unsupported", in: "ssh://host/path", wantScheme: "ssh"},
 
 		// Scheme-less shorthand, matching the dolt CLI.
