@@ -21,7 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG DUMBODB_VERSION
 # TARGETARCH is provided automatically by BuildKit/buildx (amd64, arm64, ...).
 ARG TARGETARCH
-ARG GO_VERSION=1.26.2
+ARG GO_VERSION=1.26.7
 
 # COPY doesn't support conditionals, so we rely on the build context maybe having a dumbodb/ directory
 # to distinguish between source and binary builds using DUMBODB_VERSION=source.
