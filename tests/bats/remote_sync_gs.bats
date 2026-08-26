@@ -8,9 +8,8 @@
 load helpers
 
 setup() {
-    if [ ! -x "$FAKEGCS_BINARY" ]; then
-        skip "fake-gcs-server not built (run 'make fakegcs')"
-    fi
+    # Missing infra is a hard failure in CI, a skip only for local developers.
+    require_infra "$FAKEGCS_BINARY" "fake-gcs-server" "fakegcs" || return 1
 
     FAKEGCS_DATA_DIR="$(mktemp -d)"
     FAKEGCS_PORT="$(free_port)"

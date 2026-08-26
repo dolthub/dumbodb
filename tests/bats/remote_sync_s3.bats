@@ -7,9 +7,8 @@
 load helpers
 
 setup() {
-    if [ ! -x "$MINIO_BINARY" ]; then
-        skip "minio binary not built (run 'make minio')"
-    fi
+    # Missing infra is a hard failure in CI, a skip only for local developers.
+    require_infra "$MINIO_BINARY" "minio" "minio" || return 1
 
     MINIO_DATA_DIR="$(mktemp -d)"
     MINIO_API_PORT="$(free_port)"

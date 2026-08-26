@@ -4,6 +4,36 @@
 DUMBODB_BINARY="${DUMBODB_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/dumbodb}"
 DUMBODB_PID=""
 
+# in_ci: true when running under CI. GitHub Actions and most CI systems set
+# CI=true; DUMBO_REQUIRE_INFRA=1 forces the same behavior anywhere.
+in_ci() {
+    [ -n "${CI:-}" ] || [ -n "${DUMBO_REQUIRE_INFRA:-}" ]
+}
+
+# require_infra <path> <name> <make-target>
+# Guards a test on an infra binary. In CI a missing binary is a hard FAILURE
+# (tests must never fail-green on absent infrastructure); locally it skips so a
+# developer without the binary can still run the rest of the suite. Call from a
+# test's setup(); on the failure path it returns non-zero so setup fails, and on
+# the local path it invokes bats `skip` directly (so it must be called from
+# setup/test context, not a nested subshell).
+require_infra() {
+    local path="$1"
+    local name="$2"
+    local target="$3"
+
+    if [ -x "$path" ]; then
+        return 0
+    fi
+
+    if in_ci; then
+        echo "ERROR: $name not found at $path; CI must provide it (run 'make ${target}' or provision it)" >&2
+        return 1
+    fi
+
+    skip "${name} not built (run 'make ${target}')"
+}
+
 # port_open <host> <port>
 # True when a TCP connection to host:port succeeds. Uses nc when
 # available, falling back to bash's built-in /dev/tcp so the suite
