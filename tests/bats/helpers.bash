@@ -89,6 +89,90 @@ stop_dumbodb() {
     fi
 }
 
+# mongo_json <uri> <js-expression>
+# Evaluate a single JavaScript expression against <uri> and print its value as
+# JSON on stdout. Wraps the result in print(JSON.stringify(...)); quit(0) so the
+# process exits 0 with just the JSON: mongosh 2.10.x throws a spurious
+# "getAiAgent is not a function" at shutdown and otherwise exits non-zero even on
+# success. Pass the expression using single-quoted JS string literals so its
+# quotes survive the shell (e.g. db.runCommand({dumboRemote:1,action:'add'})).
+mongo_json() {
+    local uri="$1"
+    local expr="$2"
+    mongosh "$uri" --quiet --eval "print(JSON.stringify(${expr})); quit(0)"
+}
+
+# Dolt remotesrv fixture: a local push/fetch/clone endpoint. Built from the
+# pinned dolt module (see `make remotesrv`) so its chunk protocol matches the
+# dolt version compiled into dumbodb. Started like the dumbodb server so remote-
+# sync tests have a hermetic gRPC remote with no DoltHub or network dependency.
+REMOTESRV_BINARY="${REMOTESRV_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/remotesrv}"
+REMOTESRV_PID=""
+REMOTESRV_URL=""
+
+# start_remotesrv <root-dir> <port>
+# Start remotesrv serving from <root-dir> with gRPC and http multiplexed on one
+# port, wait until it accepts connections, and set REMOTESRV_URL to the base
+# endpoint (http://127.0.0.1:<port>). A repo is created on demand under
+# <root-dir> the first time something is pushed to http://.../<repo>.
+start_remotesrv() {
+    local root_dir="$1"
+    local port="$2"
+    local log_file="${root_dir}.remotesrv.log"
+
+    mkdir -p "$root_dir"
+
+    if [ ! -x "$REMOTESRV_BINARY" ]; then
+        echo "ERROR: remotesrv binary not found at $REMOTESRV_BINARY (run 'make remotesrv')" >&2
+        return 1
+    fi
+
+    # Single-port multiplexing: http-port == grpc-port. Pass only the host in
+    # --http-host; remotesrv appends ":<http-port>" itself to form the authority
+    # in the URLs it generates, so they point back at this listener.
+    "$REMOTESRV_BINARY" \
+        --dir "$root_dir" \
+        --http-port "$port" \
+        --grpc-port "$port" \
+        --http-host "127.0.0.1" \
+        >"$log_file" 2>&1 &
+    REMOTESRV_PID=$!
+
+    local ready=0
+    for _ in $(seq 1 30); do
+        if port_open 127.0.0.1 "$port"; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$REMOTESRV_PID" 2>/dev/null; then
+            echo "ERROR: remotesrv exited prematurely. Log:" >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        echo "ERROR: remotesrv failed to start within 30s" >&2
+        cat "$log_file" >&2
+        kill "$REMOTESRV_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    REMOTESRV_URL="http://127.0.0.1:${port}"
+}
+
+# stop_remotesrv
+# Kill the remotesrv process cleanly.
+stop_remotesrv() {
+    if [ -n "$REMOTESRV_PID" ]; then
+        kill "$REMOTESRV_PID" 2>/dev/null || true
+        wait "$REMOTESRV_PID" 2>/dev/null || true
+        REMOTESRV_PID=""
+    fi
+    REMOTESRV_URL=""
+}
+
 # setup_dolt_hack <data-dir>
 # Given a dumbodb data dir, create the .dolt directory structure so that
 # dolt commands run from <data-dir>/.. will see the dumbodb data.
