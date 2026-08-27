@@ -597,6 +597,15 @@ func parseRootish(s string) error {
 		)
 	}
 
+	// Bounds the decoded rootish, not the percent-encoded wire form. The value
+	// is omitted from the message because it may be arbitrarily long.
+	if len(s) > backends.MaxRootishBytes {
+		return handlererrors.NewCommandErrorMsg(
+			handlererrors.ErrOperationFailed,
+			fmt.Sprintf("rootish must be at most %d bytes, found: %d", backends.MaxRootishBytes, len(s)),
+		)
+	}
+
 	// Reject any '@'  -- it is reserved as the database/branch delimiter and
 	// is forbidden in raw branch names. This also covers reflog syntax (<ref>@{...}).
 	if strings.Contains(s, "@") {

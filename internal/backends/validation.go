@@ -19,8 +19,10 @@ import (
 	"strings"
 )
 
-// databaseNameRe validates database name (allows unicode but not special chars like / \ $ . null space).
-var databaseNameRe = regexp.MustCompile(`^[^\x00 /\\.$]{1,63}$`)
+// databaseNameRe validates the characters of an encoded database name (allows
+// unicode but not special chars like / \ $ . null space). Length is bounded
+// separately, per component, by validateDatabaseName.
+var databaseNameRe = regexp.MustCompile(`^[^\x00 /\\.$]+$`)
 
 var collectionNameRe = regexp.MustCompile("^[^\\.$\x00][^$\x00]{0,234}$")
 
@@ -33,8 +35,10 @@ const ReservedPrefix = "_dumbodb_"
 //   - allows only basic latin letters, digits, and basic punctuation;
 //   - disallows `_dumbodb_` prefix.
 //
-// That validation is quite restrictive because
-// we expect it to be easy for users to change database names in their software/configuration if needed.
+// The name may be revision-qualified ("mydb@main"), so the base name and the
+// rootish are length-checked separately: only the base name reaches the
+// filesystem, and holding it to MongoDB's 63-byte limit would leave too little
+// room for a rootish. Lengths are in bytes, matching MongoDB and NAME_MAX.
 //
 // Backends can do their own additional validation.
 func validateDatabaseName(name string) error {
@@ -43,6 +47,11 @@ func validateDatabaseName(name string) error {
 	}
 
 	if strings.HasPrefix(name, ReservedPrefix) {
+		return NewError(ErrorCodeDatabaseNameIsInvalid, nil)
+	}
+
+	baseName, rootish := SplitEncodedDBName(name)
+	if len(baseName) > MaxDatabaseNameBytes || len(rootish) > MaxRootishBytes {
 		return NewError(ErrorCodeDatabaseNameIsInvalid, nil)
 	}
 

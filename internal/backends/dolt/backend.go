@@ -41,7 +41,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -599,58 +598,24 @@ func (b *Backend) Database(name string) (backends.Database, error) {
 	}), nil
 }
 
-// splitEncodedDBName splits an encoded database name "dbname@rootish" into
-// the base database name and rootish. If no '@' separator is present, the
-// rootish defaults to "main" (the default branch).
+// splitEncodedDBName splits an encoded database name "dbname@rootish" into the
+// base database name and rootish, substituting the default branch when the name
+// carries no rootish.
 //
-// The rootish component is percent-decoded (RFC 3986 path encoding) so that
-// branch names containing characters invalid in MongoDB database names (e.g. '.'
-// in "v1.0", '/' in "feature/foo") can be encoded by the client as "v1%2E0" or
-// "feature%2Ffoo". The handler has already validated the encoding before the
-// backend is reached, so decode errors here fall back to the raw value.
+// Splitting is shared with backends.validateDatabaseName so that a name which
+// passes validation is split the same way here; see backends.SplitEncodedDBName
+// for the percent-decoding and all-digit-suffix rules.
 //
 // HEAD and HEAD~N are rejected at the handler level (rejectHEAD). DumboDB has
-// no stateful "current branch" concept per connection.
-//
-// All-digit strings after '@' (e.g. Unix nanosecond timestamps) are not valid
-// rootish expressions and cause the whole encoded name to be treated as a plain
-// database name. This prevents spurious "not found as branch or tag" errors when
-// client code accidentally produces database names like "prefix@1775505756999075683".
+// no stateful "current branch" concept per connection, so a HEAD form reaching
+// this point is passed through for the handler to catch.
 func splitEncodedDBName(encoded string) (dbName, rootish string) {
-	if idx := strings.Index(encoded, dbBranchSep); idx > 0 {
-		raw := encoded[idx+len(dbBranchSep):]
-		candidate := raw
-		if decoded, err := url.PathUnescape(raw); err == nil {
-			candidate = decoded
-		}
-		// All-digit strings are not valid rootish expressions; treat the whole
-		// encoded name as a plain database name instead.
-		if !splitAllDigits(candidate) {
-			// HEAD is rejected at the handler level (rejectHEAD).
-			// If it reaches here, pass it through -- the handler will catch it.
-			return encoded[:idx], candidate
-		}
+	baseName, rootish := backends.SplitEncodedDBName(encoded)
+	if rootish == "" {
+		return baseName, defaultBranch
 	}
-	return encoded, defaultBranch
-}
 
-// splitAllDigits reports whether s consists entirely of ASCII decimal digits
-// AND is not a valid Dolt commit hash length.
-//
-// Dolt commit hashes are exactly 32 base32 characters (0-9a-v); a 32-char
-// all-digit string is a valid hash and must still be treated as a rootish.
-// Any other all-digit string (e.g. a 19-digit UnixNano timestamp) cannot be
-// a branch name, tag, hash, or ancestor expression.
-func splitAllDigits(s string) bool {
-	if s == "" || len(s) == 32 {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return baseName, rootish
 }
 
 func (b *Backend) ListDatabases(ctx context.Context, params *backends.ListDatabasesParams) (*backends.ListDatabasesResult, error) {
