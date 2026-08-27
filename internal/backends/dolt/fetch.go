@@ -34,7 +34,20 @@ import (
 // pulls novel chunks but does not touch any local branch head. Reuses Dolt's
 // actions.FetchCommit (no DoltEnv/RepoState).
 func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
-	ru, err := b.resolveRemoteURL(ctx, params.DBName, params.Remote)
+	// An omitted remote defaults to the upstream recorded for the default branch.
+	remote := params.Remote
+	if remote == "" {
+		up, ok, err := b.getUpstream(ctx, params.DBName, defaultBranch)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("dumboFetch: no upstream configured for branch %q; specify a remote with 'from'", defaultBranch)
+		}
+		remote = up.remote
+	}
+
+	ru, err := b.resolveRemoteURL(ctx, params.DBName, remote)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +68,7 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 
 	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, remoteParams)
 	if err != nil {
-		return nil, fmt.Errorf("dumboFetch: opening remote %q: %w", params.Remote, err)
+		return nil, fmt.Errorf("dumboFetch: opening remote %q: %w", remote, err)
 	}
 	defer func() { _ = remoteDB.Close() }()
 
@@ -64,7 +77,7 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 		return nil, fmt.Errorf("dumboFetch: listing remote branches: %w", err)
 	}
 	if len(branchRefs) == 0 {
-		return nil, fmt.Errorf("dumboFetch: remote %q has no branches", params.Remote)
+		return nil, fmt.Errorf("dumboFetch: remote %q has no branches", remote)
 	}
 
 	tempDir, err := os.MkdirTemp(b.dataDir, ".fetch-*")
@@ -92,7 +105,7 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 		}
 
 		// Update the local remote-tracking ref for this branch.
-		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef(params.Remote, name), ch); err != nil {
+		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef(remote, name), ch); err != nil {
 			return nil, fmt.Errorf("dumboFetch: updating tracking ref for %q: %w", name, err)
 		}
 
@@ -100,7 +113,7 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	}
 
 	return &backends.FetchResult{
-		Remote:   params.Remote,
+		Remote:   remote,
 		URL:      ru.Raw,
 		Branches: fetched,
 	}, nil

@@ -60,7 +60,8 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	remote, err := common.GetRequiredParam[string](document, "to")
+	// 'to' is optional: an omitted target defaults to the branch's upstream.
+	remote, err := common.GetOptionalParam[string](document, "to", "")
 	if err != nil {
 		return nil, err
 	}

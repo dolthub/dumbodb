@@ -35,17 +35,30 @@ import (
 // the remote's refs/heads/<branch> is advanced directly and the local
 // remote-tracking ref refs/remotes/<remote>/<branch> is updated.
 func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) (*backends.PushResult, error) {
-	ru, err := b.resolveRemoteURL(ctx, params.DBName, params.Remote)
+	branch := params.Branch
+	if branch == "" {
+		branch = defaultBranch
+	}
+
+	// An omitted target defaults to the branch's recorded upstream remote.
+	remote := params.Remote
+	if remote == "" {
+		up, ok, err := b.getUpstream(ctx, params.DBName, branch)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("dumboPush: no upstream configured for branch %q; specify a target with 'to'", branch)
+		}
+		remote = up.remote
+	}
+
+	ru, err := b.resolveRemoteURL(ctx, params.DBName, remote)
 	if err != nil {
 		return nil, err
 	}
 	if !ru.supported() {
 		return nil, fmt.Errorf("dumboPush: remote scheme %q is not yet supported for push", ru.Scheme)
-	}
-
-	branch := params.Branch
-	if branch == "" {
-		branch = defaultBranch
 	}
 
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
@@ -70,7 +83,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	// which must already exist. Skip it for those.
 	if !isGRPCScheme(ru.Scheme) && !(isGitScheme(ru.Scheme) && !gitPreparable(ru.Scheme)) {
 		if err := dbfactory.PrepareDB(ctx, nbf, ru.Raw, nil); err != nil {
-			return nil, fmt.Errorf("dumboPush: preparing remote %q: %w", params.Remote, err)
+			return nil, fmt.Errorf("dumboPush: preparing remote %q: %w", remote, err)
 		}
 	}
 
@@ -81,7 +94,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, nbf, ru.Raw, filesys.LocalFS, remoteParams)
 	if err != nil {
-		return nil, fmt.Errorf("dumboPush: opening remote %q: %w", params.Remote, err)
+		return nil, fmt.Errorf("dumboPush: opening remote %q: %w", remote, err)
 	}
 	defer func() { _ = remoteDB.Close() }()
 
@@ -96,7 +109,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		mode = ref.ForceUpdate
 	}
 
-	remoteRef := ref.NewRemoteRef(params.Remote, branch)
+	remoteRef := ref.NewRemoteRef(remote, branch)
 
 	// statsCh may be nil; the puller guards against a nil channel.
 	err = actions.Push(ctx, tempDir, mode, branchRef, remoteRef, state.doltDB, remoteDB, commit, nil)
@@ -119,8 +132,15 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		}
 	}
 
+	// Record (or refresh) the branch's upstream so a later push/fetch can omit
+	// the target. Client push does not remap refs, so the tracked ref is the
+	// same-named branch on the remote.
+	if err := b.setUpstream(ctx, params.DBName, branch, upstream{remote: remote, ref: branch}); err != nil {
+		return nil, fmt.Errorf("dumboPush: recording upstream: %w", err)
+	}
+
 	return &backends.PushResult{
-		Remote:   params.Remote,
+		Remote:   remote,
 		URL:      ru.Raw,
 		Branch:   branch,
 		Commit:   commitHash.String(),

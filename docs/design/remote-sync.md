@@ -182,10 +182,13 @@ The leverage fork -- formerly the main open question -- is **resolved**: use
    `mode` (fast-forward-only vs force), the target branch ref, and a resolved
    commit. Map: `branch` -> resolve local head + `destBranchRef`; a `force` flag
    -> `mode`. Multi-branch / refspec fan-out and tags are later.
-2. **`admin.system.branches` upstream semantics.** `actions.Push` already writes
-   a local remote-tracking ref (`refs/remotes/<remote>/<branch>`); decide when
-   `upstream` is recorded in `system.branches` (first push with an explicit
-   target?) and how `dumboFetch` consumes it as a default.
+2. **`admin.system.branches` upstream semantics.** *(Resolved, workspace-1np.5.)*
+   Every successful `dumboPush` records/refreshes the pushed branch's
+   `upstream` (`{remote, ref}`, `ref` = the same-named remote branch, since
+   client push does not remap). A `dumboPush` with no `to` defaults to that
+   branch's upstream remote; a `dumboFetch` with no `from` defaults to the
+   default branch's (`main`) upstream remote. Missing upstream with no explicit
+   target is a clear error.
 3. **Scheme rollout.** `file` and the cloud-blob schemes
    (`aws`/`oss`/`gs`/`az`/`oci`) open standalone via `dbfactory`; `http(s)`
    (DoltHub) and `ssh` additionally need Dolt's gRPC dial provider. `file://`

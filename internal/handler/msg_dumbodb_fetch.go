@@ -60,7 +60,8 @@ func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, err
 	}
 
-	remote, err := common.GetRequiredParam[string](document, "from")
+	// 'from' is optional: an omitted remote defaults to the default branch's upstream.
+	remote, err := common.GetOptionalParam[string](document, "from", "")
 	if err != nil {
 		return nil, err
 	}

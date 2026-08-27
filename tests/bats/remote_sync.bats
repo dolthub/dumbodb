@@ -111,3 +111,19 @@ seed_and_push() {
     count="$(echo "$output" | tail -1 | tr -d '[:space:]')"
     [ "$count" = "1" ]
 }
+
+@test 'upstream: push/fetch default to the tracked remote after an explicit push' {
+    # seed_and_push does an explicit push to origin, which records the upstream.
+    seed_and_push "upstream-target"
+    local db_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
+
+    # Push with no target follows the recorded upstream (origin).
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1})"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.ok == 1 and .remote == "origin"'
+
+    # Fetch with no remote follows it too.
+    run mongo_json "$db_uri" "db.runCommand({dumboFetch:1})"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.ok == 1 and .remote == "origin"'
+}
