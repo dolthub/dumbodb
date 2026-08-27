@@ -61,4 +61,11 @@ both servers and compare results. Support levels:
 - `DumboDBFull`      -- must match MongoDB exactly; failure is a CI error
 - `DumboDBXFail`     -- known divergence; passes if DumboDB differs, fails if it matches (regression guard)
 - `DumboDBMongoOnly` -- DumboDB skipped entirely
+- `DumboDBDeviates`  -- DumboDB intentionally differs; each server's own outcome is asserted
+
+`DumboDBDeviates` is implemented by `harness.AuthPairTest(t, harness.AuthCase{...})`, not
+by `PairTest`: it needs the per-server assertions `MongoExpect` and `DumboExpect`, which
+are fields on `AuthCase`. `AuthCase.Run` also receives a client rather than a pre-made
+collection, so it suits any case that must choose its own database name. See
+`tests/auth_system_collections_test.go` and `tests/dbname_length_test.go`.
 
