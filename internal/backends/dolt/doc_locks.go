@@ -174,7 +174,7 @@ func (b *Backend) acquireTxnLocks(ctx context.Context, db, branch, collection st
 		return nil
 	}
 	mgr := b.docLockManager(db, branch)
-	owner, inTxn := ownerForTxn(ctx, false)
+	owner, inTxn := ownerForTxn(ctx)
 	if !inTxn {
 		return mgr.WaitForRelease(ctx, collection, ids)
 	}

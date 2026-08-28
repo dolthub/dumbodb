@@ -630,22 +630,51 @@ func (c *conn) dispatchThroughSession(connCtx context.Context, msg *wire.OpMsg, 
 		return nil, shadowGoneError(shadow)
 	}
 
+	// One fork mechanism, one reconciliation. A write pins a BASE and
+	// accumulates in the session overlay; the mode chooses only the boundary at
+	// which that overlay reconciles against the tip and publishes:
+	//
+	//	explicit transaction  -> commitTransaction
+	//	--session-isolation   -> dumboCommit
+	//	otherwise             -> the end of this command
+	//
+	// Nothing else about a write depends on the mode.
+	writes := cmd != nil && cmd.WritesData
+	inClientTxn := ci.InTransaction()
+	forked := writes || inClientTxn || c.h.SessionIsolation()
+	reconcileAtCommandEnd := writes && !inClientTxn && !c.h.SessionIsolation()
+
 	runFn := shadow.Use
-	if cmd != nil && cmd.Durable {
+	if reconcileAtCommandEnd || cmd != nil && cmd.Durable {
 		runFn = shadow.Commit
 	}
 
 	var resMsg *wire.OpMsg
 	runErr := runFn(time.Now(), func(sess *dsess.DoltSession) error {
-		if c.h.SessionIsolation() || conninfo.Get(connCtx).InTransaction() {
+		if forked {
 			sqlCtx := sqlctx.Wrap(connCtx, sess)
 			if _, txErr := sqlctx.EnsureTxn(sqlCtx, sess); txErr != nil {
 				return fmt.Errorf("dispatchThroughSession: %w", txErr)
 			}
+			ci.SetForked(true)
+			if reconcileAtCommandEnd {
+				defer ci.SetForked(false)
+			}
 		}
 		var handlerErr error
 		resMsg, handlerErr = c.invokeHandler(connCtx, msg, name, cmd)
-		return handlerErr
+		if !reconcileAtCommandEnd {
+			return handlerErr
+		}
+		if handlerErr != nil {
+			c.h.AbandonWriteBoundary(connCtx)
+			return handlerErr
+		}
+		if err := c.h.ReconcileWriteBoundary(connCtx); err != nil {
+			c.h.AbandonWriteBoundary(connCtx)
+			return err
+		}
+		return nil
 	})
 	if errors.Is(runErr, sqlctx.ErrShadowInvalidated) {
 		return nil, shadowGoneError(shadow)

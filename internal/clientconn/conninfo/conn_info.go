@@ -54,6 +54,7 @@ type ConnInfo struct {
 	rw sync.RWMutex
 
 	inTransaction bool // protected by rw
+	forked        bool // protected by rw; a write command's transaction is live
 	txnAborted    bool // protected by rw; set when server rejects a txn op, makes subsequent commitTransaction return NoSuchTransaction
 
 	metadataRecv bool // protected by rw
@@ -272,6 +273,21 @@ func (connInfo *ConnInfo) InTransaction() bool {
 	defer connInfo.rw.RUnlock()
 
 	return connInfo.inTransaction
+}
+
+// Forked reports whether a write command's transaction is live on this
+// connection, so its writes are accumulating in the session overlay. Distinct
+// from InTransaction, which is the client's explicit transaction.
+func (connInfo *ConnInfo) Forked() bool {
+	connInfo.rw.RLock()
+	defer connInfo.rw.RUnlock()
+	return connInfo.forked
+}
+
+func (connInfo *ConnInfo) SetForked(v bool) {
+	connInfo.rw.Lock()
+	defer connInfo.rw.Unlock()
+	connInfo.forked = v
 }
 
 func (connInfo *ConnInfo) SetInTransaction(v bool) {
