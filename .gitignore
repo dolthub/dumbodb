@@ -16,3 +16,10 @@ data/
 # Gas Town (added by gt)
 CLAUDE.local.md
 dumbodb
+
+# Editor swap and backup files
+*.swp
+*.swo
+*.swn
+*~
+.*.sw[a-p]
