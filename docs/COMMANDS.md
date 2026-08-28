@@ -19,6 +19,21 @@ All versioning commands target a specific branch by encoding the branch name in 
 
 Use `db.getSiblingDB("mydb@feature")` in mongosh to connect to a branch.
 
+### Name lengths
+
+| Component | Limit |
+|------|---------|
+| Database name | 128 bytes |
+| Rootish | 512 bytes |
+
+The name is split at the first `@` and the two parts are bounded separately, so a rootish never counts against the database name: `mydb@<32-char-hash>` costs `mydb` nothing. The rootish limit applies to the decoded value, so `mydb@v1%2E0` counts as the four bytes of `v1.0`.
+
+Both limits are counted in bytes rather than characters, so a name of 128 two-byte characters is 256 bytes and is rejected.
+
+MongoDB caps a database name at 63 bytes and has no notion of a rootish, so it measures `<db>@<rootish>` as one name. DumboDB's larger cap is a convenience; the separation above is what makes a revision addressable regardless of how long the database name is. Names over either limit are rejected with `InvalidNamespace (73)`.
+
+Rootish values are ASCII only and follow git's ref naming rules: no leading `.`, no `..`, no control characters, none of `: ? [ \ ^ ~ *`, space, or tab, no trailing `/` or `.`, no `.lock` suffix, and no `@{`.
+
 ## Refspecs
 
 Command parameters that name a commit (`commit`, `onto`, `mergeIn`, `to`, `hash`, `base`, `targets`, `from`) accept any of these forms:

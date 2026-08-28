@@ -383,8 +383,14 @@ func (h *Handler) MsgCreate(connCtx context.Context, msg *wire.OpMsg) (*wire.OpM
 
 // invalidDatabaseNameMsg returns the MongoDB-compatible error message for an invalid database name.
 func invalidDatabaseNameMsg(dbName, collectionName string) string {
-	if len(dbName) > 63 {
-		return fmt.Sprintf("db name must be at most 63 characters, found: %d", len(dbName))
+	baseName, rootish := backends.SplitEncodedDBName(dbName)
+
+	if len(baseName) > backends.MaxDatabaseNameBytes {
+		return fmt.Sprintf("db name must be at most %d bytes, found: %d", backends.MaxDatabaseNameBytes, len(baseName))
+	}
+
+	if len(rootish) > backends.MaxRootishBytes {
+		return fmt.Sprintf("rootish must be at most %d bytes, found: %d", backends.MaxRootishBytes, len(rootish))
 	}
 
 	if strings.ContainsRune(dbName, '.') {
