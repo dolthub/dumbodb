@@ -526,7 +526,7 @@ func (state *dbState) getOrInitBranchWS(ctx context.Context, branch string) (*do
 		return nil, fmt.Errorf("rootish %q: not found as branch or tag", branch)
 	}
 
-	if _, inTxn := ownerForTxn(ctx, state.backend.sessionIsolation); inTxn {
+	if _, inTxn := ownerForTxn(ctx); inTxn {
 		if sess := sessionFromContext(ctx); sess != nil && dbNameDsessFriendly(state.name) && !alwaysAutoCommit(state.name) {
 			sqlCtx := sqlctx.Wrap(ctx, sess)
 			qualified := qualifiedDbName(state.name, branch)
@@ -571,14 +571,16 @@ func (state *dbState) loadCommittedWS(ctx context.Context, branch string) (*dolt
 // GetIfPresent (not Get): background loops (e.g., capped cleanup) run
 // without a ConnInfo and would otherwise panic.
 //
-// In --session-isolation mode every connection is implicitly forked, so
-// the InTransaction check is bypassed.
-func ownerForTxn(ctx context.Context, sessionIsolation bool) (string, bool) {
+// Forked means "this connection is accumulating writes in a session overlay
+// against a pinned BASE". Every write is forked, in every mode; the mode
+// decides only when the fork reconciles. So this asks whether a session
+// transaction is live, not which mode the server runs in.
+func ownerForTxn(ctx context.Context) (string, bool) {
 	ci := conninfo.GetIfPresent(ctx)
 	if ci == nil {
 		return "", false
 	}
-	if sessionIsolation || ci.InTransaction() {
+	if ci.InTransaction() || ci.Forked() {
 		return ci.Owner(), true
 	}
 	return "", false

@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends/decorators/oplog"
 	"github.com/dolthub/dumbodb/internal/clientconn/conninfo"
 	"github.com/dolthub/dumbodb/internal/clientconn/cursor"
+	"github.com/dolthub/dumbodb/internal/handler/common"
 	"github.com/dolthub/dumbodb/internal/handler/users"
 	"github.com/dolthub/dumbodb/internal/sqlctx"
 	"github.com/dolthub/dumbodb/internal/types"
@@ -288,6 +289,29 @@ func (h *Handler) SessionRegistry() *sqlctx.SessionRegistry {
 		return sab.SessionRegistry()
 	}
 	return nil
+}
+
+// ReconcileWriteBoundary reconciles the connection's pending writes against
+// the current tip and publishes them. This is the same reconciliation an
+// explicit commitTransaction performs; the only thing that varies by mode is
+// when it is reached.
+func (h *Handler) ReconcileWriteBoundary(ctx context.Context) error {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		if err := sab.OnTransactionCommit(ctx, conninfo.Get(ctx).Owner()); err != nil {
+			if backends.ErrorCodeIs(err, backends.ErrorCodeWriteConflict) {
+				return common.TranslateBackendWriteError(err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// AbandonWriteBoundary discards the connection's pending writes.
+func (h *Handler) AbandonWriteBoundary(ctx context.Context) {
+	if sab, ok := h.b.(backends.SessionAwareBackend); ok {
+		sab.OnTransactionAbort(conninfo.Get(ctx).Owner())
+	}
 }
 
 // AutoCommitBoundary commits each branch a write recorded on the connection
