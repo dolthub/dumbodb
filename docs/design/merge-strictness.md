@@ -5,13 +5,31 @@
 **Date:** 2026-08-26
 **Status:** Design. Behaviour specification only -- testing and implementation
 are out of scope until the behaviour below is agreed.
+**Problem:** the standard MongoDB compare-and-swap does not work in dumbodb.
+Section 1.
 
-## 1. Goal
+## 1. The problem
+
+The standard way to do optimistic locking in MongoDB is a compare-and-swap on a
+sequence field:
+
+```js
+db.docs.updateOne(
+  { _id: 1, v: 7 },                                  // CAS condition
+  { $set: { status: "review" }, $inc: { v: 1 } }
+)
+// n: 1 -> we won.  n: 0 -> someone else moved it; re-read and retry.
+```
+
+**In dumbodb this pattern does not work.** Two clients that both read `v: 7`
+can both be told `n: 1`, and one of the two updates is then discarded. Neither
+client is told anything. The counter reads 8 when two increments were
+acknowledged.
+
+### The proposal: four levels
 
 A collection declares what makes two branches' changes to the same document a
-conflict. Four levels, set per collection in `__dumbo_catalog__`.
-
-### The four levels
+conflict, set per collection in `__dumbo_catalog__`.
 
 Each level is named for **what triggers a conflict**. `Touched` means a side
 wrote it at all; `Divergent` means the two sides wrote it differently. The unit
@@ -25,6 +43,30 @@ is either the whole `document` or an individual `field`.
 | `fieldDivergent` | both sides wrote **the same field** *and the values differ* |
 
 `fieldTouched` is the new default; `fieldDivergent` is today's only behaviour.
+
+### What each level does
+
+`merge` means the merge proceeds. `CONFLICT` means it does not.
+
+| scenario | `documentTouched` | `fieldTouched` | `fieldDivergent` | `documentDivergent` |
+|---|---|---|---|---|
+| only one side changed the document | merge | merge | merge | merge |
+| different fields, same document | CONFLICT | merge | merge | CONFLICT |
+| **same field, same value** (the CAS race) | CONFLICT | **CONFLICT** | **merge** | merge |
+| same field, same value, plus a disjoint edit | CONFLICT | CONFLICT | merge | CONFLICT |
+| same field, different values | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
+| modify vs delete | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
+| add/add same `_id`, identical content | CONFLICT | CONFLICT | merge | merge |
+| add/add same `_id`, different content | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
+| both sides deleted | CONFLICT | CONFLICT | merge | merge |
+
+Row 3 is the reason this document exists: two compare-and-swap updates that
+agree on the resulting value are read as agreement, and one of them is
+discarded. Section 5 traces that row key by key.
+
+Row 2 separates `fieldTouched` from `documentDivergent`, and row 4 separates
+`fieldDivergent` from `documentDivergent`. Section 4 gives the predicates the
+table is derived from.
 
 ### They do not form a line
 
@@ -57,11 +99,10 @@ documentDivergent conflicts, fieldTouched merges -- disjoint fields:
                              documentDivergent conflicts
 ```
 
-The trap worth naming, because it is easy to reason past: making a document
-divergent does require touching *a* field, but `fieldTouched` asks whether both
-sides touched **the same** field. Each side touching some field of its own is a
-weaker condition than the two sides colliding on one field, so
-`documentDivergent` does not imply `fieldTouched`.
+Making a document divergent requires touching *a* field, but `fieldTouched`
+asks whether both sides touched **the same** field. Each side touching some
+field of its own is a weaker condition than the two sides colliding on one
+field, so `documentDivergent` does not imply `fieldTouched`.
 
 Worked against one scenario -- branch A sets `status`, branch B sets `owner`,
 and both `$inc` the same `v` from 7 to 8:
@@ -73,8 +114,8 @@ and both `$inc` the same `v` from 7 to 8:
 | `documentDivergent` | conflict; both wrote the document and the results differ |
 | `fieldDivergent` | **merges**; `v` is 8 either way, `status` and `owner` are disjoint |
 
-That last row is the bug. Section 4 gives the precise predicates, section 5 the
-full scenario matrix, section 6 this example traced key by key.
+That last row is the behaviour this document changes -- row 4 of the table
+above, made concrete. Section 5 traces it key by key.
 
 ### Where this stands today
 
@@ -83,40 +124,31 @@ There is exactly one behaviour, `fieldDivergent`, and it is not configurable.
 explicit `dumboMerge` of two branches, `dumboRebase`, `dumboCherryPick`,
 `dumboRevert`, and the implicit commit-time merge under `--session-isolation`.
 Section 2.2 is the proof and section 3 names the exact line responsible. The
-default becomes `fieldTouched` (section 9).
+default becomes `fieldTouched` (section 8).
 
-**There is a second, independent defect that these levels do not fix.**
-Concurrent non-transactional writes lose acknowledged updates in every mode,
-with no merge involved, because the read-modify-write holds no lock
-(section 2.1, workspace-q2c, P0). Both must be fixed before a
-compare-and-swap can be relied on. Do not read this document as claiming the
-levels alone make CAS work.
+**The levels decide what counts as a collision. Something else has to make
+collisions reachable.** An ordinary `updateOne` does not merge at all today: it
+reads a root, computes a whole replacement document, and stamps it over
+whatever is there, holding no lock across the read (section 2.1,
+workspace-q2c, P0). So the levels govern `dumboMerge` and the commit-time
+merge, and have no effect on the path most traffic takes, until every write
+runs through a transaction that pins a base and reconciles at a boundary. That
+is workspace-oug.1, and it is a prerequisite rather than a companion.
 
-Scope note worth having up front: this feature stops the loss being
-**silent**. What the losing side then sees is section 7.
+Once collisions are reachable, a losing writer is told `n: 0` with no error,
+which is what MongoDB returns for a compare-and-swap that finds nothing to
+update. Section 6 has the detail.
 
-## 2. The problem, exactly
+## 2. The problem, measured
 
-The standard MongoDB optimistic-locking pattern is a compare-and-swap on a
-sequence field:
-
-```js
-db.docs.updateOne(
-  { _id: 1, v: 7 },                                  // CAS condition
-  { $set: { status: "review" }, $inc: { v: 1 } }
-)
-// n: 1 -> we won.  n: 0 -> someone else moved it; re-read and retry.
-```
-
-It fails in two different ways, and they need separating.
+The compare-and-swap of section 1 fails in two independent ways, with different
+causes and different fixes. They need separating.
 
 ### 2.1 Concurrent writers, no branching: every mode loses writes
 
-An earlier draft of this section claimed default and `--auto-commit` were
-correct here. That was measured with the two updates issued **sequentially**,
-which is not a race and proves nothing. Under a genuine race -- both writers
-released at the same instant, both having read `v: 1` -- every mode loses
-writes:
+Under a genuine race -- both writers released at the same instant, both having
+read `v: 1` -- every mode loses writes. Measured over 60 rounds per
+configuration:
 
 | mode | filter | rounds | consistent | **lost** |
 |---|---|---|---|---|
@@ -157,16 +189,15 @@ holding the document and then proceeds **without holding anything itself**. Two
 concurrent plain updates both read the document, both build a full replacement
 from the same base, and the second overwrites the first.
 
-**Merge strictness does not fix this and must not be described as if it does.**
-No merge runs on this path. Tracked as workspace-q2c (P0); the levels in this
-document address section 2.2 only. A CAS is trustworthy only once both land.
+No merge runs on this path, so no level applies to it. Tracked as
+workspace-q2c (P0); the levels in this document address section 2.2. Both have
+to land before a compare-and-swap can be relied on.
 
 ### 2.2 Any merge of two divergent lines
 
-This is the general case, and it is not mode-specific. Measured in **default
-mode** with two explicit branches and an explicit `doltMerge` -- no session
-isolation involved at all. Baseline `{_id: 1, v: 1, a: "s", b: "s"}` committed,
-branch `feature` created, then each branch runs the same CAS on `v == 1`:
+Measured with two explicit branches and an explicit `doltMerge`. Baseline
+`{_id: 1, v: 1, a: "s", b: "s"}` committed, branch `feature` created, then
+each branch runs the same CAS on `v == 1`:
 
 | scenario | branch CAS matched | `doltMerge` | final |
 |---|---|---|---|
@@ -176,11 +207,10 @@ branch `feature` created, then each branch runs the same CAS on `v == 1`:
 Two CAS-guarded increments from `v: 1` and the counter reads 2. The merge
 reported success. Nobody was told anything.
 
-**So the lost update is a property of the merge, not of
-`--session-isolation`.** It reaches every merge path in every mode. The only
-thing `--session-isolation` adds is that ordinary concurrent clients get there
-without creating a branch or asking for a merge, which is why 2.1 is the more
-alarming presentation and 2.2 is the more general problem.
+**The loss is in the merge itself**, so it reaches every path that merges:
+`dumboMerge`, `dumboRebase`, `dumboCherryPick`, `dumboRevert`, and the
+commit-time merge. Any two lines of history that both ran the compare-and-swap
+produce this, however they came to diverge.
 
 ### 2.3 Why convergence is the wrong test
 
@@ -201,8 +231,6 @@ are both implicit, so "avoid merges" is not a state a user can arrange or even
 observe. This is what two ordinary concurrent clients get.
 
 ## 3. Two independent knobs, and only one of them is the bug
-
-These get conflated. They must not be.
 
 **Knob A -- comparison granularity.** Which units the merge compares.
 Ground truth: `mergeBSONDoc` (`internal/backends/dolt/bson_merge.go:27`)
@@ -236,7 +264,7 @@ top-level scalar, so knob A already isolates it correctly; nothing about key
 enumeration needs to change to fix the CAS. But knob B does have to change:
 `fieldTouched` means deleting the `case sameMod` escape, so **this is a change
 to the differ**, not a no-op. Knob A is a separate question, still open
-(section 11.2).
+(section 10.2).
 
 ## 4. The four levels, precisely
 
@@ -280,36 +308,7 @@ What each is for:
   twice), and for cross-field invariants a validator cannot express, such as a
   state machine or a ledger entry.
 
-## 5. Scenario matrix
-
-`merge` means the merge proceeds. `CONFLICT` means it does not.
-
-| scenario | `documentTouched` | `fieldTouched` | `fieldDivergent` | `documentDivergent` |
-|---|---|---|---|---|
-| only one side changed the document | merge | merge | merge | merge |
-| different fields, same document | CONFLICT | merge | merge | CONFLICT |
-| **same field, same value** (the CAS race) | CONFLICT | **CONFLICT** | **merge** | merge |
-| same field, same value, plus a disjoint edit | CONFLICT | CONFLICT | merge | CONFLICT |
-| same field, different values | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
-| modify vs delete | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
-| add/add same `_id`, identical content | CONFLICT | CONFLICT | merge | merge |
-| add/add same `_id`, different content | CONFLICT | CONFLICT | CONFLICT | CONFLICT |
-| both sides deleted | CONFLICT | CONFLICT | merge | merge |
-
-Row 3 is the bug and the whole reason for this document. Row 2 separates
-`fieldTouched` from `documentDivergent`; row 4 separates `fieldDivergent` from
-`documentDivergent`.
-
-Two things sit on top of the level and are unchanged by it:
-
-- **Collection validators still apply.** A merge that is clean under the level
-  can still be refused because the merged document fails the validator. This
-  already works (`internal/backends/dolt/merge_validation.go`) and must keep
-  working at every level.
-- **Unique index collisions** are not document-identity conflicts; see
-  `docs/design/unique-collision-conflict-representation.md`.
-
-## 6. The CAS race traced through every level
+## 5. The CAS race traced through every level
 
 ```
 base:   { _id: 1, v: 7, status: "draft" }
@@ -343,12 +342,12 @@ Per key, under today's differ:
 | `fieldDivergent` | `v` is 8 on both sides, convergent | merge -> `{_id: 1, v: 8, status: "review", owner: "bob"}`. Both writes landed, `v` records one increment, neither client was told. **The bug.** |
 | `documentDivergent` | both wrote, `ours != theirs` | CONFLICT |
 
-## 7. What the losing side sees
+## 6. What the losing side sees
 
 The levels decide *what is a conflict*. This section is what happens next, and
 it differs by how the divergence arose -- not by server mode.
 
-### 7.1 The CAS condition lives in the operation, not the document
+### 6.1 The CAS condition lives in the operation, not the document
 
 This is the whole reason a merge cannot answer a CAS.
 
@@ -379,29 +378,26 @@ Replaying the *operation* does recover it. Applied against a tip already at
 `version: 2`, the filter matches nothing and the CAS fails for exactly the
 reason MongoDB would fail it.
 
-### 7.2 Two kinds of divergence, two answers
+### 6.2 Two kinds of divergence, two answers
 
 | divergence | reconciliation | what the loser sees |
 |---|---|---|
 | two branches, each with committed history | **merge** -- the states are both real history and there is no operation left to replay | a conflict via `dumboConflicts`, resolvable as today; a human has context and should choose |
-| a session's uncommitted pending work | **rebase** -- replay the pending operations onto the tip | each operation re-evaluates on its own terms. A CAS whose filter no longer matches simply matches nothing, exactly as in section 7.1 |
+| a session's uncommitted pending work | **rebase** -- replay the pending operations onto the tip | each operation re-evaluates on its own terms. A CAS whose filter no longer matches simply matches nothing, exactly as in section 6.1 |
 
-The second row is the proposal to validate (section 7.3). It makes
+The second row is the proposal to validate (section 6.3). It makes
 `--session-isolation` *less* of a special case, not more: a session is a
 long-running transaction, its pending operations are replayed onto current
 state at commit, and each one succeeds or fails on its own merits just as it
 would have in default mode. No bespoke error code, no bespoke conflict shape.
 
-It also settles a question an earlier draft got wrong. That draft argued an
-`n: 1` handed to a client before commit "cannot be retracted", and concluded
-MongoDB CAS semantics were unreachable. **A pre-commit acknowledgment in
-`--session-isolation` was never final** -- no more than a write inside a
+**A pre-commit acknowledgment in `--session-isolation` is not final** -- no more than a write inside a
 MongoDB transaction is final before `commitTransaction`. MongoDB's own answer
 for a CAS that loses inside a transaction is to abort and retry the
 transaction, not to resolve anything. Treating the pending ack as provisional
 is the existing model, not a new concession.
 
-### 7.3 Rebase-on-commit: to validate
+### 6.3 Rebase-on-commit: to validate
 
 Stated as a requirement to test, not a settled design:
 
@@ -429,13 +425,12 @@ levels:
    say which ones did not apply, so the client can retry those rather than
    guessing.
 
-Tracked on workspace-sb3, which previously proposed evaluating write filters
-against the branch tip at write time. Rebase-on-commit is the better shape:
-tip evaluation gives earlier feedback but abandons the isolation the mode
-exists to provide, whereas replay preserves isolation and still reaches the
-right answer.
+Tracked on workspace-sb3. Replay is preferred over evaluating write filters
+against the branch tip at write time: tip evaluation gives earlier feedback but
+abandons the isolation the mode exists to provide, whereas replay preserves
+isolation and still reaches the right answer.
 
-### 7.4 What the levels deliver on their own
+### 6.4 What the levels deliver on their own
 
 Independent of any of the above: the levels stop the loss being **silent** on
 the merge path. Under `fieldTouched`, two CAS results that collide on `v` do
@@ -449,7 +444,7 @@ by any level; it needs the locking fix in workspace-q2c. Both are required
 before the pattern in 7.1 can be relied on, and this document should not be
 read as claiming otherwise.
 
-## 8. Scope: the level governs every merge
+## 7. Scope: the level governs every merge
 
 The level applies to all merges, explicit and implicit. No merge path is exempt:
 
@@ -464,16 +459,16 @@ A per-invocation override on `dumboMerge` is a plausible later addition and is
 deliberately not in this design. The collection config is the only source of
 the level for now.
 
-## 9. Default: `fieldTouched`
+## 8. Default: `fieldTouched`
 
-**The default is `fieldTouched`.** The standard MongoDB
-CAS-on-a-sequence-field pattern must work out of the box. It is what every
-Mongo developer writes and what the ecosystem's documentation teaches, and a
-database that silently loses those updates is not usable for the pattern
-regardless of what our own docs say. A silent lost update reachable without
-opting into any version-control concept is a correctness bug in the default,
-not a documentation gap. Correctness by default beats a cheaper merge by
-default.
+**The default is `fieldTouched`.** The compare-and-swap of section 1 has to
+work without a collection opting into anything, so the level that makes it work
+has to be the one a collection gets by default. `fieldDivergent` cannot be the
+default, because it is the level under which the pattern fails.
+
+`documentTouched` would also honour the compare-and-swap, and more besides.
+`fieldTouched` is preferred because it is the weakest level that does, so it
+buys the guarantee at the smallest cost in false conflicts.
 
 `fieldDivergent` stays available per collection for workloads that genuinely
 want field-level composition and have no derived fields.
@@ -481,7 +476,7 @@ want field-level composition and have no derived fields.
 This changes existing behaviour, so it needs a release note and a documented
 way to opt a collection back to `fieldDivergent`.
 
-## 10. Configuration
+## 9. Configuration
 
 The level is collection config, stored in the existing per-collection catalog
 document in `__dumbo_catalog__` (`backends.ReservedCatalogName`), alongside
@@ -505,9 +500,9 @@ Notes that follow from how that catalog already works:
 - The wire value is the name, never a number. The level numbers used in
   discussion do not appear in the API.
 
-## 11. Behaviour still to pin
+## 10. Behaviour still to pin
 
-### 11.1 Both sides deleted the same document -- DECIDED 2026-08-28
+### 10.1 Both sides deleted the same document -- DECIDED 2026-08-28
 
 **The `Touched` levels include deletion.** If `documentTouched` conflicts
 because both sides wrote the document, that covers both sides deleting it, and
@@ -528,7 +523,7 @@ Verified against a Dolt row merge policy, where delete/delete is one of the
 convergent branches that merges today without consulting anything (see
 `/workspace/pluggable-row-merge-policy.md`, phase 1).
 
-### 11.2 Comparison granularity (knob A)
+### 10.2 Comparison granularity (knob A)
 
 The levels are specified over a set of changed fields, so "field" needs a
 definition. Today it is a top-level key, with subdocuments and arrays atomic
@@ -551,20 +546,20 @@ Options:
 
 This is independent of the level semantics and can be decided separately.
 
-### 11.3 Whether the level governs adds and deletes
+### 10.3 Whether the level governs adds and deletes
 
 The matrix assumes it governs adds, deletes, and field edits alike. Note the
 consequence at the default: two pipelines inserting the identical document
 conflict under `fieldTouched`. That is a real cost of the default and should be
 a deliberate choice.
 
-### 11.4 What "identical" means for `documentDivergent`
+### 10.4 What "identical" means for `documentDivergent`
 
 Proposal: equality of the canonical stored bytes, which is already how
 documents are compared elsewhere, so field order and encoding cannot make two
 equal documents look different.
 
-### 11.5 Level divergence across branches
+### 10.5 Level divergence across branches
 
 The level is itself branch-versioned data. If one branch ran `collMod` to
 change it and the other did not, which level governs *their* merge: destination
@@ -573,17 +568,17 @@ branch wins, strictest wins, or the divergence is itself a conflict? The
 "strictest wins" is not fully defined, since `fieldTouched` and
 `documentDivergent` are incomparable (section 4).
 
-### 11.6 Conflict legibility for the explicit-merge path
+### 10.6 Conflict legibility for the explicit-merge path
 
 A `fieldTouched` conflict reached through `dumboMerge` can have identical
 `ours` and `theirs`, which reads as a bug unless the envelope says why. Likely
 a new `reason.code`, following
 `docs/design/unique-collision-conflict-representation.md`.
 
-## 12. Out of scope for now
+## 11. Out of scope for now
 
 - Test plan and implementation.
-- A `dumboMerge` per-invocation override (section 8).
+- A `dumboMerge` per-invocation override (section 7).
 - **Per-field policy.** A collection-level setting forces the whole document to
   the strictest level any single field needs: set a collection to
   `fieldTouched` to protect its counter and two idempotent writers of an
@@ -595,14 +590,14 @@ a new `reason.code`, following
   `fieldTouched` as the default, the application-managed CAS of section 2 stops
   losing writes silently across a merge, so a server-maintained token becomes
   an ergonomics feature rather than a correctness requirement. It does not make
-  the CAS report failure the MongoDB way; that is workspace-sb3 (section 7.3).
+  the CAS report failure the MongoDB way; that is workspace-sb3 (section 6.3).
 
-## 13. Decisions
+## 12. Decisions
 
 - **2026-08-26: four levels, named for their conflict trigger:**
   `documentTouched`, `fieldTouched`, `fieldDivergent`, `documentDivergent`.
   Configured per collection in `__dumbo_catalog__`.
-- **2026-08-26: the default is `fieldTouched`.** Rationale in section 9.
+- **2026-08-26: the default is `fieldTouched`.** Rationale in section 8.
   Today's behaviour, `fieldDivergent`, remains available per collection.
 - **2026-08-26: the level governs every merge**, including the implicit
   `dumboCommit` merge under `--session-isolation` and the replay commands. A
@@ -612,26 +607,23 @@ a new `reason.code`, following
   is nothing to adjudicate and resolving `"ours"` would overwrite the winner.
   Resolution via `dumboConflicts` remains for explicit `dumboMerge` branch
   integration. A session's *uncommitted* work is a different case and should
-  be rebased rather than merged (section 7.2), which is to be validated.
-- **2026-08-27: the lost update is a property of the merge, not of
-  `--session-isolation`.** Measured in default mode with two explicit branches
-  and an explicit `doltMerge`: two CAS-guarded increments from `v: 1` merge
-  cleanly to `v: 2` with `ok: 1` and no conflict (section 2.2). Every merge path
-  in every mode is affected. `--session-isolation` is only the path that reaches
-  it without any branch work.
+  be rebased rather than merged (section 6.2), which is to be validated.
+- **2026-08-27: the lost update is in the merge.** Measured with two explicit
+  branches and an explicit `doltMerge`: two CAS-guarded increments from `v: 1`
+  merge cleanly to `v: 2` with `ok: 1` and no conflict (section 2.2). Every path
+  that merges is affected.
 - **2026-08-27: a CAS precondition cannot survive a state-based merge, so a
   session's uncommitted work should be rebased, not merged.** The condition
   lives in the operation's filter; merging end states discards it. Replaying the
-  operation against the tip recovers it and matches MongoDB exactly. This also
-  retires an earlier claim that a pre-commit `n: 1` "cannot be retracted" --
-  such an ack was never final, no more than a write inside a MongoDB
-  transaction is final before commit. To be validated; see section 7.3 and
-  workspace-sb3.
+  operation against the tip recovers it and matches MongoDB exactly. An
+  acknowledgment handed to a client before commit is not final, no more than a
+  write inside a MongoDB transaction is final before `commitTransaction`. To be
+  validated; see section 6.3 and workspace-sb3.
 - **2026-08-28: the `Touched` levels include deletion.** Both sides deleting a
   document conflicts under `documentTouched` and `fieldTouched`, and merges
-  under `fieldDivergent` and `documentDivergent`. Section 11.1 has the
-  reasoning; the section 5 matrix row is updated to match. This closes the last
-  open question in section 11 about scenario outcomes.
+  under `fieldDivergent` and `documentDivergent`. Section 10.1 has the
+  reasoning; the section 1 matrix row is updated to match. This closes the last
+  open question in section 10 about scenario outcomes.
 - **2026-08-27: merge strictness delivers the end of *silent* loss, and that is
-  what this document commits to.** How the losing side is told is section 7.2:
+  what this document commits to.** How the losing side is told is section 6.2:
   a conflict for a branch merge, a replay for a pending session.
