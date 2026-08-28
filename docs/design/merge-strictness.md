@@ -122,78 +122,20 @@ above, made concrete. Section 5 traces it key by key.
 There is exactly one behaviour, `fieldDivergent`, and it is not configurable.
 **It silently loses updates on every merge path**, in every server mode:
 explicit `dumboMerge` of two branches, `dumboRebase`, `dumboCherryPick`,
-`dumboRevert`, and the implicit commit-time merge under `--session-isolation`.
-Section 2.2 is the proof and section 3 names the exact line responsible. The
+`dumboRevert`, and the implicit merge at `dumboCommit`. Section 2.1 is the
+proof and section 3 names the exact line responsible. The
 default becomes `fieldTouched` (section 8).
 
-**The levels decide what counts as a collision. Something else has to make
-collisions reachable.** An ordinary `updateOne` does not merge at all today: it
-reads a root, computes a whole replacement document, and stamps it over
-whatever is there, holding no lock across the read (section 2.1,
-workspace-q2c, P0). So the levels govern `dumboMerge` and the commit-time
-merge, and have no effect on the path most traffic takes, until every write
-runs through a transaction that pins a base and reconciles at a boundary. That
-is workspace-oug.1, and it is a prerequisite rather than a companion.
-
-Once collisions are reachable, a losing writer is told `n: 0` with no error,
-which is what MongoDB returns for a compare-and-swap that finds nothing to
-update. Section 6 has the detail.
+The levels decide what counts as a collision. A separate defect stops an
+ordinary write reaching a merge at all, so it has to be fixed before the levels
+govern anything but `dumboMerge`; see `docs/design/working-set-publish.md`.
 
 ## 2. The problem, measured
 
-The compare-and-swap of section 1 fails in two independent ways, with different
-causes and different fixes. They need separating.
+The compare-and-swap of section 1 fails because of what the merge does with two
+changes that agree.
 
-### 2.1 Concurrent writers, no branching: every mode loses writes
-
-Under a genuine race -- both writers released at the same instant, both having
-read `v: 1` -- every mode loses writes. Measured over 60 rounds per
-configuration:
-
-| mode | filter | rounds | consistent | **lost** |
-|---|---|---|---|---|
-| default | CAS on `v` | 60 | 52 | **8** |
-| default | plain update, no CAS | 60 | 48 | **12** |
-| `--auto-commit` | CAS on `v` | 60 | 51 | **9** |
-| `--auto-commit` | plain update, no CAS | 60 | 50 | **10** |
-
-"Lost" means the server acknowledged a write it did not keep. Every failing
-round has the identical shape:
-
-```
-ackedA=1  ackedB=1  ->  a="s"  b="B"  v=2      (expected a="A" b="B" v=3)
-```
-
-Both writers were told `n: 1`. One writer's field is simply absent and `v`
-counts one increment instead of two. It happens **with or without a CAS
-filter**, so this is not a CAS problem: it is a lost write.
-
-**This is a different defect from section 2.2, with a different cause and a
-different fix.** The survivor is never the field-merged
-`{a: "A", b: "B", v: 2}` -- in 39 failing rounds across four configurations it
-was never once that shape. It is always one writer's document wholesale, which
-is last-writer-wins clobbering, not a convergent merge.
-
-The cause is that a non-transactional write holds no lock across its
-read-modify-write (`internal/backends/dolt/doc_locks.go:172`):
-
-```go
-owner, inTxn := ownerForTxn(ctx, false)
-if !inTxn {
-    return mgr.WaitForRelease(ctx, collection, ids)   // waits, acquires nothing
-}
-```
-
-A plain `updateOne` is non-transactional, so it waits for any *transaction*
-holding the document and then proceeds **without holding anything itself**. Two
-concurrent plain updates both read the document, both build a full replacement
-from the same base, and the second overwrites the first.
-
-No merge runs on this path, so no level applies to it. Tracked as
-workspace-q2c (P0); the levels in this document address section 2.2. Both have
-to land before a compare-and-swap can be relied on.
-
-### 2.2 Any merge of two divergent lines
+### 2.1 Any merge of two divergent lines
 
 Measured with two explicit branches and an explicit `doltMerge`. Baseline
 `{_id: 1, v: 1, a: "s", b: "s"}` committed, branch `feature` created, then
@@ -212,7 +154,7 @@ reported success. Nobody was told anything.
 commit-time merge. Any two lines of history that both ran the compare-and-swap
 produce this, however they came to diverge.
 
-### 2.3 Why convergence is the wrong test
+### 2.2 Why convergence is the wrong test
 
 The reason is that the merge treats a field both sides changed to the *same*
 value as agreement. A disciplined CAS protocol -- everybody increments by
@@ -401,7 +343,7 @@ is the existing model, not a new concession.
 
 Stated as a requirement to test, not a settled design:
 
-- A session forks at `v: 1` and runs the CAS from 7.1. Another session commits
+- A session forks at `v: 1` and runs the CAS from section 6.1. Another session commits
   `v: 2` first. On `dumboCommit` the pending operation is replayed against the
   new tip, matches nothing, and the session is told its CAS did not apply --
   rather than being merged in, and rather than being handed a conflict to
@@ -436,22 +378,14 @@ Independent of any of the above: the levels stop the loss being **silent** on
 the merge path. Under `fieldTouched`, two CAS results that collide on `v` do
 not quietly combine, on any merge path. That is worth having by itself, and it
 is what this document commits to. How the losing side is then told -- conflict
-for a branch merge, replay for a pending session -- is 7.2.
-
-What the levels explicitly do **not** deliver is a trustworthy CAS on their
-own. Section 2.1's lost write happens with no merge involved and is untouched
-by any level; it needs the locking fix in workspace-q2c. Both are required
-before the pattern in 7.1 can be relied on, and this document should not be
-read as claiming otherwise.
+for a branch merge, replay for a pending session -- is section 6.2.
 
 ## 7. Scope: the level governs every merge
 
 The level applies to all merges, explicit and implicit. No merge path is exempt:
 
 - `dumboMerge`.
-- The **implicit merge at `dumboCommit` under `--session-isolation`**. Not
-  optional: this is the path section 2.1 measures, so a level that skipped it
-  would not fix the bug.
+- The **implicit merge at `dumboCommit`**.
 - `dumboRebase`, `dumboCherryPick`, `dumboRevert`, which replay changes onto a
   new base and make the same three-way comparison.
 
@@ -610,7 +544,7 @@ a new `reason.code`, following
   be rebased rather than merged (section 6.2), which is to be validated.
 - **2026-08-27: the lost update is in the merge.** Measured with two explicit
   branches and an explicit `doltMerge`: two CAS-guarded increments from `v: 1`
-  merge cleanly to `v: 2` with `ok: 1` and no conflict (section 2.2). Every path
+  merge cleanly to `v: 2` with `ok: 1` and no conflict (section 2.1). Every path
   that merges is affected.
 - **2026-08-27: a CAS precondition cannot survive a state-based merge, so a
   session's uncommitted work should be rebased, not merged.** The condition
