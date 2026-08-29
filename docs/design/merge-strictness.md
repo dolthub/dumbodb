@@ -1,12 +1,11 @@
 # Merge Modes
 
-**Issues:** workspace-mxv; motivated by workspace-dn0; optimistic locking
-(workspace-wdv) is deferred behind this
 **Date:** 2026-08-26
+
 **Status:** Design. Behaviour specification only -- testing and implementation
 are out of scope until the behaviour below is agreed.
+
 **Problem:** the standard MongoDB compare-and-swap does not work in dumbodb.
-Section 1.
 
 ## 1. The problem
 
