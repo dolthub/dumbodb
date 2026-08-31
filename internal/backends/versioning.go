@@ -670,6 +670,10 @@ type VersioningBackend interface {
 	// DumboDBClone creates a new database by cloning a file:// remote.
 	DumboDBClone(context.Context, *CloneParams) (*CloneResult, error)
 
+	// DumboDBPull fetches from a remote and merges the fetched commit into the
+	// current branch (git pull = fetch + merge).
+	DumboDBPull(context.Context, *PullParams) (*PullResult, error)
+
 	// DumboDBGC runs garbage collection on the database's chunk store.
 	// Every branch in the database is in scope (one chunk store per
 	// logical database). Mode is "default" (sweep new-gen / unreferenced
@@ -785,6 +789,27 @@ type FetchResult struct {
 	Remote   string
 	URL      string
 	Branches []FetchedRef
+}
+
+// PullParams are the arguments to DumboDBPull.
+type PullParams struct {
+	DBName  string
+	Branch  string // current branch to pull into (the connection branch)
+	Remote  string // remote to pull from; empty means the branch upstream
+	NoFF    bool   // force a merge commit even when a fast-forward is possible
+	FFOnly  bool   // fail if the pull is not a fast-forward
+	Message string // optional merge commit message
+	Author  string // optional 'Name <email>' for a merge commit
+}
+
+// PullResult is returned by DumboDBPull.
+type PullResult struct {
+	Remote          string
+	Branch          string
+	CommitBefore    string // local branch head before the pull
+	CommitAfter     string // local branch head after the pull
+	FastForward     bool   // the pull advanced the branch without a merge commit
+	AlreadyUpToDate bool   // the branch already had the fetched commit
 }
 
 // CloneParams are the arguments to DumboDBClone.

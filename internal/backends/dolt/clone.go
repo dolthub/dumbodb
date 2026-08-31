@@ -121,6 +121,12 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 			return nil, fmt.Errorf("dumboClone: setting head for %q: %w", name, err)
 		}
 
+		// git clone also records refs/remotes/origin/<branch>, so a later fetch
+		// reports a before->after change instead of a fresh ref.
+		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef("origin", name), ch); err != nil {
+			return nil, fmt.Errorf("dumboClone: setting tracking ref for %q: %w", name, err)
+		}
+
 		// Initialize the branch working set from the cloned commit so the new
 		// database is immediately readable and writable on this branch.
 		localCommit, err := state.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef(name))

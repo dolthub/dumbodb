@@ -264,6 +264,16 @@ func (b *Backend) DumboDBFetch(_ context.Context, params *backends.FetchParams) 
 	return &backends.FetchResult{Remote: params.Remote}, nil
 }
 
+func (b *Backend) DumboDBPull(_ context.Context, params *backends.PullParams) (*backends.PullResult, error) {
+	b.l.Info("stub: DumboDBPull",
+		slog.String("db", params.DBName),
+		slog.String("branch", params.Branch),
+		slog.String("remote", params.Remote),
+	)
+
+	return &backends.PullResult{Remote: params.Remote, Branch: params.Branch}, nil
+}
+
 func (b *Backend) DumboDBClone(_ context.Context, params *backends.CloneParams) (*backends.CloneResult, error) {
 	b.l.Info("stub: DumboDBClone",
 		slog.String("as", params.As),

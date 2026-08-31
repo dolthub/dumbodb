@@ -152,6 +152,7 @@ func (h *Handler) initCommands() {
 	h.register(&Command{Handler: h.MsgDumboDBRemote, Help: "Adds, lists, or removes a named remote (name + url) for the database. Stored in admin.system.remotes."}, "doltRemote", "dumboRemote")
 	h.register(&Command{Handler: h.MsgDumboDBPush, Help: "Pushes a branch's committed HEAD to a configured remote (reuses Dolt push)."}, "doltPush", "dumboPush")
 	h.register(&Command{Handler: h.MsgDumboDBFetch, Help: "Fetches a branch from a configured remote and updates the local tracking ref (reuses Dolt fetch)."}, "doltFetch", "dumboFetch")
+	h.register(&Command{Handler: h.MsgDumboDBPull, Help: "Fetches from a remote and merges the fetched commit into the current branch (git pull)."}, "doltPull", "dumboPull")
 	h.register(&Command{Handler: h.MsgDumboDBClone, Help: "Creates a new database by cloning a file:// remote. Run against the admin database."}, "doltClone", "dumboClone")
 	h.register(&Command{Handler: h.MsgDumboDBResolveConflict, Help: "Resolves a single conflict (document, view, metadata, or validation) in the current in-progress merge, cherry-pick, or rebase."}, "doltResolveConflict", "dumboResolveConflict")
 	h.register(&Command{Handler: h.MsgDumboDBRevert, Help: "Reverts the changes introduced by the named commit, creating a new inverse commit."}, "doltRevert", "dumboRevert")
