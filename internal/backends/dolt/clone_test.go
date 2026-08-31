@@ -36,7 +36,7 @@ func TestDumboDBClone_FromFileRemote(t *testing.T) {
 	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "src", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main"}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 

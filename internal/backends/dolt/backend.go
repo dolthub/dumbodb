@@ -1507,10 +1507,14 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		if !strings.HasPrefix(id, branchRefPrefix) {
 			return nil
 		}
-		branches = append(branches, backends.BranchInfo{
-			Name:     strings.TrimPrefix(id, branchRefPrefix),
-			CommitID: headAddr.String(),
-		})
+		name := strings.TrimPrefix(id, branchRefPrefix)
+		info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
+		if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
+			return err
+		} else if ok {
+			info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
+		}
+		branches = append(branches, info)
 		return nil
 	}); iterErr != nil {
 		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)

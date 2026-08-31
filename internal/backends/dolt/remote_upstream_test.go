@@ -88,10 +88,10 @@ func assertUpstream(t *testing.T, b *Backend, dbName, branch, wantRemote, wantRe
 	}
 }
 
-// TestDumboDBUpstream_RecordedAndDefaulted covers the whole tracking lifecycle:
-// an explicit push records the upstream, a target-less push/fetch defaults to
-// it, and re-pushing to a different remote updates it.
-func TestDumboDBUpstream_RecordedAndDefaulted(t *testing.T) {
+// TestDumboDBUpstream_GitSemantics mirrors git: naming a branch pushes without
+// changing tracking; only setUpstream records it (and overwrites a prior one); a
+// bare push follows the upstream; an explicit push never changes it.
+func TestDumboDBUpstream_GitSemantics(t *testing.T) {
 	ctx := context.Background()
 	b := newTestBackend(t)
 	const dbName = "mydb"
@@ -108,47 +108,77 @@ func TestDumboDBUpstream_RecordedAndDefaulted(t *testing.T) {
 		t.Fatalf("add other: %v", err)
 	}
 
-	// Explicit push records the upstream for main.
-	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main"})
-	if err != nil {
-		t.Fatalf("push origin: %v", err)
+	// (1) Named push does not set an upstream (git push origin main).
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+		t.Fatalf("named push: %v", err)
 	}
-	if res.Remote != "origin" {
-		t.Errorf("push result remote = %q, want origin", res.Remote)
+	if doc := readBranchDoc(t, b, dbName, "main"); doc != nil {
+		t.Errorf("named push must not record an upstream, got %v", doc)
+	}
+
+	// (2) setUpstream records it (git push -u origin main).
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: true, SetUpstream: true}); err != nil {
+		t.Fatalf("push -u origin: %v", err)
 	}
 	assertUpstream(t, b, dbName, "main", "origin", "main")
 
-	// Push with no target defaults to the recorded upstream (origin).
-	res2, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Branch: "main"})
+	// (3) A bare push (no remote) follows the upstream (git push).
+	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(2)))
+	commitDB(t, b, dbName, "c2")
+	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Branch: "main"})
 	if err != nil {
-		t.Fatalf("push no-target: %v", err)
+		t.Fatalf("bare push: %v", err)
 	}
-	if res2.Remote != "origin" {
-		t.Errorf("defaulted push remote = %q, want origin", res2.Remote)
+	if res.Remote != "origin" {
+		t.Errorf("bare push remote = %q, want origin", res.Remote)
 	}
 
-	// Fetch with no remote defaults to the upstream too.
-	fres, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName})
-	if err != nil {
-		t.Fatalf("fetch no-remote: %v", err)
-	}
-	if fres.Remote != "origin" {
-		t.Errorf("defaulted fetch remote = %q, want origin", fres.Remote)
-	}
-
-	// Re-pushing to a different remote updates the upstream.
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "other", Branch: "main"}); err != nil {
-		t.Fatalf("push other: %v", err)
+	// (4) setUpstream to another remote overwrites the upstream (git push -u origin2).
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "other", Branch: "main", BranchExplicit: true, SetUpstream: true}); err != nil {
+		t.Fatalf("push -u other: %v", err)
 	}
 	assertUpstream(t, b, dbName, "main", "other", "main")
 
-	// Now a target-less fetch follows the updated upstream.
-	fres2, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName})
-	if err != nil {
-		t.Fatalf("fetch after update: %v", err)
+	// (5) An explicit push to origin does not change the upstream (still other).
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+		t.Fatalf("explicit push origin: %v", err)
 	}
-	if fres2.Remote != "other" {
-		t.Errorf("fetch remote after update = %q, want other", fres2.Remote)
+	assertUpstream(t, b, dbName, "main", "other", "main")
+
+	// A bare fetch follows the (default-branch) upstream too.
+	fres, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName})
+	if err != nil {
+		t.Fatalf("bare fetch: %v", err)
+	}
+	if fres.Remote != "other" {
+		t.Errorf("bare fetch remote = %q, want other", fres.Remote)
+	}
+}
+
+// TestDumboDBUpstream_BarePushErrors covers the git-faithful refusal to push
+// with no branch named and no upstream configured.
+func TestDumboDBUpstream_BarePushErrors(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	const dbName = "mydb"
+
+	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, dbName, "c1")
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: "origin", URL: "file://" + t.TempDir()}); err != nil {
+		t.Fatalf("add origin: %v", err)
+	}
+
+	// Remote named but branch not explicit and no upstream -> error (git push origin).
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: false}); err == nil {
+		t.Error("bare push to a remote with no upstream: want error, got nil")
+	}
+	// No remote and no upstream -> error (git push).
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Branch: "main"}); err == nil {
+		t.Error("push with no remote and no upstream: want error, got nil")
+	}
+	// Fetch with no remote and no upstream -> error.
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName}); err == nil {
+		t.Error("fetch with no remote and no upstream: want error, got nil")
 	}
 }
 
@@ -165,33 +195,12 @@ func TestDumboDBUpstream_Scoping(t *testing.T) {
 			t.Fatalf("add remote %s: %v", db, err)
 		}
 	}
-	// Only dbA pushes.
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "dbA", Remote: "origin", Branch: "main"}); err != nil {
+	// Only dbA sets an upstream.
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "dbA", Remote: "origin", Branch: "main", BranchExplicit: true, SetUpstream: true}); err != nil {
 		t.Fatalf("push dbA: %v", err)
 	}
 	assertUpstream(t, b, "dbA", "main", "origin", "main")
 	if doc := readBranchDoc(t, b, "dbB", "main"); doc != nil {
 		t.Errorf("dbB should have no upstream doc, got %v", doc)
-	}
-}
-
-// TestDumboDBUpstream_MissingErrors covers the clear error when no target is
-// given and no upstream is configured.
-func TestDumboDBUpstream_MissingErrors(t *testing.T) {
-	ctx := context.Background()
-	b := newTestBackend(t)
-	const dbName = "mydb"
-
-	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(1)))
-	commitDB(t, b, dbName, "c1")
-	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: "origin", URL: "file://" + t.TempDir()}); err != nil {
-		t.Fatalf("add origin: %v", err)
-	}
-
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Branch: "main"}); err == nil {
-		t.Error("push with no target and no upstream: want error, got nil")
-	}
-	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: dbName}); err == nil {
-		t.Error("fetch with no remote and no upstream: want error, got nil")
 	}
 }

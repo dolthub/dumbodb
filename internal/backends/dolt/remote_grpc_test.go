@@ -128,7 +128,7 @@ func TestDumboDBPushFetch_HTTPRoundTrip(t *testing.T) {
 	if _, err := src.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "srcdb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	res, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main"})
+	res, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main", BranchExplicit: true})
 	if err != nil {
 		t.Fatalf("push c1: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestDumboDBPushFetch_HTTPRoundTrip(t *testing.T) {
 	// A second commit must transfer the new chunks and advance the remote head.
 	insertDoc(t, src, "srcdb", "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
 	c2 := commitDB(t, src, "srcdb", "c2")
-	if _, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main"}); err != nil {
+	if _, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
 		t.Fatalf("push c2: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestDumboDBClone_HTTPRemote(t *testing.T) {
 	if _, err := src.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "srcdb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main"}); err != nil {
+	if _, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 

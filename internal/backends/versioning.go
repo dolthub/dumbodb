@@ -59,7 +59,15 @@ type BranchParams struct {
 // BranchInfo describes a single branch returned when BranchParams.List is set.
 type BranchInfo struct {
 	Name     string
-	CommitID string // branch HEAD commit hash
+	CommitID string       // branch HEAD commit hash
+	Upstream *UpstreamRef // nil when the branch tracks no upstream
+}
+
+// UpstreamRef is a branch's tracked {remote, ref}, the analog of git's
+// upstream shown by `git branch -vv`.
+type UpstreamRef struct {
+	Remote string
+	Ref    string
 }
 
 type BranchResult struct {
@@ -740,10 +748,12 @@ type RemoteResult struct {
 
 // PushParams are the arguments to DumboDBPush.
 type PushParams struct {
-	DBName string
-	Remote string // remote name (looked up in admin.system.remotes)
-	Branch string // local branch to push; empty means the default branch
-	Force  bool   // non-fast-forward (force) update
+	DBName         string
+	Remote         string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
+	Branch         string // local branch to push; empty means the default branch
+	BranchExplicit bool   // whether Branch was named in the command (git refspec) vs defaulted from the connection
+	Force          bool   // non-fast-forward (force) update
+	SetUpstream    bool   // record the target as the branch upstream (git push -u)
 }
 
 // PushResult is returned by DumboDBPush.

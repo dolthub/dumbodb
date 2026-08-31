@@ -40,7 +40,9 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		branch = defaultBranch
 	}
 
-	// An omitted target defaults to the branch's recorded upstream remote.
+	// Resolve the remote the git way. A named target is used as given; an omitted
+	// target falls back to the branch's upstream. A bare push (no explicit branch
+	// and no upstream) is refused, like `git push` / `git push <remote>`.
 	remote := params.Remote
 	if remote == "" {
 		up, ok, err := b.getUpstream(ctx, params.DBName, branch)
@@ -48,9 +50,17 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 			return nil, err
 		}
 		if !ok {
-			return nil, fmt.Errorf("dumboPush: no upstream configured for branch %q; specify a target with 'to'", branch)
+			return nil, fmt.Errorf("dumboPush: branch %q has no upstream; name a branch or use setUpstream", branch)
 		}
 		remote = up.remote
+	} else if !params.BranchExplicit {
+		_, ok, err := b.getUpstream(ctx, params.DBName, branch)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("dumboPush: branch %q has no upstream; name a branch or use setUpstream", branch)
+		}
 	}
 
 	ru, err := b.resolveRemoteURL(ctx, params.DBName, remote)
@@ -132,11 +142,13 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		}
 	}
 
-	// Record (or refresh) the branch's upstream so a later push/fetch can omit
-	// the target. Client push does not remap refs, so the tracked ref is the
-	// same-named branch on the remote.
-	if err := b.setUpstream(ctx, params.DBName, branch, upstream{remote: remote, ref: branch}); err != nil {
-		return nil, fmt.Errorf("dumboPush: recording upstream: %w", err)
+	// Only -u records the upstream (git push -u); a plain push never changes it.
+	// Client push does not remap refs, so the tracked ref is the same-named
+	// branch on the remote.
+	if params.SetUpstream {
+		if err := b.setUpstream(ctx, params.DBName, branch, upstream{remote: remote, ref: branch}); err != nil {
+			return nil, fmt.Errorf("dumboPush: recording upstream: %w", err)
+		}
 	}
 
 	return &backends.PushResult{

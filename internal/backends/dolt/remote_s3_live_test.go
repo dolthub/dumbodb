@@ -60,7 +60,7 @@ func TestDumboDBPushFetch_S3Live(t *testing.T) {
 	if _, err := src.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "srcdb", Action: "add", Name: "origin", URL: base}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	pres, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: branch})
+	pres, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: branch, BranchExplicit: true})
 	if err != nil {
 		t.Fatalf("push to s3 %s: %v", base, err)
 	}

@@ -46,7 +46,7 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "to", "branch", "force"); err != nil {
+	if err = common.RejectUnknownFields(document, "to", "branch", "force", "setUpstream"); err != nil {
 		return nil, err
 	}
 
@@ -66,6 +66,9 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
+	// Whether the branch was named in the command (a git refspec) vs defaulted
+	// from the connection decides whether a bare push may run without an upstream.
+	branchExplicit := document.Has("branch")
 	branch, err := common.GetOptionalParam[string](document, "branch", "")
 	if err != nil {
 		return nil, err
@@ -79,16 +82,23 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
+	setUpstream, err := common.GetOptionalBoolOrIntParam(document, "setUpstream", false)
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, "dumboPush: versioning is not supported by the current backend")
 	}
 
 	res, err := vb.DumboDBPush(connCtx, &backends.PushParams{
-		DBName: dbName,
-		Remote: remote,
-		Branch: branch,
-		Force:  force,
+		DBName:         dbName,
+		Remote:         remote,
+		Branch:         branch,
+		BranchExplicit: branchExplicit,
+		Force:          force,
+		SetUpstream:    setUpstream,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())

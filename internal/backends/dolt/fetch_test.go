@@ -39,7 +39,7 @@ func TestDumboDBFetch_AllBranches(t *testing.T) {
 	if _, err := a.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "mydb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := a.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "main"}); err != nil {
+	if _, err := a.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
 		t.Fatalf("push main: %v", err)
 	}
 
