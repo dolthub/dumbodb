@@ -60,8 +60,8 @@ func TestDumboDBPushFetch_GSLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("push to gs %s: %v", base, err)
 	}
-	if pres.Commit != want {
-		t.Errorf("pushed commit = %s, want %s", pres.Commit, want)
+	if pres.CommitPushed != want {
+		t.Errorf("pushed commit = %s, want %s", pres.CommitPushed, want)
 	}
 	t.Logf("pushed %s @ %s to %s", branch, want, base)
 

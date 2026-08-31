@@ -81,7 +81,13 @@ func (h *Handler) MsgDumboDBFetch(connCtx context.Context, msg *wire.OpMsg) (*wi
 
 	branches := types.MakeArray(len(res.Branches))
 	for _, fr := range res.Branches {
-		branches.Append(must.NotFail(types.NewDocument("branch", fr.Branch, "commit", fr.Commit)))
+		entry := must.NotFail(types.NewDocument("branch", fr.Branch))
+		// commitBefore is omitted when the fetch created the tracking ref.
+		if fr.CommitBefore != "" {
+			entry.Set("commitBefore", fr.CommitBefore)
+		}
+		entry.Set("commit", fr.Commit)
+		branches.Append(entry)
 	}
 
 	return documentOpMsg(must.NotFail(types.NewDocument(

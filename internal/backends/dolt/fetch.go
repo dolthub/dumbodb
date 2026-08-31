@@ -89,6 +89,16 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 	fetched := make([]backends.FetchedRef, 0, len(branchRefs))
 	for _, br := range branchRefs {
 		name := br.GetPath()
+		trackingRef := ref.NewRemoteRef(remote, name)
+
+		// The tracking-ref head before the fetch, for the before->after report.
+		// Empty when this fetch creates the tracking ref.
+		var commitBefore string
+		if tc, err := state.doltDB.ResolveCommitRef(ctx, trackingRef); err == nil {
+			if h, err := tc.HashOf(); err == nil {
+				commitBefore = h.String()
+			}
+		}
 
 		remoteCommit, err := remoteDB.ResolveCommitRef(ctx, br)
 		if err != nil {
@@ -105,11 +115,11 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 		}
 
 		// Update the local remote-tracking ref for this branch.
-		if err := state.doltDB.SetHead(ctx, ref.NewRemoteRef(remote, name), ch); err != nil {
+		if err := state.doltDB.SetHead(ctx, trackingRef, ch); err != nil {
 			return nil, fmt.Errorf("dumboFetch: updating tracking ref for %q: %w", name, err)
 		}
 
-		fetched = append(fetched, backends.FetchedRef{Branch: name, Commit: ch.String()})
+		fetched = append(fetched, backends.FetchedRef{Branch: name, CommitBefore: commitBefore, Commit: ch.String()})
 	}
 
 	return &backends.FetchResult{

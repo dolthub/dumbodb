@@ -40,8 +40,12 @@ the branch name.
 ## Response
 
 ```json
-{ "remote": "<remote>", "branch": "<branch>", "commit": "<hash>", "upToDate": <bool>, "ok": 1 }
+{ "remote": "<remote>", "branch": "<branch>", "commitBefore": "<hash>", "commitPushed": "<hash>", "upToDate": <bool>, "ok": 1 }
 ```
+
+`commitBefore` is the remote branch's head before the push and `commitPushed`
+is the commit now on it -- the analog of git's `<before>..<after>` report.
+`commitBefore` is omitted when the push creates the branch on the remote.
 
 ## Prerequisites
 
@@ -85,10 +89,10 @@ db.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<REM
 db.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
 ```
 
-Expected:
+Expected (no `commitBefore` -- this push creates `main` on the remote):
 
 ```json
-{ "remote": "origin", "branch": "main", "commit": "<hash1>", "upToDate": false, "ok": 1 }
+{ "remote": "origin", "branch": "main", "commitPushed": "<hash1>", "upToDate": false, "ok": 1 }
 ```
 
 Confirm no upstream was set:
@@ -150,7 +154,8 @@ var db = db.getSiblingDB("pushvdb")
 db.items.insertOne({ _id: 2, label: "beta" })
 db.runCommand({ dumboCommit: 1, message: "commit two", author: "alice <alice@acme.com>" })
 db.runCommand({ dumboPush: 1 })
-// Expected: remote "origin" (from upstream), upToDate false, ok 1.
+// Expected: remote "origin", upToDate false, ok 1, and the before->after pair
+// commitBefore: <hash1>, commitPushed: <hash2>.
 ```
 
 ---

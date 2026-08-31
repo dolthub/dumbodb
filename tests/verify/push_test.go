@@ -91,7 +91,9 @@ func TestPushVerify(t *testing.T) {
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, "origin", res["remote"])
 		assert.Equal(t, "main", res["branch"])
-		assert.Equal(t, hash1, res["commit"])
+		assert.Equal(t, hash1, res["commitPushed"])
+		_, hasBefore := res["commitBefore"]
+		assert.False(t, hasBefore, "a push that creates the remote branch has no commitBefore")
 		assert.Equal(t, false, res["upToDate"])
 
 		_, hasUpstream := branchEntry(t, env, dbName, "main")["upstream"]
@@ -133,13 +135,16 @@ func TestPushVerify(t *testing.T) {
 	t.Run("Scenario4_BarePushFollowsUpstream", func(t *testing.T) {
 		_, err := db.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "label", Value: "beta"}})
 		require.NoError(t, err)
-		dumboDBCommit(t, env, dbName, "commit two", "alice <alice@acme.com>")
+		hash2 := dumboDBCommit(t, env, dbName, "commit two", "alice <alice@acme.com>")
 
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{{Key: "dumboPush", Value: int32(1)}}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, "origin", res["remote"], "bare push resolves the upstream remote")
 		assert.Equal(t, false, res["upToDate"])
+		// The remote advances hash1 -> hash2; the report shows both.
+		assert.Equal(t, hash1, res["commitBefore"])
+		assert.Equal(t, hash2, res["commitPushed"])
 	})
 
 	// -------------------------------------------------------------------------

@@ -121,6 +121,15 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	remoteRef := ref.NewRemoteRef(remote, branch)
 
+	// The remote branch head before the push, for the before->after report.
+	// Empty when the push creates the branch on the remote.
+	var commitBefore string
+	if bc, err := remoteDB.ResolveCommitRef(ctx, branchRef); err == nil {
+		if h, err := bc.HashOf(); err == nil {
+			commitBefore = h.String()
+		}
+	}
+
 	// statsCh may be nil; the puller guards against a nil channel.
 	err = actions.Push(ctx, tempDir, mode, branchRef, remoteRef, state.doltDB, remoteDB, commit, nil)
 	upToDate := errors.Is(err, pull.ErrDBUpToDate) || errors.Is(err, doltdb.ErrUpToDate)
@@ -152,11 +161,12 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	}
 
 	return &backends.PushResult{
-		Remote:   remote,
-		URL:      ru.Raw,
-		Branch:   branch,
-		Commit:   commitHash.String(),
-		UpToDate: upToDate,
+		Remote:       remote,
+		URL:          ru.Raw,
+		Branch:       branch,
+		CommitBefore: commitBefore,
+		CommitPushed: commitHash.String(),
+		UpToDate:     upToDate,
 	}, nil
 }
 

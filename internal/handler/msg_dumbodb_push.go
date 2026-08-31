@@ -104,11 +104,16 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	return documentOpMsg(must.NotFail(types.NewDocument(
+	out := must.NotFail(types.NewDocument(
 		"remote", res.Remote,
 		"branch", res.Branch,
-		"commit", res.Commit,
-		"upToDate", res.UpToDate,
-		"ok", float64(1),
-	)))
+	))
+	// commitBefore is omitted when the push created the remote branch.
+	if res.CommitBefore != "" {
+		out.Set("commitBefore", res.CommitBefore)
+	}
+	out.Set("commitPushed", res.CommitPushed)
+	out.Set("upToDate", res.UpToDate)
+	out.Set("ok", float64(1))
+	return documentOpMsg(out)
 }

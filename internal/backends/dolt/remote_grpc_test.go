@@ -132,8 +132,8 @@ func TestDumboDBPushFetch_HTTPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("push c1: %v", err)
 	}
-	if res.Commit != c1 {
-		t.Errorf("pushed commit = %s, want c1 %s", res.Commit, c1)
+	if res.CommitPushed != c1 {
+		t.Errorf("pushed commit = %s, want c1 %s", res.CommitPushed, c1)
 	}
 
 	// A second commit must transfer the new chunks and advance the remote head.

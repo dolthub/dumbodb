@@ -132,8 +132,8 @@ func TestDumboDBGit_FileRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("push to git+file: %v", err)
 	}
-	if res.Commit != c1 {
-		t.Errorf("pushed commit = %s, want c1 %s", res.Commit, c1)
+	if res.CommitPushed != c1 {
+		t.Errorf("pushed commit = %s, want c1 %s", res.CommitPushed, c1)
 	}
 
 	// A second commit advances the git remote head.

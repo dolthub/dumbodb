@@ -758,11 +758,12 @@ type PushParams struct {
 
 // PushResult is returned by DumboDBPush.
 type PushResult struct {
-	Remote   string
-	URL      string
-	Branch   string
-	Commit   string // pushed commit id
-	UpToDate bool   // true when the remote already had the commit
+	Remote       string
+	URL          string
+	Branch       string
+	CommitBefore string // remote branch head before the push; empty when the push created the branch
+	CommitPushed string // commit now on the remote branch
+	UpToDate     bool   // true when the remote already had the commit
 }
 
 // FetchParams are the arguments to DumboDBFetch.
@@ -773,8 +774,9 @@ type FetchParams struct {
 
 // FetchedRef is one remote branch updated by a fetch.
 type FetchedRef struct {
-	Branch string
-	Commit string
+	Branch       string
+	CommitBefore string // local tracking-ref head before the fetch; empty when the ref is new
+	Commit       string // tracking-ref head after the fetch
 }
 
 // FetchResult is returned by DumboDBFetch. Like git fetch, every remote branch
