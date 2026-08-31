@@ -143,6 +143,15 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		}
 	}
 
+	// git clone parity: register an origin remote for the source and make the
+	// default branch track it, so push/fetch with no target work on the clone.
+	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: params.As, Action: "add", Name: "origin", URL: ru.Raw}); err != nil {
+		return nil, fmt.Errorf("dumboClone: registering origin remote: %w", err)
+	}
+	if err := b.setUpstream(ctx, params.As, defaultName, upstream{remote: "origin", ref: defaultName}); err != nil {
+		return nil, fmt.Errorf("dumboClone: setting upstream for %q: %w", defaultName, err)
+	}
+
 	return &backends.CloneResult{
 		DB:            params.As,
 		URL:           ru.Raw,
