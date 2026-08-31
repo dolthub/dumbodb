@@ -44,8 +44,9 @@ func TestParseRemoteURL(t *testing.T) {
 		{name: "git+ssh with user and port", in: "git+ssh://git@host:22/org/repo.git", wantScheme: "git+ssh", wantRaw: "git+ssh://git@host:22/org/repo.git", supported: true},
 		{name: "git+https", in: "git+https://host/org/repo.git", wantScheme: "git+https", supported: true},
 		{name: "az blob store", in: "az://acct.blob.core.windows.net/container/db", wantScheme: "az", supported: true},
+		{name: "oss object store", in: "oss://bucket/path/db", wantScheme: "oss", supported: true},
+		{name: "oci object store", in: "oci://namespace/bucket/db", wantScheme: "oci", supported: true},
 		{name: "aws known but unsupported", in: "aws://table/bucket/db", wantScheme: "aws"},
-		{name: "oci known but unsupported", in: "oci://ns/bucket/db", wantScheme: "oci"},
 		{name: "ssh known but unsupported", in: "ssh://host/path", wantScheme: "ssh"},
 
 		// Scheme-less shorthand, matching the dolt CLI.

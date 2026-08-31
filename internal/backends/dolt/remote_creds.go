@@ -118,13 +118,14 @@ func gitPreparable(scheme string) bool {
 }
 
 // isCloneableScheme reports whether dumboClone can materialize a new database
-// from a remote of this scheme: direct stores (file, s3, gs, az, localbs) and
-// the gRPC transports. mem is excluded (in-process only, nothing to clone
-// across).
+// from a remote of this scheme: direct stores (file, s3, gs, az, oss, oci,
+// localbs) and the gRPC transports. mem is excluded (in-process only, nothing
+// to clone across).
 func isCloneableScheme(scheme string) bool {
 	switch scheme {
 	case dbfactory.FileScheme, dbfactory.S3Scheme, dbfactory.GSScheme,
-		dbfactory.AzScheme, dbfactory.LocalBSScheme:
+		dbfactory.AzScheme, dbfactory.OSSScheme, dbfactory.OCIScheme,
+		dbfactory.LocalBSScheme:
 		return true
 	default:
 		return isGRPCScheme(scheme) || isGitScheme(scheme)
