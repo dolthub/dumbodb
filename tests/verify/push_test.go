@@ -252,4 +252,23 @@ func TestPushVerify(t *testing.T) {
 		assert.Equal(t, "origin", up["remote"])
 		assert.Equal(t, "release", up["ref"])
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: Push to a differently-named remote branch (refspec)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_RefspecPushToDifferentRemoteBranch", func(t *testing.T) {
+		var res bson.M
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
+			{Key: "branch", Value: "main"}, {Key: "remoteBranch", Value: "published"}, {Key: "setUpstream", Value: true},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, "main", res["branch"])
+		assert.Equal(t, "published", res["remoteBranch"])
+
+		// main now tracks origin/published -- the upstream ref differs from the name.
+		up := branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
+		assert.Equal(t, "origin", up["remote"])
+		assert.Equal(t, "published", up["ref"])
+	})
 }

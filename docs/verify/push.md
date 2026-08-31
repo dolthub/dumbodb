@@ -30,10 +30,11 @@ the branch name.
 
 | Parameter     | Type   | Required | Default            | Description                                                          |
 |---------------|--------|----------|--------------------|----------------------------------------------------------------------|
-| `to`          | string | no\*     | branch's upstream  | Remote to push to. Omit to use the branch's upstream.                |
-| `branch`      | string | no       | connection branch  | Branch to push (`git push <remote> <branch>`).                       |
-| `force`       | bool   | no       | `false`            | Overwrite a non-fast-forward remote (`git push --force`).            |
-| `setUpstream` | bool   | no       | `false`            | Record the target as the branch's upstream (`git push -u`).          |
+| `to`           | string | no\*     | branch's upstream  | Remote to push to. Omit to use the branch's upstream.               |
+| `branch`       | string | no       | connection branch  | Local branch to push (a git refspec's left-hand side).              |
+| `remoteBranch` | string | no       | same as `branch`   | Destination branch on the remote (`git push origin branch:remoteBranch`). |
+| `force`        | bool   | no       | `false`            | Overwrite a non-fast-forward remote (`git push --force`).           |
+| `setUpstream`  | bool   | no       | `false`            | Record the target as the branch's upstream (`git push -u`).         |
 
 \* Push needs a remote from somewhere: an explicit `to`, or the branch's upstream.
 
@@ -249,11 +250,40 @@ db.getSiblingDB("pushvdb@release").runCommand({ dumboBranch: 1 })
 
 ---
 
+## Scenario 10: Push to a differently-named remote branch (refspec)
+
+`remoteBranch` sends the local branch to a different branch on the remote, like
+`git push origin main:published`. You do not have to track that branch. With
+`setUpstream`, the branch then tracks it -- its `upstream.ref` differs from the
+local name.
+
+```js
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", branch: "main", remoteBranch: "published", setUpstream: true })
+```
+
+Expected: the response echoes both the local and remote branch (main's HEAD is
+already on the remote, so this creates `published` there without transferring
+anything -- `upToDate` is true and there is no `commitBefore`).
+
+```json
+{ "remote": "origin", "branch": "main", "remoteBranch": "published", "commitPushed": "<hash>", "upToDate": true, "ok": 1 }
+```
+
+Confirm the tracking now points at the renamed branch:
+
+```js
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+// Expected: main upstream is { remote: "origin", ref: "published" }.
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                       | git analog                          |
 |---------------------------------------------------------------|-------------------------------------|
 | `{ dumboPush: 1, to: "origin", branch: "main" }`             | `git push origin main`              |
+| `{ dumboPush: 1, to: "origin", branch: "main", remoteBranch: "published" }` | `git push origin main:published` |
 | `{ dumboPush: 1, to: "origin", branch: "main", setUpstream: true }` | `git push -u origin main`   |
 | `{ dumboPush: 1 }`                                            | `git push` (uses upstream)          |
 | `{ dumboPush: 1, to: "origin" }` (no upstream)               | `git push origin` (errors)          |

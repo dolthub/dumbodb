@@ -40,6 +40,15 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		branch = defaultBranch
 	}
 
+	// The destination branch on the remote -- a git refspec's right-hand side
+	// (git push <remote> <branch>:<remoteBranch>). Defaults to the same name.
+	// Naming it, like naming the branch, is an explicit push.
+	destBranch := params.RemoteBranch
+	if destBranch == "" {
+		destBranch = branch
+	}
+	explicit := params.BranchExplicit || params.RemoteBranch != ""
+
 	// Resolve the remote the git way. A named target is used as given; an omitted
 	// target falls back to the branch's upstream. A bare push (no explicit branch
 	// and no upstream) is refused, like `git push` / `git push <remote>`.
@@ -53,7 +62,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 			return nil, fmt.Errorf("dumboPush: branch %q has no upstream; name a branch or use setUpstream", branch)
 		}
 		remote = up.remote
-	} else if !params.BranchExplicit {
+	} else if !explicit {
 		_, ok, err := b.getUpstream(ctx, params.DBName, branch)
 		if err != nil {
 			return nil, err
@@ -119,19 +128,22 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		mode = ref.ForceUpdate
 	}
 
-	remoteRef := ref.NewRemoteRef(remote, branch)
+	// The push sends the local branch's commit to refs/heads/<destBranch> on the
+	// remote and tracks it at refs/remotes/<remote>/<destBranch>.
+	destBranchRef := ref.NewBranchRef(destBranch)
+	remoteRef := ref.NewRemoteRef(remote, destBranch)
 
 	// The remote branch head before the push, for the before->after report.
 	// Empty when the push creates the branch on the remote.
 	var commitBefore string
-	if bc, err := remoteDB.ResolveCommitRef(ctx, branchRef); err == nil {
+	if bc, err := remoteDB.ResolveCommitRef(ctx, destBranchRef); err == nil {
 		if h, err := bc.HashOf(); err == nil {
 			commitBefore = h.String()
 		}
 	}
 
 	// statsCh may be nil; the puller guards against a nil channel.
-	err = actions.Push(ctx, tempDir, mode, branchRef, remoteRef, state.doltDB, remoteDB, commit, nil)
+	err = actions.Push(ctx, tempDir, mode, destBranchRef, remoteRef, state.doltDB, remoteDB, commit, nil)
 	upToDate := errors.Is(err, pull.ErrDBUpToDate) || errors.Is(err, doltdb.ErrUpToDate)
 	if err != nil && !upToDate {
 		return nil, fmt.Errorf("dumboPush: %w", err)
@@ -143,7 +155,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		// would otherwise never get its ref created. The fast-forward check
 		// already passed (or force was requested), so set the remote branch ref
 		// and the local tracking ref to the pushed commit.
-		if err := remoteDB.SetHead(ctx, branchRef, commitHash); err != nil {
+		if err := remoteDB.SetHead(ctx, destBranchRef, commitHash); err != nil {
 			return nil, fmt.Errorf("dumboPush: setting remote ref: %w", err)
 		}
 		if err := state.doltDB.SetHead(ctx, remoteRef, commitHash); err != nil {
@@ -152,10 +164,10 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	}
 
 	// Only -u records the upstream (git push -u); a plain push never changes it.
-	// Client push does not remap refs, so the tracked ref is the same-named
-	// branch on the remote.
+	// The tracked ref is the destination branch, which may differ from the local
+	// branch when a refspec renames it.
 	if params.SetUpstream {
-		if err := b.setUpstream(ctx, params.DBName, branch, upstream{remote: remote, ref: branch}); err != nil {
+		if err := b.setUpstream(ctx, params.DBName, branch, upstream{remote: remote, ref: destBranch}); err != nil {
 			return nil, fmt.Errorf("dumboPush: recording upstream: %w", err)
 		}
 	}
@@ -164,6 +176,7 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		Remote:       remote,
 		URL:          ru.Raw,
 		Branch:       branch,
+		RemoteBranch: destBranch,
 		CommitBefore: commitBefore,
 		CommitPushed: commitHash.String(),
 		UpToDate:     upToDate,

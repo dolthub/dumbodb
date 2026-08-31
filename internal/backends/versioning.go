@@ -755,6 +755,7 @@ type PushParams struct {
 	DBName         string
 	Remote         string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
 	Branch         string // local branch to push; empty means the default branch
+	RemoteBranch   string // destination branch on the remote (git refspec rhs); empty means the same name as Branch
 	BranchExplicit bool   // whether Branch was named in the command (git refspec) vs defaulted from the connection
 	Force          bool   // non-fast-forward (force) update
 	SetUpstream    bool   // record the target as the branch upstream (git push -u)
@@ -764,7 +765,8 @@ type PushParams struct {
 type PushResult struct {
 	Remote       string
 	URL          string
-	Branch       string
+	Branch       string // local branch pushed
+	RemoteBranch string // destination branch on the remote (equals Branch unless a refspec renamed it)
 	CommitBefore string // remote branch head before the push; empty when the push created the branch
 	CommitPushed string // commit now on the remote branch
 	UpToDate     bool   // true when the remote already had the commit

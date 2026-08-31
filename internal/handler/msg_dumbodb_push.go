@@ -46,7 +46,7 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "to", "branch", "force", "setUpstream"); err != nil {
+	if err = common.RejectUnknownFields(document, "to", "branch", "remoteBranch", "force", "setUpstream"); err != nil {
 		return nil, err
 	}
 
@@ -87,6 +87,11 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
+	remoteBranch, err := common.GetOptionalParam[string](document, "remoteBranch", "")
+	if err != nil {
+		return nil, err
+	}
+
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, "dumboPush: versioning is not supported by the current backend")
@@ -96,6 +101,7 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		DBName:         dbName,
 		Remote:         remote,
 		Branch:         branch,
+		RemoteBranch:   remoteBranch,
 		BranchExplicit: branchExplicit,
 		Force:          force,
 		SetUpstream:    setUpstream,
@@ -108,6 +114,10 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		"remote", res.Remote,
 		"branch", res.Branch,
 	))
+	// remoteBranch is shown only when a refspec pushed to a different name.
+	if res.RemoteBranch != res.Branch {
+		out.Set("remoteBranch", res.RemoteBranch)
+	}
 	// commitBefore is omitted when the push created the remote branch.
 	if res.CommitBefore != "" {
 		out.Set("commitBefore", res.CommitBefore)
