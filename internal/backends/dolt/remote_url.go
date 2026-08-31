@@ -58,7 +58,15 @@ var knownRemoteSchemes = map[string]struct{}{
 }
 
 // implementedRemoteSchemes are the schemes wired into push/fetch today. mem and
-// localbs are included for hermetic tests only.
+// localbs are included for hermetic tests only. az shares the s3/gs blob-store
+// code path: no dbfactory params, credentials from the ambient environment
+// (Azure default credential chain). It has no hermetic fixture and is validated
+// only against a live account.
+//
+// aws is intentionally absent: its aws://[bucket:table] host syntax is rejected
+// by net/url.Parse since Go 1.25.2 (golang/go#75678). dolt kludges around it
+// with earl.ParseRawWithAWSSupport, which our parse path does not use; enabling
+// aws needs a dedicated aws-aware parse end to end. See workspace-1np.8.
 var implementedRemoteSchemes = map[string]struct{}{
 	dbfactory.FileScheme:    {},
 	dbfactory.MemScheme:     {},
@@ -66,6 +74,7 @@ var implementedRemoteSchemes = map[string]struct{}{
 	dbfactory.HTTPSScheme:   {},
 	dbfactory.S3Scheme:       {},
 	dbfactory.GSScheme:       {},
+	dbfactory.AzScheme:       {},
 	dbfactory.GitFileScheme:  {},
 	dbfactory.GitHTTPScheme:  {},
 	dbfactory.GitHTTPSScheme: {},
