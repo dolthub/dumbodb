@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -30,56 +31,81 @@ import (
 	"github.com/dolthub/dumbodb/internal/backends"
 )
 
-// DumboDBPush pushes a branch's committed HEAD to a configured remote, reusing
-// Dolt's actions.Push (no DoltEnv/RepoState). Client push does not remap refs:
-// the remote's refs/heads/<branch> is advanced directly and the local
-// remote-tracking ref refs/remotes/<remote>/<branch> is updated.
+// DumboDBPush pushes a commit to a branch on a configured remote, reusing Dolt's
+// actions.Push (no DoltEnv/RepoState). It mirrors git push: an optional refspec
+// [+]<src>[:<dst>] selects the source revision and destination branch, and a
+// bare call pushes the connection branch to its upstream. The remote's
+// refs/heads/<dst> is advanced and the local tracking ref
+// refs/remotes/<remote>/<dst> is updated.
 func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) (*backends.PushResult, error) {
-	branch := params.Branch
-	if branch == "" {
-		branch = defaultBranch
+	connBranch := params.ConnBranch
+	if connBranch == "" {
+		connBranch = defaultBranch
 	}
 
-	// The destination branch on the remote -- a git refspec's right-hand side
-	// (git push <remote> <branch>:<remoteBranch>). Defaults to the same name.
-	// Naming it, like naming the branch, is an explicit push.
-	destBranch := params.RemoteBranch
-	if destBranch == "" {
-		destBranch = branch
-	}
-	explicit := params.BranchExplicit || params.RemoteBranch != ""
-
-	// Resolve the remote the git way (push.default=simple). A branch's "own
-	// remote" is the remote it tracks (its upstream), defaulting to origin when
-	// untracked -- git's implicit default. Only a push to the branch's own remote
-	// demands a matching upstream; a push to any other remote is a triangular
-	// current-branch push that needs no tracking. Naming a branch or remoteBranch
-	// is an explicit refspec push and skips this gate entirely.
-	//
-	//   - no 'to'            -> push to the upstream; error if none
-	//                           (git push, no configured remote).
-	//   - 'to' == own remote -> the upstream push; error if untracked
-	//                           (git push origin with no upstream).
-	//   - 'to' != own remote -> a triangular push: send the branch to the
-	//                           same-named branch there, no upstream required
-	//                           (git push other-remote).
-	remote := params.Remote
-	up, hasUpstream, err := b.getUpstream(ctx, params.DBName, branch)
+	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, err
 	}
-	if remote == "" {
-		if !hasUpstream {
-			return nil, fmt.Errorf("dumboPush: no remote given and branch %q has no upstream; specify 'to' or use setUpstream", branch)
+
+	// Parse the refspec into: srcRev (a commit-ish resolved below), localBranch
+	// (the branch the source names, empty when the source is a bare revision that
+	// cannot be tracked), dst (destination branch on the remote), forcePlus (a
+	// leading '+'), and explicit (a refspec was given, which skips the gate).
+	srcRev, localBranch, dst, forcePlus, explicit, err := parsePushSpec(ctx, state.doltDB, connBranch, params.RefSpec)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve the remote the git way (push.default=simple). A branch's "own
+	// remote" is the remote it tracks (its upstream), defaulting to origin when
+	// untracked. Only a bare push to the branch's own remote demands a matching,
+	// same-named upstream; a bare push to any other remote is a triangular
+	// current-branch push. An explicit refspec already has its destination and
+	// skips the gate.
+	remote := params.Remote
+	var up upstream
+	hasUpstream := false
+	if localBranch != "" {
+		up, hasUpstream, err = b.getUpstream(ctx, params.DBName, localBranch)
+		if err != nil {
+			return nil, err
 		}
-		remote = up.remote
-	} else if !explicit {
+	}
+
+	if explicit {
+		// git push <remote> <refspec>: a missing 'to' falls back to the source
+		// branch's upstream remote.
+		if remote == "" {
+			if !hasUpstream {
+				return nil, fmt.Errorf("dumboPush: no remote given; specify 'to'")
+			}
+			remote = up.remote
+		}
+	} else {
+		// Bare push (git push): the upstream drives both the remote and the dst.
+		if remote == "" {
+			if !hasUpstream {
+				return nil, fmt.Errorf("dumboPush: no remote given and branch %q has no upstream; specify 'to' or push with a refSpec", localBranch)
+			}
+			remote = up.remote
+		}
 		ownRemote := defaultRemote
 		if hasUpstream {
 			ownRemote = up.remote
 		}
-		if remote == ownRemote && !hasUpstream {
-			return nil, fmt.Errorf("dumboPush: branch %q has no upstream; name a branch or use setUpstream", branch)
+		if remote == ownRemote {
+			if !hasUpstream {
+				return nil, fmt.Errorf("dumboPush: branch %q has no upstream; specify a different remote or push with a refSpec", localBranch)
+			}
+			// git simple refuses a bare push when the upstream branch's name
+			// differs from the local branch; push explicitly instead.
+			if up.ref != localBranch {
+				return nil, fmt.Errorf("dumboPush: branch %q tracks %s/%s and their names differ; push explicitly, e.g. refSpec %q", localBranch, up.remote, up.ref, localBranch+":"+up.ref)
+			}
+			dst = up.ref
+		} else {
+			dst = localBranch // triangular: same-named branch on the other remote
 		}
 	}
 
@@ -91,15 +117,19 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 		return nil, fmt.Errorf("dumboPush: remote scheme %q is not yet supported for push", ru.Scheme)
 	}
 
-	state, err := b.getOrOpenDB(ctx, params.DBName, false)
+	// Resolve the source revision (branch, HEAD, HEAD~3, main~2, a hash) to the
+	// commit to push. HEAD-relative specs resolve against the connection branch.
+	cs, err := doltdb.NewCommitSpec(srcRev)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dumboPush: invalid source %q: %w", srcRev, err)
 	}
-
-	branchRef := ref.NewBranchRef(branch)
-	commit, err := state.doltDB.ResolveCommitRef(ctx, branchRef)
+	optCmt, err := state.doltDB.Resolve(ctx, cs, ref.NewBranchRef(connBranch))
 	if err != nil {
-		return nil, fmt.Errorf("dumboPush: resolving branch %q: %w", branch, err)
+		return nil, fmt.Errorf("dumboPush: resolving %q: %w", srcRev, err)
+	}
+	commit, ok := optCmt.ToCommit()
+	if !ok {
+		return nil, fmt.Errorf("dumboPush: source %q did not resolve to a commit", srcRev)
 	}
 	commitHash, err := commit.HashOf()
 	if err != nil {
@@ -135,14 +165,14 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	mode := ref.FastForwardOnly
-	if params.Force {
+	if params.Force || forcePlus {
 		mode = ref.ForceUpdate
 	}
 
-	// The push sends the local branch's commit to refs/heads/<destBranch> on the
-	// remote and tracks it at refs/remotes/<remote>/<destBranch>.
-	destBranchRef := ref.NewBranchRef(destBranch)
-	remoteRef := ref.NewRemoteRef(remote, destBranch)
+	// The push sends the source commit to refs/heads/<dst> on the remote and
+	// tracks it at refs/remotes/<remote>/<dst>.
+	destBranchRef := ref.NewBranchRef(dst)
+	remoteRef := ref.NewRemoteRef(remote, dst)
 
 	// The remote branch head before the push, for the before->after report.
 	// Empty when the push creates the branch on the remote.
@@ -176,9 +206,13 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 
 	// Only -u records the upstream (git push -u); a plain push never changes it.
 	// The tracked ref is the destination branch, which may differ from the local
-	// branch when a refspec renames it.
+	// branch when a refspec renames it. A bare revision source names no branch to
+	// track, so setUpstream is an error there (git silently skips it).
 	if params.SetUpstream {
-		if err := b.setUpstream(ctx, params.DBName, branch, upstream{remote: remote, ref: destBranch}); err != nil {
+		if localBranch == "" {
+			return nil, fmt.Errorf("dumboPush: cannot set upstream: source %q is not a branch", srcRev)
+		}
+		if err := b.setUpstream(ctx, params.DBName, localBranch, upstream{remote: remote, ref: dst}); err != nil {
 			return nil, fmt.Errorf("dumboPush: recording upstream: %w", err)
 		}
 	}
@@ -186,12 +220,63 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	return &backends.PushResult{
 		Remote:       remote,
 		URL:          ru.Raw,
-		Branch:       branch,
-		RemoteBranch: destBranch,
+		Branch:       localBranch,
+		RemoteBranch: dst,
 		CommitBefore: commitBefore,
 		CommitPushed: commitHash.String(),
 		UpToDate:     upToDate,
 	}, nil
+}
+
+// parsePushSpec interprets a git-style push refspec [+]<src>[:<dst>]. For a bare
+// push (empty spec) it targets the connection branch, leaving dst for the caller
+// to fill from the upstream. It returns the source revision (a commit-ish for
+// doltdb.NewCommitSpec), the local branch the source names (empty when the
+// source is a bare revision that cannot be tracked), the destination branch, a
+// force flag from a leading '+', and whether a refspec was given (explicit).
+func parsePushSpec(ctx context.Context, ddb *doltdb.DoltDB, connBranch, spec string) (srcRev, localBranch, dst string, force, explicit bool, err error) {
+	if spec == "" {
+		return connBranch, connBranch, "", false, false, nil
+	}
+
+	explicit = true
+	if strings.HasPrefix(spec, "+") {
+		force = true
+		spec = spec[1:]
+	}
+
+	lhs := spec
+	if i := strings.IndexByte(spec, ':'); i >= 0 {
+		lhs = spec[:i]
+		dst = spec[i+1:]
+	}
+	lhs = strings.TrimSpace(lhs)
+	dst = strings.TrimSpace(dst)
+	if lhs == "" {
+		return "", "", "", false, false, fmt.Errorf("dumboPush: refspec %q has an empty source", spec)
+	}
+	srcRev = lhs
+
+	// Identify the local branch the source names, for tracking and same-name
+	// destination inference. HEAD is the connection branch; a plain branch name
+	// is itself; anything else (HEAD~3, main~2, a hash) names no branch.
+	if strings.EqualFold(lhs, "HEAD") {
+		localBranch = connBranch
+	} else if _, ok, herr := ddb.HasBranch(ctx, lhs); herr != nil {
+		return "", "", "", false, false, herr
+	} else if ok {
+		localBranch = lhs
+	}
+
+	if dst == "" {
+		// Colon-less refspec: the destination is the source branch's own name; a
+		// bare revision has no branch name to use.
+		if localBranch == "" {
+			return "", "", "", false, false, fmt.Errorf("dumboPush: refspec %q names a commit, not a branch; use <source>:<branch>", spec)
+		}
+		dst = localBranch
+	}
+	return srcRev, localBranch, dst, force, explicit, nil
 }
 
 // resolveRemoteURL looks up a remote's stored URL in admin.system.remotes and

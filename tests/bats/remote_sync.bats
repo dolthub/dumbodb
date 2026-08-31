@@ -48,7 +48,7 @@ seed_and_push() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',refSpec:'main'})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 }
@@ -123,7 +123,7 @@ seed_and_push() {
     echo "$output" | jq -e 'map(select(.name == "main"))[0] | has("upstream") | not'
 
     # setUpstream records it (git push -u origin main).
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main',setUpstream:true})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',refSpec:'main',setUpstream:true})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 

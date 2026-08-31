@@ -50,7 +50,7 @@ teardown() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',refSpec:'main'})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .upToDate == false'
 
@@ -75,7 +75,7 @@ teardown() {
     [ "$status" -eq 0 ]
     run mongo_json "$db_uri" "db.runCommand({dumboRemote:1,action:'add',name:'origin',url:'${url}'})"
     [ "$status" -eq 0 ]
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',refSpec:'main'})"
     [ "$status" -eq 0 ]
 
     local db2_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/other"

@@ -63,7 +63,7 @@ func TestDumboDBPushFetch_DoltHubLive(t *testing.T) {
 	if _, err := src.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "srcdb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	pres, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", Branch: branch, BranchExplicit: true})
+	pres, err := src.DumboDBPush(ctx, &backends.PushParams{DBName: "srcdb", Remote: "origin", RefSpec: branch})
 	if err != nil {
 		t.Fatalf("push to DoltHub %s: %v", remoteURL, err)
 	}

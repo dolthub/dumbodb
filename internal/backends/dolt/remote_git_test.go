@@ -89,7 +89,7 @@ func TestDumboDBGit_SSHTransportWiring(t *testing.T) {
 	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "src", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("push over git+ssh wrapper: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestDumboDBGit_FileRoundTrip(t *testing.T) {
 		t.Fatalf("add remote: %v", err)
 	}
 
-	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main", BranchExplicit: true})
+	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", RefSpec: "main"})
 	if err != nil {
 		t.Fatalf("push to git+file: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestDumboDBGit_FileRoundTrip(t *testing.T) {
 	// A second commit advances the git remote head.
 	insertDoc(t, b, "src", "coll", mustDoc(t, "_id", int64(2), "v", "git-two"))
 	c2 := commitDB(t, b, "src", "c2")
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("push c2: %v", err)
 	}
 

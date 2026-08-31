@@ -69,7 +69,7 @@ func TestDumboDBPush_FileRoundTrip(t *testing.T) {
 	}
 
 	// first push to a brand-new remote
-	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: true})
+	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"})
 	if err != nil {
 		t.Fatalf("push c1: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestDumboDBPush_FileRoundTrip(t *testing.T) {
 	assertRemoteHead(t, nbf, remoteURL, "main", c1)
 
 	// idempotent re-push: no error, remote unchanged
-	res2, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: true})
+	res2, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"})
 	if err != nil {
 		t.Fatalf("re-push: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestDumboDBPush_FileRoundTrip(t *testing.T) {
 	// second commit advances the remote head
 	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(2), "v", int64(2)))
 	c2 := commitDB(t, b, dbName, "c2")
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("push c2: %v", err)
 	}
 	assertRemoteHead(t, nbf, remoteURL, "main", c2)
@@ -103,7 +103,7 @@ func TestDumboDBPush_RemoteNotFound(t *testing.T) {
 	insertDoc(t, b, "mydb", "col", mustDoc(t, "_id", int64(1)))
 	commitDB(t, b, "mydb", "c1")
 
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "ghost", Branch: "main", BranchExplicit: true}); err == nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "ghost", RefSpec: "main"}); err == nil {
 		t.Error("push to unknown remote: want error, got nil")
 	}
 }
@@ -118,7 +118,7 @@ func TestDumboDBPush_UnsupportedScheme(t *testing.T) {
 	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: dbName, Action: "add", Name: "box", URL: "ssh://host/org/repo"}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "box", Branch: "main", BranchExplicit: true}); err == nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: dbName, Remote: "box", RefSpec: "main"}); err == nil {
 		t.Error("push to unsupported scheme: want error, got nil")
 	}
 }
@@ -136,7 +136,7 @@ func TestDumboDBPush_NewBranchAtExistingCommit(t *testing.T) {
 	if _, err := b.DumboDBRemote(ctx, &backends.RemoteParams{DBName: "mydb", Action: "add", Name: "origin", URL: remoteURL}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("push main: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestDumboDBPush_NewBranchAtExistingCommit(t *testing.T) {
 	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{DBName: "mydb", From: "main", Name: "dev"}); err != nil {
 		t.Fatalf("create dev: %v", err)
 	}
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", Branch: "dev", BranchExplicit: true}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "mydb", Remote: "origin", RefSpec: "dev"}); err != nil {
 		t.Fatalf("push dev: %v", err)
 	}
 

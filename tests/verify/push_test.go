@@ -86,7 +86,7 @@ func TestPushVerify(t *testing.T) {
 	t.Run("Scenario1_NamedPushSetsNoUpstream", func(t *testing.T) {
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, "origin", res["remote"])
@@ -118,7 +118,7 @@ func TestPushVerify(t *testing.T) {
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
-			{Key: "branch", Value: "main"}, {Key: "setUpstream", Value: true},
+			{Key: "refSpec", Value: "main"}, {Key: "setUpstream", Value: true},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, true, res["upToDate"], "hash1 was already pushed in Scenario 1")
@@ -154,7 +154,7 @@ func TestPushVerify(t *testing.T) {
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin2"},
-			{Key: "branch", Value: "main"}, {Key: "setUpstream", Value: true},
+			{Key: "refSpec", Value: "main"}, {Key: "setUpstream", Value: true},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, "origin2", res["remote"])
@@ -173,7 +173,7 @@ func TestPushVerify(t *testing.T) {
 
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 		assert.Equal(t, "origin", res["remote"])
 
@@ -187,7 +187,7 @@ func TestPushVerify(t *testing.T) {
 	t.Run("Scenario7_IdempotentRepush", func(t *testing.T) {
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 		assert.Equal(t, "origin", res["remote"])
 		assert.Equal(t, true, res["upToDate"])
@@ -214,20 +214,20 @@ func TestPushVerify(t *testing.T) {
 		seed(dbA, "A")
 		var res bson.M
 		require.NoError(t, env.Client.Database(dbA).RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 
 		seed(dbB, "B")
 		// Non-fast-forward push is rejected.
 		err := env.Client.Database(dbB).RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res)
 		assert.Error(t, err, "a non-fast-forward push must be rejected")
 
 		// force overwrites the remote.
 		require.NoError(t, env.Client.Database(dbB).RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
-			{Key: "branch", Value: "main"}, {Key: "force", Value: true},
+			{Key: "refSpec", Value: "main"}, {Key: "force", Value: true},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 	})
@@ -243,7 +243,7 @@ func TestPushVerify(t *testing.T) {
 
 		require.NoError(t, env.Client.Database(dbName+"@release").RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
-			{Key: "branch", Value: "release"}, {Key: "setUpstream", Value: true},
+			{Key: "refSpec", Value: "release"}, {Key: "setUpstream", Value: true},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, "release", res["branch"])
@@ -260,7 +260,7 @@ func TestPushVerify(t *testing.T) {
 		var res bson.M
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
-			{Key: "branch", Value: "main"}, {Key: "remoteBranch", Value: "published"}, {Key: "setUpstream", Value: true},
+			{Key: "refSpec", Value: "main:published"}, {Key: "setUpstream", Value: true},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, "main", res["branch"])
@@ -280,7 +280,7 @@ func TestPushVerify(t *testing.T) {
 		// Put main's upstream in a known place (origin/main) first.
 		require.NoError(t, db.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
-			{Key: "branch", Value: "main"}, {Key: "setUpstream", Value: true},
+			{Key: "refSpec", Value: "main"}, {Key: "setUpstream", Value: true},
 		}).Decode(&res))
 		up := branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
 		require.Equal(t, "origin", up["remote"])
@@ -300,5 +300,110 @@ func TestPushVerify(t *testing.T) {
 		up = branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
 		assert.Equal(t, "origin", up["remote"], "a triangular push must not change the upstream")
 		assert.Equal(t, "main", up["ref"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 12: HEAD:<dst> pushes the current head to a differently-named branch
+	// -------------------------------------------------------------------------
+	t.Run("Scenario12_HeadToNamedBranch", func(t *testing.T) {
+		head := branchEntry(t, env, dbName, "main")["commitId"]
+		var res bson.M
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "HEAD:handy"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, "origin", res["remote"])
+		assert.Equal(t, "main", res["branch"], "HEAD resolves to the connection branch")
+		assert.Equal(t, "handy", res["remoteBranch"])
+		assert.Equal(t, head, res["commitPushed"])
+
+		// No setUpstream, so main still tracks origin/main from Scenario 11.
+		up := branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
+		assert.Equal(t, "main", up["ref"], "an explicit refspec must not change the upstream")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 13: A revision source (HEAD~1) pushes an older commit to a branch
+	// -------------------------------------------------------------------------
+	t.Run("Scenario13_RevisionSourceToBranch", func(t *testing.T) {
+		head := branchEntry(t, env, dbName, "main")["commitId"]
+		var res bson.M
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "HEAD~1:older"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, "older", res["remoteBranch"])
+		// The source is a revision, not a branch, so no "branch" is reported...
+		_, hasBranch := res["branch"]
+		assert.False(t, hasBranch, "a revision source names no local branch")
+		// ...and the commit pushed is the parent, not the current head.
+		assert.NotEqual(t, head, res["commitPushed"])
+		assert.NotEmpty(t, res["commitPushed"])
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 14: A colon-less revision has no destination branch (error)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario14_ColonlessRevisionErrors", func(t *testing.T) {
+		var res bson.M
+		err := db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "HEAD~1"},
+		}).Decode(&res)
+		assert.Error(t, err, "a colon-less revision names no branch to push to")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 15: A bare push errors when the upstream name differs (git simple)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario15_BarePushNameMismatchErrors", func(t *testing.T) {
+		var res bson.M
+		// Track a differently-named remote branch via a refspec + setUpstream.
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
+			{Key: "refSpec", Value: "main:renamed"}, {Key: "setUpstream", Value: true},
+		}).Decode(&res))
+		up := branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
+		require.Equal(t, "renamed", up["ref"])
+
+		// A bare push now refuses: main's name does not match its upstream ref.
+		err := db.RunCommand(ctx, bson.D{{Key: "dumboPush", Value: int32(1)}}).Decode(&res)
+		assert.Error(t, err, "git simple refuses a bare push to a name-mismatched upstream")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 16: A leading '+' forces a non-fast-forward push
+	// -------------------------------------------------------------------------
+	t.Run("Scenario16_PlusPrefixForces", func(t *testing.T) {
+		ffURL := "file://" + t.TempDir()
+		dbA := fmt.Sprintf("pushplusA%d", rand.Int64N(1_000_000))
+		dbB := fmt.Sprintf("pushplusB%d", rand.Int64N(1_000_000))
+		seed := func(name, who string) {
+			_, err := env.Client.Database(name).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "who", Value: who}})
+			require.NoError(t, err)
+			dumboDBCommit(t, env, name, who+"1", "x <x@x>")
+			var res bson.M
+			require.NoError(t, env.Client.Database(name).RunCommand(ctx, bson.D{
+				{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+				{Key: "name", Value: "origin"}, {Key: "url", Value: ffURL},
+			}).Decode(&res))
+		}
+		seed(dbA, "A")
+		var res bson.M
+		require.NoError(t, env.Client.Database(dbA).RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
+		}).Decode(&res))
+
+		seed(dbB, "B")
+		// Plain push of an unrelated history is rejected (not a fast-forward).
+		err := env.Client.Database(dbB).RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
+		}).Decode(&res)
+		assert.Error(t, err, "a non-fast-forward push must be rejected")
+
+		// The '+' prefix forces it, exactly like force:true.
+		require.NoError(t, env.Client.Database(dbB).RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "+main"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
 	})
 }

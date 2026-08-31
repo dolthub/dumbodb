@@ -752,20 +752,19 @@ type RemoteResult struct {
 
 // PushParams are the arguments to DumboDBPush.
 type PushParams struct {
-	DBName         string
-	Remote         string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
-	Branch         string // local branch to push; empty means the default branch
-	RemoteBranch   string // destination branch on the remote (git refspec rhs); empty means the same name as Branch
-	BranchExplicit bool   // whether Branch was named in the command (git refspec) vs defaulted from the connection
-	Force          bool   // non-fast-forward (force) update
-	SetUpstream    bool   // record the target as the branch upstream (git push -u)
+	DBName      string
+	Remote      string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
+	ConnBranch  string // the connection's current branch; the local branch for a bare push and the target of HEAD
+	RefSpec     string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
+	Force       bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
+	SetUpstream bool   // record the target as the branch upstream (git push -u)
 }
 
 // PushResult is returned by DumboDBPush.
 type PushResult struct {
 	Remote       string
 	URL          string
-	Branch       string // local branch pushed
+	Branch       string // local branch pushed; empty when the source was a revision expression, not a branch
 	RemoteBranch string // destination branch on the remote (equals Branch unless a refspec renamed it)
 	CommitBefore string // remote branch head before the push; empty when the push created the branch
 	CommitPushed string // commit now on the remote branch

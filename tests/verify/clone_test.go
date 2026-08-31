@@ -63,13 +63,13 @@ func TestCloneVerify(t *testing.T) {
 		{Key: "name", Value: "origin"}, {Key: "url", Value: srcURL},
 	}).Decode(&res))
 	require.NoError(t, src.RunCommand(ctx, bson.D{
-		{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+		{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 	}).Decode(&res))
 	require.NoError(t, env.Client.Database(srcName+"@main").RunCommand(ctx, bson.D{
 		{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
 	}).Decode(&res))
 	require.NoError(t, env.Client.Database(srcName+"@feature").RunCommand(ctx, bson.D{
-		{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "feature"},
+		{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "feature"},
 	}).Decode(&res))
 
 	// -------------------------------------------------------------------------

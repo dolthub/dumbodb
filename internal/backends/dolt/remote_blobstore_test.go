@@ -43,7 +43,7 @@ func TestDumboDBBlobstore_LocalBSRoundTrip(t *testing.T) {
 		t.Fatalf("add remote: %v", err)
 	}
 
-	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main", BranchExplicit: true})
+	res, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", RefSpec: "main"})
 	if err != nil {
 		t.Fatalf("push to localbs: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestDumboDBBlobstore_LocalBSRoundTrip(t *testing.T) {
 	// A second commit advances the blobstore remote head.
 	insertDoc(t, b, "src", "coll", mustDoc(t, "_id", int64(2), "v", "blob-two"))
 	c2 := commitDB(t, b, "src", "c2")
-	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", Branch: "main", BranchExplicit: true}); err != nil {
+	if _, err := b.DumboDBPush(ctx, &backends.PushParams{DBName: "src", Remote: "origin", RefSpec: "main"}); err != nil {
 		t.Fatalf("push c2: %v", err)
 	}
 

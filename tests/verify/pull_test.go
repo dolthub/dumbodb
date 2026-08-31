@@ -45,7 +45,7 @@ func TestPullVerify(t *testing.T) {
 	pushHub := func() {
 		var res bson.M
 		require.NoError(t, hub.RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "branch", Value: "main"},
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 	}
 

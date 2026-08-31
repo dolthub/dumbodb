@@ -46,7 +46,7 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "to", "branch", "remoteBranch", "force", "setUpstream"); err != nil {
+	if err = common.RejectUnknownFields(document, "to", "refSpec", "force", "setUpstream"); err != nil {
 		return nil, err
 	}
 
@@ -66,15 +66,11 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	// Whether the branch was named in the command (a git refspec) vs defaulted
-	// from the connection decides whether a bare push may run without an upstream.
-	branchExplicit := document.Has("branch")
-	branch, err := common.GetOptionalParam[string](document, "branch", "")
+	// refSpec is an optional git-style [+]<src>[:<dst>]; empty means a bare push
+	// of the connection branch to its upstream.
+	refSpec, err := common.GetOptionalParam[string](document, "refSpec", "")
 	if err != nil {
 		return nil, err
-	}
-	if branch == "" {
-		branch = connBranch
 	}
 
 	force, err := common.GetOptionalBoolOrIntParam(document, "force", false)
@@ -87,24 +83,18 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	remoteBranch, err := common.GetOptionalParam[string](document, "remoteBranch", "")
-	if err != nil {
-		return nil, err
-	}
-
 	vb := h.versioningBackend()
 	if vb == nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, "dumboPush: versioning is not supported by the current backend")
 	}
 
 	res, err := vb.DumboDBPush(connCtx, &backends.PushParams{
-		DBName:         dbName,
-		Remote:         remote,
-		Branch:         branch,
-		RemoteBranch:   remoteBranch,
-		BranchExplicit: branchExplicit,
-		Force:          force,
-		SetUpstream:    setUpstream,
+		DBName:      dbName,
+		Remote:      remote,
+		ConnBranch:  connBranch,
+		RefSpec:     refSpec,
+		Force:       force,
+		SetUpstream: setUpstream,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
@@ -112,9 +102,14 @@ func (h *Handler) MsgDumboDBPush(connCtx context.Context, msg *wire.OpMsg) (*wir
 
 	out := must.NotFail(types.NewDocument(
 		"remote", res.Remote,
-		"branch", res.Branch,
 	))
-	// remoteBranch is shown only when a refspec pushed to a different name.
+	// branch is the local branch pushed; empty when the source was a revision
+	// expression rather than a branch.
+	if res.Branch != "" {
+		out.Set("branch", res.Branch)
+	}
+	// remoteBranch is shown when it differs from the local branch: a refspec
+	// rename, or a revision source with no local branch name.
 	if res.RemoteBranch != res.Branch {
 		out.Set("remoteBranch", res.RemoteBranch)
 	}

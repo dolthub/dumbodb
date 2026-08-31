@@ -6,50 +6,77 @@
 Manual verification guide for `dumboPush` end-to-end behavior. Work through each
 scenario top to bottom; each builds on the previous setup.
 
-`dumboPush` mirrors `git push`. The behaviors below were checked against git
-2.39.5 and match it:
+`dumboPush` mirrors `git push`. A single `refSpec` option carries git's push
+refspec, `[+]<source>[:<destination>]`:
 
-- Naming a branch pushes it (`git push origin main`) and does **not** change the
-  branch's upstream.
-- A bare push to the branch's **own** remote with no upstream errors:
-  `dumboPush {to:"origin"}` untracked fails, exactly like `git push origin`. A
-  branch's own remote is its upstream, defaulting to `origin` when untracked.
+- `<source>` is any revision -- a branch (`main`), `HEAD`, a relative revision
+  (`HEAD~3`, `main~2`, `main^`), or a commit hash. `HEAD` and relative revisions
+  resolve against the connection's branch.
+- `<destination>` is the branch to update on the remote.
+- A leading `+` forces a non-fast-forward update (same as `force: true`).
+
+The behaviors below were checked against git 2.39.5 and match it, except where
+noted:
+
+- `refSpec: "main"` pushes `main` to `main` on the remote and does **not** change
+  the branch's upstream (`git push origin main`).
+- `refSpec: "HEAD:foo"` pushes the current head to branch `foo` on the remote.
+- A bare push to the branch's **own** remote (its upstream, or `origin` by
+  default) with no upstream errors, exactly like `git push origin`.
 - A bare push to a **different** remote is a triangular push: it sends the branch
   to the same-named branch there and needs no upstream (`git push other-remote`).
-- `setUpstream: true` records the upstream (`git push -u`); it overwrites any
-  previous upstream.
-- With an upstream set, `dumboPush {}` uses it (`git push`).
-- An explicit push never changes the upstream, even one pointing at another remote.
+- `setUpstream: true` records the upstream (`git push -u`); an explicit push
+  never changes it.
+- A bare push (`dumboPush {}`) follows the upstream; git's `simple` mode refuses
+  it when the upstream's branch name differs from the local branch.
+
+Unlike git, a revision source may be pushed straight to a new branch
+(`refSpec: "HEAD~1:older"`); git makes you fully qualify the destination as
+`refs/heads/older`, but dumbo's remote side is always branches, so the
+right-hand side is always a branch name.
 
 Upstream tracking is part of the branch interface: it is shown by `dumboBranch`
 (the analog of `git branch -vv`) and set or cleared there too (see `branch.md`).
 The `admin.system.branches` collection is internal storage, not the interface.
 
-DumboDB v0 pushes a branch to the **same-named** branch on the remote; it does
-not support git's `local:remote` refspec rename, so `upstream.ref` always equals
-the branch name.
-
 ## Parameters
 
 | Parameter     | Type   | Required | Default            | Description                                                          |
 |---------------|--------|----------|--------------------|----------------------------------------------------------------------|
-| `to`           | string | no\*     | branch's upstream  | Remote to push to. Omit to use the branch's upstream.               |
-| `branch`       | string | no       | connection branch  | Local branch to push (a git refspec's left-hand side).              |
-| `remoteBranch` | string | no       | same as `branch`   | Destination branch on the remote (`git push origin branch:remoteBranch`). |
-| `force`        | bool   | no       | `false`            | Overwrite a non-fast-forward remote (`git push --force`).           |
-| `setUpstream`  | bool   | no       | `false`            | Record the target as the branch's upstream (`git push -u`).         |
+| `to`          | string | no\*     | branch's upstream  | Remote to push to. Omit to use the branch's upstream.                |
+| `refSpec`     | string | no       | connection branch  | git-style `[+]<source>[:<destination>]`. Omit for a bare push (`git push`). |
+| `force`       | bool   | no       | `false`            | Overwrite a non-fast-forward remote (`git push --force`); same as a `+` prefix. |
+| `setUpstream` | bool   | no       | `false`            | Record the target as the source branch's upstream (`git push -u`).   |
 
-\* Push needs a remote from somewhere: an explicit `to`, or the branch's upstream.
+\* Push needs a remote from somewhere: an explicit `to`, or the source branch's
+upstream.
+
+`refSpec` forms:
+
+| refSpec              | Meaning                                                             |
+|----------------------|--------------------------------------------------------------------|
+| `main`               | push `main` to `main` (colon-less branch)                          |
+| `HEAD`               | push the current head to a branch of the connection branch's name  |
+| `main:published`     | push `main` to `published` on the remote                           |
+| `HEAD:foo`           | push the current head to `foo`                                     |
+| `HEAD~2:older`       | push a relative revision to `older`                                |
+| `+main`              | force-push `main` to `main`                                        |
+
+A colon-less source that is not a branch (e.g. `HEAD~2`) is an error: there is
+no branch name to use for the destination.
 
 ## Response
 
 ```json
-{ "remote": "<remote>", "branch": "<branch>", "commitBefore": "<hash>", "commitPushed": "<hash>", "upToDate": <bool>, "ok": 1 }
+{ "remote": "<remote>", "branch": "<branch>", "remoteBranch": "<dst>", "commitBefore": "<hash>", "commitPushed": "<hash>", "upToDate": <bool>, "ok": 1 }
 ```
 
-`commitBefore` is the remote branch's head before the push and `commitPushed`
-is the commit now on it -- the analog of git's `<before>..<after>` report.
-`commitBefore` is omitted when the push creates the branch on the remote.
+`branch` is the local branch pushed; it is **omitted** when the source is a
+revision expression rather than a branch. `remoteBranch` is shown only when the
+destination differs from `branch`. `commitBefore` is the remote branch's head
+before the push and `commitPushed` is the commit now on it -- the analog of git's
+`<before>..<after>` report. `commitBefore` is omitted when the push creates the
+branch on the remote.
 
 ## Prerequisites
 
@@ -77,20 +104,22 @@ const r1 = db.runCommand({ dumboCommit: 1, message: "commit one", author: "alice
 printjson(r1)
 const hash1 = r1.commitId
 print("hash1 =", hash1)
+
+db.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<REMOTE_DIR>" })
+db.runCommand({ dumboRemote: 1, action: "add", name: "origin2", url: "file://<REMOTE2_DIR>" })
 ```
 
-`pushvdb` now has one commit on `main` (`hash1`, the HEAD).
+`pushvdb` now has one commit on `main` (`hash1`, the HEAD) and two remotes.
 
 ---
 
-## Scenario 1: Push a named branch (`git push origin main`)
+## Scenario 1: Push a branch (`git push origin main`)
 
-Naming the branch pushes it and does **not** set an upstream.
+A colon-less branch refspec pushes it and does **not** set an upstream.
 
 ```js
 var db = db.getSiblingDB("pushvdb")
-db.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<REMOTE_DIR>" })
-db.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 ```
 
 Expected (no `commitBefore` -- this push creates `main` on the remote):
@@ -108,14 +137,14 @@ db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 
 ---
 
-## Scenario 2: Bare push with no upstream is an error (`git push origin`)
+## Scenario 2: Bare push to the own remote with no upstream is an error (`git push origin`)
 
-Without a branch named and no upstream recorded, there is nothing git would
-push -- it errors, and so does DumboDB.
+Without a refspec and no upstream recorded, a push to the branch's own remote
+(`origin` by default) errors, like `git push origin`.
 
 ```js
 db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin" })
-// Expected: ok: 0; errmsg says main has no upstream -- name a branch or use setUpstream.
+// Expected: ok: 0; errmsg says main has no upstream.
 ```
 
 The remote is unchanged.
@@ -125,7 +154,7 @@ The remote is unchanged.
 ## Scenario 3: `setUpstream` records the upstream (`git push -u origin main`)
 
 ```js
-db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", branch: "main", setUpstream: true })
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "main", setUpstream: true })
 ```
 
 The push is up to date (Scenario 1 already sent `hash1`), but the upstream is now
@@ -133,25 +162,14 @@ recorded. Confirm through the branch interface:
 
 ```js
 db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
-```
-
-Expected: `main` carries `upstream: { remote: "origin", ref: "main" }`.
-
-```json
-{
-  "branches": [
-    { "name": "main", "commitId": "<hash1>", "current": true,
-      "upstream": { "remote": "origin", "ref": "main" } }
-  ],
-  "ok": 1
-}
+// Expected: main carries upstream { remote: "origin", ref: "main" }.
 ```
 
 ---
 
 ## Scenario 4: Bare push follows the upstream (`git push`)
 
-With an upstream set, no `to` is needed.
+With an upstream set, no `to` or `refSpec` is needed.
 
 ```js
 var db = db.getSiblingDB("pushvdb")
@@ -170,8 +188,7 @@ db.runCommand({ dumboPush: 1 })
 
 ```js
 var db = db.getSiblingDB("pushvdb")
-db.runCommand({ dumboRemote: 1, action: "add", name: "origin2", url: "file://<REMOTE2_DIR>" })
-db.runCommand({ dumboPush: 1, to: "origin2", branch: "main", setUpstream: true })
+db.runCommand({ dumboPush: 1, to: "origin2", refSpec: "main", setUpstream: true })
 
 db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 // Expected: main upstream is now { remote: "origin2", ref: "main" }.
@@ -182,13 +199,13 @@ db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 ## Scenario 6: An explicit push does not change the upstream (`git push origin main`)
 
 Pushing explicitly to `origin` while the upstream is `origin2` must leave the
-upstream pointing at `origin2` (verified against git).
+upstream pointing at `origin2`.
 
 ```js
 var db = db.getSiblingDB("pushvdb")
 db.items.insertOne({ _id: 3, label: "gamma" })
 db.runCommand({ dumboCommit: 1, message: "commit three", author: "alice <alice@acme.com>" })
-db.runCommand({ dumboPush: 1, to: "origin", branch: "main" })   // no setUpstream
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })   // no setUpstream
 
 db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 // Expected: upstream is STILL { remote: "origin2", ref: "main" } -- unchanged.
@@ -202,7 +219,7 @@ Scenario 6 just pushed the current HEAD to `origin`, so pushing it again is a
 no-op.
 
 ```js
-db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 // Expected: upToDate true, remote origin, ok 1.
 ```
 
@@ -219,7 +236,7 @@ a.dropDatabase()
 a.items.insertOne({ _id: 1, who: "A" })
 a.runCommand({ dumboCommit: 1, message: "A1", author: "a <a@a>" })
 a.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<FF_REMOTE_DIR>" })
-a.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+a.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 var b = db.getSiblingDB("pushffB")
 b.dropDatabase()
@@ -227,10 +244,10 @@ b.items.insertOne({ _id: 1, who: "B" })
 b.runCommand({ dumboCommit: 1, message: "B1", author: "b <b@b>" })
 b.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<FF_REMOTE_DIR>" })
 
-b.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 // Expected: ok: 0 -- not a fast-forward.
 
-b.runCommand({ dumboPush: 1, to: "origin", branch: "main", force: true })
+b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main", force: true })
 // Expected: ok: 1 -- the remote main now holds dbB's history.
 ```
 
@@ -244,7 +261,7 @@ branch (no chunks transfer) and, with `setUpstream`, tracks it.
 ```js
 var db = db.getSiblingDB("pushvdb")
 db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, branch: "release" })
-db.getSiblingDB("pushvdb@release").runCommand({ dumboPush: 1, to: "origin", branch: "release", setUpstream: true })
+db.getSiblingDB("pushvdb@release").runCommand({ dumboPush: 1, to: "origin", refSpec: "release", setUpstream: true })
 // Expected: ok 1, branch "release".
 
 db.getSiblingDB("pushvdb@release").runCommand({ dumboBranch: 1 })
@@ -253,20 +270,19 @@ db.getSiblingDB("pushvdb@release").runCommand({ dumboBranch: 1 })
 
 ---
 
-## Scenario 10: Push to a differently-named remote branch (refspec)
+## Scenario 10: Push a branch to a differently-named remote branch (refspec rename)
 
-`remoteBranch` sends the local branch to a different branch on the remote, like
-`git push origin main:published`. You do not have to track that branch. With
-`setUpstream`, the branch then tracks it -- its `upstream.ref` differs from the
-local name.
+`refSpec: "main:published"` sends `main` to a different branch on the remote,
+like `git push origin main:published`. With `setUpstream`, the branch then tracks
+it -- its `upstream.ref` differs from the local name.
 
 ```js
-db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", branch: "main", remoteBranch: "published", setUpstream: true })
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "main:published", setUpstream: true })
 ```
 
 Expected: the response echoes both the local and remote branch (main's HEAD is
 already on the remote, so this creates `published` there without transferring
-anything -- `upToDate` is true and there is no `commitBefore`).
+anything).
 
 ```json
 { "remote": "origin", "branch": "main", "remoteBranch": "published", "commitPushed": "<hash>", "upToDate": true, "ok": 1 }
@@ -283,33 +299,88 @@ db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 
 ## Scenario 11: Bare push to a different remote is triangular (`git push origin2`)
 
-A bare push (no branch, no `setUpstream`) to a remote the branch does **not**
-track sends the branch to the same-named branch there and leaves the upstream
-untouched -- git's "triangular" current-branch push. This differs from Scenario 2
-only in the target: Scenario 2's `origin` is the branch's own remote, so it needs
-an upstream; a different remote does not.
-
-First put `main`'s upstream in a known place (`origin`):
+A bare push to a remote the branch does **not** track sends the branch to the
+same-named branch there and leaves the upstream untouched -- git's triangular
+push. First re-point main's upstream at `origin/main`:
 
 ```js
 var db = db.getSiblingDB("pushvdb")
-db.runCommand({ dumboPush: 1, to: "origin", branch: "main", setUpstream: true })
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main", setUpstream: true })
 // Expected: main upstream is { remote: "origin", ref: "main" }.
-```
 
-Now push bare to `origin2` (added in Scenario 5), which `main` does not track:
+db.runCommand({ dumboPush: 1, to: "origin2" })
+// Expected: ok 1, remote "origin2", branch "main" -- main sent to origin2/main.
 
-```js
-db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin2" })
-// Expected: ok 1, remote "origin2", branch "main" -- main was sent to origin2/main.
-```
-
-The upstream is unchanged -- the triangular push never touches it:
-
-```js
 db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
-// Expected: main upstream is STILL { remote: "origin", ref: "main" }.
+// Expected: main upstream is STILL { remote: "origin", ref: "main" } -- untouched.
+```
+
+---
+
+## Scenario 12: `HEAD:<dst>` pushes the current head to a named branch
+
+`HEAD` resolves to the connection branch's head; the destination is any branch.
+
+```js
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "HEAD:handy" })
+// Expected: ok 1, branch "main", remoteBranch "handy", commitPushed = main's head.
+// No setUpstream, so main's upstream is unchanged.
+```
+
+---
+
+## Scenario 13: A revision source pushes an older commit (`HEAD~1:older`)
+
+The left side may be a relative revision. dumbo pushes it straight to a branch --
+git would require `refs/heads/older`.
+
+```js
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "HEAD~1:older" })
+// Expected: ok 1, remoteBranch "older", NO "branch" field (the source is not a
+// branch), and commitPushed is the parent commit, not the current head.
+```
+
+---
+
+## Scenario 14: A colon-less revision is an error
+
+Without a `:dst`, a revision source has no branch name to push to.
+
+```js
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "HEAD~1" })
+// Expected: ok: 0 -- names a commit, not a branch; use <source>:<branch>.
+```
+
+---
+
+## Scenario 15: A bare push errors when the upstream name differs (git `simple`)
+
+Set main to track a differently-named remote branch, then try a bare push.
+
+```js
+var db = db.getSiblingDB("pushvdb")
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main:renamed", setUpstream: true })
+// main now tracks origin/renamed.
+
+db.runCommand({ dumboPush: 1 })
+// Expected: ok: 0 -- main's name does not match its upstream ref; push explicitly.
+```
+
+---
+
+## Scenario 16: A leading `+` forces a non-fast-forward push
+
+`+<source>` is the refspec equivalent of `force: true`. Repeat Scenario 8's
+unrelated-history setup and force with a `+`.
+
+```js
+// (dbA has pushed main to <FF2_REMOTE_DIR>; dbB has an unrelated history and the
+//  same remote configured -- see Scenario 8.)
+b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+// Expected: ok: 0 -- not a fast-forward.
+
+b.runCommand({ dumboPush: 1, to: "origin", refSpec: "+main" })
+// Expected: ok: 1 -- the '+' forces it, exactly like force: true.
 ```
 
 ---
@@ -318,21 +389,25 @@ db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 
 | Command                                                       | git analog                          |
 |---------------------------------------------------------------|-------------------------------------|
-| `{ dumboPush: 1, to: "origin", branch: "main" }`             | `git push origin main`              |
-| `{ dumboPush: 1, to: "origin", branch: "main", remoteBranch: "published" }` | `git push origin main:published` |
-| `{ dumboPush: 1, to: "origin", branch: "main", setUpstream: true }` | `git push -u origin main`   |
+| `{ dumboPush: 1, to: "origin", refSpec: "main" }`            | `git push origin main`              |
+| `{ dumboPush: 1, to: "origin", refSpec: "main:published" }`  | `git push origin main:published`    |
+| `{ dumboPush: 1, to: "origin", refSpec: "HEAD:foo" }`        | `git push origin HEAD:foo`          |
+| `{ dumboPush: 1, to: "origin", refSpec: "HEAD~2:older" }`    | `git push origin HEAD~2:refs/heads/older` |
+| `{ dumboPush: 1, to: "origin", refSpec: "main", setUpstream: true }` | `git push -u origin main`    |
 | `{ dumboPush: 1 }`                                            | `git push` (uses upstream)          |
 | `{ dumboPush: 1, to: "origin" }` (own remote, no upstream)   | `git push origin` (errors)          |
 | `{ dumboPush: 1, to: "origin2" }` (a remote it doesn't track)| `git push origin2` (triangular)     |
-| `{ dumboPush: 1, to: "origin", branch: "main", force: true }`| `git push --force origin main`      |
+| `{ dumboPush: 1, to: "origin", refSpec: "+main" }`           | `git push --force origin main`      |
 
-- Naming a branch pushes it without changing tracking.
+- A colon-less branch pushes it without changing tracking; a colon-less revision
+  (no `:dst`) is an error.
 - A bare push to the branch's own remote (its upstream, or `origin`) with no
-  upstream errors; a bare push to a different remote is triangular and succeeds.
+  upstream errors; a bare push to a different remote is triangular and succeeds;
+  a bare push whose upstream name differs from the branch errors (git `simple`).
 - `setUpstream: true` records/overwrites the upstream; an explicit push never
   changes it.
 - Upstream is shown and managed through `dumboBranch` (see `branch.md`), never by
   reading `admin.system.branches`.
-- Pushes are fast-forward-only unless `force` is set.
-- v0 pushes to the same-named remote branch; `local:remote` rename is not
-  supported, so `upstream.ref` equals the branch name.
+- Pushes are fast-forward-only unless `force` (or a `+` prefix) is set.
+- The destination is always a branch: a revision source (`HEAD~2:older`) pushes
+  straight to a branch, no `refs/heads/` qualification needed.
