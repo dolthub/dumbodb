@@ -19,6 +19,7 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 | log.md | log_test.go | TestLogVerify |
 | log-pagination-filtering.md | log_pagination_filtering_test.go | TestLogPaginationVerify |
 | merge.md | merge_test.go | TestMergeVerify |
+| push.md | push_test.go | TestPushVerify |
 | rebase.md | rebase_test.go | TestRebaseVerify |
 | reset.md | reset_test.go | TestResetVerify |
 | revert.md | revert_test.go | TestRevertVerify |
