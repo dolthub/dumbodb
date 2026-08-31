@@ -11,8 +11,11 @@ scenario top to bottom; each builds on the previous setup.
 
 - Naming a branch pushes it (`git push origin main`) and does **not** change the
   branch's upstream.
-- You cannot push bare to a remote a branch doesn't track: `dumboPush {to:"origin"}`
-  with no upstream errors, exactly like `git push origin`.
+- A bare push to the branch's **own** remote with no upstream errors:
+  `dumboPush {to:"origin"}` untracked fails, exactly like `git push origin`. A
+  branch's own remote is its upstream, defaulting to `origin` when untracked.
+- A bare push to a **different** remote is a triangular push: it sends the branch
+  to the same-named branch there and needs no upstream (`git push other-remote`).
 - `setUpstream: true` records the upstream (`git push -u`); it overwrites any
   previous upstream.
 - With an upstream set, `dumboPush {}` uses it (`git push`).
@@ -278,6 +281,39 @@ db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 
 ---
 
+## Scenario 11: Bare push to a different remote is triangular (`git push origin2`)
+
+A bare push (no branch, no `setUpstream`) to a remote the branch does **not**
+track sends the branch to the same-named branch there and leaves the upstream
+untouched -- git's "triangular" current-branch push. This differs from Scenario 2
+only in the target: Scenario 2's `origin` is the branch's own remote, so it needs
+an upstream; a different remote does not.
+
+First put `main`'s upstream in a known place (`origin`):
+
+```js
+var db = db.getSiblingDB("pushvdb")
+db.runCommand({ dumboPush: 1, to: "origin", branch: "main", setUpstream: true })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+// Expected: main upstream is { remote: "origin", ref: "main" }.
+```
+
+Now push bare to `origin2` (added in Scenario 5), which `main` does not track:
+
+```js
+db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin2" })
+// Expected: ok 1, remote "origin2", branch "main" -- main was sent to origin2/main.
+```
+
+The upstream is unchanged -- the triangular push never touches it:
+
+```js
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+// Expected: main upstream is STILL { remote: "origin", ref: "main" }.
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                       | git analog                          |
@@ -286,11 +322,13 @@ db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
 | `{ dumboPush: 1, to: "origin", branch: "main", remoteBranch: "published" }` | `git push origin main:published` |
 | `{ dumboPush: 1, to: "origin", branch: "main", setUpstream: true }` | `git push -u origin main`   |
 | `{ dumboPush: 1 }`                                            | `git push` (uses upstream)          |
-| `{ dumboPush: 1, to: "origin" }` (no upstream)               | `git push origin` (errors)          |
+| `{ dumboPush: 1, to: "origin" }` (own remote, no upstream)   | `git push origin` (errors)          |
+| `{ dumboPush: 1, to: "origin2" }` (a remote it doesn't track)| `git push origin2` (triangular)     |
 | `{ dumboPush: 1, to: "origin", branch: "main", force: true }`| `git push --force origin main`      |
 
 - Naming a branch pushes it without changing tracking.
-- A bare push (no branch, no upstream) errors, like `git push origin`.
+- A bare push to the branch's own remote (its upstream, or `origin`) with no
+  upstream errors; a bare push to a different remote is triangular and succeeds.
 - `setUpstream: true` records/overwrites the upstream; an explicit push never
   changes it.
 - Upstream is shown and managed through `dumboBranch` (see `branch.md`), never by

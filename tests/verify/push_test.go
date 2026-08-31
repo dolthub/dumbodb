@@ -271,4 +271,34 @@ func TestPushVerify(t *testing.T) {
 		assert.Equal(t, "origin", up["remote"])
 		assert.Equal(t, "published", up["ref"])
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 11: Bare push to a different remote is triangular (git push origin2)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario11_TriangularPushToUntrackedRemote", func(t *testing.T) {
+		var res bson.M
+		// Put main's upstream in a known place (origin/main) first.
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
+			{Key: "branch", Value: "main"}, {Key: "setUpstream", Value: true},
+		}).Decode(&res))
+		up := branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
+		require.Equal(t, "origin", up["remote"])
+		require.Equal(t, "main", up["ref"])
+
+		// A bare push to origin2 -- which main does NOT track -- is triangular: it
+		// sends main to origin2/main and needs no upstream, unlike Scenario 2's push
+		// to the branch's own remote.
+		require.NoError(t, db.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin2"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, "origin2", res["remote"])
+		assert.Equal(t, "main", res["branch"])
+
+		// The triangular push never touches the upstream -- still origin/main.
+		up = branchEntry(t, env, dbName, "main")["upstream"].(bson.M)
+		assert.Equal(t, "origin", up["remote"], "a triangular push must not change the upstream")
+		assert.Equal(t, "main", up["ref"])
+	})
 }

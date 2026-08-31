@@ -99,6 +99,10 @@ const (
 	// with this branch, and connections without an explicit rootish default to it.
 	defaultBranch = "main"
 
+	// defaultRemote is a branch's implicit "own remote" when it tracks nothing,
+	// mirroring git's convention that an untracked branch pushes to origin.
+	defaultRemote = "origin"
+
 	// dbBranchSep is the separator between the database name and rootish in an
 	// encoded database name (e.g. "mydb@main", "mydb@feature/foo"). The '@'
 	// character is reserved as the delimiter and is forbidden in raw database

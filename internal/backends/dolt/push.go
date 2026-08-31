@@ -49,25 +49,36 @@ func (b *Backend) DumboDBPush(ctx context.Context, params *backends.PushParams) 
 	}
 	explicit := params.BranchExplicit || params.RemoteBranch != ""
 
-	// Resolve the remote the git way. A named target is used as given; an omitted
-	// target falls back to the branch's upstream. A bare push (no explicit branch
-	// and no upstream) is refused, like `git push` / `git push <remote>`.
+	// Resolve the remote the git way (push.default=simple). A branch's "own
+	// remote" is the remote it tracks (its upstream), defaulting to origin when
+	// untracked -- git's implicit default. Only a push to the branch's own remote
+	// demands a matching upstream; a push to any other remote is a triangular
+	// current-branch push that needs no tracking. Naming a branch or remoteBranch
+	// is an explicit refspec push and skips this gate entirely.
+	//
+	//   - no 'to'            -> push to the upstream; error if none
+	//                           (git push, no configured remote).
+	//   - 'to' == own remote -> the upstream push; error if untracked
+	//                           (git push origin with no upstream).
+	//   - 'to' != own remote -> a triangular push: send the branch to the
+	//                           same-named branch there, no upstream required
+	//                           (git push other-remote).
 	remote := params.Remote
+	up, hasUpstream, err := b.getUpstream(ctx, params.DBName, branch)
+	if err != nil {
+		return nil, err
+	}
 	if remote == "" {
-		up, ok, err := b.getUpstream(ctx, params.DBName, branch)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("dumboPush: branch %q has no upstream; name a branch or use setUpstream", branch)
+		if !hasUpstream {
+			return nil, fmt.Errorf("dumboPush: no remote given and branch %q has no upstream; specify 'to' or use setUpstream", branch)
 		}
 		remote = up.remote
 	} else if !explicit {
-		_, ok, err := b.getUpstream(ctx, params.DBName, branch)
-		if err != nil {
-			return nil, err
+		ownRemote := defaultRemote
+		if hasUpstream {
+			ownRemote = up.remote
 		}
-		if !ok {
+		if remote == ownRemote && !hasUpstream {
 			return nil, fmt.Errorf("dumboPush: branch %q has no upstream; name a branch or use setUpstream", branch)
 		}
 	}
