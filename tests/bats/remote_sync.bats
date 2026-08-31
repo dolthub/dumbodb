@@ -48,7 +48,7 @@ seed_and_push() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 }
@@ -112,12 +112,27 @@ seed_and_push() {
     [ "$count" = "1" ]
 }
 
-@test 'upstream: push/fetch default to the tracked remote after an explicit push' {
-    # seed_and_push does an explicit push to origin, which records the upstream.
+@test 'upstream: setUpstream records tracking; bare push/fetch follow it' {
+    # seed_and_push does a named push to origin, which does NOT set tracking.
     seed_and_push "upstream-target"
     local db_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
-    # Push with no target follows the recorded upstream (origin).
+    # A named push alone leaves main with no upstream (git push origin main).
+    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1}).branches"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e 'map(select(.name == "main"))[0] | has("upstream") | not'
+
+    # setUpstream records it (git push -u origin main).
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main',setUpstream:true})"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.ok == 1'
+
+    # dumboBranch now shows the upstream (git branch -vv).
+    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1}).branches"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e 'map(select(.name == "main"))[0].upstream.remote == "origin"'
+
+    # A bare push follows the recorded upstream (git push).
     run mongo_json "$db_uri" "db.runCommand({dumboPush:1})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .remote == "origin"'

@@ -60,7 +60,7 @@ s3_url() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .upToDate == false'
 
@@ -87,7 +87,7 @@ s3_url() {
     [ "$status" -eq 0 ]
     run mongo_json "$db_uri" "db.runCommand({dumboRemote:1,action:'add',name:'origin',url:'${url}'})"
     [ "$status" -eq 0 ]
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
     [ "$status" -eq 0 ]
 
     # A second database fetches from the same bucket path.

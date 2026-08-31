@@ -62,7 +62,7 @@ git_round_trip() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin'})"
+    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',branch:'main'})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
