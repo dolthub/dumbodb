@@ -56,11 +56,11 @@ const r1 = src.runCommand({ dumboCommit: 1, message: "commit one", author: "alic
 const hash1 = r1.commitId
 
 src.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<SRC_DIR>" })
-src.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+src.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 // A second branch at the same commit.
 db.getSiblingDB("srcdb@main").runCommand({ dumboBranch: 1, branch: "feature" })
-db.getSiblingDB("srcdb@feature").runCommand({ dumboPush: 1, to: "origin", branch: "feature" })
+db.getSiblingDB("srcdb@feature").runCommand({ dumboPush: 1, to: "origin", refSpec: "feature" })
 
 print("hash1 =", hash1)
 ```

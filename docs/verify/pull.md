@@ -57,7 +57,7 @@ hub.dropDatabase()
 hub.items.insertOne({ _id: 1, v: "one" })
 const h1 = hub.runCommand({ dumboCommit: 1, message: "c1", author: "alice <alice@acme.com>" }).commitId
 hub.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<HUB_DIR>" })
-hub.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 // A working clone that tracks origin/main.
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "work" })
@@ -74,7 +74,7 @@ Advance the hub, then fetch on the clone.
 var hub = db.getSiblingDB("hub")
 hub.items.insertOne({ _id: 2, v: "two" })
 const h2 = hub.runCommand({ dumboCommit: 1, message: "c2", author: "alice <alice@acme.com>" }).commitId
-hub.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 db.getSiblingDB("work").runCommand({ dumboFetch: 1, from: "origin" })
 ```
@@ -147,7 +147,7 @@ w.runCommand({ dumboCommit: 1, message: "local change", author: "bob <bob@acme.c
 var hub = db.getSiblingDB("hub")
 hub.items.insertOne({ _id: 3, v: "three" })
 hub.runCommand({ dumboCommit: 1, message: "c3", author: "alice <alice@acme.com>" })
-hub.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 db.getSiblingDB("work@main").runCommand({ dumboPull: 1, message: "merge origin", author: "bob <bob@acme.com>" })
 ```
@@ -178,7 +178,7 @@ f.runCommand({ dumboCommit: 1, message: "ff local", author: "bob <bob@acme.com>"
 var hub = db.getSiblingDB("hub")
 hub.items.insertOne({ _id: 4, v: "four" })
 hub.runCommand({ dumboCommit: 1, message: "c4", author: "alice <alice@acme.com>" })
-hub.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 db.getSiblingDB("ffwork@main").runCommand({ dumboPull: 1, ffOnly: true })
 // Expected: ok: 0 -- not a fast-forward.
@@ -216,7 +216,7 @@ c.runCommand({ dumboCommit: 1, message: "clone edit", author: "bob <bob@acme.com
 var hub = db.getSiblingDB("hub")
 hub.items.updateOne({ _id: 1 }, { $set: { v: "hub-edit" } })
 hub.runCommand({ dumboCommit: 1, message: "hub edit", author: "alice <alice@acme.com>" })
-hub.runCommand({ dumboPush: 1, to: "origin", branch: "main" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 db.getSiblingDB("cfwork@main").runCommand({ dumboPull: 1, message: "pull", author: "bob <bob@acme.com>" })
 // Expected: ok: 0; a "conflicts" array with the items collection and a count.
