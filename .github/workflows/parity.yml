@@ -117,9 +117,27 @@ jobs:
           MONGOD_BIN: /usr/bin/mongod
           DUMBODB_BIN: /usr/local/bin/dumbodb
         run: |
+          set -o pipefail
           mkdir -p results
+          # Run the suite ONCE. -json feeds the results artifact and the failure
+          # summary below; pipefail propagates go test's exit code through tee.
+          # The suite used to run a second time for human-readable output, which
+          # doubled load on the runner and the extra mongod instances the harness
+          # spawns, causing flaky connection timeouts to the reference mongo.
           go test ./tests/ -v -timeout 15m -json | tee results/parity.json
-          go test ./tests/ -timeout 15m
+
+      - name: Report parity failures
+        if: failure()
+        working-directory: parity-testing
+        run: |
+          fails=$(grep '"Action":"fail"' results/parity.json \
+            | grep -oE '"Test":"[^"]+"' | sed 's/^"Test":"//; s/"$//' | sort -u)
+          if [ -n "$fails" ]; then
+            echo "Parity tests that failed:"
+            echo "$fails"
+          else
+            echo "No test-level failures recorded; the suite or harness setup failed (see output above)."
+          fi
 
       - name: Upload results
         if: always()
