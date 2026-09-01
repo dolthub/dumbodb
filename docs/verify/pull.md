@@ -224,6 +224,37 @@ db.getSiblingDB("cfwork@main").runCommand({ dumboPull: 1, message: "pull", autho
 
 ---
 
+## Scenario 9: dumboPull with `noFF` forces a merge commit (`git pull --no-ff`)
+
+Where Scenario 3 fast-forwards, `noFF` records a merge commit even when a
+fast-forward was possible. Use a fresh clone with no local commits, advance the
+hub, and pull with `noFF`.
+
+```js
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "nfwork" })
+
+// The hub advances; the clone has no local commits, so a plain pull would
+// fast-forward.
+var hub = db.getSiblingDB("hub")
+hub.items.insertOne({ _id: 5, v: "five" })
+const h5 = hub.runCommand({ dumboCommit: 1, message: "c5", author: "alice <alice@acme.com>" }).commitId
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+
+db.getSiblingDB("nfwork@main").runCommand({ dumboPull: 1, noFF: true, message: "merge origin (no-ff)", author: "bob <bob@acme.com>" })
+```
+
+Expected: `fastForward: false` and `alreadyUpToDate: false` even though a
+fast-forward was possible, and `commitAfter` is a new merge commit -- distinct
+from both `commitBefore` and the fetched commit `h5` (a plain pull here would
+have set `commitAfter == h5`). The fetched document is present:
+
+```js
+db.getSiblingDB("nfwork").items.countDocuments({ _id: 5 })
+// Expected: 1 -- c5 was merged in.
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                | git analog                     |

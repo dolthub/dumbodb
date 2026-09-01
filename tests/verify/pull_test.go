@@ -227,4 +227,38 @@ func TestPullVerify(t *testing.T) {
 		require.True(t, ok, "a conflicting pull must report a conflicts array")
 		assert.NotEmpty(t, conflicts)
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 9: dumboPull with noFF forces a merge commit (git pull --no-ff)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario9_PullNoFFForcesMergeCommit", func(t *testing.T) {
+		nfName := fmt.Sprintf("nfwork%d", suffix)
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: hubURL}, {Key: "as", Value: nfName},
+		}).Decode(&res))
+
+		// The hub advances; the fresh clone has no local commits, so a plain pull
+		// would fast-forward straight to h5.
+		_, err := hub.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(5)}, {Key: "v", Value: "five"}})
+		require.NoError(t, err)
+		h5 := dumboDBCommit(t, env, hubName, "c5", "alice <alice@acme.com>")
+		pushHub()
+
+		var res bson.M
+		require.NoError(t, env.Client.Database(nfName+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPull", Value: int32(1)}, {Key: "noFF", Value: true},
+			{Key: "message", Value: "merge origin (no-ff)"}, {Key: "author", Value: "bob <bob@acme.com>"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		// noFF records a merge commit even though a fast-forward was possible.
+		assert.Equal(t, false, res["fastForward"], "noFF must not fast-forward")
+		assert.Equal(t, false, res["alreadyUpToDate"])
+		assert.NotEqual(t, res["commitBefore"], res["commitAfter"], "a merge commit was created")
+		assert.NotEqual(t, h5, res["commitAfter"], "commitAfter is a merge commit, not the fetched commit (a plain pull would equal h5)")
+
+		nf := env.Client.Database(nfName)
+		n, err := nf.Collection("items").CountDocuments(ctx, bson.D{{Key: "_id", Value: int32(5)}})
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, n, "c5 was merged in")
+	})
 }
