@@ -159,11 +159,15 @@ lists every branch when `branch` is omitted.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `branch` | string | no |  -- | Name of the branch to create or delete. Omit to list every branch |
+| `branch` | string | no |  -- | Name of the branch to create or delete. Omit to list branches |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
+| `remote` | bool/int | no | `false` | When listing, show remote-tracking branches instead of local ones (`git branch -r`) |
+| `all` | bool/int | no | `false` | When listing, show local **and** remote-tracking branches (`git branch -a`) |
 
 `delete` and `forceDelete` are mutually exclusive, and both require `branch`.
+`remote` and `all` apply only when listing (no `branch`); a plain listing shows
+local branches (`git branch`).
 
 ### Response fields
 
@@ -185,9 +189,13 @@ A listing returns:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Branch name |
+| `name` | string | Branch name; for a remote-tracking branch, `<remote>/<branch>` |
 | `commitId` | string | Branch HEAD commit hash (32-char base32) |
-| `current` | bool | `true` for the branch encoded in the database name |
+| `current` | bool | `true` for the branch encoded in the database name (always `false` for remote-tracking) |
+| `remoteTracking` | bool | Present and `true` only for a remote-tracking branch (`refs/remotes/<remote>/<branch>`) |
+| `remote` | string | Remote-tracking only: the remote it came from |
+| `ref` | string | Remote-tracking only: the branch name on that remote |
+| `upstream` | object | Local branches that track a remote: `{ remote, ref }` (`git branch -vv`) |
 
 ### Example
 
@@ -196,7 +204,7 @@ A listing returns:
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
 // { branch: "feature", ok: 1 }
 
-// List every branch
+// List local branches (git branch)
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
 // {
 //   branches: [
@@ -205,6 +213,19 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
 //   ],
 //   ok: 1
 // }
+
+// List remote-tracking branches (git branch -r)
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, remote: true })
+// {
+//   branches: [
+//     { name: "origin/main", commitId: "<hash>", current: false,
+//       remoteTracking: true, remote: "origin", ref: "main" }
+//   ],
+//   ok: 1
+// }
+
+// List local and remote-tracking branches (git branch -a)
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, all: true })
 
 // Create a branch from an ancestor commit
 db.getSiblingDB("orders@main~2").runCommand({ dumboBranch: 1, branch: "rollback-point" })
@@ -226,6 +247,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 | `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
 | `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
+| `remote` or `all` given with a `branch` name | `BadValue: dumboBranch: remote and all apply only when listing branches` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -233,6 +255,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 - Branch creation works from any rootish: branch name, commit hash, or `branch~N` ancestor expression.
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
+- Remote-tracking branches (`remote`/`all`) are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are never `current` and carry no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
 - Omitting `branch` lists branches, mirroring `git branch`. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
 - `current` marks the branch encoded in the database name. A connection pinned to a commit hash or ancestor expression is on no branch, so every entry reports `current: false`.
 

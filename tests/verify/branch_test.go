@@ -431,6 +431,77 @@ func TestBranchVerify(t *testing.T) {
 		assert.Len(t, listBranches(t, env, listDbName+"@main"), 3,
 			"rejected requests must leave the branch set untouched")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 12: List remote-tracking branches (git branch -r / -a)
+	// -------------------------------------------------------------------------
+	t.Run("Scenario12_ListRemoteTrackingBranches", func(t *testing.T) {
+		rtDB := fmt.Sprintf("rtlist%d", rand.Int64N(1_000_000))
+		conn := env.Client.Database(rtDB)
+		require.NoError(t, conn.Drop(ctx))
+		_, err := conn.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, rtDB, "c1", "alice <alice@acme.com>")
+		require.NoError(t, env.Client.Database(rtDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
+		}).Err())
+
+		// A remote with both branches pushed -- push writes the tracking refs
+		// refs/remotes/origin/<branch> into the local store.
+		require.NoError(t, conn.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: "file://" + t.TempDir()},
+		}).Err())
+		for _, br := range []string{"main", "feature"} {
+			require.NoError(t, env.Client.Database(rtDB+"@"+br).RunCommand(ctx, bson.D{
+				{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: br},
+			}).Err())
+		}
+
+		list := func(opts bson.D) []bson.M {
+			cmd := append(bson.D{{Key: "dumboBranch", Value: int32(1)}}, opts...)
+			var res bson.M
+			require.NoError(t, env.Client.Database(rtDB+"@main").RunCommand(ctx, cmd).Decode(&res))
+			arr, ok := res["branches"].(bson.A)
+			require.True(t, ok, "branches must be an array")
+			out := make([]bson.M, len(arr))
+			for i, e := range arr {
+				out[i] = e.(bson.M)
+			}
+			return out
+		}
+		names := func(entries []bson.M) []string {
+			ns := make([]string, len(entries))
+			for i, e := range entries {
+				ns[i] = e["name"].(string)
+			}
+			return ns
+		}
+
+		// Default: local only, and no remoteTracking marker.
+		local := list(bson.D{})
+		assert.ElementsMatch(t, []string{"main", "feature"}, names(local))
+		for _, e := range local {
+			_, hasRT := e["remoteTracking"]
+			assert.False(t, hasRT, "a local listing must not mark remoteTracking")
+		}
+
+		// remote:true -> remote-tracking only (git branch -r).
+		rem := list(bson.D{{Key: "remote", Value: true}})
+		assert.ElementsMatch(t, []string{"origin/feature", "origin/main"}, names(rem))
+		for _, e := range rem {
+			assert.Equal(t, true, e["remoteTracking"])
+			assert.Equal(t, "origin", e["remote"])
+			assert.Equal(t, false, e["current"], "a remote-tracking branch is never current")
+			assert.NotEmpty(t, e["commitId"])
+			assert.Contains(t, []string{"main", "feature"}, e["ref"])
+		}
+
+		// all:true -> both (git branch -a).
+		assert.ElementsMatch(t,
+			[]string{"main", "feature", "origin/main", "origin/feature"},
+			names(list(bson.D{{Key: "all", Value: true}})))
+	})
 }
 
 // branchListEntry is one entry of a doltBranch listing response.

@@ -86,6 +86,10 @@ const (
 	// namespace used by `dolt branch`.
 	branchRefPrefix = "refs/heads/"
 
+	// remoteRefPrefix is the dataset-ID prefix for remote-tracking branches
+	// (refs/remotes/<remote>/<branch>), written by push/fetch/clone.
+	remoteRefPrefix = "refs/remotes/"
+
 	// mainDataset is the dataset ID used for the "refs/heads/main" branch.
 	// Dolt expects the full ref path including "refs/" prefix.
 	mainDataset = "refs/heads/main"
@@ -1446,7 +1450,7 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	defer db.mu.Unlock()
 
 	if params.List {
-		return dumboDBBranchList(ctx, db)
+		return dumboDBBranchList(ctx, db, params.IncludeLocal, params.IncludeRemote)
 	}
 
 	if params.Delete {
@@ -1498,9 +1502,11 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
-// dumboDBBranchList returns every branch in the database with its HEAD commit,
-// sorted by name. Caller must hold db.mu.Lock().
-func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
+// dumboDBBranchList returns branches in the database with their HEAD commits,
+// sorted by name. includeLocal lists local branches (refs/heads/*, git branch);
+// includeRemote lists remote-tracking branches (refs/remotes/<remote>/<branch>,
+// git branch -r). Caller must hold db.mu.Lock().
+func dumboDBBranchList(ctx context.Context, db *dbState, includeLocal, includeRemote bool) (*backends.BranchResult, error) {
 	dsMap, err := db.datasDB.Datasets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
@@ -1508,17 +1514,31 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 
 	branches := []backends.BranchInfo{}
 	if iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
-		if !strings.HasPrefix(id, branchRefPrefix) {
-			return nil
+		switch {
+		case includeLocal && strings.HasPrefix(id, branchRefPrefix):
+			name := strings.TrimPrefix(id, branchRefPrefix)
+			info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
+			if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
+				return err
+			} else if ok {
+				info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
+			}
+			branches = append(branches, info)
+		case includeRemote && strings.HasPrefix(id, remoteRefPrefix):
+			// refs/remotes/<remote>/<branch> -- split off the remote from the ref.
+			rest := strings.TrimPrefix(id, remoteRefPrefix)
+			remote, ref, ok := strings.Cut(rest, "/")
+			if !ok {
+				return nil // malformed; skip rather than surface a partial name
+			}
+			branches = append(branches, backends.BranchInfo{
+				Name:           rest, // "<remote>/<branch>"
+				CommitID:       headAddr.String(),
+				RemoteTracking: true,
+				Remote:         remote,
+				Ref:            ref,
+			})
 		}
-		name := strings.TrimPrefix(id, branchRefPrefix)
-		info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
-		if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
-			return err
-		} else if ok {
-			info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
-		}
-		branches = append(branches, info)
 		return nil
 	}); iterErr != nil {
 		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)

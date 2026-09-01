@@ -768,7 +768,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, "branch", "delete", "forceDelete"); err != nil {
+	if err = common.RejectUnknownFields(document, "branch", "delete", "forceDelete", "remote", "all"); err != nil {
 		return nil, err
 	}
 
@@ -790,6 +790,27 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	// An absent "branch" lists every branch. An explicit empty string remains an
 	// error, so a client that computes the name cannot silently list instead.
 	listMode := !document.Has("branch")
+
+	// Listing scope, mirroring git: default lists local branches (git branch);
+	// remote lists remote-tracking branches (git branch -r); all lists both
+	// (git branch -a).
+	remoteScope, err := common.GetOptionalBoolOrIntParam(document, "remote", false)
+	if err != nil {
+		return nil, err
+	}
+	allScope, err := common.GetOptionalBoolOrIntParam(document, "all", false)
+	if err != nil {
+		return nil, err
+	}
+	if !listMode && (remoteScope || allScope) {
+		return nil, handlererrors.NewCommandErrorMsgWithArgument(
+			handlererrors.ErrBadValue,
+			"dumboBranch: remote and all apply only when listing branches",
+			"remote",
+		)
+	}
+	includeRemote := remoteScope || allScope
+	includeLocal := allScope || !remoteScope
 
 	if !listMode {
 		if newBranch == "" {
@@ -848,12 +869,14 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	}
 
 	res, err := vb.DumboDBBranch(connCtx, &backends.BranchParams{
-		DBName: dbName,
-		From:   fromBranch,
-		Name:   newBranch,
-		Delete: safeDelete || forceDelete,
-		Force:  forceDelete,
-		List:   listMode,
+		DBName:        dbName,
+		From:          fromBranch,
+		Name:          newBranch,
+		Delete:        safeDelete || forceDelete,
+		Force:         forceDelete,
+		List:          listMode,
+		IncludeLocal:  includeLocal,
+		IncludeRemote: includeRemote,
 	})
 	if err != nil {
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
@@ -866,9 +889,17 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 				"name", b.Name,
 				"commitId", b.CommitID,
 				// fromBranch is a rootish, so a hash or ancestor connection
-				// matches nothing and no branch is marked current.
-				"current", b.Name == fromBranch,
+				// matches nothing and no branch is marked current. A
+				// remote-tracking ref is never the checked-out branch.
+				"current", !b.RemoteTracking && b.Name == fromBranch,
 			))
+			if b.RemoteTracking {
+				// A git remote-tracking branch (git branch -r): the remote it
+				// came from and the branch name on that remote.
+				entry.Set("remoteTracking", true)
+				entry.Set("remote", b.Remote)
+				entry.Set("ref", b.Ref)
+			}
 			if b.Upstream != nil {
 				entry.Set("upstream", must.NotFail(types.NewDocument(
 					"remote", b.Upstream.Remote,
