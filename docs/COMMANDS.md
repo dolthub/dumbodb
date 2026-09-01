@@ -159,15 +159,11 @@ lists every branch when `branch` is omitted.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `branch` | string | no |  -- | Name of the branch to create or delete. Omit to list branches |
+| `branch` | string | no |  -- | Name of the branch to create or delete. Omit to list every branch (local and remote-tracking) |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
-| `remote` | bool/int | no | `false` | When listing, show remote-tracking branches instead of local ones (`git branch -r`) |
-| `all` | bool/int | no | `false` | When listing, show local **and** remote-tracking branches (`git branch -a`) |
 
 `delete` and `forceDelete` are mutually exclusive, and both require `branch`.
-`remote` and `all` apply only when listing (no `branch`); a plain listing shows
-local branches (`git branch`).
 
 ### Response fields
 
@@ -182,7 +178,7 @@ A listing returns:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `branches` | array | One entry per branch, sorted by `name` |
+| `branches` | array | One entry per branch -- local and remote-tracking -- sorted by `name` |
 | `ok` | number | `1` on success |
 
 ### Branch entry
@@ -204,28 +200,18 @@ A listing returns:
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
 // { branch: "feature", ok: 1 }
 
-// List local branches (git branch)
+// List every branch: local (with upstream tracking) and remote-tracking
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
 // {
 //   branches: [
-//     { name: "feature", commitId: "<hash>", current: false },
-//     { name: "main",    commitId: "<hash>", current: true  }
-//   ],
-//   ok: 1
-// }
-
-// List remote-tracking branches (git branch -r)
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, remote: true })
-// {
-//   branches: [
+//     { name: "feature",     commitId: "<hash>", current: false },
+//     { name: "main",        commitId: "<hash>", current: true,
+//       upstream: { remote: "origin", ref: "main" } },
 //     { name: "origin/main", commitId: "<hash>", current: false,
 //       remoteTracking: true, remote: "origin", ref: "main" }
 //   ],
 //   ok: 1
 // }
-
-// List local and remote-tracking branches (git branch -a)
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, all: true })
 
 // Create a branch from an ancestor commit
 db.getSiblingDB("orders@main~2").runCommand({ dumboBranch: 1, branch: "rollback-point" })
@@ -247,7 +233,6 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 | `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
 | `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
-| `remote` or `all` given with a `branch` name | `BadValue: dumboBranch: remote and all apply only when listing branches` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -255,8 +240,8 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 - Branch creation works from any rootish: branch name, commit hash, or `branch~N` ancestor expression.
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
-- Remote-tracking branches (`remote`/`all`) are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are never `current` and carry no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
-- Omitting `branch` lists branches, mirroring `git branch`. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
+- A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
+- Omitting `branch` lists every branch. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
 - `current` marks the branch encoded in the database name. A connection pinned to a commit hash or ancestor expression is on no branch, so every entry reports `current: false`.
 
 ---

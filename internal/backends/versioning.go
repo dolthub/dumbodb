@@ -48,21 +48,20 @@ type CommitResult struct {
 }
 
 type BranchParams struct {
-	DBName        string
-	From          string // source branch to branch from (current connection branch); also used to detect current-branch delete
-	Name          string // name of the new branch (or branch to delete when Delete is true); empty when List is true
-	Delete        bool   // if true, delete the named branch instead of creating it
-	Force         bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
-	List          bool   // if true, list branches in the database; Name, Delete and Force are ignored
-	IncludeLocal  bool   // when listing, include local branches (git branch); default when neither include flag is set
-	IncludeRemote bool   // when listing, include remote-tracking branches (git branch -r)
+	DBName string
+	From   string // source branch to branch from (current connection branch); also used to detect current-branch delete
+	Name   string // name of the new branch (or branch to delete when Delete is true); empty when List is true
+	Delete bool   // if true, delete the named branch instead of creating it
+	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
+	List   bool   // if true, list every branch (local and remote-tracking); Name, Delete and Force are ignored
 }
 
 // BranchInfo describes a single branch returned when BranchParams.List is set.
+// A listing includes both local branches and remote-tracking branches.
 type BranchInfo struct {
 	Name     string
 	CommitID string       // branch HEAD commit hash
-	Upstream *UpstreamRef // nil when the branch tracks no upstream
+	Upstream *UpstreamRef // a local branch's tracked upstream; nil when it tracks nothing
 
 	// RemoteTracking marks an entry from refs/remotes/<remote>/<branch> -- a git
 	// remote-tracking branch -- rather than a local branch. Name is

@@ -270,11 +270,11 @@ Key checks:
 
 ## Scenario 10: List branches  -- no `branch` argument
 
-Omitting `branch` lists every branch in the database, as `git branch` does.
-Entries are sorted by name and the branch encoded in the connection is flagged
-with `current: true`.
+Omitting `branch` lists every branch in the database -- local branches **and**
+remote-tracking branches (see Scenario 12). Entries are sorted by name and the
+branch encoded in the connection is flagged with `current: true`.
 
-Use a fresh database so the listing is exact:
+Use a fresh database with no remotes so the listing is just its local branches:
 
 ```js
 var lb = db.getSiblingDB("branchlistdb")
@@ -353,15 +353,16 @@ Key checks:
 
 ---
 
-## Scenario 12: List remote-tracking branches (`git branch -r` / `-a`)
+## Scenario 12: A listing includes remote-tracking branches with tracking info
 
-A plain listing shows local branches. `remote: true` shows the remote-tracking
+A listing shows local branches (with their `upstream`) **and** remote-tracking
 branches -- the `refs/remotes/<remote>/<branch>` refs written by `dumboClone` /
-`dumboFetch` / `dumboPush` -- and `all: true` shows both.
+`dumboFetch` / `dumboPush`. There are no scope flags: `{ doltBranch: 1 }` returns
+everything.
 
-Set up a database with two branches and push them to a `file://` remote (push
-writes the tracking refs into the local store). Substitute an empty/nonexistent
-path for `<RT_REMOTE_DIR>`.
+Set up a database with two branches, push them to a `file://` remote (push writes
+the tracking refs into the local store), and track `main`'s upstream. Substitute
+an empty/nonexistent path for `<RT_REMOTE_DIR>`.
 
 ```js
 var rt = db.getSiblingDB("rtlistdb")
@@ -371,26 +372,21 @@ rt.runCommand({ doltCommit: 1, message: "c1" })
 rt.runCommand({ doltBranch: 1, branch: "feature" })
 
 rt.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file://<RT_REMOTE_DIR>" })
-db.getSiblingDB("rtlistdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main" })
+db.getSiblingDB("rtlistdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main", setUpstream: true })
 db.getSiblingDB("rtlistdb@feature").runCommand({ doltPush: 1, to: "origin", refSpec: "feature" })
-```
 
-A plain listing is local-only:
-
-```js
 db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1 })
-// Expected: entries "feature" and "main"; no remoteTracking marker.
 ```
 
-`remote: true` lists the tracking branches (`git branch -r`):
-
-```js
-db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1, remote: true })
-```
+Expected -- local branches (`main` carries its `upstream`) alongside the
+`origin/*` remote-tracking entries:
 
 ```json
 {
   "branches": [
+    { "name": "feature", "commitId": "<hash>", "current": false },
+    { "name": "main", "commitId": "<hash>", "current": true,
+      "upstream": { "remote": "origin", "ref": "main" } },
     { "name": "origin/feature", "commitId": "<hash>", "current": false,
       "remoteTracking": true, "remote": "origin", "ref": "feature" },
     { "name": "origin/main", "commitId": "<hash>", "current": false,
@@ -400,18 +396,11 @@ db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1, remote: true })
 }
 ```
 
-`all: true` lists both (`git branch -a`):
-
-```js
-db.getSiblingDB("rtlistdb@main").runCommand({ doltBranch: 1, all: true })
-// Expected: "feature", "main", "origin/feature", "origin/main".
-```
-
 Key checks:
-- A remote-tracking entry's `name` is `<remote>/<branch>`, and it carries
-  `remoteTracking: true`, `remote`, and `ref`
-- A remote-tracking branch is never `current` and has no `upstream`
-- `remote` / `all` are listing-only; passing them with a `branch` name errors
+- The listing includes both local and remote-tracking branches, sorted by `name`
+- A local branch shows its `upstream` when it tracks one (the `git branch -vv` info)
+- A remote-tracking entry's `name` is `<remote>/<branch>`; it carries
+  `remoteTracking: true`, `remote`, and `ref`, is never `current`, and has no `upstream`
 
 ---
 
@@ -425,10 +414,8 @@ Key checks:
 | `{ doltBranch: 1, branch: "name" }` | `@main~1` | `{ branch: "name", ok: 1 }` |
 | `{ doltBranch: 1, branch: "name", delete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
 | `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (always) |
-| `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current }, ... ], ok: 1 }` |
-| `{ doltBranch: 1 }` | `@<hash>` | same list, every entry `current: false` |
-| `{ doltBranch: 1, remote: true }` | `@main` | remote-tracking branches (`git branch -r`) |
-| `{ doltBranch: 1, all: true }` | `@main` | local + remote-tracking branches (`git branch -a`) |
+| `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current, upstream?, remoteTracking? }, ... ], ok: 1 }` |
+| `{ doltBranch: 1 }` | `@<hash>` | same list, every local entry `current: false` |
 
 - `branch` in the response echoes the name you provided.
 - Branch creation works from any rootish that resolves to a commit (branch name, hash, ancestor expression).
@@ -438,5 +425,5 @@ Key checks:
 - `forceDelete: 1` (force delete): succeeds unconditionally.
 - `delete` and `forceDelete` are mutually exclusive; passing both returns an error.
 - Omitting `branch` lists every branch, sorted by name, with the connection's branch flagged `current: true`.
+- A listing includes local branches (each with its `upstream` when it tracks one) and remote-tracking branches; a remote-tracking entry is `<remote>/<branch>` with `remoteTracking: true`, never `current`, and carries no `upstream`.
 - An explicit `branch: ""` is an error, not a list request; `delete`/`forceDelete` still require a name.
-- `remote: true` lists remote-tracking branches (`git branch -r`) and `all: true` lists local plus remote-tracking (`git branch -a`); a remote-tracking entry is `<remote>/<branch>` with `remoteTracking: true`, never `current`, and carries no `upstream`.

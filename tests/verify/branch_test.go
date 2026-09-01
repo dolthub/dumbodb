@@ -433,9 +433,9 @@ func TestBranchVerify(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Scenario 12: List remote-tracking branches (git branch -r / -a)
+	// Scenario 12: A listing includes remote-tracking branches with tracking info
 	// -------------------------------------------------------------------------
-	t.Run("Scenario12_ListRemoteTrackingBranches", func(t *testing.T) {
+	t.Run("Scenario12_ListIncludesRemoteTracking", func(t *testing.T) {
 		rtDB := fmt.Sprintf("rtlist%d", rand.Int64N(1_000_000))
 		conn := env.Client.Database(rtDB)
 		require.NoError(t, conn.Drop(ctx))
@@ -447,60 +447,55 @@ func TestBranchVerify(t *testing.T) {
 		}).Err())
 
 		// A remote with both branches pushed -- push writes the tracking refs
-		// refs/remotes/origin/<branch> into the local store.
+		// refs/remotes/origin/<branch> into the local store. Track main upstream.
 		require.NoError(t, conn.RunCommand(ctx, bson.D{
 			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
 			{Key: "name", Value: "origin"}, {Key: "url", Value: "file://" + t.TempDir()},
 		}).Err())
-		for _, br := range []string{"main", "feature"} {
-			require.NoError(t, env.Client.Database(rtDB+"@"+br).RunCommand(ctx, bson.D{
-				{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: br},
-			}).Err())
+		require.NoError(t, env.Client.Database(rtDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"}, {Key: "setUpstream", Value: true},
+		}).Err())
+		require.NoError(t, env.Client.Database(rtDB+"@feature").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "feature"},
+		}).Err())
+
+		// The default listing includes local AND remote-tracking branches.
+		var res bson.M
+		require.NoError(t, env.Client.Database(rtDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)},
+		}).Decode(&res))
+		arr, ok := res["branches"].(bson.A)
+		require.True(t, ok, "branches must be an array")
+		byName := map[string]bson.M{}
+		for _, e := range arr {
+			m := e.(bson.M)
+			byName[m["name"].(string)] = m
 		}
 
-		list := func(opts bson.D) []bson.M {
-			cmd := append(bson.D{{Key: "dumboBranch", Value: int32(1)}}, opts...)
-			var res bson.M
-			require.NoError(t, env.Client.Database(rtDB+"@main").RunCommand(ctx, cmd).Decode(&res))
-			arr, ok := res["branches"].(bson.A)
-			require.True(t, ok, "branches must be an array")
-			out := make([]bson.M, len(arr))
-			for i, e := range arr {
-				out[i] = e.(bson.M)
-			}
-			return out
-		}
-		names := func(entries []bson.M) []string {
-			ns := make([]string, len(entries))
-			for i, e := range entries {
-				ns[i] = e["name"].(string)
-			}
-			return ns
-		}
+		// Local branches, main with its upstream tracking info.
+		require.Contains(t, byName, "main")
+		require.Contains(t, byName, "feature")
+		mainEntry := byName["main"]
+		assert.Equal(t, true, mainEntry["current"])
+		_, hasRT := mainEntry["remoteTracking"]
+		assert.False(t, hasRT, "a local branch is not remoteTracking")
+		up := mainEntry["upstream"].(bson.M)
+		assert.Equal(t, "origin", up["remote"])
+		assert.Equal(t, "main", up["ref"])
 
-		// Default: local only, and no remoteTracking marker.
-		local := list(bson.D{})
-		assert.ElementsMatch(t, []string{"main", "feature"}, names(local))
-		for _, e := range local {
-			_, hasRT := e["remoteTracking"]
-			assert.False(t, hasRT, "a local listing must not mark remoteTracking")
-		}
-
-		// remote:true -> remote-tracking only (git branch -r).
-		rem := list(bson.D{{Key: "remote", Value: true}})
-		assert.ElementsMatch(t, []string{"origin/feature", "origin/main"}, names(rem))
-		for _, e := range rem {
-			assert.Equal(t, true, e["remoteTracking"])
+		// Remote-tracking branches, with remote/ref and never current.
+		require.Contains(t, byName, "origin/main")
+		require.Contains(t, byName, "origin/feature")
+		for _, name := range []string{"origin/main", "origin/feature"} {
+			e := byName[name]
+			assert.Equal(t, true, e["remoteTracking"], "%s must be remoteTracking", name)
 			assert.Equal(t, "origin", e["remote"])
-			assert.Equal(t, false, e["current"], "a remote-tracking branch is never current")
+			assert.Equal(t, false, e["current"], "%s must never be current", name)
 			assert.NotEmpty(t, e["commitId"])
-			assert.Contains(t, []string{"main", "feature"}, e["ref"])
+			_, hasUpstream := e["upstream"]
+			assert.False(t, hasUpstream, "%s must carry no upstream", name)
 		}
-
-		// all:true -> both (git branch -a).
-		assert.ElementsMatch(t,
-			[]string{"main", "feature", "origin/main", "origin/feature"},
-			names(list(bson.D{{Key: "all", Value: true}})))
+		assert.Contains(t, []interface{}{"main", "feature"}, byName["origin/main"]["ref"])
 	})
 }
 

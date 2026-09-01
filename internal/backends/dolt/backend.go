@@ -1450,7 +1450,7 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	defer db.mu.Unlock()
 
 	if params.List {
-		return dumboDBBranchList(ctx, db, params.IncludeLocal, params.IncludeRemote)
+		return dumboDBBranchList(ctx, db)
 	}
 
 	if params.Delete {
@@ -1502,11 +1502,11 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 	return &backends.BranchResult{Branch: params.Name}, nil
 }
 
-// dumboDBBranchList returns branches in the database with their HEAD commits,
-// sorted by name. includeLocal lists local branches (refs/heads/*, git branch);
-// includeRemote lists remote-tracking branches (refs/remotes/<remote>/<branch>,
-// git branch -r). Caller must hold db.mu.Lock().
-func dumboDBBranchList(ctx context.Context, db *dbState, includeLocal, includeRemote bool) (*backends.BranchResult, error) {
+// dumboDBBranchList returns every branch in the database with its HEAD commit,
+// sorted by name: local branches (refs/heads/*) with their upstream tracking,
+// and remote-tracking branches (refs/remotes/<remote>/<branch>). Caller must
+// hold db.mu.Lock().
+func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult, error) {
 	dsMap, err := db.datasDB.Datasets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("DumboDBBranch: listing datasets: %w", err)
@@ -1515,7 +1515,7 @@ func dumboDBBranchList(ctx context.Context, db *dbState, includeLocal, includeRe
 	branches := []backends.BranchInfo{}
 	if iterErr := dsMap.IterAll(ctx, func(id string, headAddr hash.Hash) error {
 		switch {
-		case includeLocal && strings.HasPrefix(id, branchRefPrefix):
+		case strings.HasPrefix(id, branchRefPrefix):
 			name := strings.TrimPrefix(id, branchRefPrefix)
 			info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
 			if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
@@ -1524,7 +1524,7 @@ func dumboDBBranchList(ctx context.Context, db *dbState, includeLocal, includeRe
 				info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
 			}
 			branches = append(branches, info)
-		case includeRemote && strings.HasPrefix(id, remoteRefPrefix):
+		case strings.HasPrefix(id, remoteRefPrefix):
 			// refs/remotes/<remote>/<branch> -- split off the remote from the ref.
 			rest := strings.TrimPrefix(id, remoteRefPrefix)
 			remote, ref, ok := strings.Cut(rest, "/")
