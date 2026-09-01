@@ -141,9 +141,9 @@ func (b *Backend) remoteDBParams(scheme string) (map[string]interface{}, error) 
 	}
 
 	if isGitScheme(scheme) {
-		// Git remotes keep a per-remote bare-repo cache under
-		// <cacheRoot>/.dolt/git-remote-cache. Point the cache root at a
-		// server-owned directory; the factory creates the subtree on demand.
+		// Git remotes keep a per-remote bare-repo cache under a server-owned
+		// directory. Dolt uses git_cache_root verbatim, creating
+		// <cacheRoot>/<remote-hash>/repo.git on demand.
 		cacheRoot := filepath.Join(b.dataDir, gitRemoteCacheRoot)
 		if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
 			return nil, fmt.Errorf("creating git remote cache root: %w", err)
@@ -168,6 +168,7 @@ func (b *Backend) remoteDBParams(scheme string) (map[string]interface{}, error) 
 }
 
 // gitRemoteCacheRoot is the directory under the backend data dir used as the
-// git_cache_root for git remotes. The factory creates .dolt/git-remote-cache
-// beneath it.
-const gitRemoteCacheRoot = ".git-remote-cache"
+// git_cache_root for git remotes. Dolt uses it verbatim, creating
+// <gitRemoteCacheRoot>/<remote-hash>/repo.git beneath it -- a real top-level
+// directory under the data dir, not a hidden .dolt-nested one.
+const gitRemoteCacheRoot = "git-remote-cache"
