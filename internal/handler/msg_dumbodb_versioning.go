@@ -862,13 +862,20 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	if listMode {
 		branches := types.MakeArray(len(res.Branches))
 		for _, b := range res.Branches {
-			branches.Append(must.NotFail(types.NewDocument(
+			entry := must.NotFail(types.NewDocument(
 				"name", b.Name,
 				"commitId", b.CommitID,
 				// fromBranch is a rootish, so a hash or ancestor connection
 				// matches nothing and no branch is marked current.
 				"current", b.Name == fromBranch,
-			)))
+			))
+			if b.Upstream != nil {
+				entry.Set("upstream", must.NotFail(types.NewDocument(
+					"remote", b.Upstream.Remote,
+					"ref", b.Upstream.Ref,
+				)))
+			}
+			branches.Append(entry)
 		}
 
 		return documentOpMsg(

@@ -99,6 +99,10 @@ const (
 	// with this branch, and connections without an explicit rootish default to it.
 	defaultBranch = "main"
 
+	// defaultRemote is a branch's implicit "own remote" when it tracks nothing,
+	// mirroring git's convention that an untracked branch pushes to origin.
+	defaultRemote = "origin"
+
 	// dbBranchSep is the separator between the database name and rootish in an
 	// encoded database name (e.g. "mydb@main", "mydb@feature/foo"). The '@'
 	// character is reserved as the delimiter and is forbidden in raw database
@@ -1507,10 +1511,14 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		if !strings.HasPrefix(id, branchRefPrefix) {
 			return nil
 		}
-		branches = append(branches, backends.BranchInfo{
-			Name:     strings.TrimPrefix(id, branchRefPrefix),
-			CommitID: headAddr.String(),
-		})
+		name := strings.TrimPrefix(id, branchRefPrefix)
+		info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
+		if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
+			return err
+		} else if ok {
+			info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
+		}
+		branches = append(branches, info)
 		return nil
 	}); iterErr != nil {
 		return nil, fmt.Errorf("DumboDBBranch: iterating datasets: %w", iterErr)

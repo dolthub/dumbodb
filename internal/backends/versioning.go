@@ -59,7 +59,15 @@ type BranchParams struct {
 // BranchInfo describes a single branch returned when BranchParams.List is set.
 type BranchInfo struct {
 	Name     string
-	CommitID string // branch HEAD commit hash
+	CommitID string       // branch HEAD commit hash
+	Upstream *UpstreamRef // nil when the branch tracks no upstream
+}
+
+// UpstreamRef is a branch's tracked {remote, ref}, the analog of git's
+// upstream shown by `git branch -vv`.
+type UpstreamRef struct {
+	Remote string
+	Ref    string
 }
 
 type BranchResult struct {
@@ -650,6 +658,22 @@ type VersioningBackend interface {
 	// by the combination of TagParams fields; see TagParams documentation.
 	DumboDBTag(context.Context, *TagParams) (*TagResult, error)
 
+	// DumboDBRemote adds, lists, or removes a named remote for a database.
+	DumboDBRemote(context.Context, *RemoteParams) (*RemoteResult, error)
+
+	// DumboDBPush pushes a branch's committed HEAD to a configured remote.
+	DumboDBPush(context.Context, *PushParams) (*PushResult, error)
+
+	// DumboDBFetch fetches a branch from a remote and updates the tracking ref.
+	DumboDBFetch(context.Context, *FetchParams) (*FetchResult, error)
+
+	// DumboDBClone creates a new database by cloning a file:// remote.
+	DumboDBClone(context.Context, *CloneParams) (*CloneResult, error)
+
+	// DumboDBPull fetches from a remote and merges the fetched commit into the
+	// current branch (git pull = fetch + merge).
+	DumboDBPull(context.Context, *PullParams) (*PullResult, error)
+
 	// DumboDBGC runs garbage collection on the database's chunk store.
 	// Every branch in the database is in scope (one chunk store per
 	// logical database). Mode is "default" (sweep new-gen / unreferenced
@@ -704,4 +728,102 @@ type DroppedDatabase struct {
 
 type DroppedDatabasesResult struct {
 	Databases []DroppedDatabase
+}
+
+// RemoteParams are the arguments to DumboDBRemote.
+type RemoteParams struct {
+	DBName string
+	Action string // "add", "list", or "remove"
+	Name   string // remote name (add, remove)
+	URL    string // remote url (add)
+}
+
+// RemoteInfo describes a single configured remote.
+type RemoteInfo struct {
+	Name string
+	URL  string
+}
+
+// RemoteResult is returned by DumboDBRemote. For list it holds all remotes for
+// the database; for add it holds the created remote; for remove it is empty.
+type RemoteResult struct {
+	Remotes []RemoteInfo
+}
+
+// PushParams are the arguments to DumboDBPush.
+type PushParams struct {
+	DBName      string
+	Remote      string // remote name (looked up in admin.system.remotes); empty means use the branch upstream
+	ConnBranch  string // the connection's current branch; the local branch for a bare push and the target of HEAD
+	RefSpec     string // git-style [+]<src>[:<dst>]; empty means a bare push of the connection branch (git push)
+	Force       bool   // non-fast-forward (force) update; equivalent to a leading '+' in the refspec
+	SetUpstream bool   // record the target as the branch upstream (git push -u)
+}
+
+// PushResult is returned by DumboDBPush.
+type PushResult struct {
+	Remote       string
+	URL          string
+	Branch       string // local branch pushed; empty when the source was a revision expression, not a branch
+	RemoteBranch string // destination branch on the remote (equals Branch unless a refspec renamed it)
+	CommitBefore string // remote branch head before the push; empty when the push created the branch
+	CommitPushed string // commit now on the remote branch
+	UpToDate     bool   // true when the remote already had the commit
+}
+
+// FetchParams are the arguments to DumboDBFetch.
+type FetchParams struct {
+	DBName string
+	Remote string // remote name (looked up in admin.system.remotes)
+}
+
+// FetchedRef is one remote branch updated by a fetch.
+type FetchedRef struct {
+	Branch       string
+	CommitBefore string // local tracking-ref head before the fetch; empty when the ref is new
+	Commit       string // tracking-ref head after the fetch
+}
+
+// FetchResult is returned by DumboDBFetch. Like git fetch, every remote branch
+// is pulled into a local tracking ref refs/remotes/<remote>/<branch>.
+type FetchResult struct {
+	Remote   string
+	URL      string
+	Branches []FetchedRef
+}
+
+// PullParams are the arguments to DumboDBPull.
+type PullParams struct {
+	DBName  string
+	Branch  string // current branch to pull into (the connection branch)
+	Remote  string // remote to pull from; empty means the branch upstream
+	NoFF    bool   // force a merge commit even when a fast-forward is possible
+	FFOnly  bool   // fail if the pull is not a fast-forward
+	Message string // optional merge commit message
+	Author  string // optional 'Name <email>' for a merge commit
+}
+
+// PullResult is returned by DumboDBPull.
+type PullResult struct {
+	Remote          string
+	Branch          string
+	CommitBefore    string // local branch head before the pull
+	CommitAfter     string // local branch head after the pull
+	FastForward     bool   // the pull advanced the branch without a merge commit
+	AlreadyUpToDate bool   // the branch already had the fetched commit
+}
+
+// CloneParams are the arguments to DumboDBClone.
+type CloneParams struct {
+	From string // remote url (file:// only for now)
+	As   string // new database name
+}
+
+// CloneResult is returned by DumboDBClone.
+type CloneResult struct {
+	DB            string
+	URL           string
+	DefaultBranch string
+	Commit        string   // default branch head after clone
+	Branches      []string // branches cloned
 }

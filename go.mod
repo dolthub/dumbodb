@@ -10,11 +10,11 @@ require (
 	github.com/cockroachdb/apd/v3 v3.2.3
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/dlclark/regexp2 v1.11.5
-	github.com/dolthub/dolt/go v0.40.5-0.20260820171201-8382e48a684f
+	github.com/dolthub/dolt/go v0.40.5-0.20260826232834-b0c00152f440
 	github.com/dolthub/eventsapi_schema v0.0.0-20260715220557-d9b4a1c6b4d4
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2
 	github.com/dolthub/go-icu-collation v0.0.0-20260813204241-4b977bd17878
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260819181947-4c008a0ad5d1
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260825193748-47a543579e13
 	github.com/google/uuid v1.6.0
 	github.com/mohae/uvarint v0.0.0-20160208145430-c3f9e62bf2b0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
@@ -94,7 +94,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/gocraft/dbr/v2 v2.7.2 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect

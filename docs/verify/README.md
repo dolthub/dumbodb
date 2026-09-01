@@ -14,11 +14,14 @@ Every verify doc has a matching automated test in `tests/verify/` (package
 | branch.md | branch_test.go | TestBranchVerify |
 | branch-status.md | branch_status_test.go | TestBranchStatusVerify |
 | cherry-pick.md | cherry_pick_test.go | TestCherryPickVerify |
+| clone.md | clone_test.go | TestCloneVerify |
 | commit.md | commit_test.go | TestCommitVerify |
 | diff.md | diff_test.go | TestDiffVerify |
 | log.md | log_test.go | TestLogVerify |
 | log-pagination-filtering.md | log_pagination_filtering_test.go | TestLogPaginationVerify |
 | merge.md | merge_test.go | TestMergeVerify |
+| pull.md | pull_test.go | TestPullVerify |
+| push.md | push_test.go | TestPushVerify |
 | rebase.md | rebase_test.go | TestRebaseVerify |
 | reset.md | reset_test.go | TestResetVerify |
 | revert.md | revert_test.go | TestRevertVerify |

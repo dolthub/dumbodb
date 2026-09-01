@@ -29,14 +29,12 @@ teardown() {
     local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
     # Insert alice.
-    run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
+    run mongo_json "$mongo_uri" 'db.col1.insertOne({name:"alice",age:30})'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
     # Insert bob.
-    run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.col1.insertOne({name:"bob",age:25}))'
+    run mongo_json "$mongo_uri" 'db.col1.insertOne({name:"bob",age:25})'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
@@ -60,13 +58,11 @@ teardown() {
 @test 'inserted docs appear as added rows in dolt diff' {
     local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
-    run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
+    run mongo_json "$mongo_uri" 'db.col1.insertOne({name:"alice",age:30})'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
-    run mongosh "$mongo_uri" --quiet --eval \
-        'JSON.stringify(db.col1.insertOne({name:"bob",age:25}))'
+    run mongo_json "$mongo_uri" 'db.col1.insertOne({name:"bob",age:25})'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
@@ -95,8 +91,7 @@ teardown() {
 }
 
 @test 'collection schema has _id and doc columns' {
-    run mongosh "mongodb://127.0.0.1:${DUMBODB_PORT}/test" --quiet --eval \
-        'JSON.stringify(db.col1.insertOne({name:"alice",age:30}))'
+    run mongo_json "mongodb://127.0.0.1:${DUMBODB_PORT}/test" 'db.col1.insertOne({name:"alice",age:30})'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.acknowledged == true and .insertedId != null'
 
@@ -116,14 +111,12 @@ teardown() {
   local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
   # Insert a document so there is something to commit.
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.col.insertOne({x:1}))'
+  run mongo_json "$mongo_uri" 'db.col.insertOne({x:1})'
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.acknowledged == true'
 
   # Run dumboCommit and capture the result.
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({dumboCommit: 1, message: "my first commit"}))'
+  run mongo_json "$mongo_uri" 'db.runCommand({dumboCommit: 1, message: "my first commit"})'
   [ "$status" -eq 0 ]
 
   # Verify ok:1 and a non-empty commitId.
@@ -148,18 +141,15 @@ teardown() {
   local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
   # Insert and commit so we have a non-empty repo.
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.col.insertOne({x:1}))'
+  run mongo_json "$mongo_uri" 'db.col.insertOne({x:1})'
   [ "$status" -eq 0 ]
 
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>"}))'
+  run mongo_json "$mongo_uri" 'db.runCommand({dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>"})'
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.ok == 1'
 
   # Create a branch via dumboDB.
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature-x"}))'
+  run mongo_json "$mongo_uri" 'db.runCommand({doltBranch: 1, branch: "feature-x"})'
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.ok == 1'
 
@@ -177,18 +167,15 @@ teardown() {
   local mongo_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
   # Insert and commit so we have a non-empty repo.
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.col.insertOne({x:1}))'
+  run mongo_json "$mongo_uri" 'db.col.insertOne({x:1})'
   [ "$status" -eq 0 ]
 
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>"}))'
+  run mongo_json "$mongo_uri" 'db.runCommand({dumboCommit: 1, message: "baseline", author: "alice <alice@acme.com>"})'
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.ok == 1'
 
   # Create a tag via dumboDB.
-  run mongosh "$mongo_uri" --quiet --eval \
-    'JSON.stringify(db.runCommand({dumboTag: 1, name: "v1.0", message: "first release", author: "alice <alice@acme.com>"}))'
+  run mongo_json "$mongo_uri" 'db.runCommand({dumboTag: 1, name: "v1.0", message: "first release", author: "alice <alice@acme.com>"})'
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.ok == 1'
 

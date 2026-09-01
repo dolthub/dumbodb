@@ -4,6 +4,42 @@
 DUMBODB_BINARY="${DUMBODB_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/dumbodb}"
 DUMBODB_PID=""
 
+# Disable mongosh client-side telemetry for the whole suite by pointing mongosh's
+# global-config lookup at our checked-in mongosh.conf (forceDisableTelemetry:
+# true). This also sidesteps mongosh 2.10.x's "getAiAgent is not a function"
+# crash: forceDisableTelemetry short-circuits that getter before the missing call.
+export MONGOSH_GLOBAL_CONFIG_FILE_FOR_TESTING="${MONGOSH_GLOBAL_CONFIG_FILE_FOR_TESTING:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mongosh.conf}"
+
+# in_ci: true when running under CI. GitHub Actions and most CI systems set
+# CI=true; DUMBO_REQUIRE_INFRA=1 forces the same behavior anywhere.
+in_ci() {
+    [ -n "${CI:-}" ] || [ -n "${DUMBO_REQUIRE_INFRA:-}" ]
+}
+
+# require_infra <path> <name> <make-target>
+# Guards a test on an infra binary. In CI a missing binary is a hard FAILURE
+# (tests must never fail-green on absent infrastructure); locally it skips so a
+# developer without the binary can still run the rest of the suite. Call from a
+# test's setup(); on the failure path it returns non-zero so setup fails, and on
+# the local path it invokes bats `skip` directly (so it must be called from
+# setup/test context, not a nested subshell).
+require_infra() {
+    local path="$1"
+    local name="$2"
+    local target="$3"
+
+    if [ -x "$path" ]; then
+        return 0
+    fi
+
+    if in_ci; then
+        echo "ERROR: $name not found at $path; CI must provide it (run 'make ${target}' or provision it)" >&2
+        return 1
+    fi
+
+    skip "${name} not built (run 'make ${target}')"
+}
+
 # port_open <host> <port>
 # True when a TCP connection to host:port succeeds. Uses nc when
 # available, falling back to bash's built-in /dev/tcp so the suite
@@ -87,6 +123,370 @@ stop_dumbodb() {
         wait "$DUMBODB_PID" 2>/dev/null || true
         DUMBODB_PID=""
     fi
+}
+
+# mongo_json <uri> <js-expression>
+# Evaluate a single JavaScript expression against <uri> and print its value as
+# JSON on stdout. Wraps the result in print(JSON.stringify(...)); quit(0) so the
+# process exits 0 with just the JSON: mongosh 2.10.x throws a spurious
+# "getAiAgent is not a function" at shutdown and otherwise exits non-zero even on
+# success. Pass the expression using single-quoted JS string literals so its
+# quotes survive the shell (e.g. db.runCommand({dumboRemote:1,action:'add'})).
+mongo_json() {
+    local uri="$1"
+    local expr="$2"
+    mongosh "$uri" --quiet --eval "print(JSON.stringify(${expr})); quit(0)"
+}
+
+# Dolt remotesrv fixture: a local push/fetch/clone endpoint. Built from the
+# pinned dolt module (see `make remotesrv`) so its chunk protocol matches the
+# dolt version compiled into dumbodb. Started like the dumbodb server so remote-
+# sync tests have a hermetic gRPC remote with no DoltHub or network dependency.
+REMOTESRV_BINARY="${REMOTESRV_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/remotesrv}"
+REMOTESRV_PID=""
+REMOTESRV_URL=""
+
+# start_remotesrv <root-dir> <port>
+# Start remotesrv serving from <root-dir> with gRPC and http multiplexed on one
+# port, wait until it accepts connections, and set REMOTESRV_URL to the base
+# endpoint (http://127.0.0.1:<port>). A repo is created on demand under
+# <root-dir> the first time something is pushed to http://.../<repo>.
+start_remotesrv() {
+    local root_dir="$1"
+    local port="$2"
+    local log_file="${root_dir}.remotesrv.log"
+
+    mkdir -p "$root_dir"
+
+    if [ ! -x "$REMOTESRV_BINARY" ]; then
+        echo "ERROR: remotesrv binary not found at $REMOTESRV_BINARY (run 'make remotesrv')" >&2
+        return 1
+    fi
+
+    # Single-port multiplexing: http-port == grpc-port. Pass only the host in
+    # --http-host; remotesrv appends ":<http-port>" itself to form the authority
+    # in the URLs it generates, so they point back at this listener.
+    "$REMOTESRV_BINARY" \
+        --dir "$root_dir" \
+        --http-port "$port" \
+        --grpc-port "$port" \
+        --http-host "127.0.0.1" \
+        >"$log_file" 2>&1 &
+    REMOTESRV_PID=$!
+
+    local ready=0
+    for _ in $(seq 1 30); do
+        if port_open 127.0.0.1 "$port"; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$REMOTESRV_PID" 2>/dev/null; then
+            echo "ERROR: remotesrv exited prematurely. Log:" >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        echo "ERROR: remotesrv failed to start within 30s" >&2
+        cat "$log_file" >&2
+        kill "$REMOTESRV_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    REMOTESRV_URL="http://127.0.0.1:${port}"
+}
+
+# stop_remotesrv
+# Kill the remotesrv process cleanly.
+stop_remotesrv() {
+    if [ -n "$REMOTESRV_PID" ]; then
+        kill "$REMOTESRV_PID" 2>/dev/null || true
+        wait "$REMOTESRV_PID" 2>/dev/null || true
+        REMOTESRV_PID=""
+    fi
+    REMOTESRV_URL=""
+}
+
+# MinIO fixture: a local S3-compatible object store for end-to-end s3:// remote
+# tests. Downloaded on demand by `make minio` (kept out of the default bats
+# target); s3 tests skip when the binary is absent. Uses fixed root credentials
+# that tests also pass to the dumbodb server as AWS_* for the SDK credential
+# chain.
+MINIO_BINARY="${MINIO_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/minio}"
+MINIO_PID=""
+MINIO_ENDPOINT=""
+MINIO_ACCESS_KEY="minioadmin"
+MINIO_SECRET_KEY="minioadmin"
+
+# start_minio <data-dir> <api-port> <console-port> <bucket>
+# Start MinIO serving from <data-dir>, pre-create <bucket> (a top-level directory
+# is a bucket in single-drive mode), wait for readiness, and set MINIO_ENDPOINT
+# to http://127.0.0.1:<api-port>.
+start_minio() {
+    local data_dir="$1"
+    local api_port="$2"
+    local console_port="$3"
+    local bucket="$4"
+    local log_file="${data_dir}.minio.log"
+
+    if [ ! -x "$MINIO_BINARY" ]; then
+        echo "ERROR: minio binary not found at $MINIO_BINARY (run 'make minio')" >&2
+        return 1
+    fi
+
+    mkdir -p "${data_dir}/${bucket}"
+
+    MINIO_ROOT_USER="$MINIO_ACCESS_KEY" MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
+        "$MINIO_BINARY" server "$data_dir" \
+        --address "127.0.0.1:${api_port}" \
+        --console-address "127.0.0.1:${console_port}" \
+        >"$log_file" 2>&1 &
+    MINIO_PID=$!
+
+    local ready=0
+    for _ in $(seq 1 30); do
+        if port_open 127.0.0.1 "$api_port"; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$MINIO_PID" 2>/dev/null; then
+            echo "ERROR: minio exited prematurely. Log:" >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        echo "ERROR: minio failed to start within 30s" >&2
+        cat "$log_file" >&2
+        kill "$MINIO_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    MINIO_ENDPOINT="http://127.0.0.1:${api_port}"
+}
+
+# stop_minio
+# Kill the MinIO process cleanly.
+stop_minio() {
+    if [ -n "$MINIO_PID" ]; then
+        kill "$MINIO_PID" 2>/dev/null || true
+        wait "$MINIO_PID" 2>/dev/null || true
+        MINIO_PID=""
+    fi
+    MINIO_ENDPOINT=""
+}
+
+# fake-gcs-server fixture: a local Google Cloud Storage emulator for end-to-end
+# gs:// remote tests. Built on demand by `make fakegcs` (kept out of the default
+# bats target); gs tests skip when the binary is absent. The GCS SDK is routed
+# at it via the STORAGE_EMULATOR_HOST environment variable, which tests export
+# into the dumbodb server's environment.
+FAKEGCS_BINARY="${FAKEGCS_BINARY:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../" && pwd)/.runtime/bin/fake-gcs-server}"
+FAKEGCS_PID=""
+FAKEGCS_ENDPOINT=""
+
+# start_fakegcs <data-dir> <port> <bucket>
+# Start fake-gcs-server on the filesystem backend, pre-create <bucket> (a
+# top-level directory under the filesystem root), wait for readiness, and set
+# FAKEGCS_ENDPOINT to http://127.0.0.1:<port>.
+start_fakegcs() {
+    local data_dir="$1"
+    local port="$2"
+    local bucket="$3"
+    local log_file="${data_dir}.fakegcs.log"
+
+    if [ ! -x "$FAKEGCS_BINARY" ]; then
+        echo "ERROR: fake-gcs-server not found at $FAKEGCS_BINARY (run 'make fakegcs')" >&2
+        return 1
+    fi
+
+    mkdir -p "${data_dir}/${bucket}"
+
+    # public-host must be the emulator's own address so upload Location headers
+    # point back here rather than at storage.googleapis.com.
+    "$FAKEGCS_BINARY" \
+        -backend filesystem \
+        -filesystem-root "$data_dir" \
+        -scheme http \
+        -host 127.0.0.1 \
+        -port "$port" \
+        -public-host "127.0.0.1:${port}" \
+        >"$log_file" 2>&1 &
+    FAKEGCS_PID=$!
+
+    local ready=0
+    for _ in $(seq 1 30); do
+        if port_open 127.0.0.1 "$port"; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "$FAKEGCS_PID" 2>/dev/null; then
+            echo "ERROR: fake-gcs-server exited prematurely. Log:" >&2
+            cat "$log_file" >&2
+            return 1
+        fi
+        sleep 1
+    done
+
+    if [ "$ready" -eq 0 ]; then
+        echo "ERROR: fake-gcs-server failed to start within 30s" >&2
+        cat "$log_file" >&2
+        kill "$FAKEGCS_PID" 2>/dev/null || true
+        return 1
+    fi
+
+    FAKEGCS_ENDPOINT="http://127.0.0.1:${port}"
+}
+
+# stop_fakegcs
+# Kill the fake-gcs-server process cleanly.
+stop_fakegcs() {
+    if [ -n "$FAKEGCS_PID" ]; then
+        kill "$FAKEGCS_PID" 2>/dev/null || true
+        wait "$FAKEGCS_PID" 2>/dev/null || true
+        FAKEGCS_PID=""
+    fi
+    FAKEGCS_ENDPOINT=""
+}
+
+# Git-over-SSH fixture for git+ssh:// remote tests. A real OpenSSH daemon on a
+# loopback port, mirroring dolt's integration-test harness. The dumbodb server
+# reaches it by exporting GIT_SSH_COMMAND (a wrapper using the test key), so git
+# -- which the GitRemoteFactory shells out to -- tunnels through it.
+GIT_SSHD_DIR=""
+GIT_SSHD_PID=""
+GIT_SSHD_PORT=""
+GIT_SSH_USER=""
+
+# have_sshd: true when an sshd binary is available to run.
+have_sshd() {
+    command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]
+}
+
+# start_git_sshd <work-dir>
+# Start a user-owned sshd on a free loopback port with a generated host key and a
+# client key authorized for the current user, and export GIT_SSH_COMMAND pointing
+# at a wrapper that uses that key with host-key checking disabled. Sets
+# GIT_SSHD_PORT and GIT_SSH_USER.
+start_git_sshd() {
+    local dir="$1"
+    local sshd_bin
+    sshd_bin="$(command -v sshd 2>/dev/null)" || sshd_bin="/usr/sbin/sshd"
+
+    GIT_SSHD_DIR="$dir"
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+
+    ssh-keygen -q -t ed25519 -f "$dir/host_key" -N ""
+    chmod 600 "$dir/host_key"
+    ssh-keygen -q -t ed25519 -f "$dir/id_client" -N ""
+    cat "$dir/id_client.pub" > "$dir/authorized_keys"
+    chmod 600 "$dir/authorized_keys"
+
+    GIT_SSHD_PORT="$(free_port)"
+    cat > "$dir/sshd_config" <<EOF
+Port ${GIT_SSHD_PORT}
+ListenAddress 127.0.0.1
+HostKey ${dir}/host_key
+AuthorizedKeysFile ${dir}/authorized_keys
+StrictModes no
+PasswordAuthentication no
+PubkeyAuthentication yes
+UsePAM no
+AllowTcpForwarding no
+X11Forwarding no
+LogLevel ERROR
+EOF
+
+    "$sshd_bin" -f "$dir/sshd_config" -D </dev/null >>"$dir/sshd.log" 2>&1 &
+    GIT_SSHD_PID=$!
+
+    local ready=0 i
+    for i in $(seq 1 50); do
+        if port_open 127.0.0.1 "$GIT_SSHD_PORT"; then ready=1; break; fi
+        if ! kill -0 "$GIT_SSHD_PID" 2>/dev/null; then
+            echo "ERROR: sshd exited prematurely. Log:" >&2; cat "$dir/sshd.log" >&2; return 1
+        fi
+        sleep 0.2
+    done
+    [ "$ready" -eq 1 ] || { echo "ERROR: sshd failed to start on $GIT_SSHD_PORT" >&2; cat "$dir/sshd.log" >&2; return 1; }
+
+    GIT_SSH_USER="$(id -un)"
+    local wrapper="$dir/ssh_wrapper.sh"
+    cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+exec ssh -i "${dir}/id_client" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes "\$@"
+EOF
+    chmod +x "$wrapper"
+    export GIT_SSH_COMMAND="$wrapper"
+}
+
+# start_git_ssh_wrapper_only
+# Local fallback for machines without sshd: a GIT_SSH_COMMAND that runs git's
+# transport command locally (no daemon). Exercises the git+ssh code path but not
+# real network ssh. Sets GIT_SSH_USER; leaves GIT_SSHD_PORT empty (URLs use no
+# port and an absolute repo path).
+start_git_ssh_wrapper_only() {
+    local dir="$1"
+    GIT_SSHD_DIR="$dir"
+    mkdir -p "$dir"
+    GIT_SSH_USER="git"
+    local wrapper="$dir/ssh_wrapper.sh"
+    printf '#!/usr/bin/env bash\neval "${@: -1}"\n' > "$wrapper"
+    chmod +x "$wrapper"
+    export GIT_SSH_COMMAND="$wrapper"
+}
+
+# git_ssh_url <abs-bare-repo>
+# Build a git+ssh:// URL for the current transport mode (real sshd carries the
+# port; wrapper mode omits it).
+git_ssh_url() {
+    local repo="$1"
+    if [ -n "$GIT_SSHD_PORT" ]; then
+        echo "git+ssh://${GIT_SSH_USER}@127.0.0.1:${GIT_SSHD_PORT}${repo}"
+    else
+        echo "git+ssh://${GIT_SSH_USER}@127.0.0.1${repo}"
+    fi
+}
+
+# stop_git_sshd
+stop_git_sshd() {
+    if [ -n "$GIT_SSHD_PID" ]; then
+        kill "$GIT_SSHD_PID" 2>/dev/null || true
+        wait "$GIT_SSHD_PID" 2>/dev/null || true
+        GIT_SSHD_PID=""
+    fi
+    unset GIT_SSH_COMMAND
+    [ -n "$GIT_SSHD_DIR" ] && rm -rf "$GIT_SSHD_DIR"
+    GIT_SSHD_DIR=""; GIT_SSHD_PORT=""; GIT_SSH_USER=""
+}
+
+# seed_git_bare_repo <abs-bare-repo> [branch]
+# Create a bare git repo seeded with one plain commit on <branch> (default main).
+# Dolt git remotes require at least one branch before the first push.
+seed_git_bare_repo() {
+    local repo="$1"
+    local branch="${2:-main}"
+    git init --bare "$repo" >/dev/null
+    local seed
+    seed="$(mktemp -d)"
+    (
+        set -euo pipefail
+        cd "$seed"
+        git init -q
+        git config user.email dumbo@test
+        git config user.name dumbo
+        echo seed > README
+        git add README
+        git commit -qm seed
+        git branch -M "$branch"
+        git push -q "$repo" "$branch"
+    )
+    rm -rf "$seed"
 }
 
 # setup_dolt_hack <data-dir>

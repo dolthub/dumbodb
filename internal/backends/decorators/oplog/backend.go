@@ -251,3 +251,43 @@ var (
 	_ backends.Backend           = (*backend)(nil)
 	_ backends.VersioningBackend = (*backend)(nil)
 )
+
+func (b *backend) DumboDBRemote(ctx context.Context, params *backends.RemoteParams) (*backends.RemoteResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBRemote(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBRemote: versioning not supported by wrapped backend")
+}
+
+func (b *backend) DumboDBPush(ctx context.Context, params *backends.PushParams) (*backends.PushResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBPush(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBPush: versioning not supported by wrapped backend")
+}
+
+func (b *backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBFetch(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBFetch: versioning not supported by wrapped backend")
+}
+
+func (b *backend) DumboDBClone(ctx context.Context, params *backends.CloneParams) (*backends.CloneResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBClone(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBClone: versioning not supported by wrapped backend")
+}
+
+func (b *backend) DumboDBPull(ctx context.Context, params *backends.PullParams) (*backends.PullResult, error) {
+	if vb, ok := b.origB.(backends.VersioningBackend); ok {
+		return vb.DumboDBPull(ctx, params)
+	}
+
+	return nil, fmt.Errorf("oplog: DumboDBPull: versioning not supported by wrapped backend")
+}

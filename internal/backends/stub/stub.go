@@ -234,3 +234,51 @@ func (c *collection) CreateIndexes(_ context.Context, _ *backends.CreateIndexesP
 func (c *collection) DropIndexes(_ context.Context, _ *backends.DropIndexesParams) (*backends.DropIndexesResult, error) {
 	return nil, fmt.Errorf("stub: DropIndexes %q.%q not implemented", c.dbName, c.name)
 }
+
+func (b *Backend) DumboDBRemote(_ context.Context, params *backends.RemoteParams) (*backends.RemoteResult, error) {
+	b.l.Info("stub: DumboDBRemote",
+		slog.String("db", params.DBName),
+		slog.String("action", params.Action),
+		slog.String("name", params.Name),
+	)
+
+	return &backends.RemoteResult{Remotes: []backends.RemoteInfo{}}, nil
+}
+
+func (b *Backend) DumboDBPush(_ context.Context, params *backends.PushParams) (*backends.PushResult, error) {
+	b.l.Info("stub: DumboDBPush",
+		slog.String("db", params.DBName),
+		slog.String("remote", params.Remote),
+		slog.String("refSpec", params.RefSpec),
+	)
+
+	return &backends.PushResult{Remote: params.Remote, Branch: params.ConnBranch}, nil
+}
+
+func (b *Backend) DumboDBFetch(_ context.Context, params *backends.FetchParams) (*backends.FetchResult, error) {
+	b.l.Info("stub: DumboDBFetch",
+		slog.String("db", params.DBName),
+		slog.String("remote", params.Remote),
+	)
+
+	return &backends.FetchResult{Remote: params.Remote}, nil
+}
+
+func (b *Backend) DumboDBPull(_ context.Context, params *backends.PullParams) (*backends.PullResult, error) {
+	b.l.Info("stub: DumboDBPull",
+		slog.String("db", params.DBName),
+		slog.String("branch", params.Branch),
+		slog.String("remote", params.Remote),
+	)
+
+	return &backends.PullResult{Remote: params.Remote, Branch: params.Branch}, nil
+}
+
+func (b *Backend) DumboDBClone(_ context.Context, params *backends.CloneParams) (*backends.CloneResult, error) {
+	b.l.Info("stub: DumboDBClone",
+		slog.String("as", params.As),
+		slog.String("from", params.From),
+	)
+
+	return &backends.CloneResult{DB: params.As}, nil
+}

@@ -24,8 +24,14 @@ teardown() {
 mongosh_eval() {
     local db_name="$1"
     local js="$2"
-    mongosh "mongodb://127.0.0.1:${DUMBODB_PORT}" \
-        --quiet --eval "db = db.getSiblingDB('${db_name}'); ${js}" 2>/dev/null || true
+    # quit(0) sidesteps mongosh 2.10.x's spurious "getAiAgent" shutdown error,
+    # which otherwise makes mongosh exit non-zero even when the eval succeeded.
+    # We deliberately do NOT swallow stderr or force success (no '2>/dev/null ||
+    # true'), so a real failure surfaces as a non-zero status instead of passing
+    # green. Because quit(0) runs last, mongosh no longer auto-prints the trailing
+    # expression: callers that need the result must print() it explicitly.
+    mongosh "mongodb://127.0.0.1:${DUMBODB_PORT}" --quiet --eval "db = db.getSiblingDB('${db_name}'); ${js}
+quit(0)"
 }
 
 @test 'dumboGC: 1 returns the expected fields' {
@@ -33,7 +39,7 @@ mongosh_eval() {
     run mongosh_eval "gcwire" 'db.items.insertOne({_id: 1, v: "hello"});'
     [ "$status" -eq 0 ]
 
-    run mongosh_eval "gcwire" 'JSON.stringify(db.runCommand({dumboGC: 1}));'
+    run mongosh_eval "gcwire" 'print(JSON.stringify(db.runCommand({dumboGC: 1})));'
     [ "$status" -eq 0 ]
 
     # Required fields.
@@ -51,7 +57,7 @@ mongosh_eval() {
     run mongosh_eval "gcwirefull" 'db.items.insertOne({_id: 1, v: "hello"});'
     [ "$status" -eq 0 ]
 
-    run mongosh_eval "gcwirefull" 'JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"}));'
+    run mongosh_eval "gcwirefull" 'print(JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"})));'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .mode == "full"'
 }
@@ -61,7 +67,7 @@ mongosh_eval() {
     [ "$status" -eq 0 ]
 
     run mongosh_eval "gcwirebad" \
-        'try { JSON.stringify(db.runCommand({dumboGC: 1, mode: "bogus"})) } catch(e) { JSON.stringify(e.errorResponse) }'
+        'try { print(JSON.stringify(db.runCommand({dumboGC: 1, mode: "bogus"}))) } catch(e) { print(JSON.stringify(e.errorResponse)) }'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 0'
     echo "$output" | jq -e '.errmsg | contains("unknown mode")'
@@ -81,7 +87,7 @@ mongosh_eval() {
     '
     [ "$status" -eq 0 ]
 
-    run mongosh_eval "$db_name" 'JSON.stringify(db.runCommand({dumboGC: 1}));'
+    run mongosh_eval "$db_name" 'print(JSON.stringify(db.runCommand({dumboGC: 1})));'
     [ "$status" -eq 0 ]
 
     local before after
@@ -135,7 +141,7 @@ mongosh_eval() {
     oldgen_files_before="$(find "${db_dir}/oldgen" -maxdepth 1 -type f | wc -l)"
 
     # Run full-mode GC over the wire.
-    run mongosh_eval "$db_name" 'JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"}));'
+    run mongosh_eval "$db_name" 'print(JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"})));'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .mode == "full"'
 
@@ -208,7 +214,7 @@ mongosh_eval() {
 
     # Create feature branch from current main HEAD.
     run mongosh_eval "$db_name" '
-        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature"}))
+        print(JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature"})))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
@@ -232,7 +238,7 @@ mongosh_eval() {
 
     # First GC pass (default mode). Steady-state: compacts current
     # workload into an oldgen archive.
-    run mongosh_eval "$db_name" 'JSON.stringify(db.runCommand({dumboGC: 1}));'
+    run mongosh_eval "$db_name" 'print(JSON.stringify(db.runCommand({dumboGC: 1})));'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
     local chunks_after_1 size_after_1
@@ -257,14 +263,14 @@ mongosh_eval() {
     # feature is garbage. forceDelete bypasses the merged-into-main
     # safety check.
     run mongosh_eval "$db_name" '
-        JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature", forceDelete: true}))
+        print(JSON.stringify(db.runCommand({doltBranch: 1, branch: "feature", forceDelete: true})))
     '
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
     # Second GC pass (full mode). Should reclaim the feature-only
     # chunks and shrink the store by 2x or more.
-    run mongosh_eval "$db_name" 'JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"}));'
+    run mongosh_eval "$db_name" 'print(JSON.stringify(db.runCommand({dumboGC: 1, mode: "full"})));'
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .mode == "full"'
     local chunks_after_2 size_after_2

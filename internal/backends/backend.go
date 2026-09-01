@@ -385,3 +385,43 @@ var (
 	_ Backend           = (*backendContract)(nil)
 	_ VersioningBackend = (*backendContract)(nil)
 )
+
+func (bc *backendContract) DumboDBRemote(ctx context.Context, params *RemoteParams) (*RemoteResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBRemote(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBRemote")
+}
+
+func (bc *backendContract) DumboDBPush(ctx context.Context, params *PushParams) (*PushResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBPush(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBPush")
+}
+
+func (bc *backendContract) DumboDBPull(ctx context.Context, params *PullParams) (*PullResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBPull(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBPull")
+}
+
+func (bc *backendContract) DumboDBFetch(ctx context.Context, params *FetchParams) (*FetchResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBFetch(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBFetch")
+}
+
+func (bc *backendContract) DumboDBClone(ctx context.Context, params *CloneParams) (*CloneResult, error) {
+	if vb, ok := bc.b.(VersioningBackend); ok {
+		return vb.DumboDBClone(ctx, params)
+	}
+
+	return nil, newVersioningUnsupportedError("DumboDBClone")
+}

@@ -79,6 +79,11 @@ Every `dumbo*` command has an identical `dolt*` alias:
 | `dumboTag` | `doltTag` |
 | `dumboGC` | `doltGC` |
 | `dumboUndrop` | `doltUndrop` |
+| `dumboRemote` | `doltRemote` |
+| `dumboClone` | `doltClone` |
+| `dumboPush` | `doltPush` |
+| `dumboFetch` | `doltFetch` |
+| `dumboPull` | `doltPull` |
 
 ---
 
@@ -1746,3 +1751,331 @@ admin.runCommand({ dumboUndrop: 1, purgeMatching: { name: "orders", droppedBefor
 - Restore is a copy: the drop is not consumed. It stays listed and can be restored again (each restore produces an independent database). Restoring into a name that is already live is rejected.
 - Preserved databases are permanently deleted automatically once they are more than 30 days old. A background job checks hourly and logs an INFO line for each deletion. Undrop a database before then to recover it.
 - System databases (`admin`, `config`, `local`) cannot be dropped, so they are never preserved.
+
+---
+
+## Remote sync
+
+`dumboRemote`, `dumboClone`, `dumboPush`, `dumboFetch`, and `dumboPull` give a
+DumboDB database the same remote workflow as git, reusing Dolt's chunk-transfer
+machinery. A remote is a named URL stored per database in `admin.system.remotes`;
+branch upstream tracking is stored in `admin.system.branches`. Both are internal
+storage -- the supported interface is these commands plus `dumboBranch` (the
+`git branch -vv` analog), not direct reads of those collections.
+
+**Remote URLs.** A remote's `url` (and `dumboClone`'s `from`) accepts:
+`file://` (a local directory), `http(s)://` (a Dolt remotesapi gRPC endpoint such
+as DoltHub), `s3://`, `gs://`, `az://`, `oss://`, `oci://` (object stores), and
+`git+file://` / `git+http(s)://` / `git+ssh://` (a Dolt database stored in a git
+repository). A scheme-less value is expanded like the Dolt CLI: `org/repo`
+becomes `https://doltremoteapi.dolthub.com/org/repo`. Secure gRPC remotes
+(`https://`, DoltHub) require credentials from `dolt login` in the server's
+environment; object stores read credentials from the ambient environment.
+
+---
+
+## dumboRemote
+
+Adds, lists, or removes a named remote for the database. Remotes are stored in
+`admin.system.remotes` and referenced by name from `dumboPush` / `dumboFetch` /
+`dumboPull`.
+
+**Alias:** `doltRemote`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `action` | string | yes | -- | `"add"`, `"list"`, or `"remove"` |
+| `name` | string | for `add`/`remove` | -- | Remote name (e.g. `"origin"`) |
+| `url` | string | for `add` | -- | Remote URL (see [Remote URLs](#remote-sync)) |
+
+### Response fields
+
+| Action | Fields |
+|--------|--------|
+| `add` | `name`, `url`, `ok` |
+| `list` | `remotes` (array of `{ name, url }`), `ok` |
+| `remove` | `ok` |
+
+### Example
+
+```js
+var db = db.getSiblingDB("orders@main")
+
+db.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///srv/remotes/orders" })
+// { name: "origin", url: "file:///srv/remotes/orders", ok: 1 }
+
+db.runCommand({ dumboRemote: 1, action: "list" })
+// { remotes: [ { name: "origin", url: "file:///srv/remotes/orders" } ], ok: 1 }
+
+db.runCommand({ dumboRemote: 1, action: "remove", name: "origin" })
+// { ok: 1 }
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| `action` is not `add`/`list`/`remove` | `BadValue: dumboRemote: action must be add, list, or remove` |
+| `add`/`remove` without `name` | `BadValue: dumboRemote <action>: name is required` |
+| `add` without `url` | `BadValue: dumboRemote add: url is required` |
+
+### Notes
+
+- The command value is `1`; the operation is the `action` field.
+- The target database is the one encoded in the connection; remotes are scoped per database (`_id` is `"<db>.<name>"`).
+
+---
+
+## dumboClone
+
+Creates a new server-side database by cloning a remote. Must be run against the
+`admin` database.
+
+**Alias:** `doltClone`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `from` | string | yes | -- | Remote URL to clone (see [Remote URLs](#remote-sync)) |
+| `as` | string | yes | -- | Name for the new database |
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `db` | string | Name of the created database (echoes `as`) |
+| `from` | string | Resolved remote URL cloned from |
+| `defaultBranch` | string | The clone's default branch (`main`/`master`/first) |
+| `commit` | string | Default branch head after the clone |
+| `branches` | array | Names of all branches brought over |
+| `ok` | number | `1` on success |
+
+### Example
+
+```js
+var admin = db.getSiblingDB("admin")
+
+admin.runCommand({ dumboClone: 1, from: "file:///srv/remotes/orders", as: "orders" })
+// {
+//   db:            "orders",
+//   from:          "file:///srv/remotes/orders",
+//   defaultBranch: "main",
+//   commit:        "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
+//   branches:      [ "main", "feature" ],
+//   ok:            1
+// }
+
+// From DoltHub (scheme-less org/repo shorthand); requires `dolt login`.
+admin.runCommand({ dumboClone: 1, from: "myorg/orders", as: "orders" })
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| Not run against `admin` | `OperationFailed: dumboClone: can only be run against the admin database` |
+| `from` or `as` missing | `Location40414 / IDL error: BSON field 'dumboClone.<field>' is missing` |
+| `as` is a reserved name (`admin`, `config`, `local`) | `OperationFailed: dumboClone: "<name>" is a reserved database name` |
+| A database named `as` already exists | `OperationFailed: dumboClone: database "<name>" already exists` |
+| Remote scheme not cloneable | `OperationFailed: dumboClone: unsupported remote scheme "<scheme>"` |
+
+### Notes
+
+- The clone registers an `origin` remote pointing at `from` and sets the default branch to track `origin/<default>`, matching `git clone`. After a clone, a bare `dumboPush` / `dumboPull` needs no target.
+- Every remote branch is materialized as a local branch and a tracking ref `refs/remotes/origin/<branch>`.
+
+---
+
+## dumboPush
+
+Pushes a commit to a branch on a configured remote, mirroring `git push`. Operates
+on the branch encoded in the connection.
+
+**Alias:** `doltPush`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `to` | string | no\* | branch's upstream | Remote **name** to push to. Omit to use the branch's upstream. |
+| `refSpec` | string | no | connection branch | git-style `[+]<source>[:<destination>]` (see Notes). Omit for a bare push. |
+| `force` | bool | no | `false` | Overwrite a non-fast-forward remote (`git push --force`); same as a leading `+`. |
+| `setUpstream` | bool | no | `false` | Record the target as the source branch's upstream (`git push -u`). |
+
+\* Push needs a remote from somewhere: an explicit `to`, or the source branch's upstream.
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `remote` | string | Remote pushed to |
+| `branch` | string | Local branch pushed; **omitted** when the source was a revision expression, not a branch |
+| `remoteBranch` | string | Destination branch on the remote; shown only when it differs from `branch` |
+| `commitBefore` | string | Remote branch head before the push; omitted when the push created the branch |
+| `commitPushed` | string | Commit now on the remote branch |
+| `upToDate` | bool | `true` when the remote already had the commit |
+| `ok` | number | `1` on success |
+
+### Example
+
+```js
+var db = db.getSiblingDB("orders@main")
+
+// git push origin main
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+// { remote: "origin", branch: "main", commitPushed: "<hash>", upToDate: false, ok: 1 }
+
+// git push -u origin main (records the upstream)
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main", setUpstream: true })
+
+// git push (bare; uses the recorded upstream)
+db.runCommand({ dumboPush: 1 })
+
+// git push origin main:published (refspec rename)
+db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main:published" })
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| No `to` and the branch has no upstream | `OperationFailed: dumboPush: no remote given and branch "<b>" has no upstream; specify 'to' or push with a refSpec` |
+| Bare push to the branch's own remote with no upstream | `OperationFailed: dumboPush: branch "<b>" has no upstream; specify a different remote or push with a refSpec` |
+| Bare push where the upstream branch name differs from the local branch | `OperationFailed: dumboPush: branch "<b>" tracks <remote>/<ref> and their names differ; push explicitly, e.g. refSpec "<b>:<ref>"` |
+| `refSpec` names a commit, not a branch, with no `:destination` | `OperationFailed: dumboPush: refspec "<spec>" names a commit, not a branch; use <source>:<branch>` |
+| `setUpstream` with a revision source (no branch) | `OperationFailed: dumboPush: cannot set upstream: source "<src>" is not a branch` |
+| Push is not a fast-forward and `force` is not set | `OperationFailed: dumboPush: ...` (non-fast-forward) |
+| Remote not found / scheme unsupported | `OperationFailed: remote "<r>" not found for database "<db>"` / `... scheme "<s>" is not yet supported for push` |
+
+### Notes
+
+- `refSpec` is git's push refspec `[+]<source>[:<destination>]`:
+  - `<source>` is any revision -- a branch (`main`), `HEAD`, a relative revision (`HEAD~3`, `main~2`, `main^`), or a commit hash. `HEAD`/relative resolve against the connection branch.
+  - `<destination>` is the branch to update on the remote. Unlike git, a revision source may be pushed straight to a branch (`HEAD~1:older`) -- the right-hand side is always a branch name.
+  - colon-less `main` means `main:main`; `HEAD` means the connection branch's name; a bare revision (`HEAD~3`) with no `:destination` errors.
+  - a leading `+` forces (like `force: true`).
+- Pushing to the branch's **own** remote (its upstream, or `origin` by default) with no upstream errors; pushing to a **different** remote is a triangular push to a same-named branch that needs no upstream.
+- Upstream is recorded only by `setUpstream`; a plain push never changes it. It is shown by `dumboBranch`, not by reading `admin.system.branches`.
+
+---
+
+## dumboFetch
+
+Downloads every branch from a remote into local tracking refs
+`refs/remotes/<remote>/<branch>`, mirroring `git fetch`. It transfers novel
+chunks but never moves a local branch head.
+
+**Alias:** `doltFetch`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `from` | string | no\* | default branch's upstream | Remote **name** to fetch. Omit to use the default branch's upstream. |
+
+\* Required only when the default branch has no upstream.
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `remote` | string | Remote fetched from |
+| `branches` | array | One entry per remote branch: `{ branch, commitBefore?, commit }` |
+| `ok` | number | `1` on success |
+
+Each `branches` entry reports the tracking ref's `commitBefore -> commit` change;
+`commitBefore` is omitted when the fetch created the tracking ref.
+
+### Example
+
+```js
+var db = db.getSiblingDB("orders@main")
+
+db.runCommand({ dumboFetch: 1, from: "origin" })
+// { remote: "origin", branches: [ { branch: "main", commitBefore: "<h1>", commit: "<h2>" } ], ok: 1 }
+
+// Bare fetch uses the default branch's upstream.
+db.runCommand({ dumboFetch: 1 })
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| No `from` and the default branch has no upstream | `OperationFailed: dumboFetch: no upstream configured for branch "main"; specify a remote with 'from'` |
+| Remote not found | `OperationFailed: remote "<r>" not found for database "<db>"` |
+| Remote scheme unsupported | `OperationFailed: dumboFetch: remote scheme "<s>" is not yet supported for fetch` |
+| Remote has no branches | `OperationFailed: dumboFetch: remote "<r>" has no branches` |
+
+### Notes
+
+- Fetch never touches a local branch -- only tracking refs. Use `dumboPull` (or `dumboMerge` from a tracking ref) to advance a branch.
+
+---
+
+## dumboPull
+
+Fetches from a remote and merges the fetched commit for the current branch into
+that branch -- `git pull` = fetch + merge. Operates on the branch encoded in the
+connection.
+
+**Alias:** `doltPull`
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `from` | string | no\* | branch's upstream | Remote **name** to pull from. Omit to use the current branch's upstream. |
+| `ffOnly` | bool | no | `false` | Fail if the pull is not a fast-forward (`git pull --ff-only`). |
+| `noFF` | bool | no | `false` | Always create a merge commit, even when a fast-forward is possible (`git pull --no-ff`). |
+| `message` | string | no | -- | Merge commit message. |
+| `author` | string | no | -- | `Name <email>` for a merge commit. |
+
+\* Required only when the branch has no upstream.
+
+### Response fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `remote` | string | Remote pulled from |
+| `branch` | string | Branch pulled into (the connection branch) |
+| `commitBefore` | string | Branch head before the pull; omitted when unchanged/new |
+| `commitAfter` | string | Branch head after the pull (a fast-forward target or a merge commit) |
+| `fastForward` | bool | `true` when the pull fast-forwarded |
+| `alreadyUpToDate` | bool | `true` when there was nothing to merge |
+| `ok` | number | `1` on success |
+
+A conflicting pull returns `ok: 0` with a `conflicts` array of
+`{ collection, count }`, like `dumboMerge`, and leaves the branch staged for
+resolution (`dumboConflicts` / `dumboResolveConflict` / `dumboMerge`).
+
+### Example
+
+```js
+var db = db.getSiblingDB("orders@main")
+
+db.runCommand({ dumboPull: 1 })
+// { remote: "origin", branch: "main", commitBefore: "<h1>", commitAfter: "<h2>", fastForward: true, alreadyUpToDate: false, ok: 1 }
+
+// Force a merge commit even when a fast-forward is possible.
+db.runCommand({ dumboPull: 1, noFF: true, message: "merge origin", author: "alice <alice@acme.com>" })
+
+// Refuse a non-fast-forward.
+db.runCommand({ dumboPull: 1, ffOnly: true })
+```
+
+### Error cases
+
+| Condition | Error |
+|-----------|-------|
+| No `from` and the branch has no upstream | `OperationFailed: ... branch has no upstream; specify a remote with 'from'` |
+| `ffOnly` and the pull is not a fast-forward | `OperationFailed: ...` (not a fast-forward) |
+| Conflicting merge | `ok: 0` with a `conflicts` array (not an error reply) |
+
+### Notes
+
+- `dumboPull` defaults its remote to the current branch's upstream; `dumboFetch` defaults to the default branch's upstream.
+- A fast-forward moves the branch with no new commit; otherwise a merge commit is created (`message`/`author` name it). `noFF` forces a merge commit even when a fast-forward was possible.
