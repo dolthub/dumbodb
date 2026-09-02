@@ -61,9 +61,7 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		noFF = policy.ff == "no"
 		ffOnly = policy.ff == "only"
 	}
-	// "merges" currently performs a plain rebase; rebase-merges topology
-	// preservation is a follow-up (the rebase engine lacks --rebase-merges).
-	doRebase := rebaseMode == "true" || rebaseMode == "merges"
+	doRebase := rebaseMode == "true"
 
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {

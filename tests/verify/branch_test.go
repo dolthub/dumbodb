@@ -566,6 +566,13 @@ func TestBranchVerify(t *testing.T) {
 			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}}},
 		}).Err()
 		assert.Error(t, err, "a pull policy applies only to a tracking branch")
+
+		// config.rebase is a bool: "merges" is rejected (not supported).
+		err = mainConn.RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "config", Value: bson.D{{Key: "rebase", Value: "merges"}}},
+		}).Err()
+		assert.Error(t, err, "config.rebase must be a bool; \"merges\" is rejected")
 	})
 }
 

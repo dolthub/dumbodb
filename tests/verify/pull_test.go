@@ -303,6 +303,12 @@ func TestPullVerify(t *testing.T) {
 			bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{int32(300), int32(6)}}}}})
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, n)
+
+		// rebase is a bool: "merges" is rejected (not supported).
+		err = env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPull", Value: int32(1)}, {Key: "rebase", Value: "merges"},
+		}).Err()
+		assert.Error(t, err, "rebase must be a bool; \"merges\" is rejected")
 	})
 
 	// -------------------------------------------------------------------------

@@ -162,7 +162,7 @@ lists every branch when `branch` is omitted.
 | `branch` | string | no |  -- | Name of the branch to create, delete, or configure. Omit to list every branch (local and remote-tracking) |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
-| `config` | document | no |  -- | Set the branch's pull policy: `rebase` (bool or `"merges"`) and/or `ff` (`"no"`/`"only"`/`"default"`). Requires `branch` with an upstream |
+| `config` | document | no |  -- | Set the branch's pull policy: `rebase` (bool) and/or `ff` (`"no"`/`"only"`/`"default"`). Requires `branch` with an upstream |
 | `unsetConfig` | array | no |  -- | Clear pull-policy keys, e.g. `["rebase", "ff"]`. Requires `branch` |
 
 `delete` and `forceDelete` are mutually exclusive, and both require `branch`.
@@ -249,7 +249,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unse
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
 | `config` on a branch with no upstream | `OperationFailed: ... branch "<name>" has no upstream; a pull policy applies only to a tracking branch` |
 | `config` combined with `delete` | `BadValue: dumboBranch: config cannot be combined with delete` |
-| `config` value out of range | `BadValue: dumboBranch: config.rebase must be a bool or "merges"` / `config.ff must be "no", "only", or "default"` |
+| `config` value out of range | `BadValue: dumboBranch: config.rebase must be a bool` / `config.ff must be "no", "only", or "default"` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -2057,7 +2057,7 @@ connection.
 | `from` | string | no\* | branch's upstream | Remote **name** to pull from. Omit to use the current branch's upstream. |
 | `ffOnly` | bool | no | `false` | Fail if the pull is not a fast-forward (`git pull --ff-only`). |
 | `noFF` | bool | no | `false` | Always create a merge commit, even when a fast-forward is possible (`git pull --no-ff`). |
-| `rebase` | bool or `"merges"` | no | -- | Rebase the branch onto the fetched commit instead of merging (`git pull --rebase`). |
+| `rebase` | bool | no | -- | Rebase the branch onto the fetched commit instead of merging (`git pull --rebase`). |
 | `message` | string | no | -- | Merge commit message. |
 | `author` | string | no | -- | `Name <email>` for a merge commit. |
 
@@ -2066,7 +2066,7 @@ connection.
 A tracking branch may carry a persistent pull policy (`rebase`, `ff`) set via
 `dumboBranch`. A bare `dumboPull` honors it; passing `rebase` / `noFF` / `ffOnly`
 overrides it for that call, as git's command line overrides `branch.<name>.rebase`
-/ `pull.ff`. (`rebase: "merges"` currently performs a plain rebase.)
+/ `pull.ff`.
 
 ### Response fields
 

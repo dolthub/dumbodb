@@ -57,7 +57,7 @@ type BranchParams struct {
 
 	// Configure sets/clears the pull policy of the tracking branch Name.
 	// SetRebase/SetFF are nil to leave unchanged, "" to clear a key, or a value
-	// ("true"/"merges" for rebase; "no"/"only" for ff) to set it.
+	// ("true" for rebase; "no"/"only" for ff) to set it.
 	Configure bool
 	SetRebase *string
 	SetFF     *string
@@ -71,7 +71,7 @@ type BranchInfo struct {
 	Upstream *UpstreamRef // a local branch's tracked upstream; nil when it tracks nothing
 
 	// Rebase and FF are a tracking branch's persistent pull policy (empty when
-	// unset): Rebase is "true"/"merges"; FF is "no"/"only".
+	// unset): Rebase is "true"; FF is "no"/"only".
 	Rebase string
 	FF     string
 
@@ -826,7 +826,7 @@ type PullParams struct {
 	NoFF      bool   // force a merge commit even when a fast-forward is possible
 	FFOnly    bool   // fail if the pull is not a fast-forward
 	FFSet     bool   // whether NoFF/FFOnly were passed explicitly (overrides the branch pull policy)
-	Rebase    string // "" (not set), "false", "true", or "merges": rebase onto the fetched commit instead of merging
+	Rebase    string // "" (not set), "false", or "true": rebase onto the fetched commit instead of merging
 	RebaseSet bool   // whether Rebase was passed explicitly (overrides the branch pull policy)
 	Message   string // optional merge commit message
 	Author    string // optional 'Name <email>' for a merge commit

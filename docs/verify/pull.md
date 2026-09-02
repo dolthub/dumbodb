@@ -32,7 +32,7 @@ Upstream tracking drives the no-argument forms, exactly as in git: a bare
 | `from`    | string | no\*     | Remote to pull from. Omit to use the current branch upstream. |
 | `ffOnly`  | bool   | no       | Fail if the pull is not a fast-forward (`git pull --ff-only`). |
 | `noFF`    | bool   | no       | Always create a merge commit (`git pull --no-ff`).        |
-| `rebase`  | bool or `"merges"` | no | Rebase the branch onto the fetched commit instead of merging (`git pull --rebase`). |
+| `rebase`  | bool | no | Rebase the branch onto the fetched commit instead of merging (`git pull --rebase`). |
 | `message` | string | no       | Merge commit message.                                    |
 | `author`  | string | no       | `Name <email>` for a merge commit.                       |
 
@@ -42,7 +42,7 @@ A tracking branch may carry a persistent **pull policy** (`rebase`, `ff`) set vi
 `dumboBranch` (see `branch.md`), the analog of git's `branch.<name>.rebase` and
 `pull.ff`. A bare `dumboPull` honors that policy; passing `rebase` / `ffOnly` /
 `noFF` explicitly overrides it for that call, exactly as git's command line beats
-config. (`rebase: "merges"` currently performs a plain rebase.)
+config.
 
 ## Prerequisites
 

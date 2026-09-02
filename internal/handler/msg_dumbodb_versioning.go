@@ -764,27 +764,16 @@ func (h *Handler) MsgDumboDBCommit(connCtx context.Context, msg *wire.OpMsg) (*w
 //	db.getSiblingDB("mydb@main").runCommand({dumboDBBranch: 1, branch: "feature", delete: 1})  // delete
 //
 // normalizeBranchRebase validates a config.rebase value and returns its stored
-// form: "true", "merges", or "" (unset -- also what a false/"false"/"default"
-// clears to).
+// form: "true", or "" (unset -- also what false clears to).
 func normalizeBranchRebase(v any) (string, error) {
-	switch t := v.(type) {
-	case bool:
+	if t, ok := v.(bool); ok {
 		if t {
 			return "true", nil
 		}
 		return "", nil
-	case string:
-		switch t {
-		case "true":
-			return "true", nil
-		case "false":
-			return "", nil
-		case "merges":
-			return "merges", nil
-		}
 	}
 	return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-		`dumboBranch: config.rebase must be a bool or "merges"`, "config")
+		"dumboBranch: config.rebase must be a bool", "config")
 }
 
 // normalizeBranchFF validates a config.ff value and returns its stored form:

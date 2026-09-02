@@ -39,7 +39,7 @@ type upstream struct {
 
 // pullPolicy is a tracking branch's persistent pull behavior, the analog of
 // git's branch.<name>.rebase and pull.ff. Empty strings mean "unset" (use the
-// default). rebase is "", "true", or "merges"; ff is "", "no", or "only".
+// default). rebase is "" or "true"; ff is "", "no", or "only".
 type pullPolicy struct {
 	rebase string
 	ff     string

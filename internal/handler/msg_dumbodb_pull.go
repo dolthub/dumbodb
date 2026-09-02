@@ -75,8 +75,7 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	// the branch's stored pull policy.
 	ffSet := document.Has("noFF") || document.Has("ffOnly")
 
-	// rebase may be a bool or the string "merges"; when set it overrides the
-	// branch's stored rebase policy.
+	// rebase is a bool; when set it overrides the branch's stored rebase policy.
 	rebaseSet := document.Has("rebase")
 	var rebaseVal string
 	if rebaseSet {
@@ -88,16 +87,9 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 			} else {
 				rebaseVal = "false"
 			}
-		case string:
-			if v == "true" || v == "false" || v == "merges" {
-				rebaseVal = v
-			} else {
-				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-					`dumboPull: rebase must be a bool or "merges"`, "rebase")
-			}
 		default:
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-				`dumboPull: rebase must be a bool or "merges"`, "rebase")
+				"dumboPull: rebase must be a bool", "rebase")
 		}
 	}
 

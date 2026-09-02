@@ -455,7 +455,7 @@ db.getSiblingDB("cfgdb@feature").runCommand({ doltBranch: 1, branch: "feature", 
 ```
 
 Key checks:
-- `config` accepts `rebase` (`true` / `false` / `"merges"`) and `ff` (`"no"` / `"only"` / `"default"`); `false`/`"default"` clear a key
+- `config` accepts `rebase` (`true` / `false`) and `ff` (`"no"` / `"only"` / `"default"`); `false`/`"default"` clear a key
 - The set response and the listing entry both report the branch's `config`
 - Setting a policy on a branch with no upstream is rejected
 
