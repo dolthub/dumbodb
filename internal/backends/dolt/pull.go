@@ -45,6 +45,26 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		remote = up.remote
 	}
 
+	// Resolve the effective pull behavior: explicit arguments override the
+	// branch's stored pull policy, exactly as git command-line flags override
+	// branch.<name>.rebase and pull.ff.
+	policy, err := b.getPullPolicy(ctx, params.DBName, branch)
+	if err != nil {
+		return nil, err
+	}
+	rebaseMode := policy.rebase
+	if params.RebaseSet {
+		rebaseMode = params.Rebase
+	}
+	noFF, ffOnly := params.NoFF, params.FFOnly
+	if !params.FFSet {
+		noFF = policy.ff == "no"
+		ffOnly = policy.ff == "only"
+	}
+	// "merges" currently performs a plain rebase; rebase-merges topology
+	// preservation is a follow-up (the rebase engine lacks --rebase-merges).
+	doRebase := rebaseMode == "true" || rebaseMode == "merges"
+
 	state, err := b.getOrOpenDB(ctx, params.DBName, false)
 	if err != nil {
 		return nil, err
@@ -86,14 +106,37 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 		}, nil
 	}
 
+	// Rebase path: replay the branch's local commits onto the fetched commit
+	// instead of merging. A *DumboDBRebaseConflictError propagates to the handler.
+	if doRebase {
+		rebaseRes, err := b.DumboDBRebase(ctx, &backends.RebaseParams{
+			DBName: params.DBName,
+			Branch: branch,
+			Onto:   fetched,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &backends.PullResult{
+			Remote:       remote,
+			Branch:       branch,
+			CommitBefore: before,
+			CommitAfter:  rebaseRes.NewTip,
+			// A rebase with no local commits to replay lands exactly on the
+			// fetched commit -- a fast-forward.
+			FastForward: rebaseRes.NewTip == fetched,
+			Rebased:     true,
+		}, nil
+	}
+
 	// Merge the fetched commit into the branch. A commit hash resolves cleanly;
 	// a *MergeConflictError propagates to the handler unchanged.
 	mergeRes, err := b.DumboDBMerge(ctx, &backends.MergeParams{
 		DBName:  params.DBName,
 		Into:    branch,
 		From:    fetched,
-		NoFF:    params.NoFF,
-		FFOnly:  params.FFOnly,
+		NoFF:    noFF,
+		FFOnly:  ffOnly,
 		Message: params.Message,
 		Author:  params.Author,
 	})

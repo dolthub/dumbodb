@@ -54,6 +54,13 @@ type BranchParams struct {
 	Delete bool   // if true, delete the named branch instead of creating it
 	Force  bool   // if true together with Delete, skip the unmerged-commits safety check (forceDelete semantics)
 	List   bool   // if true, list every branch (local and remote-tracking); Name, Delete and Force are ignored
+
+	// Configure sets/clears the pull policy of the tracking branch Name.
+	// SetRebase/SetFF are nil to leave unchanged, "" to clear a key, or a value
+	// ("true"/"merges" for rebase; "no"/"only" for ff) to set it.
+	Configure bool
+	SetRebase *string
+	SetFF     *string
 }
 
 // BranchInfo describes a single branch returned when BranchParams.List is set.
@@ -62,6 +69,11 @@ type BranchInfo struct {
 	Name     string
 	CommitID string       // branch HEAD commit hash
 	Upstream *UpstreamRef // a local branch's tracked upstream; nil when it tracks nothing
+
+	// Rebase and FF are a tracking branch's persistent pull policy (empty when
+	// unset): Rebase is "true"/"merges"; FF is "no"/"only".
+	Rebase string
+	FF     string
 
 	// RemoteTracking marks an entry from refs/remotes/<remote>/<branch> -- a git
 	// remote-tracking branch -- rather than a local branch. Name is
@@ -81,6 +93,12 @@ type UpstreamRef struct {
 type BranchResult struct {
 	Branch   string       // name of the created or deleted branch; empty when listing
 	Branches []BranchInfo // populated only when BranchParams.List is set, sorted by Name
+
+	// Configured is set in configure mode; Rebase/FF are the branch's resulting
+	// pull policy (empty strings when unset).
+	Configured bool
+	Rebase     string
+	FF         string
 }
 
 type MergeParams struct {
@@ -802,13 +820,16 @@ type FetchResult struct {
 
 // PullParams are the arguments to DumboDBPull.
 type PullParams struct {
-	DBName  string
-	Branch  string // current branch to pull into (the connection branch)
-	Remote  string // remote to pull from; empty means the branch upstream
-	NoFF    bool   // force a merge commit even when a fast-forward is possible
-	FFOnly  bool   // fail if the pull is not a fast-forward
-	Message string // optional merge commit message
-	Author  string // optional 'Name <email>' for a merge commit
+	DBName    string
+	Branch    string // current branch to pull into (the connection branch)
+	Remote    string // remote to pull from; empty means the branch upstream
+	NoFF      bool   // force a merge commit even when a fast-forward is possible
+	FFOnly    bool   // fail if the pull is not a fast-forward
+	FFSet     bool   // whether NoFF/FFOnly were passed explicitly (overrides the branch pull policy)
+	Rebase    string // "" (not set), "false", "true", or "merges": rebase onto the fetched commit instead of merging
+	RebaseSet bool   // whether Rebase was passed explicitly (overrides the branch pull policy)
+	Message   string // optional merge commit message
+	Author    string // optional 'Name <email>' for a merge commit
 }
 
 // PullResult is returned by DumboDBPull.
@@ -819,6 +840,7 @@ type PullResult struct {
 	CommitAfter     string // local branch head after the pull
 	FastForward     bool   // the pull advanced the branch without a merge commit
 	AlreadyUpToDate bool   // the branch already had the fetched commit
+	Rebased         bool   // the pull rebased the branch onto the fetched commit instead of merging
 }
 
 // CloneParams are the arguments to DumboDBClone.

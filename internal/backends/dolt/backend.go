@@ -1453,6 +1453,10 @@ func (b *Backend) DumboDBBranch(ctx context.Context, params *backends.BranchPara
 		return dumboDBBranchList(ctx, db)
 	}
 
+	if params.Configure {
+		return dumboDBBranchConfigure(ctx, db, params)
+	}
+
 	if params.Delete {
 		return dumboDBBranchDelete(ctx, db, params)
 	}
@@ -1518,10 +1522,14 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 		case strings.HasPrefix(id, branchRefPrefix):
 			name := strings.TrimPrefix(id, branchRefPrefix)
 			info := backends.BranchInfo{Name: name, CommitID: headAddr.String()}
-			if up, ok, err := db.backend.getUpstream(ctx, db.name, name); err != nil {
+			if cfg, ok, err := db.backend.readBranchConfig(ctx, db.name, name); err != nil {
 				return err
 			} else if ok {
-				info.Upstream = &backends.UpstreamRef{Remote: up.remote, Ref: up.ref}
+				if cfg.upstream != nil {
+					info.Upstream = &backends.UpstreamRef{Remote: cfg.upstream.remote, Ref: cfg.upstream.ref}
+				}
+				info.Rebase = cfg.pull.rebase
+				info.FF = cfg.pull.ff
 			}
 			branches = append(branches, info)
 		case strings.HasPrefix(id, remoteRefPrefix):
@@ -1547,6 +1555,35 @@ func dumboDBBranchList(ctx context.Context, db *dbState) (*backends.BranchResult
 	sort.Slice(branches, func(i, j int) bool { return branches[i].Name < branches[j].Name })
 
 	return &backends.BranchResult{Branches: branches}, nil
+}
+
+// dumboDBBranchConfigure sets or clears a tracking branch's pull policy (the
+// rebase / ff keys) and returns the resulting policy. Caller must hold
+// db.mu.Lock().
+func dumboDBBranchConfigure(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
+	branchDS, err := db.datasDB.GetDataset(ctx, branchRefPrefix+params.Name)
+	if err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: resolving branch %q: %w", params.Name, err)
+	}
+	if !branchDS.HasHead() {
+		return nil, backends.NewError(backends.ErrorCodeCollectionDoesNotExist,
+			fmt.Errorf("DumboDBBranch: branch %q does not exist", params.Name))
+	}
+
+	if err := db.backend.setPullPolicy(ctx, db.name, params.Name, params.SetRebase, params.SetFF); err != nil {
+		return nil, fmt.Errorf("DumboDBBranch: %w", err)
+	}
+
+	pp, err := db.backend.getPullPolicy(ctx, db.name, params.Name)
+	if err != nil {
+		return nil, err
+	}
+	return &backends.BranchResult{
+		Configured: true,
+		Branch:     params.Name,
+		Rebase:     pp.rebase,
+		FF:         pp.ff,
+	}, nil
 }
 
 // dumboDBBranchDelete deletes the branch named params.Name.

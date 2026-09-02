@@ -46,7 +46,7 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 		return nil, err
 	}
 
-	if err = common.RejectUnknownFields(document, "from", "noFF", "ffOnly", "message", "author"); err != nil {
+	if err = common.RejectUnknownFields(document, "from", "noFF", "ffOnly", "rebase", "message", "author"); err != nil {
 		return nil, err
 	}
 
@@ -71,6 +71,36 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	if err != nil {
 		return nil, err
 	}
+	// Whether the fast-forward mode was set explicitly; if not, DumboDBPull uses
+	// the branch's stored pull policy.
+	ffSet := document.Has("noFF") || document.Has("ffOnly")
+
+	// rebase may be a bool or the string "merges"; when set it overrides the
+	// branch's stored rebase policy.
+	rebaseSet := document.Has("rebase")
+	var rebaseVal string
+	if rebaseSet {
+		raw, _ := document.Get("rebase")
+		switch v := raw.(type) {
+		case bool:
+			if v {
+				rebaseVal = "true"
+			} else {
+				rebaseVal = "false"
+			}
+		case string:
+			if v == "true" || v == "false" || v == "merges" {
+				rebaseVal = v
+			} else {
+				return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+					`dumboPull: rebase must be a bool or "merges"`, "rebase")
+			}
+		default:
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				`dumboPull: rebase must be a bool or "merges"`, "rebase")
+		}
+	}
+
 	message, err := common.GetOptionalParam[string](document, "message", "")
 	if err != nil {
 		return nil, err
@@ -86,20 +116,32 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	}
 
 	res, err := vb.DumboDBPull(connCtx, &backends.PullParams{
-		DBName:  dbName,
-		Branch:  connBranch,
-		Remote:  remote,
-		NoFF:    noFF,
-		FFOnly:  ffOnly,
-		Message: message,
-		Author:  author,
+		DBName:    dbName,
+		Branch:    connBranch,
+		Remote:    remote,
+		NoFF:      noFF,
+		FFOnly:    ffOnly,
+		FFSet:     ffSet,
+		Rebase:    rebaseVal,
+		RebaseSet: rebaseSet,
+		Message:   message,
+		Author:    author,
 	})
 	if err != nil {
-		// A conflicting merge reports per-collection conflicts, like dumboMerge.
-		var conflictErr *backends.MergeConflictError
-		if errors.As(err, &conflictErr) {
-			conflictsArr := types.MakeArray(len(conflictErr.Conflicts))
-			for _, c := range conflictErr.Conflicts {
+		// A conflicting merge OR rebase reports per-collection conflicts, like
+		// dumboMerge / dumboRebase, and leaves the branch staged for resolution.
+		var conflicts []backends.ConflictSummary
+		var mergeErr *backends.MergeConflictError
+		var rebaseErr *backends.DumboDBRebaseConflictError
+		switch {
+		case errors.As(err, &mergeErr):
+			conflicts = mergeErr.Conflicts
+		case errors.As(err, &rebaseErr):
+			conflicts = rebaseErr.Conflicts
+		}
+		if conflicts != nil {
+			conflictsArr := types.MakeArray(len(conflicts))
+			for _, c := range conflicts {
 				conflictsArr.Append(must.NotFail(types.NewDocument(
 					"collection", c.Collection,
 					"count", int32(c.Count),
@@ -109,7 +151,7 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 				"conflicts", conflictsArr,
 				"ok", float64(0),
 				"code", int32(handlererrors.ErrOperationFailed),
-				"errmsg", conflictErr.Error(),
+				"errmsg", err.Error(),
 			)))
 		}
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
@@ -125,6 +167,10 @@ func (h *Handler) MsgDumboDBPull(connCtx context.Context, msg *wire.OpMsg) (*wir
 	out.Set("commitAfter", res.CommitAfter)
 	out.Set("fastForward", res.FastForward)
 	out.Set("alreadyUpToDate", res.AlreadyUpToDate)
+	// rebased is shown only when the pull rebased instead of merging.
+	if res.Rebased {
+		out.Set("rebased", true)
+	}
 	out.Set("ok", float64(1))
 	return documentOpMsg(out)
 }

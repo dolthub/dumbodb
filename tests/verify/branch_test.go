@@ -497,6 +497,76 @@ func TestBranchVerify(t *testing.T) {
 		}
 		assert.Contains(t, []interface{}{"main", "feature"}, byName["origin/main"]["ref"])
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 13: Set, list, and clear a tracking branch's pull policy
+	// -------------------------------------------------------------------------
+	t.Run("Scenario13_PullPolicyConfig", func(t *testing.T) {
+		cfgDB := fmt.Sprintf("cfglist%d", rand.Int64N(1_000_000))
+		conn := env.Client.Database(cfgDB)
+		require.NoError(t, conn.Drop(ctx))
+		_, err := conn.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, cfgDB, "c1", "alice <alice@acme.com>")
+		require.NoError(t, env.Client.Database(cfgDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
+		}).Err())
+		// main tracks a remote; feature does not.
+		require.NoError(t, conn.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: "file://" + t.TempDir()},
+		}).Err())
+		require.NoError(t, env.Client.Database(cfgDB+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"}, {Key: "setUpstream", Value: true},
+		}).Err())
+
+		mainConn := env.Client.Database(cfgDB + "@main")
+		var res bson.M
+
+		// Set rebase + ff; the response echoes the resulting policy.
+		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}, {Key: "ff", Value: "only"}}},
+		}).Decode(&res))
+		cfg := res["config"].(bson.M)
+		assert.Equal(t, "true", cfg["rebase"])
+		assert.Equal(t, "only", cfg["ff"])
+
+		// The listing surfaces the policy on the local main entry.
+		require.NoError(t, mainConn.RunCommand(ctx, bson.D{{Key: "dumboBranch", Value: int32(1)}}).Decode(&res))
+		for _, e := range res["branches"].(bson.A) {
+			m := e.(bson.M)
+			if m["name"] == "main" {
+				lc := m["config"].(bson.M)
+				assert.Equal(t, "true", lc["rebase"])
+				assert.Equal(t, "only", lc["ff"])
+			}
+		}
+
+		// unsetConfig clears one key; the other remains.
+		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "unsetConfig", Value: bson.A{"rebase"}},
+		}).Decode(&res))
+		cfg = res["config"].(bson.M)
+		_, hasRebase := cfg["rebase"]
+		assert.False(t, hasRebase, "rebase was unset")
+		assert.Equal(t, "only", cfg["ff"])
+
+		// config ff:"default" clears ff too; the policy is now empty.
+		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "config", Value: bson.D{{Key: "ff", Value: "default"}}},
+		}).Decode(&res))
+		assert.Len(t, res["config"].(bson.M), 0, "an empty policy has no keys")
+
+		// A pull policy requires an upstream: feature tracks nothing -> error.
+		err = env.Client.Database(cfgDB+"@feature").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
+			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}}},
+		}).Err()
+		assert.Error(t, err, "a pull policy applies only to a tracking branch")
+	})
 }
 
 // branchListEntry is one entry of a doltBranch listing response.

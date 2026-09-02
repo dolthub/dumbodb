@@ -159,11 +159,16 @@ lists every branch when `branch` is omitted.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `branch` | string | no |  -- | Name of the branch to create or delete. Omit to list every branch (local and remote-tracking) |
+| `branch` | string | no |  -- | Name of the branch to create, delete, or configure. Omit to list every branch (local and remote-tracking) |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
+| `config` | document | no |  -- | Set the branch's pull policy: `rebase` (bool or `"merges"`) and/or `ff` (`"no"`/`"only"`/`"default"`). Requires `branch` with an upstream |
+| `unsetConfig` | array | no |  -- | Clear pull-policy keys, e.g. `["rebase", "ff"]`. Requires `branch` |
 
 `delete` and `forceDelete` are mutually exclusive, and both require `branch`.
+`config` / `unsetConfig` are the pull-policy surface (`git config
+branch.<name>.rebase` / `pull.ff`); they require a `branch` that tracks a remote
+and cannot be combined with `delete`. A `false` / `"default"` value clears a key.
 
 ### Response fields
 
@@ -192,6 +197,7 @@ A listing returns:
 | `remote` | string | Remote-tracking only: the remote it came from |
 | `ref` | string | Remote-tracking only: the branch name on that remote |
 | `upstream` | object | Local branches that track a remote: `{ remote, ref }` (`git branch -vv`) |
+| `config` | object | A tracking branch's pull policy when set: `{ rebase?, ff? }` |
 
 ### Example
 
@@ -224,6 +230,14 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature", d
 // Force-delete a branch with unmerged commits
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned", forceDelete: 1 })
 // { branch: "abandoned", ok: 1 }
+
+// Set a tracking branch's pull policy (git config branch.main.rebase true)
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", config: { rebase: true } })
+// { branch: "main", config: { rebase: "true" }, ok: 1 }
+
+// Clear a pull-policy key
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unsetConfig: ["rebase"] })
+// { branch: "main", config: {}, ok: 1 }
 ```
 
 ### Error cases
@@ -233,6 +247,9 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 | `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
 | `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
+| `config` on a branch with no upstream | `OperationFailed: ... branch "<name>" has no upstream; a pull policy applies only to a tracking branch` |
+| `config` combined with `delete` | `BadValue: dumboBranch: config cannot be combined with delete` |
+| `config` value out of range | `BadValue: dumboBranch: config.rebase must be a bool or "merges"` / `config.ff must be "no", "only", or "default"` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -241,6 +258,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
 - A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
+- `config` / `unsetConfig` set a tracking branch's persistent pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`). A bare `dumboPull` honors it; explicit `dumboPull` flags override it (see `dumboPull`). The policy is shown in the listing entry's `config`.
 - Omitting `branch` lists every branch. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
 - `current` marks the branch encoded in the database name. A connection pinned to a commit hash or ancestor expression is on no branch, so every entry reports `current: false`.
 
@@ -2039,10 +2057,16 @@ connection.
 | `from` | string | no\* | branch's upstream | Remote **name** to pull from. Omit to use the current branch's upstream. |
 | `ffOnly` | bool | no | `false` | Fail if the pull is not a fast-forward (`git pull --ff-only`). |
 | `noFF` | bool | no | `false` | Always create a merge commit, even when a fast-forward is possible (`git pull --no-ff`). |
+| `rebase` | bool or `"merges"` | no | -- | Rebase the branch onto the fetched commit instead of merging (`git pull --rebase`). |
 | `message` | string | no | -- | Merge commit message. |
 | `author` | string | no | -- | `Name <email>` for a merge commit. |
 
 \* Required only when the branch has no upstream.
+
+A tracking branch may carry a persistent pull policy (`rebase`, `ff`) set via
+`dumboBranch`. A bare `dumboPull` honors it; passing `rebase` / `noFF` / `ffOnly`
+overrides it for that call, as git's command line overrides `branch.<name>.rebase`
+/ `pull.ff`. (`rebase: "merges"` currently performs a plain rebase.)
 
 ### Response fields
 
@@ -2054,11 +2078,12 @@ connection.
 | `commitAfter` | string | Branch head after the pull (a fast-forward target or a merge commit) |
 | `fastForward` | bool | `true` when the pull fast-forwarded |
 | `alreadyUpToDate` | bool | `true` when there was nothing to merge |
+| `rebased` | bool | present and `true` when the pull rebased instead of merging |
 | `ok` | number | `1` on success |
 
-A conflicting pull returns `ok: 0` with a `conflicts` array of
-`{ collection, count }`, like `dumboMerge`, and leaves the branch staged for
-resolution (`dumboConflicts` / `dumboResolveConflict` / `dumboMerge`).
+A conflicting pull (merge or rebase) returns `ok: 0` with a `conflicts` array of
+`{ collection, count }`, like `dumboMerge` / `dumboRebase`, and leaves the branch
+staged for resolution (`dumboConflicts` / `dumboResolveConflict` / `dumboMerge`).
 
 ### Example
 
@@ -2070,6 +2095,10 @@ db.runCommand({ dumboPull: 1 })
 
 // Force a merge commit even when a fast-forward is possible.
 db.runCommand({ dumboPull: 1, noFF: true, message: "merge origin", author: "alice <alice@acme.com>" })
+
+// Rebase the branch onto the fetched commit instead of merging.
+db.runCommand({ dumboPull: 1, rebase: true })
+// { remote: "origin", branch: "main", commitBefore: "<h>", commitAfter: "<h>", fastForward: false, alreadyUpToDate: false, rebased: true, ok: 1 }
 
 // Refuse a non-fast-forward.
 db.runCommand({ dumboPull: 1, ffOnly: true })

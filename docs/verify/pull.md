@@ -32,10 +32,17 @@ Upstream tracking drives the no-argument forms, exactly as in git: a bare
 | `from`    | string | no\*     | Remote to pull from. Omit to use the current branch upstream. |
 | `ffOnly`  | bool   | no       | Fail if the pull is not a fast-forward (`git pull --ff-only`). |
 | `noFF`    | bool   | no       | Always create a merge commit (`git pull --no-ff`).        |
+| `rebase`  | bool or `"merges"` | no | Rebase the branch onto the fetched commit instead of merging (`git pull --rebase`). |
 | `message` | string | no       | Merge commit message.                                    |
 | `author`  | string | no       | `Name <email>` for a merge commit.                       |
 
 \* Required only when the branch has no upstream.
+
+A tracking branch may carry a persistent **pull policy** (`rebase`, `ff`) set via
+`dumboBranch` (see `branch.md`), the analog of git's `branch.<name>.rebase` and
+`pull.ff`. A bare `dumboPull` honors that policy; passing `rebase` / `ffOnly` /
+`noFF` explicitly overrides it for that call, exactly as git's command line beats
+config. (`rebase: "merges"` currently performs a plain rebase.)
 
 ## Prerequisites
 
@@ -255,6 +262,86 @@ db.getSiblingDB("nfwork").items.countDocuments({ _id: 5 })
 
 ---
 
+## Scenario 10: `dumboPull { rebase: true }` rebases instead of merging
+
+With local and remote changes (as in Scenario 5), `rebase: true` replays the
+local commit on top of the fetched commit -- a linear history, no merge commit
+(`git pull --rebase`).
+
+```js
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "rbwork" })
+
+// Local commit on the clone.
+var r = db.getSiblingDB("rbwork")
+r.items.insertOne({ _id: 300, v: "rb-local" })
+r.runCommand({ dumboCommit: 1, message: "rb local", author: "bob <bob@acme.com>" })
+
+// Remote advances.
+var hub = db.getSiblingDB("hub")
+hub.items.insertOne({ _id: 6, v: "six" })
+hub.runCommand({ dumboCommit: 1, message: "c6", author: "alice <alice@acme.com>" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+
+db.getSiblingDB("rbwork@main").runCommand({ dumboPull: 1, rebase: true })
+// Expected: rebased: true, fastForward: false, alreadyUpToDate: false; both the
+// local (_id 300) and remote (_id 6) documents are present, in linear history.
+```
+
+---
+
+## Scenario 11: A branch pull policy of rebase makes a bare pull rebase
+
+Record `rebase` on the tracking branch, then a bare `dumboPull` rebases without
+any per-call argument (`git config branch.main.rebase true; git pull`).
+
+```js
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "rbpol" })
+
+db.getSiblingDB("rbpol@main").runCommand({ dumboBranch: 1, branch: "main", config: { rebase: true } })
+// Expected: { branch: "main", config: { rebase: "true" }, ok: 1 }
+
+// Diverge (local + remote commit), then a BARE pull.
+var r = db.getSiblingDB("rbpol")
+r.items.insertOne({ _id: 301, v: "local" })
+r.runCommand({ dumboCommit: 1, message: "local", author: "bob <bob@acme.com>" })
+var hub = db.getSiblingDB("hub")
+hub.items.insertOne({ _id: 7, v: "seven" })
+hub.runCommand({ dumboCommit: 1, message: "c7", author: "alice <alice@acme.com>" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+
+db.getSiblingDB("rbpol@main").runCommand({ dumboPull: 1 })
+// Expected: rebased: true -- the bare pull honored the branch policy.
+```
+
+---
+
+## Scenario 12: A branch pull policy of `ff: "only"`, and overriding it
+
+Record `ff: "only"`; a bare pull then fails on a non-fast-forward (like
+`pull.ff = only`). An explicit `noFF` overrides the policy for that call.
+
+```js
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "ffpol" })
+db.getSiblingDB("ffpol@main").runCommand({ dumboBranch: 1, branch: "main", config: { ff: "only" } })
+
+// Diverge so the pull is not a fast-forward.
+var r = db.getSiblingDB("ffpol")
+r.items.insertOne({ _id: 302, v: "local" })
+r.runCommand({ dumboCommit: 1, message: "local", author: "bob <bob@acme.com>" })
+var hub = db.getSiblingDB("hub")
+hub.items.insertOne({ _id: 8, v: "eight" })
+hub.runCommand({ dumboCommit: 1, message: "c8", author: "alice <alice@acme.com>" })
+hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+
+db.getSiblingDB("ffpol@main").runCommand({ dumboPull: 1 })
+// Expected: ok: 0 -- the ff:only policy rejects a non-fast-forward.
+
+db.getSiblingDB("ffpol@main").runCommand({ dumboPull: 1, noFF: true, message: "merge", author: "bob <bob@acme.com>" })
+// Expected: ok: 1 -- an explicit noFF overrides the policy and merges.
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                | git analog                     |
@@ -265,9 +352,16 @@ db.getSiblingDB("nfwork").items.countDocuments({ _id: 5 })
 | `{ dumboPull: 1, from: "origin" }`                     | `git pull origin`              |
 | `{ dumboPull: 1, ffOnly: true }`                       | `git pull --ff-only`           |
 | `{ dumboPull: 1, noFF: true }`                         | `git pull --no-ff`             |
+| `{ dumboPull: 1, rebase: true }`                       | `git pull --rebase`            |
+| `{ dumboBranch: 1, branch: "main", config: { rebase: true } }` | `git config branch.main.rebase true` |
+| `{ dumboBranch: 1, branch: "main", config: { ff: "only" } }`   | `git config pull.ff only`      |
 
 - `dumboFetch` updates every tracking ref and never moves a local branch.
-- `dumboPull` fetches, then merges the fetched commit into the current branch:
-  fast-forward, a merge commit, or a conflict (reported like `dumboMerge`).
+- `dumboPull` fetches, then merges (or, with `rebase`, rebases) the fetched commit
+  into the current branch: fast-forward, a merge commit, a rebase, or a conflict
+  (reported like `dumboMerge` / `dumboRebase`).
+- A tracking branch's persistent pull policy (`rebase`, `ff`), set via
+  `dumboBranch`, drives a bare `dumboPull`; explicit `rebase`/`noFF`/`ffOnly`
+  override it for that call.
 - Both default their remote to the branch upstream; a bare form with no upstream
   errors.

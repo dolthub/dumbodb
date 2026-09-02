@@ -261,4 +261,95 @@ func TestPullVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, n, "c5 was merged in")
 	})
+
+	// diverge clones a fresh working db from the hub, adds one local commit
+	// (id localID), advances the hub with one commit (id hubID) and pushes it,
+	// leaving the clone's main diverged from origin/main. Returns the clone name.
+	diverge := func(t *testing.T, prefix string, localID, hubID int32) string {
+		t.Helper()
+		name := fmt.Sprintf("%s%d", prefix, suffix)
+		var res bson.M
+		require.NoError(t, admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: hubURL}, {Key: "as", Value: name},
+		}).Decode(&res))
+		w := env.Client.Database(name)
+		_, err := w.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: localID}, {Key: "v", Value: "local"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, name, "local change", "bob <bob@acme.com>")
+
+		_, err = hub.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: hubID}, {Key: "v", Value: "hub"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, hubName, "hub change", "alice <alice@acme.com>")
+		pushHub()
+		return name
+	}
+
+	// -------------------------------------------------------------------------
+	// Scenario 10: dumboPull {rebase:true} rebases instead of merging
+	// -------------------------------------------------------------------------
+	t.Run("Scenario10_PullRebaseExplicit", func(t *testing.T) {
+		name := diverge(t, "rbwork", 300, 6)
+		var res bson.M
+		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPull", Value: int32(1)}, {Key: "rebase", Value: true},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, true, res["rebased"], "rebase:true must rebase, not merge")
+		assert.Equal(t, false, res["fastForward"])
+		assert.Equal(t, false, res["alreadyUpToDate"])
+
+		// The local commit was replayed on top of the hub's commit: both present.
+		n, err := env.Client.Database(name).Collection("items").CountDocuments(ctx,
+			bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{int32(300), int32(6)}}}}})
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, n)
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 11: a branch pull policy of rebase makes a bare pull rebase
+	// -------------------------------------------------------------------------
+	t.Run("Scenario11_PullPolicyRebase", func(t *testing.T) {
+		name := diverge(t, "rbpolicy", 301, 7)
+		var res bson.M
+		// Record the policy on the tracking branch.
+		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}}},
+		}).Decode(&res))
+		cfg := res["config"].(bson.M)
+		require.Equal(t, "true", cfg["rebase"])
+
+		// A bare pull honors the policy -> rebased.
+		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPull", Value: int32(1)},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+		assert.Equal(t, true, res["rebased"], "a bare pull must honor the rebase policy")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 12: a branch pull policy of ff:only rejects a non-FF bare pull,
+	// and an explicit noFF overrides the policy
+	// -------------------------------------------------------------------------
+	t.Run("Scenario12_PullPolicyFFOnlyAndOverride", func(t *testing.T) {
+		name := diverge(t, "ffpolicy", 302, 8)
+		var res bson.M
+		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "config", Value: bson.D{{Key: "ff", Value: "only"}}},
+		}).Decode(&res))
+
+		// A bare pull is not a fast-forward (main diverged) -> rejected.
+		raw := runCommandRaw(t, env.Client.Database(name+"@main"), bson.D{{Key: "dumboPull", Value: int32(1)}})
+		require.EqualValues(t, 0, raw["ok"], "ff:only policy must reject a non-fast-forward pull")
+
+		// An explicit noFF overrides the policy and creates a merge commit.
+		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboPull", Value: int32(1)}, {Key: "noFF", Value: true},
+			{Key: "message", Value: "merge over policy"}, {Key: "author", Value: "bob <bob@acme.com>"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"], "explicit noFF overrides the ff:only policy")
+		assert.Equal(t, false, res["fastForward"])
+		assert.NotEqual(t, true, res["rebased"], "a merge is not a rebase")
+	})
 }
