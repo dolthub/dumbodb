@@ -26,8 +26,12 @@ guide uses `file://` remotes -- local directories the server can read and write
 ## Response
 
 ```json
-{ "db": "<as>", "from": "<url>", "defaultBranch": "<branch>", "commit": "<hash>", "branches": [ ... ], "ok": 1 }
+{ "db": "<as>", "from": "<url>", "ok": 1 }
 ```
+
+`db` echoes `as` and `from` is the resolved remote URL. The clone brings every
+branch and sets the default branch to track `origin`; inspect the result with
+`dumboBranch` (see `branch.md`), not the clone response.
 
 ## Prerequisites
 
@@ -78,7 +82,7 @@ db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<SRC_DIR>", a
 Expected:
 
 ```json
-{ "db": "clonedb", "from": "file://<SRC_DIR>", "defaultBranch": "main", "commit": "<hash1>", "branches": [ "feature", "main" ], "ok": 1 }
+{ "db": "clonedb", "from": "file://<SRC_DIR>", "ok": 1 }
 ```
 
 The cloned data is readable:
@@ -89,9 +93,8 @@ db.getSiblingDB("clonedb").items.findOne({ _id: 1 })
 ```
 
 Key checks:
-- `defaultBranch` is `main`, `commit` is `hash1`
-- `branches` contains both `main` and `feature`
-- the seeded document is present in `clonedb`
+- `db` echoes `clonedb`, `from` echoes the source URL
+- the seeded document is present in `clonedb` (branches are verified next)
 
 ---
 

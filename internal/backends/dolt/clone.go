@@ -94,9 +94,6 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	}
 	defaultName := pickDefaultBranch(branchNames)
 
-	branches := make([]string, 0, len(branchRefs))
-	defaultCommit := ""
-
 	for _, br := range branchRefs {
 		name := br.GetPath()
 
@@ -143,11 +140,6 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		if err := updateWorkingSet(ctx, state.doltDB, ws, name); err != nil {
 			return nil, fmt.Errorf("dumboClone: initializing working set for %q: %w", name, err)
 		}
-
-		branches = append(branches, name)
-		if name == defaultName {
-			defaultCommit = ch.String()
-		}
 	}
 
 	// git clone parity: register an origin remote for the source and make the
@@ -160,11 +152,8 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 	}
 
 	return &backends.CloneResult{
-		DB:            params.As,
-		URL:           ru.Raw,
-		DefaultBranch: defaultName,
-		Commit:        defaultCommit,
-		Branches:      branches,
+		DB:  params.As,
+		URL: ru.Raw,
 	}, nil
 }
 

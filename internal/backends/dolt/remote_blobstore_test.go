@@ -59,12 +59,8 @@ func TestDumboDBBlobstore_LocalBSRoundTrip(t *testing.T) {
 	}
 
 	// Clone the blobstore remote into a fresh database and read the data back.
-	cres, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"})
-	if err != nil {
+	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"}); err != nil {
 		t.Fatalf("clone from localbs: %v", err)
-	}
-	if cres.Commit != c2 {
-		t.Errorf("clone default commit = %s, want c2 %s", cres.Commit, c2)
 	}
 
 	st := mustDB(t, b, "clonedb")

@@ -31,15 +31,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func cloneBranchList(t *testing.T, arr bson.A) []string {
-	t.Helper()
-	out := make([]string, 0, len(arr))
-	for _, raw := range arr {
-		out = append(out, fmt.Sprint(raw))
-	}
-	return out
-}
-
 func TestCloneVerify(t *testing.T) {
 	env := startDumboDB(t)
 	ctx := context.Background()
@@ -82,11 +73,9 @@ func TestCloneVerify(t *testing.T) {
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, cloneName, res["db"])
-		assert.Equal(t, "main", res["defaultBranch"])
-		assert.Equal(t, hash1, res["commit"])
-		names := cloneBranchList(t, res["branches"].(bson.A))
-		assert.Contains(t, names, "main")
-		assert.Contains(t, names, "feature")
+		assert.Equal(t, srcURL, res["from"])
+		// The clone brings every branch and readable data -- verified in
+		// Scenario 2 (dumboBranch listing) and below.
 
 		var doc bson.M
 		require.NoError(t, env.Client.Database(cloneName).Collection("items").FindOne(ctx, bson.D{{Key: "_id", Value: int32(1)}}).Decode(&doc))

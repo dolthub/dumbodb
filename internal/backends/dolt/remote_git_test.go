@@ -93,12 +93,16 @@ func TestDumboDBGit_SSHTransportWiring(t *testing.T) {
 		t.Fatalf("push over git+ssh wrapper: %v", err)
 	}
 
-	cres, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"})
-	if err != nil {
+	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"}); err != nil {
 		t.Fatalf("clone over git+ssh wrapper: %v", err)
 	}
-	if cres.Commit != c1 {
-		t.Errorf("clone commit = %s, want c1 %s", cres.Commit, c1)
+	cst := mustDB(t, b, "clonedb")
+	ccm, err := cst.doltDB.ResolveCommitRef(ctx, ref.NewBranchRef("main"))
+	if err != nil {
+		t.Fatalf("resolve clonedb main: %v", err)
+	}
+	if h, _ := ccm.HashOf(); h.String() != c1 {
+		t.Errorf("clonedb main = %s, want c1 %s", h.String(), c1)
 	}
 	assertDocValue(t, ctx, b, "clonedb", "coll", int64(1), "via-ssh")
 }
@@ -144,12 +148,8 @@ func TestDumboDBGit_FileRoundTrip(t *testing.T) {
 	}
 
 	// Clone the git remote into a fresh database and read the data back.
-	cres, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"})
-	if err != nil {
+	if _, err := b.DumboDBClone(ctx, &backends.CloneParams{From: remoteURL, As: "clonedb"}); err != nil {
 		t.Fatalf("clone from git+file: %v", err)
-	}
-	if cres.Commit != c2 {
-		t.Errorf("clone default commit = %s, want c2 %s", cres.Commit, c2)
 	}
 
 	st := mustDB(t, b, "clonedb")

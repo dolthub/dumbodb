@@ -1874,10 +1874,10 @@ Creates a new server-side database by cloning a remote. Must be run against the
 |-------|------|-------------|
 | `db` | string | Name of the created database (echoes `as`) |
 | `from` | string | Resolved remote URL cloned from |
-| `defaultBranch` | string | The clone's default branch (`main`/`master`/first) |
-| `commit` | string | Default branch head after the clone |
-| `branches` | array | Names of all branches brought over |
 | `ok` | number | `1` on success |
+
+The clone brings every branch and sets the default branch (`main`) to track
+`origin`; inspect it with `dumboBranch`, not the clone response.
 
 ### Example
 
@@ -1885,14 +1885,7 @@ Creates a new server-side database by cloning a remote. Must be run against the
 var admin = db.getSiblingDB("admin")
 
 admin.runCommand({ dumboClone: 1, from: "file:///srv/remotes/orders", as: "orders" })
-// {
-//   db:            "orders",
-//   from:          "file:///srv/remotes/orders",
-//   defaultBranch: "main",
-//   commit:        "v9ra3pmi0f6kotj5k3fganpmb3oi9t1k",
-//   branches:      [ "main", "feature" ],
-//   ok:            1
-// }
+// { db: "orders", from: "file:///srv/remotes/orders", ok: 1 }
 
 // From DoltHub (scheme-less org/repo shorthand); requires `dolt login`.
 admin.runCommand({ dumboClone: 1, from: "myorg/orders", as: "orders" })

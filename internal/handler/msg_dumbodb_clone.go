@@ -72,17 +72,9 @@ func (h *Handler) MsgDumboDBClone(connCtx context.Context, msg *wire.OpMsg) (*wi
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	branches := types.MakeArray(len(res.Branches))
-	for _, br := range res.Branches {
-		branches.Append(br)
-	}
-
 	return documentOpMsg(must.NotFail(types.NewDocument(
 		"db", res.DB,
 		"from", res.URL,
-		"defaultBranch", res.DefaultBranch,
-		"commit", res.Commit,
-		"branches", branches,
 		"ok", float64(1),
 	)))
 }

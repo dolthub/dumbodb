@@ -851,9 +851,6 @@ type CloneParams struct {
 
 // CloneResult is returned by DumboDBClone.
 type CloneResult struct {
-	DB            string
-	URL           string
-	DefaultBranch string
-	Commit        string   // default branch head after clone
-	Branches      []string // branches cloned
+	DB  string
+	URL string
 }
