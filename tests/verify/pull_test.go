@@ -49,6 +49,23 @@ func TestPullVerify(t *testing.T) {
 		}).Decode(&res))
 	}
 
+	// tipParents returns the parent1/parent2 of a branch's HEAD via dumboLog. A
+	// merge commit has a non-empty parent2; a rebased/fast-forwarded/regular
+	// commit has only parent1 -- so parent2 == "" means linear history.
+	tipParents := func(t *testing.T, connDB string) (parent1, parent2 string) {
+		t.Helper()
+		var res bson.M
+		require.NoError(t, env.Client.Database(connDB).RunCommand(ctx, bson.D{
+			{Key: "dumboLog", Value: int32(1)}, {Key: "limit", Value: int32(1)},
+		}).Decode(&res))
+		commits, ok := res["commits"].(bson.A)
+		require.True(t, ok && len(commits) > 0, "dumboLog must return commits")
+		tip := commits[0].(bson.M)
+		parent1, _ = tip["parent1"].(string)
+		parent2, _ = tip["parent2"].(string)
+		return parent1, parent2
+	}
+
 	// Setup: hub with c1 on main, pushed; a working clone tracking origin/main.
 	require.NoError(t, hub.Drop(ctx))
 	_, err := hub.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "one"}})
@@ -157,6 +174,12 @@ func TestPullVerify(t *testing.T) {
 		assert.Equal(t, false, res["alreadyUpToDate"])
 		assert.NotEqual(t, res["commitBefore"], res["commitAfter"], "a merge commit was created")
 
+		// The tip is a real merge commit: two parents. parent1 is the local
+		// pre-pull head; parent2 is the fetched commit.
+		p1, p2 := tipParents(t, workName+"@main")
+		assert.Equal(t, res["commitBefore"], p1, "parent1 is the pre-pull head")
+		assert.NotEmpty(t, p2, "a merge commit has a parent2")
+
 		n, err := work.Collection("items").CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		assert.EqualValues(t, 4, n, "both sides' documents are present")
@@ -260,6 +283,10 @@ func TestPullVerify(t *testing.T) {
 		assert.NotEqual(t, res["commitBefore"], res["commitAfter"], "a merge commit was created")
 		assert.NotEqual(t, h5, res["commitAfter"], "commitAfter is a merge commit, not the fetched commit (a plain pull would equal h5)")
 
+		// It is a real merge commit: parent2 is the fetched commit h5.
+		_, p2 := tipParents(t, nfName+"@main")
+		assert.Equal(t, h5, p2, "noFF's merge commit has parent2 == the fetched commit")
+
 		nf := env.Client.Database(nfName)
 		n, err := nf.Collection("items").CountDocuments(ctx, bson.D{{Key: "_id", Value: int32(5)}})
 		require.NoError(t, err)
@@ -308,6 +335,12 @@ func TestPullVerify(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, n)
 
+		// Rebase produces linear history: the tip has a parent1 and NO parent2
+		// (a merge would have set parent2).
+		p1, p2 := tipParents(t, name+"@main")
+		assert.NotEmpty(t, p1, "the replayed tip has a parent")
+		assert.Empty(t, p2, "a rebase is linear -- no parent2")
+
 		// rebase is a bool: "merges" is rejected (not supported).
 		err = env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboPull", Value: int32(1)}, {Key: "rebase", Value: "merges"},
@@ -335,6 +368,10 @@ func TestPullVerify(t *testing.T) {
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 		assert.Equal(t, true, res["rebased"], "a bare pull must honor the rebase policy")
+
+		// Linear history: no parent2.
+		_, p2 := tipParents(t, name+"@main")
+		assert.Empty(t, p2, "a policy rebase is linear -- no parent2")
 	})
 
 	// -------------------------------------------------------------------------
@@ -361,5 +398,9 @@ func TestPullVerify(t *testing.T) {
 		assert.EqualValues(t, 1, res["ok"], "explicit noFF overrides the ff:only policy")
 		assert.Equal(t, false, res["fastForward"])
 		assert.NotEqual(t, true, res["rebased"], "a merge is not a rebase")
+
+		// The override produced a real merge commit: parent2 is present.
+		_, p2 := tipParents(t, name+"@main")
+		assert.NotEmpty(t, p2, "the override merge has a parent2")
 	})
 }

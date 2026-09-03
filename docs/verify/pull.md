@@ -171,6 +171,14 @@ db.getSiblingDB("work").items.countDocuments({})
 // Expected: 4 (_id 1,2,3,100)
 ```
 
+Confirm the tip is a real **merge commit** -- two parents (`parent1` is the
+pre-pull head, `parent2` is the fetched commit):
+
+```js
+db.getSiblingDB("work@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
+// Expected: the tip has BOTH parent1 (== the earlier commitBefore) and parent2.
+```
+
 ---
 
 ## Scenario 6: ffOnly rejects a non-fast-forward pull
@@ -262,6 +270,13 @@ db.getSiblingDB("nfwork").items.countDocuments({ _id: 5 })
 // Expected: 1 -- c5 was merged in.
 ```
 
+Confirm it is a real merge commit -- `parent2` is the fetched commit `h5`:
+
+```js
+db.getSiblingDB("nfwork@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
+// Expected: the tip carries parent2 == h5 (a plain fast-forward would have no parent2).
+```
+
 ---
 
 ## Scenario 10: `dumboPull { rebase: true }` rebases instead of merging
@@ -285,8 +300,23 @@ hub.runCommand({ dumboCommit: 1, message: "c6", author: "alice <alice@acme.com>"
 hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 db.getSiblingDB("rbwork@main").runCommand({ dumboPull: 1, rebase: true })
-// Expected: rebased: true, fastForward: false, alreadyUpToDate: false; both the
-// local (_id 300) and remote (_id 6) documents are present, in linear history.
+// Expected: rebased: true, fastForward: false, alreadyUpToDate: false.
+```
+
+Both the local (`_id 300`) and remote (`_id 6`) documents are present:
+
+```js
+db.getSiblingDB("rbwork").items.countDocuments({ _id: { $in: [300, 6] } })
+// Expected: 2
+```
+
+The history is **linear** -- the local commit was replayed on top of the fetched
+commit, so the tip has a `parent1` and **no** `parent2` (a merge would have set
+one):
+
+```js
+db.getSiblingDB("rbwork@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
+// Expected: the tip has parent1 set and NO parent2 field.
 ```
 
 ---
@@ -313,6 +343,9 @@ hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 db.getSiblingDB("rbpol@main").runCommand({ dumboPull: 1 })
 // Expected: rebased: true -- the bare pull honored the branch policy.
+
+db.getSiblingDB("rbpol@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
+// Expected: linear -- the tip has parent1 and NO parent2.
 ```
 
 ---
@@ -340,6 +373,9 @@ db.getSiblingDB("ffpol@main").runCommand({ dumboPull: 1 })
 
 db.getSiblingDB("ffpol@main").runCommand({ dumboPull: 1, noFF: true, message: "merge", author: "bob <bob@acme.com>" })
 // Expected: ok: 1 -- an explicit noFF overrides the policy and merges.
+
+db.getSiblingDB("ffpol@main").runCommand({ dumboLog: 1, limit: 1 }).commits[0]
+// Expected: the override produced a merge commit -- the tip has a parent2.
 ```
 
 ---
