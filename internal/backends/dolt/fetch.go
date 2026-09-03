@@ -119,7 +119,11 @@ func (b *Backend) DumboDBFetch(ctx context.Context, params *backends.FetchParams
 			return nil, fmt.Errorf("dumboFetch: updating tracking ref for %q: %w", name, err)
 		}
 
-		fetched = append(fetched, backends.FetchedRef{Branch: name, CommitBefore: commitBefore, Commit: ch.String()})
+		// Report only branches whose tracking ref actually moved (or was newly
+		// created); an up-to-date branch is omitted, like git fetch's quiet output.
+		if commitBefore != ch.String() {
+			fetched = append(fetched, backends.FetchedRef{Branch: name, CommitBefore: commitBefore, Commit: ch.String()})
+		}
 	}
 
 	return &backends.FetchResult{

@@ -97,6 +97,10 @@ func TestPullVerify(t *testing.T) {
 		var res bson.M
 		require.NoError(t, work.RunCommand(ctx, bson.D{{Key: "dumboFetch", Value: int32(1)}}).Decode(&res))
 		assert.Equal(t, "origin", res["remote"])
+		// Scenario 1 already fetched origin/main, so this fetch is a no-op:
+		// only branches that actually moved are reported, so branches is empty.
+		arr, _ := res["branches"].(bson.A)
+		assert.Empty(t, arr, "an up-to-date fetch reports no updated branches")
 	})
 
 	// -------------------------------------------------------------------------

@@ -78,20 +78,21 @@ func (b *Backend) DumboDBPull(ctx context.Context, params *backends.PullParams) 
 	}
 	before := beforeHash.String()
 
-	// Fetch updates every tracking ref; take the fetched commit for this branch.
-	fetchRes, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: params.DBName, Remote: remote})
+	// Fetch updates every tracking ref (dumboFetch only *reports* the ones that
+	// moved, so read the branch's tracking ref directly for the fetched commit).
+	if _, err := b.DumboDBFetch(ctx, &backends.FetchParams{DBName: params.DBName, Remote: remote}); err != nil {
+		return nil, err
+	}
+	trackingRef := ref.NewRemoteRef(remote, branch)
+	fetchedCommit, err := state.doltDB.ResolveCommitRef(ctx, trackingRef)
+	if err != nil {
+		return nil, fmt.Errorf("dumboPull: remote %q has no branch %q", remote, branch)
+	}
+	fetchedHash, err := fetchedCommit.HashOf()
 	if err != nil {
 		return nil, err
 	}
-	var fetched string
-	for _, fr := range fetchRes.Branches {
-		if fr.Branch == branch {
-			fetched = fr.Commit
-		}
-	}
-	if fetched == "" {
-		return nil, fmt.Errorf("dumboPull: remote %q has no branch %q", remote, branch)
-	}
+	fetched := fetchedHash.String()
 
 	// Already up to date: the branch head equals the fetched commit.
 	if before == fetched {

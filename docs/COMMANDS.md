@@ -2002,11 +2002,13 @@ chunks but never moves a local branch head.
 | Field | Type | Description |
 |-------|------|-------------|
 | `remote` | string | Remote fetched from |
-| `branches` | array | One entry per remote branch: `{ branch, commitBefore?, commit }` |
+| `branches` | array | One entry per branch whose tracking ref **moved**: `{ branch, commitBefore?, commit }` |
 | `ok` | number | `1` on success |
 
 Each `branches` entry reports the tracking ref's `commitBefore -> commit` change;
-`commitBefore` is omitted when the fetch created the tracking ref.
+`commitBefore` is omitted when the fetch created the tracking ref. Only branches
+that actually moved (or were newly created) are listed -- an up-to-date fetch
+reports an empty `branches`.
 
 ### Example
 
@@ -2015,6 +2017,10 @@ var db = db.getSiblingDB("orders@main")
 
 db.runCommand({ dumboFetch: 1, from: "origin" })
 // { remote: "origin", branches: [ { branch: "main", commitBefore: "<h1>", commit: "<h2>" } ], ok: 1 }
+
+// Fetching again with nothing new: no branch moved, so branches is empty.
+db.runCommand({ dumboFetch: 1, from: "origin" })
+// { remote: "origin", branches: [], ok: 1 }
 
 // Bare fetch uses the default branch's upstream.
 db.runCommand({ dumboFetch: 1 })

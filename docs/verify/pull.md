@@ -8,10 +8,12 @@ scenario top to bottom; the setup below is shared.
 
 These mirror git. `dumboFetch` is `git fetch`: it downloads every branch from a
 remote into local tracking refs (`refs/remotes/<remote>/<branch>`) and touches no
-local branch. `dumboPull` is `git pull` = fetch + merge: it fetches, then merges
-the fetched commit for the current branch into that branch (fast-forward, a merge
-commit, or a conflict). Both report the per-branch `commitBefore -> commit`
-change, like git's `<before>..<after>`.
+local branch. Its `branches` result lists **only the tracking refs that actually
+moved** (or were newly created), each as a `commitBefore -> commit` pair like
+git's `<before>..<after>`; an up-to-date fetch reports an empty `branches`.
+`dumboPull` is `git pull` = fetch + merge: it fetches, then merges the fetched
+commit for the current branch into that branch (fast-forward, a merge commit, or
+a conflict).
 
 Upstream tracking drives the no-argument forms, exactly as in git: a bare
 `dumboFetch` / `dumboPull` uses the current branch's upstream (see `push.md` and
@@ -105,7 +107,8 @@ db.getSiblingDB("work").items.countDocuments({})
 
 ```js
 db.getSiblingDB("work").runCommand({ dumboFetch: 1 })
-// Expected: remote "origin" (from the default branch upstream); already up to date.
+// Expected: remote "origin" (from the default branch upstream). Scenario 1
+// already fetched origin/main, so nothing moved: branches is [] (empty).
 ```
 
 ---
