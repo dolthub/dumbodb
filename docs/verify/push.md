@@ -87,9 +87,10 @@ mongosh mongodb://localhost:27017
 ```
 
 Scenarios push to `file://` remotes -- local directories the server can write
-to. Pick two empty/nonexistent paths and substitute them for `<REMOTE_DIR>` and
-`<REMOTE2_DIR>` (e.g. `/tmp/dumbo-remote-1`, `/tmp/dumbo-remote-2`). `file://`
-behaves like every other transport for push.
+to. They use `/tmp/dumbo-remote-1` and `/tmp/dumbo-remote-2` (plus
+`/tmp/dumbo-ff-remote` and `/tmp/dumbo-ff2-remote` in Scenarios 8 and 16). Remove
+them first (`rm -rf /tmp/dumbo-remote-* /tmp/dumbo-ff*-remote`) so the pushes
+start from empty remotes. `file://` behaves like every other transport for push.
 
 ---
 
@@ -104,8 +105,8 @@ printjson(r1)
 const hash1 = r1.commitId
 print("hash1 =", hash1)
 
-db.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<REMOTE_DIR>" })
-db.runCommand({ dumboRemote: 1, action: "add", name: "origin2", url: "file://<REMOTE2_DIR>" })
+db.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-remote-1" })
+db.runCommand({ dumboRemote: 1, action: "add", name: "origin2", url: "file:///tmp/dumbo-remote-2" })
 ```
 
 `pushvdb` now has one commit on `main` (`hash1`, the HEAD) and two remotes.
@@ -233,13 +234,13 @@ given. Two databases with unrelated histories push to one remote.
 var a = db.getSiblingDB("pushffA")
 a.items.insertOne({ _id: 1, who: "A" })
 a.runCommand({ dumboCommit: 1, message: "A1", author: "a <a@a>" })
-a.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<FF_REMOTE_DIR>" })
+a.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-ff-remote" })
 a.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 var b = db.getSiblingDB("pushffB")
 b.items.insertOne({ _id: 1, who: "B" })
 b.runCommand({ dumboCommit: 1, message: "B1", author: "b <b@b>" })
-b.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<FF_REMOTE_DIR>" })
+b.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-ff-remote" })
 
 b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 // Expected: ok: 0 -- not a fast-forward.
@@ -371,7 +372,7 @@ db.runCommand({ dumboPush: 1 })
 unrelated-history setup and force with a `+`.
 
 ```js
-// (dbA has pushed main to <FF2_REMOTE_DIR>; dbB has an unrelated history and the
+// (dbA has pushed main to /tmp/dumbo-ff2-remote; dbB has an unrelated history and the
 //  same remote configured -- see Scenario 8.)
 b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 // Expected: ok: 0 -- not a fast-forward.

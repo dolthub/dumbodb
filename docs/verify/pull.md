@@ -52,7 +52,8 @@ A running DumboDB instance and `mongosh`. Connect:
 mongosh mongodb://localhost:27017
 ```
 
-Pick an empty/nonexistent path for `<HUB_DIR>` and substitute it below.
+The scenarios use `/tmp/dumbo-hub` as the remote directory. Remove it first
+(`rm -rf /tmp/dumbo-hub`) so the setup starts from an empty remote.
 
 ---
 
@@ -62,11 +63,11 @@ Pick an empty/nonexistent path for `<HUB_DIR>` and substitute it below.
 var hub = db.getSiblingDB("hub")
 hub.items.insertOne({ _id: 1, v: "one" })
 const h1 = hub.runCommand({ dumboCommit: 1, message: "c1", author: "alice <alice@acme.com>" }).commitId
-hub.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<HUB_DIR>" })
+hub.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-hub" })
 hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 // A working clone that tracks origin/main.
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "work" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "work" })
 print("h1 =", h1)
 ```
 
@@ -174,7 +175,7 @@ db.getSiblingDB("work").items.countDocuments({})
 Set up a fresh divergence and pull with `ffOnly`.
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "ffwork" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "ffwork" })
 
 // Local commit diverges from the remote's next commit.
 var f = db.getSiblingDB("ffwork")
@@ -211,7 +212,7 @@ When both sides change the same document, the pull's merge conflicts. Like
 staged for resolution (resolve with `dumboResolveConflict` / `dumboMerge`).
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "cfwork" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "cfwork" })
 
 // Both sides edit _id:1 differently.
 var c = db.getSiblingDB("cfwork")
@@ -236,7 +237,7 @@ fast-forward was possible. Use a fresh clone with no local commits, advance the
 hub, and pull with `noFF`.
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "nfwork" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "nfwork" })
 
 // The hub advances; the clone has no local commits, so a plain pull would
 // fast-forward.
@@ -267,7 +268,7 @@ local commit on top of the fetched commit -- a linear history, no merge commit
 (`git pull --rebase`).
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "rbwork" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "rbwork" })
 
 // Local commit on the clone.
 var r = db.getSiblingDB("rbwork")
@@ -293,7 +294,7 @@ Record `rebase` on the tracking branch, then a bare `dumboPull` rebases without
 any per-call argument (`git config branch.main.rebase true; git pull`).
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "rbpol" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "rbpol" })
 
 db.getSiblingDB("rbpol@main").runCommand({ dumboBranch: 1, branch: "main", config: { rebase: true } })
 // Expected: { branch: "main", config: { rebase: "true" }, ok: 1 }
@@ -319,7 +320,7 @@ Record `ff: "only"`; a bare pull then fails on a non-fast-forward (like
 `pull.ff = only`). An explicit `noFF` overrides the policy for that call.
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<HUB_DIR>", as: "ffpol" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "ffpol" })
 db.getSiblingDB("ffpol@main").runCommand({ dumboBranch: 1, branch: "main", config: { ff: "only" } })
 
 // Diverge so the pull is not a fast-forward.

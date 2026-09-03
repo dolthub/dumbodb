@@ -359,8 +359,8 @@ branches -- the `refs/remotes/<remote>/<branch>` refs written by `dumboClone` /
 everything.
 
 Set up a database with two branches, push them to a `file://` remote (push writes
-the tracking refs into the local store), and track `main`'s upstream. Substitute
-an empty/nonexistent path for `<RT_REMOTE_DIR>`.
+the tracking refs into the local store), and track `main`'s upstream. The remote
+directory is `/tmp/dumbo-rt-remote` (remove it first for a clean run).
 
 ```js
 var rt = db.getSiblingDB("rtlistdb")
@@ -368,7 +368,7 @@ rt.items.insertOne({ _id: 1 })
 rt.runCommand({ doltCommit: 1, message: "c1" })
 rt.runCommand({ doltBranch: 1, branch: "feature" })
 
-rt.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file://<RT_REMOTE_DIR>" })
+rt.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-rt-remote" })
 db.getSiblingDB("rtlistdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main", setUpstream: true })
 db.getSiblingDB("rtlistdb@feature").runCommand({ doltPush: 1, to: "origin", refSpec: "feature" })
 
@@ -408,14 +408,15 @@ bare `dumboPull` (see `pull.md`): `rebase` (`git config branch.<name>.rebase`) a
 `ff` (`git config pull.ff`). Set it with `config`, clear keys with `unsetConfig`,
 and see it in the listing entry's `config`. It applies only to a tracking branch.
 
-Set up a database whose `main` tracks a remote (substitute `<CFG_REMOTE_DIR>`):
+Set up a database whose `main` tracks a remote at `/tmp/dumbo-cfg-remote` (remove
+it first for a clean run):
 
 ```js
 var c = db.getSiblingDB("cfgdb")
 c.items.insertOne({ _id: 1 })
 c.runCommand({ doltCommit: 1, message: "c1" })
 c.runCommand({ doltBranch: 1, branch: "feature" })
-c.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file://<CFG_REMOTE_DIR>" })
+c.runCommand({ doltRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-cfg-remote" })
 db.getSiblingDB("cfgdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "main", setUpstream: true })
 ```
 

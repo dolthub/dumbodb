@@ -41,14 +41,14 @@ A running DumboDB instance and `mongosh`. Connect:
 mongosh mongodb://localhost:27017
 ```
 
-Pick two empty/nonexistent directory paths for `<SRC_DIR>` (the remote to clone)
-and substitute them below.
+The scenarios use `/tmp/dumbo-src` as the source remote directory. Remove it
+first (`rm -rf /tmp/dumbo-src`) so the setup starts from an empty remote.
 
 ---
 
 ## Setup: publish a source remote with two branches
 
-Create a database, push `main`, then push a second branch, so `<SRC_DIR>` holds a
+Create a database, push `main`, then push a second branch, so `/tmp/dumbo-src` holds a
 remote with two branches to clone.
 
 ```js
@@ -58,7 +58,7 @@ src.items.insertOne({ _id: 1, label: "alpha" })
 const r1 = src.runCommand({ dumboCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
 const hash1 = r1.commitId
 
-src.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<SRC_DIR>" })
+src.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-src" })
 src.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 // A second branch at the same commit.
@@ -68,20 +68,20 @@ db.getSiblingDB("srcdb@feature").runCommand({ dumboPush: 1, to: "origin", refSpe
 print("hash1 =", hash1)
 ```
 
-`<SRC_DIR>` now has `main` and `feature`, both at `hash1`.
+`/tmp/dumbo-src` now has `main` and `feature`, both at `hash1`.
 
 ---
 
 ## Scenario 1: Clone a remote into a new database
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<SRC_DIR>", as: "clonedb" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-src", as: "clonedb" })
 ```
 
 Expected:
 
 ```json
-{ "db": "clonedb", "from": "file://<SRC_DIR>", "ok": 1 }
+{ "db": "clonedb", "from": "file:///tmp/dumbo-src", "ok": 1 }
 ```
 
 The cloned data is readable:
@@ -133,7 +133,7 @@ db.getSiblingDB("clonedb").runCommand({ dumboRemote: 1, action: "list" })
 Expected:
 
 ```json
-{ "remotes": [ { "name": "origin", "url": "file://<SRC_DIR>" } ], "ok": 1 }
+{ "remotes": [ { "name": "origin", "url": "file:///tmp/dumbo-src" } ], "ok": 1 }
 ```
 
 ---
@@ -164,7 +164,7 @@ Key checks:
 ## Scenario 5: Cloning into an existing database is rejected
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<SRC_DIR>", as: "clonedb" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-src", as: "clonedb" })
 // Expected: ok: 0; errmsg says the database already exists.
 ```
 
@@ -173,7 +173,7 @@ db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<SRC_DIR>", a
 ## Scenario 6: A reserved database name is rejected
 
 ```js
-db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file://<SRC_DIR>", as: "admin" })
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-src", as: "admin" })
 // Expected: ok: 0; errmsg says the name is reserved.
 ```
 
