@@ -197,37 +197,52 @@ func TestPushVerify(t *testing.T) {
 	// Scenario 8: Fast-forward-only by default; force overwrites
 	// -------------------------------------------------------------------------
 	t.Run("Scenario8_FastForwardAndForce", func(t *testing.T) {
+		// A realistic non-fast-forward: the source and a clone share a common
+		// commit (c1), both add a commit, and the clone's later push is refused.
 		ffURL := "file://" + t.TempDir()
-		dbA := fmt.Sprintf("pushffA%d", rand.Int64N(1_000_000))
-		dbB := fmt.Sprintf("pushffB%d", rand.Int64N(1_000_000))
-
-		seed := func(name, who string) {
-			_, err := env.Client.Database(name).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "who", Value: who}})
-			require.NoError(t, err)
-			dumboDBCommit(t, env, name, who+"1", "x <x@x>")
-			var res bson.M
-			require.NoError(t, env.Client.Database(name).RunCommand(ctx, bson.D{
-				{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
-				{Key: "name", Value: "origin"}, {Key: "url", Value: ffURL},
-			}).Decode(&res))
-		}
-		seed(dbA, "A")
+		srcName := fmt.Sprintf("pushffsrc%d", rand.Int64N(1_000_000))
+		cloneName := fmt.Sprintf("pushffclone%d", rand.Int64N(1_000_000))
+		src := env.Client.Database(srcName)
 		var res bson.M
-		require.NoError(t, env.Client.Database(dbA).RunCommand(ctx, bson.D{
+
+		// Source: c1, pushed to a fresh remote.
+		_, err := src.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "who", Value: "base"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, srcName, "c1", "a <a@a>")
+		require.NoError(t, src.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: ffURL},
+		}).Decode(&res))
+		require.NoError(t, src.RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 		}).Decode(&res))
 
-		seed(dbB, "B")
-		// Non-fast-forward push is rejected.
-		err := env.Client.Database(dbB).RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
-		}).Decode(&res)
-		assert.Error(t, err, "a non-fast-forward push must be rejected")
+		// Clone the remote -- shares c1 as a common root and tracks origin/main.
+		require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: ffURL}, {Key: "as", Value: cloneName},
+		}).Decode(&res))
 
-		// force overwrites the remote.
-		require.NoError(t, env.Client.Database(dbB).RunCommand(ctx, bson.D{
-			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"},
-			{Key: "refSpec", Value: "main"}, {Key: "force", Value: true},
+		// Source advances the remote first (c1 -> c2-source).
+		_, err = src.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "who", Value: "source"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, srcName, "c2-source", "a <a@a>")
+		require.NoError(t, src.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
+		}).Decode(&res))
+
+		// Clone commits its own change on top of the shared c1 (c1 -> c2-clone).
+		clone := env.Client.Database(cloneName)
+		_, err = clone.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "who", Value: "clone"}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, cloneName, "c2-clone", "b <b@b>")
+
+		// The clone's push diverged from the shared c1 -> non-fast-forward, rejected.
+		err = clone.RunCommand(ctx, bson.D{{Key: "dumboPush", Value: int32(1)}}).Decode(&res)
+		assert.Error(t, err, "a non-fast-forward push (diverged from the shared base) must be rejected")
+
+		// force overwrites the remote with the clone's history.
+		require.NoError(t, clone.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "force", Value: true},
 		}).Decode(&res))
 		assert.EqualValues(t, 1, res["ok"])
 	})

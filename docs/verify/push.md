@@ -228,25 +228,39 @@ db.getSiblingDB("pushvdb").runCommand({ dumboPush: 1, to: "origin", refSpec: "ma
 ## Scenario 8: Fast-forward-only by default; `force` overwrites (`git push --force`)
 
 A push that is not a fast-forward of the remote is rejected unless `force` is
-given. Two databases with unrelated histories push to one remote.
+given. This is the real "someone pushed before you" case: two clones share a
+common commit, both add their own commit, and the second push is refused because
+the histories have diverged from the shared base.
 
 ```js
-var a = db.getSiblingDB("pushffA")
-a.items.insertOne({ _id: 1, who: "A" })
-a.runCommand({ dumboCommit: 1, message: "A1", author: "a <a@a>" })
-a.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-ff-remote" })
-a.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+// Source db: one commit (c1), pushed to a fresh remote.
+var s = db.getSiblingDB("pushffsrc")
+s.items.insertOne({ _id: 1, who: "base" })
+s.runCommand({ dumboCommit: 1, message: "c1", author: "a <a@a>" })
+s.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-ff-remote" })
+s.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })   // remote at c1
 
-var b = db.getSiblingDB("pushffB")
-b.items.insertOne({ _id: 1, who: "B" })
-b.runCommand({ dumboCommit: 1, message: "B1", author: "b <b@b>" })
-b.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-ff-remote" })
+// A collaborator clones the remote -- it shares c1 as a common root and tracks origin.
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-ff-remote", as: "pushffclone" })
 
-b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
+// The source advances the remote first (c1 -> c2-source).
+s.items.insertOne({ _id: 2, who: "source" })
+s.runCommand({ dumboCommit: 1, message: "c2-source", author: "a <a@a>" })
+s.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })   // remote now at c2-source
+
+// The clone commits its own change on top of the shared c1 (c1 -> c2-clone).
+var c = db.getSiblingDB("pushffclone")
+c.items.insertOne({ _id: 3, who: "clone" })
+c.runCommand({ dumboCommit: 1, message: "c2-clone", author: "b <b@b>" })
+
+// The clone's push is a non-fast-forward: c2-clone and c2-source both descend
+// from c1, so c2-clone is not a descendant of the remote's current head.
+c.runCommand({ dumboPush: 1 })
 // Expected: ok: 0 -- not a fast-forward.
 
-b.runCommand({ dumboPush: 1, to: "origin", refSpec: "main", force: true })
-// Expected: ok: 1 -- the remote main now holds dbB's history.
+// force overwrites the remote with the clone's history.
+c.runCommand({ dumboPush: 1, force: true })
+// Expected: ok: 1 -- the remote main now holds c2-clone (c2-source is discarded).
 ```
 
 ---
