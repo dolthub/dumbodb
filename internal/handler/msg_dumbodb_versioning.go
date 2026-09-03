@@ -773,7 +773,7 @@ func normalizeBranchRebase(v any) (string, error) {
 		return "", nil
 	}
 	return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-		"dumboBranch: config.rebase must be a bool", "config")
+		"dumboBranch: setConfig.rebase must be a bool", "setConfig")
 }
 
 // normalizeBranchFF validates a config.ff value and returns its stored form:
@@ -790,15 +790,15 @@ func normalizeBranchFF(v any) (string, error) {
 		}
 	}
 	return "", handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-		`dumboBranch: config.ff must be "no", "only", or "default"`, "config")
+		`dumboBranch: setConfig.ff must be "no", "only", or "default"`, "setConfig")
 }
 
-// parseBranchConfig reads the config / unsetConfig fields of a dumboBranch
+// parseBranchConfig reads the setConfig / unsetConfig fields of a dumboBranch
 // command into set-pointers for the pull policy. configMode reports whether
 // either field was present. A nil pointer leaves the key unchanged; a pointer to
 // "" clears it; otherwise it is set.
 func parseBranchConfig(document *types.Document) (setRebase, setFF *string, configMode bool, err error) {
-	hasConfig, hasUnset := document.Has("config"), document.Has("unsetConfig")
+	hasConfig, hasUnset := document.Has("setConfig"), document.Has("unsetConfig")
 	if !hasConfig && !hasUnset {
 		return nil, nil, false, nil
 	}
@@ -806,11 +806,11 @@ func parseBranchConfig(document *types.Document) (setRebase, setFF *string, conf
 	set := map[string]string{}
 
 	if hasConfig {
-		raw, _ := document.Get("config")
+		raw, _ := document.Get("setConfig")
 		cfgDoc, ok := raw.(*types.Document)
 		if !ok {
 			return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-				"dumboBranch: config must be a document", "config")
+				"dumboBranch: setConfig must be a document", "setConfig")
 		}
 		for _, key := range cfgDoc.Keys() {
 			v, _ := cfgDoc.Get(key)
@@ -829,7 +829,7 @@ func parseBranchConfig(document *types.Document) (setRebase, setFF *string, conf
 				set["ff"] = norm
 			default:
 				return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-					fmt.Sprintf("dumboBranch: unknown config key %q (allowed: rebase, ff)", key), "config")
+					fmt.Sprintf("dumboBranch: unknown setConfig key %q (allowed: rebase, ff)", key), "setConfig")
 			}
 		}
 	}
@@ -850,7 +850,7 @@ func parseBranchConfig(document *types.Document) (setRebase, setFF *string, conf
 			}
 			if _, dup := set[key]; dup {
 				return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-					fmt.Sprintf("dumboBranch: %q appears in both config and unsetConfig", key), "unsetConfig")
+					fmt.Sprintf("dumboBranch: %q appears in both setConfig and unsetConfig", key), "unsetConfig")
 			}
 			set[key] = ""
 		}
@@ -858,7 +858,7 @@ func parseBranchConfig(document *types.Document) (setRebase, setFF *string, conf
 
 	if len(set) == 0 {
 		return nil, nil, true, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-			"dumboBranch: config or unsetConfig must name at least one key (rebase, ff)", "config")
+			"dumboBranch: setConfig or unsetConfig must name at least one key (rebase, ff)", "setConfig")
 	}
 	if v, ok := set["rebase"]; ok {
 		setRebase = &v
@@ -875,7 +875,7 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		return nil, handlererrors.NewCommandErrorMsg(handlererrors.ErrOperationFailed, err.Error())
 	}
 
-	if err = common.RejectUnknownFields(document, "branch", "delete", "forceDelete", "config", "unsetConfig"); err != nil {
+	if err = common.RejectUnknownFields(document, "branch", "delete", "forceDelete", "setConfig", "unsetConfig"); err != nil {
 		return nil, err
 	}
 
@@ -955,11 +955,11 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 	if configMode {
 		if listMode {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-				"dumboBranch: config requires a branch name", "branch")
+				"dumboBranch: setConfig requires a branch name", "branch")
 		}
 		if safeDelete || forceDelete {
 			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
-				"dumboBranch: config cannot be combined with delete", "config")
+				"dumboBranch: setConfig cannot be combined with delete", "setConfig")
 		}
 	}
 

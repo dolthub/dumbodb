@@ -405,8 +405,9 @@ Key checks:
 
 A branch that tracks a remote can carry a persistent pull policy that drives a
 bare `dumboPull` (see `pull.md`): `rebase` (`git config branch.<name>.rebase`) and
-`ff` (`git config pull.ff`). Set it with `config`, clear keys with `unsetConfig`,
-and see it in the listing entry's `config`. It applies only to a tracking branch.
+`ff` (`git config pull.ff`). Set it with `setConfig`, clear keys with
+`unsetConfig`, and see it in the listing entry's `config`. It applies only to a
+tracking branch.
 
 Set up a database whose `main` tracks a remote at `/tmp/dumbo-cfg-remote` (remove
 it first for a clean run):
@@ -423,7 +424,7 @@ db.getSiblingDB("cfgdb@main").runCommand({ doltPush: 1, to: "origin", refSpec: "
 Set the policy; the response echoes the resulting config:
 
 ```js
-db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", config: { rebase: true, ff: "only" } })
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { rebase: true, ff: "only" } })
 // { branch: "main", config: { rebase: "true", ff: "only" }, ok: 1 }
 ```
 
@@ -434,25 +435,25 @@ db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1 })
 // The "main" entry carries config: { rebase: "true", ff: "only" }.
 ```
 
-Clear one key with `unsetConfig`; `config: { ff: "default" }` clears `ff`:
+Clear one key with `unsetConfig`; `setConfig: { ff: "default" }` clears `ff`:
 
 ```js
 db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", unsetConfig: ["rebase"] })
 // { branch: "main", config: { ff: "only" }, ok: 1 }
 
-db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", config: { ff: "default" } })
+db.getSiblingDB("cfgdb@main").runCommand({ doltBranch: 1, branch: "main", setConfig: { ff: "default" } })
 // { branch: "main", config: {}, ok: 1 } -- the policy is now empty.
 ```
 
 A pull policy needs an upstream: `feature` tracks nothing, so this errors:
 
 ```js
-db.getSiblingDB("cfgdb@feature").runCommand({ doltBranch: 1, branch: "feature", config: { rebase: true } })
+db.getSiblingDB("cfgdb@feature").runCommand({ doltBranch: 1, branch: "feature", setConfig: { rebase: true } })
 // Expected error: branch "feature" has no upstream; a pull policy applies only to a tracking branch.
 ```
 
 Key checks:
-- `config` accepts `rebase` (`true` / `false`) and `ff` (`"no"` / `"only"` / `"default"`); `false`/`"default"` clear a key
+- `setConfig` accepts `rebase` (`true` / `false`) and `ff` (`"no"` / `"only"` / `"default"`); `false`/`"default"` clear a key
 - The set response and the listing entry both report the branch's `config`
 - Setting a policy on a branch with no upstream is rejected
 
@@ -470,7 +471,7 @@ Key checks:
 | `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (always) |
 | `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current, upstream?, remoteTracking?, config? }, ... ], ok: 1 }` |
 | `{ doltBranch: 1 }` | `@<hash>` | same list, no entry marked `current` |
-| `{ doltBranch: 1, branch: "name", config: { rebase, ff } }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (set pull policy) |
+| `{ doltBranch: 1, branch: "name", setConfig: { rebase, ff } }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (set pull policy) |
 | `{ doltBranch: 1, branch: "name", unsetConfig: ["rebase"] }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (clear a key) |
 
 - `branch` in the response echoes the name you provided.
@@ -482,5 +483,5 @@ Key checks:
 - `delete` and `forceDelete` are mutually exclusive; passing both returns an error.
 - Omitting `branch` lists every branch, sorted by name, with the connection's branch flagged `current: true`.
 - A listing includes local branches (each with its `upstream` when it tracks one) and remote-tracking branches; a remote-tracking entry is `<remote>/<branch>` with `remoteTracking: true`, never `current`, and carries no `upstream`.
-- `config` / `unsetConfig` set or clear a tracking branch's persistent pull policy (`rebase`, `ff`), the analog of `git config branch.<name>.rebase` / `pull.ff`. It drives a bare `dumboPull` (see `pull.md`) and applies only to a branch with an upstream.
+- `setConfig` / `unsetConfig` set or clear a tracking branch's persistent pull policy (`rebase`, `ff`), the analog of `git config branch.<name>.rebase` / `pull.ff`; the branch's current policy is shown in its listing entry's `config`. It drives a bare `dumboPull` (see `pull.md`) and applies only to a branch with an upstream.
 - An explicit `branch: ""` is an error, not a list request; `delete`/`forceDelete` still require a name.

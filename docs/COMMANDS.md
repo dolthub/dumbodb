@@ -162,13 +162,14 @@ lists every branch when `branch` is omitted.
 | `branch` | string | no |  -- | Name of the branch to create, delete, or configure. Omit to list every branch (local and remote-tracking) |
 | `delete` | bool/int | no | `false` | Safe-delete: fails if the branch has unmerged commits |
 | `forceDelete` | bool/int | no | `false` | Force-delete: succeeds unconditionally |
-| `config` | document | no |  -- | Set the branch's pull policy: `rebase` (bool) and/or `ff` (`"no"`/`"only"`/`"default"`). Requires `branch` with an upstream |
+| `setConfig` | document | no |  -- | Set the branch's pull policy: `rebase` (bool) and/or `ff` (`"no"`/`"only"`/`"default"`). Requires `branch` with an upstream |
 | `unsetConfig` | array | no |  -- | Clear pull-policy keys, e.g. `["rebase", "ff"]`. Requires `branch` |
 
 `delete` and `forceDelete` are mutually exclusive, and both require `branch`.
-`config` / `unsetConfig` are the pull-policy surface (`git config
+`setConfig` / `unsetConfig` are the pull-policy write surface (`git config
 branch.<name>.rebase` / `pull.ff`); they require a `branch` that tracks a remote
 and cannot be combined with `delete`. A `false` / `"default"` value clears a key.
+The branch's current policy is read back in the listing entry's `config` field.
 
 ### Response fields
 
@@ -232,7 +233,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "abandoned",
 // { branch: "abandoned", ok: 1 }
 
 // Set a tracking branch's pull policy (git config branch.main.rebase true)
-db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", config: { rebase: true } })
+db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { rebase: true } })
 // { branch: "main", config: { rebase: "true" }, ok: 1 }
 
 // Clear a pull-policy key
@@ -247,9 +248,10 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unse
 | `branch` is empty | `BadValue: dumboBranch: branch name must not be empty` |
 | `delete` or `forceDelete` without `branch` | `BadValue: dumboBranch: branch name is required for delete` |
 | `delete` and `forceDelete` both set | `BadValue: dumboBranch: delete and forceDelete are mutually exclusive` |
-| `config` on a branch with no upstream | `OperationFailed: ... branch "<name>" has no upstream; a pull policy applies only to a tracking branch` |
-| `config` combined with `delete` | `BadValue: dumboBranch: config cannot be combined with delete` |
-| `config` value out of range | `BadValue: dumboBranch: config.rebase must be a bool` / `config.ff must be "no", "only", or "default"` |
+| `setConfig` on a branch with no upstream | `OperationFailed: ... branch "<name>" has no upstream; a pull policy applies only to a tracking branch` |
+| `setConfig` combined with `delete` | `BadValue: dumboBranch: setConfig cannot be combined with delete` |
+| `setConfig` value out of range | `BadValue: dumboBranch: setConfig.rebase must be a bool` / `setConfig.ff must be "no", "only", or "default"` |
+| unknown `setConfig` key | `BadValue: dumboBranch: unknown setConfig key "<k>" (allowed: rebase, ff)` |
 | Safe-delete on branch with unmerged commits | `OperationFailed: ... unmerged commits` |
 
 ### Notes
@@ -258,7 +260,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unse
 - The new branch HEAD equals the commit resolved from the source rootish.
 - Data on the new branch is fully isolated from its source.
 - A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
-- `config` / `unsetConfig` set a tracking branch's persistent pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`). A bare `dumboPull` honors it; explicit `dumboPull` flags override it (see `dumboPull`). The policy is shown in the listing entry's `config`.
+- `setConfig` / `unsetConfig` set a tracking branch's persistent pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`). A bare `dumboPull` honors it; explicit `dumboPull` flags override it (see `dumboPull`). The policy is read back in the listing entry's `config` field.
 - Omitting `branch` lists every branch. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
 - `current: true` marks the branch encoded in the database name and is omitted from every other entry. A connection pinned to a commit hash or ancestor expression is on no branch, so no entry carries `current`.
 

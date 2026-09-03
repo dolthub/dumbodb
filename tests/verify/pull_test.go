@@ -357,7 +357,7 @@ func TestPullVerify(t *testing.T) {
 		// Record the policy on the tracking branch.
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
-			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}}},
+			{Key: "setConfig", Value: bson.D{{Key: "rebase", Value: true}}},
 		}).Decode(&res))
 		cfg := res["config"].(bson.M)
 		require.Equal(t, "true", cfg["rebase"])
@@ -383,7 +383,7 @@ func TestPullVerify(t *testing.T) {
 		var res bson.M
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
-			{Key: "config", Value: bson.D{{Key: "ff", Value: "only"}}},
+			{Key: "setConfig", Value: bson.D{{Key: "ff", Value: "only"}}},
 		}).Decode(&res))
 
 		// A bare pull is not a fast-forward (main diverged) -> rejected.

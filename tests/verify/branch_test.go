@@ -527,7 +527,7 @@ func TestBranchVerify(t *testing.T) {
 		// Set rebase + ff; the response echoes the resulting policy.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
-			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}, {Key: "ff", Value: "only"}}},
+			{Key: "setConfig", Value: bson.D{{Key: "rebase", Value: true}, {Key: "ff", Value: "only"}}},
 		}).Decode(&res))
 		cfg := res["config"].(bson.M)
 		assert.Equal(t, "true", cfg["rebase"])
@@ -557,23 +557,47 @@ func TestBranchVerify(t *testing.T) {
 		// config ff:"default" clears ff too; the policy is now empty.
 		require.NoError(t, mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
-			{Key: "config", Value: bson.D{{Key: "ff", Value: "default"}}},
+			{Key: "setConfig", Value: bson.D{{Key: "ff", Value: "default"}}},
 		}).Decode(&res))
 		assert.Len(t, res["config"].(bson.M), 0, "an empty policy has no keys")
 
 		// A pull policy requires an upstream: feature tracks nothing -> error.
 		err = env.Client.Database(cfgDB+"@feature").RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
-			{Key: "config", Value: bson.D{{Key: "rebase", Value: true}}},
+			{Key: "setConfig", Value: bson.D{{Key: "rebase", Value: true}}},
 		}).Err()
 		assert.Error(t, err, "a pull policy applies only to a tracking branch")
 
-		// config.rebase is a bool: "merges" is rejected (not supported).
+		// Invalid values and keys are rejected.
+		bad := []struct {
+			name string
+			cfg  bson.D
+		}{
+			{"rebase merges", bson.D{{Key: "rebase", Value: "merges"}}}, // rebase is a bool
+			{"rebase string", bson.D{{Key: "rebase", Value: "true"}}},   // not a bool
+			{"ff bad value", bson.D{{Key: "ff", Value: "sometimes"}}},   // ff must be no/only/default
+			{"ff bool", bson.D{{Key: "ff", Value: true}}},               // ff is a string
+			{"unknown key", bson.D{{Key: "squash", Value: true}}},       // only rebase/ff allowed
+			{"unknown + valid", bson.D{{Key: "rebase", Value: true}, {Key: "nope", Value: 1}}},
+		}
+		for _, tc := range bad {
+			err = mainConn.RunCommand(ctx, bson.D{
+				{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+				{Key: "setConfig", Value: tc.cfg},
+			}).Err()
+			assert.Error(t, err, "setConfig %s must be rejected", tc.name)
+		}
+
+		// setConfig and unsetConfig may not both name the same key.
 		err = mainConn.RunCommand(ctx, bson.D{
 			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
-			{Key: "config", Value: bson.D{{Key: "rebase", Value: "merges"}}},
+			{Key: "setConfig", Value: bson.D{{Key: "rebase", Value: true}}},
+			{Key: "unsetConfig", Value: bson.A{"rebase"}},
 		}).Err()
-		assert.Error(t, err, "config.rebase must be a bool; \"merges\" is rejected")
+		assert.Error(t, err, "the same key in setConfig and unsetConfig must be rejected")
+
+		// NOTE: rebase + ff together is *allowed* (git-parity: rebase wins on
+		// pull, ff is inert) -- see the valid set at the top of this scenario.
 	})
 }
 
