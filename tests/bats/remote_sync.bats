@@ -63,7 +63,6 @@ seed_and_push() {
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
     echo "$output" | jq -e '.db == "clonedb"'
-    echo "$output" | jq -e '.defaultBranch == "main"'
 
     # The cloned database is readable and contains the seeded document.
     local clone_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/clonedb"

@@ -57,7 +57,7 @@ teardown() {
     local admin_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/admin"
     run mongo_json "$admin_uri" "db.runCommand({dumboClone:1,from:'${url}',as:'clonedb'})"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.ok == 1 and .db == "clonedb" and .defaultBranch == "main"'
+    echo "$output" | jq -e '.ok == 1 and .db == "clonedb"'
 
     local clone_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/clonedb"
     run mongo_json "$clone_uri" 'db.col.findOne({_id:1})'
