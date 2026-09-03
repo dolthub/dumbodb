@@ -59,7 +59,6 @@ The validator is durable: after restarting the server, it is still reported by
 
 ```js
 var db = db.getSiblingDB("valrestart")
-db.dropDatabase()
 db.createCollection("items", { validator: { age: { $gte: 0 } }, validationLevel: "strict" })
 db.items.insertOne({ _id: 2, age: -1 })   // rejected (121)  -- validator active
 
@@ -81,7 +80,6 @@ A branch inherits the validator; enforcement on the branch is independent of
 
 ```js
 var db = db.getSiblingDB("valbranch")
-db.dropDatabase()
 db.createCollection("items", { validator: { age: { $gte: 0 } } })
 db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice <alice@acme.com>" })
 
@@ -103,7 +101,6 @@ other, merges in cleanly.
 
 ```js
 var db = db.getSiblingDB("valmerge")
-db.dropDatabase()
 db.createCollection("items")   // no validator yet
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 
@@ -147,7 +144,6 @@ collection is never named.
 
 ```js
 var db = db.getSiblingDB("valconflict")
-db.dropDatabase()
 db.createCollection("items", { validator: { age: { $gte: 0 } } })
 db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice <alice@acme.com>" })
 
@@ -264,7 +260,6 @@ forbids. `validationLevel` (strict/moderate) is irrelevant to the merge.
 
 ```js
 var db = db.getSiblingDB("valdataconflict")
-db.dropDatabase()
 db.createCollection("items")   // no validator yet
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 
@@ -365,7 +360,6 @@ validator is always `{ age: { $gte: 0 } }`.
 
 ```js
 var db = db.getSiblingDB("mx6a")
-db.dropDatabase()
 db.createCollection("items")                                                        // base: no validator, no docs
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 db.runCommand({ doltBranch: 1, branch: "feature" })
@@ -396,7 +390,6 @@ Same as 6a, but the document main inserts conforms, so the merge is clean.
 
 ```js
 var db = db.getSiblingDB("mx6b")
-db.dropDatabase()
 db.createCollection("items")
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 db.runCommand({ doltBranch: 1, branch: "feature" })
@@ -415,7 +408,6 @@ db.runCommand({ doltMerge: 1, mergeIn: "feature" })                             
 
 ```js
 var db = db.getSiblingDB("mx6c")
-db.dropDatabase()
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: 5 })                                             // base: conforming doc
 db.runCommand({ doltCommit: 1, message: "create + doc", author: "alice <alice@acme.com>" })
@@ -448,7 +440,6 @@ merge never touches, is grandfathered -- no conflict.
 
 ```js
 var db = db.getSiblingDB("mx6d")
-db.dropDatabase()
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })                                            // base: already violating
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
@@ -472,7 +463,6 @@ applies under `error`, even though the value was already violating.
 
 ```js
 var db = db.getSiblingDB("mx6e")
-db.dropDatabase()
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
@@ -500,7 +490,6 @@ violating value is allowed and the merge is clean.
 
 ```js
 var db = db.getSiblingDB("mx6f")
-db.dropDatabase()
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
@@ -521,7 +510,6 @@ db.items.findOne({ _id: 1 })                                                    
 
 ```js
 var db = db.getSiblingDB("mx6g")
-db.dropDatabase()
 db.createCollection("items")
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 db.runCommand({ doltBranch: 1, branch: "feature" })
@@ -545,7 +533,6 @@ rejected; resolving to the conforming side completes.
 
 ```js
 var db = db.getSiblingDB("mx6h")
-db.dropDatabase()
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: 5 })
 db.runCommand({ doltCommit: 1, message: "create + doc", author: "alice <alice@acme.com>" })
@@ -578,7 +565,6 @@ is acceptable -- only a conforming replacement (or a drop) completes the merge.
 
 ```js
 var db = db.getSiblingDB("mx6i")
-db.dropDatabase()
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })                                            // base: already violating
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
@@ -613,7 +599,6 @@ now-pinned validator and **re-pauses** if a merged document violates it.
 
 ```js
 var db = db.getSiblingDB("valtwophase")
-db.dropDatabase()
 
 // Base: validated items (age >= 0) with one conforming doc.
 db.createCollection("items", { validator: { age: { $gte: 0 } } })
@@ -674,7 +659,6 @@ the collection's own data.
 
 ```js
 var db = db.getSiblingDB("valobserve")
-db.dropDatabase()
 
 // A newly-created validated collection: the whole spec is new, so all three
 // metadata fields report as "added". doltStatus is summary verbosity, so it

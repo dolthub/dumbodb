@@ -54,7 +54,6 @@ commit, which is what exercises the view-merge path.
 
 ```js
 var db = db.getSiblingDB("vwmrg1")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, status: "active" },
@@ -95,7 +94,6 @@ conflict; `doltConflicts` reports it as a `type: "view"` entry in the unified
 
 ```js
 var db = db.getSiblingDB("vwmrg2")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
@@ -151,7 +149,6 @@ Same setup as Scenario 2; resolving "ours" keeps this branch's definition.
 
 ```js
 var db = db.getSiblingDB("vwmrg3")
-db.dropDatabase()
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
 ])
@@ -184,7 +181,6 @@ definition, which need match neither side.
 
 ```js
 var db = db.getSiblingDB("vwmrg4")
-db.dropDatabase()
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
 ])
@@ -221,7 +217,6 @@ after the merge.
 
 ```js
 var db = db.getSiblingDB("vwmrg5")
-db.dropDatabase()
 db.items.insertMany([
   { _id: 1, status: "active" }, { _id: 2, status: "inactive" }, { _id: 3, status: "pending" }
 ])

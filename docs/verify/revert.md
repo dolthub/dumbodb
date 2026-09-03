@@ -32,7 +32,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("revertdb")
-db.dropDatabase()
 
 // C1: insert {_id:1, v:1} on main.
 db.records.insertOne({ _id: 1, v: 1 })

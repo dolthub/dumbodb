@@ -97,7 +97,6 @@ behaves like every other transport for push.
 
 ```js
 var db = db.getSiblingDB("pushvdb")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, label: "alpha" })
 const r1 = db.runCommand({ dumboCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
@@ -232,14 +231,12 @@ given. Two databases with unrelated histories push to one remote.
 
 ```js
 var a = db.getSiblingDB("pushffA")
-a.dropDatabase()
 a.items.insertOne({ _id: 1, who: "A" })
 a.runCommand({ dumboCommit: 1, message: "A1", author: "a <a@a>" })
 a.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<FF_REMOTE_DIR>" })
 a.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 var b = db.getSiblingDB("pushffB")
-b.dropDatabase()
 b.items.insertOne({ _id: 1, who: "B" })
 b.runCommand({ dumboCommit: 1, message: "B1", author: "b <b@b>" })
 b.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<FF_REMOTE_DIR>" })

@@ -32,7 +32,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("pickdb")
-db.dropDatabase()
 
 // Baseline: one document on main.
 db.items.insertOne({ _id: 1, v: 1 })

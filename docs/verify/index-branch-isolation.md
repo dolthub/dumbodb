@@ -32,7 +32,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("idxisovdb")
-db.dropDatabase()
 
 // Seed: one doc on main with name "alpha".
 db.items.insertOne({ _id: 1, name: "alpha" })
@@ -329,7 +328,6 @@ the pre- and post-definition.
 ```js
 // Fresh database for this scenario -- isolated from idxisovdb above.
 var mdb = db.getSiblingDB("idxmoddb")
-mdb.dropDatabase()
 
 // Seed a collection with an index on field "age" and commit.
 mdb.items.insertOne({ _id: 1, age: 30, name: "alpha" })

@@ -28,7 +28,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("statusdb")
-db.dropDatabase()
 
 // Baseline: one document in "items", committed.
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })

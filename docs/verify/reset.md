@@ -28,7 +28,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("resetdb")
-db.dropDatabase()
 
 db.tasks.insertOne({ _id: 1, v: 1 })
 const r1 = db.runCommand({ doltCommit: 1, message: "initial", author: "alice <alice@acme.com>" })
@@ -259,7 +258,6 @@ Run this setup once before each scenario (drop and rebuild for a clean state).
 
 ```js
 var mdb = db.getSiblingDB("resetbranchdb")
-mdb.dropDatabase()
 
 // main: one committed document (M1).
 mdb.tasks.insertOne({ _id: 1, v: 1 })

@@ -47,7 +47,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("tagvdb")
-db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "alpha" })

@@ -47,7 +47,6 @@ is the shared baseline commit):
 
 ```js
 var db = db.getSiblingDB("bsdemo")
-db.dropDatabase()
 
 // Baseline commit "anc" on main.
 db.seed.insertOne({ _id: 1 })

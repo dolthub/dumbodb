@@ -28,7 +28,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("diffdb")
-db.dropDatabase()
 
 // Baseline: two documents, committed
 db.items.insertOne({ _id: 1, label: "alpha", score: 10 })

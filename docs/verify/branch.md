@@ -28,7 +28,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("branchvdb")
-db.dropDatabase()
 
 // Commit 1: one document
 db.products.insertOne({ _id: 1, label: "alpha" })
@@ -150,7 +149,6 @@ correct document count at the ancestor state.
 ```js
 // Fresh database: two commits (hash1 = 1 doc, hash2/HEAD = 2 docs)
 var db2 = db.getSiblingDB("branchvdb2")
-db2.dropDatabase()
 db2.products.insertOne({ _id: 1, label: "alpha" })
 db2.runCommand({ doltCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })
 db2.products.insertOne({ _id: 2, label: "beta" })
@@ -278,7 +276,6 @@ Use a fresh database with no remotes so the listing is just its local branches:
 
 ```js
 var lb = db.getSiblingDB("branchlistdb")
-lb.dropDatabase()
 lb.products.insertOne({ _id: 1, label: "alpha" })
 lb.runCommand({ doltCommit: 1, message: "commit one" })
 
@@ -366,7 +363,6 @@ an empty/nonexistent path for `<RT_REMOTE_DIR>`.
 
 ```js
 var rt = db.getSiblingDB("rtlistdb")
-rt.dropDatabase()
 rt.items.insertOne({ _id: 1 })
 rt.runCommand({ doltCommit: 1, message: "c1" })
 rt.runCommand({ doltBranch: 1, branch: "feature" })
@@ -415,7 +411,6 @@ Set up a database whose `main` tracks a remote (substitute `<CFG_REMOTE_DIR>`):
 
 ```js
 var c = db.getSiblingDB("cfgdb")
-c.dropDatabase()
 c.items.insertOne({ _id: 1 })
 c.runCommand({ doltCommit: 1, message: "c1" })
 c.runCommand({ doltBranch: 1, branch: "feature" })

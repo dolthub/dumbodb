@@ -52,7 +52,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("idxmntvrfy")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, name: "alpha",   city: "NYC" },
@@ -303,7 +302,6 @@ covers every document from both sides.
 
 ```js
 var db = db.getSiblingDB("idxmntcp")
-db.dropDatabase()
 
 // Baseline: a seed doc with no "name" field -- the common ancestor.
 db.items.insertOne({ _id: 0, tag: "seed" })
@@ -365,7 +363,6 @@ from both branches.
 
 ```js
 var db = db.getSiblingDB("idxmnt2idx")
-db.dropDatabase()
 
 // Baseline: one document with both fields -- the common ancestor.
 db.items.insertOne({ _id: 0, name: "seed", city: "Origin" })

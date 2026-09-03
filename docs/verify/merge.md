@@ -32,7 +32,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("mergedb")
-db.dropDatabase()
 
 // Baseline: one document, committed on main.
 db.inventory.insertOne({ _id: 1, v: 1 })
@@ -403,7 +402,6 @@ final commit.
 
 ```js
 var db13 = db.getSiblingDB("mergedb13")
-db13.dropDatabase()
 
 // Baseline: two documents.
 db13.items.insertMany([

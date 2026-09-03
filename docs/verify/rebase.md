@@ -32,7 +32,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("rebasedb")
-db.dropDatabase()
 
 // C1: initial commit on main.
 db.items.insertOne({_id: 1, v: 1})
@@ -168,7 +167,6 @@ Create a feature branch with three commits, advance main, then rebase all three.
 
 ```js
 var tdb = db.getSiblingDB("rebase3c")
-tdb.dropDatabase()
 
 tdb.items.insertOne({_id: 1, v: 1})
 tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
@@ -201,7 +199,6 @@ Key checks:
 
 ```js
 var tdb = db.getSiblingDB("rebase3cf")
-tdb.dropDatabase()
 
 tdb.items.insertOne({_id: 1, v: 1})
 tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
@@ -246,7 +243,6 @@ Key checks:
 
 ```js
 var tdb = db.getSiblingDB("rebase3cl")
-tdb.dropDatabase()
 
 tdb.items.insertOne({_id: 1, v: 1})
 tdb.runCommand({doltCommit: 1, message: "C1", author: "alice <alice@acme.com>"})
@@ -298,7 +294,6 @@ Use a fresh database.
 
 ```js
 var cdb = db.getSiblingDB("rebaseconflict")
-cdb.dropDatabase()
 
 cdb.items.insertOne({_id: 1, v: 1})
 const rc1 = cdb.getSiblingDB("rebaseconflict@main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})
@@ -364,7 +359,6 @@ Use another fresh database.
 
 ```js
 var rdb = db.getSiblingDB("rebaseresolve")
-rdb.dropDatabase()
 
 rdb.items.insertOne({_id: 1, v: 1})
 const rr1 = rdb.getSiblingDB("rebaseresolve@main").runCommand({doltCommit: 1, message: "initial", author: "test <test@example.com>"})

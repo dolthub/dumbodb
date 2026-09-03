@@ -45,7 +45,6 @@ the next call's `from`. When the walk is exhausted, `next` is **omitted**.
 
 ```js
 var pg = db.getSiblingDB("logpage")
-pg.dropDatabase()
 
 // main: m1, m2
 pg.coll.insertOne({ _id: 1 })
@@ -271,7 +270,6 @@ always the id-list form.
 
 ```js
 var ff = db.getSiblingDB("logfilter")
-ff.dropDatabase()
 
 ff.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
 ff.runCommand({ doltCommit: 1, message: "c1 add orders 1,2", author: "a <a@x.io>" })
@@ -356,7 +354,6 @@ Key checks:
 
 ```js
 var nf = db.getSiblingDB("logfilter_ids")
-nf.dropDatabase()
 
 const oid = ObjectId()
 nf.events.insertOne({ _id: oid, kind: "login" })
@@ -401,7 +398,6 @@ the post-image may satisfy it. `$match`es and explicit `_id`s OR.
 
 ```js
 var mf = db.getSiblingDB("logfilter_match")
-mf.dropDatabase()
 
 mf.orders.insertMany([ { _id: 1, status: "pending" }, { _id: 2, status: "shipped" } ])
 mf.runCommand({ doltCommit: 1, message: "m1 add 1,2", author: "a <a@x.io>" })
@@ -430,7 +426,6 @@ This example uses `$gt`; try `$gte`/`$lt`/`$regex`/`$exists` the same way.
 
 ```js
 var gf = db.getSiblingDB("logfilter_gt")
-gf.dropDatabase()
 
 gf.orders.insertOne({ _id: 1, amount: 50 })
 gf.runCommand({ doltCommit: 1, message: "g1 add cheap order", author: "a <a@x.io>" })
@@ -457,7 +452,6 @@ conditions (implicit AND).
 
 ```js
 var cf = db.getSiblingDB("logfilter_changed")
-cf.dropDatabase()
 
 cf.orders.insertMany([
   { _id: 1, customer: "4242", status: "pending" },

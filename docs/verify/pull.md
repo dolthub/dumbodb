@@ -60,7 +60,6 @@ Pick an empty/nonexistent path for `<HUB_DIR>` and substitute it below.
 
 ```js
 var hub = db.getSiblingDB("hub")
-hub.dropDatabase()
 hub.items.insertOne({ _id: 1, v: "one" })
 const h1 = hub.runCommand({ dumboCommit: 1, message: "c1", author: "alice <alice@acme.com>" }).commitId
 hub.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file://<HUB_DIR>" })
@@ -197,7 +196,6 @@ db.getSiblingDB("ffwork@main").runCommand({ dumboPull: 1, ffOnly: true })
 
 ```js
 var solo = db.getSiblingDB("solodb")
-solo.dropDatabase()
 solo.items.insertOne({ _id: 1 })
 solo.runCommand({ dumboCommit: 1, message: "seed", author: "a <a@a>" })
 db.getSiblingDB("solodb@main").runCommand({ dumboPull: 1 })

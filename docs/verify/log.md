@@ -29,7 +29,6 @@ commit. Before any user commits, `doltLog` returns exactly that one commit.
 
 ```js
 var db = db.getSiblingDB("logdb")
-db.dropDatabase()
 
 db.events.insertOne({ _id: 0 })
 
@@ -253,7 +252,6 @@ The next three scenarios require a database that has a true three-way merge.
 
 ```js
 var mdb = db.getSiblingDB("logmerge")
-mdb.dropDatabase()
 
 mdb.events.insertOne({ _id: 1, v: 1 })
 const rA = mdb.runCommand({ doltCommit: 1, message: "add-one", author: "alice <alice@acme.com>" })
@@ -565,7 +563,6 @@ Run this in a fresh database:
 
 ```js
 var idb = db.getSiblingDB("logidxvdb")
-idb.dropDatabase()
 
 idb.items.insertOne({ _id: 1, age: 30, name: "alpha" })
 idb.runCommand({ doltCommit: 1, message: "seed", author: "alice <alice@acme.com>" })

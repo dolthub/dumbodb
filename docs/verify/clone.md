@@ -53,7 +53,6 @@ remote with two branches to clone.
 
 ```js
 var src = db.getSiblingDB("srcdb")
-src.dropDatabase()
 
 src.items.insertOne({ _id: 1, label: "alpha" })
 const r1 = src.runCommand({ dumboCommit: 1, message: "commit one", author: "alice <alice@acme.com>" })

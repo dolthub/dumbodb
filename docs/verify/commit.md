@@ -42,7 +42,6 @@ Run this once before the scenarios below.
 
 ```js
 var db = db.getSiblingDB("commitdb")
-db.dropDatabase()
 
 // Baseline: two documents, committed
 db.orders.insertOne({ _id: 1, label: "alpha", v: 1 })

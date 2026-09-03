@@ -28,7 +28,6 @@ Run this once before the verification scenarios below.
 
 ```js
 var db = db.getSiblingDB("verifydb")
-db.dropDatabase()
 
 // Commit 1: one document
 db.items.insertOne({ _id: 1, label: "first", version: 1 })
@@ -253,7 +252,6 @@ To test `^2` and chained expressions, create a merge commit:
 
 ```js
 var cdb = db.getSiblingDB("chaindb")
-cdb.dropDatabase()
 
 cdb.items.insertOne({ _id: 1, v: "root" })
 const hashC1 = cdb.runCommand({ doltCommit: 1, message: "C1", author: "alice <alice@acme.com>" }).commitId

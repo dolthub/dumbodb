@@ -48,7 +48,6 @@ merge, index lookups on the merged branch find both sides' documents.
 
 ```js
 var db = db.getSiblingDB("idxmrg1")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, name: "base" })
 db.items.createIndex({ name: 1 }, { name: "by_name" })
@@ -103,7 +102,6 @@ never saw it. After the merge the index covers feature's documents.
 
 ```js
 var db = db.getSiblingDB("idxmrg2")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, city: "base" })
 db.runCommand({ doltCommit: 1, message: "seed, no index", author: "alice <alice@acme.com>" })
@@ -137,7 +135,6 @@ feature's delete to main's indexed state and drop the value from the index.
 
 ```js
 var db = db.getSiblingDB("idxmrg2b")
-db.dropDatabase()
 
 // Seed data, no index yet.
 db.items.insertOne({ _id: 1, city: "base" })
@@ -183,7 +180,6 @@ main's indexed state (new value in, old value out).
 
 ```js
 var db = db.getSiblingDB("idxmrg2c")
-db.dropDatabase()
 
 // Seed data, no index yet.
 db.items.insertOne({ _id: 1, city: "base" })
@@ -228,7 +224,6 @@ collection scans and remain correct.
 
 ```js
 var db = db.getSiblingDB("idxmrg3")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, name: "base" })
 db.items.createIndex({ name: 1 }, { name: "by_name" })
@@ -264,7 +259,6 @@ recreate the collision; resolving with "ours" completes the merge.
 
 ```js
 var db = db.getSiblingDB("idxmrg4")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
@@ -341,7 +335,6 @@ and resolvable independently.
 
 ```js
 var db = db.getSiblingDB("idxmrg4b")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED", code: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
@@ -398,7 +391,6 @@ conflict) is what index lookups must see after the merge commits.
 
 ```js
 var db = db.getSiblingDB("idxmrg5")
-db.dropDatabase()
 
 db.items.insertMany([
   { _id: 1, name: "alpha" },
@@ -466,7 +458,6 @@ branch; `theirs` is the cherry-picked commit.
 
 ```js
 var db = db.getSiblingDB("idxmrg6")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
@@ -522,7 +513,6 @@ other way round: `ours` is the replayed commit, `theirs` is the onto branch.
 
 ```js
 var db = db.getSiblingDB("idxmrg7")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
@@ -580,7 +570,6 @@ document now holds its unique key, the revert parks a `uniqueKeyCollision`.
 
 ```js
 var db = db.getSiblingDB("idxmrg8")
-db.dropDatabase()
 
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
