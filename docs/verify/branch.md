@@ -291,9 +291,9 @@ Expected:
 ```json
 {
   "branches": [
-    { "name": "alpha", "commitId": "<hash>", "current": false },
-    { "name": "main",  "commitId": "<hash>", "current": true  },
-    { "name": "zeta",  "commitId": "<hash>", "current": false }
+    { "name": "alpha", "commitId": "<hash>" },
+    { "name": "main",  "commitId": "<hash>", "current": true },
+    { "name": "zeta",  "commitId": "<hash>" }
   ],
   "ok": 1
 }
@@ -303,7 +303,8 @@ Key checks:
 - Every branch appears exactly once, sorted by `name`
 - `commitId` is the branch HEAD commit; `alpha` and `zeta` branched from `main`
   HEAD, so all three match here
-- Exactly one entry has `current: true`  -- the branch encoded in the connection
+- `current: true` appears on exactly one entry -- the branch encoded in the
+  connection; it is omitted from the others
 
 Listing follows the connection, not the default branch:
 
@@ -318,7 +319,7 @@ branch, so no entry is current:
 ```js
 const h = db.getSiblingDB("branchlistdb@main").runCommand({ doltLog: 1, limit: 1 }).commits[0].commitId
 db.getSiblingDB("branchlistdb@" + h).runCommand({ doltBranch: 1 })
-// Expected: the same three entries, all with current: false
+// Expected: the same three entries, none carrying a "current" field
 ```
 
 ---
@@ -380,12 +381,12 @@ Expected -- local branches (`main` carries its `upstream`) alongside the
 ```json
 {
   "branches": [
-    { "name": "feature", "commitId": "<hash>", "current": false },
+    { "name": "feature", "commitId": "<hash>" },
     { "name": "main", "commitId": "<hash>", "current": true,
       "upstream": { "remote": "origin", "ref": "main" } },
-    { "name": "origin/feature", "commitId": "<hash>", "current": false,
+    { "name": "origin/feature", "commitId": "<hash>",
       "remoteTracking": true, "remote": "origin", "ref": "feature" },
-    { "name": "origin/main", "commitId": "<hash>", "current": false,
+    { "name": "origin/main", "commitId": "<hash>",
       "remoteTracking": true, "remote": "origin", "ref": "main" }
   ],
   "ok": 1
@@ -467,7 +468,7 @@ Key checks:
 | `{ doltBranch: 1, branch: "name", delete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (merged) or error (unmerged) |
 | `{ doltBranch: 1, branch: "name", forceDelete: 1 }` | `@main` | `{ branch: "name", ok: 1 }` (always) |
 | `{ doltBranch: 1 }` | `@main` | `{ branches: [ { name, commitId, current, upstream?, remoteTracking?, config? }, ... ], ok: 1 }` |
-| `{ doltBranch: 1 }` | `@<hash>` | same list, every local entry `current: false` |
+| `{ doltBranch: 1 }` | `@<hash>` | same list, no entry marked `current` |
 | `{ doltBranch: 1, branch: "name", config: { rebase, ff } }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (set pull policy) |
 | `{ doltBranch: 1, branch: "name", unsetConfig: ["rebase"] }` | `@main` | `{ branch: "name", config: {...}, ok: 1 }` (clear a key) |
 

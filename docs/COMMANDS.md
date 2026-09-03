@@ -192,7 +192,7 @@ A listing returns:
 |-------|------|-------------|
 | `name` | string | Branch name; for a remote-tracking branch, `<remote>/<branch>` |
 | `commitId` | string | Branch HEAD commit hash (32-char base32) |
-| `current` | bool | `true` for the branch encoded in the database name (always `false` for remote-tracking) |
+| `current` | bool | Present and `true` only on the branch encoded in the database name; omitted from all other entries (and never on remote-tracking) |
 | `remoteTracking` | bool | Present and `true` only for a remote-tracking branch (`refs/remotes/<remote>/<branch>`) |
 | `remote` | string | Remote-tracking only: the remote it came from |
 | `ref` | string | Remote-tracking only: the branch name on that remote |
@@ -210,10 +210,10 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "feature" })
 db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1 })
 // {
 //   branches: [
-//     { name: "feature",     commitId: "<hash>", current: false },
+//     { name: "feature",     commitId: "<hash>" },
 //     { name: "main",        commitId: "<hash>", current: true,
 //       upstream: { remote: "origin", ref: "main" } },
-//     { name: "origin/main", commitId: "<hash>", current: false,
+//     { name: "origin/main", commitId: "<hash>",
 //       remoteTracking: true, remote: "origin", ref: "main" }
 //   ],
 //   ok: 1
@@ -260,7 +260,7 @@ db.getSiblingDB("orders@main").runCommand({ dumboBranch: 1, branch: "main", unse
 - A listing includes local branches and remote-tracking branches in one result. Remote-tracking entries are the `refs/remotes/<remote>/<branch>` refs populated by `dumboClone` / `dumboFetch` / `dumboPush`; they are named `<remote>/<branch>`, carry `remoteTracking: true`, `remote`, and `ref`, are never `current`, and have no `upstream`. A local branch's own tracking is shown by its `upstream` field, the `git branch -vv` analog.
 - `config` / `unsetConfig` set a tracking branch's persistent pull policy: `rebase` (`git config branch.<name>.rebase`) rebases instead of merging on pull; `ff` (`git config pull.ff`) fixes the fast-forward mode (`no`/`only`). A bare `dumboPull` honors it; explicit `dumboPull` flags override it (see `dumboPull`). The policy is shown in the listing entry's `config`.
 - Omitting `branch` lists every branch. Only an absent `branch` lists; an explicit `branch: ""` is still an error.
-- `current` marks the branch encoded in the database name. A connection pinned to a commit hash or ancestor expression is on no branch, so every entry reports `current: false`.
+- `current: true` marks the branch encoded in the database name and is omitted from every other entry. A connection pinned to a commit hash or ancestor expression is on no branch, so no entry carries `current`.
 
 ---
 

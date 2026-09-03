@@ -1007,11 +1007,13 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 			entry := must.NotFail(types.NewDocument(
 				"name", b.Name,
 				"commitId", b.CommitID,
-				// fromBranch is a rootish, so a hash or ancestor connection
-				// matches nothing and no branch is marked current. A
-				// remote-tracking ref is never the checked-out branch.
-				"current", !b.RemoteTracking && b.Name == fromBranch,
 			))
+			// current is shown only on the checked-out branch. fromBranch is a
+			// rootish, so a hash or ancestor connection matches nothing, and a
+			// remote-tracking ref is never the checked-out branch.
+			if !b.RemoteTracking && b.Name == fromBranch {
+				entry.Set("current", true)
+			}
 			if b.RemoteTracking {
 				// A git remote-tracking branch (git branch -r): the remote it
 				// came from and the branch name on that remote.

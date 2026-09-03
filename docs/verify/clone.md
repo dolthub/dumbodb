@@ -108,7 +108,7 @@ Expected: both branches exist locally, each at `hash1`.
 ```json
 {
   "branches": [
-    { "name": "feature", "commitId": "<hash1>", "current": false },
+    { "name": "feature", "commitId": "<hash1>" },
     { "name": "main",    "commitId": "<hash1>", "current": true,
       "upstream": { "remote": "origin", "ref": "main" } }
   ],

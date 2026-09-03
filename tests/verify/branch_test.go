@@ -490,7 +490,8 @@ func TestBranchVerify(t *testing.T) {
 			e := byName[name]
 			assert.Equal(t, true, e["remoteTracking"], "%s must be remoteTracking", name)
 			assert.Equal(t, "origin", e["remote"])
-			assert.Equal(t, false, e["current"], "%s must never be current", name)
+			_, hasCurrent := e["current"]
+			assert.False(t, hasCurrent, "%s must never be current (field omitted)", name)
 			assert.NotEmpty(t, e["commitId"])
 			_, hasUpstream := e["upstream"]
 			assert.False(t, hasUpstream, "%s must carry no upstream", name)
@@ -609,8 +610,9 @@ func listBranches(t *testing.T, env *dumboDBTestEnv, connDB string) []branchList
 		require.True(t, isStr, "branches[%d].name must be a string", i)
 		commitID, isStr := doc["commitId"].(string)
 		require.True(t, isStr, "branches[%d].commitId must be a string", i)
-		current, isBool := doc["current"].(bool)
-		require.True(t, isBool, "branches[%d].current must be a bool", i)
+		// current is present (true) only on the checked-out branch; absent
+		// elsewhere.
+		current, _ := doc["current"].(bool)
 
 		out = append(out, branchListEntry{Name: name, CommitID: commitID, Current: current})
 	}
