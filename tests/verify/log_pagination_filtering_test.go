@@ -66,7 +66,7 @@ func TestLogPaginationVerify(t *testing.T) {
 	insMain(2)
 	label[dumboDBCommit(t, env, pgdb, "m2", "a <a@x.io>")] = "m2"
 
-	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "feat"}}).Err())
+	require.NoError(t, main.RunCommand(ctx, bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feat"}}).Err())
 	insFeat(101)
 	label[dumboDBCommit(t, env, pgdb+"@feat", "f1", "a <a@x.io>")] = "f1"
 	insFeat(102)
@@ -174,7 +174,7 @@ func TestLogPaginationVerify(t *testing.T) {
 	t.Run("A6_AllSpansBranches", func(t *testing.T) {
 		// A side branch off main with an un-merged commit.
 		require.NoError(t, env.Client.Database(pgdb+"@main").RunCommand(ctx,
-			bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "side"}}).Err())
+			bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "side"}}).Err())
 		_, err := env.Client.Database(pgdb+"@side").Collection("coll").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(900)}})
 		require.NoError(t, err)
 		s1 := dumboDBCommit(t, env, pgdb+"@side", "s1", "a <a@x.io>")

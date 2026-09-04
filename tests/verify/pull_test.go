@@ -340,7 +340,7 @@ func TestPullVerify(t *testing.T) {
 		name := diverge(t, "rbpolicy", 301, 7)
 		var res bson.M
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "update"}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "rebase", Value: true}}}}},
 		}).Decode(&res))
 		cfg := res["config"].(bson.M)["pull"].(bson.M)
@@ -364,7 +364,7 @@ func TestPullVerify(t *testing.T) {
 		name := diverge(t, "ffpolicy", 302, 8)
 		var res bson.M
 		require.NoError(t, env.Client.Database(name+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "update"}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{{Key: "ff", Value: "only"}}}}},
 		}).Decode(&res))
 
@@ -402,7 +402,7 @@ func TestPullVerify(t *testing.T) {
 			{Key: "name", Value: "origin"}, {Key: "url", Value: rnURL},
 		}).Decode(&res))
 		require.NoError(t, env.Client.Database(rnHub+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "trunk"},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "trunk"},
 		}).Decode(&res))
 		require.NoError(t, env.Client.Database(rnHub+"@main").RunCommand(ctx, bson.D{
 			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
@@ -415,7 +415,7 @@ func TestPullVerify(t *testing.T) {
 			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: rnURL}, {Key: "as", Value: rnWork},
 		}).Decode(&res))
 		require.NoError(t, env.Client.Database(rnWork+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "main"},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "update"}, {Key: "branch", Value: "main"},
 			{Key: "setConfig", Value: bson.D{{Key: "pull", Value: bson.D{
 				{Key: "remote", Value: "origin"}, {Key: "branch", Value: "trunk"},
 			}}}},

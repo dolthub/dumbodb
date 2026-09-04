@@ -50,6 +50,7 @@ func TestBranchStatus_DirtyAfterUpdate(t *testing.T) {
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&brRaw))
 
@@ -100,6 +101,7 @@ func TestBranchStatus_CleanAfterCommit(t *testing.T) {
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "dev"},
 	}).Decode(&brRaw))
 
@@ -143,6 +145,7 @@ func TestBranchDiff_ShowsChanges(t *testing.T) {
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "work"},
 	}).Decode(&brRaw))
 
@@ -201,6 +204,7 @@ func TestBranchDiff_EmptyAfterCommit(t *testing.T) {
 	var brRaw bson.M
 	require.NoError(t, mainDB.RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "br"},
 	}).Decode(&brRaw))
 

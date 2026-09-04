@@ -104,7 +104,7 @@ func TestPushVerify(t *testing.T) {
 		t.Helper()
 		var res bson.M
 		require.NoError(t, env.Client.Database(dbName+"@"+branch).RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: branch},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "update"}, {Key: "branch", Value: branch},
 			{Key: "setConfig", Value: cfg},
 		}).Decode(&res))
 		require.EqualValues(t, 1, res["ok"])
@@ -253,7 +253,7 @@ func TestPushVerify(t *testing.T) {
 	t.Run("Scenario8_NewBranchPushedAndTracked", func(t *testing.T) {
 		var res bson.M
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "release"},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "release"},
 		}).Decode(&res))
 
 		require.NoError(t, env.Client.Database(dbName+"@release").RunCommand(ctx, bson.D{

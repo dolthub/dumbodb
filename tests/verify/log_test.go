@@ -207,6 +207,7 @@ func TestLogVerify(t *testing.T) {
 		// (hash3), so two branches share the same tip commit.
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "logvrfy-refs"},
 		}).Err(), "creating logvrfy-refs branch must succeed")
 
@@ -275,6 +276,7 @@ func TestLogVerify(t *testing.T) {
 	// Create "feat" branch from main HEAD (hashA).
 	require.NoError(t, env.Client.Database(mergeDBName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "feat"},
 	}).Err())
 

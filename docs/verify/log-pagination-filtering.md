@@ -54,7 +54,7 @@ const m2 = pg.runCommand({ doltCommit: 1, message: "m2", author: "a <a@x.io>" })
 
 // branch "feat" from main HEAD (m2), then advance feat FIRST so its
 // commits get older timestamps than the later main commits.
-pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, branch: "feat" })
+pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, action: "add", branch: "feat" })
 const fdb = db.getSiblingDB("logpage@feat")
 fdb.coll.insertOne({ _id: 101 })
 const f1 = fdb.runCommand({ doltCommit: 1, message: "f1", author: "a <a@x.io>" }).commitId
@@ -232,7 +232,7 @@ only on an un-merged branch appear. It is mutually exclusive with `from`.
 
 ```js
 // Create a side branch off main with a commit that is NOT merged back.
-pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, branch: "side" })
+pg.getSiblingDB("logpage@main").runCommand({ doltBranch: 1, action: "add", branch: "side" })
 var side = db.getSiblingDB("logpage@side")
 side.coll.insertOne({ _id: 900 })
 const s1 = side.runCommand({ doltCommit: 1, message: "s1", author: "a <a@x.io>" }).commitId

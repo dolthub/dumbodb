@@ -331,7 +331,7 @@ any per-call argument (`git config branch.main.rebase true; git pull`).
 ```js
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "rbpol" })
 
-db.getSiblingDB("rbpol@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { rebase: true } } })
+db.getSiblingDB("rbpol@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { rebase: true } } })
 // Expected: { branch: "main", config: { pull: { remote, branch, rebase: "true" } }, ok: 1 }
 
 // Diverge (local + remote commit), then a BARE pull.
@@ -359,7 +359,7 @@ Record `ff: "only"`; a bare pull then fails on a non-fast-forward (like
 
 ```js
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "ffpol" })
-db.getSiblingDB("ffpol@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { ff: "only" } } })
+db.getSiblingDB("ffpol@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { ff: "only" } } })
 
 // Diverge so the pull is not a fast-forward.
 var r = db.getSiblingDB("ffpol")
@@ -396,13 +396,13 @@ var h = db.getSiblingDB("rnhub")
 h.items.insertOne({ _id: 1, v: "one" })
 h.runCommand({ dumboCommit: 1, message: "c1", author: "alice <alice@acme.com>" })
 h.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-rn-hub" })
-db.getSiblingDB("rnhub@main").runCommand({ dumboBranch: 1, branch: "trunk" })
+db.getSiblingDB("rnhub@main").runCommand({ dumboBranch: 1, action: "add", branch: "trunk" })
 db.getSiblingDB("rnhub@main").runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 db.getSiblingDB("rnhub@trunk").runCommand({ dumboPush: 1, to: "origin", refSpec: "trunk" })
 
 // Work: clone, then re-point local main at origin/trunk.
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-rn-hub", as: "rnwork" })
-db.getSiblingDB("rnwork@main").runCommand({ dumboBranch: 1, branch: "main", setConfig: { pull: { remote: "origin", branch: "trunk" } } })
+db.getSiblingDB("rnwork@main").runCommand({ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { remote: "origin", branch: "trunk" } } })
 
 // Advance origin/trunk with a new commit.
 var ht = db.getSiblingDB("rnhub@trunk")
@@ -428,7 +428,7 @@ fetches -- an invalid request must not move remote-tracking refs.
 db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-hub", as: "mxwork" })
 
 // Note origin/main's tracking commit, then advance the hub WITHOUT fetching.
-db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1, action: "list" })
 // (remember the "origin/main" entry's commitId)
 var hub = db.getSiblingDB("hub")
 hub.items.insertOne({ _id: 900, v: "mx" })
@@ -438,7 +438,7 @@ hub.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 db.getSiblingDB("mxwork@main").runCommand({ dumboPull: 1, noFF: true, ffOnly: true })
 // Expected: ok: 0 -- errmsg "noFF and ffOnly are mutually exclusive".
 
-db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: origin/main's commitId is UNCHANGED -- the rejected pull never fetched.
 ```
 
@@ -455,8 +455,8 @@ db.getSiblingDB("mxwork@main").runCommand({ dumboBranch: 1 })
 | `{ dumboPull: 1, ffOnly: true }`                       | `git pull --ff-only`           |
 | `{ dumboPull: 1, noFF: true }`                         | `git pull --no-ff`             |
 | `{ dumboPull: 1, rebase: true }`                       | `git pull --rebase`            |
-| `{ dumboBranch: 1, branch: "main", setConfig: { pull: { rebase: true } } }` | `git config branch.main.rebase true` |
-| `{ dumboBranch: 1, branch: "main", setConfig: { pull: { ff: "only" } } }`   | `git config pull.ff only`      |
+| `{ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { rebase: true } } }` | `git config branch.main.rebase true` |
+| `{ dumboBranch: 1, action: "update", branch: "main", setConfig: { pull: { ff: "only" } } }`   | `git config pull.ff only`      |
 
 - `dumboFetch` updates every tracking ref and never moves a local branch.
 - `dumboPull` fetches, then merges (or, with `rebase`, rebases) the fetched commit

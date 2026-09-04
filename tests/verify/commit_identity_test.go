@@ -121,7 +121,7 @@ func TestCommitIdentityAuthOffMergeAuthor(t *testing.T) {
 		insert(t, dbName, 1)
 		dumboDBCommit(t, env, dbName, "base")
 		require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: 1}, {Key: "branch", Value: "feature"},
+			{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
 		}).Err())
 		insert(t, dbName, 2)
 		dumboDBCommit(t, env, dbName, "main-2")
@@ -290,7 +290,7 @@ func TestCommitIdentityReplayStamping(t *testing.T) {
 	// aa authors a base commit on main, branches "feature", and authors C2 on feature.
 	commit(t, aa, "repo", "items", 1, "base")
 	require.NoError(t, aa.Database("repo@main").RunCommand(ctx, bson.D{
-		{Key: "dumboBranch", Value: 1}, {Key: "branch", Value: "feature"},
+		{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
 	}).Err())
 	c2 := commit(t, aa, "repo@feature", "items", 2, "add-two")
 	require.Equal(t, "Alice Dev <alice@corp.io>", c2.Author)
@@ -397,7 +397,7 @@ func TestCommitIdentityMergeAndRebase(t *testing.T) {
 	branch := func(t *testing.T, c *mongo.Client, db, name string) {
 		t.Helper()
 		require.NoError(t, c.Database(db+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: 1}, {Key: "branch", Value: name},
+			{Key: "dumboBranch", Value: 1}, {Key: "action", Value: "add"}, {Key: "branch", Value: name},
 		}).Err())
 	}
 

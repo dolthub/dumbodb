@@ -306,7 +306,7 @@ var db = db.getSiblingDB("idxmntcp")
 // Baseline: a seed doc with no "name" field -- the common ancestor.
 db.items.insertOne({ _id: 0, tag: "seed" })
 db.runCommand({ doltCommit: 1, message: "base seed", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmntcp@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmntcp@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // main: documents, then an index over them in a separate commit.
 db.items.insertMany([{ _id: 1, name: "alpha" }, { _id: 2, name: "bravo" }])
@@ -367,7 +367,7 @@ var db = db.getSiblingDB("idxmnt2idx")
 // Baseline: one document with both fields -- the common ancestor.
 db.items.insertOne({ _id: 0, name: "seed", city: "Origin" })
 db.runCommand({ doltCommit: 1, message: "base seed", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmnt2idx@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmnt2idx@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // main: documents, then an index on the first field (name).
 db.items.insertMany([

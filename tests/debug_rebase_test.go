@@ -26,6 +26,7 @@ func TestRebaseDebug(t *testing.T) {
 	var branchResult bson.M
 	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
 	require.NoError(t, err)

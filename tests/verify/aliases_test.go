@@ -30,26 +30,26 @@ type (
 )
 
 var (
-	repoRoot                = support.RepoRoot
-	bsToInt64               = support.BsToInt64
-	bsBranchCreate          = support.BsBranchCreate
-	bsMerge                 = support.BsMerge
-	bsTag                   = support.BsTag
-	bsStatus                = support.BsStatus
-	bsAssert                = support.BsAssert
-	bsNewDB                 = support.BsNewDB
-	runLog                  = support.RunLog
-	logCommitIDs            = support.LogCommitIDs
-	logNext                 = support.LogNext
-	assertRootishRejected   = support.AssertRootishRejected
+	repoRoot                          = support.RepoRoot
+	bsToInt64                         = support.BsToInt64
+	bsBranchCreate                    = support.BsBranchCreate
+	bsMerge                           = support.BsMerge
+	bsTag                             = support.BsTag
+	bsStatus                          = support.BsStatus
+	bsAssert                          = support.BsAssert
+	bsNewDB                           = support.BsNewDB
+	runLog                            = support.RunLog
+	logCommitIDs                      = support.LogCommitIDs
+	logNext                           = support.LogNext
+	assertRootishRejected             = support.AssertRootishRejected
 	assertWriteBlockedOperationFailed = support.AssertWriteBlockedOperationFailed
-	startDumboDB            = support.StartDumboDB
-	dumboDBCommit           = support.Commit
-	dumboDBCommitAllowEmpty = support.CommitAllowEmpty
-	runCommandRaw           = support.RunCommandRaw
-	decodeStatusResult      = support.DecodeStatusResult
-	toInt                   = support.ToInt
-	findTableStatus         = support.FindTableStatus
-	runStatus               = support.RunStatus
-	decodeLogResult         = support.DecodeLogResult
+	startDumboDB                      = support.StartDumboDB
+	dumboDBCommit                     = support.Commit
+	dumboDBCommitAllowEmpty           = support.CommitAllowEmpty
+	runCommandRaw                     = support.RunCommandRaw
+	decodeStatusResult                = support.DecodeStatusResult
+	toInt                             = support.ToInt
+	findTableStatus                   = support.FindTableStatus
+	runStatus                         = support.RunStatus
+	decodeLogResult                   = support.DecodeLogResult
 )

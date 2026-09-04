@@ -45,6 +45,7 @@ func rebaseVerifySetup(t *testing.T, env *dumboDBTestEnv, dbName string) (hashC1
 	var branchResult bson.M
 	err = env.Client.Database(dbName+"@main").RunCommand(ctx, bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: "feature"},
 	}).Decode(&branchResult)
 	require.NoError(t, err, "doltBranch to create 'feature'")
@@ -220,6 +221,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		require.NoError(t, env.Client.Database(tdb+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 
@@ -263,6 +265,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		require.NoError(t, env.Client.Database(tdb+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 
@@ -331,6 +334,7 @@ func TestRebaseVerify(t *testing.T) {
 
 		require.NoError(t, env.Client.Database(tdb+"@main").RunCommand(ctx, bson.D{
 			{Key: "doltBranch", Value: int32(1)},
+			{Key: "action", Value: "add"},
 			{Key: "branch", Value: "feature"},
 		}).Err())
 

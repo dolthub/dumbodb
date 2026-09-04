@@ -41,7 +41,7 @@ printjson(r1)
 const hashC1 = r1.commitId
 
 // Create "feature" branch from main HEAD.
-db.getSiblingDB("pickdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("pickdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 // Advance feature with a commit we will cherry-pick onto main.

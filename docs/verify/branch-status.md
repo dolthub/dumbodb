@@ -57,7 +57,7 @@ function emptyCommit(branch, msg) {
     { doltCommit: 1, message: msg, author: "alice <alice@acme.com>", allowEmpty: true })
 }
 function makeBranch(from, name) {
-  return db.getSiblingDB("bsdemo@" + from).runCommand({ doltBranch: 1, branch: name })
+  return db.getSiblingDB("bsdemo@" + from).runCommand({ doltBranch: 1, action: "add", branch: name })
 }
 
 makeBranch("main", "b1")   // b1 branches from anc
@@ -184,7 +184,7 @@ starts at `main`) gives:
 
 ```js
 // Cut rel from main, then merge b2 into it.
-db.getSiblingDB("bsdemo@main").runCommand({ doltBranch: 1, branch: "rel" })
+db.getSiblingDB("bsdemo@main").runCommand({ doltBranch: 1, action: "add", branch: "rel" })
 db.getSiblingDB("bsdemo@rel").runCommand({ doltMerge: 1, mergeIn: "b2" })
 
 db.getSiblingDB("bsdemo@main").runCommand({ dumboBranchStatus: 1, base: "main", targets: ["rel"] })

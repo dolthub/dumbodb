@@ -133,7 +133,7 @@ Expected (no `commitBefore` -- this push creates `main` on the remote):
 Confirm no config was recorded:
 
 ```js
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: the "main" entry has NO "config" field.
 ```
 
@@ -159,11 +159,11 @@ Tracking is set explicitly through the branch interface -- there is no push `-u`
 
 ```js
 db.getSiblingDB("pushvdb@main").runCommand({
-  dumboBranch: 1, branch: "main",
+  dumboBranch: 1, action: "update", branch: "main",
   setConfig: { pull: { remote: "origin", branch: "main" } }
 })
 
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: main carries config.pull { remote: "origin", branch: "main" }.
 ```
 
@@ -193,7 +193,7 @@ db.items.insertOne({ _id: 3, label: "gamma" })
 db.runCommand({ dumboCommit: 1, message: "commit three", author: "alice <alice@acme.com>" })
 db.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: config.pull is STILL { remote: "origin", branch: "main" } and there
 // is no config.push -- an explicit push mutates nothing.
 ```
@@ -257,15 +257,15 @@ Push a new branch explicitly, then record its upstream with `setConfig`.
 
 ```js
 var db = db.getSiblingDB("pushvdb")
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, branch: "release" })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "add", branch: "release" })
 db.getSiblingDB("pushvdb@release").runCommand({ dumboPush: 1, to: "origin", refSpec: "release" })
 // Expected: ok 1, branch "release".
 
 db.getSiblingDB("pushvdb@release").runCommand({
-  dumboBranch: 1, branch: "release",
+  dumboBranch: 1, action: "update", branch: "release",
   setConfig: { pull: { remote: "origin", branch: "release" } }
 })
-db.getSiblingDB("pushvdb@release").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@release").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: the "release" entry carries config.pull { remote: "origin", branch: "release" }.
 ```
 
@@ -291,7 +291,7 @@ anything).
 Confirm config.pull is unchanged:
 
 ```js
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: main config.pull is STILL { remote: "origin", branch: "main" }.
 ```
 
@@ -308,7 +308,7 @@ var db = db.getSiblingDB("pushvdb")
 db.runCommand({ dumboPush: 1, to: "origin2" })
 // Expected: ok 1, remote "origin2", branch "main" -- main sent to origin2/main.
 
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: main config.pull is STILL { remote: "origin", branch: "main" } -- untouched.
 ```
 
@@ -358,7 +358,7 @@ but pushes to `origin2/rev51` (config.push).
 ```js
 var db = db.getSiblingDB("pushvdb")
 db.getSiblingDB("pushvdb@main").runCommand({
-  dumboBranch: 1, branch: "main",
+  dumboBranch: 1, action: "update", branch: "main",
   setConfig: { push: { remote: "origin2", branch: "rev51" } }
 })
 
@@ -367,7 +367,7 @@ db.runCommand({ dumboCommit: 1, message: "commit four", author: "alice <alice@ac
 db.runCommand({ dumboPush: 1 })
 // Expected: ok 1, remote "origin2", remoteBranch "rev51" -- a bare push follows config.push.
 
-db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("pushvdb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: config.pull is still { remote: "origin", branch: "main" } (the fetch
 // upstream is untouched) and config.push is { remote: "origin2", branch: "rev51" }.
 ```

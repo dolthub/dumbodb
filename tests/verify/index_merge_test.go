@@ -31,6 +31,7 @@ func idxvBranch(t *testing.T, env *dumboDBTestEnv, dbName, branch string) {
 	t.Helper()
 	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(context.Background(), bson.D{
 		{Key: "doltBranch", Value: int32(1)},
+		{Key: "action", Value: "add"},
 		{Key: "branch", Value: branch},
 	}).Err())
 }

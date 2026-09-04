@@ -264,7 +264,7 @@ mdb.tasks.insertOne({ _id: 1, v: 1 })
 const hashM1 = mdb.runCommand({ doltCommit: 1, message: "main-base", author: "alice <alice@acme.com>" }).commitId
 
 // Create a feature branch from main.
-mdb.runCommand({ doltBranch: 1, branch: "feature" })
+mdb.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Switch to the feature branch and add two commits (F1, F2).
 var fdb = db.getSiblingDB("resetbranchdb@feature")

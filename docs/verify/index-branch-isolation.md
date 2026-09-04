@@ -39,8 +39,8 @@ const r0 = db.runCommand({ doltCommit: 1, message: "seed alpha", author: "alice 
 printjson(r0)
 
 // Branch "am" and "nz" off main.
-db.getSiblingDB("idxisovdb@main").runCommand({ doltBranch: 1, branch: "am" })
-db.getSiblingDB("idxisovdb@main").runCommand({ doltBranch: 1, branch: "nz" })
+db.getSiblingDB("idxisovdb@main").runCommand({ doltBranch: 1, action: "add", branch: "am" })
+db.getSiblingDB("idxisovdb@main").runCommand({ doltBranch: 1, action: "add", branch: "nz" })
 ```
 
 After setup, `idxisovdb` has:

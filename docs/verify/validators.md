@@ -83,7 +83,7 @@ var db = db.getSiblingDB("valbranch")
 db.createCollection("items", { validator: { age: { $gte: 0 } } })
 db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // The validator is present on the branch and enforces there.
 var feat = db.getSiblingDB("valbranch@feature")
@@ -104,7 +104,7 @@ var db = db.getSiblingDB("valmerge")
 db.createCollection("items")   // no validator yet
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature adds the validator.
 var feat = db.getSiblingDB("valmerge@feature")
@@ -147,7 +147,7 @@ var db = db.getSiblingDB("valconflict")
 db.createCollection("items", { validator: { age: { $gte: 0 } } })
 db.runCommand({ doltCommit: 1, message: "create validated items", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature: require age >= 18.
 var feat = db.getSiblingDB("valconflict@feature")
@@ -263,7 +263,7 @@ var db = db.getSiblingDB("valdataconflict")
 db.createCollection("items")   // no validator yet
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature adds a validator; its own data conforms.
 var feat = db.getSiblingDB("valdataconflict@feature")
@@ -362,7 +362,7 @@ validator is always `{ age: { $gte: 0 } }`.
 var db = db.getSiblingDB("mx6a")
 db.createCollection("items")                                                        // base: no validator, no docs
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6a@feature")                                          // feature: add the validator
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
@@ -392,7 +392,7 @@ Same as 6a, but the document main inserts conforms, so the merge is clean.
 var db = db.getSiblingDB("mx6b")
 db.createCollection("items")
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6b@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
@@ -411,7 +411,7 @@ var db = db.getSiblingDB("mx6c")
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: 5 })                                             // base: conforming doc
 db.runCommand({ doltCommit: 1, message: "create + doc", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6c@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
@@ -443,7 +443,7 @@ var db = db.getSiblingDB("mx6d")
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })                                            // base: already violating
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6d@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
@@ -466,7 +466,7 @@ var db = db.getSiblingDB("mx6e")
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6e@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })             // action defaults to "error"
@@ -493,7 +493,7 @@ var db = db.getSiblingDB("mx6f")
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6f@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationAction: "warn" })
@@ -512,7 +512,7 @@ db.items.findOne({ _id: 1 })                                                    
 var db = db.getSiblingDB("mx6g")
 db.createCollection("items")
 db.runCommand({ doltCommit: 1, message: "create items", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6g@feature")
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } }, validationAction: "warn" })
@@ -536,7 +536,7 @@ var db = db.getSiblingDB("mx6h")
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: 5 })
 db.runCommand({ doltCommit: 1, message: "create + doc", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6h@feature")                                          // feature: add validator AND edit _id:1 conformingly
 feat.runCommand({ collMod: "items", validator: { age: { $gte: 0 } } })
@@ -568,7 +568,7 @@ var db = db.getSiblingDB("mx6i")
 db.createCollection("items")
 db.items.insertOne({ _id: 1, age: -5 })                                            // base: already violating
 db.runCommand({ doltCommit: 1, message: "create + violating doc", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("mx6i@feature")                                          // feature: edit (still violating) BEFORE adding validator
 feat.items.updateOne({ _id: 1 }, { $set: { age: -3, tag: "f" } })
@@ -605,7 +605,7 @@ db.createCollection("items", { validator: { age: { $gte: 0 } } })
 db.items.insertOne({ _id: 1, age: 5 })
 db.runCommand({ doltCommit: 1, message: "create validated items + doc", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature tightens the validator to age >= 10.
 var feat = db.getSiblingDB("valtwophase@feature")

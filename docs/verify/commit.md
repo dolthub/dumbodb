@@ -104,7 +104,7 @@ data is visible on the branch but not on main (isolation check).
 
 ```js
 // Create branch "feature" from main HEAD
-db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("commitdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 var feature = db.getSiblingDB("commitdb@feature")

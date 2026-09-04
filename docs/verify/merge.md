@@ -41,7 +41,7 @@ printjson(r1)
 const hashC1 = r1.commitId
 
 // Create "feature" branch from main HEAD.
-db.getSiblingDB("mergedb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("mergedb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 // Expected: { branch: "feature", ok: 1 }
 
 print("hashC1 =", hashC1)
@@ -411,7 +411,7 @@ db13.items.insertMany([
 db13.runCommand({ doltCommit: 1, message: "baseline", author: "alice <alice@acme.com>" })
 
 // Create feature branch.
-db13.getSiblingDB("mergedb13@main").runCommand({ doltBranch: 1, branch: "feature" })
+db13.getSiblingDB("mergedb13@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Main: modify _id:1 only.
 db13.items.updateOne({ _id: 1 }, { $set: { v: "main-v1" } })

@@ -144,7 +144,7 @@ func TestLogAllHandler(t *testing.T) {
 
 	// side branch with a commit not reachable from main.
 	require.NoError(t, env.Client.Database(dbName+"@main").RunCommand(ctx,
-		bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "branch", Value: "side"}}).Err())
+		bson.D{{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "side"}}).Err())
 	_, err = env.Client.Database(dbName+"@side").Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	sideHash := dumboDBCommit(t, env, dbName+"@side", "side-1", "a <a@x.io>")

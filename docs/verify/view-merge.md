@@ -62,7 +62,7 @@ db.items.insertMany([
 ])
 db.runCommand({ doltCommit: 1, message: "seed items", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature adds the view.
 var feat = db.getSiblingDB("vwmrg1@feature")
@@ -101,7 +101,7 @@ db.items.insertMany([
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
 
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature: cv -> inactive.
 var feat = db.getSiblingDB("vwmrg2@feature")
@@ -154,7 +154,7 @@ db.items.insertMany([
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("vwmrg3@feature")
 feat.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ] })
@@ -186,7 +186,7 @@ db.items.insertMany([
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 var feat = db.getSiblingDB("vwmrg4@feature")
 feat.runCommand({ collMod: "cv", viewOn: "items", pipeline: [ { $match: { status: "inactive" } } ] })
@@ -222,7 +222,7 @@ db.items.insertMany([
 ])
 db.runCommand({ create: "cv", viewOn: "items", pipeline: [ { $match: { status: "active" } } ] })
 db.runCommand({ doltCommit: 1, message: "seed items + view cv", author: "alice <alice@acme.com>" })
-db.runCommand({ doltBranch: 1, branch: "feature" })
+db.runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Feature drops the view.
 var feat = db.getSiblingDB("vwmrg5@feature")

@@ -62,7 +62,7 @@ src.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tm
 src.runCommand({ dumboPush: 1, to: "origin", refSpec: "main" })
 
 // A second branch at the same commit.
-db.getSiblingDB("srcdb@main").runCommand({ dumboBranch: 1, branch: "feature" })
+db.getSiblingDB("srcdb@main").runCommand({ dumboBranch: 1, action: "add", branch: "feature" })
 db.getSiblingDB("srcdb@feature").runCommand({ dumboPush: 1, to: "origin", refSpec: "feature" })
 
 print("hash1 =", hash1)
@@ -100,7 +100,7 @@ Key checks:
 ## Scenario 2: Clone brings every branch
 
 ```js
-db.getSiblingDB("clonedb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("clonedb@main").runCommand({ dumboBranch: 1, action: "list" })
 ```
 
 Expected: both branches exist locally, each at `hash1`.
@@ -144,7 +144,7 @@ Expected:
 target -- exactly like a freshly cloned git repo.
 
 ```js
-db.getSiblingDB("clonedb@main").runCommand({ dumboBranch: 1 })
+db.getSiblingDB("clonedb@main").runCommand({ dumboBranch: 1, action: "list" })
 // Expected: main has config.pull { remote: "origin", branch: "main" }.
 
 // Add a commit and push with no target.

@@ -57,7 +57,7 @@ func TestCloneVerify(t *testing.T) {
 		{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main"},
 	}).Decode(&res))
 	require.NoError(t, env.Client.Database(srcName+"@main").RunCommand(ctx, bson.D{
-		{Key: "dumboBranch", Value: int32(1)}, {Key: "branch", Value: "feature"},
+		{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "add"}, {Key: "branch", Value: "feature"},
 	}).Decode(&res))
 	require.NoError(t, env.Client.Database(srcName+"@feature").RunCommand(ctx, bson.D{
 		{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "feature"},
@@ -86,7 +86,7 @@ func TestCloneVerify(t *testing.T) {
 	t.Run("Scenario2_CloneBringsEveryBranch", func(t *testing.T) {
 		var res bson.M
 		require.NoError(t, env.Client.Database(cloneName+"@main").RunCommand(ctx, bson.D{
-			{Key: "dumboBranch", Value: int32(1)},
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "list"},
 		}).Decode(&res))
 		got := map[string]bson.M{}
 		for _, raw := range res["branches"].(bson.A) {

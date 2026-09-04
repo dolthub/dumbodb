@@ -53,7 +53,7 @@ db.items.insertOne({ _id: 1, name: "base" })
 db.items.createIndex({ name: 1 }, { name: "by_name" })
 db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
 
-db.getSiblingDB("idxmrg1@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg1@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Main writes the a-side.
 db.items.insertMany([
@@ -105,7 +105,7 @@ var db = db.getSiblingDB("idxmrg2")
 
 db.items.insertOne({ _id: 1, city: "base" })
 db.runCommand({ doltCommit: 1, message: "seed, no index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg2@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg2@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Index exists only on main.
 db.items.createIndex({ city: 1 }, { name: "by_city" })
@@ -142,7 +142,7 @@ db.items.insertOne({ _id: 2, city: "paris" })
 db.runCommand({ doltCommit: 1, message: "seed (no index)", author: "alice <alice@acme.com>" })
 
 // Branch before the index exists, so feature never has it.
-db.getSiblingDB("idxmrg2b@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg2b@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Create the index only on main; the branches now diverge.
 db.items.createIndex({ city: 1 }, { name: "by_city" })
@@ -187,7 +187,7 @@ db.items.insertOne({ _id: 2, city: "paris" })
 db.runCommand({ doltCommit: 1, message: "seed (no index)", author: "alice <alice@acme.com>" })
 
 // Branch before the index exists, so feature never has it.
-db.getSiblingDB("idxmrg2c@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg2c@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Create the index only on main; the branches now diverge.
 db.items.createIndex({ city: 1 }, { name: "by_city" })
@@ -228,7 +228,7 @@ var db = db.getSiblingDB("idxmrg3")
 db.items.insertOne({ _id: 1, name: "base" })
 db.items.createIndex({ name: 1 }, { name: "by_name" })
 db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg3@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg3@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 db.items.dropIndex("by_name")
 db.runCommand({ doltCommit: 1, message: "main: drop by_name", author: "alice <alice@acme.com>" })
@@ -263,7 +263,7 @@ var db = db.getSiblingDB("idxmrg4")
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg4@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg4@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Same unique key, different documents, one per branch.
 db.items.insertOne({ _id: 10, sku: "S-1" })
@@ -340,7 +340,7 @@ db.items.insertOne({ _id: 1, sku: "SEED", code: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.items.createIndex({ code: 1 }, { name: "by_code", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + two unique indexes", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg4b@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg4b@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // One pair will collide on by_sku, a separate pair on by_code.
 db.items.insertOne({ _id: 10, sku: "S-1", code: "K-10" })
@@ -398,7 +398,7 @@ db.items.insertMany([
 ])
 db.items.createIndex({ name: 1 }, { name: "by_name" })
 db.runCommand({ doltCommit: 1, message: "seed + index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg5@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg5@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Both sides edit the same field of the same docs.
 db.items.updateOne({ _id: 1 }, { $set: { name: "ours-1" } })
@@ -462,7 +462,7 @@ var db = db.getSiblingDB("idxmrg6")
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg6@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg6@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // main takes the key.
 db.items.insertOne({ _id: 10, sku: "S-1" })
@@ -517,7 +517,7 @@ var db = db.getSiblingDB("idxmrg7")
 db.items.insertOne({ _id: 1, sku: "SEED" })
 db.items.createIndex({ sku: 1 }, { name: "by_sku", unique: true })
 db.runCommand({ doltCommit: 1, message: "seed + unique index", author: "alice <alice@acme.com>" })
-db.getSiblingDB("idxmrg7@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("idxmrg7@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // feature takes the key first (diverging from main).
 var feat = db.getSiblingDB("idxmrg7@feature")

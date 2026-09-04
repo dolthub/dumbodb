@@ -200,7 +200,7 @@ no `refs` field.
 
 ```js
 // Create a second branch pointing at the current main HEAD.
-db.getSiblingDB("logdb@main").runCommand({ doltBranch: 1, branch: "feature" })
+db.getSiblingDB("logdb@main").runCommand({ doltBranch: 1, action: "add", branch: "feature" })
 
 // Query from main  -- hash3 is tip of both "main" and "feature".
 db.runCommand({ doltLog: 1, limit: 2 })
@@ -258,7 +258,7 @@ const rA = mdb.runCommand({ doltCommit: 1, message: "add-one", author: "alice <a
 const hashA = rA.commitId
 
 // Create "feat" branch from main HEAD (hashA).
-mdb.getSiblingDB("logmerge@main").runCommand({ doltBranch: 1, branch: "feat" })
+mdb.getSiblingDB("logmerge@main").runCommand({ doltBranch: 1, action: "add", branch: "feat" })
 
 // Advance main: _id:2 -> hashB.
 mdb.events.insertOne({ _id: 2, v: 2 })
