@@ -111,27 +111,28 @@ seed_and_push() {
     [ "$count" = "1" ]
 }
 
-@test 'upstream: setUpstream records tracking; bare push/fetch follow it' {
-    # seed_and_push does a named push to origin, which does NOT set tracking.
+@test 'config.pull: setConfig records tracking; bare push/fetch follow it' {
+    # seed_and_push does a named push to origin, which records no config.
     seed_and_push "upstream-target"
     local db_uri="mongodb://127.0.0.1:${DUMBODB_PORT}/test"
 
-    # A named push alone leaves main with no upstream (git push origin main).
+    # A named push alone leaves main with no config (git push origin main).
     run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1}).branches"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e 'map(select(.name == "main"))[0] | has("upstream") | not'
+    echo "$output" | jq -e 'map(select(.name == "main"))[0] | has("config") | not'
 
-    # setUpstream records it (git push -u origin main).
-    run mongo_json "$db_uri" "db.runCommand({dumboPush:1,to:'origin',refSpec:'main',setUpstream:true})"
+    # setConfig records the config.pull upstream (there is no push -u).
+    run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1,branch:'main',setConfig:{pull:{remote:'origin',branch:'main'}}})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1'
 
-    # dumboBranch now shows the upstream (git branch -vv).
+    # dumboBranch now shows config.pull (git branch -vv).
     run mongo_json "$db_uri" "db.getSiblingDB('test@main').runCommand({dumboBranch:1}).branches"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e 'map(select(.name == "main"))[0].upstream.remote == "origin"'
+    echo "$output" | jq -e 'map(select(.name == "main"))[0].config.pull.remote == "origin"'
+    echo "$output" | jq -e 'map(select(.name == "main"))[0].config.pull.branch == "main"'
 
-    # A bare push follows the recorded upstream (git push).
+    # A bare push follows config.pull (git push).
     run mongo_json "$db_uri" "db.runCommand({dumboPush:1})"
     [ "$status" -eq 0 ]
     echo "$output" | jq -e '.ok == 1 and .remote == "origin"'
