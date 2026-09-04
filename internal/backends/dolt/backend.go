@@ -1504,6 +1504,7 @@ func dumboDBBranchCreate(ctx context.Context, db *dbState, params *backends.Bran
 			})
 			return nil, fmt.Errorf("DumboDBBranch: %w", cfgErr)
 		}
+		res.Configured = true
 		res.Pull = pullInfo(cfg.pull)
 		res.Push = pushInfo(cfg.push)
 	}
