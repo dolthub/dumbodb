@@ -25,11 +25,11 @@ import (
 // CountDocuments aggregation. The handler can satisfy it via the backend's
 // O(1) Count() rather than a full scan.
 type countShortcutInfo struct {
-	outField string           // name of the count output field, e.g. "n"
-	idValue  any              // literal value used for $group _id (echoed back to the client)
-	skip     int64            // number of documents to skip; 0 if absent
-	limit    int64            // maximum documents to return; -1 if absent
-	filter   *types.Document  // $match filter; non-nil only when non-empty
+	outField string          // name of the count output field, e.g. "n"
+	idValue  any             // literal value used for $group _id (echoed back to the client)
+	skip     int64           // number of documents to skip; 0 if absent
+	limit    int64           // maximum documents to return; -1 if absent
+	filter   *types.Document // $match filter; non-nil only when non-empty
 }
 
 // tryCountAggregateShortcut detects the exact aggregate pipeline shape that

@@ -167,4 +167,58 @@ func TestCloneVerify(t *testing.T) {
 		}).Decode(&res)
 		assert.Error(t, err, "cloning an unsupported scheme must fail")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 8: Cloning a remote with no main is rejected; fetch is the workaround
+	// -------------------------------------------------------------------------
+	t.Run("Scenario8_CloneWithoutMainRejected", func(t *testing.T) {
+		noMainURL := "file://" + t.TempDir()
+		srcNM := fmt.Sprintf("srcnomain%d", rand.Int64N(1_000_000))
+		s := env.Client.Database(srcNM)
+		_, err := s.Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, srcNM, "c1", "a <a@a>")
+		require.NoError(t, s.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: noMainURL},
+		}).Err())
+		// Push main -> release, so the remote holds only "release" (no main).
+		require.NoError(t, s.RunCommand(ctx, bson.D{
+			{Key: "dumboPush", Value: int32(1)}, {Key: "to", Value: "origin"}, {Key: "refSpec", Value: "main:release"},
+		}).Err())
+
+		// Cloning it is rejected.
+		var res bson.M
+		err = admin.RunCommand(ctx, bson.D{
+			{Key: "dumboClone", Value: int32(1)}, {Key: "from", Value: noMainURL}, {Key: "as", Value: "nomainclone"},
+		}).Decode(&res)
+		require.Error(t, err, "cloning a remote with no main must be rejected")
+
+		// Workaround: create a database (it has main), add the remote, fetch.
+		wa := fmt.Sprintf("nomainwork%d", rand.Int64N(1_000_000))
+		w := env.Client.Database(wa)
+		_, err = w.Collection("seed").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+		require.NoError(t, err)
+		dumboDBCommit(t, env, wa, "seed", "a <a@a>")
+		require.NoError(t, w.RunCommand(ctx, bson.D{
+			{Key: "dumboRemote", Value: int32(1)}, {Key: "action", Value: "add"},
+			{Key: "name", Value: "origin"}, {Key: "url", Value: noMainURL},
+		}).Err())
+		require.NoError(t, w.RunCommand(ctx, bson.D{
+			{Key: "dumboFetch", Value: int32(1)}, {Key: "from", Value: "origin"},
+		}).Decode(&res))
+		assert.EqualValues(t, 1, res["ok"])
+
+		// The release tracking ref is now present alongside the local main.
+		var list bson.M
+		require.NoError(t, env.Client.Database(wa+"@main").RunCommand(ctx, bson.D{
+			{Key: "dumboBranch", Value: int32(1)}, {Key: "action", Value: "list"},
+		}).Decode(&list))
+		names := map[string]bool{}
+		for _, e := range list["branches"].(bson.A) {
+			names[e.(bson.M)["name"].(string)] = true
+		}
+		assert.True(t, names["main"], "the workaround database keeps its main")
+		assert.True(t, names["origin/release"], "the fetched branch appears as a tracking ref")
+	})
 }

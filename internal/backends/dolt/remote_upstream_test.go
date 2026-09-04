@@ -293,6 +293,44 @@ func TestDumboDBBranchAddWithConfig(t *testing.T) {
 	}
 }
 
+// TestDumboDBBranchCannotDeleteMain verifies the default branch can never be
+// removed, even from another connection.
+func TestDumboDBBranchCannotDeleteMain(t *testing.T) {
+	ctx := context.Background()
+	b := newTestBackend(t)
+	const dbName = "mydb"
+
+	insertDoc(t, b, dbName, "col", mustDoc(t, "_id", int64(1)))
+	commitDB(t, b, dbName, "c1")
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{Action: "add", DBName: dbName, From: "main", Name: "feature"}); err != nil {
+		t.Fatalf("add feature: %v", err)
+	}
+
+	if _, err := b.DumboDBBranch(ctx, &backends.BranchParams{Action: "remove", DBName: dbName, From: "feature", Name: "main", Force: true}); err == nil {
+		t.Fatal("removing main: want error, got nil")
+	}
+
+	if _, ok, err := b.readBranchConfig(ctx, dbName, "main"); err != nil {
+		t.Fatalf("main config read after failed delete: %v", err)
+	} else {
+		_ = ok
+	}
+	// main must still be listable.
+	res, err := b.DumboDBBranch(ctx, &backends.BranchParams{Action: "list", DBName: dbName, From: "feature"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	found := false
+	for _, br := range res.Branches {
+		if br.Name == "main" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("main must still exist after a rejected delete")
+	}
+}
+
 // TestDumboDBConfig_Scoping verifies config docs are keyed per database.
 func TestDumboDBConfig_Scoping(t *testing.T) {
 	ctx := context.Background()

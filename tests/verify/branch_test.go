@@ -619,6 +619,35 @@ func TestBranchVerify(t *testing.T) {
 		// The rolled-back branch is gone: a plain re-add succeeds.
 		addBranch(t, env, awDB+"@main", "bad")
 	})
+
+	// -------------------------------------------------------------------------
+	// Scenario 16: the default branch main can never be removed
+	// -------------------------------------------------------------------------
+	t.Run("Scenario16_CannotRemoveMain", func(t *testing.T) {
+		// From any connection, removing main is refused with a reset suggestion.
+		var res bson.M
+		err := env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "remove"}, {Key: "branch", Value: "main"},
+		}).Decode(&res)
+		require.Error(t, err, "main must not be removable")
+		assert.Contains(t, err.Error(), "default branch")
+		assert.Contains(t, err.Error(), "dumboReset")
+
+		// force does not override the guard.
+		err = env.Client.Database(dbName+"@feature").RunCommand(ctx, bson.D{
+			{Key: "doltBranch", Value: int32(1)}, {Key: "action", Value: "remove"}, {Key: "branch", Value: "main"}, {Key: "force", Value: true},
+		}).Decode(&res)
+		require.Error(t, err, "force must not override the main guard")
+
+		// main is still present.
+		found := false
+		for _, b := range listBranches(t, env, dbName+"@main") {
+			if b.Name == "main" {
+				found = true
+			}
+		}
+		assert.True(t, found, "main must still exist")
+	})
 }
 
 // branchListEntry is one entry of a doltBranch listing response.

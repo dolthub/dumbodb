@@ -39,15 +39,15 @@ type remoteURL struct {
 // this set is rejected by parseRemoteURL. Being known does not imply push/fetch
 // support yet; see remoteURL.supported.
 var knownRemoteSchemes = map[string]struct{}{
-	dbfactory.FileScheme:    {},
-	dbfactory.HTTPScheme:    {},
-	dbfactory.HTTPSScheme:   {},
-	dbfactory.S3Scheme:      {},
-	dbfactory.AWSScheme:     {},
-	dbfactory.GSScheme:      {},
-	dbfactory.AzScheme:      {},
-	dbfactory.OCIScheme:     {},
-	dbfactory.OSSScheme:     {},
+	dbfactory.FileScheme:     {},
+	dbfactory.HTTPScheme:     {},
+	dbfactory.HTTPSScheme:    {},
+	dbfactory.S3Scheme:       {},
+	dbfactory.AWSScheme:      {},
+	dbfactory.GSScheme:       {},
+	dbfactory.AzScheme:       {},
+	dbfactory.OCIScheme:      {},
+	dbfactory.OSSScheme:      {},
 	dbfactory.SSHScheme:      {},
 	dbfactory.GitFileScheme:  {},
 	dbfactory.GitHTTPScheme:  {},
@@ -69,10 +69,10 @@ var knownRemoteSchemes = map[string]struct{}{
 // with earl.ParseRawWithAWSSupport, which our parse path does not use; enabling
 // aws needs a dedicated aws-aware parse end to end. See workspace-1np.15.
 var implementedRemoteSchemes = map[string]struct{}{
-	dbfactory.FileScheme:    {},
-	dbfactory.MemScheme:     {},
-	dbfactory.HTTPScheme:    {},
-	dbfactory.HTTPSScheme:   {},
+	dbfactory.FileScheme:     {},
+	dbfactory.MemScheme:      {},
+	dbfactory.HTTPScheme:     {},
+	dbfactory.HTTPSScheme:    {},
 	dbfactory.S3Scheme:       {},
 	dbfactory.GSScheme:       {},
 	dbfactory.AzScheme:       {},

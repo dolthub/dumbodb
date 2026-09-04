@@ -48,7 +48,9 @@ var setParameterEnvelopeFields = map[string]bool{
 // MsgSetParameter implements the `setParameter` admin command.
 //
 // Accepts one or more parameters per call:
-//   db.adminCommand({setParameter: 1, paramA: valueA, paramB: valueB})
+//
+//	db.adminCommand({setParameter: 1, paramA: valueA, paramB: valueB})
+//
 // Returns the previous value of the last-updated parameter under "was",
 // matching MongoDB's wire shape for the single-parameter case. Unknown
 // parameters return code 72 (InvalidOptions); known-but-not-settable-at-

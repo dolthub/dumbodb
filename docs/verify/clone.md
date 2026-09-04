@@ -188,6 +188,39 @@ db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "ssh://host/org/repo"
 
 ---
 
+## Scenario 8: Cloning a remote with no `main` is rejected
+
+Every database must have a `main`, so a remote that lacks one cannot be cloned.
+Push `main` to a differently-named branch on a fresh remote so it holds only
+`release`, then try to clone it:
+
+```js
+var s = db.getSiblingDB("srcnomain")
+s.items.insertOne({ _id: 1 })
+s.runCommand({ dumboCommit: 1, message: "c1", author: "a <a@a>" })
+s.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-nomain" })
+s.runCommand({ dumboPush: 1, to: "origin", refSpec: "main:release" })   // remote has only "release"
+
+db.getSiblingDB("admin").runCommand({ dumboClone: 1, from: "file:///tmp/dumbo-nomain", as: "nomainclone" })
+// Expected: ok: 0 -- remote has no "main" branch; create a database and dumboFetch instead.
+```
+
+Workaround -- create a database (it has `main`), register the remote, and fetch
+the branch you need:
+
+```js
+var w = db.getSiblingDB("nomainwork")
+w.seed.insertOne({ _id: 1 })
+w.runCommand({ dumboCommit: 1, message: "seed", author: "a <a@a>" })
+w.runCommand({ dumboRemote: 1, action: "add", name: "origin", url: "file:///tmp/dumbo-nomain" })
+w.runCommand({ dumboFetch: 1, from: "origin" })
+
+db.getSiblingDB("nomainwork@main").runCommand({ dumboBranch: 1, action: "list" })
+// Expected: local "main" plus the remote-tracking "origin/release".
+```
+
+---
+
 ## Quick Reference
 
 | Command                                                                | Effect                                        |

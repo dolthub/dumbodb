@@ -32,8 +32,8 @@ import (
 // document satisfying the filter. Per collection:
 //   - All     -> `{}` (matches every document, i.e. any change to the collection)
 //   - else    -> the OR of `{_id: {$in: [ids...]}}` (when IDs is non-empty) and
-//                each $match query. With a single clause that clause is used
-//                directly; with several they are wrapped in `$or`.
+//     each $match query. With a single clause that clause is used
+//     directly; with several they are wrapped in `$or`.
 //
 // $match queries are NOT resolved at HEAD: each is applied per commit, so a
 // commit is included when it touched a document matching the query (with the

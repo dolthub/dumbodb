@@ -95,8 +95,8 @@ type sqlCtxRepoStateAdapter struct {
 }
 
 var (
-	_ env.RepoStateReader[*sql.Context]    = (*sqlCtxRepoStateAdapter)(nil)
-	_ env.RepoStateWriter                  = (*sqlCtxRepoStateAdapter)(nil)
+	_ env.RepoStateReader[*sql.Context]     = (*sqlCtxRepoStateAdapter)(nil)
+	_ env.RepoStateWriter                   = (*sqlCtxRepoStateAdapter)(nil)
 	_ env.RepoStateReadWriter[*sql.Context] = (*sqlCtxRepoStateAdapter)(nil)
 )
 

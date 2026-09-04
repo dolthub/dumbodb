@@ -1599,6 +1599,10 @@ func pushInfo(p branchPush) *backends.BranchPushInfo {
 // dumboDBBranchDelete deletes the branch named params.Name.
 // Caller must hold db.mu.Lock().
 func dumboDBBranchDelete(ctx context.Context, db *dbState, params *backends.BranchParams) (*backends.BranchResult, error) {
+	// The default branch must always exist; it can never be deleted.
+	if params.Name == defaultBranch {
+		return nil, fmt.Errorf("DumboDBBranch: cannot delete the default branch %q; every database must have it", defaultBranch)
+	}
 	// Refuse to delete the current connection's branch.
 	if params.Name == params.From {
 		return nil, fmt.Errorf("DumboDBBranch: cannot delete the currently checked-out branch %q", params.Name)

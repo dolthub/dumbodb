@@ -77,6 +77,19 @@ func (b *Backend) DumboDBClone(ctx context.Context, params *backends.CloneParams
 		return nil, fmt.Errorf("dumboClone: remote %q has no branches", ru.Raw)
 	}
 
+	// Every dumbo database must have a default branch, so a remote lacking one
+	// cannot be cloned. Create a database and dumboFetch the branch you need.
+	hasDefault := false
+	for _, br := range branchRefs {
+		if br.GetPath() == defaultBranch {
+			hasDefault = true
+			break
+		}
+	}
+	if !hasDefault {
+		return nil, fmt.Errorf("dumboClone: remote %q has no %q branch; every database must have one -- create a database and dumboFetch the branch you need instead", ru.Raw, defaultBranch)
+	}
+
 	state, err := b.getOrOpenDB(ctx, params.As, true)
 	if err != nil {
 		return nil, fmt.Errorf("dumboClone: creating database %q: %w", params.As, err)

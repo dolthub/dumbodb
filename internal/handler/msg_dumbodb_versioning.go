@@ -1033,6 +1033,11 @@ func (h *Handler) MsgDumboDBBranch(connCtx context.Context, msg *wire.OpMsg) (*w
 		if hasConfig {
 			return nil, branchActionFieldErr("remove", "setConfig")
 		}
+		if newBranch == defaultBranch {
+			return nil, handlererrors.NewCommandErrorMsgWithArgument(handlererrors.ErrBadValue,
+				fmt.Sprintf("dumboBranch: cannot remove the default branch %q; every database must have it. To discard its history, move it with dumboReset { to: \"<commit>\", hard: true } instead.", defaultBranch),
+				"branch")
+		}
 	}
 
 	if action != "list" {

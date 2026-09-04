@@ -373,6 +373,22 @@ db.getSiblingDB("addcfgdb@main").runCommand({ doltBranch: 1, action: "add", bran
 
 ---
 
+## Scenario 16: The default branch `main` can never be removed
+
+Every database must have `main`, so `action: "remove"` refuses it (with or
+without `force`) and points you at `dumboReset` to discard its history instead.
+
+```js
+db.getSiblingDB("branchvdb@feature").runCommand({ doltBranch: 1, action: "remove", branch: "main" })
+// Expected: ok: 0 -- cannot remove the default branch "main"; move it with
+//           dumboReset { to: "<commit>", hard: true } instead.
+
+db.getSiblingDB("branchvdb@feature").runCommand({ doltBranch: 1, action: "remove", branch: "main", force: true })
+// Expected: ok: 0 -- force does not override the guard.
+```
+
+---
+
 ## Quick Reference
 
 | Command | Connection | Result |
